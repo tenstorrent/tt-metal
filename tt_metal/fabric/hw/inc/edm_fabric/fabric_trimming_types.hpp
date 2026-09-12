@@ -14,6 +14,24 @@
 
 namespace tt::tt_fabric {
 
+// Convert a receiver router's compact 2D downstream-slot mask into the destination routers'
+// flattened sender-channel IDs. Each compact slot's 4-bit channel ID is supplied by host wiring.
+constexpr uint16_t forwarded_slots_to_sender_mask(
+    uint8_t forwarded_slot_mask, uint32_t packed_downstream_sender_channel_ids) {
+    constexpr uint32_t sender_channel_id_width_bits = 4;
+    constexpr uint32_t sender_channel_id_mask = (1u << sender_channel_id_width_bits) - 1u;
+    uint16_t sender_mask = 0;
+    for (uint32_t compact_slot = 0; compact_slot < 4; ++compact_slot) {
+        if ((forwarded_slot_mask & (1u << compact_slot)) != 0) {
+            const uint32_t sender_channel_id =
+                (packed_downstream_sender_channel_ids >> (compact_slot * sender_channel_id_width_bits)) &
+                sender_channel_id_mask;
+            sender_mask |= static_cast<uint16_t>(1u << sender_channel_id);
+        }
+    }
+    return sender_mask;
+}
+
 // Primary template - enabled implementation (full data storage)
 template <bool ENABLED, size_t NUM_VC = 2, size_t MAX_NUM_SENDER_CHANNELS = 9>
 struct FabricDatapathUsageL1Results {
@@ -28,8 +46,8 @@ struct FabricDatapathUsageL1Results {
     // A bit is set high if the sender channel with ID matching that bit (offset) processed any traffic
     SenderChannelUsedBitfield sender_channel_used_bitfield_by_vc = {};
 
-    // A bit is set high if the sender channel on this VC is forwarded to the receiver channel with ID matching
-    // that bit (offset). Used only for validation after readback.
+    // For each receiving VC, bits encode destination routers' flattened sender-channel IDs.
+    // They indicate forwarding topology, not local sender use. A local-only delivery leaves the row unchanged.
     std::array<SenderChannelUsedBitfield, NUM_VC> sender_channel_forwarded_to_bitfield_by_vc = {};
 
     // A bit is set high if the receiver channel with ID matching that bit (offset) has forwarded any traffic

@@ -358,7 +358,6 @@ void create_worker_kernel(
         const auto dst_device_id = worker_test_config.dest_device->get_device_ids()[0];
         const auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_device_id);
         const auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_device_id);
-        const auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         const auto forwarding_direction =
             control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
 
@@ -380,7 +379,6 @@ void create_worker_kernel(
         worker_rt_args.push_back(src_fabric_node_id.chip_id);
         worker_rt_args.push_back(dst_fabric_node_id.chip_id);
         worker_rt_args.push_back(*dst_fabric_node_id.mesh_id);
-        worker_rt_args.push_back(mesh_shape[1]);
     }
 
     std::vector<std::pair<size_t, size_t>> addresses_to_clear = {

@@ -35,7 +35,7 @@ static FORCE_INLINE void fabric_set_mcast_route(
     volatile PACKET_HEADER_TYPE* packet_header,
     uint8_t* range,
     uint8_t i) {
-#if defined(FABRIC_2D)  // for both DYNAMIC
+#if defined(FABRIC_2D)
     // 2D multicast
     const auto& slot = connection_manager.get(i);
     if (range[i] != 0) {

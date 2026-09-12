@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <unordered_set>
 
 // UMD: EthCoord is a UMD type alias used in the private method
@@ -201,6 +202,58 @@ public:
     std::optional<RoutingDirection> get_forwarding_direction(
         FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
 
+    // Canonical logical route between two chips of one mesh, reconstructed by following the next-hop
+    // relation. Not a substitute for get_fabric_route(), which is conditioned on a source channel.
+    std::vector<FabricNodeId> get_canonical_intramesh_route(
+        FabricNodeId src_fabric_node_id, FabricNodeId dst_fabric_node_id) const;
+
+    // Whether the mesh has a validated express-ring topology. Mesh-scoped; per-line link liveness is
+    // not represented.
+    bool express_routing_enabled(MeshId mesh_id) const;
+
+    // Whether a protected ring family covers this node along the given dimension. Ring state is only
+    // derived for meshes with express links, so check express_routing_enabled before relying on this.
+    // Per-node by design: answers false for a leaf. Never wire this into
+    // need_deadlock_avoidance_support -- that flag also gates first-level ACK and the credit path, so
+    // a per-node answer would elide the guard on leaf chips. The per-mesh axis query below is the one
+    // that feeds it.
+    bool has_protected_ring(FabricNodeId fabric_node_id, RoutingDimension dimension) const;
+
+    // Whether the edge leaving `local` in `egress` belongs to a protected ring.
+    bool is_protected_ring_edge(FabricNodeId local, RoutingDirection egress) const;
+
+    // The ring a direction rides: the express decomposition for an axis hop, the ordinary X ring for
+    // E/W. Null when the mesh has no such ring. Public because the multicast reverse trees are built
+    // from it off the control plane -- a host that must open one connection per canonical root output
+    // has to run the same encoder the worker runs, and that needs this topology.
+    const AxisRouteTopology* ring_for_direction(MeshId mesh_id, RoutingDirection direction) const;
+
+    // The topology governing `axis` (0 = Y, 1 = X) of this mesh: express chords where declared for
+    // that axis, the ordinary ring where the axis closes, else the plain line. Never null for a 2D
+    // mesh with a non-degenerate axis.
+    //
+    // Prefer this over ring_for_direction() for anything that needs a per-axis tree. The latter is
+    // null on a non-express mesh (Y) or a non-closing dimension (X), and a null topology silently
+    // yields an empty multicast map rather than an error.
+    const AxisRouteTopology* axis_topology(MeshId mesh_id, int axis) const;
+
+    // For traffic arriving at `local` from its `ingress` neighbor and leaving toward its `egress` one,
+    // whether both hops ride one oriented view of the same ring, i.e. it stays on the ring it is on.
+    bool are_same_directed_ring_edges(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // For that same turn, whether a non-transit ring acquisition is permitted. A crossing into the
+    // family that may continue is terminal and returns false.
+    bool continuation_allowed(FabricNodeId local, RoutingDirection ingress, RoutingDirection egress) const;
+
+    // Does the axis that `axis_direction` belongs to (N/S/Z select Y, E/W select X) carry any
+    // protected ring anywhere in this mesh?
+    //
+    // Used to decide whether a router compiles in protected flow control at all, which is a property
+    // of the axis rather than of one chip. Asking the per-node question instead would disable the
+    // guard on leaf chips, and that flag also gates first-level ACK and the credit path, so the
+    // effect would reach beyond flow control.
+    bool mesh_has_protected_ring_in_axis_of(MeshId mesh_id, RoutingDirection axis_direction) const;
+
     // Return eth channels that can forward the data from src to dest.
     // This will be a subset of the active routers in a given direction since some channels could be
     // reserved along the way for tunneling etc.
@@ -360,6 +413,10 @@ private:
     tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
     tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 
+    // Coordinate along that ring's axis of the neighbor reached by `direction`.
+    std::optional<int> ring_coord_of_neighbor(
+        const AxisRouteTopology& rings, FabricNodeId local, RoutingDirection direction) const;
+
     // TODO: remove this from local node control plane. Can get it from the global control plane
     std::unique_ptr<tt::tt_metal::PhysicalSystemDescriptor> physical_system_descriptor_;
     std::unique_ptr<tt::tt_fabric::TopologyMapper> topology_mapper_;
@@ -440,12 +497,28 @@ private:
     // Takes RoutingTableGenerator table and converts to routing tables for each ethernet port
     void convert_fabric_routing_table_to_chip_routing_table();
 
+    using Routing2DActionVectors = std::array<std::uint8_t, Routing2DCodec::ACTION_VECTOR_CAPACITY_BYTES>;
+
     void write_routing_tables_to_eth_cores(MeshId mesh_id, ChipId chip_id) const;
-    void write_routing_info_to_devices(MeshId mesh_id, ChipId chip_id) const;
+    void write_routing_info_to_devices(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const RoutingTable& intra_mesh_routing_table,
+        const RoutingTable& inter_mesh_routing_table,
+        const Routing2DActionVectors* action_vectors_2d) const;
     void write_fabric_connections_to_tensix_cores(MeshId mesh_id, ChipId chip_id) const;
     // Helper functions to compute and embed routing path tables
     void compute_and_embed_1d_routing_path_table(MeshId mesh_id, routing_l1_info_t& routing_info) const;
-    void compute_and_embed_2d_routing_path_table(MeshId mesh_id, ChipId chip_id, routing_l1_info_t& routing_info) const;
+    Routing2DActionVectors compute_2d_routing_action_vectors(
+        MeshId mesh_id, const MeshShape& mesh_shape, const RoutingTable& intra_mesh_routing_table) const;
+    void compute_and_embed_2d_routing_path_table(
+        MeshId mesh_id,
+        ChipId chip_id,
+        const MeshShape& mesh_shape,
+        const Routing2DActionVectors& action_vectors,
+        const RoutingTable& inter_mesh_routing_table,
+        routing_l1_info_t& routing_info) const;
 
     // Helper to populate fabric connection info for both router and mux configurations
     void populate_fabric_connection_info(
@@ -470,9 +543,6 @@ private:
     // Initialize the local mesh binding from the environment variables
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
-
-    template <uint8_t dim, bool compressed>
-    void write_all_to_all_routing_fields(MeshId mesh_id) const;
 
     // Top level function responsible for generating intermesh connectivity
     // based on the MGD and Physical State of the system.

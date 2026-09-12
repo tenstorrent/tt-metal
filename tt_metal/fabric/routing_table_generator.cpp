@@ -17,6 +17,8 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
+#include "axis_route_topology.hpp"
+
 namespace tt::tt_fabric {
 
 RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapper) :
@@ -45,11 +47,63 @@ RoutingTableGenerator::RoutingTableGenerator(const TopologyMapper& topology_mapp
             devices_in_mesh.resize(intra_mesh_connectivity.size());
         }
     }
+    // Recover the express-link ring decomposition per mesh; null where a mesh declares none, which
+    // leaves that mesh on the base dimension-order policy. express_rings_ and x_rings_ keep their
+    // existing meaning and population rules so nothing that reads them changes behaviour.
+    this->express_rings_.resize(intra_mesh_connectivity.size());
+    this->x_rings_.resize(intra_mesh_connectivity.size());
+    for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
+        auto rings = derive_express_ring_topology(mesh_graph, MeshId{mesh_id_val});
+        if (!rings.has_value()) {
+            continue;  // no express links: the mesh keeps the base policy and needs no ring state
+        }
+        this->express_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*rings));
+        auto x_rings = derive_ordinary_ring_topology(mesh_graph, MeshId{mesh_id_val}, 1);
+        if (x_rings.has_value()) {
+            this->x_rings_[mesh_id_val] = std::make_unique<AxisRouteTopology>(std::move(*x_rings));
+        }
+    }
+
+    // Per-axis topologies, for EVERY mesh and BOTH axes. This is what the 2D action-map multicast
+    // encoder needs: it builds a reverse tree per axis, so a missing topology on either one silently
+    // produces an empty map rather than an error.
+    //
+    // x_rings_ above cannot serve that purpose -- it is only populated for express meshes, and only
+    // when the X dimension closes. Deriving it unconditionally is not safe either, because
+    // derive_ordinary_ring_topology() is fatal when a line on the axis lacks an ordinary edge while
+    // axis_wraps() only inspects line 0. derive_axis_topology() resolves both: it falls back to the
+    // plain line, so an axis that does not close (or does not close uniformly) still gets a usable
+    // topology instead of aborting init.
+    this->axis_topologies_.resize(intra_mesh_connectivity.size());
+    for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
+        for (int axis = 0; axis < 2; axis++) {
+            this->axis_topologies_[mesh_id_val][axis] =
+                std::make_unique<AxisRouteTopology>(derive_axis_topology(mesh_graph, MeshId{mesh_id_val}, axis));
+        }
+    }
+
     // Generate the intra mesh routing table
     this->generate_intramesh_routing_table(intra_mesh_connectivity);
 
     // Generate the inter mesh routing table
     this->generate_intermesh_routing_table(inter_mesh_connectivity, intra_mesh_connectivity);
+}
+
+RoutingTableGenerator::~RoutingTableGenerator() = default;
+
+const AxisRouteTopology* RoutingTableGenerator::get_express_rings(MeshId mesh_id) const {
+    return *mesh_id < this->express_rings_.size() ? this->express_rings_[*mesh_id].get() : nullptr;
+}
+
+const AxisRouteTopology* RoutingTableGenerator::get_x_rings(MeshId mesh_id) const {
+    return *mesh_id < this->x_rings_.size() ? this->x_rings_[*mesh_id].get() : nullptr;
+}
+
+const AxisRouteTopology* RoutingTableGenerator::get_axis_topology(MeshId mesh_id, int axis) const {
+    if (*mesh_id >= this->axis_topologies_.size() || axis < 0 || axis > 1) {
+        return nullptr;
+    }
+    return this->axis_topologies_[*mesh_id][axis].get();
 }
 
 void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConnectivity& intra_mesh_connectivity) {
@@ -110,14 +164,27 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                     // Move North or South
                     MeshCoordinate target_coord_on_column(dst_mesh_coord[0], src_mesh_coord[1]);
                     auto target_chip_id = mesh_graph.coordinate_to_chip(mesh_id, target_coord_on_column);
-                    auto direction = get_shorter_direction_on_row_or_col(
-                        mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
+                    // A express-link mesh takes its next hop from the ring decomposition, which carries
+                    // the leaf, orientation and cross-ring policy; every other mesh uses the base
+                    // dimension-order policy unchanged. This is the only place express links alter routing.
+                    RoutingDirection direction = RoutingDirection::NONE;
+                    if (const auto* rings = this->express_rings_[mesh_id_val].get(); rings != nullptr) {
+                        const int next_row = rings->next_row(
+                            static_cast<int>(src_mesh_coord[0]), static_cast<int>(dst_mesh_coord[0]));
+                        const auto next_chip = mesh_graph.coordinate_to_chip(
+                            mesh_id, MeshCoordinate(static_cast<std::uint32_t>(next_row), src_mesh_coord[1]));
+                        direction = intra_mesh_connectivity[mesh_id_val][src_chip_id].at(next_chip).port_direction;
+                    } else {
+                        direction = get_shorter_direction_on_row_or_col(
+                            mesh_id_val, src_chip_id, target_chip_id, RoutingDirection::N, RoutingDirection::S);
+                    }
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
                     // TODO: today we are not updating the weight of the edge, should we use weight to balance
                     //  routing traffic?
                     //  intra_mesh_connectivity[mesh_id][src_chip_id][next_chip_id].weight += 1;
                 } else if (src_mesh_coord[1] != dst_mesh_coord[1]) {
-                    // Move East or West
+                    // Move East or West. The E/W axis carries no chords, so it always uses the base
+                    // policy -- identical to main.
                     auto direction = get_shorter_direction_on_row_or_col(
                         mesh_id_val, src_chip_id, dst_chip_id, RoutingDirection::E, RoutingDirection::W);
                     this->intra_mesh_table_[*mesh_id][src_chip_id][dst_chip_id] = direction;
@@ -130,7 +197,168 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
                 }
             }
         }
+        this->validate_express_ring_routes(mesh_id_val, intra_mesh_connectivity);
     }
+}
+
+void RoutingTableGenerator::validate_express_ring_routes(
+    std::uint32_t mesh_id_val, const IntraMeshConnectivity& intra_mesh_connectivity) {
+    const auto* rings = this->express_rings_[mesh_id_val].get();
+    if (rings == nullptr) {
+        return;
+    }
+    const auto& mesh_graph = topology_mapper_.get_mesh_graph();
+    const MeshId mesh_id{mesh_id_val};
+    const auto& conn = intra_mesh_connectivity[mesh_id_val];
+    const auto& table = this->intra_mesh_table_[mesh_id_val];
+    const int num_chips = static_cast<int>(conn.size());
+
+    const auto row_of = [&](int chip) {
+        return static_cast<int>(mesh_graph.chip_to_coordinate(mesh_id, chip)[rings->axis_dim]);
+    };
+    const auto neighbor = [&](int chip, RoutingDirection dir) {
+        for (const auto& [peer, edge] : conn[chip]) {
+            if (edge.port_direction == dir) {
+                return static_cast<int>(peer);
+            }
+        }
+        return -1;
+    };
+    const auto is_axis_dir = [](RoutingDirection dir) {
+        return dir == RoutingDirection::N || dir == RoutingDirection::S || dir == RoutingDirection::Z;
+    };
+    // An axis hop is legal only as a ring edge, a crossover, or a leaf-run/anchor edge.
+    const auto axis_hop_permitted = [&](int from_row, int to_row) {
+        if (rings->is_leaf(from_row) || rings->is_leaf(to_row)) {
+            return true;
+        }
+        if (rings->domain_of[from_row] == rings->domain_of[to_row]) {
+            return rings->ring_distance(rings->domain_of[from_row], from_row, to_row) == 1;
+        }
+        return std::any_of(rings->crossovers.begin(), rings->crossovers.end(), [&](const auto& crossover) {
+            return (crossover.first == from_row && crossover.second == to_row) ||
+                   (crossover.first == to_row && crossover.second == from_row);
+        });
+    };
+
+    std::vector<bool> visited(num_chips, false);
+    for (int src = 0; src < num_chips; src++) {
+        for (int dst = 0; dst < num_chips; dst++) {
+            if (src == dst) {
+                continue;
+            }
+            std::fill(visited.begin(), visited.end(), false);
+            int cur = src;
+            int hops = 0;
+            bool in_x_phase = false;
+            bool axis_landed = false;
+            while (cur != dst) {
+                TT_FATAL(!visited[cur], "Mesh M{} route {}->{} revisits chip {}", mesh_id_val, src, dst, cur);
+                visited[cur] = true;
+                const auto dir = table[cur][dst];
+                TT_FATAL(
+                    dir != RoutingDirection::NONE && dir != RoutingDirection::C,
+                    "Mesh M{} route {}->{} has no next hop at chip {}",
+                    mesh_id_val,
+                    src,
+                    dst,
+                    cur);
+                const int next = neighbor(cur, dir);
+                TT_FATAL(
+                    next >= 0,
+                    "Mesh M{} route {}->{} needs a neighbor at chip {} that does not exist",
+                    mesh_id_val,
+                    src,
+                    dst,
+                    cur);
+                if (!is_axis_dir(dir)) {
+                    in_x_phase = true;
+                } else {
+                    TT_FATAL(
+                        !in_x_phase,
+                        "Mesh M{} route {}->{} returns to the express axis after leaving it",
+                        mesh_id_val,
+                        src,
+                        dst);
+                    TT_FATAL(
+                        !axis_landed,
+                        "Mesh M{} route {}->{} continues on the express axis after a terminal landing",
+                        mesh_id_val,
+                        src,
+                        dst);
+                    const int from_row = row_of(cur);
+                    const int to_row = row_of(next);
+                    if (cur != src) {
+                        // A leaf may be passed through only while egressing the source's own run or
+                        // ingressing the destination's -- each toward the nearer anchor, so the run is
+                        // never crossed end to end. A leaf belonging to neither run is a real detour.
+                        const bool in_src_run = rings->leaf_run_of[from_row] == rings->leaf_run_of[row_of(src)];
+                        const bool in_dst_run = rings->leaf_run_of[from_row] == rings->leaf_run_of[row_of(dst)];
+                        TT_FATAL(
+                            !rings->is_leaf(from_row) || in_src_run || in_dst_run,
+                            "Mesh M{} route {}->{} transits leaf row {}",
+                            mesh_id_val,
+                            src,
+                            dst,
+                            from_row);
+                    }
+                    TT_FATAL(
+                        axis_hop_permitted(from_row, to_row),
+                        "Mesh M{} route {}->{} uses a forbidden axis hop, row {} to {}",
+                        mesh_id_val,
+                        src,
+                        dst,
+                        from_row,
+                        to_row);
+                    axis_landed = !rings->is_leaf(from_row) && !rings->is_leaf(to_row) &&
+                                  rings->domain_of[from_row] != rings->domain_of[to_row] &&
+                                  rings->domain_of[to_row] == rings->continue_src_domain;
+                }
+                cur = next;
+                TT_FATAL(++hops <= num_chips, "Mesh M{} route {}->{} did not converge", mesh_id_val, src, dst);
+            }
+        }
+    }
+
+    // Every line along an axis must route identically, so one relation covers all of them.
+    const auto shape = mesh_graph.get_mesh_shape(mesh_id);
+    for (int dim = 0; dim < 2; dim++) {
+        const int along_len = static_cast<int>(shape[dim]);
+        const int ortho_len = static_cast<int>(shape[1 - dim]);
+        const auto chip_at = [&](int along, int ortho) {
+            const auto coord = dim == 0 ? MeshCoordinate(static_cast<std::uint32_t>(along), ortho)
+                                        : MeshCoordinate(ortho, static_cast<std::uint32_t>(along));
+            return static_cast<int>(mesh_graph.coordinate_to_chip(mesh_id, coord));
+        };
+        for (int a = 0; a < along_len; a++) {
+            for (int b = 0; b < along_len; b++) {
+                if (a == b) {
+                    continue;
+                }
+                const auto expected = table[chip_at(a, 0)][chip_at(b, 0)];
+                for (int ortho = 1; ortho < ortho_len; ortho++) {
+                    TT_FATAL(
+                        table[chip_at(a, ortho)][chip_at(b, ortho)] == expected,
+                        "Mesh M{} dim {} line {} routes {} to {} differently than line 0",
+                        mesh_id_val,
+                        dim,
+                        ortho,
+                        a,
+                        b);
+                }
+            }
+        }
+    }
+
+    // No dependency cycle may form outside the selected protected rings.
+    const auto cyclic = rings->cyclic_non_ring_hops();
+    TT_FATAL(
+        cyclic.empty(),
+        "Mesh M{} has a dependency cycle through non-ring hop {}->{} (and {} more); routing would deadlock",
+        mesh_id_val,
+        cyclic.empty() ? -1 : cyclic.front().first,
+        cyclic.empty() ? -1 : cyclic.front().second,
+        cyclic.empty() ? 0 : static_cast<int>(cyclic.size() - 1));
 }
 
 // Returns first hop to reach each destination mesh from source mesh.

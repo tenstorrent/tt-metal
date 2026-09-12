@@ -229,7 +229,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 125
     bh_sc1: 20
-    bh_sc4: 90
+    bh_sc4: 130
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80

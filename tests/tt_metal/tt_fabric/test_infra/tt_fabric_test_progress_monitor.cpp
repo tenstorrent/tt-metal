@@ -10,6 +10,7 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -211,6 +212,34 @@ private:
     const tt::tt_metal::PhysicalSystemDescriptor& psd_;
     std::unordered_map<BoardType, tt::scaleout_tools::Board> boards_;
 };
+
+// Formats one Control Plane route with its physical chip locations and channels.
+std::string format_hanging_link_path(
+    tt::tt_fabric::ControlPlane& control_plane,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const FabricNodeId& src,
+    const FabricNodeId& dst) {
+    auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(src, dst);
+    if (fwd_chans.empty()) {
+        return "<no route>";
+    }
+    auto src_chan = fwd_chans.front();
+    auto route = control_plane.get_fabric_route(src, dst, src_chan);
+
+    auto node_label = [&](const FabricNodeId& node, unsigned chan) {
+        auto asic_id = control_plane.get_asic_id_from_fabric_node_id(node);
+        auto tray_id = psd.get_tray_id(asic_id);
+        auto asic_loc = psd.get_asic_location(asic_id);
+        return fmt::format("D{}[T{}/N{}](ch{})", node.chip_id, *tray_id, *asic_loc, chan);
+    };
+
+    std::stringstream ss;
+    ss << node_label(src, static_cast<unsigned>(src_chan));
+    for (const auto& hop : route) {
+        ss << " -> " << node_label(hop.first, static_cast<unsigned>(hop.second));
+    }
+    return ss.str();
+}
 
 }  // namespace
 
@@ -1101,6 +1130,8 @@ void TestProgressMonitor::write_summary_report(
                 (void)pair_key;
                 ofs << "  [" << pair_idx++ << "] " << format_device_label(agg.src_node) << "  ->  "
                     << format_device_label(agg.dst_node) << "\n";
+                ofs << "      Route: " << format_hanging_link_path(control_plane, psd, agg.src_node, agg.dst_node)
+                    << "\n";
                 ofs << "      Dst Host: " << agg.dst_host << " (Rank " << agg.dst_host_rank << ")\n";
 
                 auto fwd_chans = control_plane.get_forwarding_eth_chans_to_chip(agg.src_node, agg.dst_node);
@@ -1193,6 +1224,7 @@ void TestProgressMonitor::write_detailed_report(
             FabricNodeId dst_node_id(MeshId{rec->dst_mesh_id}, rec->dst_chip_id);
 
             ofs << "  [" << entry_idx++ << "] " << role_str << " endpoint\n";
+            ofs << "      Route: " << format_hanging_link_path(control_plane, psd, src_node_id, dst_node_id) << "\n";
             ofs << "      flow_uid: " << rec->flow_uid << "\n";
             ofs << "      Configured: " << format_device_label(src_node_id) << " -> "
                 << format_device_label(dst_node_id) << "\n";

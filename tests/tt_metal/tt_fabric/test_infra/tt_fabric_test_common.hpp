@@ -413,11 +413,10 @@ public:
     }
 
     uint32_t get_max_connections_per_device() const override {
-        static constexpr uint32_t MAX_Z_NEIGHBORS = 2;
         auto arch = tt::tt_metal::hal::get_arch();
         switch (arch) {
-            case tt::ARCH::BLACKHOLE: return 4 + MAX_Z_NEIGHBORS;  // N, S, E, W + up to 2 Z destinations
-            default: return 4;                                     // N, S, E, W
+            case tt::ARCH::BLACKHOLE: return 5;  // N, S, E, W, Z
+            default: return 4;                   // N, S, E, W
         }
     }
 
@@ -723,23 +722,12 @@ public:
 
     std::unordered_map<RoutingDirection, uint32_t> get_hops_to_chip(
         FabricNodeId src_node_id, FabricNodeId dst_node_id) const override {
-        // Cross-mesh route: prefer a direct Z-link hop when the destination is a Z-neighbor.
-        // The hop map cannot express a cardinal count that means "in the *other* mesh's
-        // coordinate space" — coordinate subtraction across meshes is meaningless — so for
-        // Z-link inter-mesh setups we emit {Z: 1} for direct Z-neighbors. For inter-mesh
-        // setups whose stitching is cardinal (no Z direction assigned in the MGD), fall
-        // through to the displacement-based path so we preserve the prior behavior for
-        // cardinal-stitched multi-mesh topologies.
-        if (src_node_id.mesh_id != dst_node_id.mesh_id) {
-            const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
-            const bool dst_is_direct_z_neighbor =
-                std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
-            if (dst_is_direct_z_neighbor) {
-                return {{RoutingDirection::Z, 1}};
-            }
-            // Non-Z-neighbor cross-mesh: fall through to displacement. This matches main
-            // for cardinal-stitched multi-mesh and is a known approximation for Z-link
-            // multi-hop cross-mesh (which the 2D routing path doesn't depend on anyway).
+        // Preserve a direct Z edge; coordinate displacement would report a cardinal route.
+        const auto z_neighbors = get_all_neighbor_node_ids(src_node_id, RoutingDirection::Z);
+        const bool dst_is_direct_z_neighbor =
+            std::find(z_neighbors.begin(), z_neighbors.end(), dst_node_id) != z_neighbors.end();
+        if (dst_is_direct_z_neighbor) {
+            return {{RoutingDirection::Z, 1}};
         }
 
         const auto& src_coord = get_device_coord(src_node_id);
@@ -847,24 +835,26 @@ public:
         }
 
         const auto src_coord = get_device_coord(src_node_id);
+        const auto mesh_shape = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_mesh_shape(
+            src_node_id.mesh_id, MeshScope::GLOBAL);
         auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
 
-        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, EW_DIM)) {
-            // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
-            uint32_t ew_total_hops = mesh_shape_[EW_DIM] - 1;
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, EW_DIM)) {
+            // EW dimension: need to cover (mesh_shape[EW_DIM] - 1) total hops
+            uint32_t ew_total_hops = mesh_shape[EW_DIM] - 1;
             uint32_t ew_forward_hops = ew_total_hops / 2;                 // Half go in one direction
             uint32_t ew_backward_hops = ew_total_hops - ew_forward_hops;  // Rest go in other direction
 
             hops[RoutingDirection::E] = ew_forward_hops;
             hops[RoutingDirection::W] = ew_backward_hops;
         } else {
-            hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+            hops[RoutingDirection::E] = mesh_shape[EW_DIM] - src_coord[EW_DIM] - 1;
             hops[RoutingDirection::W] = src_coord[EW_DIM];
         }
 
-        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape_, NS_DIM)) {
-            // NS dimension: need to cover (mesh_shape_[NS_DIM] - 1) total hops
-            uint32_t ns_total_hops = mesh_shape_[NS_DIM] - 1;
+        if (tt::tt_fabric::has_genuine_torus_axis(fabric_type, mesh_shape, NS_DIM)) {
+            // NS dimension: need to cover (mesh_shape[NS_DIM] - 1) total hops
+            uint32_t ns_total_hops = mesh_shape[NS_DIM] - 1;
             uint32_t ns_forward_hops = ns_total_hops / 2;                 // Half go in one direction
             uint32_t ns_backward_hops = ns_total_hops - ns_forward_hops;  // Rest go in other direction
 
@@ -873,7 +863,7 @@ public:
         } else {
             // Mesh/Linear: go all the way in one direction per dimension
             hops[RoutingDirection::N] = src_coord[NS_DIM];
-            hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+            hops[RoutingDirection::S] = mesh_shape[NS_DIM] - src_coord[NS_DIM] - 1;
         }
 
         return hops;

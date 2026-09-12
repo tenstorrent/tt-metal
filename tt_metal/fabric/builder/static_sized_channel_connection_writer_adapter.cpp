@@ -21,7 +21,7 @@ StaticSizedChannelConnectionWriterAdapter::StaticSizedChannelConnectionWriterAda
 void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     const SenderWorkerAdapterSpec& adapter_spec,
     uint32_t inbound_vc_idx,
-    uint32_t /*sender_channel_idx*/,
+    uint32_t sender_channel_idx,
     eth_chan_directions downstream_direction,
     tt::tt_metal::CoreCoord downstream_noc_xy,
     bool is_2D_routing) {
@@ -39,10 +39,11 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
         // For Z router     (my_direction=4): EAST(0)→0, WEST(1)→1,  NORTH(2)→2, SOUTH(3)→3
         size_t compact_index = get_receiver_channel_compact_index(my_direction, downstream_direction);
         this->downstream_edms_connected_by_vc_mask.at(inbound_vc_idx) |= (1 << compact_index);
+        this->downstream_sender_channel_ids.at(inbound_vc_idx).at(compact_index) = sender_channel_idx;
 
         // Store addresses indexed by [vc_idx][compact_index]
-        // NOTE: For INTRA_MESH connections, this works fine (one connection per compact_index)
-        // For Z router multi-target, we'll use vc_to_downstreams_ instead
+        // NOTE: For single-target turns, this works fine (one connection per compact_index)
+        // For the boundary router's multi-target fanout, we'll use vc_to_downstreams_ instead
         this->downstream_edm_buffer_base_addresses.at(inbound_vc_idx).at(compact_index) =
             adapter_spec.edm_buffer_base_addr;
         this->downstream_edm_worker_registration_addresses.at(inbound_vc_idx).at(compact_index) =
@@ -68,6 +69,29 @@ void StaticSizedChannelConnectionWriterAdapter::add_downstream_connection(
     this->downstream_edms_connected_by_vc_set.insert(inbound_vc_idx);
 }
 
+uint32_t StaticSizedChannelConnectionWriterAdapter::get_packed_downstream_sender_channel_ids(uint32_t vc_idx) const {
+    static_assert(
+        builder_config::num_downstream_edms_2d_vc1_wide <= 4,
+        "Packed downstream sender-channel IDs reserve four 2D direction slots");
+    constexpr uint32_t sender_channel_id_width_bits = 4;
+    uint32_t packed_sender_channel_ids = 0;
+    const uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
+        if ((mask & (1 << compact_idx)) == 0) {
+            continue;
+        }
+        const auto sender_channel_id = this->downstream_sender_channel_ids.at(vc_idx).at(compact_idx);
+        TT_FATAL(sender_channel_id.has_value(), "Missing downstream sender channel for compact slot {}", compact_idx);
+        TT_FATAL(
+            *sender_channel_id < sizeof(uint16_t) * 8,
+            "Downstream sender channel {} exceeds the channel trimming bitfield",
+            *sender_channel_id);
+        packed_sender_channel_ids |= static_cast<uint32_t>(*sender_channel_id)
+                                     << (compact_idx * sender_channel_id_width_bits);
+    }
+    return packed_sender_channel_ids;
+}
+
 void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
     const SenderWorkerAdapterSpec& adapter_spec, eth_chan_directions /*tensix_direction*/, tt::tt_metal::CoreCoord tensix_noc_xy) {
     this->relay_connection_info.noc_xy = tensix_noc_xy;
@@ -89,19 +113,19 @@ void StaticSizedChannelConnectionWriterAdapter::add_local_tensix_connection(
 
 void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
     uint32_t vc_idx, std::vector<uint32_t>& args_out) const {
-    // Standard packing for all connection types
+    // Standard packing for all connections
     //
     // IMPORTANT: All connections on the same VC share the same downstream buffer address.
     // This is a fundamental constraint of the fabric architecture:
-    // - For INTRA_MESH: Each sender channel connects to one downstream router
-    // - For Z_TO_MESH: Multiple sender channels (one per direction) each connect to one downstream router
+    // - For ordinary mesh turns: each sender channel connects to one downstream router
+    // - For the from-boundary fanout: multiple sender channels (one per direction) each connect to
+    //   one downstream router
     // - All connections on a VC write to the same receiver channel buffer on their respective targets
     //
     // Because of this constraint, the standard packing path (which stores one buffer address per VC)
-    // is sufficient for all connection types, including multi-target scenarios.
+    // is sufficient for all connections, including multi-target scenarios.
     if (is_2D_routing) {
-        // For 2D: Use fixed slot count based on VC (kernel expects fixed-size arrays)
-        // VC0: 3 slots (mesh directions)
+        // For 2D: use up to four compact direction slots (kernel expects fixed-size arrays).
         // Get the connection mask to determine which compact indices are valid
         uint32_t mask = this->downstream_edms_connected_by_vc_mask.at(vc_idx);
 
@@ -112,7 +136,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         // For example, if mask=0x5 (binary 101), we pack compact indices 0 and 2 into args[0] and args[1]
 
         // Pack buffer base addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 uint32_t buffer_addr = this->downstream_edm_buffer_base_addresses[vc_idx][compact_idx].value_or(0);
                 args_out.push_back(buffer_addr);
@@ -124,14 +148,14 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         args_out.push_back(this->pack_downstream_noc_y_rt_arg(vc_idx));
 
         // Pack worker registration addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(this->downstream_edm_worker_registration_addresses[vc_idx][compact_idx].value_or(0));
             }
         }
 
         // Pack worker location info addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(
                     this->downstream_edm_worker_location_info_addresses[vc_idx][compact_idx].value_or(0));
@@ -139,7 +163,7 @@ void StaticSizedChannelConnectionWriterAdapter::pack_inbound_channel_rt_args(
         }
 
         // Pack buffer index semaphore addresses (dense packed based on mask)
-        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+        for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
             if (mask & (1 << compact_idx)) {
                 args_out.push_back(
                     this->downstream_edm_buffer_index_semaphore_addresses[vc_idx][compact_idx].value_or(0));
@@ -217,7 +241,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_y_rt_arg
     uint32_t dense_idx = 0;
 
     // Iterate through compact indices in order to match address packing order
-    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
             for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
@@ -250,7 +274,7 @@ uint32_t StaticSizedChannelConnectionWriterAdapter::pack_downstream_noc_x_rt_arg
     uint32_t dense_idx = 0;
 
     // Iterate through compact indices in order to match address packing order
-    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_with_z; compact_idx++) {
+    for (size_t compact_idx = 0; compact_idx < builder_config::num_downstream_edms_2d_vc1_wide; compact_idx++) {
         if (mask & (1 << compact_idx)) {
             // Find the connection with this compact_idx
             for (const auto& [direction, noc_xy] : downstream_edms_connected_by_vc[vc_idx]) {
