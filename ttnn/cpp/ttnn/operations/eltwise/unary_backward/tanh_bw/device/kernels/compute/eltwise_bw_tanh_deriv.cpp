@@ -33,7 +33,9 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                // grad_output and input need not share a dtype, so the unpacker has to
+                // reconfigure between the two buffers rather than assume one format for both.
+                ckl::DataFormatReconfig::Enabled),
             ckl::Dst::D0>{},
         ckl::CopyTile<
             ckl::input(
@@ -41,7 +43,9 @@ void kernel_main() {
                 ckl::WaitPolicy::PerBlockSize,
                 ckl::PopPolicy::PerBlockSize,
                 ckl::InputTileMapping::Block,
-                ckl::DataFormatReconfig::Disabled),
+                // grad_output and input need not share a dtype, so the unpacker has to
+                // reconfigure between the two buffers rather than assume one format for both.
+                ckl::DataFormatReconfig::Enabled),
             ckl::Dst::D1>{},
         ckl::TanhDerivative<ckl::Approx::Exact, ckl::Dst::D1>{},     // dest[1] = sech²(input)
         ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},  // dest[0] = grad_out * sech²(input)
