@@ -245,8 +245,6 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
         // CQ's
-        const uint32_t completion_q_rd_ptr =
-            mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
         const uint32_t prefetch_q_base =
             mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
 
@@ -265,20 +263,11 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
             CoreCoord(completion_queue_writer_core.x, completion_queue_writer_core.y),
             core_type);
 
-        const std::tuple<uint32_t, uint32_t> completion_interface_tlb_data = ctx.get_cluster()
-                                                                                 .get_tlb_data(tt_cxy_pair(
-                                                                                     completion_queue_writer_core.chip,
-                                                                                     completion_queue_writer_virtual.x,
-                                                                                     completion_queue_writer_virtual.y))
-                                                                                 .value();
-        auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
-
-        this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_windows.emplace_back(
-            ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
-                completion_queue_writer_core.chip,
-                completion_queue_writer_virtual.x,
-                completion_queue_writer_virtual.y)));
+        // Static TLBs are mapped at address 0, so a device address is already the window's byte offset.
+        this->completion_byte_addrs[cq_id] =
+            mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD, cq_id);
+        this->completion_q_windows.emplace_back(ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
+            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
 
         const uint32_t alignment =
             is_dram_backed() ? ctx.hal().get_alignment(HalMemType::DRAM) : ctx.hal().get_alignment(HalMemType::HOST);
@@ -300,6 +289,18 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
         this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
         this->prefetch_q_dev_fences[cq_id] =
             prefetch_q_base + mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes();
+        // Both windows are written at raw device addresses, so every address this CQ will use must fit
+        // the static TLB aperture.
+        TT_FATAL(
+            this->prefetch_q_dev_fences[cq_id] <= this->prefetch_q_windows[cq_id]->get_size() &&
+                this->completion_byte_addrs[cq_id] < this->completion_q_windows[cq_id]->get_size(),
+            "Dispatch L1 addresses for cq_id {} (prefetch_q end {}, completion_q_rd {}) exceed the static TLB "
+            "window sizes ({}, {})",
+            cq_id,
+            this->prefetch_q_dev_fences[cq_id],
+            this->completion_byte_addrs[cq_id],
+            this->prefetch_q_windows[cq_id]->get_size(),
+            this->completion_q_windows[cq_id]->get_size());
     }
 }
 
