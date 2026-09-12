@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <cstdint>
 #include <string>
@@ -219,13 +219,13 @@ struct MatmulTestNameGenerator {
 
 namespace tt::tt_metal {
 
-class Matmul1DParamFixture : public GenericMeshDeviceFixture,
+class Matmul1DParamFixture : public UnitMeshFastDispatchFixture,
                              public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
 
-class Matmul1DV2ParamFixture : public GenericMeshDeviceFixture,
+class Matmul1DV2ParamFixture : public UnitMeshFastDispatchFixture,
                                public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
 
-class Matmul2DParamFixture : public GenericMeshDeviceFixture,
+class Matmul2DParamFixture : public UnitMeshFastDispatchFixture,
                              public ::testing::WithParamInterface<unit_tests::dm::matmul::MatmulTestConfig> {};
 
 }  // namespace tt::tt_metal

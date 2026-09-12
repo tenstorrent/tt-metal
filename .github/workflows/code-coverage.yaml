@@ -54,8 +54,31 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       collect-coverage: true
 
+  bake-test-env:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      # Canonical ghcr ref: harbor-prefix only reaches bake layer contexts, never
+      # this output, so the GitHub-hosted producer can pull it.
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+
   run-metal-runtime-tests:
-    needs: [build-artifact]
+    # bake-test-env is needed for its output, but an explicit `if` is required or
+    # a failed bake would skip this job by default. An empty ref instead falls
+    # back to the artifact path, so coverage still gets collected.
+    needs: [build-artifact, bake-test-env]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
     uses: ./.github/workflows/runtime-unit-tests-impl.yaml
     secrets: inherit
     with:
@@ -64,6 +87,7 @@ jobs:
       # wh_n150_civ2: single-card WH — sufficient for runtime unit tests
       enabled-skus: "wh_n150_civ2"
       collect-coverage: true
+      prebuilt-image: ${{ needs.bake-test-env.outputs.image }}
 
   aggregate-coverage:
     name: "Aggregate & publish coverage"

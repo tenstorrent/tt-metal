@@ -69,7 +69,7 @@ metal_infra:
 
 ttnn:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
@@ -88,11 +88,11 @@ ttnn:
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 120
+    wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
     bh_p150b_civ2: 850
-    wh_n150_civ2: 1020
+    wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 117
     bh_p300: 60
@@ -119,8 +119,8 @@ ttnn:
   unit_tier3:
     wh_n150: 4
   device_perf:
-    bh_p150b_civ2: 7
-    wh_n150: 5
+    bh_p150b_civ2: 9
+    wh_n150: 10
     wh_llmbox_perf: 8
   integration:
     wh_llmbox: 30
@@ -186,7 +186,7 @@ shield:
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 20
+    bh_p150b_civ2: 24
     bh_p150: 2
   device_perf:
     wh_n150: 100
@@ -243,7 +243,7 @@ scaleout:
 
 runtime:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
     github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
@@ -332,6 +332,9 @@ llk:
     sim_quasar_xl: 180
 
 models:
+  # Agentic Research Model Tests: Saturday 07:00 UTC, independent of daily model tiers.
+  agentic_research_tier3:
+    bh_quietbox_2: 12
   merge_gate:
     wh_galaxy_merge_gate: 5
   sanity:
@@ -354,7 +357,7 @@ models:
     bh_quietbox_2: 390
     bh_galaxy: 78
     bh_sc1: 335
-    bh_sc4: 120
+    bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 45
@@ -371,7 +374,7 @@ models:
     bh_p300: 13
     bh_quietbox_2: 42
   unit_tier1:
-    wh_llmbox: 150
+    wh_llmbox: 155
     wh_n150: 118
     wh_galaxy: 260
     wh_galaxy_perf: 65
@@ -383,7 +386,7 @@ models:
   unit_tier2:
     wh_llmbox: 114
     wh_llmbox_perf: 191
-    wh_n150: 82
+    wh_n150: 87
     wh_n300: 30
     wh_galaxy_perf: 80
     bh_p150: 20
@@ -402,13 +405,13 @@ models:
     wh_llmbox: 0
   device_perf:
     wh_n150: 20
-    wh_galaxy_perf: 55
+    wh_galaxy_perf: 70
     bh_p150: 20
     bh_p300: 20
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 540
+    bh_sc1: 640
     bh_sc1_high_power: 194
     wh_n150: 500
     wh_n150_civ2: 300

@@ -25,7 +25,8 @@ on:
 jobs:
   # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
-    runs-on: tt-ubuntu-2204-large-stable
+    # Dedicated ARC scale set; capped separately from the build runner pool.
+    runs-on: tt-ubuntu-2204-copilot-stable
     # Copilot caps this at 59. Submodule checkout is the bulk of it.
     timeout-minutes: 50
 
@@ -35,6 +36,21 @@ jobs:
       contents: read
 
     steps:
+      - name: Keep Copilot local services off the outbound proxy
+        # The runtime starts local Git, MCP, and model API proxies after setup.
+        # Preserve existing exclusions and normalize the runner image's URL prefix.
+        # GITHUB_ENV persists these values into the generated runtime steps.
+        run: |
+          bypass="localhost,127.0.0.1,::1"
+          for existing in "${no_proxy:-}" "${NO_PROXY:-}"; do
+            existing="${existing#http://}"
+            existing="${existing#https://}"
+            if [ -n "$existing" ]; then
+              bypass="$bypass,$existing"
+            fi
+          done
+          printf 'no_proxy=%s\nNO_PROXY=%s\n' "$bypass" "$bypass" >> "$GITHUB_ENV"
+
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -69,28 +85,26 @@ jobs:
           docker image inspect "$IMG" --format 'image ready: {{.Id}} ({{.Created}})' 2>/dev/null || true
 
       - name: Check ccache credentials
-        # A cold build will not finish inside a session, so surface this loudly.
+        # The secrets context belongs to this job: Actions in a validation run,
+        # Agents in a Copilot session. It does not identify the runtime's env.
         # Referenced at step level: job-level env resolves empty for agent runs.
         env:
-          ACTIONS_GARAGE_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
-          ACTIONS_GARAGE_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
+          GARAGE_S3_ACCESS_KEY: ${{ secrets.GARAGE_S3_ACCESS_KEY }}
+          GARAGE_S3_SECRET_KEY: ${{ secrets.GARAGE_S3_SECRET_KEY }}
         run: |
           # Both halves are required: copilot-build.sh enables the remote cache
           # only when the pair is present, so reporting on one key alone would
           # claim a warm cache while the build silently ran cold.
           if [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] && [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
-            echo "Agents secrets present - remote ccache will be used (read-only)."
+            echo "Garage credentials are available to this setup job."
           elif [ -n "${GARAGE_S3_ACCESS_KEY:-}" ] || [ -n "${GARAGE_S3_SECRET_KEY:-}" ]; then
-            echo "::error::Only one of GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY is set as an"
-            echo "::error::Agents secret. The remote cache needs both; the agent would build cold."
+            echo "::error::Only one of GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY is available"
+            echo "::error::to this setup job. Both are required for remote cache access."
             exit 1
-          elif [ -n "${ACTIONS_GARAGE_ACCESS_KEY:-}" ] && [ -n "${ACTIONS_GARAGE_SECRET_KEY:-}" ]; then
-            echo "::notice::Actions secrets found (this validation run), but Copilot cannot read them."
-            echo "::notice::Add GARAGE_S3_ACCESS_KEY / GARAGE_S3_SECRET_KEY under Settings ->"
-            echo "::notice::Secrets and variables -> Agents for the agent to get a warm cache."
           else
-            echo "::warning::No Garage credentials from either source. The agent would build COLD."
+            echo "::notice::No Garage credentials are available to this setup job."
           fi
+          echo "copilot-build.sh checks the agent's injected credentials at build time."
 
       - name: Install gh-aw extension
         # Must match the gh-aw version the repo's .lock.yml files were compiled

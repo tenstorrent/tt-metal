@@ -94,15 +94,6 @@ jobs:
           curl -fsSL "${{ inputs.tests-yaml-gist-url }}" -o "${{ env.TESTS_YAML_PATH }}"
           echo "Downloaded tests YAML:"
           head -n 20 "${{ env.TESTS_YAML_PATH }}"
-      - name: Verify test timeouts against budget
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e" \
-            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |

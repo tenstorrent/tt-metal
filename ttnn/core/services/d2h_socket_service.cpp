@@ -621,6 +621,11 @@ D2HStreamService::D2HStreamService(
 }
 
 D2HStreamService::~D2HStreamService() {
+    // mesh_device_ is a shared_ptr, so the mesh can still be alive but already CLOSED when the last
+    // reference to this service drops. A closed mesh has cleared its command queues, released the
+    // service cores this would free, and unmapped the host FIFO window barrier() polls (untimed), so
+    // non-null is not enough to touch it -- gate on the mesh actually being open.
+    const bool device_live = mesh_device_ != nullptr && mesh_device_->is_initialized();
     try {
         stop_host_read_workers();
         if (!is_owner_) {
@@ -628,22 +633,21 @@ D2HStreamService::~D2HStreamService() {
             return;
         }
 
-        barrier();
-        signal_termination();
-
-        if (mesh_device_) {
+        if (device_live) {
+            barrier();
+            signal_termination();
             distributed::Finish(mesh_device_->mesh_command_queue());
         }
 
         auto& svc = tt::tt_metal::internal::service_core_manager();
-        if (mesh_device_) {
+        if (device_live) {
             for (const auto& [coord, core] : service_cores_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.wait_done(d, core);
             }
         }
 
-        if (mesh_device_) {
+        if (device_live) {
             for (const auto& [coord, addr] : termination_addrs_) {
                 auto* d = mesh_device_->get_device(coord);
                 svc.deallocate_l1(d, service_cores_.at(coord), addr);
@@ -677,7 +681,16 @@ D2HStreamService::~D2HStreamService() {
                 mesh_id_claimed_cores_.clear();
             }
         }
+    } catch (const std::exception& e) {
+        log_warning(tt::LogOp, "D2HStreamService: shutdown failed: {}", e.what());
+    } catch (...) {
+        log_warning(tt::LogOp, "D2HStreamService: shutdown failed with unknown exception");
+    }
 
+    // Outside the block above, and only reached by an owner: the descriptor is host state that needs
+    // no open mesh, and a leftover file makes the next service on this host read a stale manifest.
+    // It has to go even when the device-side release was skipped or threw part-way.
+    try {
         if (!descriptor_path_.empty()) {
             if (std::remove(descriptor_path_.c_str()) == 0 || errno == ENOENT) {
                 distributed::ShmResourceTracker::instance().untrack_file(descriptor_path_);
@@ -685,9 +698,9 @@ D2HStreamService::~D2HStreamService() {
             descriptor_path_.clear();
         }
     } catch (const std::exception& e) {
-        log_warning(tt::LogOp, "D2HStreamService: shutdown failed: {}", e.what());
+        log_warning(tt::LogOp, "D2HStreamService: descriptor cleanup failed: {}", e.what());
     } catch (...) {
-        log_warning(tt::LogOp, "D2HStreamService: shutdown failed with unknown exception");
+        log_warning(tt::LogOp, "D2HStreamService: descriptor cleanup failed with unknown exception");
     }
 }
 
