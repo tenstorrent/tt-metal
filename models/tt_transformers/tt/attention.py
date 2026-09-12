@@ -699,27 +699,48 @@ class Attention(LightweightModule):
         )
         return q_heads_1BQD, k_heads_1BKD
 
+    def _rope_prefill(self, x_1HSD, rot_mats):
+        """Prefill RoPE on ``[1, H, S, D]``, run with the heads in the parallelised dim.
+
+        The interleaved prefill kernel splits its work as ``batch x seq_tiles``:
+        ``batch_parallel_factor = padded_shape[0]`` and
+        ``seq_parallel_factor = min(cores // batch, S // 32)``. Dim 1 -- where the heads
+        live -- is never part of that split, so a ``[1, H, S, D]`` input runs on ``S/32``
+        cores: FOUR of them for a 128-token prompt, on a 110-core grid, with each core
+        looping over all H heads.
+
+        Moving the heads into dim 0 hands the same work ``H x S/32`` cores instead. It is
+        free and it is exact:
+          * for a TILE-layout interleaved tensor the tile order of ``[1, H, S, D]`` and
+            ``[H, 1, S, D]`` is identical (only leading dims change), so the reshape is a
+            view, not a copy -- and the reader's flat page index
+            ``b*n_heads*Ht*Wt + h*Ht*Wt + s*Wt`` is the same number either way;
+          * cos/sin indexing survives too. With ``n_heads == 1`` the kernel takes its
+            ``freq_per_head`` branch, whose head term is ``head_num * cos_Ht * Wt`` with
+            ``head_num`` pinned at 0 -- i.e. the same ``seq_tile * Wt`` row the
+            broadcast branch reads.
+        """
+        heads = x_1HSD.shape[1]
+        batched = heads > 1 and x_1HSD.shape[0] == 1
+        if batched:
+            x_1HSD = ttnn.reshape(x_1HSD, (heads, 1, x_1HSD.shape[2], x_1HSD.shape[3]))
+        # These ran at ttnn's HiFi4 default (no config was passed) -- 4x the math for a
+        # bf16 rotation-matrix product, where HiFi2 is the matched fidelity.
+        out = ttnn.experimental.rotary_embedding_llama(
+            x_1HSD,
+            rot_mats[0],
+            rot_mats[1],
+            self.transformation_mats["prefill"],
+            is_decode_mode=False,
+            compute_kernel_config=self.compute_kernel_config_hifi2,
+        )
+        if batched:
+            out = ttnn.reshape(out, (1, heads, out.shape[2], out.shape[3]))
+        return out
+
     def _mllama_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
-        # These two ran at ttnn's HiFi4 default (no config was passed) -- 4x the math
-        # for a bf16 rotation-matrix product, where HiFi2 is the matched fidelity.
-        q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
-            q_heads_1QSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-
-        k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
-            k_heads_1KSD_pre_rot,
-            rot_mats[0],
-            rot_mats[1],
-            self.transformation_mats["prefill"],
-            is_decode_mode=False,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-        )
-
+        q_heads_1QSD = self._rope_prefill(q_heads_1QSD_pre_rot, rot_mats)
+        k_heads_1KSD = self._rope_prefill(k_heads_1KSD_pre_rot, rot_mats)
         return q_heads_1QSD, k_heads_1KSD
 
     def _hf_rope_prefill(self, q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, rot_mats):
