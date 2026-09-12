@@ -119,6 +119,16 @@ while IFS= read -r FILE; do
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
+        # Shared perf counter headers and Python package: the LLK perf harness (every arch, quasar
+        # collection included) and metal's tools/tracy both consume them, so run both sides.
+        tt_metal/tt-llk/tools/include/perf_counters/**|tt_metal/tt-llk/tools/python/**)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            LLK_PERF_CHANGED=true
+            TOOLS_CHANGED=true
+            TTMETALIUM_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
