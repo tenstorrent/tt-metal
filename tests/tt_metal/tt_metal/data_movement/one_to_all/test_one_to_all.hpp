@@ -11,7 +11,7 @@ constexpr uint32_t START_ID = 6;
 constexpr uint32_t START_ID_2_0 = 170;
 
 void directed_ideal_test(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     uint32_t test_case_id,
     bool is_multicast,
     bool is_linked,
