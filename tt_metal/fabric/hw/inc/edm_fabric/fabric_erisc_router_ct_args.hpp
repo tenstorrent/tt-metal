@@ -129,7 +129,7 @@ constexpr bool is_intermesh_router = NAMED_CT_ARG("IS_INTERMESH_ROUTER");
 constexpr bool is_handshake_sender = NAMED_CT_ARG("IS_HANDSHAKE_SENDER") != 0;
 constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
 
-static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
+static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 1");
 
 constexpr size_t VC0_RECEIVER_CHANNEL = 0;
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
