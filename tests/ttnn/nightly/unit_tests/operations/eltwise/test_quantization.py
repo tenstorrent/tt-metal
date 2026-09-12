@@ -638,6 +638,25 @@ def test_quantize_uint8_upper_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
+def test_quantize_uint8_lower_saturation(device):
+    """Test quantize uint8 lower saturation to 0, against the matching positive row"""
+    input_tr = torch.tensor(
+        [
+            [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0, 5.0],
+            [0.0, -0.2, -0.4, -0.6, -0.8, -1.0, -2.0, -5.0],
+        ],
+        dtype=torch.float32,
+    )
+    scale, zero_point = 1.0 / 255.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
 def test_requantize_uint8_upper_saturation(device):
     """Test requantize uint8 upper saturation to 255 on the output side"""
     q_in = torch.tensor([[0, 50, 100, 200, 255, 300, 1000]], dtype=torch.int32)
@@ -645,6 +664,29 @@ def test_requantize_uint8_upper_saturation(device):
     expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
 
     q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize(
+    "in_dtype,q_values,in_scale,in_zp",
+    [
+        (ttnn.int32, [0, 10, 64, 127, 200, 255, -1, -50, -300, -1000], 1.0, 0),
+        (ttnn.int32, [0, 10, 64, 127, 200, 255], 2.0, 10),
+        (ttnn.int8, [-128, -100, -32, -1, 0, 1, 32, 100, 127], 1.0, 0),
+    ],
+)
+def test_requantize_uint8_lower_saturation(device, in_dtype, q_values, in_scale, in_zp):
+    """Test requantize saturating the lower end of a uint8 output to 0"""
+    q_in = torch.tensor([q_values], dtype=torch.int32 if in_dtype == ttnn.int32 else torch.int8)
+    out_scale, out_zp = 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.float32) - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(
+        torch.uint8
+    )
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=in_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
     assert out_tt.dtype == ttnn.uint8
     result = ttnn.to_torch(out_tt)
