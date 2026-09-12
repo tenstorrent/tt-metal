@@ -103,13 +103,13 @@ def create_tt_model(
         hf_config=model_args,
         state_dict=state_dict,
         ccl_manager=ccl_manager,
+        prefill_chunk_size=prefill_chunk_size,
+        precision=precision,
         dtype=dtype,
         tensor_cache_path=tensor_cache_path,
         max_seq_len=max_seq_len,
-        prefill_chunk_size=prefill_chunk_size,
         max_local_batch_size=max_batch_size,
         num_layers=num_layers,
-        precision=precision,
         ring_kv_caches=ring_kv_caches,
     )
 

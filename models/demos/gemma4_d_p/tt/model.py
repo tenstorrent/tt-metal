@@ -172,12 +172,12 @@ class Gemma4Model:
         state_dict,
         ccl_manager,
         prefill_chunk_size,
+        precision,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         max_seq_len=262144,
         max_local_batch_size=1,
         num_layers=None,
-        precision=None,
         ring_kv_caches=None,
     ):
         mesh_device = mesh_config.device
@@ -217,11 +217,6 @@ class Gemma4Model:
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
-
-        from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
-
-        if precision is None:
-            precision = Gemma4Precision()
 
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
