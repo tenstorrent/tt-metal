@@ -86,6 +86,14 @@ serve_profiles:
     args:
       - [--max-num-batched-tokens, "262144"]
       - --no-async-scheduling           # the plugin's block-output contract is synchronous
+  - name: batch4-dflash2
+    description: Up to 4 concurrent requests, each with lossless DFlash2 speculative decoding (one multi-user speculative step per decode step; batched block-output serving).
+    max_num_seqs: 4
+    env:
+      QWEN36_DRAFTER: dflash2
+    args:
+      - [--max-num-batched-tokens, "262144"]
+      - --no-async-scheduling           # the plugin's block-output contract is synchronous
   - name: batch32
     description: Plain decode, up to 32 concurrent users (no speculation).
     max_num_seqs: 32
@@ -95,7 +103,7 @@ default_profile: single-user-dflash2
 
 verify:
   - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
-  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_output'] and C.model_capabilities['output_tokens_per_step'] == 32, C.model_capabilities"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_output'] and C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['output_tokens_per_step'] == 32, C.model_capabilities"
   - "from models.demos.blackhole.qwen36.tt.dflash2_serving import DFlash2ServingDecoder; assert DFlash2ServingDecoder"
   - "import json; m=json.load(open('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json')); assert m['main_class'].endswith(':Qwen36DFlashForCausalLM'), m"
   - "from vllm_tt_plugin.config import get_tt_block_output_kv_lookahead_tokens, is_tt_adaptive_block_output_model"
