@@ -754,6 +754,10 @@ TEST(CyclicSdpaBwEndpointTest, FourCoresTallBlocks) {
     check_relay(4, 2, 2, 64, /* endpoint_sync */ true, /* Bt */ 2);
 }
 
+TEST(CyclicSdpaBwEndpointTest, FourCoresFourTileBlocks) {
+    check_relay(4, 2, 2, 64, /* endpoint_sync */ true, /* Bt */ 4);
+}
+
 TEST(CyclicSdpaBwEndpointTest, SixtyFourCores) {
     check_relay(64, 8, 8, 64, true);
 }
@@ -824,6 +828,29 @@ TEST(CyclicSdpaBwIdentityTest, RemovingTheBarrierChangesNothing) {
 
     // dQ travels the same route in all three.
     expect_identical(algorithm2.dQ, relay.dQ, "dQ, Algorithm 2 against the relay");
+}
+
+// The same claim at every block shape. It is the one the whole comparison
+// between the two rests on -- if they are bitwise equal then the endpoint
+// counters order exactly what the barrier ordered, and any timing difference
+// between them is the cost of the ordering and nothing else. Tall blocks
+// change what a spill covers, a whole block rather than one tile row, so the
+// endpoint thresholds are worth re-pinning against them.
+TEST(CyclicSdpaBwIdentityTest, RemovingTheBarrierChangesNothingWithTallBlocks) {
+    const uint32_t C = 4;
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid.x < 2 || grid.y < 2) {
+        GTEST_SKIP() << "needs a 2x2 region";
+    }
+    for (uint32_t Bt : {2u, 4u}) {
+        const auto ref = make_reference(2u * C * Bt * kTile, 64);
+        const auto relay = run_relay(C, ref, 2, 2, /*endpoint_sync=*/false, nullptr, Bt);
+        const auto endpoint = run_relay(C, ref, 2, 2, /*endpoint_sync=*/true, nullptr, Bt);
+        const std::string at = " at Bt = " + std::to_string(Bt);
+        expect_identical(relay.dQ, endpoint.dQ, "dQ, barrier against endpoint counters" + at);
+        expect_identical(relay.dK, endpoint.dK, "dK, barrier against endpoint counters" + at);
+        expect_identical(relay.dV, endpoint.dV, "dV, barrier against endpoint counters" + at);
+    }
 }
 
 // The column gradients are where the two differ, and residency is the more
