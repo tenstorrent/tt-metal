@@ -29,13 +29,15 @@ device code reads:
    and their query path is unchanged.
 """
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
 
 class MistralSmall4Config:
     """Mistral-Small-4-119B model dimensions (text_config)."""
 
     # Core dimensions
     EMB_SIZE = 4096  # hidden_size
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension (also the shared expert's)
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension; unused - NUM_DENSE_LAYERS is 0
 

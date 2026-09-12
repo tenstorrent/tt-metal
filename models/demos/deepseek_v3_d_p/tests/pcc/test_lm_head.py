@@ -102,28 +102,36 @@ def _ci_unsupported_param_combos_global_to_local_token_id(**params):
     [
         pytest.param(
             (1, 4),
-            torus_x_device_params(),
+            torus_x_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
         pytest.param(
             (2, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

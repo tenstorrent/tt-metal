@@ -10,12 +10,15 @@ Values from HuggingFace config.json for MiniMax-M3.
 """
 
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
+
 class MiniMaxM3Config:
     """MiniMax-M3 text-backbone model dimensions and hyperparameters."""
 
     # Core dimensions
     EMB_SIZE = 6144
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # Implementation-specific; keep in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
 
     # FFN dimensions
     MOE_INTERMEDIATE_SIZE = 3072  # Routed-expert FFN hidden dimension

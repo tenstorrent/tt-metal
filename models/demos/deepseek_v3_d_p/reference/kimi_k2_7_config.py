@@ -14,12 +14,15 @@ K2.6 silently moved K2.7, and it would hide which values K2.7 actually asserts.
 """
 
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
+
 class KimiK27Config:
     """Kimi K2.7-Code model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split. moe_fused_swiglu beat the composite at EVERY measured
     # token count on the 7168x2048 routed-expert shape (1.02-1.81x across 0-5120 tokens),

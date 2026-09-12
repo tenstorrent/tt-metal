@@ -11,6 +11,8 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda.ops import kda_recurrent_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     collect_mesh_accuracy_and_determinism_results,
     compare_cpu_device,
@@ -297,7 +299,7 @@ def _run_distributed_recurrence(
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric_1d_device_params(model_config=KimiK3Config)],
     indirect=True,
 )
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
@@ -333,7 +335,7 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric_1d_device_params(model_config=KimiK3Config)],
     indirect=True,
 )
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])

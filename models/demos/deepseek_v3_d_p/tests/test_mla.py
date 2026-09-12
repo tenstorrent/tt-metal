@@ -19,8 +19,15 @@ from ttnn.device import is_blackhole
 
 import ttnn
 from models.common.utility_functions import comp_pcc, hf_cache_layer_kv
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.mla_reference import create_mla_reference
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    fabric_1d_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.reference_runners import run_reference_mla
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import num_full_indexer_layers, resolve_has_indexer
@@ -441,11 +448,7 @@ def run_model(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-        },
-    ],
+    [fabric2d_device_params(model_config=MistralSmall4Config)],
     ids=["fabric2d"],
     indirect=True,
 )
@@ -965,7 +968,7 @@ def _run_chunked_prefill(
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric_1d_device_params(model_config=MistralSmall4Config)],
     ids=["line"],
     indirect=True,
 )
@@ -1085,7 +1088,7 @@ def test_llama4_query_scale_matches_rotated_positions(request, mesh_device, kv_a
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [fabric_1d_device_params(model_config=MistralSmall4Config)],
     ids=["line"],
     indirect=True,
 )
@@ -1195,7 +1198,7 @@ def test_llama4_query_scale_is_applied_in_q_stem(request, mesh_device, kv_actual
 @pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 16 * 1024 * 1024}],
+    [fabric_1d_device_params(model_config=MistralSmall4Config, trace_region_size=16 * 1024 * 1024)],
     ids=["line"],
     indirect=True,
 )
@@ -1306,15 +1309,18 @@ _CHUNKED_SCENARIOS = (
 )
 
 
+# This mesh axis is crossed independently with Kimi K2.7, Kimi K3, and Mistral.
+# Kimi K2.7 has the largest payload among those variants (tied with Kimi K3), so
+# it safely covers every variant while keeping the axes independent.
 @pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        pytest.param((2, 2), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x2"),
-        pytest.param((2, 4), fabric2d_device_params(l1_small_size=1152), id="fabric2d-2x4"),
+        pytest.param((2, 2), fabric2d_device_params(model_config=KimiK27Config, l1_small_size=1152), id="fabric2d-2x2"),
+        pytest.param((2, 4), fabric2d_device_params(model_config=KimiK27Config, l1_small_size=1152), id="fabric2d-2x4"),
         # high_bw_all_gather parks readiness/completion semaphores in L1_SMALL. On 8x4 the
         # fallback fragments general L1 enough that a later op's static circular buffers collide.
         #
-        pytest.param((8, 4), torus_xy_device_params(l1_small_size=1152), id="torus-xy-8x4"),
+        pytest.param((8, 4), torus_xy_device_params(model_config=KimiK27Config, l1_small_size=1152), id="torus-xy-8x4"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -1408,7 +1414,7 @@ def test_mla_chunked_prefill(
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=1152),
+            torus_xy_device_params(model_config=KimiK3Config, l1_small_size=1152),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         )

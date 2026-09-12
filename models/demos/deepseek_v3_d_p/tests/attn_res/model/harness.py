@@ -19,6 +19,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -49,7 +50,7 @@ L1_SMALL_SIZE = 1152
 # to drop out rather than open a submesh and stall in the ethernet handshake.
 EXACT_BOX = {"require_exact_physical_num_devices": True}
 
-FABRIC = {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": L1_SMALL_SIZE, **EXACT_BOX}
+FABRIC = fabric2d_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **EXACT_BOX)
 
 
 def placements():
@@ -78,17 +79,17 @@ def placements():
         pytest.param((2, 4), FABRIC, id="mesh-2x4"),
         pytest.param(
             (8, 4),
-            fabric2d_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            fabric2d_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
             id="mesh-8x4",
         ),
         pytest.param(
             (8, 4),
-            torus_x_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            torus_x_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
             id="torusx-mesh-8x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
+            torus_xy_device_params(model_config=KimiK3Config, l1_small_size=L1_SMALL_SIZE, **EXACT_BOX),
             id="torusxy-mesh-8x4",
         ),
     ]

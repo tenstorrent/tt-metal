@@ -13,6 +13,7 @@ import pytest
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     check_kimi_k3_accuracy,
@@ -35,13 +36,17 @@ _PCC_THRESHOLD = 0.9995
         pytest.param(
             (2, 4),
             1,
-            fabric_1d_device_params(),
+            fabric_1d_device_params(
+                model_config=KimiK3Config,
+            ),
             id="SP2xTP4-fabric-1d",
         ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=KimiK3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
@@ -116,13 +121,39 @@ def test_synthetic_kimi_k3_accuracy_and_determinism(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, fabric_1d_device_params(), 128, id="SP1xTP8"),
-        pytest.param((2, 4), 1, fabric_1d_device_params(), 128, id="SP2xTP4"),
-        pytest.param((2, 4), 0, fabric_1d_device_params(), 128, id="SP4xTP2"),
+        pytest.param(
+            (1, 8),
+            1,
+            fabric_1d_device_params(
+                model_config=KimiK3Config,
+            ),
+            128,
+            id="SP1xTP8",
+        ),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric_1d_device_params(
+                model_config=KimiK3Config,
+            ),
+            128,
+            id="SP2xTP4",
+        ),
+        pytest.param(
+            (2, 4),
+            0,
+            fabric_1d_device_params(
+                model_config=KimiK3Config,
+            ),
+            128,
+            id="SP4xTP2",
+        ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=KimiK3Config,
+            ),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",

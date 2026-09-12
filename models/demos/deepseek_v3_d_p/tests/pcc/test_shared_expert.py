@@ -92,19 +92,25 @@ def shared_expert_sub_device(mesh_device):
     # v4_pro shape).
     ids=["isl_5k", "isl_5k-k3-6144", "isl_5k-k3-6144-situ", "isl_5k-v4pro-3072"],
 )
+# The model-shape and mesh axes are crossed independently. Every model above has
+# EMB_SIZE=7168, so Kimi K2.7's payload is also the exact payload for all cases.
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
         pytest.param(
             (1, 4),
-            torus_x_device_params(),
+            torus_x_device_params(
+                model_config=KimiK27Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
             id="torus-x-1x4",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=KimiK27Config,
+            ),
             1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
@@ -113,7 +119,7 @@ def shared_expert_sub_device(mesh_device):
         # only param where the SiTU cases can run at all -- SiTU needs ttnn.softcap, Blackhole-only.
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(model_config=KimiK27Config),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",

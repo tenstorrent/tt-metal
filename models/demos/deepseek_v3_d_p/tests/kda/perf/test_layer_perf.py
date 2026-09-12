@@ -23,6 +23,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import KIMI_K3_FIRST_KDA_LAYER
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
@@ -405,9 +406,7 @@ def _trace_wall_samples_ms(
         # Ethernet-core recovery. SP2xTP4/SP4xTP2 were correct but 0.05%/0.10%
         # slower than FABRIC_1D; do not enable 2D until the SP1 failure is fixed.
         pytest.param(
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            },
+            fabric_1d_device_params(model_config=KimiK3Config),
             id="fabric_1d",
         ),
     ],
@@ -514,11 +513,20 @@ def test_kimi_k3_layer_1_perf(
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
     [
-        pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d"),
+        pytest.param(
+            (2, 4),
+            1,
+            fabric_1d_device_params(
+                model_config=KimiK3Config,
+            ),
+            id="SP2xTP4-fabric-1d",
+        ),
         pytest.param(
             (8, 4),
             1,
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=KimiK3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),

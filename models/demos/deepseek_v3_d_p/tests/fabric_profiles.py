@@ -10,62 +10,54 @@ import re
 from pathlib import Path
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 
 
-def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+def fabric2d_device_params(*, model_config, **overrides) -> dict:
     """Unwrapped local Fabric2D profile for 2x2/2x4/4x2 Blackhole tests."""
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=model_config.FABRIC_PAYLOAD_SIZE),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
     params.update(overrides)
     return params
 
 
-def fabric_1d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+def fabric_1d_device_params(*, model_config, **overrides) -> dict:
     """Unwrapped 1D fabric profile."""
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=model_config.FABRIC_PAYLOAD_SIZE),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
     params.update(overrides)
     return params
 
 
-def torus_y_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+def torus_y_device_params(*, model_config, **overrides) -> dict:
     """Fabric2D Ring/Linear profile for an Nx1 mesh."""
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=model_config.FABRIC_PAYLOAD_SIZE),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
     params.update(overrides)
     return params
 
 
-def torus_x_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+def torus_x_device_params(*, model_config, **overrides) -> dict:
     """Fabric2D Linear/Ring profile for a 1xN mesh."""
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=model_config.FABRIC_PAYLOAD_SIZE),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
     params.update(overrides)
     return params
 
 
-def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
+def torus_xy_device_params(*, model_config, **overrides) -> dict:
     """Production 8x4 Ring/Ring profile.
 
     Leave `TT_MESH_GRAPH_DESC_PATH` unset. A torus descriptor declares its channel counts
@@ -77,9 +69,7 @@ def torus_xy_device_params(*, fabric_payload_size=None, **overrides) -> dict:
     """
     params = {
         "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-        "fabric_router_config": create_fabric_router_config(
-            max_payload_size=get_max_payload_size() if fabric_payload_size is None else fabric_payload_size
-        ),
+        "fabric_router_config": create_fabric_router_config(max_payload_size=model_config.FABRIC_PAYLOAD_SIZE),
         "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
     }
     params.update(overrides)

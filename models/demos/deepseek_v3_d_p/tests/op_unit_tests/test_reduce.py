@@ -40,13 +40,17 @@ from tests.ttnn.utils_for_testing import comp_pcc
 REDUCE_MESH_PARAMS = [
     pytest.param(
         (4, 1),
-        torus_y_device_params(),
+        torus_y_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
         id="torus-y-4x1",
     ),
     pytest.param(
         (4, 2),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
@@ -55,7 +59,9 @@ REDUCE_MESH_PARAMS = [
     # so the only one covering mistral_small_4 (or any model) on Blackhole.
     pytest.param(
         (8, 4),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="fabric2d-mesh-8x4",
     ),

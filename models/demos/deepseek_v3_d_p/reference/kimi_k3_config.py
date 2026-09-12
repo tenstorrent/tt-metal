@@ -31,13 +31,14 @@ included, is plain bf16. Only the MoE routed experts are quantized.
 
 import types
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
 
 class KimiK3Config:
     """Kimi K3 model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 7168  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 33792  # Dense FFN hidden dimension
 
@@ -58,6 +59,7 @@ class KimiK3Config:
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 768
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
 
     # Above this, moe_grouped_topk's circular buffers (sized from NUM_ROUTED_EXPERTS/32) no longer fit
     # L1 alongside the height-sharded gate input, and the program fails to validate. Enforced by

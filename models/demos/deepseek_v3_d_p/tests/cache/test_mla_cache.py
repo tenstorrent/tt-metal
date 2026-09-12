@@ -11,6 +11,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import profiler
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -39,12 +40,16 @@ def _ci_unsupported_param_combos(**params):
 
 
 @pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos)
+# This mesh axis is crossed with DeepSeek V3, Kimi K3, and Mistral. DeepSeek is
+# one of the tested variants and has the largest payload (tied with Kimi K3).
 @pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         pytest.param(
             (2, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
         ),
@@ -53,7 +58,9 @@ def _ci_unsupported_param_combos(**params):
         # executable there, which is where the Kimi weight caches are exercised.
         pytest.param(
             (2, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
@@ -62,7 +69,9 @@ def _ci_unsupported_param_combos(**params):
         # that executes on Blackhole, and so the only one that covers mistral_small_4 at all.
         pytest.param(
             (8, 4),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
         ),
