@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/compute/topk.h"
 
 /**
  * @brief Before packing UInt16 value tiles from 32-bit DEST, move values into the packer-visible high half.
@@ -42,9 +43,15 @@ void prepare_uint16_fp32_dest_value_tiles_for_pack(uint32_t dst_tile_a, uint32_t
  * The function assumes that the input and index buffers contain at least Wt tiles,
  * and that Wt is a multiple of 2. It reserves space in the output buffers, processes
  * tiles in pairs, and pushes the results to the output buffers upon completion.
+ *
+ * @tparam stable_sort Run the index-aware comparator-stable network: on exact value
+ * ties the paired index tiles are compare-exchanged so ties resolve in the original
+ * (ascending-index) order.
+ * @tparam tie_order The GLOBAL sort order, never the per-pair local direction, which
+ * this helper deliberately alternates to build the bitonic sequence.
  */
-FORCE_INLINE
-void sort_Wt_tiles_row_to_bitonic_sequence(
+template <bool stable_sort = false, ckernel::TopkTieOrder tie_order = ckernel::TopkTieOrder::Unset>
+FORCE_INLINE void sort_Wt_tiles_row_to_bitonic_sequence(
     DataflowBuffer& input_dfb,
     DataflowBuffer& index_dfb,
     DataflowBuffer& input_transposed_dfb,
@@ -75,7 +82,11 @@ void sort_Wt_tiles_row_to_bitonic_sequence(
         transpose_tile(index_dfb.get_id(), 1, 3);
 
         // llk_topk_sort -> inplace
-        ckernel::topk_local_sort(0, (int)ascending_local, end_phase);
+        if constexpr (stable_sort) {
+            ckernel::topk_canonicalize_negzero_values(0);
+        }
+        ckernel::topk_local_sort<stable_sort, DST_ACCUM_MODE, /*fused=*/false, /*rank_stamped=*/false, tie_order>(
+            0, (int)ascending_local, end_phase);
 
         // UInt16-in-32b-DEST: mode-9 packer fixup before packing values (#50215).
         prepare_uint16_fp32_dest_value_tiles_for_pack(0, 1);

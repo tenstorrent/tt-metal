@@ -133,8 +133,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // CLAMP_NEGATIVE must match the accuracy harness (which passes it): for
         // approx exp it selects the clamped approx-exp branch in sfpu_operations.
         // Omitting it defaulted to false -> a different approx path -> mismatch.
-        test_utils::
-            call_unary_sfpu_operation_init<SFPU_UNARY_OPERATION, APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, FAST_MODE, STABLE_SORT, CLAMP_NEGATIVE>();
+        // TopK rows: the init runs the topk init (fused variant when FUSED_SORT).
+        test_utils::call_unary_sfpu_operation_init<
+            SFPU_UNARY_OPERATION,
+            APPROX_MODE,
+            is_fp32_dest_acc_en,
+            ITERATIONS,
+            FAST_MODE,
+            STABLE_SORT,
+            CLAMP_NEGATIVE,
+            DataFormat::Invalid /* TYPECAST_IN */,
+            DataFormat::Invalid /* TYPECAST_OUT */,
+            FUSED_SORT>();
         PROFILER_SYNC();
     }
     {
@@ -228,7 +238,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             ITERATIONS,
                             FAST_MODE,
                             STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
                 }
             }
@@ -263,7 +276,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             ITERATIONS,
                             FAST_MODE,
                             STABLE_SORT,
-                            CLAMP_NEGATIVE>(block_tile, formats.math);
+                            CLAMP_NEGATIVE,
+                            DataFormat::Invalid /* TYPECAST_IN */,
+                            DataFormat::Invalid /* TYPECAST_OUT */,
+                            FUSED_SORT>(block_tile, formats.math);
                     }
 
                     _llk_math_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
