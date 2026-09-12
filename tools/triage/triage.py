@@ -781,7 +781,7 @@ def init_output_serializer(args: ScriptArguments) -> None:
         try:
             from sqlite_serializer import SqliteSerializer
 
-            serializers.append(SqliteSerializer(sqlite_path, get_verbose_level))
+            serializers.append(SqliteSerializer(sqlite_path))
         except Exception as e:
             utils.WARN(f"Failed to open --sqlite-output-path={sqlite_path!r}: {e}. SQLite output will be skipped.")
 

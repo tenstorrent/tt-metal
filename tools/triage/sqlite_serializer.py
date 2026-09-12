@@ -7,8 +7,14 @@
 SQLite output back end for tt-triage.
 
 Each script's output becomes one table, named after the script, with a row per
-result and a column per displayed field. Columns are INTEGER, REAL or TEXT,
+result and a column per serializable field. Columns are INTEGER, REAL or TEXT,
 chosen from the values the script produced.
+
+Unlike the console and CSV back ends, this one ignores the `-v` verbosity level:
+a database is an archive, not a screen, so every field a script produced is
+stored - including the ones `-v`/`-vv` would have been needed to display. That
+keeps a default run's database queryable for the detail a later question needs,
+without re-running triage at a higher verbosity.
 
 A shared `diagnostics` table collects the check failures, warnings and script
 errors reported alongside those results.
@@ -18,9 +24,9 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from typing import Any, Callable, Iterable
+from typing import Any, Iterable
 
-from serializers import OutputSerializer, strip_rich_markup, extract_table_data
+from serializers import ALL_VERBOSE_LEVELS, OutputSerializer, strip_rich_markup, extract_table_data
 
 
 def quote_identifier(name: str) -> str:
@@ -105,7 +111,7 @@ DIAGNOSTICS_TABLE = "diagnostics"
 class SqliteSerializer(OutputSerializer):
     """Writes each script's rows into a table named after the script."""
 
-    def __init__(self, path: str, verbose_level_getter: Callable[[], int]):
+    def __init__(self, path: str):
         path = os.path.abspath(path)
         parent = os.path.dirname(path)
         if parent:
@@ -113,7 +119,6 @@ class SqliteSerializer(OutputSerializer):
         if os.path.exists(path):
             raise FileExistsError(f"{path} already exists - remove it or pass a different path")
         self.path = path
-        self._verbose_getter = verbose_level_getter
         self._con = sqlite3.connect(path)
         # Created up front so it can always be queried, even on a clean run.
         self._con.execute(
@@ -135,7 +140,7 @@ class SqliteSerializer(OutputSerializer):
         assert script_name is not None, "cannot serialize a result without a script name"
         self._insert_diagnostics(script_name, failures, warnings, script_failed, failure_message)
 
-        table_data = extract_table_data(result, self._verbose_getter())
+        table_data = extract_table_data(result, ALL_VERBOSE_LEVELS)
         if table_data is None or not table_data.rows:
             # Check-only scripts return nothing; their diagnostics are the output.
             self._con.commit()
