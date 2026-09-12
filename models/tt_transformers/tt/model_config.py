@@ -85,6 +85,17 @@ class PrecisionSetting(Enum):
     BF16 = "bf16"
 
 
+def _CORE_COUNTS_DESC(n_tiles, max_x, max_y):
+    """Exact divisors of ``n_tiles`` that fit a device rectangle, largest first."""
+    out = []
+    for c in range(1, min(max_x * max_y, n_tiles) + 1):
+        if n_tiles % c:
+            continue
+        if any(c % x == 0 and c // x <= max_y for x in range(1, min(max_x, c) + 1)):
+            out.append(c)
+    return list(reversed(out))
+
+
 def _prefill_1d_key(pc):
     """Identity of a 1D-mcast program config, for looking its in0 shard back up.
 
@@ -3916,6 +3927,34 @@ class ModelArgs:
                 best = (gx, num_cores // gx, num_cores)
         if best is None or best[2] <= grid_x_2d:
             return None
+        # A core that owns only per_core_N=2 output tiles reads the weight stream in
+        # 2-tile strips and gets ~4 GB/s of the ~25 it could: ff2 sits at 274 GB/s over
+        # 64 readers for that reason. Trade cores for a wider strip where the trade is
+        # not lopsided -- never give up more than half the cores for it, since the
+        # projection still has to do its FLOPs somewhere.
+        # The rectangle's WIDTH has to stay put: the in0 shard below is a multiple of it,
+        # so narrowing the rectangle (56 -> 28 cores takes grid_x 8 -> 7) would leave the
+        # activation with no shard that tiles and hand in0 back to its single sender.
+        def _gx(c):
+            return max(x for x in range(1, min(max_x, c) + 1) if c % x == 0 and c // x <= max_y)
+
+        # Only where the contraction is DEEP enough that the weight stream, not the
+        # FLOPs, sets the time. Measured both ways: ff2 (K=112 tiles) 56.8 -> 49.2 us at
+        # half the cores, while wo (K=32 tiles) went 18.1 -> 20.0 -- its FLOPs% was
+        # already 34 at the wide grid and halving the cores made compute the binding
+        # constraint before the wider strip could pay.
+        wider = (
+            [
+                c
+                for c in _CORE_COUNTS_DESC(n_tiles, max_x, max_y)
+                if n_tiles // c >= 4 and c * 2 >= best[2] and c < best[2] and _gx(c) == best[0]
+            ]
+            if k_tiles >= 64
+            else []
+        )
+        if wider:
+            num_cores = wider[0]
+            best = (best[0], num_cores // best[0], num_cores)
         grid_x, grid_y, num_cores = best
 
         per_core_M = m_tiles
