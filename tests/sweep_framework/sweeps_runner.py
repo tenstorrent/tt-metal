@@ -344,12 +344,16 @@ def run(input_queue, output_queue, config: SweepsConfig):
         clear_job_device_program_cache,
         close_job_device,
         device_canary,
+        dispatch_timeout_detail,
+        resolved_open_params_for_source,
+        set_traced_source_for_open,
     )
 
     module_cache = {}
     cur_module = None
     cur_gen = None  # current module's device fixture generator
     cur_device = None
+    cur_open_params = {}  # source-derived device params the current device was opened with
 
     def _exhaust_fixture():
         nonlocal cur_gen
@@ -372,13 +376,37 @@ def run(input_queue, output_queue, config: SweepsConfig):
             if item == _WORKER_CLOSE:
                 return
 
-            module_name, test_vector = item
+            # 3-tuple carries the vector's traced source so the device can be opened with the
+            # traced test's device_params; 2-tuple stays accepted so an in-flight vector from an
+            # older parent (or any other producer) is never mistaken for a sentinel.
+            if isinstance(item, tuple) and len(item) == 3:
+                module_name, test_vector, traced_source = item
+            else:
+                module_name, test_vector = item
+                traced_source = None
+            # Before get_devices() below: the fixture opens the mesh, and the source has to be
+            # declared while the open is still ahead of us.
+            set_traced_source_for_open(traced_source)
             test_module = module_cache.get(module_name)
             if test_module is None:
                 test_module = importlib.import_module("sweeps." + module_name)
                 module_cache[module_name] = test_module
 
+            # A source change WITHIN a module changes the device configuration too, and the module's
+            # fixture holds its device open across vectors -- so reopening on module change alone
+            # would replay the rest of the module under the first source's config. Compare the
+            # RESOLVED params, not the raw source: they are empty unless the opt-in env is set, so
+            # with the feature off this is always "no change" and no reopen is added.
+            new_open_params = resolved_open_params_for_source(traced_source)
+            if module_name == cur_module and new_open_params != cur_open_params:
+                logger.info(
+                    f"SWEEPS: traced-source device params changed within {module_name} "
+                    f"({cur_open_params} -> {new_open_params}); reopening the device"
+                )
+                cur_module = None  # force the reopen path below
+
             if module_name != cur_module:
+                cur_open_params = new_open_params
                 _exhaust_fixture()
                 # Clear the reused device's program cache so this module starts
                 # clean (no cross-module kernel-binary collision, kernel.cpp:443).
@@ -399,6 +427,23 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None, None])
                     continue
 
+                # Probe the freshly opened device ONCE, before any vector is attributed to it.
+                # The canary was previously reactive -- it ran only after a vector failed -- so a
+                # device that cannot execute kernels was discovered only after it had already
+                # manufactured failures. Run 31771328869 is the case: on 5 of 32 chips the
+                # eltwise_binary_no_bcast image in L1 did not match the ELF that 27 other chips
+                # loaded, the compute never produced tiles, and the first add of the job hung the
+                # whole mesh. ttnn.add IS that kernel, so the probe exercises exactly the path that
+                # was broken, for ~1 ms once per open on a healthy device.
+                if cur_device is not None:
+                    healthy, detail = device_canary(cur_device)
+                    if not healthy:
+                        logger.error(f"Device canary FAILED right after opening for {module_name}: {detail}")
+                        cur_device = None
+                        cur_module = None  # a later vector should reopen rather than reuse this device
+                        output_queue.put([False, f"device unusable at open: {detail}", None, None, None, detail])
+                        continue
+
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 if config.measure_perf_with_cache:
@@ -417,7 +462,12 @@ def run(input_queue, output_queue, config: SweepsConfig):
                 if not status and cur_device is not None:
                     healthy, canary_detail = device_canary(cur_device)
                     if healthy:
-                        canary_detail = None  # nothing to report; the failure stands on its own
+                        # The probe passes on a device that has ALREADY timed out on real work --
+                        # 2+2 on two tiles is not enough work to hit the wedged path. Check the
+                        # durable marker too before letting the failure stand.
+                        canary_detail = dispatch_timeout_detail()
+                        if canary_detail:
+                            logger.error(f"Device unusable after a failing vector: {canary_detail}")
                     else:
                         logger.error(f"Device canary FAILED after a failing vector: {canary_detail}")
                 output_queue.put(
@@ -439,6 +489,10 @@ def run(input_queue, output_queue, config: SweepsConfig):
                     if not healthy:
                         canary_detail = detail
                         logger.error(f"Device canary FAILED after a raised vector: {detail}")
+                    else:
+                        canary_detail = dispatch_timeout_detail()
+                        if canary_detail:
+                            logger.error(f"Device unusable after a raised vector: {canary_detail}")
                 output_queue.put([False, str(e), None, None, None, canary_detail])
     finally:
         _exhaust_fixture()
@@ -519,8 +573,32 @@ def _kill_child(p, timeout_before_rejoin):
         p.join()
 
 
+def _set_traced_source_for_open(source):
+    """Declare the traced source for an imminent device open in THIS process.
+
+    Imported lazily (like the other mesh_tensor_utils uses in this file) so importing the runner
+    never pulls in ttnn, and never fatal: the source only refines the device config, so failing to
+    declare it leaves the open on its defaults.
+    """
+    try:
+        from tests.sweep_framework.sweep_utils.mesh_tensor_utils import set_traced_source_for_open
+
+        set_traced_source_for_open(source)
+    except Exception as exc:
+        logger.debug(f"SWEEPS: could not declare traced source for device open: {exc}")
+
+
 def _attempt_vector(
-    test_vector, module_name, input_queue, output_queue, config, timeout, child_mode, p, main_proc_runner
+    test_vector,
+    module_name,
+    input_queue,
+    output_queue,
+    config,
+    timeout,
+    child_mode,
+    p,
+    main_proc_runner,
+    traced_source=None,
 ):
     """Send a single vector to the child process and collect the result.
 
@@ -532,10 +610,17 @@ def _attempt_vector(
         p.start()
 
     if p is None and main_proc_runner is not None:
+        # Main-process mode runs in THIS process, so declare the source directly instead of sending
+        # it through the queue. execute_suite has already declared the suite's source before the
+        # runner opened its device; this keeps a per-vector change visible to any module that opens
+        # its own device inside run().
+        _set_traced_source_for_open(traced_source)
         main_proc_runner(test_vector)
     else:
-        # persistent worker is module-agnostic: tag each vector with its module
-        input_queue.put((module_name, test_vector))
+        # persistent worker is module-agnostic: tag each vector with its module, and with the
+        # traced source it came from (sanitize_inputs strips that into header_info, so the child
+        # has no other way to know which model's device_params the vector was traced under).
+        input_queue.put((module_name, test_vector, traced_source))
 
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
@@ -550,8 +635,9 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         response[3],
         response[4],
     )
-    # 6th element (optional, so older/other producers of this tuple still unpack): set only
-    # when the vector FAILED and the post-failure device canary also failed.
+    # 6th element (optional, so older/other producers of this tuple still unpack): set only when the
+    # vector FAILED and the device was then found unusable -- either the canary could not compute
+    # 2+2, or a dispatch timeout had already fired in this job.
     canary_detail = response[5] if len(response) > 5 else None
     result["message"] = message
 
@@ -598,25 +684,30 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
     else:
         result["exception"] = message
         if canary_detail:
-            # The vector failed AND the device then failed to compute 2+2 across its own mesh.
-            # A device that cannot do that is not evidence about this op, so the failure is
-            # unattributable: mark NOT_RUN and stop rather than book it -- and rather than keep
-            # feeding vectors to a device that will manufacture more.
+            # The vector failed AND the device is not in a state where that failure means anything,
+            # by either of two independent signals (device_canary / dispatch_timeout_detail):
+            # it could not compute 2+2 across its own mesh, or the runtime already declared a
+            # dispatch timeout earlier in this job. Neither is evidence about this op, so the
+            # failure is unattributable: mark NOT_RUN and stop rather than book it -- and rather
+            # than keep feeding vectors to a device that will manufacture more.
             #
             # This is what run 31295900210 needed. On UF-MN-B4-GWH03 a device timeout was
             # followed by add/linear/nlp_create_qkv_heads_decode each returning PCC exactly 0.0;
             # all three were booked as test failures and all three pass in other runs on other
-            # boxes. The exception text alone could not tell them apart from real regressions --
-            # a health probe can.
+            # boxes. The exception text alone could not tell them apart from real regressions.
+            # Run 31771328869 repeated it on the SAME box with the canary already in place: the
+            # probe passed (2+2 on two tiles is not enough work to hit the wedged path) while the
+            # runtime had already logged "the device is unrecoverable", which is why the durable
+            # timeout marker is checked as well as the live probe.
             #
             # Deliberately ahead of the profiler-readback rule below: both mean "the device is
-            # bad", and the canary is the more direct measurement of the two.
+            # bad", and these are the more direct measurements of the two.
             logger.error(
-                f"Device canary failed after input_hash='{input_hash}' failed: {canary_detail}. "
+                f"Device unusable when input_hash='{input_hash}' failed: {canary_detail}. "
                 "The failure is unattributable to this vector -- marking NOT_RUN and ending the run."
             )
             result["status"] = TestStatus.NOT_RUN
-            result["exception"] = f"DEVICE CANARY FAILED (result not attributable to this vector): {canary_detail}"
+            result["exception"] = f"DEVICE UNUSABLE (result not attributable to this vector): {canary_detail}"
             result["device_perf"] = None
             result["_abort_suite"] = True
             result["_infra_abort"] = True
@@ -1002,6 +1093,7 @@ def _execute_vector_with_retry(
     p,
     result,
     main_proc_runner=None,
+    traced_source=None,
 ):
     """Execute a single test vector with up to MAX_RETRIES retries on timeout.
 
@@ -1024,6 +1116,7 @@ def _execute_vector_with_retry(
                 child_mode,
                 p,
                 main_proc_runner,
+                traced_source,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
 
@@ -1255,6 +1348,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     main_proc_context = None
     if not child_mode and not config.dry_run:
         logger.info("Running in main process mode - device will remain open for all vectors in suite")
+        # Declare the source BEFORE the runner opens its device: in main-process mode the device is
+        # opened once, up front, so a source declared later (per vector) would arrive too late to
+        # affect it. Only when the suite agrees on one source -- a mixed suite has no single answer,
+        # and guessing one would replay some vectors under another model's configuration.
+        declared = [h.get("traced_source") for h in header_info if h.get("traced_source") not in (None, "", [])]
+        if declared and len({str(s) for s in declared}) == 1:
+            _set_traced_source_for_open(declared[0])
         main_proc_runner, main_proc_context = _create_main_proc_runner(module_name, input_queue, output_queue, config)
 
     if child_mode and owns_worker:
@@ -1310,6 +1410,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     p,
                     result,
                     main_proc_runner,
+                    header_info[i].get("traced_source"),
                 )
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
