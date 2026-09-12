@@ -359,6 +359,7 @@ def run_test_sdpa_decode_single_iter(
     override_q_chunk_size=None,
     override_k_chunk_size=None,
     sliding_window_size=None,
+    fp32_dest_acc_en=False,
 ):
     compute_grid_size = device.compute_with_storage_grid_size()
     if sub_core_grids is None:
@@ -387,7 +388,7 @@ def run_test_sdpa_decode_single_iter(
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi2,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=fp32_dest_acc_en,
         packer_l1_acc=False,
     )
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
