@@ -1346,7 +1346,10 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
-    using namespace tt::tt_fabric::detail;
+    using detail::make_topology_search_engine;
+    using detail::MappingValidator;
+    using detail::topology_mapping_should_use_sat_engine;
+    using detail::TopologySearchState;
     const auto next_start = std::chrono::steady_clock::now();
     auto stamp_elapsed = [&](MappingResult<TargetNode, GlobalNode> result) {
         result.stats.elapsed_time =
@@ -2315,8 +2318,7 @@ int SearchHeuristic::compute_candidate_cost(
     if (!global_to_host.empty() && global_idx < global_to_host.size()) {
         const int candidate_host = global_to_host[global_idx];
         if (candidate_host >= 0) {
-            for (size_t t = 0; t < mapping.size(); ++t) {
-                const int mapped_global = mapping[t];
+            for (const int mapped_global : mapping) {
                 if (mapped_global >= 0 && static_cast<size_t>(mapped_global) < global_to_host.size() &&
                     global_to_host[static_cast<size_t>(mapped_global)] == candidate_host) {
                     ++host_affinity_score;
@@ -2670,7 +2672,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::dfs_recursive(
 
     // Check memoization cache
     uint64_t state_hash = hash_state(state_.mapping);
-    if (state_.failed_states.find(state_hash) != state_.failed_states.end()) {
+    if (state_.failed_states.contains(state_hash)) {
         state_.memoization_hits++;
         return false;
     }
@@ -3158,7 +3160,7 @@ bool DFSSearchEngine<TargetNode, GlobalNode>::enumerate_mappings(
         if (pos >= graph_data.n_target) {
             if (unique_shapes) {
                 const auto key = topology_mapping_shape_key(state_.mapping);
-                if (accepted_shapes.count(key) != 0) {
+                if (accepted_shapes.contains(key)) {
                     return;
                 }
                 accepted_shapes.insert(key);
