@@ -129,14 +129,31 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
 
     // Create kernel specs
     // -------------------
-    // This factory targets Gen1 (Wormhole / Blackhole) only. The two data movement kernels place
-    // the reader on RISCV_0 and the writer on RISCV_1, which is the reverse of the conventional
-    // assignment, so neither matches a role default and neither can go through the
-    // architecture-agnostic reader / writer helpers without changing where they run. Spelling out
-    // the Gen1 config is therefore what preserves the placement, and it pins this whole factory to
-    // Gen1: a Gen2 build would need placement decisions that cannot be derived from these values.
+    // The two data movement kernels place the reader on RISCV_0 and the writer on RISCV_1, which is
+    // the reverse of the conventional assignment, so neither matches a role default and neither can
+    // go through the architecture-agnostic reader / writer helpers without changing where they run.
+    // Spelling out the Gen1 config is what preserves that placement.
+    //
+    // Gen2 (Quasar) has no placement to preserve: RISC core and NOC selection are automatic there,
+    // and DataMovementGen2Config shares no field with the Gen1 config. Its default is therefore the
+    // whole Gen2 answer, and it is the same one the architecture-agnostic helpers give on Quasar.
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+
+    DataMovementHardwareConfig reader_hw_config = DataMovementGen1Config{
+        .processor = DataMovementProcessor::RISCV_0,
+        .noc = reader_noc,
+    };
+
+    DataMovementHardwareConfig writer_hw_config = DataMovementGen1Config{
+        .processor = DataMovementProcessor::RISCV_1,
+        .noc = writer_noc,
+    };
+
+    if (device->arch() == tt::ARCH::QUASAR) {
+        reader_hw_config = DataMovementGen2Config{};
+        writer_hw_config = DataMovementGen2Config{};
+    }
 
     KernelSpec reader{
         .unique_id = EMA_READER,
@@ -152,10 +169,7 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"src_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_0,
-            .noc = reader_noc,
-        }},
+        .hw_config = reader_hw_config,
     };
 
     KernelSpec writer{
@@ -172,10 +186,7 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
         }},
         .compile_time_args = {{"total_tiles_per_core", total_tiles_per_core}},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_start_tile"}},
-        .hw_config = DataMovementHardwareConfig{DataMovementGen1Config{
-            .processor = DataMovementProcessor::RISCV_1,
-            .noc = writer_noc,
-        }},
+        .hw_config = writer_hw_config,
     };
 
     KernelSpec compute{
@@ -212,8 +223,8 @@ ttnn::device_operation::ProgramArtifacts EmaDeviceOperation::EmaProgramFactory::
              {"alpha_bits", alpha_bits},
              {"beta_bits", beta_bits}},
         // Translates the TTNN ComputeKernelConfig this op resolves into its Metal 2.0 equivalent.
-        // The helper picks the alternative matching the architecture, but that does not make the
-        // program portable: the data movement kernels above are Gen1-only, so the whole factory is.
+        // The helper picks the alternative matching the architecture and sets every field it owns,
+        // so this spec needs no architecture branch of its own.
         .hw_config = ttnn::to_compute_hardware_config(device->arch(), operation_attributes.compute_kernel_config),
     };
 
