@@ -46,6 +46,15 @@ treat their absence in your environment as a reason to skip the table above.
 
 **If you are unsure whether your change affects the build, build it.**
 
+For agentic workflow sources (`.github/workflows/*.md`), regenerate the
+corresponding `.lock.yml` with the installed, pinned `gh aw compile` command.
+Do not substitute a manual edit of the generated command line for compilation.
+
+An unavailable, skipped, or timed-out validation is **unverified**, even if its
+wrapper reports success. For example, a code-review result that says the
+`autofind` binary is unavailable does not establish that a review ran. Report
+which checks actually completed and which remain outstanding in the PR.
+
 ## Building
 
 If you changed C++ or CMake, compile before opening the PR.

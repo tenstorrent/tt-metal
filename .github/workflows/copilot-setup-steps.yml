@@ -21,6 +21,8 @@ on:
     paths:
       - .github/workflows/copilot-setup-steps.yml
       - .github/scripts/copilot-build.sh
+      - .github/scripts/copilot-runtime-stdio.py
+      - .github/scripts/tests/test_copilot_runtime_stdio.py
 
 jobs:
   # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
@@ -113,3 +115,10 @@ jobs:
         uses: github/gh-aw-actions/setup-cli@6aab9e5b5c91c615506061f09bedd81a23babe3c # v0.86.2
         with:
           version: v0.86.2
+
+      - name: Protect Copilot runtime output from log-pipe backpressure
+        # The native runtime can abort on a nonblocking stdout/stderr write.
+        # BASH_ENV wraps only runtime steps, retaining security checks and logs.
+        run: |
+          python3 .github/scripts/tests/test_copilot_runtime_stdio.py
+          python3 .github/scripts/copilot-runtime-stdio.py --install
