@@ -37,6 +37,11 @@ namespace sfpu {
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
  *
+ * Parity limit: the odd/even test below converts pow through vSMag16, which saturates at
+ * +/-32767, so any larger |pow| reads as non-integer and a negative base returns NaN
+ * where the true result is finite: (-1)**40000 gives NaN rather than 1. The inline claim
+ * that "large powers will approach 0/Inf" does not hold when |base| == 1.
+ *
  * @note This function assumes that the programmable constants are set to the following values:
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
@@ -162,6 +167,40 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     return y;
 }
 
+/**
+ * @brief base**pow on an fp32 DST.
+ *
+ * Same two-step log2/exp2 shape as _sfpu_binary_power_21f_, but with a wider log. The
+ * zero-base block below is fp32-only: _sfpu_binary_power_21f_ still carries the original
+ * one verbatim, so on a bf16 DST pow(0, NaN) returns +0 and pow(0, pow < 0) writes NaN.
+ * See #53922, deferred there on tt-llk#675.
+ *
+ * @param base The base value (sfpi::vFloat vector), can be any floating point number
+ * @param pow The exponent/power value (sfpi::vFloat vector), can be any floating point number
+ *
+ * @return sfpi::vFloat Result of base**pow
+ *
+ * @note Two consumers, both via _sfpu_binary_power_: calculate_sfpu_binary_pow, and
+ * calculate_rpow, which passes its scalar as `base`. So ttnn.rpow(y, 0.0) is pow(0, y)
+ * and the zero-base semantics below apply to it too.
+ *
+ * Special Cases:
+ * - base = +/-0, pow > 0: Returns +/-0 for finite pow, preserving the base sign only for odd integer pow; +inf returns
+ * +0
+ * - base = +/-0, pow < 0: Returns +/-inf for finite pow, preserving the base sign only for odd integer pow; -inf
+ * returns +inf
+ * - base = +/-0, pow = +/-0: Returns 1
+ * - base = +/-0, pow = +/-NaN: Returns NaN
+ * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
+ * - base < 0, pow = non-integer: Returns NaN (complex result)
+ * - Overflow/underflow: Clamped to appropriate limits
+ *
+ * Parity limit: the same vSMag16 saturation described on _sfpu_binary_power_21f_ above.
+ * In this body it also costs the zero-base sign: a -0 base loses it for odd pow in
+ * 32767 < |pow| < 2**24, because the saturated pow reads as non-integer and the
+ * negative-base branch overwrites y with a positive NaN before the fills below copy its
+ * sign. A +0 base is unaffected, and the magnitude stays correct throughout.
+ */
 sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat pow) {
     // The algorithm works in two steps:
     // 1) Compute log2(base)
@@ -264,11 +303,18 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     v_if(out_exp >= 255) { y = std::numeric_limits<float>::infinity(); }
     v_endif;
 
+    // |pow| removes a -0 exponent: convert<vSMag16> would round trip that back to something the
+    // bit-exact compare below reports as non-integer (on BH, not on WH) and gives NaN instead of 1
+    // for a -0 base. Kept on WH too, where it passes only because that conversion happens to
+    // preserve the sign of a -0, which is not a guarantee. Free either way: the zero-base block
+    // below needs |pow|, so this hoist reuses its abs and the instruction count is unchanged.
+    sfpi::vFloat abs_pow = sfpi::abs(pow);
+
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
         // Check valid base range
         auto pow_int = sfpi::convert<sfpi::vSMag16>(
-            pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
+            abs_pow, sfpi::RoundMode::Nearest);  // int16 should be plenty, since large powers will approach 0/Inf
         auto pow_rounded = sfpi::convert<sfpi::vFloat>(pow_int, sfpi::RoundMode::Nearest);
 
         // If pow is odd integer then result is negative
@@ -277,7 +323,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         y = sfpi::setsgn2(y, pow_int);
 
         // Check for integer power, if it is not then overwrite result with NaN
-        v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
+        v_if(pow_rounded != abs_pow) {  // negative base and non-integer power => set to NaN
             y = std::numeric_limits<float>::quiet_NaN();
         }
         v_endif;
@@ -291,17 +337,21 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
     // SFPU `== 0` is bit-exact, so matching -0 needs an abs. Recompute it here
     // rather than reusing abs_base: that live range would span the log2/exp2 body
     // and spills this kernel.
-    // Fill 0 for every non-zero exponent, then narrow to the negative ones.
-    // v_and tightens the enclosing predicate in place, so it costs one compare
-    // where a second flat v_if would also save and restore the lane mask.
-    // pow == 0 fails the != 0 gate and keeps 1.
+    // Fill 0 for every non-zero exponent, then narrow to the negative ones, which
+    // IEEE defines as +inf. v_and tightens the enclosing predicate in place, so it
+    // costs one compare where a second flat v_if would also save and restore the
+    // lane mask. Gating on |pow| lets both signed zeros keep the mainline's 1.
+    // Both fills take their sign from y rather than writing a positive constant, because
+    // IEEE keeps the sign of a zero base through an odd integer exponent.
     sfpi::vFloat abs_end = sfpi::abs(base);
     v_if(abs_end == 0.f) {
-        v_if(pow != 0.f) {
-            y = 0.0f;
+        v_if(abs_pow != 0.f) {
+            y = sfpi::copysgn(sfpi::vFloat(0.0f), y);
             v_and(pow < 0.f);
-            y = std::numeric_limits<float>::quiet_NaN();
+            y = sfpi::copysgn(sfpi::vFloat(std::numeric_limits<float>::infinity()), y);
         }
+        v_endif;
+        v_if(sfpi::is_nan(pow)) { y = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
     }
     v_endif;
@@ -326,15 +376,20 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_<true>(sfpi::vFloat base, sfpi::vFlo
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_binary_pow(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
+    const uint in0_offset = dst_index_in0 * dst_tile_size_sfpi;
+    const uint in1_offset = dst_index_in1 * dst_tile_size_sfpi;
+    const uint out_offset = dst_index_out * dst_tile_size_sfpi;
+
+    // Unroll is perf-neutral on BH. Only unrolled in WH_B0.
     for (int d = 0; d < ITERATIONS; d++) {
-        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
-        constexpr uint dst_tile_size_sfpi = 32;
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat in0 = sfpi::dst_reg[in0_offset];
+        sfpi::vFloat in1 = sfpi::dst_reg[in1_offset];
 
         sfpi::vFloat result = _sfpu_binary_power_<is_fp32_dest_acc_en>(in0, in1);
 
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg[out_offset] = result;
         sfpi::dst_reg++;
     }
 }
