@@ -37,4 +37,21 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     uint32_t rows_per_block_tiles = 1U,
     bool use_barrier = false);
 
+// The same thing, taking what a forward pass actually hands back.
+//
+// The kernel needs D = rowsum(dO . O), and nothing in the repository produces
+// it: sdpa_fw returns only the log-sum-exp, and sdpa_bw computes D itself
+// inside its dQ pass and passes it to its dK/dV pass. This overload computes
+// it the same way, from the attention output, so a caller holding the
+// forward's outputs can use the op without knowing that.
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw_from_forward(
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& grad_output,
+    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& log_sum_exp,
+    uint32_t rows_per_block_tiles = 1U,
+    bool use_barrier = false);
+
 }  // namespace ttml::metal
