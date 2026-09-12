@@ -1,0 +1,104 @@
+name: "[internal] vLLM TT plugin host tests"
+
+on:
+  workflow_call:
+    inputs:
+      plugin-repository:
+        required: true
+        type: string
+        description: "Must match the calling standalone plugin repository"
+      plugin-ref:
+        required: true
+        type: string
+        description: "Must match the calling pull request head SHA"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  resolve-inputs:
+    runs-on: ubuntu-slim
+    outputs:
+      plugin-ref: ${{ steps.resolve.outputs.plugin-ref }}
+      tt-metal-ref: ${{ steps.resolve.outputs.tt-metal-ref }}
+    steps:
+      - name: Validate calling pull request inputs
+        id: resolve
+        env:
+          CALLER_EVENT_NAME: ${{ github.event_name }}
+          CALLER_PR_HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          CALLER_PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CALLER_REPOSITORY: ${{ github.repository }}
+          PLUGIN_REPOSITORY: ${{ inputs.plugin-repository }}
+          PLUGIN_REF: ${{ inputs.plugin-ref }}
+          TT_METAL_REPOSITORY: ${{ job.workflow_repository }}
+          TT_METAL_REF: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$CALLER_REPOSITORY" != "tenstorrent/vllm-tt-plugin" ]; then
+            echo "::error::This workflow may only be called from tenstorrent/vllm-tt-plugin"
+            exit 1
+          fi
+          if [ "$CALLER_EVENT_NAME" != "pull_request" ]; then
+            echo "::error::This workflow may only be called from a pull_request event"
+            exit 1
+          fi
+          if [ "$CALLER_PR_HEAD_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+            echo "::error::Pull request heads from forks are not supported"
+            exit 1
+          fi
+          if [ "$PLUGIN_REPOSITORY" != "$CALLER_REPOSITORY" ]; then
+            echo "::error::plugin-repository must match the calling repository"
+            exit 1
+          fi
+          if [ "$PLUGIN_REF" != "$CALLER_PR_HEAD_SHA" ]; then
+            echo "::error::plugin-ref must match the calling pull request head SHA"
+            exit 1
+          fi
+          if ! [[ "$CALLER_PR_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unable to resolve the calling pull request head SHA"
+            exit 1
+          fi
+          if [ "$TT_METAL_REPOSITORY" != "tenstorrent/tt-metal" ]; then
+            echo "::error::This workflow must run from tenstorrent/tt-metal"
+            exit 1
+          fi
+          if ! [[ "$TT_METAL_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Unable to resolve the TT-metal workflow commit"
+            exit 1
+          fi
+          echo "plugin-ref=$CALLER_PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
+          echo "tt-metal-ref=$TT_METAL_REF" >> "$GITHUB_OUTPUT"
+
+  build-artifact:
+    needs: resolve-inputs
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      ref: ${{ needs.resolve-inputs.outputs.tt-metal-ref }}
+      build-type: Release
+      build-inplace-wheel: true
+      publish-artifact: true
+      publish-package: false
+      platform: "Ubuntu 22.04"
+      use-system-sfpi: true
+      ci-build-docker-image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-ci-build-amd64:latest
+      dev-docker-image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-22.04-dev-amd64:latest
+      allow-missing-cache-credentials: true
+
+  vllm-plugin-unit-tests:
+    needs: [resolve-inputs, build-artifact]
+    uses: ./.github/workflows/vllm-plugin-unit-tests-impl.yaml
+    permissions:
+      contents: read
+      packages: read
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      plugin-repository: tenstorrent/vllm-tt-plugin
+      plugin-ref: ${{ needs.resolve-inputs.outputs.plugin-ref }}
+      tt-metal-ref: ${{ needs.resolve-inputs.outputs.tt-metal-ref }}
