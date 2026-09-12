@@ -8,6 +8,7 @@
 #include "api/compute/src_order.h"                     // SrcOrder
 #include "api/compute/experimental/2_0/llk_operand.h"  // LLKOperand
 #include "experimental/2_0/llk_hw_configure.h"  // id-free llk_{unpack,math,pack}_hw_configure (+ pack_dest_init / math_pack_sync_init per TRISC)
+#include "api/compute/experimental/semaphore_compute_impl.h"  // compute_semaphore_hw_startup (Blackhole compute semaphore seed)
 
 #ifdef TRISC_PACK
 #include "experimental/2_0/llk_pack_tile.h"  // id-free llk_pack_init<DESC>
@@ -89,6 +90,10 @@ ALWI void compute_kernel_hw_startup(
     PACK((llk_pack_hw_configure<is_fp32_dest_acc_en, OUT>()));
     PACK((llk_pack_init<OUT, is_fp32_dest_acc_en, PackMode::Default>()));
     PACK((_llk_pack_dest_init_<DST_SYNC_MODE, is_fp32_dest_acc_en>()));
+    // Seed the Blackhole compute semaphore (SemScope::COMPUTE_ATOMIC): Value 0, Max = the host-baked
+    // capacity. PACK is its producer, so this needs no handshake with UNPACK; see
+    // compute_semaphore_hw_startup().
+    PACK((compute_semaphore_hw_startup()));
 }
 
 // clang-format off

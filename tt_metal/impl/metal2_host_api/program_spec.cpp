@@ -1141,14 +1141,68 @@ void ValidateProgramSpec(const ProgramSpec& spec, const CollectedSpecData& colle
         }
     }
 
-    // Compute kernels cannot have any semaphore bindings.
-    // (There's no use case for ever wanting this, so best just forbid it.)
+    // Blackhole supports local semaphore bindings on UNPACK and PACK (SemScope::COMPUTE_ATOMIC).
+    // Wormhole has no compute implementation and Quasar compute remains out of scope.
     for (const auto& kernel : spec.kernels) {
         TT_FATAL(
-            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty(),
+            !kernel.is_compute_kernel() || kernel.semaphore_bindings.empty() || hal.get_arch() == tt::ARCH::BLACKHOLE,
             "KernelSpec '{}' has semaphore bindings. "
-            "Semaphore bindings are not supported for compute kernels.",
+            "Semaphore bindings on compute kernels are supported only on Blackhole.",
             kernel.unique_id);
+    }
+
+    // A compute semaphore is an UNPACK <-> PACK mechanism (the Tensix hardware semaphore, driven by
+    // Tensix instructions a DM core cannot issue) and may not be shared with a DM kernel. Reject it
+    // here rather than resolve a scope that cannot serve both.
+    {
+        std::unordered_set<std::string_view> sem_has_compute;
+        std::unordered_set<std::string_view> sem_has_dm;
+        for (const auto& kernel : spec.kernels) {
+            for (const auto& binding : kernel.semaphore_bindings) {
+                (kernel.is_compute_kernel() ? sem_has_compute : sem_has_dm).insert(*binding.semaphore_spec_name);
+            }
+        }
+        for (const auto& name : sem_has_compute) {
+            TT_FATAL(
+                !sem_has_dm.contains(name),
+                "SemaphoreSpec '{}' is bound by both a compute kernel and a data-movement kernel. "
+                "Compute semaphores synchronize UNPACK and PACK with each other and cannot be shared "
+                "with a DM kernel; use separate semaphores for the compute and data-movement handoffs.",
+                name);
+        }
+        // Every compute semaphore maps onto the single free Tensix hardware semaphore (index 3), so two in
+        // one program would alias the same hardware state.
+        TT_FATAL(
+            sem_has_compute.size() <= 1,
+            "{} semaphores are bound by compute kernels; a program may bind at most one compute semaphore "
+            "(Blackhole has a single free Tensix hardware semaphore).",
+            sem_has_compute.size());
+        // The compute semaphore lives in the Tensix Sync Unit, which the host cannot write; it is seeded
+        // to 0 by compute_kernel_hw_startup() on the device, so no other initial value can be honored.
+        // Its capacity (max_value) is a 4-bit hardware field and has no meaning for a DM semaphore.
+        for (const auto& sem : spec.semaphores) {
+            const bool compute_bound = sem_has_compute.contains(std::string_view{*sem.unique_id});
+            const uint32_t init_value = sem.advanced_options.initial_value;
+            const uint32_t max_value = sem.advanced_options.max_value;
+            TT_FATAL(
+                !compute_bound || init_value == 0,
+                "SemaphoreSpec '{}' is bound by a compute kernel but has initial_value={}. Compute "
+                "semaphores always start at 0 (seeded by compute_kernel_hw_startup on the device).",
+                sem.unique_id,
+                init_value);
+            TT_FATAL(
+                !compute_bound || max_value <= 15,
+                "SemaphoreSpec '{}' has max_value={}; a compute semaphore's capacity is at most 15 (4-bit "
+                "Tensix hardware semaphore).",
+                sem.unique_id,
+                max_value);
+            TT_FATAL(
+                compute_bound || max_value == 0,
+                "SemaphoreSpec '{}' has max_value={} but is not bound by a compute kernel; max_value is the "
+                "capacity of a compute semaphore and has no effect on a data-movement semaphore.",
+                sem.unique_id,
+                max_value);
+        }
     }
 
     // Validate DM kernel disable_dfb_implicit_sync_for entries.
@@ -3251,6 +3305,21 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
             } else {
                 auto config = MakeGen1ComputeConfig(kernel_spec, dfb_name_to_slot, hal);
                 config.compile_args = std::move(compile_args);
+                // Bake the compute semaphore's capacity into the kernel (Semaphore::wait_not_full and the
+                // SEMINITs read COMPUTE_SEMAPHORE_MAX). At most one compute semaphore per program
+                // (ValidateProgramSpec), so at most one define.
+                for (const auto& binding : kernel_spec.semaphore_bindings) {
+                    if (semaphore_name_to_scope.at(binding.semaphore_spec_name) != SemScope::COMPUTE_ATOMIC) {
+                        continue;
+                    }
+                    const auto sem = std::find_if(
+                        spec.semaphores.begin(), spec.semaphores.end(), [&](const SemaphoreSpec& s) {
+                            return s.unique_id == binding.semaphore_spec_name;
+                        });
+                    if (sem != spec.semaphores.end() && sem->advanced_options.max_value != 0) {
+                        config.defines["COMPUTE_SEMAPHORE_MAX"] = std::to_string(sem->advanced_options.max_value);
+                    }
+                }
                 kernel = std::make_shared<ComputeKernel>(
                     program_impl->get_context_id(),
                     kernel_src,
