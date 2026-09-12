@@ -782,12 +782,12 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
 // meaningless for correctness, so nothing is checked here.
 //
 // Disabled by default: it is slow and it measures rather than asserts.
-void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h) {
+void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64) {
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     if (grid_w > grid.x || grid_h > grid.y) {
         GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
     }
-    const auto ref = make_reference(2u * C * kTile, 64);
+    const auto ref = make_reference(2u * C * kTile, d);
 
     double dram_seconds = 0.0;
     double relay_seconds = 0.0;
@@ -816,8 +816,8 @@ void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h) {
     }
 
     const double us = 1e6;
-    std::cout << "  C=" << C << " N=" << 2u * C * kTile << " on " << grid_w << "x" << grid_h
-              << ": DRAM " << dram_seconds * us << " us, relay " << relay_seconds * us
+    std::cout << "  C=" << C << " N=" << 2u * C * kTile << " d=" << d << " on " << grid_w << "x"
+              << grid_h << ": DRAM " << dram_seconds * us << " us, relay " << relay_seconds * us
               << " us, endpoint " << endpoint_seconds * us << " us"
               << " | relay speedup " << dram_seconds / relay_seconds << "x"
               << ", endpoint against relay " << endpoint_seconds / relay_seconds << "x"
@@ -835,4 +835,21 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariants) {
     time_one_size(16, 4, 4);
     time_one_size(32, 8, 4);
     time_one_size(64, 8, 8);
+}
+
+// Does more work per timestep change the picture? The head dimension is the
+// only knob that adds arithmetic here -- a block is one sequence tile, so
+// every intermediate stays one tile while Q, K, V, dO, dQ, dK, dV grow as
+// d/32 tiles. Compute and payload bytes both scale linearly in d, so what
+// this separates is the *fixed* per-timestep cost -- semaphore waits,
+// barrier, kernel overhead -- from the part that scales. If the relay's
+// advantage and the endpoint deficit both shrink as d grows, the fixed costs
+// are being amortized and the port is moving toward compute bound.
+TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheHeadDimension) {
+    for (uint32_t d : {32u, 64u, 128u, 256u}) {
+        time_one_size(16, 4, 4, d);
+    }
+    for (uint32_t d : {32u, 64u, 128u, 256u}) {
+        time_one_size(64, 8, 8, d);
+    }
 }
