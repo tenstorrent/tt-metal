@@ -27,9 +27,16 @@ void kernel_main() {
     const uint32_t bank_id = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t total_num_blocks_in_buffer = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t* page_sizes = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
-    const uint32_t* block_num_pages = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
-    const uint32_t* block_num_tiles = (uint32_t*)(get_arg_addr(increment_arg_idx(rt_args_idx, num_tensors)));
+    // Copy the per-tensor runtime args out of L1 once (reason explained in writer_l1.cpp).
+    uint32_t page_sizes[num_tensors];
+    uint32_t block_num_pages[num_tensors];
+    uint32_t block_num_tiles[num_tensors];
+    for (uint32_t t = 0; t < num_tensors; t++) {
+        page_sizes[t] = get_arg_val<uint32_t>(rt_args_idx + t);
+        block_num_pages[t] = get_arg_val<uint32_t>(rt_args_idx + num_tensors + t);
+        block_num_tiles[t] = get_arg_val<uint32_t>(rt_args_idx + 2 * num_tensors + t);
+    }
+    rt_args_idx += 3 * num_tensors;
 
     uint32_t l1_buffer_start_addr = get_write_ptr(cb_id);
     uint32_t l1_buffer_end_addr = get_write_ptr(cb_id) + read_cb_size;
