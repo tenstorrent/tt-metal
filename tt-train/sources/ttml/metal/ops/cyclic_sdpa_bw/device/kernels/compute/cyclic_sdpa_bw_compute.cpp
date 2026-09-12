@@ -107,14 +107,21 @@ constexpr uint32_t block_size = get_compile_time_arg_val(6);
 // stages are one tile each and the matmul pipeline latency has nothing to
 // hide behind.
 constexpr uint32_t Bt = get_compile_time_arg_val(7);
+// sqrt(d): the exponential applies the softmax scale to its whole argument,
+// so the statistic being subtracted is divided by it first -- once per row of
+// score tiles instead of a scale pass on each of the Bt tiles.
+constexpr uint32_t inv_scaler_bits = get_compile_time_arg_val(8);
 constexpr uint32_t score_tiles = Bt * Bt;
 
-// Score tiles sit in even registers: apply_mask_on_reg and the softmax step
-// both want a scratch register next to the one they work on, and several
-// score tiles are live at once. Bt <= 4 with FP32 dest.
+// Score tiles are contiguous, with two shared scratch registers above them:
+// one for the row's broadcast statistic, one for the causal mask. Bt + 2
+// registers where per-tile scratch would need 2 * Bt, and it is what lets the
+// row's statistic be broadcast once rather than once per score tile.
 constexpr uint32_t score_reg(uint32_t b) {
-    return 2u * b;
+    return b;
 }
+constexpr uint32_t stat_reg = Bt;
+constexpr uint32_t mask_reg = Bt + 1u;
 
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -149,14 +156,37 @@ constexpr uint32_t cb_grad_value_out = tt::CBIndex::c_23;
 // mode, because matmul Src registers do not support Float32 unpack, so a
 // copy_tile out of one lands in DST in a layout the 32-bit transpose_dest
 // scrambles. copy_dest_values duplicates dS inside DST instead.
-// The same fused FP32 softmax as sdpa_bw's, but reading L from a chosen tile
-// and taking its scratch register as an argument: that helper uses
-// scores_reg + 1, which is another score tile here.
-void softmax_on_dst(
+// sdpa_bw's apply_mask_on_reg with the scratch register named rather than
+// assumed to be the next one along: score tiles are contiguous here, so the
+// register after one is another score tile.
+void apply_mask_at(
     const uint32_t scores_reg,
-    const uint32_t tmp_reg,
-    const uint32_t cb_statistics,
-    const uint32_t stat_tile) {
+    const uint32_t mask_register,
+    const uint32_t cb_mask,
+    const uint32_t minus_one,
+    const uint32_t custom_inf) {
+    copy_init(cb_mask);
+    copy_tile(cb_mask, /* tile_idx */ 0, mask_register);
+
+    mask_tile_init();
+    mask_tile(scores_reg, mask_register);
+
+    // No scale here: the exponential applies it, and the mask's minus
+    // infinity survives being scaled either way.
+    binop_with_scalar_tile_init();
+    add_unary_tile(mask_register, minus_one);
+    mul_unary_tile(mask_register, custom_inf);
+
+    add_binary_tile_init();
+    add_binary_tile(scores_reg, mask_register, scores_reg);
+}
+
+// Broadcast a row's statistic into DST. Split out of the softmax step because
+// it is the same for every column tile of the row: sdpa_bw folds the two
+// together, which is right when a row has one score tile and wasteful when it
+// has Bt of them.
+void broadcast_statistic_to_dst(
+    const uint32_t tmp_reg, const uint32_t cb_statistics, const uint32_t stat_tile) {
     reconfig_data_format_srcb(cb_statistics);
     UNPACK((llk_unpack_A_init<BroadcastType::COL, false, EltwiseBinaryReuseDestType::NONE, false>(
         false, false, cb_statistics)));
@@ -165,12 +195,31 @@ void softmax_on_dst(
           DST_ACCUM_MODE,
           BroadcastType::COL>(cb_statistics)));
     unary_bcast<BroadcastType::COL>(cb_statistics, stat_tile, tmp_reg);
+}
 
+// P = exp(a(S - L/a)) for every score tile of one row, with the scale folded
+// into the exponential rather than applied to S beforehand.
+//
+// sdpa_exp_tile_scaled folds the whole FP32 scale into LREG12 at init time on
+// Blackhole -- one SFPU pass per score tile that no longer happens -- and
+// pre-multiplies by a bfloat16 scale on Wormhole. It computes exp(a * x), so
+// the caller supplies L/a and the identity exp(a(S - L/a)) = exp(aS - L) does
+// the rest. sdpa_fw already works this way, keeping its scores and its
+// running maximum unscaled.
+//
+// Both SFPU programs are configured once for the row rather than once per
+// tile, which is only possible because the subtracts and the exponentials are
+// no longer interleaved: an init between them would reprogram the unit.
+void subtract_and_exp_row(const uint32_t first_reg, const uint32_t count, const uint32_t broadcast_reg) {
     sub_binary_tile_init();
-    sub_binary_tile(scores_reg, tmp_reg, scores_reg);
+    for (uint32_t b = 0; b < count; ++b) {
+        sub_binary_tile(first_reg + b, broadcast_reg, first_reg + b);
+    }
 
-    sdpa_exp_tile_init();
-    sdpa_exp_tile(scores_reg);
+    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_bits>();
+    for (uint32_t b = 0; b < count; ++b) {
+        sdpa_exp_tile(first_reg + b);
+    }
 }
 
 // One tile pair of the block. The caller reserves and pushes the three
@@ -297,15 +346,19 @@ void kernel_main() {
                     matmul_tiles(cb_query, cb_key, a * qWt + k, b * qWt + k, score_reg(b));
                 }
             }
+            if (diagonal) {
+                apply_mask_at(
+                    score_reg(a), mask_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
+            }
+
+            // One broadcast for the row, one scale of it, and one
+            // configuration of each SFPU program -- all per row rather than
+            // per score tile.
+            broadcast_statistic_to_dst(stat_reg, cb_lse, a);
+            binop_with_scalar_tile_init();
+            mul_unary_tile(stat_reg, inv_scaler_bits);
+            subtract_and_exp_row(score_reg(0), Bt, stat_reg);
             for (uint32_t b = 0; b < Bt; ++b) {
-                if (diagonal && b == a) {
-                    apply_mask_on_reg(
-                        score_reg(b), cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
-                } else {
-                    binop_with_scalar_tile_init();
-                    mul_unary_tile(score_reg(b), scaler_bits);
-                }
-                softmax_on_dst(score_reg(b), score_reg(b) + 1u, cb_lse, a);
                 if (diagonal && b > a) {
                     // Wholly above the diagonal. Zeroing P there lets every
                     // later sum run over all of the block's tiles without
