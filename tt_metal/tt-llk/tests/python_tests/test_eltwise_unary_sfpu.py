@@ -422,140 +422,69 @@ _EDGE_SWEEP_OPS = sorted(
     sfpu_unary_ops() - set(_UNARY_OPS_NOT_SWEPT), key=lambda o: o.name
 )
 
-# What the cat-A/cat-D probes found on Wormhole, recorded as non-strict xfails so each case
-# still executes and reports XPASS if the behaviour changes. Listed exhaustively per
-# (input, output, dest_acc) so a combination drifting in or out shows up as a diff here.
-# Sign(-0.0) and Heaviside(-0.0) diverge because SFPSETCC is specified only for inputs that
-# are neither negative zero nor NaN, so they are outside the documented contract rather than
-# hardware faults; they diverge on exactly the two unpack_to_dest combinations, the only ones
-# where a real -0.0 reaches the LREG. See _assert_signed_zero_partition_valid below.
-_EDGE_KNOWN_DIVERGENCES = {
-    MathOperation.Sign: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-    MathOperation.Heaviside: (
-        (DataFormat.Float32, DataFormat.Float16_b, DestAccumulation.Yes),
-        (DataFormat.Float32, DataFormat.Float32, DestAccumulation.Yes),
-    ),
-}
-
-
-# The cat-B divergences, derived rather than listed: each op diverges on exactly the
-# combinations that deliver the probe it diverges on, so the sets stay right when the format
-# axis grows or a delivery measurement is revised. Reciprocal and SqrtCustom diverge wherever
-# specials are carried at all; Sqrt and Rsqrt only where a real -0.0 is also delivered.
-def _cat_b_divergences(delivers):
-    return tuple(
-        (fmt.input_format, fmt.output_format, dest_acc)
-        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
-        for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-        if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
-        and delivers(fmt.input_format, dest_acc)
-    )
-
-
-_EDGE_KNOWN_DIVERGENCES.update(
+# Five of the six recorded divergences are gone, fixed in the kernels rather than re-recorded
+# here: Sign, Heaviside, Sqrt and Rsqrt on -0.0, and SqrtCustom on -inf. All five were the same
+# two hardware facts, not properties of the ops:
+#
+#   * SFPSETCC compares bit patterns, not IEEE values. `v == 0.0f` is an all-bits-zero test, so
+#     a real -0.0 (0x80000000) read as non-zero, and `v < 0.0F` is a sign-bit test, so -0.0 read
+#     as negative. That accounts for Sign, Heaviside, Sqrt and Rsqrt; the kernels now clear the
+#     sign with SFPABS, or shift it out, before comparing.
+#   * sqrt_custom's non-finite pass-through was right for +inf and NaN and wrong for -inf. It
+#     now returns a literal +qNaN on the exact -inf pattern -- narrow enough to leave erfinv's
+#     slightly-negative finite intermediate alone, which is what blocked the earlier fix.
+#
+# Measured on Wormhole only. Blackhole and Quasar carry their own copies of these kernels and
+# have not had the same treatment; a failure there is a real divergence to fix at the kernel,
+# not to re-record here, since a non-strict xfail would hide it again. The -0.0 fixes are no-ops
+# under true IEEE compare semantics, so they port safely to an arch that cannot be measured;
+# sqrt_custom's needs a device.
+#
+# Reciprocal is the one left, deliberately. See _EDGE_DIVERGENCE_REASON.
+#
+# The assertion below holds the *coverage* in place rather than any expected result: these ops'
+# edge probes are what proves the fixes, so dropping one from the sweep has to be deliberate.
+_EDGE_FIXED_DIVERGENCE_OPS = frozenset(
     {
-        MathOperation.Reciprocal: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.SqrtCustom: _cat_b_divergences(lambda _fmt, _dest_acc: True),
-        MathOperation.Sqrt: _cat_b_divergences(negative_zero_delivered),
-        MathOperation.Rsqrt: _cat_b_divergences(negative_zero_delivered),
-    }
-)
-
-# The four whose divergence needs the cat-B probe to be sent. Their xfails are conditional on
-# specials surviving the NaN-sign gate; see where the marker is applied.
-_CAT_B_DERIVED_DIVERGENCES = frozenset(
-    {
-        MathOperation.Reciprocal,
+        MathOperation.Sign,
+        MathOperation.Heaviside,
         MathOperation.SqrtCustom,
         MathOperation.Sqrt,
         MathOperation.Rsqrt,
     }
 )
 
-_EDGE_DIVERGENCE_REASON = {
-    MathOperation.Sign: "sign(-0.0) returns -1; torch and IEEE give 0. Outside the "
-    "documented SFPSETCC contract, which is specified only for inputs that are not "
-    "negative zero. Scoped to the unpack-to-dest combinations, the only ones where a real "
-    "-0.0 reaches the LREG.",
-    MathOperation.Heaviside: "heaviside(-0.0) returns 0; -0.0 == 0 makes it 0.5. Same "
-    "SFPSETCC negative-zero caveat as Sign, and the same unpack-to-dest scoping.",
-    MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
-    "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
-    "combination that delivers one. Not prescribed by the ISA.",
-    MathOperation.SqrtCustom: "sqrt_custom(-inf) returns -inf; IEEE and the golden give "
-    "NaN. The non-finite guard passes non-finite input straight through rather than "
-    "synthesising a NaN, which is right for +inf and NaN and wrong for -inf -- a deliberate "
-    "limit of the minimal fix, since a negative-to-NaN guard would regress erfinv on "
-    "ordinary in-domain inputs. See https://github.com/tenstorrent/tt-metal/issues/52930.",
-    MathOperation.Sqrt: "sqrt(-0) returns NaN; IEEE and the golden give -0. Scoped to the "
-    "unpack-to-dest combinations, the only ones where a real -0.0 reaches the LREG.",
-    MathOperation.Rsqrt: "rsqrt(-0) returns NaN; IEEE and the golden give -inf. Same cause "
-    "and same unpack-to-dest scoping as Sqrt.",
-}
+assert _EDGE_FIXED_DIVERGENCE_OPS <= set(_EDGE_SWEEP_OPS), (
+    "these ops' edge probes are the regression test for the -0.0 / -inf kernel fixes: "
+    f"{sorted(o.name for o in _EDGE_FIXED_DIVERGENCE_OPS - set(_EDGE_SWEEP_OPS))} left the "
+    "sweep, so nothing checks them any more"
+)
 
 
-def _unpack_to_dest(input_format: DataFormat, dest_acc: DestAccumulation) -> bool:
-    """Mirror of the unpack_to_dest expression eltwise_unary_sfpu passes to TestConfig.
-
-    Kept as one expression rather than two literals so the claim below is checked against
-    the driver's actual routing, not against a copy of it that can drift.
-    """
-    return input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-
-
-def _assert_signed_zero_partition_valid():
-    """The signed-zero ops must partition on unpack_to_dest, exactly.
-
-    The explanation recorded against those divergences is an inference from which combinations
-    diverge, and a comment is prose that no run checks. Asserting the shape instead makes
-    editing a table without revisiting the explanation fail at collection.
-    """
-    all_combos = [
+# Derived rather than listed: reciprocal diverges on exactly the combinations that deliver the
+# NaN probe, so the set stays right when the format axis grows or a delivery measurement is
+# revised.
+_EDGE_KNOWN_DIVERGENCES = {
+    MathOperation.Reciprocal: tuple(
         (fmt.input_format, fmt.output_format, dest_acc)
         for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes)
-    ]
-
-    expectations = {
-        # SFPSETCC mishandles a -0.0 that does arrive, which is the unpack-to-dest path.
-        MathOperation.Sign: True,
-        MathOperation.Heaviside: True,
-    }
-
-    # Signbit used to hold the other side of this partition: six xfails recording that the -0.0
-    # probe never arrived on the datacopy path. negative_zero_delivered() now keeps the probe
-    # off those pipelines, so an entry here would be a non-strict xfail that can never fire.
-    assert MathOperation.Signbit not in _EDGE_KNOWN_DIVERGENCES, (
-        "Signbit's divergences were a stimulus limitation, not a kernel defect. An entry "
-        "here means the delivery gate changed -- re-derive it rather than restoring it."
+        if specials_safe(fmt.input_format, fmt.output_format, dest_acc)
     )
+}
 
-    for op, diverges_when_unpack_to_dest in expectations.items():
-        expected = {
-            combo
-            for combo in all_combos
-            if _unpack_to_dest(combo[0], combo[2]) == diverges_when_unpack_to_dest
-        }
-        recorded = set(_EDGE_KNOWN_DIVERGENCES.get(op, ()))
-        assert recorded == expected, (
-            f"{op.name}'s recorded divergences no longer match the unpack_to_dest "
-            f"partition (expected unpack_to_dest == "
-            f"{diverges_when_unpack_to_dest}).\n"
-            f"  missing: {sorted(str(c) for c in expected - recorded)}\n"
-            f"  extra:   {sorted(str(c) for c in recorded - expected)}\n"
-            "The comment above rests on this partition -- if the measurement really "
-            "moved, re-derive the explanation rather than only editing the table."
-        )
-
-    assert set(_EDGE_KNOWN_DIVERGENCES[MathOperation.Sign]) == set(
-        _EDGE_KNOWN_DIVERGENCES[MathOperation.Heaviside]
-    ), "Sign and Heaviside share one SFPSETCC cause, so their sets must stay identical"
-
-
-_assert_signed_zero_partition_valid()
+_EDGE_DIVERGENCE_REASON = {
+    MathOperation.Reciprocal: "1/NaN returns +0; IEEE, torch and the golden all give NaN. "
+    "Every other special agrees, so this is the NaN probe alone, and it diverges on every "
+    "combination that delivers one. Left unfixed on purpose, not for want of a fix: the "
+    "branch-free scale.Exp = ~in.Exp trick sends every exponent-255 lane to +/-0, which is "
+    "right for +/-inf and wrong only here, and re-asserting NaN costs ~5 SFPU slots on a "
+    "~18-slot kernel -- measured at 1.44x on Wormhole, eight times the next-most-expensive of "
+    "the six fixes. 1/NaN is also the only one of the six the ISA does not prescribe. Gating "
+    "the guard on a template flag keeps the ~30 internal consumers (softmax, sigmoid, silu, "
+    "gelu, exp, div, ...) at 1.00x but still leaves the op itself at 1.44x, which is not worth "
+    "torch parity on a value no kernel computes.",
+}
 
 
 @pytest.mark.nightly
@@ -587,13 +516,12 @@ def test_eltwise_unary_sfpu_edges(
 
     specials = _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials)
 
-    # Marked after the gate: where the gate has taken cat B away the probe is not sent, so the
-    # entry would be a non-strict xfail that XPASSes every run. Sign and Heaviside are cat-A
-    # signed zeros and are unaffected.
+    # Marked after the gate: where the gate has taken the cat-B probe away it is not sent, so
+    # the entry would be a non-strict xfail that XPASSes every run.
     diverges_here = (formats.input_format, formats.output_format, dest_acc) in (
         _EDGE_KNOWN_DIVERGENCES.get(mathop, ())
     )
-    if diverges_here and (specials or mathop not in _CAT_B_DERIVED_DIVERGENCES):
+    if diverges_here and specials:
         request.node.add_marker(
             pytest.mark.xfail(reason=_EDGE_DIVERGENCE_REASON[mathop], strict=False)
         )
@@ -631,11 +559,12 @@ def test_eltwise_unary_sfpu_edges(
 
 # sqrt_custom(+inf): a strict regression assertion, deliberately outside the edge sweep.
 #
-# The edge sweep marks the whole SqrtCustom invocation non-strict XFAIL for the
-# sqrt_custom(-inf) divergence, which would absorb a return to sqrt_custom(+inf) = NaN, so the
-# repaired value is asserted here on its own. It runs on Float32 -> Float32 at dest_acc=Yes: a
-# 16-bit output narrows NaN to inf on the way to L1, which is how the defect originally stayed
-# hidden, so only a 32-bit output can show a regression.
+# The sweep now covers both non-finite ends of sqrt_custom, so this no longer exists to escape
+# an xfail that would absorb it. It stays for the two things the sweep cannot give: a strict
+# verdict on one named value, and coverage on Quasar, whose copy of the kernel still guards
+# only val != 0.0f. It runs on Float32 -> Float32 at dest_acc=Yes: a 16-bit output narrows NaN
+# to inf on the way to L1, which is how the defect originally stayed hidden, so only a 32-bit
+# output can show a regression.
 @pytest.mark.nightly
 def test_sqrt_custom_infinity_regression(request):
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)

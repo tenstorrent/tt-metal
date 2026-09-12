@@ -29,7 +29,9 @@ inline void calculate_sign(const std::uint32_t /*exponent_size_8*/) {
         // before, sends -0 to -1). Only the zero case is left for a branch, so the
         // v_elseif and its predicate-complement disappear.
         sfpi::vFloat res = sfpi::copysgn(sfpi::vFloat(1.0f), v);
-        v_if(_sfpu_is_fp16_zero_(v)) { res = 0.0f; }
+        // SFPABS first: SFPSETCC's zero test is a bit-pattern test, so a raw -0.0
+        // (0x80000000) reads as non-zero and falls through to the copysgn arm as -1.
+        v_if(sfpi::abs(v) == 0.0f) { res = 0.0f; }
         v_endif;
         sfpi::dst_reg[0] = res;
         sfpi::dst_reg++;

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <limits>
+
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
@@ -30,9 +32,14 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
     // NaN lanes. That is safe -- exexp(NaN) == 255 falsifies the other conjunct and AND is
     // monotone, so NaN passes through whatever the compare returned.
     //
-    // Residual: -inf passes through where IEEE and the golden give NaN. No negative-to-NaN guard,
-    // because erfinv's NR undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40)
-    // non-positive for small in-domain x, which would turn erfinv(1e-6) into NaN.
+    // -inf is the one non-finite the pass-through gets wrong: IEEE sqrt(-inf) = NaN. Guarding
+    // on the exact -inf bit pattern rather than on `val < 0` keeps erfinv safe -- its NR
+    // undershoot makes `tmp + intermediate_result` (ckernel_sfpu_erfinv.h:40) slightly negative
+    // for small in-domain x, and a negative-to-NaN guard would turn erfinv(1e-6) into NaN.
+    //
+    // The NaN has to be written as a literal +qNaN, not synthesised as (-inf + inf): that
+    // arithmetic yields a *negative* NaN here, and the pack path substitutes an inf of the same
+    // sign, so the result lands as -inf on every bf16 Dest or bf16 output.
     v_if(val != 0.0f && sfpi::exexp(val, sfpi::ExponentMode::Biased) != 255) {
         sfpi::vUInt magic = sfpi::as<sfpi::vUInt>(sfpi::vFloat(sfpi::sFloat16b(0x5f37)));
         sfpi::vFloat approx = sfpi::as<sfpi::vFloat>(magic - (sfpi::as<sfpi::vUInt>(val) >> 1));
@@ -42,6 +49,9 @@ sfpi_inline sfpi::vFloat sfpu_sqrt_custom(sfpi::vFloat in) {
             approx = ((approx * approx) * neg_half_val + 1.5f) * approx;
         }
         out = approx * val;
+    }
+    v_elseif(sfpi::as<sfpi::vInt>(val) == static_cast<int>(0xFF800000)) {
+        out = std::numeric_limits<float>::quiet_NaN();
     }
     v_endif;
     return out;
