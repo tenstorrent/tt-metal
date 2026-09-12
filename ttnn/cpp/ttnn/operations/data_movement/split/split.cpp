@@ -14,6 +14,8 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include <mutex>
+
 namespace ttnn {
 
 namespace detail {
@@ -254,12 +256,18 @@ std::vector<ttnn::Tensor> split(
             const uint64_t est_bytes = chunk_bytes * num_chunks_local + cb_overhead_bytes;
 
             if (est_bytes > static_cast<uint64_t>(max_l1)) {
-                log_warning(
-                    tt::LogOp,
-                    "ttnn.split: L1 budget exceeded (need ~{} B, have {} B for {} chunks); DRAM downgrade.",
-                    est_bytes,
-                    max_l1,
-                    num_chunks_local);
+                // Same input shape/dtype/num_chunks recurs identically across every decode step of a
+                // model loop, so this would otherwise fire once per call with byte-identical values;
+                // warn once per process to preserve the signal without the per-step repetition.
+                static std::once_flag l1_budget_exceeded_warned;
+                std::call_once(l1_budget_exceeded_warned, [&] {
+                    log_warning(
+                        tt::LogOp,
+                        "ttnn.split: L1 budget exceeded (need ~{} B, have {} B for {} chunks); DRAM downgrade.",
+                        est_bytes,
+                        max_l1,
+                        num_chunks_local);
+                });
                 return false;
             }
             return true;
@@ -423,7 +431,14 @@ std::vector<ttnn::Tensor> split(
             } else {
                 input_bytes = slice_input.physical_volume() * slice_input.element_size();
             }
-            log_warning(tt::LogOp, "ttnn.split: migrating L1 input ({} B) to DRAM before slice fallback.", input_bytes);
+            // Same input shape/dtype recurs identically across every decode step of a model loop,
+            // so this would otherwise fire once per call with byte-identical values; warn once per
+            // process to preserve the signal without the per-step repetition.
+            static std::once_flag l1_migration_warned;
+            std::call_once(l1_migration_warned, [&] {
+                log_warning(
+                    tt::LogOp, "ttnn.split: migrating L1 input ({} B) to DRAM before slice fallback.", input_bytes);
+            });
             slice_input = ttnn::to_memory_config(slice_input, dram_interleaved, std::nullopt);
         }
         results = detail::split_with_slice_impl(
