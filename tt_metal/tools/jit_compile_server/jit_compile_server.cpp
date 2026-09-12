@@ -20,6 +20,7 @@
 #include "impl/jit_server/types.hpp"
 #include "jit_build/depend.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "jit_build/pch.hpp"
 
 // Remote JIT compile server
 //
@@ -155,8 +156,8 @@ void build_failure(
         fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file));
 }
 
-bool need_compile(const std::string& out_dir, const std::string& obj) {
-    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
+bool need_compile(const std::string& out_dir, const std::string& obj, const std::string& umbrella) {
+    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj, umbrella);
 }
 
 bool need_link(const std::string& out_dir, const std::string& target_name) {
@@ -180,6 +181,32 @@ void append_tokenized(std::vector<std::string>& args, const std::string& flags) 
     args.insert(args.end(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
 }
 
+std::string find_target_pch_root(const tt::tt_metal::jit_server::TargetRecipe& target, const std::string& out_dir) {
+    // Source-mode recipes already carry the tt-metal root as an include directory.
+    // Resolve it as the compiler would, without constructing a device/MetalContext
+    // or requiring an additional server environment variable or RPC field.
+    const auto includes = tt::jit_build::utils::tokenize_flags(target.includes);
+    for (size_t i = 0; i < includes.size(); ++i) {
+        if (!includes[i].starts_with("-I")) {
+            continue;
+        }
+        std::string dir = includes[i].substr(2);
+        if (dir.empty() && i + 1 < includes.size()) {
+            dir = includes[++i];
+        }
+        if (dir.empty()) {
+            continue;
+        }
+        const fs::path root = fs::path(out_dir) / dir;
+        std::error_code ec;
+        if (fs::is_regular_file(root / tt::jit_build::PCH_UMBRELLA, ec)) {
+            return root.string();
+        }
+    }
+    // Older source trees may not ship the optional umbrella.
+    return {};
+}
+
 // Uses posix_spawn with an explicit argument vector — no shell interpretation of
 // client-supplied fields.
 void compile_one(
@@ -187,17 +214,31 @@ void compile_one(
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
     size_t src_index,
-    const std::string& temp_obj) {
+    const std::string& temp_obj,
+    const std::string& pch_root,
+    const std::string& source_root) {
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
     // Build the g++ argv via the shared jit_build_utils builder and run it directly (posix_spawn,
     // no shell), the same path used by the local compile.
     std::vector<std::string> defines(target.defines.begin(), target.defines.end());
+    std::string cflags = target.cflags;
+    // Preprocess-and-ship sends self-contained .ii files whose standard headers
+    // are already expanded, so they cannot benefit from this shared prelude.
+    if (fs::path(target.srcs[src_index]).extension() != ".ii" && !source_root.empty()) {
+        // Only toolchain headers: kernel-specific -I paths must not create PCH variants.
+        const std::string pch =
+            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, "", source_root, pch_root);
+        if (!pch.empty()) {
+            defines.insert(defines.begin(), {"-include", pch});
+            cflags += " -Winvalid-pch -Wno-error=invalid-pch";
+        }
+    }
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
         gpp,
         target.compiler_opt_level,
-        target.cflags,
+        cflags,
         target.includes,
         defines,
         target.srcs[src_index],
@@ -215,7 +256,11 @@ void compile_one(
     // missing dephash conservatively forces a server-side recompile next time, and client-side reuse
     // rides on the client-written <elf> full-dephash sidecar instead.
     if (fs::path(target.srcs[src_index]).extension() != ".ii") {
-        tt::jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+        tt::jit_build::write_dependency_hashes(
+            out_dir,
+            obj_temp_path,
+            obj_temp_path + ".dephash",
+            source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string());
     }
     fs::remove(temp_d_path);
 }
@@ -266,6 +311,7 @@ void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
+    const std::string& pch_root,
     tt::tt_metal::jit_server::CompileResponse& response) {
     if (target.srcs.size() != target.objs.size()) {
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
@@ -280,9 +326,12 @@ void build_target(
         temp_objs.push_back(tt::jit_build::utils::FileRenamer::generate_temp_path(obj));
     }
 
+    const std::string source_root = find_target_pch_root(target, out_dir);
+    const std::string umbrella =
+        source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string();
     std::vector<bool> compiled(num_objs, false);
     for (size_t i = 0; i < num_objs; ++i) {
-        if (need_compile(out_dir, target.objs[i])) {
+        if (need_compile(out_dir, target.objs[i], fs::path(target.srcs[i]).extension() == ".ii" ? "" : umbrella)) {
             compiled[i] = true;
         }
     }
@@ -302,7 +351,7 @@ void build_target(
 
     for (size_t i = 0; i < num_objs; ++i) {
         if (compiled[i]) {
-            compile_one(gpp, target, out_dir, i, temp_objs[i]);
+            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root, source_root);
         }
     }
 
@@ -396,7 +445,9 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            build_target(request.gpp, resolved_target, out_dir, response);
+            const std::string pch_root =
+                (fs::path(g_server_cache_root) / std::to_string(request.build_key) / "pch").string();
+            build_target(request.gpp, resolved_target, out_dir, pch_root, response);
         }
 
         response.success = true;

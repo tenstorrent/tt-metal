@@ -45,6 +45,7 @@
 #include "jit_build/depend.hpp"
 #include "jit_build_settings.hpp"
 #include "jit_build_utils.hpp"
+#include "pch.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "profiler_paths.hpp"
 #include "tt_metal/llrt/tt_elffile.hpp"
@@ -138,7 +139,8 @@ void JitBuildEnv::init(
     // Tools
     const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
     if (use_ccache) {
-        this->gpp_ = "ccache ";
+        // ccache requires sloppiness settings for both PCH creation and consumption
+        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
     } else {
         this->gpp_ = "";
     }
@@ -652,17 +654,31 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
 void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
     TTZoneScopedD(JIT);
 
-    // Build the compile recipe (opt/cflags/includes/defines, including kernel-specific include
-    // paths and the -include for the named-compile-arg map header) ONCE via export_target_recipe,
-    // then turn it into an argv with the shared builder and run it SHELL-FREE via exec_command —
-    // the same argv builder the JIT compile server and preprocess-and-ship use. Shell-free also
-    // means defines carrying shell metacharacters, like -DFULL_KERNEL_NAME="<name>", need no
-    // escaping — each define is one argv element, passed verbatim.
+    // Use the shared recipe and argv builder to pass defines verbatim without shell escaping.
     const tt::jit_build::TargetRecipe recipe = export_target_recipe(settings);
 
     std::string cflags = recipe.cflags;
     if (env_.get_rtoptions().get_build_map_enabled()) {
         cflags += " -save-temps=obj -fdump-tree-all -fdump-rtl-all";
+    }
+
+    // Add the machine-local PCH here so exported recipes remain portable.
+    // Exclude per-kernel include paths and build-map dump flags from the PCH profile.
+    const std::string pch = tt::jit_build::ensure_pch(
+        env_.gpp_,
+        recipe.compiler_opt_level,
+        recipe.cflags,
+        this->includes_,
+        env_.root_,
+        fmt::format("{}{}/pch/", env_.out_root_, env_.build_key_));
+
+    // Preserve the recipe's defines for watcher logging.
+    std::vector<std::string> defines = recipe.defines;
+    if (!pch.empty()) {
+        // Load the PCH before any other force-included header emits C++ tokens.
+        defines.insert(defines.begin(), {"-include", pch});
+        // Warn if GCC rejects the PCH, while allowing textual fallback.
+        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];
@@ -674,7 +690,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,
-        recipe.defines,
+        defines,
         this->srcs_[src_index],
         tt::jit_build::utils::GppAction::Compile,
         obj_temp_path,
@@ -695,13 +711,16 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
+    jit_build::write_dependency_hashes(
+        out_dir, obj_temp_path, obj_temp_path + ".dephash", fs::exists(umbrella) ? umbrella.string() : "");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
+    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
     return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
-           !jit_build::dependencies_up_to_date(out_dir, obj);
+           !jit_build::dependencies_up_to_date(out_dir, obj, fs::exists(umbrella) ? umbrella.string() : "");
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(

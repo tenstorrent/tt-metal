@@ -203,7 +203,11 @@ void write_dependency_hashes(
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& extra_dependency) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
@@ -221,6 +225,9 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
         hash_file.setstate(std::ios::badbit);
     } else {
         auto dependencies = parse_dependency_file(dep_file);
+        if (!extra_dependency.empty() && dependencies.contains(obj)) {
+            dependencies.at(obj).push_back(extra_dependency);
+        }
         write_dependency_hashes(dependencies, out_dir, obj, hash_file);
     }
     hash_file.close();
@@ -230,10 +237,12 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
     }
 }
 
-bool dependencies_up_to_date(std::istream& hash_file) {
+bool dependencies_up_to_date(std::istream& hash_file, const std::string& required_dependency) {
     size_t count = 0;
+    bool found_required = required_dependency.empty();
     std::filesystem::path dep;
     while (hash_file >> dep) {
+        found_required |= dep == required_dependency;
         uint64_t recorded_hash{};
         hash_file >> recorded_hash;
         if (hash_file.fail()) {
@@ -266,10 +275,11 @@ bool dependencies_up_to_date(std::istream& hash_file) {
         return false;
     }
     // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
-    return count > 0;
+    return count > 0 && found_required;
 }
 
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
+bool dependencies_up_to_date(
+    const std::string& out_dir, const std::string& obj, const std::string& required_dependency) {
     auto t0 = std::chrono::steady_clock::now();
     std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
     std::ifstream hash_file(hash_path);
@@ -278,7 +288,8 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
         return false;
     }
 
-    auto up_to_date = dependencies_up_to_date(hash_file);
+    auto up_to_date = dependencies_up_to_date(
+        hash_file, required_dependency.empty() ? "" : (std::filesystem::path(out_dir) / required_dependency).string());
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
