@@ -22,6 +22,7 @@ See also: ttnn.corruptible_allocation_scope, ttnn.execute_trace.
 from __future__ import annotations
 
 import gc
+import os
 import sys
 from typing import ClassVar
 
@@ -35,6 +36,11 @@ class UnsafeAllocationTracker:
 
     _diagnostics_enabled: ClassVar[bool] = TRACE_ALLOC_DIAGNOSTICS
     _referrer_depth: ClassVar[int] = TRACE_ALLOC_REFERRER_DEPTH
+    # TT_METAL_TRACE_ALLOC_REPORT_ONLY=1: log the live-unsafe buffers (id, op, DRAM address, owner
+    # path) before each replay instead of raising, so a run completes and its output can be judged
+    # against the addresses. Deduplicated per (trace, address set).
+    _report_only: ClassVar[bool] = os.environ.get("TT_METAL_TRACE_ALLOC_REPORT_ONLY") == "1"
+    _reported: ClassVar[set] = set()
 
     def __init__(self, mesh_device):
         self.mesh_device = mesh_device
@@ -86,6 +92,10 @@ class UnsafeAllocationTracker:
 
         live_unsafe = set(live_unsafe_map.keys())
 
+        if self._report_only:
+            self._report_addresses(trace_id, live_unsafe, live_unsafe_map)
+            return
+
         parts = [
             f"Found {len(live_unsafe)} device buffer(s) still alive before "
             f"trace replay. These will be corrupted on replay.\n"
@@ -113,6 +123,94 @@ class UnsafeAllocationTracker:
             "tensors, or ensure temporary tensors are freed before replay."
         )
         raise RuntimeError("".join(parts))
+
+    @classmethod
+    def _report_addresses(cls, trace_id, live_unsafe: set[int], live_unsafe_map: dict) -> None:
+        tensors = cls._find_tensors_by_uid(live_unsafe)
+        rows = []
+        for buf_id in sorted(live_unsafe):
+            ctx = live_unsafe_map.get(buf_id, "") or ""
+            op = ctx.split(" output_mem_config")[0].replace("program_cache: ", "")
+            dtype = ctx.split("output_dtype=DataType::")[1].split(" ")[0] if "output_dtype=" in ctx else ""
+            path, tensor = tensors.get(buf_id, ("?", None))
+            addr = shape = "?"
+            if tensor is not None:
+                try:
+                    addr = f"0x{tensor.buffer_address():x}"
+                except Exception as e:
+                    addr = f"err:{type(e).__name__}"
+                try:
+                    shape = str(list(tensor.shape))
+                except Exception:
+                    pass
+            rows.append((buf_id, op, dtype, addr, shape, path))
+        key = (str(trace_id), tuple((r[0], r[3]) for r in rows))
+        if key in cls._reported:
+            return
+        cls._reported.add(key)
+        out = [f"[TRACE_ALLOC_REPORT] trace={trace_id} live_unsafe={len(rows)}"]
+        for buf_id, op, dtype, addr, shape, path in rows:
+            out.append(f"[TRACE_ALLOC_REPORT]   {buf_id} {addr:>12} {op}:{dtype} shape={shape} via {path}")
+        print("\n".join(out), file=sys.stderr, flush=True)
+
+    @staticmethod
+    def _find_tensors_by_uid(live_unsafe: set[int]) -> dict:
+        """Frame-locals walk (same shape as _find_python_referrers) returning {uid: (path, tensor)}."""
+        import ttnn
+
+        found: dict = {}
+        visited: set[int] = set()
+
+        def scan(val, path, depth):
+            if id(val) in visited:
+                return
+            visited.add(id(val))
+            if isinstance(val, ttnn.Tensor):
+                try:
+                    uid = val.buffer_unique_id()
+                except Exception:
+                    return
+                if uid in live_unsafe and uid not in found:
+                    found[uid] = (path, val)
+                return
+            if depth <= 0:
+                return
+            if isinstance(val, (list, tuple)):
+                for i, item in enumerate(val):
+                    scan(item, f"{path}[{i}]", depth - 1)
+            elif isinstance(val, dict):
+                try:
+                    items = list(val.items())
+                except Exception:
+                    return
+                for k, v in items:
+                    scan(v, f"{path}[{k!r}]", depth - 1)
+            else:
+                try:
+                    has_dict = hasattr(val, "__dict__") and not isinstance(val, type)
+                except Exception:
+                    return
+                if not has_dict:
+                    return
+                try:
+                    items = list(val.__dict__.items())
+                except Exception:
+                    return
+                for k, v in items:
+                    if not k.startswith("__"):
+                        scan(v, f"{path}.{k}", depth - 1)
+
+        for _tid, frame in list(sys._current_frames().items()):
+            while frame is not None:
+                try:
+                    local_items = list(frame.f_locals.items())
+                except Exception:
+                    frame = frame.f_back
+                    continue
+                for name, val in local_items:
+                    scan(val, f"{frame.f_code.co_name}:{name}", UnsafeAllocationTracker._referrer_depth)
+                frame = frame.f_back
+        return found
 
     @staticmethod
     def _find_python_referrers(live_unsafe: set[int]) -> str:
