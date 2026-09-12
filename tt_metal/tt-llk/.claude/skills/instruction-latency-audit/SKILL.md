@@ -61,9 +61,11 @@ The pass `rtl-rvtt-schedule.cc` conditionally inserts `sfpnop` after Tensix insn
 3. **For each raw sequence**, walk producer→consumer in **executed** program order.
    For an inline `TTI_*` run that is the source order. For a word that is slotted
    into a MOP or captured into a replay buffer it is **not**: per `race-audit-all`
-   → *"A word's SLOT, not its line"*, an `END_OP` is followed by the **next** outer
-   iteration's `START_OP`, a `*_LAST` override replaces a loop op only on the last
-   inner iteration, and template 0 selects per iteration from a runtime mask. So
+   → *"A word's SLOT, not its line"*, the last live END slot is followed by the
+   **next** outer iteration's `START_OP` (`END_OP1` when both are live, `END_OP0`
+   when `END_OP1` is a plain `NOP`), a `*_LAST` override replaces a loop op only
+   on the last inner iteration and still has the live END ops after it, and
+   template 0 selects per iteration from a runtime mask. So
    padding that looks sufficient in the text can be absent in the executed stream
    (and vice versa), and it can differ between the first, middle and last
    iterations of the same MOP. Resolve the neighbours at the `run()`/`replay()`
