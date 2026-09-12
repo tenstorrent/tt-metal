@@ -398,6 +398,11 @@ class SpeculativeDecoder:
             ttnn.deallocate(t)
         self.mtp_extra_steps += 1
 
+    def _after_seed(self, first, positions):
+        """Hook run right after seed_spec_step (pre-capture): ``first[u]`` was consumed at
+        ``positions[u]``. The MTP drafter needs nothing here; a block drafter extends its context."""
+        return None
+
     def _reseed_warmup(self, rows, dim_frac, dtype):
         """Compile the batched-reseed program BEFORE the verify trace is captured.
 
@@ -824,6 +829,10 @@ class SpeculativeDecoder:
         # presence penalty sees here.
         for u in range(B):
             pending[u] = self._pick_token(Lp[u], torch.tensor([first[u]], dtype=torch.int64))
+        # Drafter hook: the seed's own rows are now part of the context (a block drafter extends its
+        # context KV with the seed position here; the MTP drafter has nothing to do). Still
+        # pre-capture, so whatever it compiles is safe.
+        self._after_seed(first, list(Tp))
 
         # Anchor buffers + the one-hot matmul that refills them, compiled while nothing is traced.
         # The warmup writes zeros into _hp_buf, so the real seed rows are copied in AFTERWARDS.

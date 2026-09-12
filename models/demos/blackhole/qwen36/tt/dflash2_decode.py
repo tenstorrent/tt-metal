@@ -17,12 +17,16 @@ Iteration shape (anchor p; the base has consumed through p):
 
 Context plumbing:
   * prompt   : the eager masked prefill captures the taps per chunk (Qwen36Model._dflash_tap);
-               _warm_mtp_chunk (called per chunk by generate) fills the draft KV for that chunk.
-  * seed     : the eager seed verify (position T) captures the same way; _seed extends slot T.
-  * loop     : the verify TRACE copies its taps into fixed buffers (model._dflash_tap_bufs);
-               the reseed hook extends slots p+1..p+m+1 from them after each commit.
+               _warm_mtp_chunk (called per chunk per user by generate) fills that user's draft KV.
+  * seed     : the eager verify-style seed (model.seed_spec_step) captures one tap row per user;
+               _after_seed extends each user's context by its seed slot Tp[u].
+  * loop     : the verify TRACE copies its taps into fixed buffers (model._dflash_tap_bufs, B*T rows);
+               the reseed hook extends each user's slots p_u+1..p_u+m_u+1 from its rows after accept.
 Every hook that the MTP drafter used for its own KV maintenance is repointed, so generate() runs
-unmodified. Two drafter implementations (QWEN36_DFLASH_TP, default 1):
+unmodified. B > 1 (multi-user): the drafter runs every user's block in ONE forward of B*block
+user-major rows (row u*block + j), mirroring the verify bucket, so the verify trace's tap rows
+feed the extend directly; each user has its own context blocks in the drafter's paged KV.
+Two drafter implementations (QWEN36_DFLASH_TP, default 1):
   * DFlash2DrafterTP (tt/dflash2_tp.py): weights TP-sharded, taps consumed on device, draft + extend
     traced (captured lazily on the first loop iteration, after the verify trace).
   * DFlash2Drafter   (tt/dflash2.py): replicated, eager, host tap round-trips (the validated oracle
@@ -34,7 +38,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.qwen36.tt.dflash2 import DEFAULT_WEIGHTS, DFlash2Drafter, load_config, taps_to_host
+from models.demos.blackhole.qwen36.tt.dflash2 import DEFAULT_WEIGHTS, DFlash2Drafter, load_config
 from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 from models.tt_transformers.tt.common import get_block_size
 
@@ -127,9 +131,15 @@ def get_drafter(model, weights_dir=None, block=None):
 
 
 class DFlash2Decoder(SpeculativeDecoder):
-    """SpeculativeDecoder with the DFlash block-diffusion drafter (lossless: same verify/accept)."""
+    """SpeculativeDecoder with the DFlash block-diffusion drafter (lossless: same verify/accept).
 
-    def __init__(self, model, page_table_torch, draft_len=None, stop_tokens=None, weights_dir=None, sampling=None):
+    B users share one draft forward (B*block rows, user-major) and one verify replay (B*T rows);
+    the drafter keeps a private paged context KV with one block range per user (the same [B, nb]
+    page tables as the target). K = block-1 per user, so B*(K+1) <= 32 binds K to the batch: K=7
+    (block 8) up to B=4, K=3 (block 4) at B=8.
+    """
+
+    def __init__(self, model, page_tables, draft_len=None, stop_tokens=None, weights_dir=None, sampling=None):
         # The block drafter yields tokens, not a draft distribution: greedy only (the substrate's rejection
         # sampler needs q(x) per draft position).
         assert sampling is None, "DFlash2Decoder is greedy-only (sampling=None)"
@@ -138,110 +148,121 @@ class DFlash2Decoder(SpeculativeDecoder):
         self.drafter = get_drafter(model, self._weights_dir, block=K + 1)
         assert self.drafter.K == K
         self.tp = self.drafter.is_tp
+        assert (
+            self.tp
+        ), "DFlash2Decoder runs the TP drafter (QWEN36_DFLASH_TP=1); the replicated oracle is B=1 test-only"
         # The shared model is armed for DFlash taps only inside generate() (and disarmed in its
         # finally), so a constructed-but-idle decoder leaves other decoders/prefills untouched.
-        super().__init__(model, page_table_torch, draft_len=K, stop_tokens=stop_tokens)
-        self._pt_torch = page_table_torch
-        self.ctx_len = 0  # positions whose taps the draft KV holds (debug/asserts)
+        super().__init__(model, page_tables, draft_len=K, stop_tokens=stop_tokens)
+        self._pt_torch = self.page_tables  # [B, nb] (normalized by the base class)
+        self.ctx_len = [0] * self.B  # per user: positions whose taps the draft KV holds (asserts)
         self._armed = False
 
     # ------------------------------------------------------------------ prompt / seed context
     def _take_prompt_taps(self):
         taps = self.model.take_dflash_eager_taps()
         assert taps is not None, (
-            "no eager prompt taps: the masked-bucket prefill replayed a trace instead of running eagerly "
-            "(QWEN36_PREFILL_BUCKET_TRACE captured?) — the DFlash drafter needs the eager masked prefill"
+            "no eager taps: the masked-bucket prefill replayed a trace instead of running eagerly "
+            "(QWEN36_PREFILL_BUCKET_TRACE captured?) -- the DFlash drafter needs the eager masked prefill"
         )
         return taps
 
-    def _warm_mtp_chunk(self, feed, chunk_start, valid_len, prompt_ids):
-        """Per prefill chunk: this chunk's taps -> draft context KV at chunk_start.. (bucket rows)."""
+    def _user_of(self, page_table_torch):
+        """Which user a per-user [1, nb] page-table row belongs to (the prefill hook gets the row, not u)."""
+        row = torch.as_tensor(page_table_torch).reshape(-1).to(torch.int32)
+        for u in range(self.B):
+            if torch.equal(self.page_tables[u], row):
+                return u
+        raise AssertionError(f"page-table row {row[:4].tolist()}... is not one of this decoder's {self.B} users")
+
+    def _warm_mtp_chunk(self, feed, chunk_start, valid_len, prompt_ids, page_table_torch):
+        """Per prefill chunk of one user: this chunk's taps -> that user's draft context KV at chunk_start.."""
+        u = self._user_of(page_table_torch)
         taps = self._take_prompt_taps()
-        _dbg(f"fill_context start={chunk_start} valid={valid_len} rows={taps[0].shape[-2]}")
-        if self.tp:
-            self.drafter.fill_context(taps, chunk_start)
-        else:
-            self.drafter.fill_context(taps_to_host(self.mesh, taps), chunk_start)
+        _dbg(f"fill_context user={u} start={chunk_start} valid={valid_len} rows={taps[0].shape[-2]}")
+        self.drafter.fill_context(taps, chunk_start, user=u)
         for t in taps:
             ttnn.deallocate(t)
         if _DEBUG:
             ttnn.synchronize_device(self.mesh)
         _dbg("fill_context done")
-        self.ctx_len = chunk_start + valid_len
+        self.ctx_len[u] = chunk_start + valid_len
 
-    def _warm_mtp_last(self, last_hidden, first_tok, slot):
+    def _warm_mtp_last(self, last_hidden, first_tok, slot, page_table_tt):
         pass  # no MTP KV to warm
 
-    def _seed(self, first, p):
-        """Base seed at position p+1 (=T), then its tap -> draft context slot T. Eager: also compiles
-        the extend programs (identical body/shapes to the loop's) before the verify trace exists."""
-        _dbg(f"seed p={p}")
-        Lp, Hp = super()._seed(first, p)
-        _dbg("seed base done; extending slot")
-        taps = self._take_prompt_taps()  # bucket-128 taps; row 0 is position p+1
-        if self.tp:
-            self.drafter.extend_from_taps(taps, p + 1, 1)
-        else:
-            self.drafter.extend_context(taps_to_host(self.mesh, taps, rows=self.drafter.block), p + 1, 1)
+    def _after_seed(self, first, positions):
+        """The seed consumed first[u] at positions[u] (= Tp[u]) through the verify-style seed body,
+        which captured one tap row per user; those rows -> each user's draft context slot Tp[u].
+        Eager and pre-capture: also compiles the R-row extend body."""
+        taps = self._take_prompt_taps()  # [1,1,B,dim/tp] per tap layer, row u = user u
+        _dbg(f"seed extend slots={positions}")
+        self.drafter.extend_seed_rows(taps, list(positions))
         for t in taps:
             ttnn.deallocate(t)
-        assert self.ctx_len == p + 1, f"prompt context covers {self.ctx_len}, seed at {p + 1}"
-        self.ctx_len = p + 2
-        return Lp, Hp
+        for u, pu in enumerate(positions):
+            assert self.ctx_len[u] == pu, f"user {u}: prompt context covers {self.ctx_len[u]}, seed at {pu}"
+            self.ctx_len[u] = pu + 1
+        if _DEBUG:
+            ttnn.synchronize_device(self.mesh)
 
     # ------------------------------------------------------------------ pre-capture warmups
     def _draft_warmup(self, pending, Hp, p):
         """Compile every draft program BEFORE the verify trace is captured. Its block KV write at
-        p+1..p+K+1 is exactly what the first real draft repeats, so it is inert."""
-        _dbg(f"draft warmup C={p + 1}")
-        if self.tp:
-            self.drafter.draft(int(pending), p + 1, traced=False)
-        else:
-            self.drafter.draft(int(pending), p + 1)
+        p_u+1..p_u+K+1 is exactly what the first real draft repeats, so it is inert."""
+        _dbg(f"draft warmup C={[pu + 1 for pu in p]}")
+        self.drafter.draft([int(t) for t in pending], [pu + 1 for pu in p], traced=False)
         ttnn.synchronize_device(self.mesh)
         _dbg("draft warmup done")
 
-    def _reseed_warmup(self, T, dim_frac, dtype):
-        pass  # the seed's extend already compiled the extend programs (same shapes)
+    def _reseed_warmup(self, rows, dim_frac, dtype):
+        """Compile the extend body with every row routed to the scratch block (no real slot touched)."""
+        self.drafter.extend_context([0] * self.B, [0] * self.B, traced=False)
+        ttnn.synchronize_device(self.mesh)
 
     # ------------------------------------------------------------------ loop hooks
-    def _draft(self, pending_tok, anchor_hidden, p):
-        assert self.ctx_len == p + 1, f"draft at p={p} but context covers {self.ctx_len}"
-        if self.tp and not self._armed and _DRAFT_TRACED:
-            # First loop draft: the verify + commit traces are captured and every drafter program has
-            # run eagerly, so the drafter may now capture its own draft/extend traces.
+    def _draft(self, pending, anchor_hidden, p):
+        for u in range(self.B):
+            # A LIVE user's context covers exactly 0..p (== p+1 rows). A FROZEN user keeps its p while
+            # the extend still wrote its last committed rows, so its context runs past p+1: harmless
+            # (its block rows at p+1..p+block overwrite those slots and nothing beyond them is read).
+            assert self.ctx_len[u] >= p[u] + 1, f"user {u}: draft at p={p[u]} but context covers only {self.ctx_len[u]}"
+        if not self._armed and _DRAFT_TRACED:
+            # First loop draft: the verify trace is captured and every drafter program has run
+            # eagerly, so the drafter may now capture its own draft/extend traces.
             self.drafter.arm_traces()
             self._armed = True
-        _dbg(f"draft C={p + 1}")
-        out = self.drafter.draft(int(pending_tok), p + 1, traced=_DRAFT_TRACED)
+        _dbg(f"draft C={[pu + 1 for pu in p]}")
+        out = self.drafter.draft([int(t) for t in pending], [pu + 1 for pu in p], traced=_DRAFT_TRACED)
         if _DEBUG:
             ttnn.synchronize_device(self.mesh)
         _dbg(f"draft done {out}")
         return out
 
-    def _reseed_mtp_batched(self, slot0, vhidden, tokens, scratch_only=False):
-        """After commit: the verify trace's taps for rows 0..m (positions slot0..slot0+m, i.e.
-        [pending] + accepted drafts) -> draft context KV. Rows past m go to the scratch block."""
+    def _reseed_mtp_batched(self, prev_p, vfeed, committed, scratch_only=False):
+        """After accept: the verify trace's tap rows for each user's committed positions
+        (prev_p[u]+1 .. prev_p[u]+len(committed[u]), i.e. [pending] + accepted drafts) -> that user's
+        draft context KV. Rows past the committed prefix go to the scratch block."""
         if scratch_only:
             return
-        n = len(tokens) + 1
+        slot0 = [int(pp) + 1 for pp in prev_p]
+        n = [len(c) for c in committed]
         _dbg(f"extend slot0={slot0} n={n}")
-        if self.tp:
-            self.drafter.extend_context(slot0, n, traced=_DRAFT_TRACED)
-        else:
-            self.drafter.extend_context(self.model.dflash_taps(), slot0, n)
+        self.drafter.extend_context(slot0, n, traced=_DRAFT_TRACED)
         if _DEBUG:
             ttnn.synchronize_device(self.mesh)
         _dbg("extend done")
-        self.ctx_len = slot0 + n
+        for u in range(self.B):
+            self.ctx_len[u] = slot0[u] + n[u]
 
     _reseed_mtp = _reseed_mtp_batched
 
     # ------------------------------------------------------------------ generate
-    def generate(self, prompt_ids, max_new_tokens):
+    def generate(self, prompts, max_new_tokens):
         model = self.model
         bs = get_block_size(model._paged_kv_caches)
         T = self.K + 1
+        rows = self.B * T
         try:
             # Another DFlash2Decoder on this model may have replaced (and freed) our drafter via
             # get_drafter: re-resolve, and re-pin the model's tap layers to OURS.
@@ -253,35 +274,26 @@ class DFlash2Decoder(SpeculativeDecoder):
             # no replay can land on it; force a fresh verify capture per generate for the same reason.
             self._vfy_captured = False
             if model._dflash_tap_bufs is not None and (
-                len(model._dflash_tap_bufs) != len(model._dflash_tap_layers) or model._dflash_tap_bufs[0].shape[-2] != T
+                len(model._dflash_tap_bufs) != len(model._dflash_tap_layers)
+                or model._dflash_tap_bufs[0].shape[-2] != rows
             ):
                 model.free_dflash_tap_bufs()
             if model._dflash_tap_bufs is None:
-                model._dflash_tap_bufs = model.alloc_dflash_tap_bufs(T)
-            if self.tp:
-                self.drafter.alloc(self._pt_torch, bs, model._dflash_tap_bufs)
-            else:
-                self.drafter.alloc_kv(self._pt_torch, bs)
-            self.ctx_len = 0
+                model._dflash_tap_bufs = model.alloc_dflash_tap_bufs(rows)
+            self.drafter.alloc(self._pt_torch, bs, model._dflash_tap_bufs)
+            self.ctx_len = [0] * self.B
             self._armed = False
-            return super().generate(prompt_ids, max_new_tokens)
+            return super().generate(prompts, max_new_tokens)
         finally:
             ttnn.synchronize_device(model.mesh_device)  # a non-blocking replay may be in flight (exception path)
-            if self.tp:
-                self.drafter.free()
-            else:
-                self.drafter.free_kv()
-            # The verify trace captured above (and the commit traces cut against it) bake the tap-buf
-            # addresses freed below: release them so nothing can ever replay copies into freed DRAM.
-            # A later decoder re-captures (SpeculativeDecoder.generate checks the model's trace).
-            model.release_commit_traces()
-            tid = getattr(model, "_vfy_trace_id", None)
-            if tid is not None:
-                ttnn.release_trace(model.mesh_device, tid)
-                model._vfy_trace_id = None
+            self.drafter.free()
+            # The verify trace captured above bakes the tap-buf addresses freed below: release it so
+            # nothing can ever replay copies into freed DRAM (the base generate already released it on
+            # the normal path; this covers the exception path). A later decoder re-captures.
+            model.release_verify_trace()
             self._vfy_captured = False
             # Leave the shared model as the native-MTP path expects it: no tap clones on later
-            # prefills, no tap copies baked into a later (native) verify trace.
+            # prefills/seeds, no tap copies baked into a later (native) verify trace.
             model._free_dflash_eager_taps()
             model.free_dflash_tap_bufs()
             model._dflash_tap = False

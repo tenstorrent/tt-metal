@@ -114,7 +114,9 @@ class DFlash2DrafterTP:
             self.pred_cb = s["candidate_selector.predecessor_codebook"].float()
             self.succ_cb = s["candidate_selector.successor_codebook"].float()
             self.hproj = self._rep(s["candidate_selector.hidden_projection.weight"].T.contiguous(), "hproj")
-        self.S = self._rep(_shift(self.block), "shift", cache=False)  # depends on the block
+        # The in-block shift (GroupedDynamicCausalConv's second tap) is built per alloc(): it is
+        # block-diagonal over the U users' blocks, so it depends on U as well as the block.
+        self.S = None
         self._sc1 = ttnn.create_sharded_memory_config(
             shape=(ttnn.TILE_SIZE, HD),
             core_grid=ttnn.CoreGrid(x=1, y=1),
@@ -141,10 +143,13 @@ class DFlash2DrafterTP:
         )
         # per-generate state
         self.kv = None
-        self.page_table = None
+        self.page_tables = None  # torch int32 [U, nb]: user u's context blocks (row u)
+        self.page_table = None  # alias of page_tables (kept for single-user callers)
+        self.U = 1  # users per draft/extend (rows = U * block, user-major: row u*block + j)
+        self.R = self.block
         self.block_size = None
         self.scratch_block = None
-        self.tap_bufs = None  # list of persistent fractured [1,1,B,dim_tp] (the verify trace's taps)
+        self.tap_bufs = None  # list of persistent fractured [1,1,R,dim_tp] (the verify trace's taps)
         self._bufs = None  # persistent staging buffers
         self._draft_tid = None
         self._draft_out = None
@@ -338,24 +343,38 @@ class DFlash2DrafterTP:
         ttnn.deallocate(v_p)
 
     # ------------------------------------------------------------------ per-generate state
-    def alloc(self, page_table_torch, block_size, tap_bufs):
-        """Draft KV (nb+1 blocks, block nb = scratch) + persistent staging buffers. Call BEFORE any
-        trace is captured. ``tap_bufs``: the model's persistent fractured tap buffers ([1,1,B,dim_tp]
-        each, one per tap layer) that the verify trace fills — the extend reads them directly."""
+    def alloc(self, page_tables_torch, block_size, tap_bufs):
+        """Draft KV + persistent staging buffers for U users. Call BEFORE any trace is captured.
+
+        ``page_tables_torch``: torch int32 [U, nb] (a [nb] / [1, nb] table is U = 1), user u's
+        context blocks in row u — the drafter mirrors the target's per-user block layout in its own
+        cache, sized to the largest block id named plus one scratch block (index = that maximum + 1)
+        for padding rows. Every draft/extend runs R = U * block rows, USER-MAJOR (row u*block + j is
+        user u's block position j), the same layout as the verify bucket, so the verify trace's tap
+        buffers ([1,1,R,dim_tp] each, one per tap layer; ``tap_bufs``) feed the extend directly.
+        """
         assert self.layers and not getattr(
             self, "dead", False
         ), "drafter weights were released (another checkpoint/block/TP was loaded via get_drafter); rebuild the decoder"
         assert self.kv is None
-        B = self.block
-        nb = int(page_table_torch.shape[-1])
-        self.page_table = page_table_torch.to(torch.int32)
+        pt = torch.as_tensor(page_tables_torch)
+        pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+        assert pt.dim() == 2, f"page tables must be [U, nb], got {tuple(pt.shape)}"
+        self.page_tables = pt.to(torch.int32).contiguous()
+        self.page_table = self.page_tables
+        U = int(self.page_tables.shape[0])
+        Bk = self.block
+        R = U * Bk
+        assert R <= ttnn.TILE_SIZE, f"{U} users x block {Bk} = {R} draft rows exceed one decode tile"
+        self.U, self.R = U, R
+        nb = int(self.page_tables.shape[-1])
         self.block_size = int(block_size)
-        self.scratch_block = nb
+        self.scratch_block = int(self.page_tables.max()) + 1
         self.tap_bufs = list(tap_bufs)
         assert (
-            len(self.tap_bufs) == len(self.taps) and self.tap_bufs[0].shape[-2] == B
-        ), f"tap bufs {[tuple(t.shape) for t in self.tap_bufs]} vs block {B}"
-        shape = [nb + 1, self.NKVl, self.block_size, HD]
+            len(self.tap_bufs) == len(self.taps) and self.tap_bufs[0].shape[-2] == R
+        ), f"tap bufs {[tuple(t.shape) for t in self.tap_bufs]} vs {U} users x block {Bk} = {R} rows"
+        shape = [self.scratch_block + 1, self.NKVl, self.block_size, HD]
         rep = ttnn.ReplicateTensorToMesh(self.mesh) if self.nd > 1 else None
 
         def _mk():
@@ -369,18 +388,28 @@ class DFlash2DrafterTP:
             )
 
         self.kv = [(_mk(), _mk()) for _ in range(len(self.layers))]
+        # Block-diagonal in-block shift: kron(I_U, shift(block)) -> [1, R, R]. Row u*Bk + j reads
+        # row u*Bk + j - 1 (j > 0) and nothing else, so the conv never crosses a user boundary.
+        S = torch.zeros(1, R, R)
+        for u in range(U):
+            S[0, u * Bk : (u + 1) * Bk, u * Bk : (u + 1) * Bk] = _shift(Bk)[0]
+        if self.S is not None:
+            ttnn.deallocate(self.S)
+        self.S = self._rep(S, "shift", cache=False)
+        # Per-ROW page tables (user-major): row u*Bk + j is user u's table.
+        pt_rows = self.page_tables.repeat_interleave(Bk, dim=0).contiguous()
         z = torch.zeros
         self._bufs = {
-            "ptB": self._rm(self.page_table.repeat(B, 1).contiguous()),
-            "emb": self._dev(z(1, 1, B, H, dtype=torch.bfloat16)),
-            "cos": self._dev(z(1, B, 1, HD, dtype=torch.bfloat16)),
-            "sin": self._dev(z(1, B, 1, HD, dtype=torch.bfloat16)),
-            "pos": self._rm(z(B, dtype=torch.int32)),
-            "cur": self._rm(z(B, dtype=torch.int32)),
-            "xpos": self._rm(z(B, dtype=torch.int32)),
-            "xpt": self._rm(self.page_table.repeat(B, 1).contiguous()),
-            "xcos": self._dev(z(1, B, 1, HD, dtype=torch.bfloat16)),
-            "xsin": self._dev(z(1, B, 1, HD, dtype=torch.bfloat16)),
+            "ptB": self._rm(pt_rows),
+            "emb": self._dev(z(1, 1, R, H, dtype=torch.bfloat16)),
+            "cos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
+            "sin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
+            "pos": self._rm(z(R, dtype=torch.int32)),
+            "cur": self._rm(z(R, dtype=torch.int32)),
+            "xpos": self._rm(z(R, dtype=torch.int32)),
+            "xpt": self._rm(pt_rows.clone()),
+            "xcos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
+            "xsin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
         }
 
     def release_traces(self):
@@ -418,25 +447,30 @@ class DFlash2DrafterTP:
             for t in self._bufs.values():
                 ttnn.deallocate(t)
             self._bufs = None
+        if self.S is not None:
+            ttnn.deallocate(self.S)
+            self.S = None
         self.tap_bufs = None
 
     # ------------------------------------------------------------------ context: prompt fill (eager)
-    def fill_context(self, taps_dev, chunk_start):
-        """Prompt chunk: taps_dev = list of fractured [1,1,S,dim_tp] (S = bucket rows, block-aligned),
-        chunk_start block-aligned -> k/v of hctx into the draft KV via paged_fill_cache."""
+    def fill_context(self, taps_dev, chunk_start, user=0):
+        """Prompt chunk of ONE user: taps_dev = list of fractured [1,1,S,dim_tp] (S = bucket rows,
+        block-aligned), chunk_start block-aligned -> k/v of hctx into user ``user``'s blocks of the
+        draft KV via paged_fill_cache."""
         assert self.kv is not None
+        assert 0 <= user < self.U, f"user {user} of {self.U}"
         S = taps_dev[0].shape[-2]
         bs = self.block_size
         assert S % bs == 0 and chunk_start % bs == 0
         blk0 = chunk_start // bs
-        blkN = min(blk0 + S // bs, int(self.page_table.shape[-1]))
+        blkN = min(blk0 + S // bs, int(self.page_tables.shape[-1]))
         rows = (blkN - blk0) * bs
         assert rows > 0
         hctx = self._hctx(taps_dev, S)
         cos, sin = rope_tables(self.theta, torch.arange(chunk_start, chunk_start + S))
         cos = self._dev(cos.reshape(1, 1, S, HD))
         sin = self._dev(sin.reshape(1, 1, S, HD))
-        chunk_pt = self._rm(self.page_table[:, blk0:blkN].contiguous())
+        chunk_pt = self._rm(self.page_tables[user : user + 1, blk0:blkN].contiguous())
         for li, lw in enumerate(self.layers):
             kc, vc = self.kv[li]
             k, v = self._ctx_kv(hctx, lw, S)
@@ -467,30 +501,43 @@ class DFlash2DrafterTP:
     # ------------------------------------------------------------------ context: extend (traceable)
     def _extend_body(self):
         b = self._bufs
-        B = self.block
-        hctx = self._hctx(self.tap_bufs, B)
+        R = self.R
+        hctx = self._hctx(self.tap_bufs, R)
         for li, lw in enumerate(self.layers):
-            k, v = self._ctx_kv(hctx, lw, B)
-            kr = apply_partial_rope_decode(k, b["xcos"], b["xsin"], self.NKVl, B, HD)
+            k, v = self._ctx_kv(hctx, lw, R)
+            kr = apply_partial_rope_decode(k, b["xcos"], b["xsin"], self.NKVl, R, HD)
             ttnn.deallocate(k)
             self._write_rows(li, kr, v, b["xpos"], b["xpt"])
         ttnn.deallocate(hctx)
 
+    def _per_user(self, v):
+        """An int (U = 1 / broadcast) or a length-U list -> a length-U list of ints."""
+        if isinstance(v, (list, tuple, torch.Tensor)):
+            out = [int(x) for x in v]
+            assert len(out) == self.U, f"expected {self.U} per-user values, got {len(out)}"
+            return out
+        return [int(v)] * self.U
+
     def _stage_extend(self, slot0, n_valid):
-        B = self.block
-        n = int(n_valid)
-        pos = torch.zeros(B, dtype=torch.int32)
-        pos[:n] = torch.arange(slot0, slot0 + n, dtype=torch.int32)
-        pt = self.page_table.repeat(B, 1).contiguous()
-        pt[n:, :] = self.scratch_block
+        Bk, R = self.block, self.R
+        slot0s, ns = self._per_user(slot0), self._per_user(n_valid)
+        pos = torch.zeros(R, dtype=torch.int32)
+        pt = torch.full((R, int(self.page_tables.shape[-1])), self.scratch_block, dtype=torch.int32)
+        for u, (s0, n) in enumerate(zip(slot0s, ns)):
+            assert 0 <= n <= Bk, f"user {u}: extend {n} rows into a {Bk}-row block"
+            r0 = u * Bk
+            pos[r0 : r0 + n] = torch.arange(s0, s0 + n, dtype=torch.int32)
+            pt[r0 : r0 + n, :] = self.page_tables[u]
         cos, sin = rope_tables(self.theta, pos)
         self._stage(pos, self._bufs["xpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(pt, self._bufs["xpt"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(cos.reshape(1, B, 1, HD).bfloat16(), self._bufs["xcos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, B, 1, HD).bfloat16(), self._bufs["xsin"], ttnn.bfloat16)
+        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), self._bufs["xcos"], ttnn.bfloat16)
+        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), self._bufs["xsin"], ttnn.bfloat16)
 
     def extend_context(self, slot0, n_valid, traced=True):
-        """Context rows 0..n_valid-1 of the tap bufs -> slots slot0..; the rest -> scratch."""
+        """Per user u: tap-buf rows u*block .. u*block+n_valid[u]-1 -> user u's context slots
+        slot0[u]..; every other row -> the scratch block. ``slot0`` / ``n_valid`` are ints (U = 1) or
+        length-U lists."""
         assert self.kv is not None
         self._stage_extend(slot0, n_valid)
         if traced and self._ext_tid is None and self._trace_armed:
@@ -506,23 +553,48 @@ class DFlash2DrafterTP:
             self.stats["extend_eager"] += 1
 
     def extend_from_taps(self, taps_dev, slot0, n_valid):
-        """Eager extend from arbitrary fractured taps (>= B rows; e.g. the seed's bucket-128 clones):
-        rows 0..B-1 are copied into the persistent tap bufs first, so the body is byte-identical to
-        the traced one (and compiles it, pre-capture)."""
-        B = self.block
+        """Eager extend from arbitrary fractured taps (>= R rows; e.g. the seed's bucket-128 clones):
+        rows 0..R-1 are copied into the persistent tap bufs first, so the body is byte-identical to
+        the traced one (and compiles it, pre-capture). Single-user form (U = 1)."""
+        R = self.R
         for src, buf in zip(taps_dev, self.tap_bufs):
-            if src.shape[-2] == B:
+            if src.shape[-2] == R:
                 ttnn.copy(src, buf)
             else:
-                sl = ttnn.slice(src, (0, 0, 0, 0), (1, 1, B, src.shape[-1]))
+                sl = ttnn.slice(src, (0, 0, 0, 0), (1, 1, R, src.shape[-1]))
                 ttnn.copy(sl, buf)
                 ttnn.deallocate(sl)
         self.extend_context(slot0, n_valid, traced=False)
 
+    def extend_seed_rows(self, taps_dev, slots):
+        """Eager extend from the SEED's taps: ``taps_dev`` is one fractured [1,1,U,dim_tp] tensor per
+        tap layer (row u = user u's residual at ``slots[u]``). Each user's row is placed at tap-buf
+        row u*block (the user-major layout the extend body reads), the other rows are left as they
+        are and routed to the scratch block, and the R-row extend body runs eagerly (pre-capture,
+        so this also compiles it). Host-staged: a handful of rows, once per generation."""
+        U, Bk = self.U, self.block
+        slots = self._per_user(slots)
+        comp = ttnn.ConcatMeshToTensor(self.mesh, dim=-1)
+        shard = ttnn.ShardTensorToMesh(self.mesh, dim=-1)
+        for src, buf in zip(taps_dev, self.tap_bufs):
+            full = ttnn.to_torch(src, mesh_composer=comp).reshape(-1, H)[:U]  # [U, H] bf16
+            host = ttnn.to_torch(buf, mesh_composer=comp).reshape(-1, H).clone()  # [R, H]
+            for u in range(U):
+                host[u * Bk] = full[u]
+            h = ttnn.from_torch(
+                host.reshape(1, 1, self.R, H).to(torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=None,
+                mesh_mapper=shard,
+            )
+            ttnn.copy_host_to_device_tensor(h, buf)
+        self.extend_context(slots, [1] * U, traced=False)
+
     # ------------------------------------------------------------------ draft (traceable)
     def _attn(self, hb, lw, li, cur_t):
         b = self._bufs
-        B = self.block
+        B = self.R  # every draft row (U users x block) is a pseudo-user of the paged decode SDPA
         q = ttnn.reshape(self._lin(hb, lw["q"]), (1, B, self.NHl, HD))
         qn = self._rms(q, lw["qn"])
         ttnn.deallocate(q)
@@ -556,7 +628,7 @@ class DFlash2DrafterTP:
         return self._allreduce(part)
 
     def _layer(self, hidden, lw, li):
-        L = self.block
+        L = self.R
         cur_t = self._bufs["pos"] if self.causal[li] else self._bufs["cur"]
         h = self._rms(hidden, lw["in_ln"])
         if "ac_kp" in lw:
@@ -590,9 +662,8 @@ class DFlash2DrafterTP:
         return out
 
     def _draft_body(self):
-        """Persistent inputs -> (vals [1,1,B,16] local, idx [1,1,B,16] local, hp [1,1,B,256] | None, h [1,1,B,H])."""
+        """Persistent inputs -> (vals [1,1,R,16] local, idx [1,1,R,16] local, hp [1,1,R,256] | None, h [1,1,R,H])."""
         b = self._bufs
-        B = self.block
         h = b["emb"]
         for li, lw in enumerate(self.layers):
             h_new = self._layer(h, lw, li)
@@ -608,18 +679,20 @@ class DFlash2DrafterTP:
         return vals, idx, hp, hn
 
     def _stage_draft(self, anchor, C):
-        B = self.block
-        blk = torch.tensor([[int(anchor)] + [self.mask_id] * (B - 1)])
-        emb = torch.nn.functional.embedding(blk, self.embed).reshape(1, 1, B, H).to(torch.bfloat16)
-        pos = torch.arange(C, C + B, dtype=torch.int32)
+        """Per user u: block [anchor[u], MASK x (block-1)] at positions C[u] .. C[u]+block-1
+        (user-major rows). ``anchor`` / ``C`` are ints (U = 1) or length-U lists."""
+        Bk, R = self.block, self.R
+        anchors, Cs = self._per_user(anchor), self._per_user(C)
+        blk = torch.tensor([[a] + [self.mask_id] * (Bk - 1) for a in anchors]).reshape(1, R)
+        emb = torch.nn.functional.embedding(blk, self.embed).reshape(1, 1, R, H).to(torch.bfloat16)
+        pos = torch.cat([torch.arange(c, c + Bk, dtype=torch.int32) for c in Cs])
+        cur = torch.cat([torch.full((Bk,), c + Bk - 1, dtype=torch.int32) for c in Cs])
         cos, sin = rope_tables(self.theta, pos)
         self._stage(emb, self._bufs["emb"], ttnn.bfloat16)
-        self._stage(cos.reshape(1, B, 1, HD).bfloat16(), self._bufs["cos"], ttnn.bfloat16)
-        self._stage(sin.reshape(1, B, 1, HD).bfloat16(), self._bufs["sin"], ttnn.bfloat16)
+        self._stage(cos.reshape(1, R, 1, HD).bfloat16(), self._bufs["cos"], ttnn.bfloat16)
+        self._stage(sin.reshape(1, R, 1, HD).bfloat16(), self._bufs["sin"], ttnn.bfloat16)
         self._stage(pos, self._bufs["pos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
-        self._stage(
-            torch.full((B,), C + B - 1, dtype=torch.int32), self._bufs["cur"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT
-        )
+        self._stage(cur, self._bufs["cur"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     _trace_armed = False
 
@@ -630,9 +703,14 @@ class DFlash2DrafterTP:
         self._trace_armed = True
 
     def draft(self, anchor, C, traced=True):
+        """Draft K = block-1 tokens per user from ``anchor`` (the token at C-1... i.e. the pending
+        token at position C[u]) over context 0..C[u]-1. Returns K ids (int anchor, U = 1) or a list
+        of U lists of K ids (list anchors), in user order."""
         assert self.kv is not None
-        B = self.block
-        self._stage_draft(anchor, C)
+        Bk, R, U = self.block, self.R, self.U
+        per_user_out = isinstance(anchor, (list, tuple))
+        anchors = self._per_user(anchor)
+        self._stage_draft(anchors, C)
         if traced and self._draft_tid is None and self._trace_armed:
             self._draft_tid = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             self._draft_out = self._draft_body()
@@ -651,25 +729,32 @@ class DFlash2DrafterTP:
         comp0 = ttnn.ConcatMeshToTensor(self.mesh, dim=0)
         if self.lm_sharded:
             V_l = self.lm_w.shape[-1]
-            va = ttnn.to_torch(vals, mesh_composer=comp0).float().reshape(self.nd, B, self.topk)  # [nd,B,16]
-            ia = ttnn.to_torch(idx, mesh_composer=comp0).long().reshape(self.nd, B, self.topk)
+            va = ttnn.to_torch(vals, mesh_composer=comp0).float().reshape(self.nd, R, self.topk)  # [nd,R,16]
+            ia = ttnn.to_torch(idx, mesh_composer=comp0).long().reshape(self.nd, R, self.topk)
             ia = ia + torch.arange(self.nd).view(self.nd, 1, 1) * V_l
-            va = va.permute(1, 0, 2).reshape(B, -1)  # [B, nd*16]
-            ia = ia.permute(1, 0, 2).reshape(B, -1)
+            va = va.permute(1, 0, 2).reshape(R, -1)  # [R, nd*16]
+            ia = ia.permute(1, 0, 2).reshape(R, -1)
             top = va.topk(self.topk, dim=-1)
-            unary = top.values[1:]
-            cand = ia.gather(-1, top.indices)[1:]
+            unary_all = top.values
+            cand_all = ia.gather(-1, top.indices)
         else:
-            unary = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).float().reshape(B, self.topk)[1:]
-            cand = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).long().reshape(B, self.topk)[1:]
-        if self.has_selector:
-            hph = ttnn.to_torch(ttnn.get_device_tensors(hp)[0]).float().reshape(B, -1)[1:]
-            out = select_path(unary, cand, hph, anchor, self.pred_cb, self.succ_cb)
-        else:
-            out = [int(c[int(u.argmax())]) for u, c in zip(unary, cand)]
-        self.last_hidden = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(1, B, H)[:, 1:]
+            unary_all = ttnn.to_torch(ttnn.get_device_tensors(vals)[0]).float().reshape(R, self.topk)
+            cand_all = ttnn.to_torch(ttnn.get_device_tensors(idx)[0]).long().reshape(R, self.topk)
+        hph_all = ttnn.to_torch(ttnn.get_device_tensors(hp)[0]).float().reshape(R, -1) if self.has_selector else None
+        hn_all = ttnn.to_torch(ttnn.get_device_tensors(hn)[0]).float().reshape(R, H)
+        outs, hiddens = [], []
+        for u in range(U):
+            r0 = u * Bk
+            unary = unary_all[r0 + 1 : r0 + Bk]  # rows 1..block-1: the K mask positions of user u
+            cand = cand_all[r0 + 1 : r0 + Bk]
+            if self.has_selector:
+                outs.append(select_path(unary, cand, hph_all[r0 + 1 : r0 + Bk], anchors[u], self.pred_cb, self.succ_cb))
+            else:
+                outs.append([int(c[int(w.argmax())]) for w, c in zip(unary, cand)])
+            hiddens.append(hn_all[r0 + 1 : r0 + Bk])
+        self.last_hidden = torch.stack(hiddens)  # [U, K, H]
         if owned:
             for t in (vals, idx, hp, hn):
                 if t is not None:
                     ttnn.deallocate(t)
-        return out
+        return outs if per_user_out else outs[0]

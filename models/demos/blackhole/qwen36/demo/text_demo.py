@@ -1036,6 +1036,27 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     B = batch
     T = token_ids.shape[1]
     K, K_src = _spec_batch_draft_len(B, T, sampling)
+    # Drafter (same switch and per-ISL gate as the single-user path): QWEN36_DRAFTER=dflash2 runs the
+    # DFlash2 block drafter for all B users in one forward (greedy only; its block caps K at
+    # block-1, then the batch row budget applies: K=7 up to B=4, K=3 at B=8).
+    _drafter = os.environ.get("QWEN36_DRAFTER", "mtp").lower()
+    _dflash_max = int(os.environ.get("QWEN36_DFLASH_MAX_PROMPT", "2048"))
+    if _drafter == "dflash2" and (sampling is not None or T > _dflash_max):
+        logger.info(
+            f"[TP SPEC B={B}] dflash2 drafter skipped (sampling={sampling is not None}, T={T} > {_dflash_max}={T > _dflash_max}): "
+            "native MTP drafts this request"
+        )
+        _drafter = "mtp"
+    if _drafter == "dflash2":
+        from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder as _Decoder
+        from models.demos.blackhole.qwen36.tt.dflash2_decode import default_draft_len
+
+        K = min(K, default_draft_len())
+        K = max(k for k in _SPEC_K_LADDER if k <= K)  # fused verify widths only
+        K_src = f"dflash2 block cap {default_draft_len()} + {K_src}"
+    else:
+        assert _drafter == "mtp", f"QWEN36_DRAFTER={_drafter!r}: expected 'mtp' or 'dflash2'"
+        _Decoder = SpeculativeDecoder
 
     # Per-user prompts. Default: the same prompt for everyone (identical prompts must decode
     # identically). QWEN36_SPEC_BATCH_DISTINCT=1: drop the first u tokens for user u (T_u = T-u,
@@ -1085,15 +1106,13 @@ def _run_tp_spec_generation_batched(model, tokenizer, token_ids, batch, max_gene
     model.set_gdn_fused_decode(True)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling).generate(
-        prompt_lists, min(6, max_generated_tokens)
-    )
+    _Decoder(model, page_tables, draft_len=K, sampling=sampling).generate(prompt_lists, min(6, max_generated_tokens))
     profiler.end("compile_decode")
     model.free_kv_caches()
 
     # Timed run. generate() records dec.prefill_time (all B prefills = TTFT) and dec.decode_time.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
-    dec = SpeculativeDecoder(model, page_tables, draft_len=K, sampling=sampling)
+    dec = _Decoder(model, page_tables, draft_len=K, sampling=sampling)
     signpost("inference_prefill")
     profiler.start("inference_prefill")
     rows = dec.generate(prompt_lists, max_generated_tokens)

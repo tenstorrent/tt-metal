@@ -1385,8 +1385,9 @@ class Qwen36Model:
         layers [5,19,33,47,61], each gathered across the TP mesh. Only valid when _dflash_tap and a
         verify trace has run (the buffers hold the LAST verify's taps)."""
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+        rows = self._vfy_B * self._vfy_T
         outs = [
-            ttnn.to_torch(b, mesh_composer=comp).reshape(1, -1, self.args.dim)[:, : self._vfy_T, :]
+            ttnn.to_torch(b, mesh_composer=comp).reshape(1, -1, self.args.dim)[:, :rows, :]
             for b in self._dflash_tap_bufs
         ]
         return torch.cat(outs, dim=-1)
@@ -1537,17 +1538,18 @@ class Qwen36Model:
         )
 
         if self._dflash_tap:
-            # Persistent fixed-address, dim-fractured buffers the verify trace copies each tap into.
-            # A decoder may pre-allocate them (the TP drafter reads them directly and needs them to
-            # exist before its own pre-capture warmups); then they are reused, not re-allocated.
+            # Persistent fixed-address, dim-fractured buffers the verify trace copies each tap into:
+            # one row per verify row (B users x T, user-major like the bucket). A decoder may
+            # pre-allocate them (the TP drafter reads them directly and needs them to exist before
+            # its own pre-capture warmups); then they are reused, not re-allocated.
             if self._dflash_tap_bufs is not None and (
-                len(self._dflash_tap_bufs) != len(self._dflash_tap_layers) or self._dflash_tap_bufs[0].shape[-2] != T
+                len(self._dflash_tap_bufs) != len(self._dflash_tap_layers) or self._dflash_tap_bufs[0].shape[-2] != rows
             ):
                 for b in self._dflash_tap_bufs:
                     ttnn.deallocate(b)
                 self._dflash_tap_bufs = None
             if self._dflash_tap_bufs is None:
-                self._dflash_tap_bufs = self.alloc_dflash_tap_bufs(T)
+                self._dflash_tap_bufs = self.alloc_dflash_tap_bufs(rows)
 
         # The deferred commit's two selectors, SHARED by all GDN layers (they are pure index /
         # one-hot data, identical for every layer, so one pair of buffers is staged per iteration
@@ -1762,7 +1764,13 @@ class Qwen36Model:
         x = self.embd(token_buf)
         x = ttnn.reshape(x, (1, 1, n_users, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        for layer in self.layers:
+        if self._dflash_tap:
+            # DFlash2 seed taps (eager, gated OFF by default): one row per user, the residual after
+            # each tap layer at the seed position. The consumer (DFlash2Decoder._after_seed) takes
+            # and frees them via take_dflash_eager_taps, exactly like the prompt chunks' taps.
+            self._free_dflash_eager_taps()
+            self._dflash_eager_taps = [None] * len(self._dflash_tap_layers)
+        for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 x_new = layer.forward(
                     x,
@@ -1786,6 +1794,10 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+            if self._dflash_tap and _li in self._dflash_tap_layers:
+                self._dflash_eager_taps[self._dflash_tap_layers.index(_li)] = ttnn.clone(
+                    x, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
         rows = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(x)
         normed = self.norm(rows, mode=Mode.PREFILL)  # -> full [1,1,B,dim]
