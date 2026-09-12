@@ -264,6 +264,13 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         assert self.ctx_len == T, f"ingest_prompt({T}) must precede the seed (ctx_len={self.ctx_len})"
         _dbg(f"traced seed T={T}")
         K = self.K
+        # The prefill wrote the GDN conv taps and marked the verify's window mirror stale; the traced
+        # verify reads its conv carry from that MIRROR and (unlike the eager verify) syncs nothing itself,
+        # so bring the mirror up to date first. Skipping this fed the seed the previous request's last
+        # window: usually a harmless perturbation, sometimes an argmax flip into EOS ("The user<eos>").
+        for dn in self._gdn:
+            if dn._conv_win_stale:
+                dn.sync_conv_win()
         _lt, vhidden, vids = self.model.verify_traced([first] * (K + 1), T, read_logits=False, clone_rows=False)
         self._commit(0)  # durable GDN state = after `first` at position T
         self._set_anchor(vhidden, 0)
@@ -272,6 +279,7 @@ class DFlash2ServingDecoder(DFlash2Decoder):
 
         self.drafter.extend_context(T, 1, traced=_DRAFT_TRACED)
         self.ctx_len = T + 1
+        _dbg(f"traced seed -> pending {int(vids[0])} (row ids {[int(v) for v in vids]})")
         return int(vids[0])
 
     # ------------------------------------------------------------------ one-time captures

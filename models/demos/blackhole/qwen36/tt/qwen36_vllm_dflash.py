@@ -456,7 +456,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         if _DEBUG:
             logger.info(
                 f"[dflash2-serve] block: {len(block)} tokens in {iters} iters, {(time.perf_counter() - t0) * 1e3:.1f} ms, "
-                f"carry={len(carry)}, stopped={stopped}"
+                f"carry={len(carry)}, stopped={stopped}, anchor={anchor}, ids={block[:12]}"
             )
         self._spec_prev_tail = block[-1] if block else None
         return self._fill_block(block)
