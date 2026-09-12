@@ -120,19 +120,31 @@ def test_tiling_geometry_matches_reference(width, height, num_frames):
 
 
 @pytest.mark.parametrize(
-    ("num_frames", "temporal_taps", "expected_latent_frames"),
-    [pytest.param(1, 1, 1, id="keyframe"), pytest.param(17, 3, 5, id="clip")],
+    ("num_frames", "temporal_taps", "expected_latent_frames", "height", "width"),
+    [
+        pytest.param(1, 1, 1, 512, 512, id="keyframe"),
+        pytest.param(17, 3, 5, 512, 512, id="clip"),
+        # An fl2va keyframe arrives on the `resolve_canvas_size` canvas, which is never square:
+        # a 16:9 keyframe lands on (768, 1344) and a 9:16 one on (1344, 768). A square-only
+        # gate cannot catch an H/W transposition in the device path, so both orientations run.
+        pytest.param(1, 1, 1, 768, 1344, id="keyframe_768P"),
+        pytest.param(1, 1, 1, 1344, 768, id="keyframe_768P_portrait"),
+        # 1440P is not a keyframe canvas -- `resolve_canvas_size` caps the area at 768 * 1344 --
+        # but it is a VAE working point (8x13 tiles in the perf tests), so a single frame is the
+        # cheapest way to gate the tiled encode geometry at that scale, in both orientations.
+        pytest.param(1, 1, 1, 1440, 2560, id="single_frame_1440P"),
+        pytest.param(1, 1, 1, 2560, 1440, id="single_frame_1440P_portrait"),
+    ],
 )
 @pytest.mark.parametrize(("mesh_device", "device_params"), SINGLE_DEVICE, indirect=["mesh_device", "device_params"])
-def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_latent_frames):
+def test_encode_clip_tiled(mesh_device, num_frames, temporal_taps, expected_latent_frames, height, width):
     """Tiled ``encode_clip`` vs the reference's tiled ``_encode_clip``; also the whole-encoder gate."""
     # Whole-encoder coverage skips without MINIMAX_H3_MODEL_PATH.
     weights_dir = _weights_dir()
     reference, config = _build_reference(weights_dir)
     torch.manual_seed(4)
 
-    extent = 512
-    x = torch.randn(1, 3, num_frames, extent, extent)
+    x = torch.randn(1, 3, num_frames, height, width)
     with torch.no_grad():
         expected = reference._encode_clip(x)
 
