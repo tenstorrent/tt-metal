@@ -138,6 +138,9 @@ void kernel_main() {
     constexpr uint32_t cb_grad_value_seed = tt::CBIndex::c_21;
     // The compute kernel's updated dQ, which travels on with the packet.
     constexpr uint32_t cb_grad_query_out = tt::CBIndex::c_17;
+    // The compute kernel's release token: one page per timestep, published
+    // once it has popped that timestep's packet slot.
+    constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
     // A local word to publish readiness tags and endpoint progress from.
     constexpr uint32_t cb_scratch = tt::CBIndex::c_24;
     constexpr uint32_t cb_column_progress = tt::CBIndex::c_26;
@@ -255,6 +258,18 @@ void kernel_main() {
         WAYPOINT("CRDD");
     };
 
+    // Initial permissions, for destination timesteps 0 and 1: there is no
+    // release two timesteps before those, so the receivers grant them up
+    // front. Increments are atomic and order-independent, so this needs no
+    // synchronisation of its own.
+    for (uint32_t u = 0; u < 2u && u < kTimesteps; ++u) {
+        const auto initial = sched.producer(my_core, u);
+        if (initial.internal && initial.core != my_core) {
+            grant_credit_to(initial.core);
+        }
+    }
+    noc_async_atomic_barrier();
+
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
@@ -308,13 +323,10 @@ void kernel_main() {
 
         const auto producer = sched.producer(my_core, t);
         if (producer.internal) {
-            // Inside a streak: the packet arrives over the NoC, or locally for
-            // the one self-transition. The reserve above freed this slot, so
-            // credit its producer and then wait for the readiness tag of this
-            // exact destination timestep; a stale tag cannot satisfy it.
-            if (producer.core != my_core) {
-                grant_credit_to(producer.core);
-            }
+            // Inside a streak: the packet arrives over the NoC, or locally
+            // for the one self-transition. The credit for this slot was
+            // granted at its release, two timesteps back, so the producer's
+            // forward did not have to wait for this core to get here.
             WAYPOINT("RDYW");
             do {
                 invalidate_l1_cache();
@@ -446,5 +458,22 @@ void kernel_main() {
         }
 
         cb_pop_front(cb_grad_query_out, qWt);
+
+        // The compute kernel has popped this timestep's slot, so it is free
+        // for destination t + 2 and its producer can be told now rather than
+        // when this core reaches t + 2. That is the paper's release timing,
+        // and it is what lets a producer forward as soon as its payload is
+        // ready instead of waiting for its receiver to arrive.
+        cb_wait_front(cb_slot_release, 1);
+        cb_pop_front(cb_slot_release, 1);
+        const uint32_t released_for = t + 2u;
+        if (released_for < kTimesteps) {
+            const auto next_producer = sched.producer(my_core, released_for);
+            if (next_producer.internal && next_producer.core != my_core) {
+                grant_credit_to(next_producer.core);
+            }
+            // A self-transition needs no credit: it reserves the destination
+            // slot itself. And a DRAM load needs none, the slot being its own.
+        }
     }
 }

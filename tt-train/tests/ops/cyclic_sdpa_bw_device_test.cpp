@@ -375,6 +375,7 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
     make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
+    make_cb(tt::CBIndex::c_7, 2, tt::DataFormat::Float32);   // slot-release tokens
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
@@ -393,6 +394,7 @@ Gradients run_relay(
     // The relay keeps the column state resident, as the paper specifies.
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
+    compute_defines["RELEASE_TOKEN"] = "1";
 
     std::vector<uint32_t> reader_args = {
         C, qWt, vWt, release_sem, ready0_sem, ready1_sem,
