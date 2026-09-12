@@ -156,8 +156,10 @@ private:
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
     uint64_t dest_output_noc = 0;
     uint64_t dest_recv_sem_noc = 0;
+    bool folded_connection = false;
     tt::tt_fabric::WorkerToFabricEdmSender connection;
     std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> headers = {};
+    std::array<volatile tt_l1_ptr PACKET_HEADER_TYPE*, header_ring_size> folded_peer_headers = {};
 #endif
     void open_connections_impl([[maybe_unused]] const TransportArgs& args, [[maybe_unused]] bool reset_header_pool) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
@@ -169,6 +171,16 @@ private:
         connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
         const auto connection_direction = get_next_hop_router_direction(dst_mesh_id, dst_chip_id);
+        folded_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
+        const uint32_t folded_peer_dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t folded_peer_dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
+
+#if defined(COMPILE_FOR_NCRISC)
+        if (folded_connection) {
+            return;
+        }
+#endif
+
         connection.open_start();
         if (reset_header_pool) {
             PacketHeaderPool::reset();
@@ -184,11 +196,36 @@ private:
             headers[i]->to_noc_fused_unicast_write_atomic_inc(
                 {dest_output_noc, dest_recv_sem_noc, /* placeholder inc_value */ 1, false}, CTArgs::chunk_size_bytes);
         }
+
+#if defined(COMPILE_FOR_BRISC)
+        if (folded_connection) {
+            const auto folded_peer_connection_direction =
+                get_next_hop_router_direction(folded_peer_dst_mesh_id, folded_peer_dst_chip_id);
+            for (uint32_t i = 0; i < header_ring_size; ++i) {
+                folded_peer_headers[i] = PacketHeaderPool::allocate_header();
+                fabric_set_single_hop_unicast_route_from_direction(
+                    folded_peer_headers[i],
+                    folded_peer_connection_direction,
+                    folded_peer_dst_chip_id,
+                    folded_peer_dst_mesh_id);
+                folded_peer_headers[i]->to_noc_fused_unicast_write_atomic_inc(
+                    {dest_output_noc, dest_recv_sem_noc, /* placeholder inc_value */ 1, false},
+                    CTArgs::chunk_size_bytes);
+            }
+        }
+#endif
+
         connection.open_finish();
 #endif
     }
     void impl([[maybe_unused]] const TransportArgs& args) {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
+
+#if defined(COMPILE_FOR_NCRISC)
+        if (folded_connection) {
+            return;
+        }
+#endif
 
         connection.setup_stateful_send_cmd_bufs<use_posted_transport_writes>();
 
@@ -224,14 +261,15 @@ private:
         };
 
         // Send a full slice (possibly multi-chunk) over the single connection.
-        auto send_slice = [&](uint32_t src_addr, uint32_t dest_slot_index) __attribute__((always_inline)) {
+        auto send_slice = [&](uint32_t src_addr, uint32_t dest_slot_index, auto& route_headers) __attribute__((
+                              always_inline)) {
             drain_tail_before_reuse_or_teardown();
 
             const uint32_t inc_value = 1u << (dest_slot_index * CTArgs::recv_sem_bits_per_slot);
             const uint64_t dest_base = dest_output_noc + dest_slot_index * CTArgs::slice_size_bytes;
 
             for (uint32_t i = 0; i < header_ring_size; ++i) {
-                headers[i]->set_fused_unicast_write_atomic_inc_value(inc_value);
+                route_headers[i]->set_fused_unicast_write_atomic_inc_value(inc_value);
             }
 
             uint32_t current_chunk_offset_bytes = 0;
@@ -243,7 +281,7 @@ private:
                     refill_free_write_slots();
                 }
 
-                auto* header = headers[current_header_idx++];
+                auto* header = route_headers[current_header_idx++];
                 if constexpr (CTArgs::last_chunk_bytes != CTArgs::chunk_size_bytes) {
                     header->set_payload_size_bytes(payload_bytes);
                 }
@@ -266,12 +304,25 @@ private:
 
         // Round 1: wait for bit 1 (scratch[0] ready), send local slice
         wait_for_bits<1>(handoff_sem_ptr);
-        send_slice(args.scratch_base_addr, args.r1_dest_slot_index);
+        send_slice(args.scratch_base_addr, args.r1_dest_slot_index, headers);
 
-        if constexpr (CTArgs::r2_active) {
+#if defined(COMPILE_FOR_BRISC)
+        if (folded_connection) {
+            send_slice(args.scratch_base_addr, args.r1_dest_slot_index, folded_peer_headers);
+            wait_for_bits<1 << 1>(handoff_sem_ptr);
+            if constexpr (CTArgs::r2_active) {
+                send_slice(args.scratch_base_addr + CTArgs::slice_size_bytes, args.r2_dest_slot_index, headers);
+            } else {
+                send_slice(
+                    args.scratch_base_addr + CTArgs::slice_size_bytes, args.r2_dest_slot_index, folded_peer_headers);
+            }
+            noc_semaphore_set(handoff_sem_ptr, 0);
+        } else
+#endif
+            if constexpr (CTArgs::r2_active) {
             // Round 2: wait for bit 2 (scratch[1] ready), forward received slice
             wait_for_bits<1 << 1>(handoff_sem_ptr);
-            send_slice(args.scratch_base_addr + CTArgs::slice_size_bytes, args.r2_dest_slot_index);
+            send_slice(args.scratch_base_addr + CTArgs::slice_size_bytes, args.r2_dest_slot_index, headers);
 
             // Wait for non-R2 peer's bit 3 ack. Once observed, all NOC incs to
             // this word (bits 1/2 from gather, bit 3 from peer) have landed,
