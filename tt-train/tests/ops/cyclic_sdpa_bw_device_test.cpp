@@ -24,6 +24,8 @@
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "metal/common/program_utils.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -201,6 +203,13 @@ Gradients run_algorithm2(
     auto* device = &ttml::autograd::ctx().get_device();
 
     const uint32_t qWt = ref.d / kTile;
+    // How many output tiles one register acquire covers in the three gradient
+    // matmuls. Profiling found the port losing most of its FPU occupancy to
+    // acquire/commit/release boundaries with two tile matmuls inside each, so
+    // this follows sdpa_bw and takes the largest divisor of qWt up to 4
+    // rather than the 1 it used to hardcode. qWt and vWt are both d/32 here,
+    // so one value serves both loops.
+    const uint32_t block_size = get_block_size(qWt, 4U);
     const uint32_t vWt = ref.d / kTile;
 
     const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
@@ -293,7 +302,7 @@ Gradients run_algorithm2(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, 1u}});
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size}});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
     const auto coordinator = device->worker_core_from_logical_core(
@@ -358,6 +367,13 @@ Gradients run_relay(
     auto* device = &ttml::autograd::ctx().get_device();
 
     const uint32_t qWt = ref.d / kTile;
+    // How many output tiles one register acquire covers in the three gradient
+    // matmuls. Profiling found the port losing most of its FPU occupancy to
+    // acquire/commit/release boundaries with two tile matmuls inside each, so
+    // this follows sdpa_bw and takes the largest divisor of qWt up to 4
+    // rather than the 1 it used to hardcode. qWt and vWt are both d/32 here,
+    // so one value serves both loops.
+    const uint32_t block_size = get_block_size(qWt, 4U);
     const uint32_t vWt = ref.d / kTile;
 
     const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
@@ -471,7 +487,7 @@ Gradients run_relay(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, 1u},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size},
             .defines = compute_defines});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
