@@ -171,6 +171,8 @@ class Gemma4Model:
         hf_config,
         state_dict,
         ccl_manager,
+        # Global prefill chunk size; determines RoPE ordering and ring KV cache layout.
+        prefill_chunk_size,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
         mesh_config=None,
@@ -178,10 +180,6 @@ class Gemma4Model:
         max_local_batch_size=1,
         num_layers=None,
         precision=None,
-        # Global prefill chunk size. Only needed under context parallelism with more
-        # than one chunk: it sets the RoPE cache's chunk-major row order and sizes the
-        # ring KV cache slabs. None means single-chunk prefill.
-        prefill_chunk_size=None,
         ring_kv_caches=None,
     ):
         from models.demos.gemma4_d_p.config import validate_galaxy_mesh
@@ -189,8 +187,6 @@ class Gemma4Model:
         validate_galaxy_mesh(mesh_device.shape)
         if mesh_config is None or mesh_config.mesh_shape != tuple(mesh_device.shape):
             raise ValueError("Galaxy prefill requires a matching mesh_config")
-        if prefill_chunk_size is None:
-            prefill_chunk_size = min(8192, max_seq_len)
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
             raise ValueError("sequence and chunk lengths must be positive")
         if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):

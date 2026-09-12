@@ -28,6 +28,7 @@ def _gemma4_is_host_weight(key):
 
 def create_tt_model(
     mesh_device,
+    prefill_chunk_size,
     max_batch_size=1,
     max_seq_len=8192,
     dtype=ttnn.bfloat16,
@@ -35,7 +36,6 @@ def create_tt_model(
     num_layers=None,
     mesh_config=None,
     model_path=None,
-    prefill_chunk_size=None,
     ring_kv_caches=None,
     force_rebuild=False,
 ):
@@ -49,8 +49,6 @@ def create_tt_model(
     validate_galaxy_mesh(mesh_device.shape)
     if tuple(mesh_device.shape) != mesh_config.mesh_shape:
         raise ValueError("mesh_config must match the device mesh")
-    if prefill_chunk_size is None:
-        prefill_chunk_size = min(8192, max_seq_len)
     SLIDING_WINDOW_SIZE = 1024
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         raise ValueError("sequence and chunk lengths must be positive")
