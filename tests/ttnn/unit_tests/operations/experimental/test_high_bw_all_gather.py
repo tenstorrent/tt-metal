@@ -1286,7 +1286,15 @@ def test_high_bw_all_gather_selected_batch_prefix(mesh_device, ag_traced):
 
     # Start smaller and grow the logical extent. This proves the cached program is compiled for the
     # worst-case slab rather than the first active prefix.
-    cases = ((0, active_local_rows // 2), (1, active_local_rows))
+    # Repeated controls reuse the schedule. Slot-only changes, growth and shrinkage must still patch it.
+    cases = (
+        (0, active_local_rows // 2),
+        (0, active_local_rows // 2),
+        (1, active_local_rows // 2),
+        (1, active_local_rows),
+        (1, active_local_rows),
+        (0, active_local_rows // 2),
+    )
 
     # The traced arm cannot use the host scalars: a replay never re-runs the patch that writes them, so
     # both the slot and the extent are handed over as metadata tensors the reader re-reads on-device.

@@ -10,6 +10,14 @@
 // kernel-only dependencies so both compilation paths use the same protocol and packed-cache geometry.
 namespace sparse_sdpa {
 
+// Uniform dispatch values precede tensor-accessor metadata in each kernel's common arguments.
+namespace reader_common_arg {
+enum : uint32_t { Q_ADDRESS, KV_ADDRESS, INDICES_ADDRESS, KV_BATCH_PAGE_OFFSET, END };
+}
+namespace writer_common_arg {
+enum : uint32_t { OUTPUT_ADDRESS, KV_ADDRESS, KV_BATCH_PAGE_OFFSET, END };
+}
+
 constexpr uint32_t SCALE_BLOCK_WIDTH = 128;
 constexpr uint32_t PACKED_FIELD_ADDRESS_UNIT_BYTES = 16;
 constexpr uint32_t CB_PAGE_ALIGNMENT = 16;
