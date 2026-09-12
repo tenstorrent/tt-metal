@@ -11,6 +11,10 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.tt_transformers.tt.ccl import tt_all_gather, tt_all_reduce, tt_all_reduce_fused
+from models.tt_transformers.tt.head_split_kernel import (
+    concat_heads as concat_heads_generic,
+    create_qkv_heads as create_qkv_heads_generic,
+)
 from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import OpGroup, TensorGroup, num_to_corerange
 
@@ -1217,19 +1221,34 @@ class Attention(LightweightModule):
         ttnn.deallocate(x_11SH)
 
         # split qkv into heads
-        (
-            q_heads_1QSD_pre_rot,
-            k_heads_1KSD_pre_rot,
-            v_heads_1VSD,
-        ) = ttnn.experimental.nlp_create_qkv_heads(
+        # Same L1 island: q/k/v here are consumed by the rotary embedding and SDPA in the
+        # same layer and by nothing else.
+        _heads_memcfg = ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG
+        # The stock op takes one work unit per (batch, seq_tile) and owns the whole QKV row
+        # in each, so a short prompt runs it on S/32 cores. The generic-op split below is
+        # the same permutation over (seq_tile, head) units; it returns None whenever the
+        # shape is outside what it covers and the stock op runs instead.
+        _split = create_qkv_heads_generic(
             xqkv_fused,
             num_heads=self.n_local_heads,
             num_kv_heads=self.n_local_kv_heads,
-            transpose_k_heads=False,
-            # Same L1 island: q/k/v here are consumed by the rotary embedding and SDPA
-            # in the same layer and by nothing else.
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
+            mesh_device=self.mesh_device,
+            memory_config=_heads_memcfg,
         )
+        if _split is not None:
+            q_heads_1QSD_pre_rot, k_heads_1KSD_pre_rot, v_heads_1VSD = _split
+        else:
+            (
+                q_heads_1QSD_pre_rot,
+                k_heads_1KSD_pre_rot,
+                v_heads_1VSD,
+            ) = ttnn.experimental.nlp_create_qkv_heads(
+                xqkv_fused,
+                num_heads=self.n_local_heads,
+                num_kv_heads=self.n_local_kv_heads,
+                transpose_k_heads=False,
+                memory_config=_heads_memcfg,
+            )
 
         norm_config = self.args.get_norm_config("attn", Mode.PREFILL, None)
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL, norm_config=norm_config)
@@ -1399,11 +1418,19 @@ class Attention(LightweightModule):
         ###
         # Output matmul
         ###
-        attn_output_11SH = ttnn.experimental.nlp_concat_heads(
-            attn_output_1QSD,
-            # Same L1 island: this feeds the wo projection and nothing else.
-            memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG,
+        # Same L1 island: this feeds the wo projection and nothing else.
+        _concat_memcfg = ttnn.DRAM_MEMORY_CONFIG if self.TG else ttnn.L1_MEMORY_CONFIG
+        # As with the head split above, the stock op's (batch, seq_tile) work split leaves
+        # a short prompt on S/32 cores; the generic-op form is the same permutation over
+        # (seq_tile, head) units, and declines to None on any shape it does not cover.
+        attn_output_11SH = concat_heads_generic(
+            attn_output_1QSD, mesh_device=self.mesh_device, memory_config=_concat_memcfg
         )
+        if attn_output_11SH is None:
+            attn_output_11SH = ttnn.experimental.nlp_concat_heads(
+                attn_output_1QSD,
+                memory_config=_concat_memcfg,
+            )
         ttnn.deallocate(attn_output_1QSD)
 
         # For batched prefill, reshape to concatenate batch dimension into sequence
