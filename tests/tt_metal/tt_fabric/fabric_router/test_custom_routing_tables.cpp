@@ -38,7 +38,15 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 
 namespace tt::tt_fabric::fabric_router_tests {
 
+static bool has_n300_2x2_topology() {
+    return tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+           tt::tt_metal::ClusterType::N300_2x2;
+}
+
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
+    if (!has_n300_2x2_topology()) {
+        GTEST_SKIP() << "Test requires a four-chip N300 2x2 cluster";
+    }
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
@@ -48,6 +56,9 @@ TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
 }
 
 TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
+    if (!has_n300_2x2_topology()) {
+        GTEST_SKIP() << "Test requires a four-chip N300 2x2 cluster";
+    }
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
@@ -58,6 +69,9 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
 }
 
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInitMGD2) {
+    if (!has_n300_2x2_topology()) {
+        GTEST_SKIP() << "Test requires a four-chip N300 2x2 cluster";
+    }
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.textproto";
