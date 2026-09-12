@@ -423,7 +423,7 @@ void kernel_main() {
             // L1_ACC needs full-ring cycling), so DRAIN all d_in1_num_subblocks_M
             // rows to keep cb_out balanced — but only WRITE the first per_core_M
             // (runtime) rows; the rest are MAC-skipped zeros that map onto other
-            // cores' rows and must not be emitted (the sb_m < per_core_M guard below).
+            // cores' rows and must not be emitted (the local_row < per_core_M guard below).
             const uint32_t sb_m_bound = d_in1_num_subblocks_M;
             for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
                 for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
@@ -434,7 +434,8 @@ void kernel_main() {
                     uint32_t subblock_tile_offset = 0;
                     for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
                         for (uint32_t j = 0; j < this_w; ++j) {
-                            const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
+                            const uint32_t local_row = sb_m * d_out_subblock_h + i;
+                            const uint32_t row = row0 + local_row;
                             const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
                             // `row` indexes the FFN *input* (x) tile-rows; the
                             // destination tile-row adds the per-expert region
@@ -450,10 +451,14 @@ void kernel_main() {
                             //   * row < count_tiles: the last chunk's per_core_M
                             //     rows extend past count_tiles when count_tiles
                             //     is not chunk-aligned.
-                            //   * sb_m < per_core_M: cb_out carries per_core_M_max
+                            //   * local_row < per_core_M: cb_out carries per_core_M_max
                             //     rows (full ring); rows past the runtime per_core_M
                             //     are zeros that belong to other cores — never write.
-                            if (sb_m < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
+                            //     The bound is on the tile-ROW, not on sb_m: a subblock
+                            //     spans d_out_subblock_h rows, so comparing the subblock
+                            //     index would pass the whole subblock holding the first
+                            //     out-of-range row.
+                            if (local_row < per_core_M && col < N_down_tiles_full && row < M_tiles_full &&
                                 row < count_tiles) {
                                 // The destination tile-row must stay inside the
                                 // (possibly shared) output buffer. ttnn::insert
