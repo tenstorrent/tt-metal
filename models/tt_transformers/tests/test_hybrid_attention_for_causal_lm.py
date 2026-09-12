@@ -141,3 +141,17 @@ def test_subclass_must_override_prefill_and_decode():
         instance.prefill_forward()
     with pytest.raises(NotImplementedError, match="decode_forward"):
         instance.decode_forward()
+
+
+def test_spec_olmo3_lllg_pattern_window_4096():
+    """OLMo-3: 3 sliding (window 4096) + 1 full layer, 64 layers. Every layer must get a spec (uniform full
+    while kv cache groups are disabled) so the TT paged cache covers the whole context on every layer."""
+    from vllm.v1.kv_cache_interface import FullAttentionSpec
+
+    from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM
+
+    layers = ["sliding_attention", "sliding_attention", "sliding_attention", "full_attention"] * 16
+    spec = HybridAttentionForCausalLM.get_kv_cache_spec(_make_vllm_config(layers, sliding_window=4096))
+    assert len(spec) == 64
+    assert all(isinstance(v, FullAttentionSpec) for v in spec.values())
+    assert f"model.layers.63.self_attn" in spec

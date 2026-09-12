@@ -597,6 +597,7 @@ class ModelArgs:
             "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
             "Qwen3-32B": "models/tt_transformers/model_params/Qwen3-32B",
             "EXAONE-4.5-33B": "models/tt_transformers/model_params/EXAONE-4.5-33B",
+            "Olmo-3.1-32B-Instruct": "models/tt_transformers/model_params/Olmo-3.1-32B-Instruct",
             "Qwen2.5-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-72B-Instruct",
             "Qwen2.5-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-32B-Instruct",
             "Meta-Llama-3-8B": "models/tt_transformers/model_params/Meta-Llama-3-8B",
@@ -664,6 +665,10 @@ class ModelArgs:
         # Post-norm decoder (EXAONE-4.x): no input_layernorm; norms are applied to the
         # attention/MLP outputs before the residual adds. Set in _set_model_specific_params().
         self.use_post_norm = False
+        # Full-width QK-norm (OLMo-2/3): q_norm / k_norm are RMSNorms over the WHOLE q_proj / k_proj output
+        # (n_heads*head_dim and n_kv_heads*head_dim) applied before the head split, not per head. Set in
+        # _set_model_specific_params(); consumed by Attention.
+        self.qk_norm_full_width = False
         # Hybrid-rope inversion (EXAONE-4.x): sliding layers use the (llama3-scaled)
         # rope while full-attention layers are NoPE. rope_scaling_local feeds the local
         # rope setup; use_global_nope neutralizes the global setup's cos/sin to identity.
@@ -685,6 +690,8 @@ class ModelArgs:
         self.sdpa_decode_q_chunk_size = 0
         self.sdpa_decode_k_chunk_size = 0
         self.sdpa_decode_use_default_compute_config = False
+        # True => Attention passes program_config=None to the decode SDPA (op auto-selects grid/chunks).
+        self.sdpa_decode_use_default_program_config = False
         self.use_hf_rope = use_hf_rope
 
         assert not os.getenv(
@@ -752,8 +759,16 @@ class ModelArgs:
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
         # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
-            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8")
+        # Olmo-3.1-32B on Blackhole: a 32-user burst of ~200-token prompts batches 32 x 1024-token
+        # prefills into one 32k-token pass. On a single P150 the KV pool leaves no DRAM for the
+        # [32768, 27648] bfp8 MLP activation (TT_FATAL Out of Memory in mlp.py ttnn.mul); on P300 /
+        # P150x4 the traced batched prefill overflows trace_region_size (mesh_trace.cpp:82). Either
+        # way the EngineCore dies and the server is wedged. Sequential per-user prefill is the
+        # validated path for this model; the 8-user batch fits but leaves no headroom.
+        self.disable_batched_prefill = (
+            (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4")
+            or (self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P150", "P300", "P150x4", "P150x8"))
+            or (self.base_model_name == "Olmo-3.1-32B" and self.device_name in ("P150", "P300", "P150x4", "P150x8"))
         )
 
         if (
@@ -1719,6 +1734,8 @@ class ModelArgs:
         sharp accuracy cliff once the context exceeds one chunk.
         """
         q_chunk, k_chunk = self.sdpa_decode_q_chunk_size, self.sdpa_decode_k_chunk_size
+        if getattr(self, "sdpa_decode_use_default_program_config", False) and prefetcher is None:
+            return None
         if prefetcher is not None:
             sdpa_grid_size = (8, 8)
             start_core = ttnn.CoreCoord(1, 0)
@@ -2568,6 +2585,10 @@ class ModelArgs:
                 # Large single-chunk prefill matters for EXAONE: chunked prefill is
                 # unsupported on sliding-window layers (48 of its 64 layers).
                 "EXAONE-4.5-33B": {"P150x8": 128},
+                # Olmo-3.1-32B: sliding-window layers need the whole prompt in ONE prefill chunk (chunked
+                # prefill raises for sliding SDPA), so the chunk must cover max_seq_len: 32k on a single
+                # P150 (32 GB, bfp4 MLP), 64k on P300 / P150x4 (p300x2).
+                "Olmo-3.1-32B": {"P150": 32, "P300": 64, "P150x4": 64, "P150x8": 64},
                 "Qwen2.5-Coder-32B": {"N150": None, "N300": None, "P150x4": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128, "P150x8": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
@@ -2870,6 +2891,23 @@ class ModelArgs:
             # itself drops mtp.* on load (_keys_to_ignore_on_load_unexpected).
             self.force_text_only = True
             self.is_multimodal = False
+
+        # OLMo-2/3 (allenai/Olmo-*): post-norm residual order with no input_layernorm —
+        #   h = x + post_attention_layernorm(attn(x)); out = h + post_feedforward_layernorm(mlp(h))
+        # — plus a FULL-WIDTH QK-norm (RMSNorm over the whole q_proj / k_proj output before the head
+        # split; see HF modeling_olmo3.py). RoPE: OLMo-3 applies its YaRN scaling only on the
+        # full_attention layers (HF #46911, OLMo 3 report); the sliding_attention layers use the plain
+        # base rope. That is exactly the framework's rope_theta_local (unscaled, rope_scaling_local=None)
+        # for sliding layers + the scaled global rope for full layers, so nothing else is needed here.
+        if self.model_type is not None and str(self.model_type).lower() in ("olmo2", "olmo3"):
+            self.use_post_norm = True
+            self.qk_norm_full_width = True
+            # Blackhole decode SDPA: with the framework's explicit (8x8) program config the paged flash-decode kernel
+            # is broken for 40 query heads / 8 KV heads (GQA ratio 5): auto chunk sizes hang the device and explicit
+            # chunk sizes give wrong attention once the position exceeds a few hundred tokens (PCC 0.1-0.3 vs torch);
+            # 32/8 heads are fine. The op's own auto-selected configuration is correct (PCC 0.9997) and hang-free
+            # (bisected on a P150, 2026-09-09), so this model passes no decode SDPA program config.
+            self.sdpa_decode_use_default_program_config = True
 
     def _set_params_from_dict(self, config):
         eos_token_id = config.get("eos_token_id", None)
@@ -3983,6 +4021,7 @@ class ModelArgs:
             "Qwen3.6-27B": "Qwen/Qwen3.6-27B",
             "LFM2.5-VL-1.6B": "LiquidAI/LFM2.5-VL-1.6B",
             "EXAONE-4.5-33B": "LGAI-EXAONE/EXAONE-4.5-33B",
+            "Olmo-3.1-32B": "allenai/Olmo-3.1-32B-Instruct",
         }
 
         logger.info(f"Tokenizer path: {self.TOKENIZER_PATH}")
@@ -4228,7 +4267,9 @@ class ModelArgs:
         # Always HuggingFace since we only support HF_MODEL now
         model = self.reference_transformer(wrap=False)
         layers = getattr(model, "layers", getattr(model, "model", {}).layers)
-        layer = layers[0].input_layernorm
+        # Post-norm decoders (EXAONE-4.x, OLMo-2/3) have no input_layernorm; their post_attention_layernorm is the
+        # norm the TT side calls ffn_norm (see test_rms_norm.py).
+        layer = getattr(layers[0], "input_layernorm", None) or layers[0].post_attention_layernorm
         layer._load_state_dict = layer.load_state_dict
         if self.use_hf_rope:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf_no_qkv_permute(x))
@@ -4450,9 +4491,10 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_decoder(self, load_checkpoint=False):
+    def reference_decoder(self, load_checkpoint=False, layer_num=0):
+        # layer_num: which decoder layer to wrap (hybrid models: layer kind and weights differ per layer)
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
-        layer = model.model.layers[0]
+        layer = model.model.layers[layer_num]
         use_position_embeddings = layer.__class__.__name__ != "Phi3DecoderLayer" or self.base_model_name in ("phi-4",)
         if hasattr(model.model, "rotary_emb_local"):
             rotary_emb_local = model.model.rotary_emb_local
@@ -4467,9 +4509,10 @@ class ModelArgs:
         )
         return wrapper
 
-    def reference_attention(self, load_checkpoint=False):
+    def reference_attention(self, load_checkpoint=False, layer_num=0):
+        # layer_num: which decoder layer's attention to wrap (hybrid models: layer kind and weights differ per layer)
         model = self.reference_transformer(wrap=False, load_checkpoint=load_checkpoint)
-        layer = model.model.layers[0].self_attn
+        layer = model.model.layers[layer_num].self_attn
         use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
         wrapper = HfAttentionWrapper(
             layer,
@@ -4616,6 +4659,7 @@ class HfAttentionWrapper:
                 self.rope_layer_type
                 if self.rope_layer_type is not None
                 else getattr(self.attention, "layer_type", None)
+                or getattr(self.attention, "attention_type", None)  # Olmo3Attention names it attention_type
             )
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
                 position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
@@ -4738,7 +4782,10 @@ class HfDecoderWrapper:
             # sliding_attention per layer). Layer 0 is sliding, so computing global rope here (as the
             # default above does) feeds the wrong rope and the reference diverges from the TT decoder
             # (which applies the correct per-layer rope). Recompute with this layer's own layer_type.
-            _layer_type = getattr(getattr(self.decoder, "self_attn", None), "layer_type", None)
+            _attn = getattr(self.decoder, "self_attn", None)
+            _layer_type = getattr(_attn, "layer_type", None) or getattr(
+                _attn, "attention_type", None
+            )  # Olmo3: attention_type
             if (
                 self.rotary_emb is not None
                 and _layer_type is not None

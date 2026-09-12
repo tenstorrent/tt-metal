@@ -26,9 +26,15 @@ from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "N300": (1, 2),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -88,10 +94,12 @@ def test_decoder_inference(
         prefetcher=prefetcher,
         use_hf_rope=False,
     )
-    model_args.n_layers = 1
+    model_args.n_layers = int(os.environ.get("TT_TEST_LAYER_NUM", "0")) + 1  # unit test: layers up to the tested one
 
     state_dict = model_args.load_state_dict()
-    reference_model = model_args.reference_decoder(load_checkpoint=True)
+    reference_model = model_args.reference_decoder(
+        load_checkpoint=True, layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0"))
+    )
 
     generation_start_pos = 0
     all_tests_pass = True
@@ -162,7 +170,7 @@ def test_decoder_inference(
         tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
-        layer_num=0,
+        layer_num=int(os.environ.get("TT_TEST_LAYER_NUM", "0")),  # bring-up aid: pick a layer kind
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,

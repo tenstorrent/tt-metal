@@ -1,0 +1,10 @@
+{
+  "hf_model": "allenai/Olmo-3.1-32B-Instruct",
+  "max_position_embeddings": 65536,
+  "target_context": 65536,
+  "max_model_len": 32768,
+  "supported_context": {"p150": 32768, "p300": 65536, "p300x2": 65536},
+  "limiting_reason": "device_dram",
+  "capacity_evidence": "P150 = one Blackhole chip with 32 GB: ~21 GB of weights (bfp4 MLP, bfp8 attention/LM head, bf16 embeddings) leave ~10 GB for KV cache (128 KiB/token in bfp8 across 64 layers), trace region and the single-chunk prefill activations; sliding-window layers do not support chunked prefill, so max_model_len must fit one prefill chunk. Multi-chip profiles shard weights and KV across chips and serve the full 65536.",
+  "notes": "Values marked validated are updated by the bring-up pipeline (~/olmo3-bringup stages 04/05) before packaging; see doc/REPORT.md."
+}

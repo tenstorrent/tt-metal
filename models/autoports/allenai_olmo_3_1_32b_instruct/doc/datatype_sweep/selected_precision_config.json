@@ -1,0 +1,14 @@
+{
+ "p150": {
+  "optimizations": "performance",
+  "why": "forced: 16k single-chunk prefill on one P150 validated only with the bfp4 FF2 (performance) config; top-1 +1.8 at 15% t/s/u cost"
+ },
+ "p300": {
+  "optimizations": "accuracy",
+  "why": "top-1 +1.4 at 10% t/s/u cost"
+ },
+ "p300x2": {
+  "optimizations": "accuracy",
+  "why": "top-1 +2.0 at 8% t/s/u cost"
+ }
+}

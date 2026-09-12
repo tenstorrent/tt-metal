@@ -322,6 +322,11 @@ class TransformerBlock(LightweightModule):
         # Norms take fractured inputs and output replicated across devices
         attn_norm_config = self.args.get_norm_config("attn", mode, self.prefetcher)
         attn_in = self.attention_norm(x, mode, norm_config=attn_norm_config)
+        if self.use_post_norm and self.num_devices == 1:
+            # Post-norm decoders on a single device: the gather-only attention_norm slot returns the residual tensor
+            # (a new wrapper over the same buffer) and Attention.forward deallocates its input, which would free the residual before the
+            # residual add (multi-device gathers produce a fresh tensor, so this only bites on one chip).
+            attn_in = ttnn.clone(x, memory_config=x.memory_config(), dtype=x.dtype)
 
         # Reshape to [B, 1, S_per_user, H] so attention infers batch_size from shape[0]
         if batch_size > 1:
@@ -376,6 +381,12 @@ class TransformerBlock(LightweightModule):
             residual = hidden_states
             pre_ff_norm_config = self.args.get_norm_config("ff", mode, self.prefetcher)
             hidden_states = self.pre_ff_norm(hidden_states, mode, norm_config=pre_ff_norm_config)
+            if self.use_post_norm and self.num_devices == 1:
+                # same aliasing hazard as attn_in above: the gather-only slot hands the MLP the residual buffer and
+                # the MLP deallocates its input.
+                hidden_states = ttnn.clone(
+                    hidden_states, memory_config=hidden_states.memory_config(), dtype=hidden_states.dtype
+                )
 
         ttnn.deallocate(attn_out)
 
