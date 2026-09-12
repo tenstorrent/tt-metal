@@ -216,7 +216,7 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "python3"]
+  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "python3", "sed", "awk", "test"]
   github:
     toolsets: [pull_requests, repos]
     lockdown: false
