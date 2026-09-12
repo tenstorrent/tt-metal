@@ -461,7 +461,6 @@ int main() {
 #ifdef DEBUG_CHECKPOINT_ENABLED
                 debug_checkpoint_init(enables);
 #endif
-                ArmPerfCounters();
                 run_triscs(enables);
 
                 noc_index = launch_msg_address->kernel_config.brisc_noc_id;
