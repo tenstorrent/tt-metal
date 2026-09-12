@@ -17,6 +17,8 @@
 
 #include <gtest/gtest.h>
 
+#include "metal/common/program_utils.hpp"
+
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cmath>
@@ -44,6 +46,7 @@ constexpr const char* kWriterPath =
 
 // One block pair's operands and the reference results.
 struct Problem {
+    uint32_t Bt = 1;  // row-tiles per block; B = Bt * 32
     uint32_t B = kTile;
     uint32_t d = 64;
     bool diagonal = false;
@@ -71,8 +74,10 @@ xt::xarray<float> random_matrix(uint32_t rows, uint32_t cols, uint32_t salt) {
     return out;
 }
 
-Problem make_problem(uint32_t d, bool diagonal) {
+Problem make_problem(uint32_t d, bool diagonal, uint32_t Bt = 1) {
     Problem p;
+    p.Bt = Bt;
+    p.B = Bt * kTile;
     p.d = d;
     p.diagonal = diagonal;
     const uint32_t B = p.B;
@@ -168,6 +173,8 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
 
     const uint32_t qWt = p.d / kTile;
     const uint32_t vWt = p.d / kTile;
+    const uint32_t Bt = p.Bt;
+    const uint32_t score_tiles = Bt * Bt;
 
     const auto query = ttml::core::from_xtensor(as_4d(p.Q), device);
     const auto key = ttml::core::from_xtensor(as_4d(p.K), device);
@@ -196,29 +203,29 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
             region,
             CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
     };
-    make_cb(tt::CBIndex::c_0, qWt, tt::DataFormat::Float16_b);  // Q
-    make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);  // K
-    make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);  // V
-    make_cb(tt::CBIndex::c_3, vWt, tt::DataFormat::Float16_b);  // dO
-    make_cb(tt::CBIndex::c_4, 1, tt::DataFormat::Float32);      // L_i
-    make_cb(tt::CBIndex::c_5, 1, tt::DataFormat::Float32);      // D_i
-    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);    // causal mask
-    make_cb(tt::CBIndex::c_10, 1, tt::DataFormat::Float32);     // P
-    make_cb(tt::CBIndex::c_11, 1, tt::DataFormat::Float32);     // dP
-    make_cb(tt::CBIndex::c_12, 1, tt::DataFormat::Float32);     // dS
-    make_cb(tt::CBIndex::c_13, 1, tt::DataFormat::Float32);     // dS^T
-    make_cb(tt::CBIndex::c_14, 1, tt::DataFormat::Float32);     // P^T
-    make_cb(tt::CBIndex::c_15, 1, tt::DataFormat::Float32);     // probe
-    make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);   // dQ
-    make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);   // dK
-    make_cb(tt::CBIndex::c_18, vWt, tt::DataFormat::Float32);   // dV
+    make_cb(tt::CBIndex::c_0, Bt * qWt, tt::DataFormat::Float16_b);    // Q
+    make_cb(tt::CBIndex::c_1, Bt * qWt, tt::DataFormat::Float16_b);    // K
+    make_cb(tt::CBIndex::c_2, Bt * vWt, tt::DataFormat::Float16_b);    // V
+    make_cb(tt::CBIndex::c_3, Bt * vWt, tt::DataFormat::Float16_b);    // dO
+    make_cb(tt::CBIndex::c_4, Bt, tt::DataFormat::Float32);            // L_i
+    make_cb(tt::CBIndex::c_5, Bt, tt::DataFormat::Float32);            // D_i
+    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);           // causal mask
+    make_cb(tt::CBIndex::c_10, score_tiles, tt::DataFormat::Float32);  // P
+    make_cb(tt::CBIndex::c_11, score_tiles, tt::DataFormat::Float32);  // dP
+    make_cb(tt::CBIndex::c_12, score_tiles, tt::DataFormat::Float32);  // dS
+    make_cb(tt::CBIndex::c_13, score_tiles, tt::DataFormat::Float32);  // dS^T
+    make_cb(tt::CBIndex::c_14, score_tiles, tt::DataFormat::Float32);  // P^T
+    make_cb(tt::CBIndex::c_15, 1, tt::DataFormat::Float32);            // probe
+    make_cb(tt::CBIndex::c_16, Bt * qWt, tt::DataFormat::Float32);     // dQ
+    make_cb(tt::CBIndex::c_17, Bt * qWt, tt::DataFormat::Float32);     // dK
+    make_cb(tt::CBIndex::c_18, Bt * vWt, tt::DataFormat::Float32);     // dV
 
     std::map<std::string, std::string> defines = {{"COMPUTE_STAGE", std::to_string(stage)}};
     if (p.diagonal) {
         defines["DIAGONAL_BLOCK"] = "1";
     }
 
-    std::vector<uint32_t> reader_args = {qWt, vWt};
+    std::vector<uint32_t> reader_args = {qWt, vWt, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
     }
@@ -230,7 +237,7 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
             .compile_args = reader_args,
             .defines = defines});
 
-    std::vector<uint32_t> writer_args = {qWt, vWt};
+    std::vector<uint32_t> writer_args = {qWt, vWt, Bt};
     for (const auto* t : {&probe, &grad_query, &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
@@ -256,7 +263,7 @@ Outputs run_pair(const Problem& p, uint32_t stage) {
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, 1u},
+            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt},
             .defines = defines});
     (void)compute;
 
@@ -387,6 +394,48 @@ TEST(CyclicPairComputeTest, Stage5AllThreeGradientsOnTheDiagonal) {
 
 // A wider head dimension, so the matmuls run over four inner tiles rather
 // than two and the per-row scalars are broadcast across more of them.
+// Two row-tiles per block: B = 64. The schedule does not change -- a block
+// is still a block -- but every score stage now has four tiles instead of
+// one, which is what lets the matmuls of a row issue back to back. The
+// reference math was already written in terms of B, so only the kernel's
+// tile loops are under test here.
+TEST(CyclicPairComputeTest, Stage5TwoRowTilesPerBlock) {
+    const auto p = make_problem(64, false, /* Bt */ 2);
+    ASSERT_EQ(p.B, 64u);
+    const auto out = run_pair(p, 5);
+    expect_close(out.dQ, p.dQ, 0.05F, "dQ at Bt = 2");
+    expect_close(out.dK, p.dK, 0.05F, "dK at Bt = 2");
+    expect_close(out.dV, p.dV, 0.05F, "dV at Bt = 2");
+}
+
+// The diagonal block is where the tile loops have to know about the
+// triangle: the tile on the diagonal gets the causal mask, the tiles above it
+// are wholly masked and are zeroed after the softmax so that every later sum
+// can run over all four tiles without knowing anything about it.
+TEST(CyclicPairComputeTest, Stage5TwoRowTilesOnTheDiagonal) {
+    const auto p = make_problem(64, true, /* Bt */ 2);
+    const auto out = run_pair(p, 5);
+    expect_close(out.dQ, p.dQ, 0.05F, "dQ at Bt = 2, diagonal");
+    expect_close(out.dK, p.dK, 0.05F, "dK at Bt = 2, diagonal");
+    expect_close(out.dV, p.dV, 0.05F, "dV at Bt = 2, diagonal");
+}
+
+// What the block shape costs, measured rather than argued. Run with the
+// device profiler and compare the PAIR zone: Bt = 2 does four times the
+// score-stage arithmetic of Bt = 1, so anything under four times the cycles
+// is the matmul pipeline latency being amortized.
+//
+//   TT_METAL_DEVICE_PROFILER=1 ttml_tests \
+//     --gtest_filter=CyclicPairComputeTest.DISABLED_ProfileBlockShapes \
+//     --gtest_also_run_disabled_tests
+TEST(CyclicPairComputeTest, DISABLED_ProfileBlockShapes) {
+    for (uint32_t bt : {1u, 2u}) {
+        const auto p = make_problem(64, false, bt);
+        (void)run_pair(p, 5);
+    }
+    ttml::autograd::ctx().close_device();
+}
+
 TEST(CyclicPairComputeTest, Stage5AllThreeGradientsWithWiderHead) {
     const auto p = make_problem(128, false);
     const auto out = run_pair(p, 5);
@@ -516,6 +565,8 @@ Outputs run_pairs(
             program, region,
             CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
     };
+    const uint32_t Bt = 1;  // these tests exercise the streak and residency
+                            // paths, not the block shape
     make_cb(tt::CBIndex::c_0, qWt, tt::DataFormat::Float16_b);
     make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);
     make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);
@@ -549,7 +600,7 @@ Outputs run_pairs(
         defines["SEED_DQ"] = "1";
     }
 
-    std::vector<uint32_t> reader_args = {qWt, vWt};
+    std::vector<uint32_t> reader_args = {qWt, vWt, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &seed}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
     }
@@ -561,7 +612,7 @@ Outputs run_pairs(
             .compile_args = reader_args,
             .defines = defines});
 
-    std::vector<uint32_t> writer_args = {qWt, vWt};
+    std::vector<uint32_t> writer_args = {qWt, vWt, Bt};
     for (const auto* t : {&probe, &grad_query, &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
@@ -583,7 +634,7 @@ Outputs run_pairs(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, 1u},
+            .compile_args = {qWt, vWt, scaler, minus_one, custom_inf, get_block_size(qWt, 4U), Bt},
             .defines = defines});
 
     std::vector<uint32_t> args = {

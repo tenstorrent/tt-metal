@@ -23,7 +23,8 @@ void kernel_main() {
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);
     constexpr uint32_t vWt = get_compile_time_arg_val(1);
-    constexpr auto probe_args = TensorAccessorArgs<2>();
+    constexpr uint32_t Bt = get_compile_time_arg_val(2);
+    constexpr auto probe_args = TensorAccessorArgs<3>();
     constexpr auto grad_query_args = TensorAccessorArgs<probe_args.next_compile_time_args_offset()>();
     constexpr auto grad_key_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
@@ -43,8 +44,8 @@ void kernel_main() {
     const auto grad_query = TensorAccessor(grad_query_args, grad_query_addr, grad_bytes);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
-    write_tiles_by_row(cb_grad_query, grad_query, 0, qWt, grad_bytes, qWt);
-    write_tiles_by_row(cb_grad_value, grad_value, 0, vWt, grad_bytes, vWt);
-    write_tiles_by_row(cb_grad_key, grad_key, 0, qWt, grad_bytes, qWt);
+    write_tiles_by_row(cb_grad_query, grad_query, 0, Bt * qWt, grad_bytes, Bt * qWt);
+    write_tiles_by_row(cb_grad_value, grad_value, 0, Bt * vWt, grad_bytes, Bt * vWt);
+    write_tiles_by_row(cb_grad_key, grad_key, 0, Bt * qWt, grad_bytes, Bt * qWt);
 #endif
 }

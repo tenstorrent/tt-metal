@@ -31,7 +31,10 @@ void kernel_main() {
 
     constexpr uint32_t qWt = get_compile_time_arg_val(0);
     constexpr uint32_t vWt = get_compile_time_arg_val(1);
-    constexpr auto query_args = TensorAccessorArgs<2>();
+    // Row-tiles per block: a block is Bt tiles tall, so every row-side or
+    // column-side operand is Bt * qWt tiles and L and D are Bt tiles each.
+    constexpr uint32_t Bt = get_compile_time_arg_val(2);
+    constexpr auto query_args = TensorAccessorArgs<3>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -76,7 +79,8 @@ void kernel_main() {
         const uint32_t seed_row = get_arg_val<uint32_t>(pair_args);
         const uint32_t seed_bytes = get_tile_size(cb_grad_query_seed);
         const auto seed = TensorAccessor(seed_args, seed_addr, seed_bytes);
-        read_tiles_by_row(cb_grad_query_seed, seed, seed_row * qWt, qWt, seed_bytes, qWt);
+        read_tiles_by_row(
+            cb_grad_query_seed, seed, seed_row * Bt * qWt, Bt * qWt, seed_bytes, Bt * qWt);
     }
 #endif
 
@@ -85,11 +89,13 @@ void kernel_main() {
         const uint32_t col_block = get_arg_val<uint32_t>(pair_args + 2u * pair + 1u);
 
         // Row-side operands follow the row block, column-side the column block.
-        read_tiles_by_row(cb_query, query, row_block * qWt, qWt, tile_bytes, qWt);
-        read_tiles_by_row(cb_key, key, col_block * qWt, qWt, tile_bytes, qWt);
-        read_tiles_by_row(cb_value, value, col_block * vWt, vWt, tile_bytes, vWt);
-        read_tiles_by_row(cb_grad_output, grad_output, row_block * vWt, vWt, tile_bytes, vWt);
-        read_one_tile(cb_lse, lse, row_block);
-        read_one_tile(cb_u_scalar, u_scalar, row_block);
+        read_tiles_by_row(
+            cb_query, query, row_block * Bt * qWt, Bt * qWt, tile_bytes, Bt * qWt);
+        read_tiles_by_row(cb_key, key, col_block * Bt * qWt, Bt * qWt, tile_bytes, Bt * qWt);
+        read_tiles_by_row(cb_value, value, col_block * Bt * vWt, Bt * vWt, tile_bytes, Bt * vWt);
+        read_tiles_by_row(
+            cb_grad_output, grad_output, row_block * Bt * vWt, Bt * vWt, tile_bytes, Bt * vWt);
+        read_tiles_by_row(cb_lse, lse, row_block * Bt, Bt, interm_bytes, Bt);
+        read_tiles_by_row(cb_u_scalar, u_scalar, row_block * Bt, Bt, interm_bytes, Bt);
     }
 }
