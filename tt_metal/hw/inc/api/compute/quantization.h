@@ -52,6 +52,26 @@ ALWI void quant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 // clang-format off
 /**
+ * Quantize variant writing a uint8 output tensor. Saturates the pre-round
+ * value into [0, 255] (FP32_TO_UINT8 alone returns |x| for negatives).
+ * Output overwrites odst in DST.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void quant_uint8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_uint8, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+}
+
+// clang-format off
+/**
  * Performs an elementwise per-tensor affine re-quantization operation on the first operand using the scaling factor in the second operand.
  * Output overwrites odst in DST.
  *
@@ -93,6 +113,26 @@ ALWI void requant_int8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         idst1,
         odst,
         VectorMode::RC)));
+}
+
+// clang-format off
+/**
+ * Re-quantize variant writing a uint8 output tensor. Saturates the pre-round
+ * value into [0, 255] (FP32_TO_UINT8 alone returns |x| for negatives).
+ * Output overwrites odst in DST.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void requant_uint8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_uint8, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
 // clang-format off
@@ -142,6 +182,33 @@ ALWI void requant_int8_in_int8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t
         DST_ACCUM_MODE,
         calculate_requant_int32_int8_pack,
         (APPROX, 8, true),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+
+// clang-format off
+/**
+ * Re-quantize variant reading an int8 input tensor and writing a uint8 output tensor.
+ * int8-input unbias (see requant_int8_in_tile_init) with uint8-output saturation into [0, 255].
+ * Output overwrites odst in DST.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                           | Type     | Valid Range                                           | Required |
+ * |----------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0          | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1          | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst           | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
+ */
+// clang-format on
+ALWI void requant_int8_in_uint8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_uint8,
+        (APPROX, 8, false, true),
         idst0,
         idst1,
         odst,
