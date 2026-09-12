@@ -455,11 +455,12 @@
       "category": 4,
       "validation_workflow_dispatched": "models-t3-e2e-tests",
       "dispatched": "2026-09-11",
-      "status": "dispatched",
-      "reported": false,
+      "status": "resolved",
+      "reported": true,
       "nonterminal_reported": false,
-      "number": null,
-      "note": "PR opened this run: migrated ToolCall.validate_field's @validator('tool_name', pre=True) to @field_validator('tool_name', mode='before') in models/common/llama_models.py, matching the non-deprecated idiom already used in ttnn/ttnn/distributed/ttrun.py. Sampled from models-t3-e2e-tests run 34439940959 (Gemma-2-9B [wh_n300] job 102756169382 and Qwen2.5-VL-32B [bh_quietbox_2] job 102756169360), both showing the warning + its GHA-annotation mirror. Dispatched models-t3-e2e-tests for validation; awaiting run outcome next scan."
+      "number": 56306,
+      "note": "PR #56306 validation run 34646835523 (models-t3-e2e-tests) completed/failure -- failure is unrelated Gemma-4-E4B PCC accuracy assertion, not the deprecation fix. Grepped 4 e2e test-execution job logs (Gemma-2-9B, Qwen2.5-VL-32B, Llama 3.2-3B, Gemma-4-E4B) for PydanticDeprecatedSince20/ToolCall/llama_models.py:63: 0 occurrences. Commented outcome (/codeowners ping) and marked ready for review (2026-09-12).",
+      "last_state": "failure"
     },
     {
       "branch": "silencer/dedupe-softmax-large-tensor-dfb-prev-max-unused",
@@ -471,12 +472,29 @@
       "category": 1,
       "validation_workflow_dispatched": "sanity-tests",
       "dispatched": "2026-09-12",
+      "status": "reported-pending-ready-for-review",
+      "reported": true,
+      "nonterminal_reported": false,
+      "number": 56331,
+      "note": "PR #56331 validation run 34684759567 (sanity-tests) completed/failure -- only failure is unrelated runtime_sim_cpp_unit_tests [sim_bh_p150]. Grepped 4 ttnn-sanity-tests job logs (fused group 2 x2, eltwise group 3, misc ops group which runs test_large_softmax) for dfb_prev_max: 0 occurrences. Commented outcome (/codeowners ping) 2026-09-12; mark_pull_request_as_ready_for_review hit this run's 1-per-run limit (already used on #56306) -- NEXT RUN MUST mark #56331 ready for review (comment already posted, just needs the ready-for-review call).",
+      "last_state": "failure"
+    },
+    {
+      "branch": "silencer/deprecated-copy-dest-values-moe-gate-mm",
+      "title": "[silencer] Migrate deprecated copy_dest_values call in moe_gate_mm kernel",
+      "pattern": "-Wdeprecated-declarations: 'void ckernel::sfpu::copy_dest_value(uint, uint, uint) [with bool APPROXIMATION_MODE = false; int ITERATIONS = 8; uint = long unsigned int]' is deprecated, at tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h:55 -- 38x in a 5000-line tail sample of sanity-tests / ttnn fused group 2 [bh_p150b_civ2] job (run 34678003004, job 103516272073), reached via the deprecated untemplated ckernel::copy_dest_values(uint32_t, uint32_t) overload called from ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp:244",
+      "source_run_id": "34678003004",
+      "source_job_id": "103516272073",
+      "source_workflow": "sanity-tests.yaml",
+      "category": 4,
+      "validation_workflow_dispatched": "sanity-tests",
+      "dispatched": "2026-09-12",
       "status": "dispatched",
       "reported": false,
       "nonterminal_reported": false,
       "number": null,
-      "note": "PR opened this run: moved dfb_prev_max's declaration inside the #ifdef NUMERIC_STABLE block (all its uses -- the dfb_max_final ping-pong expr and 3x reduce_dfb_pass<> calls -- are already gated on NUMERIC_STABLE), mirroring the existing scoping already used for its sibling dfb_max in the same function. Sampled via 4-shape parser pipeline over 4 jobs (ttnn fused group 1, ttnn misc ops group, ttnn eltwise group 1, build-artifact Build Release ubuntu 22.04) from sanity-tests run 34678003004 -- diagnostic channel showed 63x dfb_prev_max + 6x layernorm dfb_x_id (already tracked/resolved via PR #55335) + 38x -Wdeprecated-declarations (not yet root-caused, candidate for a future scan). Dispatched sanity-tests for validation; awaiting run outcome next scan."
+      "note": "PR opened this run: migrated the sole remaining caller of the deprecated untemplated ckernel::copy_dest_values(uint32_t, uint32_t) overload -- moe_gate_mm's compute.cpp:244 -- to copy_dest_values<DataFormat::Float16_b>(0, 1), matching the format the kernel already operates in (pack/unpack reconfigured to Float16_b earlier in kernel_main) and matching the templated-overload idiom already used by every other caller repo-wide (pool/generic and quasar/pool_generic compute_mpwi.cpp, deepseek_prefill's per_token_cast_to_fp8.cpp). Sampled from the same sanity-tests run 34678003004 / job 103516272073 already used for PR #56331 (dfb_prev_max) -- found while root-causing the 38x -Wdeprecated-declarations candidate noted in that run's backlog cursor. NOTE: moe_gate_mm's compute kernel is only exercised by tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_mm.py, which is NOT part of sanity-tests's matrix -- next scan's re-grep of the dispatched sanity-tests run may find no JIT-compile line for this kernel at all, making validation INCONCLUSIVE rather than confirmed; if so, a maintainer or a future run may need to dispatch a workflow that actually runs test_moe_mm.py instead. Dispatched sanity-tests anyway (it is the tracked workflow this pattern was sampled from) per convention; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Reconciled 1 in-flight validation this run: PR #56221 (ref-model-dtype-debug-print) validation run 34582955027 completed with run-level failure, but re-grep confirmed the 5 failures are unrelated to the fix (0 occurrences of target string across 7 relevant job logs) -- commented outcome, marked ready for review. New target this run: found -Wunused-but-set-variable for dfb_prev_max in softmax_large_tensor.cpp:346 (63x in one sanity-tests job sample) while sampling a fresh sanity-tests run (34678003004) via the 4-shape parser pipeline (logger/diagnostic/gha-annotation/residue). Root cause: dfb_prev_max declared unconditionally but only used under #ifdef NUMERIC_STABLE, unlike its sibling dfb_max which already has correct scoping. Moved the declaration to match. PR opened on branch silencer/dedupe-softmax-large-tensor-dfb-prev-max-unused, dispatched sanity-tests for validation. Other candidates noted but not acted on this run: -Wdeprecated-declarations (38x in same job sample, not yet root-caused -- good next target); PydanticDeprecatedSince20 class-based Config warning (already tracked via #55002); GPT-OSS-120B disaggregated prefill / BGE-M3 / DeepSeek-V3 Galaxy test failures observed in PR #56221's validation run are real CI flakiness/timeouts unrelated to Silencer's scope, not investigated further. Next: root-cause the -Wdeprecated-declarations pattern from this same sanity-tests sample; continue reconciling PR #56065 (matmul-bmm-unused-tensoraccessor-args, dispatch never landed) and PR #55335 (dfb_x_id, still open) on a future scan; check PR silencer/dedupe-softmax-large-tensor-dfb-prev-max-unused's dispatched sanity-tests run next scan."
+  "backlog_cursor": "Phase A this run: reconciled 2 in-flight validations. PR #56306 (deprecated-pydantic-validator-llama-models) validation run 34646835523 (models-t3-e2e-tests) completed/failure -- unrelated Gemma-4-E4B PCC accuracy failure; grepped 4 e2e job logs, 0 occurrences of the target PydanticDeprecatedSince20/llama_models.py:63 warning -- commented outcome and marked ready for review. PR #56331 (dedupe-softmax-large-tensor-dfb-prev-max-unused) validation run 34684759567 (sanity-tests) completed/failure -- unrelated runtime_sim_cpp_unit_tests failure; grepped 4 ttnn-sanity-tests job logs (incl. the misc-ops job that runs test_large_softmax), 0 occurrences of dfb_prev_max -- commented outcome, but mark_pull_request_as_ready_for_review hit its 1-per-run cap (already used on #56306) -- NEXT RUN MUST mark #56331 ready for review (no new comment needed, just the ready-for-review call). Phase B this run: root-caused the -Wdeprecated-declarations candidate noted in the previous run's backlog (38x copy_dest_value deprecation warning sampled from sanity-tests run 34678003004 / job 103516272073). Found the sole remaining caller of the deprecated untemplated ckernel::copy_dest_values(uint32_t,uint32_t) overload at ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/compute.cpp:244 and migrated it to copy_dest_values<DataFormat::Float16_b>(0,1). Opened PR on branch silencer/deprecated-copy-dest-values-moe-gate-mm, dispatched sanity-tests for validation. CAVEAT flagged in the PR: moe_gate_mm's kernel is only exercised by tests/ttnn/nightly/unit_tests/operations/experimental/test_moe_mm.py, which is not part of sanity-tests's matrix, so the next scan's re-grep may find no JIT-compile line for this kernel at all (inconclusive validation) -- check for that explicitly rather than assuming absence-of-warning proves the fix. Next: reconcile PR #56065 (matmul-bmm-unused-tensoraccessor-args, dispatch-never-landed) and any other stale entries; continue looking for further -Wdeprecated-declarations / -Wunused-but-set-variable candidates across the tracked workflow rotation; consider whether a workflow that runs test_moe_mm.py should be dispatched for a conclusive re-grep of the new PR."
 }
