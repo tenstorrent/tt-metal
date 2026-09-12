@@ -16,7 +16,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <map>
 #include <optional>
 #include <cmath>
@@ -2458,20 +2457,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // rotated_groups_needed == rotated_groups.size() ownership never actually moves.
     const uint32_t rotated_groups_needed =
         rotated_group_size ? tt::div_up(rotated_float_chunks, rotated_group_size) : 0;
-    // Separate-V rotation is opt-in because it regressed performance on some configurations.
-    static const bool rotate_head_chain_opt_in = []() {
-        const char* value = std::getenv("RING_MLA_ROTATE_SEPARATE_V");
-        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
-    }();
     // Active-iteration indexing handles partial masks and KV padding. No remainder
     // or no change in ownership needs no special exclusion.
     const bool use_rotated_q_split =
-        // Valid groups are full multicast rows with Q work, implying num_q_chunks > 0.
+        // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
         !rotated_groups.empty() && build_kv_chains &&
-        // Separate-V rebuilds its V chains from base work. Keep the remainder on
-        // separate heads to avoid unmatched receives from those chains.
-        (!use_head_chain || (rotate_head_chain_opt_in && (rotated_base_chunks * num_cores) % num_q_chunks == 0)) &&
+        // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
+        !use_head_chain &&
         // Only streaming compute consumes rotated IDs. Sink paths remain excluded;
         // balanced allocation and per-Q skips are incompatible with this schedule.
         use_streaming_compute && !use_attention_sink && !args.is_balanced &&
@@ -2559,20 +2552,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
 
-        // Rebuild separate-V chains from fixed base ranges. The head-boundary guard
-        // keeps remainder heads out of these chains; their V reads go directly to DRAM.
-        // GQA must retain its original head_work for the grouped K/V chains.
-        if (use_head_chain) {
-            for (auto& work : core_work) {
-                work.head_work.clear();
-            }
-            for (auto& segs : head_segments) {
-                segs.clear();
-            }
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                append_head_work(i, i * rotated_base_chunks, rotated_base_chunks);
-            }
-        }
         // Reuse a bounded ring of handoff semaphores; receivers reset their slots
         // after waiting, including across cached program replays.
         for (uint32_t sem_slot = 0; sem_slot < rotated_handoff_sem_count(ring_size); ++sem_slot) {
@@ -2669,12 +2648,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const std::array<size_t, 3> ct_arg_sizes_with_rotated_last = {
         reader_compile_time_args.size(), writer_compile_time_args.size(), compute_compile_time_args.size()};
 
-    // Head chains (MHA and separate-V shared-K) are built HERE, after the rotated-Q-split
-    // decision, because their per-(head, core) forwarding counts must describe whichever Q split
-    // actually ships. Moved down from above the K-chain pass; verified behaviour-neutral -- nothing
-    // between the old and new positions reads head_chain_configs or mcast_chains, and the K chain's
-    // own build_linear_chain call still sees the STATIC head_work it needs for its injector rule.
-    // Build head chains for MHA and separate-V shared-K. GQA uses KV-head-grouped chains instead.
+    // Build static MHA/shared-K V head chains. GQA uses KV-head-grouped chains instead.
     if (use_head_chain && build_kv_chains) {
         for (uint32_t head_id = 0; head_id < static_cast<uint32_t>(head_segments.size()); ++head_id) {
             const auto& segs = head_segments[head_id];
