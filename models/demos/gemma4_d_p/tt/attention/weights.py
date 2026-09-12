@@ -68,113 +68,105 @@ def load_attention_weights(
     padded_local_hidden = ((local_hidden + 31) // 32) * 32
     o_proj_pad_size = padded_local_hidden - local_hidden
 
-    if state_dict:
-        q_w = state_dict["q_proj.weight"]  # [q_size, H]
-        k_w = state_dict["k_proj.weight"]  # [kv_size, H]
-        if is_global and is_context_parallel:
-            rotary, nonrotary, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
-            query_order = torch.cat((rotary, nonrotary))
-            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, query_order)
-            q_w = q_w.reshape(q_size, -1)
-            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
-            k_w = k_w.reshape(kv_size, -1)
-        elif is_context_parallel:
-            adjacent_order = sliding_kv_indices(config.head_dim)
-            q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, adjacent_order)
-            q_w = q_w.reshape(q_size, -1)
-            k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
-            k_w = k_w.reshape(kv_size, -1)
+    q_w = state_dict["q_proj.weight"]  # [q_size, H]
+    k_w = state_dict["k_proj.weight"]  # [kv_size, H]
+    if is_global and is_context_parallel:
+        rotary, nonrotary, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
+        query_order = torch.cat((rotary, nonrotary))
+        q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, query_order)
+        q_w = q_w.reshape(q_size, -1)
+        k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, value_order)
+        k_w = k_w.reshape(kv_size, -1)
+    elif is_context_parallel:
+        adjacent_order = sliding_kv_indices(config.head_dim)
+        q_w = q_w.reshape(config.num_attention_heads, config.head_dim, -1).index_select(1, adjacent_order)
+        q_w = q_w.reshape(q_size, -1)
+        k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
+        k_w = k_w.reshape(kv_size, -1)
 
-        if not is_global:
-            v_w = state_dict["v_proj.weight"]  # [kv_size, H]
-        else:
-            v_w = k_w  # K=V tying: duplicate K as V
-
-        if tp > 1:
-            # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
-            # When kv_replicated, keep full K/V on each device instead of chunking
-            num_q_heads = config.num_attention_heads
-            num_kv_heads = config.num_key_value_heads
-            head_dim = config.head_dim
-            q_per_device = num_q_heads // tp
-
-            qkv_list = []
-            qk_list = []
-            for i in range(tp):
-                wq_chunk = torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)
-                if kv_replicated:
-                    # GQA-aware KV assignment: each device gets the KV head its Q heads map to
-                    kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
-                    wk_chunk = k_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
-                    wv_chunk = v_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
-                else:
-                    wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
-                    wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)
-                qkv_list.append(torch.cat([wq_chunk, wk_chunk, wv_chunk], dim=-1))
-                if tied_qkv:
-                    qk_list.append(torch.cat([wq_chunk, wk_chunk], dim=-1))
-            qkv = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-            qk = torch.cat(qk_list, dim=-1).unsqueeze(0).unsqueeze(0) if tied_qkv else None
-        else:
-            # Single device: fuse Q+K+V directly
-            qkv = (
-                torch.cat(
-                    [
-                        q_w.transpose(-2, -1),
-                        k_w.transpose(-2, -1),
-                        v_w.transpose(-2, -1),
-                    ],
-                    dim=-1,
-                )
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            qk = (
-                torch.cat([q_w.transpose(-2, -1), k_w.transpose(-2, -1)], dim=-1).unsqueeze(0).unsqueeze(0)
-                if tied_qkv
-                else None
-            )
-
-        # Output projection
-        o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-        if is_global and is_context_parallel:
-            _, _, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
-            o_w = o_w.reshape(1, 1, config.num_attention_heads, config.head_dim, config.hidden_size)
-            o_w = o_w.index_select(3, value_order)
-            o_w = o_w.reshape(1, 1, q_size, config.hidden_size)
-        if o_proj_pad_size > 0 and tp > 1:
-            padded_hidden = padded_local_hidden * tp
-            o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)
-
-        # Per-head norm weights: [head_dim] -> [1, 1, head_dim/TILE_SIZE, TILE_SIZE]
-        q_norm_flat = state_dict["q_norm.weight"].reshape(-1)
-        k_norm_flat = state_dict["k_norm.weight"].reshape(-1)
-        k_norm_w = k_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
-        if is_global:
-            rotary, nonrotary, _ = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
-            # The 128-wide rotary op consumes NeoX halves, not adjacent pairs.
-            rotary_neox = torch.sort(rotary).values
-            k_norm_rotary_w = k_norm_flat.index_select(0, rotary_neox).reshape(1, 1, 1, -1)
-            if is_context_parallel:
-                query_order = torch.cat((rotary, nonrotary))
-                packed_q_scale = torch.cat(
-                    (torch.ones(GLOBAL_ROTARY_DIM, dtype=k_norm_flat.dtype), k_norm_flat.index_select(0, nonrotary))
-                )
-                q_norm_flat = q_norm_flat.index_select(0, query_order) * packed_q_scale
-        else:
-            k_norm_rotary_w = None
-            if is_context_parallel:
-                adjacent_order = sliding_kv_indices(config.head_dim)
-                q_norm_flat = q_norm_flat.index_select(0, adjacent_order)
-                k_norm_w = k_norm_flat.index_select(0, adjacent_order).reshape(1, 1, -1, ttnn.TILE_SIZE)
-        q_norm_w = q_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
+    if not is_global:
+        v_w = state_dict["v_proj.weight"]  # [kv_size, H]
     else:
-        qkv = None
-        qk = None
-        o_w = None
-        q_norm_w = None
-        k_norm_w = None
+        v_w = k_w  # K=V tying: duplicate K as V
+
+    if tp > 1:
+        # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
+        # When kv_replicated, keep full K/V on each device instead of chunking
+        num_q_heads = config.num_attention_heads
+        num_kv_heads = config.num_key_value_heads
+        head_dim = config.head_dim
+        q_per_device = num_q_heads // tp
+
+        qkv_list = []
+        qk_list = []
+        for i in range(tp):
+            wq_chunk = torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)
+            if kv_replicated:
+                # GQA-aware KV assignment: each device gets the KV head its Q heads map to
+                kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
+                wk_chunk = k_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
+                wv_chunk = v_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
+            else:
+                wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
+                wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)
+            qkv_list.append(torch.cat([wq_chunk, wk_chunk, wv_chunk], dim=-1))
+            if tied_qkv:
+                qk_list.append(torch.cat([wq_chunk, wk_chunk], dim=-1))
+        qkv = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+        qk = torch.cat(qk_list, dim=-1).unsqueeze(0).unsqueeze(0) if tied_qkv else None
+    else:
+        # Single device: fuse Q+K+V directly
+        qkv = (
+            torch.cat(
+                [
+                    q_w.transpose(-2, -1),
+                    k_w.transpose(-2, -1),
+                    v_w.transpose(-2, -1),
+                ],
+                dim=-1,
+            )
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
+        qk = (
+            torch.cat([q_w.transpose(-2, -1), k_w.transpose(-2, -1)], dim=-1).unsqueeze(0).unsqueeze(0)
+            if tied_qkv
+            else None
+        )
+
+    # Output projection
+    o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+    if is_global and is_context_parallel:
+        _, _, value_order = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
+        o_w = o_w.reshape(1, 1, config.num_attention_heads, config.head_dim, config.hidden_size)
+        o_w = o_w.index_select(3, value_order)
+        o_w = o_w.reshape(1, 1, q_size, config.hidden_size)
+    if o_proj_pad_size > 0 and tp > 1:
+        padded_hidden = padded_local_hidden * tp
+        o_w = torch.nn.functional.pad(o_w, (0, padded_hidden - hidden_size), "constant", 0.0)
+
+    # Per-head norm weights: [head_dim] -> [1, 1, head_dim/TILE_SIZE, TILE_SIZE]
+    q_norm_flat = state_dict["q_norm.weight"].reshape(-1)
+    k_norm_flat = state_dict["k_norm.weight"].reshape(-1)
+    k_norm_w = k_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
+    if is_global:
+        rotary, nonrotary, _ = global_kv_indices(config.head_dim, GLOBAL_ROTARY_DIM)
+        # The 128-wide rotary op consumes NeoX halves, not adjacent pairs.
+        rotary_neox = torch.sort(rotary).values
+        k_norm_rotary_w = k_norm_flat.index_select(0, rotary_neox).reshape(1, 1, 1, -1)
+        if is_context_parallel:
+            query_order = torch.cat((rotary, nonrotary))
+            packed_q_scale = torch.cat(
+                (torch.ones(GLOBAL_ROTARY_DIM, dtype=k_norm_flat.dtype), k_norm_flat.index_select(0, nonrotary))
+            )
+            q_norm_flat = q_norm_flat.index_select(0, query_order) * packed_q_scale
+    else:
         k_norm_rotary_w = None
+        if is_context_parallel:
+            adjacent_order = sliding_kv_indices(config.head_dim)
+            q_norm_flat = q_norm_flat.index_select(0, adjacent_order)
+            k_norm_w = k_norm_flat.index_select(0, adjacent_order).reshape(1, 1, -1, ttnn.TILE_SIZE)
+    q_norm_w = q_norm_flat.reshape(1, 1, -1, ttnn.TILE_SIZE)
 
     # Mesh mappers
     if tp > 1:

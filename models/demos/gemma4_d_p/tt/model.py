@@ -181,6 +181,9 @@ class Gemma4Model:
         num_layers=None,
         ring_kv_caches=None,
     ):
+        assert state_dict and any(
+            key.startswith("model.language_model.") for key in state_dict
+        ), "Expected a multimodal Gemma4 state_dict with model.language_model.* keys"
         mesh_device = mesh_config.device
 
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
@@ -243,14 +246,8 @@ class Gemma4Model:
         tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
-        if state_dict and "model.language_model.embed_tokens.weight" in state_dict:
-            embed_key = "model.language_model.embed_tokens.weight"
-        elif state_dict and "model.embed_tokens.weight" in state_dict:
-            embed_key = "model.embed_tokens.weight"
-        else:
-            embed_key = None
-
-        if embed_key:
+        embed_key = "model.language_model.embed_tokens.weight"
+        if embed_key in state_dict:
             embed_weight = state_dict[embed_key]
 
             # Embedding: column-parallel (shard hidden dim across TP devices)
@@ -298,12 +295,7 @@ class Gemma4Model:
         self.tt_kv_cache = [layer.self_attn.ring_kv_cache for layer in self.layers]
 
         # Final norm
-        if state_dict and "model.language_model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.language_model.norm")
-        elif state_dict and "model.norm.weight" in state_dict:
-            norm_state = substate(state_dict, "model.norm")
-        else:
-            norm_state = {}
+        norm_state = substate(state_dict, "model.language_model.norm")
 
         self.norm = RMSNorm(
             mesh_config=mesh_config,

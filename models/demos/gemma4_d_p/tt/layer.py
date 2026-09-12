@@ -40,13 +40,7 @@ class Gemma4DecoderLayer:
         self.hidden_size = hf_config.hidden_size
         self.layer_type = hf_config.layer_types[layer_idx]
 
-        # Try both key formats (HF uses "model.language_model.layers", tests use "model.layers")
-        layer_state = {}
-        if state_dict:
-            for prefix in [f"model.language_model.layers.{layer_idx}", f"model.layers.{layer_idx}"]:
-                layer_state = substate(state_dict, prefix)
-                if layer_state:
-                    break
+        layer_state = substate(state_dict, f"model.language_model.layers.{layer_idx}") if state_dict else {}
 
         def _norm(name, with_scale=True):
             return RMSNorm(
@@ -64,10 +58,7 @@ class Gemma4DecoderLayer:
         self.post_feedforward_layernorm = _norm("post_feedforward_layernorm")
 
         # Layer scalar
-        if layer_state and "layer_scalar" in layer_state:
-            self.layer_scalar = layer_state["layer_scalar"].item()
-        else:
-            self.layer_scalar = 1.0
+        self.layer_scalar = layer_state["layer_scalar"].item()
 
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
