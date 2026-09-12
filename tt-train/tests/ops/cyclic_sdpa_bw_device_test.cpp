@@ -970,6 +970,60 @@ TEST(CyclicSdpaBwOpTest, ComputesTheRowScalarFromTheAttentionOutput) {
     expect_close(ttml::core::to_xtensor(grad_value), ref.dV, 0.06F, "dV from the forward's output");
 }
 
+// End to end against the real forward, which is the one thing every other
+// test here does not do: they all build L and O from the host reference, so
+// they check arithmetic while assuming a convention.
+//
+// The convention is not obvious. sdpa_fw keeps its scores and its running
+// maximum *unscaled*, folding the softmax scale into its exponential, so its
+// statistics could easily have been in different units than this kernel
+// wants. It computes lse = scale * max + log(sum_exp), which is exactly
+// P = exp(aS - L) -- but that is a claim about someone else's code, and this
+// is the test that it holds.
+void check_against_the_real_forward(uint32_t C, uint32_t Bt, uint32_t d) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto ref = make_reference(2u * C * Bt * kTile, d);
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, 1), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, 1), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, 1), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, 1), device);
+
+    // The forward, on device, with its own statistics.
+    const auto forward = ttml::metal::sdpa_fw(
+        query, key, value, ttml::metal::AttentionMaskType::Causal, std::nullopt, 0.0F,
+        /*return_intermediates=*/true);
+    const auto attn_output = forward[0].value();
+    const auto intermediates = forward[1].value();
+
+    // Sanity first: the forward agrees with the reference's own O, or nothing
+    // below means anything.
+    expect_close(ttml::core::to_xtensor(attn_output), ref.O, 0.06F, "sdpa_fw output against O = P V");
+
+    const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw_from_forward(
+        query, key, value, grad_output, attn_output, intermediates, Bt, /* use_barrier */ false);
+
+    const std::string at = " (Bt = " + std::to_string(Bt) + ", d = " + std::to_string(d) + ")";
+    expect_close(ttml::core::to_xtensor(grad_query), ref.dQ, 0.06F, "dQ from sdpa_fw" + at);
+    expect_close(ttml::core::to_xtensor(grad_key), ref.dK, 0.06F, "dK from sdpa_fw" + at);
+    expect_close(ttml::core::to_xtensor(grad_value), ref.dV, 0.06F, "dV from sdpa_fw" + at);
+}
+
+TEST(CyclicSdpaBwOpTest, ConsumesTheRealForward) {
+    check_against_the_real_forward(/* C */ 4, /* Bt */ 1, /* d */ 64);
+}
+
+TEST(CyclicSdpaBwOpTest, ConsumesTheRealForwardWithTallBlocks) {
+    check_against_the_real_forward(/* C */ 4, /* Bt */ 2, /* d */ 64);
+}
+
+// d = 128 is where 1/sqrt(d) is not a power of two, so the scale stays in the
+// exponential instead of folding into K. This runs that fallback against the
+// real forward too, which the d = 64 cases cannot.
+TEST(CyclicSdpaBwOpTest, ConsumesTheRealForwardWhereTheScaleDoesNotFold) {
+    check_against_the_real_forward(/* C */ 4, /* Bt */ 1, /* d */ 128);
+}
+
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
 // Within a streak the packet is the ordering token. Across a gap, the two
 // endpoint counters order a reload after the preceding streak's spill. The
