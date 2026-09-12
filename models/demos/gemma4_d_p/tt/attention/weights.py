@@ -85,54 +85,36 @@ def load_attention_weights(
         k_w = k_w.reshape(kv_size, -1)
 
     if is_global:
-        v_w = k_w  # K=V tying: duplicate K as V
+        projection_weights = (q_w, k_w)
     else:
-        v_w = state_dict["v_proj.weight"]  # [kv_size, H]
+        projection_weights = (q_w, k_w, state_dict["v_proj.weight"])
 
     if tp > 1:
-        # Chunk Q/K/V per TP device, fuse per-device, then concatenate across devices
-        # When kv_replicated, keep full K/V on each device instead of chunking
+        # Fuse each TP device's QK or QKV weights before concatenating devices.
         num_q_heads = config.num_attention_heads
         num_kv_heads = config.num_key_value_heads
         head_dim = config.head_dim
         q_per_device = num_q_heads // tp
 
-        qkv_list = []
-        qk_list = []
+        projection_chunks = []
         for i in range(tp):
-            wq_chunk = torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)
-            if kv_replicated:
-                # GQA-aware KV assignment: each device gets the KV head its Q heads map to
-                kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
-                wk_chunk = k_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
-                wv_chunk = v_w[kv_idx * head_dim : (kv_idx + 1) * head_dim].transpose(-2, -1)
-            else:
-                wk_chunk = torch.chunk(k_w, tp, dim=0)[i].transpose(-2, -1)
-                wv_chunk = torch.chunk(v_w, tp, dim=0)[i].transpose(-2, -1)
-            qkv_list.append(torch.cat([wq_chunk, wk_chunk, wv_chunk], dim=-1))
-            if tied_qkv:
-                qk_list.append(torch.cat([wq_chunk, wk_chunk], dim=-1))
-        qkv = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-        qk = torch.cat(qk_list, dim=-1).unsqueeze(0).unsqueeze(0) if tied_qkv else None
+            chunks = [torch.chunk(q_w, tp, dim=0)[i].transpose(-2, -1)]
+            for weight in projection_weights[1:]:
+                if kv_replicated:
+                    # Assign each device the KV head its Q heads map to.
+                    kv_idx = (i * q_per_device) * num_kv_heads // num_q_heads
+                    chunk = weight[kv_idx * head_dim : (kv_idx + 1) * head_dim]
+                else:
+                    chunk = torch.chunk(weight, tp, dim=0)[i]
+                chunks.append(chunk.transpose(-2, -1))
+            projection_chunks.append(torch.cat(chunks, dim=-1))
+        projection = torch.cat(projection_chunks, dim=-1).unsqueeze(0).unsqueeze(0)
     else:
-        # Single device: fuse Q+K+V directly
-        qkv = (
-            torch.cat(
-                [
-                    q_w.transpose(-2, -1),
-                    k_w.transpose(-2, -1),
-                    v_w.transpose(-2, -1),
-                ],
-                dim=-1,
-            )
-            .unsqueeze(0)
-            .unsqueeze(0)
-        )
-        qk = (
-            torch.cat([q_w.transpose(-2, -1), k_w.transpose(-2, -1)], dim=-1).unsqueeze(0).unsqueeze(0)
-            if tied_qkv
-            else None
-        )
+        projection = torch.cat([weight.transpose(-2, -1) for weight in projection_weights], dim=-1)
+        projection = projection.unsqueeze(0).unsqueeze(0)
+
+    qk = projection if is_global else None
+    qkv = None if is_global else projection
 
     # Output projection
     o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
