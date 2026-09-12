@@ -58,7 +58,7 @@ def create_tt_model(
     if prefill_chunk_size < 1024 * mesh_config.cp_degree:
         raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
 
-    model_path = model_path or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
+    model_path = model_path or os.getenv("HF_MODEL")
 
     hf_config = Gemma4ModelArgs.load_hf_config(model_path)
     model_args = Gemma4ModelArgs.from_hf_config(hf_config)

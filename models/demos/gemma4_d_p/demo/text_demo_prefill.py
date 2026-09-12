@@ -37,7 +37,7 @@ TRACE_REGION_SIZE = int(os.environ.get("GEMMA4_PREFILL_TRACE_REGION_SIZE", 256_0
 
 
 def _model_path():
-    return os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")
+    return os.getenv("HF_MODEL")
 
 
 def _load_full_weights():
