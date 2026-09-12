@@ -41,6 +41,7 @@ struct DeviceClock {
     double frequency_ghz = 0.0;  // device ticks per nanosecond
     uint64_t anchor_ticks = 0;
     int64_t anchor_host_ns = 0;  // std::chrono::steady_clock at `anchor_ticks`, in nanoseconds since its epoch
+    double anchor_sigma_ns = 0.0;  // the anchor's standard error from its read pairs' scatter
 };
 
 struct CaptureContext {
