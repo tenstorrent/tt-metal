@@ -44,8 +44,12 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.90625f, 0.0f);
-    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.09375f, 0.8125f);
+    // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2. calculate_tanh_derivative computes
+    // 1 - lut(x)^2, so this table IS this kernel's approximation -- independent of tanh_init,
+    // which fits tanh rather than sech^2. UnarySFPUGolden._tanh_derivative_lut mirrors these
+    // three pairs by hand; test_tanh_derivative_lut_consistency.py holds the copies together.
+    sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
+    sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
 }
 
