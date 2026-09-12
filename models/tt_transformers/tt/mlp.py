@@ -215,6 +215,11 @@ class MLP(LightweightModule):
         # each owner multicast out of its own shard, so only the broadcast is left. One
         # reshard serves both ff1 and ff3.
         _in0_cfg = self.args.prefill_1d_in0_memcfg(pc_1)
+        if _in0_cfg is None and mode == Mode.DECODE and not TG and self.prefetcher is None:
+            # Decode: the DRAM-sharded projection wants its in0 on ONE ROW of bank-many cores,
+            # which is not where the residual stream lives -- see decode_ff1_3_in0_memcfg. One
+            # reshard here serves both ff1 and ff3.
+            _in0_cfg = self.args.decode_ff1_3_in0_memcfg()
         if _in0_cfg is not None and x.memory_config() != _in0_cfg:
             x_sharded = ttnn.to_memory_config(x, _in0_cfg)
             ttnn.deallocate(x)

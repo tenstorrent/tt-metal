@@ -4209,6 +4209,54 @@ class ModelArgs:
         selected = {n.strip().upper() for n in names.split(",") if n.strip()}
         return tuple(g for g in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO) if g.name in selected)
 
+    @lru_cache(maxsize=None)
+    def decode_ff1_3_in0_memcfg(self):
+        """The in0 shard the decode FF1/FF3 projection wants -- ONE ROW, one core per DRAM bank.
+
+        Only the MATMUL's in0, deliberately: the residual stream, the ff-norm and the MLP input
+        all sit on ``mlp_core_grid`` (16 cores as a 8x2 block), and moving THOSE onto 8 cores
+        concentrates the residual into half as many L1s and the decode graph stops fitting
+        (statically allocated CBs clash with L1 buffers on [0-0 - 7-9]). So the layout is bought
+        with one reshard per layer instead, which both ff1 and ff3 then read.
+
+        Why the single row. A second reader per DRAM bank is placed on a core that is neither a
+        primary bank worker nor part of the in0 shard, ranked by NOC hops to the bank it serves --
+        so a 8x2 in0 block sits in the second row next to the banks and pushes every secondary
+        reader further away. Measured standalone on this shape (32x4096 @ 4096x3584, bfloat4_b,
+        in0_block_w=8, repeats agreeing to ~0.1 us):
+
+            in0 8x1, 1 reader   30.95 us      in0 8x2, 1 reader   30.97 us
+            in0 8x1, 2 readers  23.40 us      in0 8x2, 2 readers  29.98 us
+
+        The output spread is irrelevant to it -- 8, 16, 28 or 56 output cores all land within
+        0.1 us -- so widening the gated pair's output for the SiLU is unaffected. A 4x1 in0 shard
+        loses the win again (31.7 us), so it is the single row of exactly bank-many cores that
+        matters, not simply having fewer of them.
+
+        Returns ``None`` when the second reader is not in play or the row cannot tile the dim, in
+        which case the caller leaves the activation on ``mlp_core_grid`` and nothing reshards.
+        """
+        if TensorGroup.FF1_FF3 not in self._multi_reader_tensor_groups():
+            return None
+        if self.get_dram_sharded_matmul_num_workers(TensorGroup.FF1_FF3, self.hidden_dim // self.num_devices) < 2:
+            return None
+        banks = self.dram_grid_size.x
+        if banks > self.max_grid_size.x or self.dim % (ttnn.TILE_SIZE * banks) != 0:
+            return None
+        # in0_block_w is sized from mlp_core_grid, so the row is only usable when it leaves that
+        # block a divisor of the per-core K it now hands the matmul.
+        if (self.dim // ttnn.TILE_SIZE // banks) % self.find_largest_divisor(
+            self.dim // (ttnn.TILE_SIZE * self.mlp_core_grid.num_cores)
+        ):
+            return None
+        return ttnn.create_sharded_memory_config(
+            (self.tile_padded_batch_rows, self.dim // banks),
+            ttnn.CoreGrid(y=1, x=banks),
+            ttnn.ShardStrategy.WIDTH,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
         """Return the validated P150-class reader count for a Llama 3.1 8B decode projection."""
         if self.base_model_name != "Llama-3.1-8B" or self.device_name not in self._P150_CLASS_DEVICES:
