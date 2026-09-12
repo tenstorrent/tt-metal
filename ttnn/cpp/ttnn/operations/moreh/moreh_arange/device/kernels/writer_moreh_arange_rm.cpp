@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
 #include <cstdlib>
 
 #include "api/dataflow/dataflow_api.h"
@@ -20,6 +19,10 @@ void kernel_main() {
     uint32_t start = get_arg_val<uint32_t>(3);
     uint32_t step = get_arg_val<uint32_t>(4);
     uint32_t element_size = get_arg_val<uint32_t>(5);
+    // Width (in bytes) of this core's final chunk, computed by the program factory from
+    // the logical width of the output: a ROW_MAJOR buffer is exactly as long as its data,
+    // so the last chunk must not write a full TILE_WIDTH worth of elements past its end.
+    uint32_t last_chunk_bytes = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
@@ -44,13 +47,16 @@ void kernel_main() {
         cb_out_obj.reserve_back(1);
 
         uint32_t tile_idx = tile_offset + t;
+        // Only the final chunk of the final core can be narrower than a full tile.
+        const uint32_t chunk_width =
+            (t + 1 == num_tiles) ? (last_chunk_bytes / element_size) : TILE_WIDTH;
 
         uint32_t w_addr = cb_out_obj.get_write_ptr();
 
 #ifdef OUTPUT_DTYPE_BFLOAT16
         CoreLocalMem<uint16_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
@@ -60,7 +66,7 @@ void kernel_main() {
 #ifdef OUTPUT_DTYPE_INT32
         CoreLocalMem<uint32_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             int32_t val;
             val = start_u.f + step_u.f * idx;
@@ -70,7 +76,7 @@ void kernel_main() {
 #ifdef OUTPUT_DTYPE_FLOAT32
         CoreLocalMem<uint32_t> ptr(w_addr);
 
-        for (uint32_t w = 0; w < TILE_WIDTH; w++) {
+        for (uint32_t w = 0; w < chunk_width; w++) {
             int32_t idx = w + tile_idx * TILE_WIDTH;
             value val;
             val.f = start_u.f + step_u.f * idx;
@@ -79,15 +85,10 @@ void kernel_main() {
 #endif
 
         uint32_t noc_offfset = tile_idx * TILE_WIDTH * element_size;
-        // A ROW_MAJOR buffer is exactly as long as its data (no tile padding in the
-        // last dim), so the final chunk must be clamped to the page: the fixed
-        // TILE_WIDTH-sized chunk would otherwise write past the end of the output
-        // buffer into whatever tensor is allocated next in DRAM.
-        uint32_t chunk_bytes = std::min(num_bytes_per_tile, s0.get_aligned_page_size() - noc_offfset);
         noc.async_write(
             use<CircularBuffer::AddrSelector::WRITE_PTR>(cb_out_obj),
             s0,
-            chunk_bytes,
+            chunk_width * element_size,
             {.offset_bytes = 0},
             {.page_id = 0, .offset_bytes = noc_offfset});
         noc.async_write_barrier();
