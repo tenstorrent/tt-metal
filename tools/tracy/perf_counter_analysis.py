@@ -5,13 +5,22 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import sys
 from math import nan
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from loguru import logger
-from tt_llk_perf import metrics as _mc
-from tt_llk_perf.headers import counter_type_names
+
+try:
+    from tt_llk_perf import metrics as _mc
+    from tt_llk_perf.headers import counter_type_names
+except ModuleNotFoundError:
+    # A source tree puts the repo root and tools/ on PYTHONPATH; the package lives under tt-llk.
+    sys.path.append(str(Path(__file__).resolve().parents[2] / "tt_metal" / "tt-llk" / "tools" / "python"))
+    from tt_llk_perf import metrics as _mc
+    from tt_llk_perf.headers import counter_type_names
 
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
