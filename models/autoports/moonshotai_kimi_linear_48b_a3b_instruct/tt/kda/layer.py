@@ -398,23 +398,35 @@ class KimiKDA:
         return gate, beta
 
     def forward_decode(self, hidden: ttnn.Tensor, ds: KDADecodeState) -> ttnn.Tensor:
-        """hidden [1, 1, B, hidden] replicated -> [1, 1, B, hidden] replicated; updates ``ds`` in place."""
+        """hidden [1, 1, B, hidden] replicated -> [1, 1, B, hidden] replicated; updates ``ds`` in place.
+
+        B may be smaller than the allocated slot count (decode-width bucketing): the step then runs on the state prefix
+        [0:B) (vLLM condenses live requests to the lowest slots) and writes it back with slice_write."""
         c, kda, w = self.config, self.kda, self.weights
         B = hidden.shape[-2]
         Bmax = ds.recurrent.shape[0]
-        assert B == Bmax, f"decode width {B} != allocated slots {Bmax} (bucketing comes later)"
+        assert B <= Bmax, f"decode width {B} > allocated slots {Bmax}"
+        bucketed = B < Bmax
         x = ttnn.reshape(hidden, (1, B, hidden.shape[-1]))
         p = kda._project_inputs(x)  # qkv [1,B,C], decay_rank [1,B,128], output_gate [1,B,V_loc], beta [1,B,H_loc]
-        # shift-register convolution: history[0] oldest ... history[2] newest, taps[0..2] on history, taps[3] on current
+        # shift-register convolution: history[0] oldest ... history[2] newest, taps[0..2] on history, taps[3] on current.
+        # Always at the full slot width (a [1,B,C] tile is physically 32 rows anyway): a bucketed step zero-pads its qkv
+        # rows to Bmax (one op) and the q/k/v slices below take rows [0:B). Rows >= B belong to slots without a live
+        # request (vLLM condenses); their history is garbage until the next prefill rewrites it.
         hist = ds.conv_history
+        qkv = p.qkv if not bucketed else ttnn.pad(p.qkv, [(0, 0), (0, Bmax - B), (0, 0)], value=0.0)
         conv = ttnn.multiply(hist[0], w.convolution_taps[0], memory_config=_L1())
         for j in range(1, len(hist)):
             conv = ttnn.mac(hist[j], w.convolution_taps[j], conv)
-        conv = ttnn.mac(p.qkv, w.convolution_taps[len(hist)], conv)
+        conv = ttnn.mac(qkv, w.convolution_taps[len(hist)], conv)
         conv = ttnn.silu(conv, memory_config=_L1())
         for j in range(len(hist) - 1):
             ttnn.copy(hist[j + 1], hist[j])
-        ttnn.copy(p.qkv, hist[-1])
+        ttnn.copy(qkv, hist[-1])
+        if bucketed:
+            ttnn.deallocate(qkv)
+        # the recurrent state runs on the live prefix only ([B,H,K,V] fp32: the expensive part of the step)
+        rec = ttnn.slice(ds.recurrent, (0, 0, 0, 0), (B,) + tuple(ds.recurrent.shape)[1:]) if bucketed else ds.recurrent
         # head-major [B,H,1,K] / [B,H,1,V] straight from the slices (the recurrent step's native layout: one reshape each)
         H, K, V = c.num_heads, c.head_k_dim, c.head_v_dim
         q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, c.q_dim)), (B, H, 1, K))
@@ -430,13 +442,18 @@ class KimiKDA:
             v,
             beta,
             g,
-            ds.recurrent,
+            rec,
             scale=self.scale,
             device=self.mesh_device,
             l2_weight_q=self._l2_weight_q,
             l2_weight_k=self._l2_weight_k,
-            state_out=ds.recurrent,  # new state written in place: the decode trace's state address stays stable
+            state_out=rec,  # new state written in place: the decode trace's state address stays stable
         )
+        if bucketed:
+            ttnn.experimental.slice_write(
+                rec, ds.recurrent, [0, 0, 0, 0], [B] + list(tuple(rec.shape)[1:]), [1, 1, 1, 1]
+            )
+            ttnn.deallocate(rec)
         # gated RMSNorm per head: norm(o) * w * sigmoid(gate), on the step's [B,H,1,V] layout
         o = ttnn.rms_norm(o, epsilon=self.full_config.norm_eps, weight=w.norm)
         og = ttnn.sigmoid(ttnn.reshape(p.output_gate, (B, H, 1, V)))

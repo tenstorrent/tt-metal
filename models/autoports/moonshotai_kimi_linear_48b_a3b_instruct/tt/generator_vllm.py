@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -89,13 +90,15 @@ class KimiLinearModelForGenerator(KimiLinearModel):
 
     # --- decode hooks -------------------------------------------------------------------------------------------------
     def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
-        B = self.max_batch_size
-        tok = tokens.reshape(-1)[:B]
+        # the decode width B is whatever the plugin padded to: max_batch_size or one of tt_supported_decode_batch_sizes
+        tok = tokens.reshape(-1)
+        B = min(tok.numel(), self.max_batch_size)
+        tok = tok[:B]
         if isinstance(current_pos, torch.Tensor):
             pos = current_pos.reshape(-1)[:B]
         else:
             pos = torch.full((B,), int(current_pos))
-        pt = page_table if page_table is not None else torch.zeros(B, 1, dtype=torch.int32)
+        pt = page_table[:B] if page_table is not None else torch.zeros(B, 1, dtype=torch.int32)
         # idle rows carry position -1 in the plugin: keep them (the paged ops skip negative positions)
         tok_h, pos_h, pt_h = self._host_decode_inputs(tok, pos, pt)
         return tok_h, pos_h, None, pt_h
@@ -111,20 +114,28 @@ class KimiLinearModelForGenerator(KimiLinearModel):
     ):
         # on_device_logits: the sampling module consumes each chip's vocab shard [1,1,B,vocab/tp]; otherwise gather the
         # full logits [1,1,B,vocab] for host sampling
-        return self.decode_device(
-            tokens, current_pos, page_table, gather=not on_device_logits
-        )  # a plain tensor, like tt_transformers
+        logits = self.decode_device(tokens, current_pos, page_table, gather=not on_device_logits)
+        B = logits.shape[2]
+        if on_device_logits and B < self.max_batch_size:
+            # a bucketed step: hand the sampling module the same 32-row shape as the full-width step (its per-user
+            # parameter tensors are max_batch_size rows); the idle rows are zeros and are dropped by the consumer
+            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, self.max_batch_size - B), (0, 0)], value=0.0)
+            ttnn.deallocate(logits)
+            logits = padded
+        return logits  # a plain tensor, like tt_transformers
 
     def process_output_decode(self, tt_out, B, S=1, is_tokens=False, is_log_probs=False):
         if (
             is_tokens or is_log_probs
-        ):  # sampled token ids (or their log-probs) for the 32 padded rows, replicated per chip
-            t = ttnn.reshape(tt_out, ttnn.Shape([1, 1, 32, 1])) if is_tokens else tt_out
-            vals = ttnn.to_torch(ttnn.get_device_tensors(t)[0]).reshape(32, -1)[:B, 0]
+        ):  # sampled token ids (or their log-probs), one row per decode-width slot, replicated per chip
+            t = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
+            vals = t.reshape(-1) if is_tokens else t.reshape(-1, t.shape[-1])[:, 0]
+            vals = vals[: min(B, vals.numel())]
             return vals.to(torch.int64) if is_tokens else vals.float()
+        # host-sampling logits: rows = the decode width (max_batch_size or a bucket); the plugin reads its live rows
         full = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         rows = full.reshape(-1, full.shape[-1])[: B * S, : self.cfg.vocab_size]
-        return rows.reshape(B, S, self.cfg.vocab_size)
+        return rows.reshape(-1, S, self.cfg.vocab_size)
 
 
 class KimiLinearForCausalLM(Generator):
@@ -135,9 +146,23 @@ class KimiLinearForCausalLM(Generator):
         "supports_chunked_prefill": False,
     }
 
+    # Decode-width bucketing: the plugin pads a decode step to the smallest declared width >= live requests (they are
+    # condensed to the lowest slots), so a lone user runs the width-1 graph (KDA recurrent state prefix, MLA at B=1)
+    # instead of the width-32 one. Every width keeps its own decode trace (+ sampling trace namespace) and persistent
+    # device inputs. warmup_model_decode narrows this to the widths it actually captured (plugin contract).
+    # Widths measured on a 1x4 (traced step, identical routing): 1: 43.3 ms, 2: 45.4, 4: 48.8, 32: 49.8-55.5; 8 (54.8)
+    # and 16 (63.7) are SLOWER than the full width and are therefore not declared.
+    tt_supported_decode_batch_sizes = (1, 2, 4, 32)
+
     def __init__(self, model, model_args, mesh_device, tokenizer=None):
         super().__init__(model, model_args, mesh_device, tokenizer=tokenizer)
         self._num_blocks = None
+        self._bucket_store: dict[
+            int, tuple
+        ] = {}  # width -> (trace_ids_decode, trace_inputs_decode, trace_output_decode)
+        self._bucket = None
+        if os.environ.get("KIMI_DECODE_BUCKETING", "1") != "1":
+            self.tt_supported_decode_batch_sizes = ()
 
     @classmethod
     def initialize_vllm_model(
@@ -211,10 +236,31 @@ class KimiLinearForCausalLM(Generator):
         return torch.cat(out, dim=0)  # [N, 1, vocab]
 
     # --- decode: Generator.decode_forward drives prepare_inputs_decode / ttnn_decode_forward / process_output_decode -----
+    def _select_bucket(self, B: int) -> None:
+        """Point the Generator's decode-trace dicts (and the sampling trace namespace) at width ``B``."""
+        store = self._bucket_store.get(B)
+        if store is None:
+            store = self._bucket_store[B] = (
+                defaultdict(lambda: None),
+                defaultdict(lambda: None),
+                defaultdict(lambda: None),
+            )
+        self.trace_ids_decode, self.trace_inputs_decode, self.trace_output_decode = store
+        self._bucket = B
+        for m in self.model:
+            sm = getattr(m, "sampling", None)
+            if sm is not None and hasattr(sm, "set_trace_bucket"):
+                sm.set_trace_bucket(B)
+
     def decode_forward(self, *args, **kwargs):
+        tokens = kwargs["tokens"] if "tokens" in kwargs else args[0]
+        B = int(tokens.shape[0])
         slot_remap = kwargs.get("slot_remap")
         if slot_remap is not None and self.model[0].max_batch_size > 1:
-            self.model[0].remap_slots(slot_remap)
+            self.model[0].remap_slots(
+                slot_remap
+            )  # full slot space, before the (possibly narrower) step reads the prefix
+        self._select_bucket(B)
         self._refresh_stale_decode_traces(kwargs.get("kv_cache"))
         out = super().decode_forward(*args, **kwargs)
         if self._pc_at_capture is None and any(bool(v) for v in self.trace_ids_decode.values()):
@@ -242,22 +288,29 @@ class KimiLinearForCausalLM(Generator):
         ):  # sampling traces bind to the decode logits tensor by identity: drop them with the decode traces
             if getattr(m, "sampling", None) is not None and hasattr(m.sampling, "reset_trace"):
                 m.sampling.reset_trace()
-        for key, trace_ids in list(self.trace_ids_decode.items()):
-            if not trace_ids:
+        current = self._bucket
+        count = 0
+        for B, (ids, inputs, outputs) in list(self._bucket_store.items()):
+            if not any(bool(v) for v in ids.values()):
                 continue
-            for i, tid in trace_ids.items():
-                ttnn.release_trace(self.model_args[i].mesh_device, tid)
-            prepared = {
-                "device_inputs": self.trace_inputs_decode[key],
-                "kv_cache": kv_cache,
-                "on_device_sampling": key,
-            }
-            new_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
-            self.trace_ids_decode[key] = new_ids
-            self.trace_inputs_decode[key] = device_inputs
-            self.trace_output_decode[key] = tt_out_trace
+            self._select_bucket(B)  # the sampling trace re-capture must land in this width's namespace
+            for key, trace_ids in list(ids.items()):
+                if not trace_ids:
+                    continue
+                for i, tid in trace_ids.items():
+                    ttnn.release_trace(self.model_args[i].mesh_device, tid)
+                prepared = {"device_inputs": inputs[key], "kv_cache": kv_cache, "on_device_sampling": key}
+                new_ids, tt_out_trace, *device_inputs = self._record_decode_trace_text(prepared)
+                ids[key] = new_ids
+                inputs[key] = device_inputs
+                outputs[key] = tt_out_trace
+                count += 1
+        if current is not None:
+            self._select_bucket(current)
         self._pc_at_capture = self.mesh_device.num_program_cache_entries()
-        logger.info(f"decode trace(s) re-captured after program-cache growth to {n} entries in {time.time()-t0:.2f}s")
+        logger.info(
+            f"{count} decode trace(s) re-captured after program-cache growth to {n} entries in {time.time()-t0:.2f}s"
+        )
 
     # --- warm-up ------------------------------------------------------------------------------------------------------------
     def warmup_model_prefill(self, kv_cache=None, enable_trace=False, *args, **kwargs):
@@ -276,32 +329,39 @@ class KimiLinearForCausalLM(Generator):
 
     def warmup_model_decode(self, kv_cache=None, enable_trace=False, *args, **kwargs):
         model = self.model[0]
-        B = model.max_batch_size
+        Bmax = model.max_batch_size
         blocks = self._num_blocks or 1
         # the plugin passes the decode block-table width as ``num_blocks`` (= its max_num_blocks_per_req); the traced
         # decode inputs are captured at this shape and every later page table is padded/sliced to it
         max_blocks = int(kwargs.get("num_blocks") or kwargs.get("max_num_blocks_per_req") or 0) or min(blocks, 8)
-        pt = torch.zeros(B, max_blocks, dtype=torch.int32)
-        toks = torch.full((B, 1), model.cfg.pad_token_id, dtype=torch.long)
-        pos = torch.full((B,), -1, dtype=torch.int32)  # idle rows: skipped by the paged ops
+        widths = sorted({int(b) for b in self.tt_supported_decode_batch_sizes if 0 < int(b) < Bmax} | {Bmax})
+        sample = model.sampling is not None and kwargs.get("can_sample_on_device", True)
         t0 = time.time()
-        variants = [None]
-        if model.sampling is not None and kwargs.get("can_sample_on_device", True):
-            from models.common.sampling.sampling_params import SamplingParams
+        for B in widths:  # compile pass (enable_trace False) or capture pass (True) for every width, widest last
+            pt = torch.zeros(B, max_blocks, dtype=torch.int32)
+            toks = torch.full((B, 1), model.cfg.pad_token_id, dtype=torch.long)
+            pos = torch.full((B,), -1, dtype=torch.int32)  # idle rows: skipped by the paged ops
+            variants = [None]
+            if sample:
+                from models.common.sampling.sampling_params import SamplingParams
 
-            # greedy params: the device-sampling decode trace + its sampling trace get captured here, on idle slots,
-            # so no request ever pays the compile pass (which would advance a live KDA state)
-            variants.append(SamplingParams(temperature=[1.0] * B, top_k=[1] * B, top_p=[1.0] * B))
-        for sp in variants:
-            self.decode_forward(
-                toks,
-                pos,
-                page_table=pt,
-                kv_cache=kv_cache,
-                enable_trace=enable_trace,
-                read_from_device=True,
-                sampling_params=sp,
-            )
-            for s in range(B):
-                model.reset_slot(s)
-        logger.info(f"decode warm-up (trace={enable_trace}, variants={len(variants)}) in {time.time()-t0:.1f}s")
+                # greedy params: the device-sampling decode trace + its sampling trace get captured here, on idle
+                # slots, so no request ever pays the compile pass (which would advance a live KDA state)
+                variants.append(SamplingParams(temperature=[1.0] * B, top_k=[1] * B, top_p=[1.0] * B))
+            for sp in variants:
+                self.decode_forward(
+                    toks,
+                    pos,
+                    page_table=pt,
+                    kv_cache=kv_cache,
+                    enable_trace=enable_trace,
+                    read_from_device=True,
+                    sampling_params=sp,
+                )
+                for s in range(B):
+                    model.reset_slot(s)
+        # plugin contract: declare exactly the widths that have a captured decode trace
+        self.tt_supported_decode_batch_sizes = tuple(widths)
+        logger.info(
+            f"decode warm-up (trace={enable_trace}, widths={widths}, variants={2 if sample else 1}) in {time.time()-t0:.1f}s"
+        )

@@ -266,7 +266,15 @@ class KimiLinearModel:
 
     # ---- host-side decode inputs (for traced decode: created on host, copied into persistent device tensors) ---------
     def _host_decode_inputs(self, tokens: torch.Tensor, cur_pos: torch.Tensor, page_table: torch.Tensor):
-        B = self.max_batch_size
+        B = (
+            tokens.numel()
+        )  # the decode width: max_batch_size, or a smaller bucket (live slots are condensed to a prefix)
+        assert B <= self.max_batch_size and cur_pos.numel() == B and page_table.shape[0] == B, (
+            B,
+            self.max_batch_size,
+            cur_pos.shape,
+            page_table.shape,
+        )
         mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if self.num_devices > 1 else None
         tok = ttnn.from_torch(
             tokens.to(torch.int32).reshape(1, B), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=mapper
