@@ -1067,22 +1067,31 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         // Sender first: its current round still completes off the live receiver, then it exits between rounds.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
         poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
-        // Kernel diagnostics past the stop and done words: rounds, duration in ms, and the 1588 timer word (0 no
-        // hardware path, 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps).
-        uint32_t diag[3] = {0, 0, 0};
+        // Kernel diagnostics past the stop and done words: rounds, duration in ms, the 1588 timer word (0 no hardware
+        // path, 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps) and the
+        // refclk ticks spent inside rounds, low word then high: the share of the core's time the sync takes.
+        uint32_t diag[5] = {0, 0, 0, 0, 0};
         cluster.read_core(diag, sizeof(diag), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] resident link sync chip {} ran {} rounds over {} ms",
-            r.chip_a,
-            diag[0],
-            diag[1]);
         // Now the receiver's message wait sees no further message; its stop breaks it.
         cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
         poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
-        uint32_t timer_b = 0;
-        cluster.read_core(&timer_b, sizeof(timer_b), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 16);
-        for (const auto& [chip, word] : {std::pair{r.chip_a, diag[2]}, std::pair{r.chip_b, timer_b}}) {
+        uint32_t diag_b[3] = {0, 0, 0};
+        cluster.read_core(diag_b, sizeof(diag_b), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 16);
+        const auto pct = [&](uint32_t lo, uint32_t hi) {
+            const double ticks = static_cast<double>((static_cast<uint64_t>(hi) << 32) | lo);
+            return diag[1] == 0 ? 0.0 : 100.0 * ticks / (50'000.0 * static_cast<double>(diag[1]));
+        };
+        log_info(
+            tt::LogMetal,
+            "[streaming profiler] resident link sync chip {} -> chip {}: {} rounds over {} ms; inside rounds: sender "
+            "{:.1f} %, receiver {:.1f} %",
+            r.chip_a,
+            r.chip_b,
+            diag[0],
+            diag[1],
+            pct(diag[3], diag[4]),
+            pct(diag_b[1], diag_b[2]));
+        for (const auto& [chip, word] : {std::pair{r.chip_a, diag[2]}, std::pair{r.chip_b, diag_b[0]}}) {
             if (word == 2) {
                 log_warning(
                     tt::LogMetal,

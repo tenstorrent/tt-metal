@@ -18,6 +18,7 @@ static eth_ptp::LinkSession g_hw;
 static uint32_t g_trip = 0;  // the MAC FIFO tag of the next stamped frame
 #endif
 static uint32_t g_round = 0;  // the sender numbers the rounds; the receiver reads the number from the frame
+static uint64_t g_busy_ticks = 0;
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
@@ -53,6 +54,7 @@ FORCE_INLINE void run_loop_iteration(
             // The software stamps of the first trip go out too, as their own stream.
             static_assert(NUM_CHANNELS == 1);
             channel_sync_addrs[0]->reserved_2 = round;
+            const uint64_t span0 = eth_ptp::read_cfr();
             eth_ptp::HwRound rnd;
             rnd.begin(round, link::room(4) && g_hw.timer_ok);
             eth_ptp::Instant t0{}, t2{};
@@ -90,6 +92,7 @@ FORCE_INLINE void run_loop_iteration(
                 link::record_hw(rnd.q_a(g_hw), round, link::kRoleT0);
                 link::record_hw(rnd.q_b(g_hw), round, link::kRoleT2);
             }
+            g_busy_ticks += eth_ptp::read_cfr() - span0;
             return;
         }
 #endif
@@ -183,8 +186,8 @@ void kernel_main() {
         run_loop_iteration<true>(channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
         rounds++;
     }
-    // Diagnostics the host logs at stop: rounds, duration in ms, and whether the 1588 timer ran (0 no hardware path,
-    // 1 ran, 2 never acknowledged its rate).
+    // Diagnostics the host logs at stop: rounds, duration in ms, whether the 1588 timer ran (0 no hardware path,
+    // 1 ran, 2 never acknowledged its rate), and the refclk ticks spent inside rounds as two words.
     uint32_t timer_word = 0;
 #if defined(LINK_HW)
     g_hw.end();
@@ -194,6 +197,8 @@ void kernel_main() {
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 12) =
         static_cast<uint32_t>((eth_ptp::read_cfr() - rc0) / (eth_ptp::kRefclkHz / 1000u));
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 16) = timer_word;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 20) = static_cast<uint32_t>(g_busy_ticks);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 24) = static_cast<uint32_t>(g_busy_ticks >> 32);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr + 4) = 1;  // done, host polls this
 #else
     for (uint32_t i = 0; i < NUM_MESSAGES; i++) {

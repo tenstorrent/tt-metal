@@ -37,6 +37,7 @@ static constexpr uint32_t MESSAGE_SIZE = get_compile_time_arg_val(2);
 // The streaming backend always runs resident; the stop word address arrives as a runtime arg (positional
 // compile args past index 2 do not reach this kernel). Set in kernel_main, read in the message waits.
 static uint32_t g_stop_addr = 0;
+static uint64_t g_busy_ticks = 0;
 #endif
 
 template <bool MEASURE>
@@ -52,6 +53,7 @@ FORCE_INLINE bool run_loop_iteration(
         static eth_ptp::HwRound rnd;
         static uint32_t trip = 0;
         static eth_ptp::Instant sw_t1{}, sw_t1b{};
+        static uint64_t span0 = 0;
         volatile tt_l1_ptr uint32_t* hw_stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr);
         eth_ptp::RxStamps rx;
         while (channel_sync_addrs[0]->bytes_sent == 0 && *hw_stopw == 0) {
@@ -62,6 +64,7 @@ FORCE_INLINE bool run_loop_iteration(
         }
         if (trip == 0) {
             sw_t1 = eth_ptp::read_instant();
+            span0 = sw_t1.refclk;
             rnd.begin(channel_sync_addrs[0]->reserved_2, link::room(4) && g_hw.timer_ok);
         }
         const uint64_t t1h = rx.take<eth_ptp::LinkSession>();
@@ -81,6 +84,7 @@ FORCE_INLINE bool run_loop_iteration(
         rnd.add(t1h, t1bh);
         if (++trip == eth_ptp::kTripsPerRound) {
             trip = 0;
+            g_busy_ticks += eth_ptp::read_cfr() - span0;
             if (rnd.complete()) {
                 link::record_hw(rnd.q_a(g_hw), rnd.id, link::kRoleT1);
                 link::record_hw(rnd.q_b(g_hw), rnd.id, link::kRoleT1B);
@@ -206,6 +210,8 @@ void kernel_main() {
     timer_word = g_hw.timer_ok ? 1u : 2u;
 #endif
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 16) = timer_word;
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 20) = static_cast<uint32_t>(g_busy_ticks);
+    *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 24) = static_cast<uint32_t>(g_busy_ticks >> 32);
     *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(g_stop_addr + 4) = 1;  // done, host polls this
 #else
     for (uint32_t i = 0; i < NUM_MESSAGES; i++) {
