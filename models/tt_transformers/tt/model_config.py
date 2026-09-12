@@ -4181,12 +4181,40 @@ class ModelArgs:
                 return i
         return 1  # Fallback to 1 if no divisor found
 
+    # Boards whose per-chip DRAM grid is the P150's 8x1. The reader count is a property of
+    # the CHIP -- one worker per bank leaves the bank's read port idle between its own
+    # requests -- so a mesh of P150s wants the same two readers a single P150 does. Pinning
+    # this to the literal name "P150" meant every multi-chip Blackhole board (P150x4 is what
+    # a 1x4 mesh resolves to) silently fell back to one reader per bank and ran its decode
+    # projections at ~half the DRAM bandwidth a single chip reaches.
+    _P150_CLASS_DEVICES = ("P150", "P300", "P150x4", "P150x8")
+
+    # Which decode projections take the second DRAM reader. Overridable while sweeping so the
+    # groups can be bisected without editing the predicate.
+    _MULTI_READER_GROUPS_ENV = "TT_PERF_MULTI_READER_GROUPS"
+
+    def _multi_reader_tensor_groups(self):
+        # FF1/FF3 ONLY, and that is a measured result rather than a shape argument. A second
+        # reader per DRAM bank buys the bank's idle read slots but costs an extra worker core
+        # and its share of NOC traffic, so it only pays where the weight stream per bank is
+        # long enough to amortise that: swept one group at a time at full depth (192 decode
+        # tokens, 1x4 P150 mesh), FF1_FF3 went 147.46 -> 148.11 tok/s while FF2 fell to 135.4,
+        # WQKV to 143.0 and WO to 146.2. FF1/FF3 are the only pair carrying bfloat4_b weights,
+        # i.e. the smallest tiles and therefore the most read transactions per byte -- the one
+        # shape where the bank's request rate, not its bytes, is the limit.
+        default = (TensorGroup.FF1_FF3,)
+        names = os.environ.get(self._MULTI_READER_GROUPS_ENV)
+        if not names:
+            return default
+        selected = {n.strip().upper() for n in names.split(",") if n.strip()}
+        return tuple(g for g in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO) if g.name in selected)
+
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
-        """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
-        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+        """Return the validated P150-class reader count for a Llama 3.1 8B decode projection."""
+        if self.base_model_name != "Llama-3.1-8B" or self.device_name not in self._P150_CLASS_DEVICES:
             return 1
 
-        if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):
+        if tensor_group not in self._multi_reader_tensor_groups():
             return 1
 
         num_workers = 2
