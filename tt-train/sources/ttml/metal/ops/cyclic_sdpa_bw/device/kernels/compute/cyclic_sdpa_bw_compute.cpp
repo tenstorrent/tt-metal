@@ -86,6 +86,29 @@
 #define RELEASE_TOKEN 0
 #endif
 
+// FOLD_SCALE_INTO_KEY: where the softmax's 1/sqrt(d) lives.
+//
+// It appears twice in the arithmetic, on the scores and again on dS, and both
+// can go by scaling K instead:
+//
+//     S  = Q (aK)^T = a Q K^T     the score path then needs no scale at all,
+//     dQ = G (aK)   = a G K       with dS left unscaled,
+//     dK = G^T Q                  short by a -- but dK is an accumulator, so
+//                                 one scale at its handover fixes it,
+//     dV = P^T dO                 untouched.
+//
+// K is resident for a whole residency interval, so scaling it costs one pass
+// per interval, twice per core over the run, against Bt * Bt passes on dS and
+// Bt on the statistic every timestep. At Bt = 4 that removes 20 SFPU passes
+// per timestep.
+//
+// Only where it is exact: K is bfloat16, so a * K rounds unless a is a power
+// of two -- d = 64 and 256 yes, d = 128 no -- and the host enables this only
+// then. The other path keeps the scale folded into the exponential instead.
+#ifndef FOLD_SCALE_INTO_KEY
+#define FOLD_SCALE_INTO_KEY 0
+#endif
+
 // RELEASE_TOKEN: publish a token once this timestep's packet slot has been
 // popped, so the relay reader knows the slot is free and can hand its
 // producer the credit at the release -- the paper's timing -- instead of two
@@ -126,6 +149,12 @@ constexpr uint32_t mask_reg = Bt + 1u;
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
 constexpr uint32_t cb_key = tt::CBIndex::c_1;
+constexpr uint32_t cb_key_scaled = tt::CBIndex::c_27;  // a * K, when exact
+#if FOLD_SCALE_INTO_KEY
+constexpr uint32_t cb_key_operand = cb_key_scaled;
+#else
+constexpr uint32_t cb_key_operand = cb_key;
+#endif
 constexpr uint32_t cb_value = tt::CBIndex::c_2;
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
 constexpr uint32_t cb_lse = tt::CBIndex::c_4;
@@ -156,6 +185,38 @@ constexpr uint32_t cb_grad_value_out = tt::CBIndex::c_23;
 // mode, because matmul Src registers do not support Float32 unpack, so a
 // copy_tile out of one lands in DST in a layout the 32-bit transpose_dest
 // scrambles. copy_dest_values duplicates dS inside DST instead.
+#if FOLD_SCALE_INTO_KEY
+// pack_tiles_to_output with a multiply on the way through.
+//
+// dK needs it at both ends of its life. Folding the scale into K leaves the
+// accumulator short by a factor of a, so the handover multiplies by a -- but
+// a revisit then reads that already-scaled value back from DRAM as its seed,
+// so the seed is divided by a again first. Both are Bt * qWt tiles once per
+// residency interval, which is twice per core over the whole run.
+void pack_tiles_scaled(
+    const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles, const uint32_t scale_bits) {
+    cb_wait_front(cb_source, num_tiles);
+    cb_reserve_back(cb_output, num_tiles);
+
+    pack_reconfig_data_format(cb_output);
+    reconfig_data_format(cb_source, cb_source);
+
+    copy_init(cb_source);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        tile_regs_acquire();
+        copy_tile(cb_source, tile_idx, /* register idx */ 0);
+        binop_with_scalar_tile_init();
+        mul_unary_tile(/* register idx */ 0, scale_bits);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(/* register idx */ 0, cb_output);
+        tile_regs_release();
+    }
+    cb_push_back(cb_output, num_tiles);
+    cb_pop_front(cb_source, num_tiles);
+}
+#endif
+
 // sdpa_bw's apply_mask_on_reg with the scratch register named rather than
 // assumed to be the next one along: score tiles are contiguous here, so the
 // register after one is another score tile.
@@ -216,7 +277,12 @@ void subtract_and_exp_row(const uint32_t first_reg, const uint32_t count, const 
         sub_binary_tile(first_reg + b, broadcast_reg, first_reg + b);
     }
 
+#if FOLD_SCALE_INTO_KEY
+    // S already carries the scale, having come out of Q (aK)^T.
+    sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ false>();
+#else
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_bits>();
+#endif
     for (uint32_t b = 0; b < count; ++b) {
         sdpa_exp_tile(first_reg + b);
     }
@@ -243,8 +309,10 @@ void grad_scores_and_transposes(uint32_t a, uint32_t b) {
 
     mul_binary_tile_init();
     mul_binary_tile(grad_reg, attn_reg, grad_reg);
+#if !FOLD_SCALE_INTO_KEY
     binop_with_scalar_tile_init();
     mul_unary_tile(grad_reg, scaler_bits);
+#endif
 
     copy_dest_values_init();
     copy_dest_values<DataFormat::Float32>(grad_reg, grad_keep_reg);
@@ -284,6 +352,11 @@ void kernel_main() {
     bool column_accumulating = false;
 #endif
 
+    static_assert(
+        FOLD_SCALE_INTO_KEY == 0 || COLUMN_RESIDENT == 1,
+        "folding the scale into K assumes the resident column path: without residency dK is handed "
+        "over every timestep and its seed re-read every timestep, so the scale would compound");
+
     compute_kernel_hw_startup(cb_query, cb_key, cb_attention_weights);
     copy_init(cb_query);
     matmul_init(cb_query, cb_key);
@@ -303,11 +376,41 @@ void kernel_main() {
         if (column_changed && t > 0u) {
             cb_pop_front(cb_key, Bt * qWt);
             cb_pop_front(cb_value, Bt * vWt);
+#if FOLD_SCALE_INTO_KEY
+            cb_pop_front(cb_key_scaled, Bt * qWt);
+#endif
         }
+#if FOLD_SCALE_INTO_KEY
+        // a * K, once for the residency interval. Everything that reads K --
+        // the scores and dQ -- reads this copy instead.
+        if (column_changed) {
+            cb_wait_front(cb_key, Bt * qWt);
+            cb_reserve_back(cb_key_scaled, Bt * qWt);
+            reconfig_data_format_srca(cb_key);
+            copy_init(cb_key);
+            pack_reconfig_data_format(cb_key_scaled);
+            for (uint32_t t0 = 0; t0 < Bt * qWt; ++t0) {
+                tile_regs_acquire();
+                copy_tile(cb_key, t0, 0);
+                binop_with_scalar_tile_init();
+                mul_unary_tile(0, scaler_bits);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, cb_key_scaled);
+                tile_regs_release();
+            }
+            cb_push_back(cb_key_scaled, Bt * qWt);
+            cb_wait_front(cb_key_scaled, Bt * qWt);
+        }
+#endif
         if (column_changed) {
             if (visited[owned_slot]) {
                 // A revisit: the interval starts from what is in DRAM.
+#if FOLD_SCALE_INTO_KEY
+                pack_tiles_scaled(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt, inv_scaler_bits);
+#else
                 pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt);
+#endif
                 pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt);
                 column_accumulating = true;
             } else {
@@ -338,12 +441,13 @@ void kernel_main() {
         DeviceZoneScopedN("SCORES");
         cb_reserve_back(cb_attention_weights, score_tiles);
         for (uint32_t a = 0; a < Bt; ++a) {
-            reconfig_data_format(cb_query, cb_key);
-            matmul_init(cb_query, cb_key, /* transpose */ 1);
+            reconfig_data_format(cb_query, cb_key_operand);
+            matmul_init(cb_query, cb_key_operand, /* transpose */ 1);
             tile_regs_acquire();
             for (uint32_t b = 0; b < Bt; ++b) {
                 for (uint32_t k = 0; k < qWt; ++k) {
-                    matmul_tiles(cb_query, cb_key, a * qWt + k, b * qWt + k, score_reg(b));
+                    matmul_tiles(
+                        cb_query, cb_key_operand, a * qWt + k, b * qWt + k, score_reg(b));
                 }
             }
             if (diagonal) {
@@ -355,8 +459,12 @@ void kernel_main() {
             // configuration of each SFPU program -- all per row rather than
             // per score tile.
             broadcast_statistic_to_dst(stat_reg, cb_lse, a);
+#if !FOLD_SCALE_INTO_KEY
+            // The exponential carries the scale, so what it subtracts must be
+            // divided by it first.
             binop_with_scalar_tile_init();
             mul_unary_tile(stat_reg, inv_scaler_bits);
+#endif
             subtract_and_exp_row(score_reg(0), Bt, stat_reg);
             for (uint32_t b = 0; b < Bt; ++b) {
                 if (diagonal && b > a) {
@@ -444,12 +552,16 @@ void kernel_main() {
             for (uint32_t a = 0; a < Bt; ++a) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
-                    reconfig_data_format_srca(cb_grad_query_accum, cb_key);
-                    matmul_init(cb_grad_scores, cb_key, /* transpose */ 0);
+                    reconfig_data_format_srca(cb_grad_query_accum, cb_key_operand);
+                    matmul_init(cb_grad_scores, cb_key_operand, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t b = 0; b < Bt; ++b) {
                             matmul_tiles(
-                                cb_grad_scores, cb_key, a * Bt + b, b * qWt + k0 + bi, bi);
+                                cb_grad_scores,
+                                cb_key_operand,
+                                a * Bt + b,
+                                b * qWt + k0 + bi,
+                                bi);
                         }
                     }
                     tile_regs_commit();
@@ -593,7 +705,11 @@ void kernel_main() {
             // Hand both column gradients over once, at the end of the interval.
             if (column_ends) {
                 pack_tiles_to_output(cb_grad_value_accum, cb_grad_value_out, Bt * vWt);
+#if FOLD_SCALE_INTO_KEY
+                pack_tiles_scaled(cb_grad_key_accum, cb_grad_key_out, Bt * qWt, scaler_bits);
+#else
                 pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
+#endif
             }
 #else
             pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
