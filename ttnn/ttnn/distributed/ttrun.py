@@ -2900,13 +2900,32 @@ def new_mode_flow(
                     f"generate_rank_bindings"
                 )
 
+    # The generated rankfile places every rank with ``slot=0``, and PRRTE reads a rankfile slot as a *binding*: each
+    # rank is pinned to one core (``Cpus_allowed_list: 0,32`` on a 64-thread host, ``nproc`` = 2 inside the rank), so
+    # every host thread of the workload -- torch, readback, stitching, dispatch -- shares that core. Open MPI 5.0.7
+    # accepts ``--map-by rankfile:file=... --bind-to none`` (verified on a 4-host Blackhole Galaxy quad; ranks then
+    # see all cores), so new mode asks for it unless the caller set a binding policy, passed ``--bare``, or opted out
+    # with TT_RUN_BIND_TO_NONE=0. Legacy mode is unchanged: a hand-written rankfile may carry real slot ranges.
+    phase2_mpi_args = list(mpi_args or [])
+    if (
+        not bare
+        and not mock_rank_to_desc
+        and not mpi_args_specify_bind_to(phase2_mpi_args)
+        and os.environ.get("TT_RUN_BIND_TO_NONE", "1") != "0"
+    ):
+        phase2_mpi_args.extend(["--bind-to", "none"])
+        logger.info(
+            f"{TT_RUN_PREFIX} Phase 2: adding --bind-to none (the generated rankfile's slot=0 would pin each rank "
+            "to one core; TT_RUN_BIND_TO_NONE=0 or an explicit --bind-to in --mpi-args overrides)"
+        )
+
     # Log Phase 2-only command for re-runs without re-running generate_rank_bindings
     _log_new_mode_phase2_rerun_command(
         ctx,
         rank_bindings_path,
         rankfile_path,
         phase2_mock_binding_path,
-        mpi_args,
+        phase2_mpi_args,
         rankfile_syntax,
         bindings_input_is_rank_bindings_mapping_yaml=mgd_mapping_yaml,
     )
@@ -2920,7 +2939,7 @@ def new_mode_flow(
         rank_bindings_mapping=rank_bindings_path if mgd_mapping_yaml else None,
         dry_run=dry_run,
         verbose=verbose,
-        mpi_args=mpi_args,
+        mpi_args=phase2_mpi_args,
         debug_gdbserver=debug_gdbserver,
         mock_cluster_rank_binding=phase2_mock_binding_path,  # Pass Phase 2 mock mapping
         skip_executable_check=skip_executable_check,
