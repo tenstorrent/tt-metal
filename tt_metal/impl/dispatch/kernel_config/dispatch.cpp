@@ -580,8 +580,8 @@ void DispatchKernel::CreateKernel() {
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
     };
 
-    if (get_dispatch_query_manager_ref().fds_worker_completion_enabled()) {
-        defines["FDS_WORKER_DONE"] = "1";
+    if (get_dispatch_query_manager_ref().fds_signalling_enabled()) {
+        defines["FDS_SIGNALLING"] = "1";
     }
 
     if (!is_hd()) {
