@@ -193,7 +193,7 @@ shield:
     wh_n300_civ2: 10
     bh_p150: 60
   demo:
-    bh_sc4: 170
+    bh_sc4: 200
     bh_sc1: 180
 
 scaleout:
