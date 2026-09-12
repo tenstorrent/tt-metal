@@ -44,9 +44,8 @@ class Gemma4KvCaches(KvCaches):
 
 
 def allocate_ring_kv_caches(
-    mesh_device,
-    hf_config,
     mesh_config,
+    hf_config,
     *,
     num_users: int,
     max_seq_len: int,
@@ -68,7 +67,6 @@ def allocate_ring_kv_caches(
         local_heads = 1 if layer_type == "full_attention" else config.num_key_value_heads // mesh_config.tp_degree
         if layer_type == "full_attention":
             cache = init_packed_ring_kv_cache(
-                mesh_device,
                 mesh_config,
                 local_heads,
                 max_seq_len,
@@ -77,7 +75,6 @@ def allocate_ring_kv_caches(
             )
         elif layer_type == "sliding_attention":
             cache = init_ring_kv_cache(
-                mesh_device,
                 mesh_config,
                 local_heads,
                 config.head_dim,

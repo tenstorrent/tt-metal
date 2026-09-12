@@ -69,14 +69,7 @@ def ring_cache_seq_len(max_seq_len, cp):
 
 
 def init_ring_kv_cache(
-    mesh_device,
-    mesh_config,
-    num_local_kv_heads,
-    head_dim,
-    max_seq_len,
-    num_layers=1,
-    num_users=1,
-    cache_dtype=ttnn.bfloat8_b,
+    mesh_config, num_local_kv_heads, head_dim, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Contiguous CP-sharded K/V caches for the ring path.
 
@@ -91,6 +84,7 @@ def init_ring_kv_cache(
 
     bfloat8_b because ring_joint requires BFP8_B K/V (BF16 Q).
     """
+    mesh_device = mesh_config.device
     cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, head_dim]
@@ -110,15 +104,10 @@ class PackedRingKVCache:
 
 
 def init_packed_ring_kv_cache(
-    mesh_device,
-    mesh_config,
-    num_local_kv_heads,
-    max_seq_len,
-    num_layers=1,
-    num_users=1,
-    cache_dtype=ttnn.bfloat8_b,
+    mesh_config, num_local_kv_heads, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Allocate the global [Krot128 | Vordered512] CP-sharded cache."""
+    mesh_device = mesh_config.device
     cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
@@ -166,7 +155,6 @@ def write_chunk_to_packed_ring_cache(
 def ring_packed_prefill_attention(
     tt_q,
     cache_kv,
-    mesh_device,
     mesh_config,
     ccl_manager,
     num_local_kv_heads,
@@ -194,7 +182,6 @@ def ring_packed_prefill_attention(
         tt_q,
         cache_k,
         cache_v,
-        mesh_device,
         mesh_config,
         ccl_manager,
         num_local_kv_heads,
@@ -289,7 +276,6 @@ def ring_prefill_attention(
     tt_q,
     cache_k,
     cache_v,
-    mesh_device,
     mesh_config,
     ccl_manager,
     num_local_kv_heads,
@@ -314,6 +300,7 @@ def ring_prefill_attention(
     Returns ``[1, num_local_q_heads, q_local, head_dim]`` — this rank's rows only, so
     the output stays CP-sharded exactly like the input.
     """
+    mesh_device = mesh_config.device
     if program_config is None:
         # Global (non-sliding) layers take a wider K chunk. ring_joint SDPA's
         # `q in {64,128}` / `k == 128` allowlist lives inside `if (args.has_sliding_window())`

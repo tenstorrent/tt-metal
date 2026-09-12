@@ -8,7 +8,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.gemma4_d_p.config import MeshConfig
 
 
 def _default_num_links_impl():
@@ -64,7 +63,9 @@ class CCLManager:
     so repeated collectives of the same activation shape skip realloc+barrier.
     """
 
-    def __init__(self, mesh_device, num_links=None, topology=None):
+    def __init__(self, mesh_config, num_links=None, topology=None):
+        self.mesh_config = mesh_config
+        mesh_device = mesh_config.device
         if num_links is None:
             num_links = _default_num_links_impl()
         if topology is None:
@@ -193,7 +194,7 @@ class CCLManager:
         it also has to work for kv-replicated layers where the model's global KV head
         count is smaller than the TP width.
         """
-        mesh_config = MeshConfig(self.mesh_device.shape)
+        mesh_config = self.mesh_config
         n_kv_global = n_kv_local * mesh_config.tp_degree
         cache_key = (key, n_kv_global, seq, head_dim, str(dtype), str(memory_config))
         if cache_key not in self._ring_gather_buffers:
@@ -203,7 +204,7 @@ class CCLManager:
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=memory_config,
-                mesh_mapper=mesh_config.shard_mapper(self.mesh_device, tensor_dim=1),
+                mesh_mapper=mesh_config.shard_mapper(tensor_dim=1),
             )
         return self._ring_gather_buffers[cache_key]
 

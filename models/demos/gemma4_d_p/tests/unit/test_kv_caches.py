@@ -28,16 +28,16 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
         num_hidden_layers=3,
         layer_types=["sliding_attention", "full_attention", "sliding_attention"],
     )
-    mesh_config = SimpleNamespace(cp_degree=8, tp_degree=4)
+    mesh_config = SimpleNamespace(device=object(), cp_degree=8, tp_degree=4)
 
-    result = kv_caches.allocate_ring_kv_caches(object(), hf, mesh_config, num_users=8, max_seq_len=262144)
+    result = kv_caches.allocate_ring_kv_caches(mesh_config, hf, num_users=8, max_seq_len=262144)
 
     assert result.layers == ["sliding-cache", "global-cache", "sliding-cache"]
     assert result.global_layers == (1,)
     assert result.sliding_layers == (0, 2)
     assert [call[0] for call in calls] == ["sliding", "global", "sliding"]
-    assert calls[0][1][2:] == (4, 256, 262144)
-    assert calls[1][1][2:] == (1, 262144)
+    assert calls[0][1][1:] == (4, 256, 262144)
+    assert calls[1][1][1:] == (1, 262144)
     assert all(call[2]["num_users"] == 8 for call in calls)
 
 

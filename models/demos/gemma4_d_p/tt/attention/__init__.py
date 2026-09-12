@@ -43,11 +43,10 @@ class Gemma4AttentionConfig:
 class Gemma4Attention:
     def __init__(
         self,
-        mesh_device,
+        mesh_config,
         config,
         state_dict,
         ccl_manager,
-        mesh_config,
         layer_idx,
         tensor_cache_path=None,
         max_batch_size=1,
@@ -57,6 +56,7 @@ class Gemma4Attention:
         ring_layer_idx=0,
         ring_num_layers=1,
     ):
+        mesh_device = mesh_config.device
         self.mesh_device = mesh_device
         self.config = config
         self.ccl_manager = ccl_manager
@@ -69,10 +69,9 @@ class Gemma4Attention:
                 raise ValueError("External ring cache is too small for the configured prefill capacity")
 
         self.weights = load_attention_weights(
-            mesh_device=mesh_device,
+            mesh_config=mesh_config,
             config=config,
             state_dict=state_dict,
-            mesh_config=mesh_config,
             tensor_cache_path=tensor_cache_path,
             weight_dtype=weight_dtype,
         )
@@ -87,7 +86,6 @@ class Gemma4Attention:
             )
             if self.weights.is_global:
                 self.ring_kv_cache = init_packed_ring_kv_cache(
-                    mesh_device=mesh_device,
                     mesh_config=mesh_config,
                     num_local_kv_heads=num_local_kv_heads,
                     max_seq_len=max_seq_len,
@@ -96,7 +94,6 @@ class Gemma4Attention:
                 )
             else:
                 self.ring_kv_cache = init_ring_kv_cache(
-                    mesh_device=mesh_device,
                     mesh_config=mesh_config,
                     num_local_kv_heads=num_local_kv_heads,
                     head_dim=config.head_dim,

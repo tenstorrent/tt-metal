@@ -15,14 +15,18 @@ def validate_galaxy_mesh(mesh_shape):
 
 
 class MeshConfig:
-    """Use all Galaxy rows for CP and columns for TP."""
+    """Bind an open device mesh to CP rows and TP columns; the caller owns its lifetime."""
 
-    def __init__(self, mesh_shape):
-        validate_galaxy_mesh(mesh_shape)
-        self.mesh_shape = tuple(mesh_shape)
+    def __init__(self, mesh_device):
+        validate_galaxy_mesh(mesh_device.shape)
+        self.device = mesh_device
         self.tp_axis = 1
         self.cp_axis = 0
         self.total_devices = 32
+
+    @property
+    def mesh_shape(self):
+        return tuple(self.device.shape)
 
     @property
     def cp_degree(self):
@@ -34,17 +38,17 @@ class MeshConfig:
         """Number of tensor-parallel ranks along the TP mesh axis."""
         return self.mesh_shape[self.tp_axis]
 
-    def shard_mapper(self, mesh_device, tensor_dim=None, mesh_dims=None):
+    def shard_mapper(self, tensor_dim=None, mesh_dims=None):
         if mesh_dims is None:
             mesh_dims = [None, None]
             mesh_dims[self.tp_axis] = tensor_dim
-        return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=mesh_dims)
+        return ttnn.ShardTensor2dMesh(self.device, self.mesh_shape, dims=mesh_dims)
 
-    def column_parallel(self, mesh_device):
-        return self.shard_mapper(mesh_device, tensor_dim=-1)
+    def column_parallel(self):
+        return self.shard_mapper(tensor_dim=-1)
 
-    def row_parallel(self, mesh_device):
-        return self.shard_mapper(mesh_device, tensor_dim=-2)
+    def row_parallel(self):
+        return self.shard_mapper(tensor_dim=-2)
 
     def __repr__(self):
         return f"MeshConfig({self.mesh_shape}, CP={self.cp_degree}, TP={self.tp_degree})"

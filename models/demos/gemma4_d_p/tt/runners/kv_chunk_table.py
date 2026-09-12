@@ -77,7 +77,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
     """Describe global packed rows and sliding K/V rows directly from compute caches."""
     if not isinstance(kv_caches, Gemma4KvCaches):
         raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
-    mesh_config = MeshConfig(tuple(mesh_device.shape))
+    mesh_config = MeshConfig(mesh_device)
     cp = mesh_config.cp_degree
     tp = mesh_config.tp_degree
     if (cp, tp) != (8, 4) or kv_caches.cp != cp or kv_caches.tp != tp:

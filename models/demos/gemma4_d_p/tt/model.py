@@ -3,7 +3,6 @@
 
 """Gemma4 Galaxy prefill model with context-parallel ring attention."""
 
-
 import torch
 
 import ttnn
@@ -86,8 +85,9 @@ def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
     return order
 
 
-def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, prefill_chunk_size=None):
+def create_rope_caches(mesh_config, hf_config, max_seq_len, prefill_chunk_size=None):
     """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup."""
+    mesh_device = mesh_config.device
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
     is_mesh = hasattr(mesh_device, "shape")
@@ -167,26 +167,20 @@ class Gemma4Model:
 
     def __init__(
         self,
-        mesh_device,
+        mesh_config,
         hf_config,
         state_dict,
         ccl_manager,
-        # Global prefill chunk size; determines RoPE ordering and ring KV cache layout.
         prefill_chunk_size,
         dtype=ttnn.bfloat16,
         tensor_cache_path=None,
-        mesh_config=None,
         max_seq_len=131072,
         max_local_batch_size=1,
         num_layers=None,
         precision=None,
         ring_kv_caches=None,
     ):
-        from models.demos.gemma4_d_p.config import validate_galaxy_mesh
-
-        validate_galaxy_mesh(mesh_device.shape)
-        if mesh_config is None or mesh_config.mesh_shape != tuple(mesh_device.shape):
-            raise ValueError("Galaxy prefill requires a matching mesh_config")
+        mesh_device = mesh_config.device
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
             raise ValueError("sequence and chunk lengths must be positive")
         if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
@@ -243,11 +237,7 @@ class Gemma4Model:
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
         if hf_text_config is not None:
             self.rope_caches, self.rope_caches_2d = create_rope_caches(
-                mesh_device,
-                hf_text_config,
-                max_seq_len,
-                mesh_config=self.mesh_config,
-                prefill_chunk_size=prefill_chunk_size,
+                self.mesh_config, hf_text_config, max_seq_len, prefill_chunk_size=prefill_chunk_size
             )
         else:
             # Fallback: no automatic RoPE — caller must pass rope_mats explicitly
@@ -275,7 +265,7 @@ class Gemma4Model:
             # Embedding: column-parallel (shard hidden dim across TP devices)
             # Each device holds [vocab, hidden/TP]; all-gather after lookup.
             if tp > 1:
-                embed_mapper = mesh_config.column_parallel(mesh_device)
+                embed_mapper = mesh_config.column_parallel()
             else:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
@@ -296,7 +286,7 @@ class Gemma4Model:
             # need the DRAM relief and can tolerate the precision loss.
             lm_head_weight = embed_weight.transpose(0, 1).unsqueeze(0).unsqueeze(0)
             if tp > 1:
-                lm_mapper = mesh_config.column_parallel(mesh_device)
+                lm_mapper = mesh_config.column_parallel()
             else:
                 lm_mapper = replicate
             lm_head_suffix = f"_{dtype_to_str(lm_head_dtype)}"
@@ -319,7 +309,7 @@ class Gemma4Model:
             raise ValueError(f"expected {n_layers} external ring caches, got {len(ring_kv_caches)}")
         for i in range(n_layers):
             layer = Gemma4DecoderLayer(
-                mesh_device=mesh_device,
+                mesh_config=mesh_config,
                 hf_config=hf_config,
                 state_dict=state_dict,
                 layer_idx=i,
@@ -328,10 +318,9 @@ class Gemma4Model:
                 mlp_dtype=mlp_dtype,
                 attention_dtype=attention_dtype,
                 tensor_cache_path=tensor_cache_path,
-                mesh_config=mesh_config,
                 max_seq_len=self.ring_cache_max_seq_len,
                 max_local_batch_size=max_local_batch_size,
-                ring_kv_cache=(ring_kv_caches[i] if ring_kv_caches is not None else None),
+                ring_kv_cache=ring_kv_caches[i] if ring_kv_caches is not None else None,
             )
             self.layers.append(layer)
 
@@ -346,11 +335,10 @@ class Gemma4Model:
             norm_state = {}
 
         self.norm = RMSNorm(
-            mesh_device=mesh_device,
+            mesh_config=mesh_config,
             hf_config=hf_config,
             state_dict=norm_state,
             tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
-            mesh_config=mesh_config,
         )
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):

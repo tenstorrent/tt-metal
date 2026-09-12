@@ -43,14 +43,14 @@ class AttentionWeights:
 
 
 def load_attention_weights(
-    mesh_device,
+    mesh_config: MeshConfig,
     config,
     state_dict,
-    mesh_config: MeshConfig,
     weight_dtype=ttnn.bfloat16,
     tensor_cache_path=None,
 ) -> AttentionWeights:
     """Load TP-sharded QKV or tied QK weights with the packed-cache permutations."""
+    mesh_device = mesh_config.device
     is_global = config.use_kv_tying
     tied_qkv = is_global
     q_size = config.num_attention_heads * config.head_dim
@@ -178,8 +178,8 @@ def load_attention_weights(
 
     # Mesh mappers
     if tp > 1:
-        col_mapper = mesh_config.column_parallel(mesh_device)
-        row_mapper = mesh_config.row_parallel(mesh_device)
+        col_mapper = mesh_config.column_parallel()
+        row_mapper = mesh_config.row_parallel()
         replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
         col_mapper = None

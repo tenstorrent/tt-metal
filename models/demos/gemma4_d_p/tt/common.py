@@ -9,7 +9,6 @@ from loguru import logger
 
 import ttnn
 from models.common.weight_cache import build_cached_state_dict, mark_weight_cache_complete, weight_cache_is_complete
-from models.demos.gemma4_d_p.config import MeshConfig, validate_galaxy_mesh
 from models.demos.gemma4_d_p.tt.ccl import CCLManager
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
@@ -27,14 +26,13 @@ def _gemma4_is_host_weight(key):
 
 
 def create_tt_model(
-    mesh_device,
+    mesh_config,
     prefill_chunk_size,
     max_batch_size=1,
     max_seq_len=8192,
     dtype=ttnn.bfloat16,
     state_dict=None,
     num_layers=None,
-    mesh_config=None,
     model_path=None,
     ring_kv_caches=None,
     force_rebuild=False,
@@ -45,10 +43,7 @@ def create_tt_model(
     Returns:
         (model_args, model, tt_kv_cache, state_dict)
     """
-    mesh_config = mesh_config or MeshConfig(mesh_device.shape)
-    validate_galaxy_mesh(mesh_device.shape)
-    if tuple(mesh_device.shape) != mesh_config.mesh_shape:
-        raise ValueError("mesh_config must match the device mesh")
+    mesh_device = mesh_config.device
     SLIDING_WINDOW_SIZE = 1024
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         raise ValueError("sequence and chunk lengths must be positive")
@@ -69,7 +64,7 @@ def create_tt_model(
     if num_layers is not None:
         model_args.num_hidden_layers = num_layers
 
-    ccl_manager = CCLManager(mesh_device)
+    ccl_manager = CCLManager(mesh_config)
 
     # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
     _worker_mesh = tuple(mesh_device.shape)
@@ -104,13 +99,12 @@ def create_tt_model(
     precision = _precision_for_variant
 
     model = Gemma4Model(
-        mesh_device=mesh_device,
+        mesh_config=mesh_config,
         hf_config=model_args,
         state_dict=state_dict,
         ccl_manager=ccl_manager,
         dtype=dtype,
         tensor_cache_path=tensor_cache_path,
-        mesh_config=mesh_config,
         max_seq_len=max_seq_len,
         prefill_chunk_size=prefill_chunk_size,
         max_local_batch_size=max_batch_size,

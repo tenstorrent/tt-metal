@@ -81,11 +81,10 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     monkeypatch.setattr(attention, "init_packed_ring_kv_cache", allocate)
     monkeypatch.setattr(ttnn, "zeros", allocate)
     result = attention.Gemma4Attention(
-        mesh_device=object(),
         config=SimpleNamespace(is_sliding=not is_global, sliding_window=1024),
         state_dict={},
         ccl_manager=object(),
-        mesh_config=MeshConfig((8, 4)),
+        mesh_config=MeshConfig(SimpleNamespace(shape=(8, 4))),
         layer_idx=0,
         ring_kv_cache=cache,
     )
@@ -107,15 +106,16 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
 
     monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
     mesh_config = SimpleNamespace(
+        device=object(),
         tp_degree=4,
         cp_degree=8,
-        column_parallel=lambda _: None,
-        row_parallel=lambda _: None,
+        column_parallel=lambda: None,
+        row_parallel=lambda: None,
     )
     config = SimpleNamespace(
         use_kv_tying=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
     )
-    result = weights.load_attention_weights(object(), config, {}, mesh_config, tensor_cache_path="/tmp/weights")
+    result = weights.load_attention_weights(mesh_config, config, {}, tensor_cache_path="/tmp/weights")
     assert (result.wqk is not None) == is_global
     assert (result.wqkv is not None) != is_global
     assert len([name for name in loaded if "/wqk" in name]) == 1

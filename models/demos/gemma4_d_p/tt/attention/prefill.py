@@ -165,7 +165,6 @@ def prefill_forward(
         tt_sdpa = ring_packed_prefill_attention(
             packed_q,
             ring_kv_cache.kv,
-            mesh_device=tt_q.device(),
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
             num_local_kv_heads=num_local_kv_heads_ring,
@@ -183,13 +182,11 @@ def prefill_forward(
             tt_q,
             ring_kv_cache[0],
             ring_kv_cache[1],
-            mesh_device=tt_q.device(),
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
             num_local_kv_heads=num_local_kv_heads_ring,
             head_dim=config.head_dim,
             max_seq_len=ring_max_seq_len,
-            # Captured traces reserve the full history; device metadata bounds valid reads.
             logical_n=ring_logical_n,
             kv_actual_global=chunk_offset,
             sliding_window=sliding_window,

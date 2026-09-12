@@ -18,7 +18,10 @@ from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
 @pytest.mark.parametrize("shape", GALAXY_MESH_SHAPES)
 def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
-    config = MeshConfig(shape)
+    mesh_device = SimpleNamespace(shape=shape)
+    config = MeshConfig(mesh_device)
+    assert config.device is mesh_device
+    assert config.mesh_shape == shape
     assert config.cp_axis == 0
     assert config.cp_degree == shape[config.cp_axis]
     assert config.tp_axis == 1
@@ -29,13 +32,13 @@ def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
 @pytest.mark.parametrize("shape", [(1, 1), (1, 2), (2, 4), (1, 8), (1, 32), (8, 8)])
 def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
     with expect_error(ValueError, "requires a Galaxy mesh"):
-        MeshConfig(shape)
+        MeshConfig(SimpleNamespace(shape=shape))
 
 
 @pytest.mark.parametrize("chunk_size", [0, -8192, 4096, 8193])
 def test_invalid_chunk_geometry_fails_before_weight_loading(chunk_size, expect_error):
     with expect_error(ValueError, "positive|whole CP-local tiles|sliding window"):
-        create_tt_model(SimpleNamespace(shape=(8, 4)), max_seq_len=32768, prefill_chunk_size=chunk_size)
+        create_tt_model(MeshConfig(SimpleNamespace(shape=(8, 4))), max_seq_len=32768, prefill_chunk_size=chunk_size)
 
 
 @pytest.mark.parametrize("cp,chunk_size", [(8, 8192), (4, 4096), (8, 16384), (8, 32768)])
@@ -100,3 +103,20 @@ def test_non_31b_architectures_are_rejected(field, value, expect_error):
     setattr(config, field, value)
     with expect_error(ValueError, "Only Gemma4-31B-it is supported"):
         Gemma4ModelArgs.from_hf_config(config)
+
+
+@pytest.mark.parametrize("shape", GALAXY_MESH_SHAPES)
+def test_shard_mappers_use_bound_device(monkeypatch, shape):
+    import ttnn
+
+    mesh_device = SimpleNamespace(shape=shape)
+    mesh_config = MeshConfig(mesh_device)
+    calls = []
+    monkeypatch.setattr(
+        ttnn, "ShardTensor2dMesh", lambda device, mesh_shape, dims: calls.append((device, mesh_shape, dims))
+    )
+    mesh_config.column_parallel()
+    mesh_config.row_parallel()
+    mesh_config.shard_mapper(mesh_dims=(-2, None))
+    assert all(device is mesh_device and mesh_shape == shape for device, mesh_shape, _ in calls)
+    assert [tuple(dims) for _, _, dims in calls] == [(None, -1), (None, -2), (-2, None)]

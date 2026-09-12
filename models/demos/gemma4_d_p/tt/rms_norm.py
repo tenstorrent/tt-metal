@@ -4,12 +4,12 @@
 from torch import nn
 
 import ttnn
-from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
 class RMSNorm(nn.Module):
-    def __init__(self, mesh_device, hf_config, state_dict, tensor_cache_path=None, mesh_config=None, with_scale=True):
+    def __init__(self, mesh_config, hf_config, state_dict, tensor_cache_path=None, with_scale=True):
+        mesh_device = mesh_config.device
         super().__init__()
         self.with_scale = with_scale
 
@@ -18,7 +18,7 @@ class RMSNorm(nn.Module):
         else:
             torch_weight = None
 
-        self.mesh_config = mesh_config or MeshConfig(mesh_device.shape)
+        self.mesh_config = mesh_config
 
         if with_scale:
             self.tt_weight = ttnn.as_tensor(

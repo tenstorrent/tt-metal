@@ -3,7 +3,6 @@
 
 """Gemma4-31B dense decoder layer: attention, MLP, residuals and layer scalar."""
 
-
 import ttnn
 from models.demos.gemma4_d_p.tt.attention import Gemma4Attention, Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.mlp import MLP
@@ -14,14 +13,13 @@ from models.demos.gemma4_d_p.utils.substate import substate
 class Gemma4DecoderLayer:
     def __init__(
         self,
-        mesh_device,
+        mesh_config,
         hf_config,
         state_dict,
         layer_idx,
         ccl_manager,
         dtype,
         tensor_cache_path,
-        mesh_config,
         max_seq_len,
         max_local_batch_size,
         mlp_dtype=None,
@@ -32,6 +30,7 @@ class Gemma4DecoderLayer:
     ):
         # Per-module dtype overrides default to the model-wide ``dtype`` so
         # callers that don't care about precision config see no change.
+        mesh_device = mesh_config.device
         if mlp_dtype is None:
             mlp_dtype = dtype
         if attention_dtype is None:
@@ -51,11 +50,10 @@ class Gemma4DecoderLayer:
 
         def _norm(name, with_scale=True):
             return RMSNorm(
-                mesh_device=mesh_device,
+                mesh_config=mesh_config,
                 hf_config=hf_config,
                 state_dict=substate(layer_state, name) if layer_state else {},
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/{name}" if tensor_cache_path else None,
-                mesh_config=mesh_config,
                 with_scale=with_scale,
             )
 
@@ -74,11 +72,10 @@ class Gemma4DecoderLayer:
         # Attention
         attn_config = Gemma4AttentionConfig(hf_config, layer_idx)
         self.self_attn = Gemma4Attention(
-            mesh_device=mesh_device,
+            mesh_config=mesh_config,
             config=attn_config,
             state_dict=substate(layer_state, "self_attn") if layer_state else {},
             ccl_manager=ccl_manager,
-            mesh_config=mesh_config,
             layer_idx=layer_idx,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/self_attn" if tensor_cache_path else None,
             weight_dtype=attention_dtype,
@@ -91,10 +88,9 @@ class Gemma4DecoderLayer:
 
         # Dense MLP (HF key: "mlp")
         self.mlp = MLP(
-            mesh_device=mesh_device,
+            mesh_config=mesh_config,
             hf_config=hf_config,
             state_dict=substate(layer_state, "mlp") if layer_state else {},
-            mesh_config=mesh_config,
             ccl_manager=ccl_manager,
             dtype=mlp_dtype,
             tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/mlp" if tensor_cache_path else None,

@@ -3,7 +3,6 @@
 
 """Tensor-parallel dense MLP for Gemma4-31B prefill."""
 
-
 import ttnn
 from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
@@ -12,15 +11,9 @@ from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 class MLP:
     def __init__(
-        self,
-        mesh_device,
-        hf_config,
-        state_dict,
-        mesh_config,
-        ccl_manager=None,
-        dtype=ttnn.bfloat8_b,
-        tensor_cache_path=None,
+        self, mesh_config, hf_config, state_dict, ccl_manager=None, dtype=ttnn.bfloat8_b, tensor_cache_path=None
     ):
+        mesh_device = mesh_config.device
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.ccl_manager = ccl_manager
@@ -56,8 +49,8 @@ class MLP:
         )
 
         if tp > 1:
-            col_mapper = mesh_config.column_parallel(mesh_device)
-            row_mapper = mesh_config.row_parallel(mesh_device)
+            col_mapper = mesh_config.column_parallel()
+            row_mapper = mesh_config.row_parallel()
         else:
             col_mapper = None
             row_mapper = None
