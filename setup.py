@@ -173,11 +173,14 @@ class EditableWheel(editable_wheel):
         # Build the editable wheel first.
         super().run()
 
-        # Create a .pth file with paths to the repo root, ttnn and tools directories.
+        # Create a .pth file with paths to the repo root, ttnn, tools and tt-llk/tools/python directories.
         # This file gets loaded automatically by the python interpreter and its content gets populated into `sys.path`;
         # i.e. as if these paths were added to the PYTHONPATH.
         pth_filename = "ttnn-custom.pth"
-        pth_content = f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
+        pth_content = (
+            f"{Path(__file__).parent}\n{Path(__file__).parent / 'ttnn'}\n{Path(__file__).parent / 'tools'}\n"
+            f"{Path(__file__).parent / 'tt_metal' / 'tt-llk' / 'tools' / 'python'}\n"
+        )
 
         print(f"EditableWheel.run: adding {pth_filename} to the wheel")
 
@@ -411,6 +414,8 @@ class CMakeBuild(build_ext):
 
 packages = find_packages(where="ttnn", exclude=["ttnn.examples", "ttnn.examples.*"])
 packages += find_packages("tools")
+# Shared perf counter package owned by tt-llk (header parsers + metric engine), imported by tracy.
+packages += ["tt_llk_perf"]
 
 # Empty sources in order to force extension executions
 ttnn_lib_C = Extension("ttnn._ttnn", sources=[])
@@ -432,6 +437,7 @@ setup(
         "": "ttnn",
         "tracy": "tools/tracy",
         "triage": "tools/triage",
+        "tt_llk_perf": "tt_metal/tt-llk/tools/python/tt_llk_perf",
     },
     ext_modules=ext_modules,
     cmdclass=dict(build_ext=CMakeBuild, editable_wheel=EditableWheel),
