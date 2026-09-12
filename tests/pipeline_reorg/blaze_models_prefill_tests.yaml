@@ -641,9 +641,12 @@
   # inside the captured region: capture costs chunk 0 two extra forwards, which is idempotent for KV
   # but not for a recurrence, so the branch resets the carry after capture. Exactly the regression a
   # CI leg should hold.
-  # This leg resolves its tensorbins through conftest's `weight_cache_path` fixture, which has no
-  # built-in default (unlike `kimi_k3/weights.py`'s `cache_root`). Without the cache export below it
-  # rebuilds them beside the checkpoint and dies on weight load long before the 20 min budget.
+  # This leg resolves its tensorbins through conftest's `weight_cache_path` fixture, which reads
+  # `variant.ttnn_cache_env` and nothing else -- it never consults `variant.ttnn_cache_default`, so
+  # unlike `kimi_k3/weights.py`'s `cache_root` it has no fallback to the share. Without the export
+  # below the fixture points at the checkpoint dir, and `check_cache_complete` fails the
+  # `.layer_N.complete` marker check on layer 0: the leg dies on `TTNN cache incomplete` a couple of
+  # minutes in, before it builds anything. Fast and loud, but a false negative on the model.
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
