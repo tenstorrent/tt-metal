@@ -873,19 +873,20 @@ TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
 // meaningless for correctness, so nothing is checked here.
 //
 // Disabled by default: it is slow and it measures rather than asserts.
-void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64) {
+void time_one_size(
+    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64, uint32_t Bt = 1) {
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     if (grid_w > grid.x || grid_h > grid.y) {
         GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
     }
-    const auto ref = make_reference(2u * C * kTile, d);
+    const auto ref = make_reference(2u * C * Bt * kTile, d);
 
     double dram_seconds = 0.0;
     double relay_seconds = 0.0;
     double endpoint_seconds = 0.0;
-    run_algorithm2(C, ref, grid_w, grid_h, &dram_seconds);
-    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/false, &relay_seconds);
-    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &endpoint_seconds);
+    run_algorithm2(C, ref, grid_w, grid_h, &dram_seconds, Bt);
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/false, &relay_seconds, Bt);
+    run_relay(C, ref, grid_w, grid_h, /*endpoint_sync=*/true, &endpoint_seconds, Bt);
 
     // What Algorithm 4 adds over the barrier: one endpoint write per
     // inter-streak spill, and one wait -- a handful of remote reads -- per
@@ -907,7 +908,8 @@ void time_one_size(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64
     }
 
     const double us = 1e6;
-    std::cout << "  C=" << C << " N=" << 2u * C * kTile << " d=" << d << " on " << grid_w << "x"
+    std::cout << "  C=" << C << " N=" << 2u * C * Bt * kTile << " Bt=" << Bt << " d=" << d
+              << " on " << grid_w << "x"
               << grid_h << ": DRAM " << dram_seconds * us << " us, relay " << relay_seconds * us
               << " us, endpoint " << endpoint_seconds * us << " us"
               << " | relay speedup " << dram_seconds / relay_seconds << "x"
@@ -948,8 +950,9 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariants) {
 // then generated/profiler/.logs/profile_log_device.csv holds the zones.
 TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
     const uint32_t C = 16;
-    const auto ref = make_reference(2u * C * kTile, 64);
-    run_relay(C, ref, 4, 4, /*endpoint_sync=*/false, nullptr);
+    const uint32_t Bt = 4;
+    const auto ref = make_reference(2u * C * Bt * kTile, 64);
+    run_relay(C, ref, 4, 4, /*endpoint_sync=*/false, nullptr, Bt);
     ttml::autograd::ctx().close_device();
 }
 
@@ -957,6 +960,17 @@ TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
 // blocks one tile tall, and half as many cores with blocks two tiles tall.
 // Same arithmetic either way -- 2C^2 tile pairs -- so this is purely what
 // block shape does to how fast a core gets through it.
+// Does the relay still earn its place once the compute is efficient? Tall
+// blocks cut the compute per unit of arithmetic by 1.9x without touching the
+// dataflow, so the dataflow's share of the total goes up and this is where
+// the three algorithms should be compared.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareTheThreeVariantsWithTallBlocks) {
+    time_one_size(16, 4, 4, 64, /* Bt */ 4);
+    time_one_size(32, 8, 4, 64, /* Bt */ 4);
+    time_one_size(64, 8, 8, 64, /* Bt */ 2);
+    time_one_size(64, 8, 8, 64, /* Bt */ 4);
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBlockShapes) {
     struct Shape {
         uint32_t C, w, h, Bt;
