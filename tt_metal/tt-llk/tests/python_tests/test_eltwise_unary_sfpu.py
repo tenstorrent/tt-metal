@@ -1049,7 +1049,9 @@ def test_eltwise_unary_sfpu_polygamma_order(
     input_dimensions: list[int],
 ):
     if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
-        pytest.skip(reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already")
+        pytest.skip(
+            reason="Float32 reaches a 16-bit Dest as Float16_b, which is swept already"
+        )
     eltwise_unary_sfpu(
         "sources/eltwise_unary_sfpu_test.cpp",
         formats,
