@@ -538,6 +538,7 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
     make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
+    make_cb(tt::CBIndex::c_27, rowT, tt::DataFormat::Float16_b);  // a * K
     make_cb(tt::CBIndex::c_7, 2, tt::DataFormat::Float32);   // slot-release tokens
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
@@ -562,6 +563,16 @@ Gradients run_relay(
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";
+    // Fold the softmax scale into K where that is exact. K is bfloat16, so
+    // a * K rounds unless a is a power of two: check by round-tripping the
+    // scalar's mantissa rather than special-casing head dimensions.
+    {
+        const float a = 1.0F / std::sqrt(static_cast<float>(ref.d));
+        const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
+        if (exact) {
+            compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
+        }
+    }
 
     std::vector<uint32_t> reader_args = {
         C, qWt, vWt, release_sem, ready_imm0_sem, ready_imm1_sem, ready_dq0_sem,
