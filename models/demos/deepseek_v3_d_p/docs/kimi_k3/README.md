@@ -84,13 +84,19 @@ One 93-layer 24/24/24/21 configuration at three slot counts, same build (2026-09
 | 1 | 747 ms | 6857 tok/s | -- | 55% |
 | 2 | 714 ms | 7174 tok/s | 2263 tok/s | 42% |
 | 8 | 713 ms | 7177 tok/s | 4600 tok/s | 15% |
+| 64 | 728 ms | 7032 tok/s | 6504 tok/s | 2% |
 
-Steady state saturates at TWO slots: 1 to 2 buys 4.6%, 2 to 8 buys 0.04%. The pipeline is
-compute-bound from two slots on, so extra concurrency does not make a chunk cheaper. What it does is
-amortise a fixed cost. `wall = fill + users * 11 * bottleneck` fits both measured runs with the same
-fill -- 34.1 s at two users, 35.2 s at eight -- so end-to-end throughput climbs from 2263 to 4600
-tok/s purely because the fill is spread over 88 chunks instead of 22. **7177 tok/s is the ceiling for
-this split**; more slots approach it and none exceed it.
+Steady state peaks at two to eight slots and does not improve past that: 1 to 2 buys 4.6%, 2 to 8
+buys 0.04%, and 8 to 64 gives back 2%. The pipeline is compute-bound from two slots on, so extra
+concurrency does not make a chunk cheaper. What it does is amortise a fixed cost.
+`wall = fill + users * 11 * bottleneck` fits with a constant fill -- 34.1 s at two users, 35.2 s at
+eight -- so end-to-end throughput climbs from 2263 to 6504 tok/s purely because the fill is spread
+over 704 chunks instead of 22. **~7100 tok/s is the ceiling for this split**; more slots approach it
+and none exceed it.
+
+The model was fitted on the 2- and 8-user runs and then used to predict 64 before that run finished:
+537 s and 6713 tok/s predicted, 554.2 s and 6504 tok/s measured, 3.2% out over an 8x extrapolation.
+Use it to size a deployment rather than paying for another bring-up.
 
 Quoting the producer's end-to-end number alone therefore understates the model by up to 3x, and by a
 factor that depends on how many chunks the run happened to push.
@@ -98,7 +104,7 @@ factor that depends on how many chunks the run happened to push.
 ### Chunk 0 is one program build, not a per-slot cost
 
 Chunk 0 costs 8 to 14 s per rank against a 0.6 to 0.75 s steady chunk, and it does not move with slot
-count -- 1, 2 and 8 users all pay it once. Every later slot's first chunk is normal (685-710 ms), so
+count -- 1, 2, 8 and 64 users all pay the same, a 64x range. Every later slot's first chunk is normal (685-710 ms), so
 it is once per process.
 
 `PREFILL_ACK_TIMING=1` splits `zero_pad_and_ack` into its zero and its ack. On the first MLA layer of
