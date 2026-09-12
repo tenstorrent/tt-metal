@@ -89,9 +89,7 @@ uint32_t nd_shard_n_tiles(const ttnn::Tensor& w) {
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
-    const UnifiedRoutedExpertFfnParams& op,
-    const UnifiedRoutedExpertFfnInputs& t,
-    Tensor& tensor_return_value) {
+    const UnifiedRoutedExpertFfnParams& op, const UnifiedRoutedExpertFfnInputs& t, Tensor& tensor_return_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // All local experts share one shape/dtype (validated), so the program is
@@ -105,10 +103,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // This expert's M (not x's allocated M): x may be a shared buffer wider
     // than one expert's region. K still comes from x's last dim (emb).
     const uint32_t M_tiles_full = op.m_tiles;
-    const uint32_t K_gate_tiles = x_shape[-1] / TILE;            // = N_gate K = emb / TILE
-    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;    // = hidden / TILE
-    const uint32_t K_down_tiles = down_shape[-2] / TILE;         // = hidden / TILE
-    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;    // = emb / TILE
+    const uint32_t K_gate_tiles = x_shape[-1] / TILE;          // = N_gate K = emb / TILE
+    const uint32_t N_gate_tiles_full = gate_shape[-1] / TILE;  // = hidden / TILE
+    const uint32_t K_down_tiles = down_shape[-2] / TILE;       // = hidden / TILE
+    const uint32_t N_down_tiles_full = down_shape[-1] / TILE;  // = emb / TILE
 
     // Blackhole compute grid is 13x10 worker cores; we use the bottom-left
     // 11x8 = 88 to leave headroom for dispatch and to give per_core_M /
@@ -275,6 +273,15 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             d_sub_w = cand;
             break;
         }
+    }
+    // A subblock narrower than 3 tiles is where the matmul stops being math-bound and the
+    // operand unpack starts to dominate: measured on 7168x2048, forcing the down subblock from
+    // 1x7 to 1x3 costs 1% but 1x1 costs 28% of total op time. per_core_N_d = 11 (prime, from
+    // ceil(112/11) on the 11-wide grid) is the shape that lands there, and no divisor can save
+    // it -- so below the cliff, give up the exact tiling and take a RAGGED last subblock
+    // instead. Shapes whose divisor rule already clears 3 keep their exact tiling untouched.
+    if (d_sub_w < 3) {
+        d_sub_w = std::min<uint32_t>(DST_CAPACITY, per_core_N_d);
     }
     const uint32_t d_out_subblock_w = d_sub_w;
 
@@ -454,7 +461,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
 
     const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
-    const uint32_t d_in1_num_subblocks = per_core_N_d / d_out_subblock_w;
+    // Ceil, not exact: the last subblock may be narrower (d_out_subblock_w_tail). Equal to the
+    // exact division whenever the width divides, which is every shape but the ragged one.
+    const uint32_t d_in1_num_subblocks = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
+    const uint32_t d_out_subblock_w_tail = per_core_N_d - (d_in1_num_subblocks - 1) * d_out_subblock_w;
     const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
     const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
@@ -643,10 +653,18 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // pipelines compute/writer one-ahead and is safe under the tightest L1
     // budget (the 256-expert / 32-per-chip case the unfused path is run on).
     constexpr uint32_t cb_out_stage_count = 2u;
+    // A CB wraps only when a push lands EXACTLY on fifo_limit (adaptive_chunk.hpp). On a ragged
+    // subblock grid the pushes alternate width and tail, so a ring sized in SUBBLOCKS is never hit
+    // exactly and the write pointer walks off into neighbouring L1. Size the ragged case in whole
+    // output ROWS -- the row period per_core_N_d is what the push sequence repeats on. Exact grids
+    // keep the original subblock sizing.
+    const bool d_subblocks_exact = (d_out_subblock_w_tail == d_out_subblock_w);
+    const uint32_t cb_out_tiles =
+        d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d) * cb_out_stage_count;
     make_cb(
         CB_OUT,
         out_df,
-        /*tiles=*/d_out_subblock_h * d_out_subblock_w * cb_out_stage_count,
+        /*tiles=*/cb_out_tiles,
         out_tile_size);
     // cb_in0_down_full: reader pushes per_core_M × in0_block_w_d tiles of activated
     // once per down K-block. Single-buffered to save L1.
@@ -880,6 +898,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // DRAM ND shard widths, matching the reader's args 34/35.
         gu_shard_w,  // 30
         d_shard_w,   // 31
+        // Width of the LAST down N-subblock; equals d_out_subblock_w unless the subblock grid
+        // is ragged (see the program factory). The drain must not wait on tiles the compute
+        // kernel never packs.
+        d_out_subblock_w_tail,  // 32
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -933,6 +955,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // down out subblock
         d_out_subblock_h,
         d_out_subblock_w,
+        d_out_subblock_w_tail,
         d_out_block_num_tiles,
         // chunk loop control
         num_chunks,

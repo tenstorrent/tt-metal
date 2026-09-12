@@ -110,7 +110,9 @@ void kernel_main() {
     // Full compile-time M-subblock count of cb_out. The writer DRAINS all of them
     // but only WRITES the first (runtime) per_core_M rows (see the drain loop below).
     constexpr uint32_t d_in1_num_subblocks_M = per_core_M_max / d_out_subblock_h;
-    constexpr uint32_t d_in1_num_subblocks_N = per_core_N_d / d_out_subblock_w;
+    // Ceil, matching the program factory: on a ragged grid the last subblock is narrower, so
+    // truncating here would drain one subblock per row too few and deadlock against compute.
+    constexpr uint32_t d_in1_num_subblocks_N = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
 
@@ -135,6 +137,10 @@ void kernel_main() {
     // same tensors.
     constexpr uint32_t GU_SHARD_W = get_compile_time_arg_val(30);
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(31);
+    // Width of the LAST down N-subblock. Equals d_out_subblock_w on an exact subblock grid;
+    // narrower on a ragged one, where the compute kernel packs fewer tiles for that subblock --
+    // waiting on the full width here would hang.
+    constexpr uint32_t d_out_subblock_w_tail = get_compile_time_arg_val(32);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
 
@@ -147,7 +153,7 @@ void kernel_main() {
     const uint32_t down_col_end =
         (down_col0 + per_core_N_d < N_down_tiles_full) ? down_col0 + per_core_N_d : N_down_tiles_full;
 
-    constexpr uint32_t out_accessor_offset = 32;
+    constexpr uint32_t out_accessor_offset = 33;
     constexpr auto out_args = TensorAccessorArgs<out_accessor_offset>();
     const auto out_acc = TensorAccessor(out_args, output_addr, cb_out_buf.get_tile_size());
 
@@ -421,10 +427,13 @@ void kernel_main() {
             const uint32_t sb_m_bound = d_in1_num_subblocks_M;
             for (uint32_t sb_m = 0; sb_m < sb_m_bound; ++sb_m) {
                 for (uint32_t sb_n = 0; sb_n < d_in1_num_subblocks_N; ++sb_n) {
-                    cb_out_buf.wait_front(d_out_subblock_num_tiles);
+                    const uint32_t this_w =
+                        (sb_n + 1 == d_in1_num_subblocks_N) ? d_out_subblock_w_tail : d_out_subblock_w;
+                    const uint32_t this_tiles = this_w * d_out_subblock_h;
+                    cb_out_buf.wait_front(this_tiles);
                     uint32_t subblock_tile_offset = 0;
                     for (uint32_t i = 0; i < d_out_subblock_h; ++i) {
-                        for (uint32_t j = 0; j < d_out_subblock_w; ++j) {
+                        for (uint32_t j = 0; j < this_w; ++j) {
                             const uint32_t row = row0 + sb_m * d_out_subblock_h + i;
                             const uint32_t col = col0 + sb_n * d_out_subblock_w + j;
                             // `row` indexes the FFN *input* (x) tile-rows; the
@@ -474,7 +483,7 @@ void kernel_main() {
                     // slot now — the NoC has captured the data. ~10x faster than
                     // noc_async_write_barrier per subblock at small per_core_M.
                     noc.async_writes_flushed();
-                    cb_out_buf.pop_front(d_out_subblock_num_tiles);
+                    cb_out_buf.pop_front(this_tiles);
                 }
             }
         }  // end chunk loop
