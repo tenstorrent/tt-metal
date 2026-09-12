@@ -25,6 +25,7 @@ target_link_libraries(
     PRIVATE
         test_metal_common_libs
         Boost::smart_ptr
+        yaml-cpp::yaml-cpp
 )
 
 TT_ENABLE_UNITY_BUILD(unit_tests_api_lib)
