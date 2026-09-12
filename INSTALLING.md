@@ -83,7 +83,22 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
   pip install ttnn
   ```
 
-#### Step 2. (For models users only) Set Up Environment for Models:
+> [!NOTE]
+> The `ttnn` wheel does not bundle PyTorch by default. Several TT-NN tutorials (for example
+> `ttnn_basic_operations.py`, `ttnn_multihead_attention.py`, and `ttnn_tracer_model.py`) create
+> `torch` tensors and convert them with `ttnn.from_torch()`. If you plan to run those
+> tutorials or any code that imports `torch`, install the development dependencies before
+> continuing:
+>
+> ```sh
+> pip install -r tt_metal/python_env/requirements-dev.txt
+> ```
+>
+> This installs PyTorch (`torch==2.11.0`, CPU-only on x86_64) and other packages referenced
+> by the tutorials. You can skip this step if you only use TT-NN's own tensor creation
+> APIs such as `ttnn.full()`, `ttnn.zeros()`, or `ttnn.from_numpy()`.
+
+#### Step 2. (For models and tutorial users) Set Up Environment for Models:
 
 To try our pre-built models in [`tt-metal/models/`](https://github.com/tenstorrent/tt-metal/tree/main/models), you must:
 
