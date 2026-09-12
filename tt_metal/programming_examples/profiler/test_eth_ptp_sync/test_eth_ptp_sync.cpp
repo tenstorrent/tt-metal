@@ -27,6 +27,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <map>
 #include <vector>
 
 #include <tt-metalium/device.hpp>
@@ -289,14 +290,15 @@ int main(int argc, char** argv) {
         static_cast<uint32_t>(hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED));
     struct {
         uint32_t handshake, channel, result;
-    } const lay{base, base + 64, base + 128};
-    // Mo's result region is 144 B + 32 B per sample from base+128; ours is 128 B + 48 B per sample, then the raw
-    // dumps at +0x20000/+0x21000. Everything must fit in the eth core's unreserved L1.
+    } const lay{base, base + 64, base + 256};
+    // The channel region takes sync frames of up to 128 B (PTP_FLAG_FRAME_WORDS). Mo's result region is 144 B + 32 B
+    // per sample from base+256; ours is 128 B + 48 B per sample, then the raw dumps at +0x20000/+0x21000. Everything
+    // must fit in the eth core's unreserved L1.
     const uint32_t ptp_addr = base + 0x18000;
     const uint32_t l1_size =
         static_cast<uint32_t>(hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED));
     TT_FATAL(n_samples <= 2048, "at most 2048 samples fit below the raw dump area");
-    TT_FATAL(128u + 16u + 32u * n_samples <= 0x18000u, "software sample region would overrun the PTP region");
+    TT_FATAL(256u + 144u + 32u * n_samples <= 0x18000u, "software sample region would overrun the PTP region");
     TT_FATAL(
         0x18000u + 0x21000u + 0x1800u <= l1_size,
         "eth L1 unreserved region ({} B from {:#x}) too small",
@@ -386,6 +388,190 @@ int main(int argc, char** argv) {
         B.ptp.n_samples);
     print_snapshot("sender  ", A.ptp, ghz);
     print_snapshot("receiver", B.ptp, cluster.get_device_aiclk(db->id()) / 1000.0);
+    if (flags & PTP_FLAG_BLEED_TEST) {
+        std::map<uint32_t, uint32_t> tagged_behind, tagged_ahead;
+        std::vector<double> gap_behind, gap_ahead, issue_gap;
+        uint32_t q0_missing = 0, q2_missing = 0;
+        for (size_t i = 0; i < A.hw.size(); i++) {
+            const auto& a = A.hw[i];
+            const bool behind = (i & 1) == 0;
+            (behind ? tagged_behind : tagged_ahead)[a.mac_tag_lo]++;
+            if (a.mac_tag_lo >= 2) {
+                (behind ? gap_behind : gap_ahead)
+                    .push_back(static_cast<double>(static_cast<int64_t>(u64(a.mac_tx_lo, a.mac_tx_hi))));
+            }
+            q0_missing += a.th_rx_lo != 1;
+            q2_missing += a.th_rx_hi != 1;
+            issue_gap.push_back(a.th_label);
+        }
+        auto hist = [](const char* name, const std::map<uint32_t, uint32_t>& h) {
+            printf("[bleed] %s:", name);
+            for (const auto& [k, v] : h) {
+                printf(" %u stamp(s) x%u", k, v);
+            }
+            printf("\n");
+        };
+        hist("queue-0 packet issued right BEHIND the armed queue-2 frame", tagged_behind);
+        hist("queue-0 packet issued right AHEAD of the armed queue-2 frame", tagged_ahead);
+        auto stats = [](const char* name, std::vector<double> v) {
+            if (v.empty()) {
+                printf("[bleed] %s: none\n", name);
+                return;
+            }
+            std::sort(v.begin(), v.end());
+            printf(
+                "[bleed] %s: n=%zu min %.0f med %.0f max %.0f\n", name, v.size(), v.front(), v[v.size() / 2], v.back());
+        };
+        stats("second stamp minus first, behind (ns)", gap_behind);
+        stats("second stamp minus first, ahead (ns)", gap_ahead);
+        stats("cycles between the two commands", issue_gap);
+        printf(
+            "[bleed] samples where queue 0 / queue 2 did not count exactly one hand-off: %u / %u\n",
+            q0_missing,
+            q2_missing);
+        mesh_device->close();
+        return 0;
+    }
+    if (flags & (PTP_FLAG_KEEPALIVE_TRACE | PTP_FLAG_FRAME_ARM_SWEEP)) {
+        // Sender samples: mac_tag_lo = arming lead (cycles from the arming to the hand-off's count; frame sweep: the
+        // delay from the command to the arming), mac_tag_hi = stamped, mac_tx_lo = count to FIFO entry, mac_tx_hi =
+        // command to count (frame sweep).
+        const bool sweep = (flags & PTP_FLAG_FRAME_ARM_SWEEP) != 0;
+        std::map<uint32_t, std::pair<uint32_t, uint32_t>> by_lead;  // lead -> (stamped, unstamped)
+        uint32_t unstamped_max_lead = 0, stamped_min_lead = ~0u, stamped = 0;
+        std::vector<double> fifo_lag, cmd_to_count;
+        for (const auto& a : A.hw) {
+            auto& e = by_lead[sweep ? a.mac_tag_lo : (a.mac_tag_lo / 16) * 16];
+            (a.mac_tag_hi ? e.first : e.second)++;
+            if (a.mac_tag_hi) {
+                stamped++;
+                stamped_min_lead = std::min(stamped_min_lead, a.mac_tag_lo);
+                fifo_lag.push_back(a.mac_tx_lo);
+            } else {
+                unstamped_max_lead = std::max(unstamped_max_lead, a.mac_tag_lo);
+            }
+            if (sweep) {
+                cmd_to_count.push_back(a.mac_tx_hi);
+            }
+        }
+        printf(
+            "[arm] %s: %zu samples, %u stamped; longest lead left unstamped %u cycles, shortest lead stamped %u\n",
+            sweep ? "frame, armed a swept delay after the command" : "next keepalive after an arbitrary arming",
+            A.hw.size(),
+            stamped,
+            unstamped_max_lead,
+            stamped_min_lead);
+        printf("[arm] lead (cycles%s): stamped/unstamped\n", sweep ? " after the command" : ", binned by 16");
+        uint32_t far_stamped = 0, far_unstamped = 0;
+        for (const auto& [lead, e] : by_lead) {
+            if (lead < 1024) {
+                printf("[arm]   %4u: %u/%u\n", lead, e.first, e.second);
+            } else {
+                far_stamped += e.first;
+                far_unstamped += e.second;
+            }
+        }
+        printf("[arm]   1024 and beyond: %u/%u\n", far_stamped, far_unstamped);
+        std::sort(fifo_lag.begin(), fifo_lag.end());
+        std::sort(cmd_to_count.begin(), cmd_to_count.end());
+        if (!fifo_lag.empty()) {
+            printf(
+                "[arm] count to FIFO entry: min %.0f med %.0f max %.0f cycles\n",
+                fifo_lag.front(),
+                fifo_lag[fifo_lag.size() / 2],
+                fifo_lag.back());
+        }
+        if (!cmd_to_count.empty()) {
+            printf(
+                "[arm] command to count: min %.0f med %.0f max %.0f cycles\n",
+                cmd_to_count.front(),
+                cmd_to_count[cmd_to_count.size() / 2],
+                cmd_to_count.back());
+        }
+        mesh_device->close();
+        return 0;
+    }
+    if (flags & PTP_FLAG_COUNTER_TRACE) {
+        // Sender samples carry the queue-2 counter trace instead of stamps (eth_ptp_sync_kernel.hpp, CounterTrace).
+        printf(
+            "[trace] frames of %u bytes; per sample: dSTART dEND dWORD status | cycles after the command: START FIFO "
+            "END "
+            "| iteration: START FIFO END of N\n",
+            16 * (1 + ((flags >> PTP_FLAG_FRAME_WORDS_SHIFT) & 7)));
+        std::map<uint32_t, uint32_t> d_start, d_word_minus_start, status_vals;
+        uint32_t fifo_first = 0, same_iter = 0, start_first = 0, end_before_fifo = 0, missing = 0;
+        std::vector<double> t_start, t_fifo, t_end;
+        for (size_t i = 0; i < A.hw.size(); i++) {
+            const auto& a = A.hw[i];
+            if (i < 16) {
+                printf(
+                    "[trace] %3zu: %u %u %u 0x%05x | %u %u %u | %u %u %u of %u\n",
+                    i,
+                    a.mac_tag_lo,
+                    a.mac_tag_hi,
+                    a.mac_tx_lo,
+                    a.mac_tx_hi,
+                    a.th_rx_lo,
+                    a.th_rx_hi,
+                    a.th_label,
+                    a.ptp_a_lo,
+                    a.ptp_a_hi,
+                    a.ptp_b_lo,
+                    a.ptp_b_hi);
+            }
+            d_start[a.mac_tag_lo]++;
+            d_word_minus_start[a.mac_tx_lo - a.mac_tag_lo]++;
+            status_vals[a.mac_tx_hi]++;
+            if (a.ptp_a_lo == 0 || a.ptp_a_hi == 0 || a.ptp_b_lo == 0) {
+                missing++;
+                continue;
+            }
+            fifo_first += a.ptp_a_hi < a.ptp_a_lo;
+            same_iter += a.ptp_a_hi == a.ptp_a_lo;
+            start_first += a.ptp_a_hi > a.ptp_a_lo;
+            end_before_fifo += a.ptp_b_lo < a.ptp_a_hi;
+            t_start.push_back(a.th_rx_lo);
+            t_fifo.push_back(a.th_rx_hi);
+            t_end.push_back(a.th_label);
+        }
+        auto hist = [](const char* name, const std::map<uint32_t, uint32_t>& h) {
+            printf("[trace] %s:", name);
+            for (const auto& [k, v] : h) {
+                printf(" %u x%u", k, v);
+            }
+            printf("\n");
+        };
+        hist("dSTART per frame (1 + keepalives in the window)", d_start);
+        hist("dWORD - dSTART per frame (the frame's units beyond one)", d_word_minus_start);
+        hist("STATUS values or'ed over the frame", status_vals);
+        printf(
+            "[trace] order of first sight: FIFO before START %u, same iteration %u, START before FIFO %u; END before "
+            "FIFO %u; samples missing an event %u\n",
+            fifo_first,
+            same_iter,
+            start_first,
+            end_before_fifo,
+            missing);
+        auto med = [](std::vector<double> v) {
+            if (v.empty()) {
+                return 0.0;
+            }
+            std::sort(v.begin(), v.end());
+            return v[v.size() / 2];
+        };
+        auto mx = [](const std::vector<double>& v) { return v.empty() ? 0.0 : *std::max_element(v.begin(), v.end()); };
+        printf(
+            "[trace] cycles from command to: START med %.0f max %.0f | FIFO med %.0f max %.0f | END med %.0f max "
+            "%.0f\n",
+            med(t_start),
+            mx(t_start),
+            med(t_fifo),
+            mx(t_fifo),
+            med(t_end),
+            mx(t_end));
+        mesh_device->close();
+        return 0;
+    }
     if (flags & PTP_FLAG_RAW_DUMP) {
         auto dump = [&](const char* who, int chip, const CoreCoord& core) {
             std::vector<uint32_t> mac(4 * 48), rx(6 * 48);

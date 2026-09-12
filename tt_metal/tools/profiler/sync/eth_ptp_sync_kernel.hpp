@@ -86,8 +86,46 @@ inline bool txq_idle_bounded(uint32_t q, uint64_t deadline) {
     }
     return true;
 }
-inline void send_sync_frame(uint32_t q, uint32_t channel_addr) {
-    internal_::eth_send_packet(q, channel_addr >> 4, channel_addr >> 4, sizeof(eth_channel_sync_t) >> 4);
+inline uint32_t frame_words(uint32_t flags) { return 1u + ((flags >> PTP_FLAG_FRAME_WORDS_SHIFT) & 7u); }
+inline void send_sync_frame(uint32_t q, uint32_t channel_addr, uint32_t words = 1) {
+    internal_::eth_send_packet(q, channel_addr >> 4, channel_addr >> 4, words);
+}
+
+// PTP_FLAG_COUNTER_TRACE: what the queue's counters, its status word and the MAC FIFO do around one frame. Each
+// iteration reads the FIFO flag, PKT_START_CNT, PKT_END_CNT and STATUS in that order; the first iteration and wall
+// cycle at which each changed are kept, so the host can order the events to within one iteration (~60 cycles).
+struct CounterTrace {
+    uint32_t start0, end0, word0;
+    uint32_t it_start = 0, it_fifo = 0, it_end = 0;
+    uint32_t t_start = 0, t_fifo = 0, t_end = 0;
+    uint32_t status_or = 0;
+    uint32_t iters = 0;
+};
+inline void trace_begin(CounterTrace& t, uint32_t q) {
+    t.start0 = rd(txq_reg(q, ETH_TXQ_PKT_START_CNT));
+    t.end0 = rd(txq_reg(q, ETH_TXQ_PKT_END_CNT));
+    t.word0 = rd(txq_reg(q, ETH_TXQ_WORD_CNT));
+}
+// Polls until the frame has started, its stamp is in the FIFO and it has ended, or 4096 iterations.
+inline void trace_follow(CounterTrace& t, uint32_t q, uint32_t t_cmd) {
+    for (t.iters = 1; t.iters <= 4096; t.iters++) {
+        if (t.it_fifo == 0 && raw::mac_tx_fifo_not_empty()) {
+            t.it_fifo = t.iters;
+            t.t_fifo = rd(kWallClockL) - t_cmd;
+        }
+        if (t.it_start == 0 && rd(txq_reg(q, ETH_TXQ_PKT_START_CNT)) != t.start0) {
+            t.it_start = t.iters;
+            t.t_start = rd(kWallClockL) - t_cmd;
+        }
+        if (t.it_end == 0 && rd(txq_reg(q, ETH_TXQ_PKT_END_CNT)) != t.end0) {
+            t.it_end = t.iters;
+            t.t_end = rd(kWallClockL) - t_cmd;
+        }
+        t.status_or |= rd(txq_reg(q, ETH_TXQ_STATUS));
+        if (t.it_fifo != 0 && t.it_start != 0 && t.it_end != 0) {
+            break;
+        }
+    }
 }
 
 // The handshake rides erisc_info->channels[0].bytes_sent, the eth firmware's own channel state, and every
@@ -272,6 +310,101 @@ inline void rx_discard_all() {
     rx_discard_all(ts, lb, have);
 }
 
+// PTP_FLAG_KEEPALIVE_TRACE: when, relative to its hand-off, a keepalive samples the stamp request. Each sample arms
+// the request at whatever phase of the keepalive cycle the loop is at, waits for the next hand-off (PKT_START_CNT)
+// and looks for its FIFO entry: the arming lead below which no entry appears is the sampling point.
+// PTP_FLAG_FRAME_ARM_SWEEP does the same for the kernel's own frames, arming a swept delay after the command.
+// Per sample: mac_tag_lo = cycles from the arming to the hand-off's count (frame sweep: the swept delay),
+// mac_tag_hi = 1 if stamped, mac_tx_lo = cycles from the count to the entry, mac_tx_hi = cycles from the command to
+// the count (frame sweep), th_rx_lo = entries drained.
+inline void arm_trace_sample(uint32_t q, uint32_t i, PtpSample& out, int32_t frame_delay, uint32_t channel_addr) {
+    uint32_t junk[4];
+    drain_mac_fifo(0xFFFFFFFFu, 0xFFFFFFFFu, junk, 0, false);
+    const uint32_t s0 = rd(txq_reg(q, ETH_TXQ_PKT_START_CNT));
+    uint32_t t_cmd = 0;
+    if (frame_delay >= 0) {
+        t_cmd = rd(kWallClockL);
+        send_sync_frame(q, channel_addr, 1);
+        while (rd(kWallClockL) - t_cmd < static_cast<uint32_t>(frame_delay)) {
+        }
+    }
+    const uint32_t t_arm = rd(kWallClockL);
+    raw::txq_request_two_step(q, 0x5000'0000'0000'0000ull | i);
+    uint32_t t_start = t_arm;
+    for (uint32_t spin = 0; spin < 100000; spin++) {
+        if (rd(txq_reg(q, ETH_TXQ_PKT_START_CNT)) != s0) {
+            t_start = rd(kWallClockL);
+            break;
+        }
+    }
+    uint32_t t_fifo = 0;
+    bool stamped = false;
+    for (uint32_t spin = 0; spin < 64; spin++) {
+        if (raw::mac_tx_fifo_not_empty()) {
+            t_fifo = rd(kWallClockL);
+            stamped = true;
+            break;
+        }
+    }
+    raw::txq_clear_timestamp_cmd(q);
+    uint32_t w[4] = {0, 0, 0, 0};
+    const uint32_t diag = drain_mac_fifo(i, 0x50000000u, w, 0, false);
+    out.mac_tag_lo = frame_delay >= 0 ? static_cast<uint32_t>(frame_delay) : t_start - t_arm;
+    out.mac_tag_hi = stamped && (diag & (1u << 16)) ? 1u : 0u;
+    out.mac_tx_lo = stamped ? t_fifo - t_start : 0u;
+    out.mac_tx_hi = frame_delay >= 0 ? t_start - t_cmd : 0u;
+    out.th_rx_lo = (diag >> 8) & 0xFF;
+    out.th_rx_hi = 0;
+    out.th_label = 0;
+    out.ptp_a_lo = out.ptp_a_hi = out.ptp_b_lo = out.ptp_b_hi = 0;
+    out.diag = diag;
+}
+
+// PTP_FLAG_BLEED_TEST: whether a frame of another queue leaving the MAC right behind (even samples) or right ahead
+// (odd) of an armed queue-2 frame is stamped under queue 2's tag. Per sample: mac_tag_lo = stamps under the tag,
+// mac_tag_hi = entries popped, mac_tx_lo/hi = second stamp minus the first (ns, two words), th_rx_lo = queue-0
+// hand-offs counted, th_rx_hi = queue-2 hand-offs counted, th_label = cycles from the first command to the second.
+inline void bleed_sample(uint32_t q, uint32_t i, PtpSample& out, uint32_t channel_addr, uint32_t scratch_addr) {
+    uint32_t junk[4];
+    drain_mac_fifo(0xFFFFFFFFu, 0xFFFFFFFFu, junk, 0, false);
+    const uint32_t s0_q0 = rd(txq_reg(0, ETH_TXQ_PKT_START_CNT));
+    const uint32_t s0_q2 = rd(txq_reg(q, ETH_TXQ_PKT_START_CNT));
+    while (internal_::eth_txq_is_busy(0) || internal_::eth_txq_is_busy(q)) {
+    }
+    raw::txq_request_two_step(q, 0x5000'0000'0000'0000ull | i);
+    const uint32_t t0 = rd(kWallClockL);
+    if ((i & 1) == 0) {
+        internal_::eth_send_packet<false>(q, channel_addr >> 4, channel_addr >> 4, 1);
+        internal_::eth_send_packet<false>(0, scratch_addr >> 4, scratch_addr >> 4, 1);
+    } else {
+        internal_::eth_send_packet<false>(0, scratch_addr >> 4, scratch_addr >> 4, 1);
+        internal_::eth_send_packet<false>(q, channel_addr >> 4, channel_addr >> 4, 1);
+    }
+    const uint32_t t1 = rd(kWallClockL);
+    for (uint32_t spin = 0; spin < 512; spin++) {
+        rd(kWallClockL);
+    }
+    raw::txq_clear_timestamp_cmd(q);
+    uint64_t ts[4] = {0, 0, 0, 0};
+    uint32_t tagged = 0, popped = 0;
+    raw::MacTxStamp e;
+    while (raw::mac_tx_fifo_pop(e)) {
+        if (static_cast<uint32_t>(e.tag) == i && popped < 4) {
+            ts[tagged] = e.tx_ts;
+            tagged++;
+        }
+        popped++;
+    }
+    out.mac_tag_lo = tagged;
+    out.mac_tag_hi = popped;
+    split(tagged >= 2 ? ts[1] - ts[0] : 0, out.mac_tx_lo, out.mac_tx_hi);
+    out.th_rx_lo = rd(txq_reg(0, ETH_TXQ_PKT_START_CNT)) - s0_q0;
+    out.th_rx_hi = rd(txq_reg(q, ETH_TXQ_PKT_START_CNT)) - s0_q2;
+    out.th_label = t1 - t0;
+    out.ptp_a_lo = out.ptp_a_hi = out.ptp_b_lo = out.ptp_b_hi = 0;
+    out.diag = 0;
+}
+
 inline void snapshot_start(volatile PtpResult* r, uint32_t flags) {
     r->magic = kPtpMagic;
     r->status = 0;
@@ -381,8 +514,30 @@ inline bool ptp_sync_sender(
     uint32_t junk[4];
     detail::drain_mac_fifo(0xFFFFFFFFu, 0xFFFFFFFFu, junk, 0, false);
     detail::rx_discard_all();
-
+    const bool trace = (flags & PTP_FLAG_COUNTER_TRACE) != 0;
+    const uint32_t words = detail::frame_words(flags);
     uint32_t done = 0;
+    if (flags & (PTP_FLAG_KEEPALIVE_TRACE | PTP_FLAG_FRAME_ARM_SWEEP | PTP_FLAG_BLEED_TEST)) {
+        for (uint32_t i = 0; i < n_samples; i++) {
+            detail::txq_idle_bounded(q, deadline);
+            const int32_t delay = (flags & PTP_FLAG_FRAME_ARM_SWEEP) ? static_cast<int32_t>((i % 24) * 8) : -1;
+            if (flags & PTP_FLAG_BLEED_TEST) {
+                detail::bleed_sample(q, i, ps[i], channel_addr, handshake_addr);
+            } else {
+                detail::arm_trace_sample(q, i, ps[i], delay, channel_addr);
+            }
+            done = i + 1;
+            pres->n_samples = done;
+            // The gap grows 64 cycles a sample, so the arming walks the 8002-cycle keepalive period rather than
+            // sitting at one phase of it.
+            const uint64_t until = detail::now64() + gap_cycles + 64u * i;
+            while (detail::now64() < until) {
+            }
+        }
+        detail::publish(result_addr, ETH_SYNC_DONE, done);
+        detail::snapshot_end(pres, flags, done);
+        return true;
+    }
     for (uint32_t i = 0; i < n_samples; i++) {
         if (!detail::txq_idle_bounded(q, deadline)) {
             detail::publish(result_addr, ETH_SYNC_TIMEOUT_TXQ, done);
@@ -398,7 +553,15 @@ inline bool ptp_sync_sender(
         uint32_t t0_hi, t0_lo;
         detail::read_wall_clock(t0_hi, t0_lo);
         const uint64_t p0 = read_ptp64ns();
-        detail::send_sync_frame(q, channel_addr);
+        detail::CounterTrace tr{};
+        if (trace) {
+            detail::trace_begin(tr, q);
+        }
+        const uint32_t t_cmd = rd(detail::kWallClockL);
+        detail::send_sync_frame(q, channel_addr, words);
+        if (trace) {
+            detail::trace_follow(tr, q, t_cmd);
+        }
         // Pop the egress stamp as soon as the frame has left and disarm: TS_CMD is sticky, and a queue that stays
         // armed past its idle timeout stamps its own keepalive under our tag.
         detail::txq_idle_bounded(q, deadline);
@@ -451,6 +614,20 @@ inline bool ptp_sync_sender(
         detail::split(p0, ps[i].ptp_a_lo, ps[i].ptp_a_hi);
         detail::split(p2, ps[i].ptp_b_lo, ps[i].ptp_b_hi);
         ps[i].diag = diag;
+        if (trace) {
+            // Counter deltas are taken here, after the echo, so the frame has certainly ended.
+            ps[i].mac_tag_lo = rd(txq_reg(q, ETH_TXQ_PKT_START_CNT)) - tr.start0;
+            ps[i].mac_tag_hi = rd(txq_reg(q, ETH_TXQ_PKT_END_CNT)) - tr.end0;
+            ps[i].mac_tx_lo = rd(txq_reg(q, ETH_TXQ_WORD_CNT)) - tr.word0;
+            ps[i].mac_tx_hi = tr.status_or;
+            ps[i].th_rx_lo = tr.t_start;
+            ps[i].th_rx_hi = tr.t_fifo;
+            ps[i].th_label = tr.t_end;
+            ps[i].ptp_a_lo = tr.it_start;
+            ps[i].ptp_a_hi = tr.it_fifo;
+            ps[i].ptp_b_lo = tr.it_end;
+            ps[i].ptp_b_hi = tr.iters;
+        }
         done = i + 1;
         pres->n_samples = done;
 
