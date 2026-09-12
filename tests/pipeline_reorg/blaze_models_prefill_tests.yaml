@@ -605,7 +605,7 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) chunked prefill accuracy L5, L24 25k@5k vs golden trace"
+- name: "(Kimi-K3-2.8T) chunked prefill accuracy L5, L24 55k@5k vs golden trace"
   # What a single chunk cannot prove: that the KDA recurrent AND convolution carries survive a chunk
   # boundary. The conv carry is the causal conv's 3-token history, so getting it wrong corrupts only
   # the first three tokens of a chunk -- invisible to a per-chunk PCC over 5120 tokens.

@@ -1368,13 +1368,6 @@ def test_mla_chunked_prefill(
     # Incidental, not a K3 guarantee; re-enable when K3 has a runtime that actually feeds metadata.
     if variant.name == "kimi_k3" and use_metadata_tensor:
         pytest.skip("kimi_k3 has no runtime, so the metadata (device-scalar) path is unreachable for it")
-    # No K3 checkpoint is reachable, so no GPU trace was ever recorded for it. _run_chunked_prefill
-    # already asserts on supports_pretrained, but only once a trace root is configured -- so on a box
-    # with MLA_CHUNKED_TRACE_PATH set these cases would hard-fail instead of being cleanly out of
-    # scope. Skip up front; the assert stays as the backstop for any future supports_pretrained=False
-    # variant and for the silent K2.6-trace-substitution it was written to catch.
-    if variant.name == "kimi_k3" and reference == "trace":
-        pytest.skip("kimi_k3 has no reachable checkpoint, so no GPU trace exists for it")
     # Same reason as K3's: the variant-unqualified CI selectors for this test would otherwise run
     # Mistral on Wormhole T3K, where it has never been brought up.
     if variant.name == "mistral_small_4" and not is_blackhole():
