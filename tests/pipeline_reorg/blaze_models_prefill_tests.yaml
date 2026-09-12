@@ -584,6 +584,7 @@
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
     export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -614,6 +615,7 @@
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
     export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -639,12 +641,16 @@
   # inside the captured region: capture costs chunk 0 two extra forwards, which is idempotent for KV
   # but not for a recurrence, so the branch resets the carry after capture. Exactly the regression a
   # CI leg should hold.
+  # This leg resolves its tensorbins through conftest's `weight_cache_path` fixture, which has no
+  # built-in default (unlike `kimi_k3/weights.py`'s `cache_root`). Without the cache export below it
+  # rebuilds them beside the checkpoint and dies on weight load long before the 20 min budget.
   cmd: |
     export LOGURU_LEVEL=INFO
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
     export KIMI_K3_HF_MODEL=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
     export KIMI_K3_CKPT=/mnt/models/blaze/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/kimi-k3-ttnn-cache
     export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
@@ -1361,12 +1367,15 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # 93 layers is the deepest model on this rig, and mesh bringup plus weight load dominates: the
-      # chunk loop is minutes of it. Measured on run 34648535999, from test-step start: 42.6 min to
-      # all four ranks serving (24 MLA layers loaded, all ranks through warmup compile), then the
-      # producer connect, 11 chunks of 5120 and the KV read-back. 45 min cut that off mid-bringup.
-      # Counts against the shield/demo budget with the Kimi-K2.7 and GLM-5.2 entries.
-      timeout: 70
+      # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
+      # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
+      # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
+      # Two measurements, both from test-step start to all four ranks serving: 42.6 min on run
+      # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
+      # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
+      # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
+      # Sized off the slower measurement; the shield/demo cap for bh_sc4 is 120.
+      timeout: 100
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
