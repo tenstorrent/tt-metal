@@ -65,7 +65,7 @@ class Gemma4Attention:
 
         if ring_kv_cache is not None:
             cache = ring_kv_cache.kv if hasattr(ring_kv_cache, "kv") else ring_kv_cache[0]
-            if cache.shape[-2] * mesh_config.prefill.sp < max_seq_len:
+            if cache.shape[-2] * mesh_config.cp_degree < max_seq_len:
                 raise ValueError("External ring cache is too small for the configured prefill capacity")
 
         self.weights = load_attention_weights(
@@ -80,9 +80,11 @@ class Gemma4Attention:
         self.ring_kv_cache = ring_kv_cache
         self.ring_layer_idx = ring_layer_idx
         self.ring_num_layers = ring_num_layers
-        self.ring_max_seq_len = cache.shape[-2] * mesh_config.prefill.sp if ring_kv_cache is not None else None
+        self.ring_max_seq_len = cache.shape[-2] * mesh_config.cp_degree if ring_kv_cache is not None else None
         if self.ring_kv_cache is None:
-            num_local_kv_heads = 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp
+            num_local_kv_heads = (
+                1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp_degree
+            )
             if self.weights.is_global:
                 self.ring_kv_cache = init_packed_ring_kv_cache(
                     mesh_device=mesh_device,

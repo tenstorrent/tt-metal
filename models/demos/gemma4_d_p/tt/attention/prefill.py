@@ -44,7 +44,7 @@ def prefill_forward(
     """Write a user's chunk and attend its cached prefix."""
     if ring_kv_cache is None:
         raise ValueError("Galaxy prefill requires a ring KV cache")
-    tp = mesh_config.tp
+    tp = mesh_config.tp_degree
     chunk_offset = int(chunk_start_idx)
     kv_tied = weights.is_global
     xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)

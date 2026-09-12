@@ -53,9 +53,9 @@ def create_tt_model(
         prefill_chunk_size = min(8192, max_seq_len)
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         raise ValueError("sequence and chunk lengths must be positive")
-    if prefill_chunk_size % (mesh_config.prefill.sp * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
+    if prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
         raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-    if prefill_chunk_size < 1024 * mesh_config.prefill.sp:
+    if prefill_chunk_size < 1024 * mesh_config.cp_degree:
         raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
 
     model_path = model_path or os.getenv("HF_MODEL") or os.getenv("GEMMA4_MODEL_PATH", "google/gemma-4-31B-it")

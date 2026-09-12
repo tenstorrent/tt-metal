@@ -10,6 +10,7 @@ import zlib
 
 import ttnn
 from models.demos.common.prefill.runners.migration import get_num_dram_banks, serialize_prebuilt_kv_chunk_table
+from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, PackedRingKVCache
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
@@ -33,7 +34,7 @@ def iter_cache_chunk_locations(
     *,
     seq_len: int,
     chunk_size: int,
-    sp: int,
+    cp: int,
     num_users: int,
     heads_per_device: int,
     local_head: int,
@@ -43,13 +44,13 @@ def iter_cache_chunk_locations(
     """Yield the ROUND_ROBIN_1D address walk for one head in one layer buffer."""
     if not 0 <= local_head < heads_per_device:
         raise ValueError(f"local_head {local_head} outside [0, {heads_per_device})")
-    if seq_len % chunk_size or chunk_size % (sp * TILE_HEIGHT):
+    if seq_len % chunk_size or chunk_size % (cp * TILE_HEIGHT):
         raise ValueError("sequence and prefill chunks must align to CP-local 32-token rows")
-    local_seq = seq_len // sp
-    local_chunk = chunk_size // sp
+    local_seq = seq_len // cp
+    local_chunk = chunk_size // cp
     blocks_local = local_seq // TILE_HEIGHT
     blocks_per_chunk = local_chunk // TILE_HEIGHT
-    for cp_row in range(sp):
+    for cp_row in range(cp):
         for slot in range(num_users):
             for prefill_chunk in range(seq_len // chunk_size):
                 for block_in_chunk in range(blocks_per_chunk):
@@ -72,14 +73,14 @@ def _config(*, num_layers, max_seq_len, num_users, chunk_size_bytes):
     return config
 
 
-def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int, sp_axis: int = 0):
+def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chunk_size: int):
     """Describe global packed rows and sliding K/V rows directly from compute caches."""
     if not isinstance(kv_caches, Gemma4KvCaches):
         raise TypeError(f"expected Gemma4KvCaches, got {type(kv_caches).__name__}")
-    tp_axis = 1 - sp_axis
-    sp = int(mesh_device.shape[sp_axis])
-    tp = int(mesh_device.shape[tp_axis])
-    if (sp, tp) != (8, 4) or kv_caches.sp != sp or kv_caches.tp != tp:
+    mesh_config = MeshConfig(tuple(mesh_device.shape))
+    cp = mesh_config.cp_degree
+    tp = mesh_config.tp_degree
+    if (cp, tp) != (8, 4) or kv_caches.cp != cp or kv_caches.tp != tp:
         raise ValueError(f"Gemma 4 migration currently requires CP8/TP4, got mesh={tuple(mesh_device.shape)}")
     num_layers = len(kv_caches)
     configs = {
@@ -103,7 +104,10 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
     def device_group(cp_row, tp_column):
         key = (cp_row, tp_column)
         if key not in group_cache:
-            fnid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(cp_row, tp_column))
+            coordinates = [0, 0]
+            coordinates[mesh_config.cp_axis] = cp_row
+            coordinates[mesh_config.tp_axis] = tp_column
+            fnid = mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coordinates))
             group_cache[key] = table.add_device_group([fnid])
             host_key = (int(fnid.mesh_id), int(fnid.chip_id))
             if host_key not in mapped_hosts:
@@ -118,7 +122,7 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
         for cp_row, slot, position, bank_id, bank_offset in iter_cache_chunk_locations(
             seq_len=kv_caches.max_seq_len,
             chunk_size=chunk_size,
-            sp=sp,
+            cp=cp,
             num_users=kv_caches.num_users,
             heads_per_device=heads_per_device,
             local_head=local_head,

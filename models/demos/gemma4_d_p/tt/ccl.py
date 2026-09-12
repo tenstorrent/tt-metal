@@ -292,11 +292,6 @@ class CCLManager:
         return [inter, out]
 
 
-def cp_degree(mesh_config):
-    """Number of context-parallel ranks in the Galaxy mesh."""
-    return mesh_config.prefill.sp
-
-
 def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     """All-reduce across TP devices.
 
@@ -304,7 +299,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     reduce_scatter_minimal_async + all_gather_async (tt_transformers composite
     pattern) on ``ccl_manager.topology`` (Ring on P150x8).
     """
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG
@@ -315,7 +310,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
     workers = ccl_num_workers_per_link()
     nbuf = ccl_num_buffers_per_channel()
     if ccl_async_enabled():
-        tp = mesh_config.tp
+        tp = mesh_config.tp_degree
         rs_bufs = ccl_manager.get_persistent_rs_buffers(tensor, memory_config, tp)
         scattered = ttnn.experimental.reduce_scatter_minimal_async(
             tensor,
@@ -367,7 +362,7 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
 
 def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
     """All-gather across TP devices."""
-    if mesh_config is None or mesh_config.tp <= 1:
+    if mesh_config is None or mesh_config.tp_degree <= 1:
         return tensor
 
     memory_config = memory_config or ttnn.DRAM_MEMORY_CONFIG

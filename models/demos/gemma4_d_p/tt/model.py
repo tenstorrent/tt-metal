@@ -90,15 +90,13 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len, mesh_config=None, pr
     """Create chunk-major CP-sharded RoPE tables and replicated tables for traced position lookup."""
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextRotaryEmbedding
 
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
-
     is_mesh = hasattr(mesh_device, "shape")
     replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-    cp = cp_degree(mesh_config) if (is_mesh and mesh_config is not None) else 1
+    cp = mesh_config.cp_degree if (is_mesh and mesh_config is not None) else 1
     row_order = None
     if cp > 1:
         assert max_seq_len % cp == 0, f"max_seq_len {max_seq_len} must be divisible by CP degree {cp}"
-        shard_dims = (-2, None) if mesh_config.sp_axis == 0 else (None, -2)
+        shard_dims = (-2, None) if mesh_config.cp_axis == 0 else (None, -2)
         prefill_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
         # Multi-chunk needs the rows reordered so one scalar slice serves every rank;
         # single-chunk (max_seq_len == chunk) is already correct without it.
@@ -195,9 +193,9 @@ class Gemma4Model:
             prefill_chunk_size = min(8192, max_seq_len)
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
             raise ValueError("sequence and chunk lengths must be positive")
-        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.prefill.sp * ttnn.TILE_SIZE):
+        if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
             raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-        if prefill_chunk_size < 1024 * mesh_config.prefill.sp:
+        if prefill_chunk_size < 1024 * mesh_config.cp_degree:
             raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
         self.mesh_device = mesh_device
         self.hf_config = hf_config
@@ -211,7 +209,7 @@ class Gemma4Model:
         self.ccl_manager = ccl_manager
         self._rope_prefill_positions = None
         self._packed_global_rope_trans_mat = None
-        if mesh_config is not None and mesh_config.prefill.sp > 1:
+        if mesh_config is not None and mesh_config.cp_degree > 1:
             self._packed_global_rope_trans_mat = ttnn.from_torch(
                 get_rot_transformation_mat(),
                 device=mesh_device,
@@ -263,7 +261,7 @@ class Gemma4Model:
         # Embedding
         is_mesh = hasattr(mesh_device, "shape")
         replicate = ttnn.ReplicateTensorToMesh(mesh_device) if is_mesh else None
-        tp = mesh_config.tp if mesh_config else 1
+        tp = mesh_config.tp_degree if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
         from models.demos.gemma4_d_p.tt.precision import dtype_to_str
@@ -416,7 +414,7 @@ class Gemma4Model:
                 layer_rope = gathered_rope[layer_type]
             else:
                 layer_rope = self._get_rope_mats(
-                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.prefill.sp
+                    i, seq_len=seq_len, start_pos=chunk_start_idx // self.mesh_config.cp_degree
                 )
             if layer_type not in packed_rope_by_type and self._packed_global_rope_trans_mat is not None:
                 pack_rope = pack_global_rope_device if layer_type == "full_attention" else pack_sliding_rope_device
@@ -442,14 +440,13 @@ class Gemma4Model:
 
     def _cp_gather_prefill_sequence(self, hidden_states):
         """Gather a chunk across CP ranks without freeing the caller-owned hidden states."""
-        from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
-        if cp_degree(self.mesh_config) <= 1:
+        if self.mesh_config.cp_degree <= 1:
             return hidden_states
         return ttnn.all_gather(
             hidden_states,
             dim=2,
-            cluster_axis=self.mesh_config.sp_axis,
+            cluster_axis=self.mesh_config.cp_axis,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
@@ -483,7 +480,7 @@ class Gemma4Model:
         embeds = ttnn.mul(embeds, self.embed_scale)
 
         # All-gather sharded hidden dim back to full hidden
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             embeds = ttnn.unsqueeze_to_4D(embeds)
             from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
 
@@ -513,7 +510,7 @@ class Gemma4Model:
         Under TP, Gemma4 all-gathers logits inside the model so a single
         device tensor already holds the full vocab.
         """
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
             torch_output = ttnn.to_torch(tt_out)

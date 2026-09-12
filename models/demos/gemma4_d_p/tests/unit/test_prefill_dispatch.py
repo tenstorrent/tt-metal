@@ -107,8 +107,8 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
 
     monkeypatch.setattr(ttnn, "as_tensor", as_tensor)
     mesh_config = SimpleNamespace(
-        tp=4,
-        prefill=SimpleNamespace(sp=8),
+        tp_degree=4,
+        cp_degree=8,
         column_parallel=lambda _: None,
         row_parallel=lambda _: None,
     )

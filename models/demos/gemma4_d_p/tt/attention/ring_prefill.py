@@ -14,7 +14,6 @@ Local layers also apply the sliding window. Every chunk uses this path.
 from dataclasses import dataclass
 
 import ttnn
-from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_DIM
 
@@ -92,7 +91,7 @@ def init_ring_kv_cache(
 
     bfloat8_b because ring_joint requires BFP8_B K/V (BF16 Q).
     """
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, head_dim]
 
@@ -120,7 +119,7 @@ def init_packed_ring_kv_cache(
     cache_dtype=ttnn.bfloat8_b,
 ):
     """Allocate the global [Krot128 | Vordered512] CP-sharded cache."""
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
     cache = _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, GLOBAL_PACKED_DIM)
@@ -148,7 +147,7 @@ def write_chunk_to_packed_ring_cache(
             kv_t,
             layer_idx=layer_idx,
             num_layers=num_layers,
-            cluster_axis=mesh_config.sp_axis,
+            cluster_axis=mesh_config.cp_axis,
         )
     else:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -158,7 +157,7 @@ def write_chunk_to_packed_ring_cache(
             layer_idx=layer_idx,
             num_layers=num_layers,
             kv_actual_global=kv_actual_global,
-            cluster_axis=mesh_config.sp_axis,
+            cluster_axis=mesh_config.cp_axis,
         )
     if chunk is not packed_kv:
         chunk.deallocate(True)
@@ -272,7 +271,7 @@ def write_chunk_to_ring_cache(
                 kv_t,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
-                cluster_axis=mesh_config.sp_axis,
+                cluster_axis=mesh_config.cp_axis,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -282,7 +281,7 @@ def write_chunk_to_ring_cache(
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global,
-                cluster_axis=mesh_config.sp_axis,
+                cluster_axis=mesh_config.cp_axis,
             )
 
 
@@ -326,7 +325,7 @@ def ring_prefill_attention(
         program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
     # Shared by every layer; the caller sets them once per chunk via set_ring_metadata.
     metadata = ccl_manager.get_ring_metadata()
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
     # Buffer size depends on the mode, and the two requirements are opposites.
@@ -369,7 +368,7 @@ def ring_prefill_attention(
         dim=2,
         multi_device_global_semaphore=ccl_manager.ring_attention_ccl_semaphore_handles,
         num_links=ccl_manager.num_links,
-        cluster_axis=mesh_config.sp_axis,
+        cluster_axis=mesh_config.cp_axis,
         mesh_device=mesh_device,
         topology=ttnn.Topology.Linear,
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),

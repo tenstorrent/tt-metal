@@ -82,10 +82,9 @@ def _host_tensor(mesh_device, torch_tensor, dtype, layout, mesh_config=None, seq
 
 def _cp_or_replicate_mapper(mesh_device, mesh_config, seq_dim=-2):
     """Create a CP sharding mapper for ``seq_dim``, or a replication mapper."""
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
-    if mesh_config is not None and cp_degree(mesh_config) > 1:
-        shard_dims = (seq_dim, None) if mesh_config.sp_axis == 0 else (None, seq_dim)
+    if mesh_config is not None and mesh_config.cp_degree > 1:
+        shard_dims = (seq_dim, None) if mesh_config.cp_axis == 0 else (None, seq_dim)
         return ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, dims=shard_dims)
     return ttnn.ReplicateTensorToMesh(mesh_device)
 
@@ -146,10 +145,9 @@ def _cp_gather_torch(tensor, mesh_device, mesh_config):
 
     Falls back to device 0 alone when CP is off, matching ``_first_device_torch``.
     """
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     shards = ttnn.get_device_tensors(tensor)
-    cp = cp_degree(mesh_config) if mesh_config is not None else 1
+    cp = mesh_config.cp_degree if mesh_config is not None else 1
     if cp <= 1:
         return ttnn.to_torch(shards[0]).float()
 
@@ -176,7 +174,7 @@ def _hf_text_config(model_path):
 def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None):
     """Create a CP prefill model with ring caches for one or more chunks."""
     mesh_config = _mesh_config(mesh_device)
-    if mesh_config.prefill.sp <= 1:
+    if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
     tp = mesh_device.shape[1]
     context_len = context_len or chunk_size
@@ -215,10 +213,9 @@ def test_prefill_long_context_traced(
     mesh_device, context_len, chunk_size, readback_all, token_source, reset_seeds, request
 ):
     """Measure all prefill chunks using one replayed ring-attention trace."""
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     mesh_config = _mesh_config(mesh_device)
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:
@@ -421,10 +418,9 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     """
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
     from models.demos.gemma4_d_p.tt.attention.ring_prefill import PackedRingKVCache
-    from models.demos.gemma4_d_p.tt.ccl import cp_degree
 
     mesh_config = _mesh_config(mesh_device)
-    cp = cp_degree(mesh_config)
+    cp = mesh_config.cp_degree
     if cp <= 1:
         pytest.skip(f"targets CP>1; mesh {tuple(mesh_device.shape)} gives CP={cp}")
     if chunk_size < GEMMA4_SLIDING_WINDOW_TOKENS * cp:

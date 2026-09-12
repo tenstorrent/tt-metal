@@ -55,8 +55,8 @@ def load_attention_weights(
     tied_qkv = is_global
     q_size = config.num_attention_heads * config.head_dim
     kv_size = config.num_key_value_heads * config.head_dim
-    tp = mesh_config.tp
-    is_context_parallel = bool(mesh_config and mesh_config.prefill.sp > 1)
+    tp = mesh_config.tp_degree
+    is_context_parallel = bool(mesh_config and mesh_config.cp_degree > 1)
 
     # When KV heads < TP, each device gets the KV head(s) its Q heads map to via GQA.
     # E.g. 16 Q / 2 KV / 8 TP: devices 0-3 get KV head 0, devices 4-7 get KV head 1.

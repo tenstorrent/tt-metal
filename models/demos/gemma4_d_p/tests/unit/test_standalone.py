@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.gemma4_d_p.config import GALAXY_MESH_SHAPES, MeshConfig, ModeConfig
+from models.demos.gemma4_d_p.config import GALAXY_MESH_SHAPES, MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
 from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 
@@ -19,8 +19,10 @@ from models.demos.gemma4_d_p.tt.model import _cp_chunk_major_row_order
 @pytest.mark.parametrize("shape", GALAXY_MESH_SHAPES)
 def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
     config = MeshConfig(shape)
-    assert config.prefill.sp == shape[0]
-    assert config.prefill.tp == shape[1]
+    assert config.cp_axis == 0
+    assert config.cp_degree == shape[config.cp_axis]
+    assert config.tp_axis == 1
+    assert config.tp_degree == shape[config.tp_axis]
     assert config.total_devices == 32
 
 
@@ -28,11 +30,6 @@ def test_galaxy_parallelism_uses_all_rows_and_columns(shape):
 def test_smaller_or_multiple_galaxies_are_rejected(shape, expect_error):
     with expect_error(ValueError, "requires a Galaxy mesh"):
         MeshConfig(shape)
-
-
-def test_disabling_cp_is_rejected(expect_error):
-    with expect_error(ValueError, "must use all Galaxy rows"):
-        MeshConfig((8, 4), prefill=ModeConfig(tp=4, sp=1))
 
 
 @pytest.mark.parametrize("chunk_size", [0, -8192, 4096, 8193])

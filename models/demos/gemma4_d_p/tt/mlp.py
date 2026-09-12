@@ -27,7 +27,7 @@ class MLP:
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
 
-        tp = mesh_config.tp if mesh_config else 1
+        tp = mesh_config.tp_degree if mesh_config else 1
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
         # Tag the cache filenames with the weight dtype so that flipping a
@@ -103,6 +103,6 @@ class MLP:
         up.deallocate(True)
         output = ttnn.linear(hidden, self.down_proj, compute_kernel_config=self.compute_kernel_config)
         hidden.deallocate(True)
-        if self.mesh_config is not None and self.mesh_config.tp > 1:
+        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
             output = ccl_allreduce(output, self.mesh_config, self.ccl_manager)
         return output
