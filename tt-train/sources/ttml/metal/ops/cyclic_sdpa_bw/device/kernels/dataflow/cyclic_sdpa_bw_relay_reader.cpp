@@ -214,7 +214,6 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_dq_sem_id[0])),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_dq_sem_id[1]))};
     const uint32_t scratch_l1 = get_write_ptr(cb_scratch);
-    volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
     volatile tt_l1_ptr uint32_t* credit_from_prev =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credit_prev_sem_id));
     volatile tt_l1_ptr uint32_t* credit_from_next =
@@ -466,11 +465,13 @@ void kernel_main() {
                 ds, get_noc_addr(receiver_x, receiver_y, dst_u_scalar), stride_interm);
             // Payload complete before readiness, as the contract requires.
             noc_async_write_barrier();
-            *scratch = u + 1u;
-            noc_semaphore_set_remote(
-                scratch_l1,
-                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])));
-            noc_async_write_barrier();
+            // An inline write carries the value in the command itself, so
+            // there is no 4-byte source word in L1 to keep alive and no
+            // trailing write barrier to wait for the ack of. The payload
+            // barrier above is what orders payload before readiness; this
+            // write is fire-and-forget, and the consumer polls for it.
+            noc_inline_dw_write(
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])), u + 1u);
         }
 
         // Now dQ, which is the one field that has to wait for arithmetic --
@@ -501,11 +502,13 @@ void kernel_main() {
             noc_async_write(
                 dq_out, get_noc_addr(receiver_x, receiver_y, dst_grad_query), stride_grad_query);
             noc_async_write_barrier();
-            *scratch = u + 1u;
-            noc_semaphore_set_remote(
-                scratch_l1,
-                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst])));
-            noc_async_write_barrier();
+            // An inline write carries the value in the command itself, so
+            // there is no 4-byte source word in L1 to keep alive and no
+            // trailing write barrier to wait for the ack of. The payload
+            // barrier above is what orders payload before readiness; this
+            // write is fire-and-forget, and the consumer polls for it.
+            noc_inline_dw_write(
+                get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_dq_sem_id[dst])), u + 1u);
         } else {
             // Streak end: spill dQ_i and complete the write, so the reload at
             // the next streak start observes it.
@@ -545,4 +548,10 @@ void kernel_main() {
             // slot itself. And a DRAM load needs none, the slot being its own.
         }
     }
+
+    // Drain what is still in flight before the kernel ends: the readiness and
+    // endpoint writes are issued without waiting for their acks, and a
+    // kernel must not finish with outstanding NoC transactions.
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 }
