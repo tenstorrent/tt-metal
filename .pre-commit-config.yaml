@@ -142,6 +142,26 @@ repos:
 # Metal's hooks above are excluded from that subtree; these entries replace them.
 - repo: local
   hooks:
+    - id: llk-xthread-cfg-wormhole
+      name: "llk: cross-thread config write (wormhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      args: ["--arch", "wormhole_b0",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/wormhole/wormhole_b0_defines/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_wormhole_b0",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_wormhole_b0.txt"]
+      files: ^tt_metal/tt-llk/tt_llk_wormhole_b0/.*\.(h|hpp)$
+    - id: llk-xthread-cfg-blackhole
+      name: "llk: cross-thread config write (blackhole)"
+      entry: python3 tt_metal/tt-llk/infra/check_cross_thread_cfg.py
+      language: system
+      args: ["--arch", "blackhole",
+             "--defs", "tt_metal/hw/inc/internal/tt-1xx/blackhole/cfg_defines.h",
+             "--tree", "tt_metal/tt-llk/tt_llk_blackhole",
+             "--baseline", "tt_metal/tt-llk/infra/xthread_cfg_baseline_blackhole.txt"]
+      # Quasar is deliberately absent: it writes config via cfg_rmw/RMWCIB, which this checker
+      # does not model, so it would report a vacuous zero. The script refuses that arch outright.
+      files: ^tt_metal/tt-llk/tt_llk_blackhole/.*\.(h|hpp)$
     - id: llk-fix-cstdint
       name: "llk: fix std::uint*_t and add cstdint include"
       entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py
