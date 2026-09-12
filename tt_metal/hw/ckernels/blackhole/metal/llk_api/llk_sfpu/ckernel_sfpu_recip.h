@@ -147,68 +147,21 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations) {
 #endif
 }
 
-// FP32 reciprocal, with throughput of 5c/32.
-inline void _calculate_reciprocal_fast_24b_5c_(const int iterations) {
-#ifdef DISABLE_SFPLOADMACRO
+// FP32 reciprocal.
+//
+// The refinement is multiplicative, y = y * (2 - x*y), one Newton-Raphson step per iteration
+// (see sfpu_reciprocal_iter above).  The additive form this replaced -- y = y + y*(e + e**2 + e**3)
+// with e = 1 - x*y -- adds a correction *term* of about 2**-8/x, which is below FLT_MIN and so
+// flushed to zero by the SFPU for |x| >= 2**119: the refinement was silently discarded and the raw
+// ~7-bit SFPARECIP seed returned (up to 90,174 ULP / 0.56% relative error over seven whole binades,
+// partial loss from 2**111 up).  The multiplicative form never forms a subnormal intermediate,
+// because its correction factor 2 - x*y is ~1 for every x.
+inline void _calculate_reciprocal_fast_24b_(const int iterations) {
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
-        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPARECIP_MOD1_RECIP);
-        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 1);  // SFPMAD_MOD1_NEGATE_VA
-        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-        TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+        sfpi::dst_reg[0] = sfpu_reciprocal_iter<2>(sfpi::dst_reg[0]);
+        sfpi::dst_reg++;
     }
-#else
-    // Pseudocode:
-    //
-    // y = arecip(x)
-    // e = 1 - x*y
-    // t = e * e + e
-    // t2 = t * e + e    # e**3 + e**2 + e
-    // t2 = min(t2, 1.0) # replace NaN with 1.0
-    // y = t2 * y + y    # y = y * (e**3 + e**2 + e + 1)
-    //                   # if y = ±0 or ±inf, then y = y+y
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    //   | Load | Simple                 | MAD                     | Store   |
-    // - | -----| ---------------------- | ----------------------- |-------- |
-    // 0 | [y]  |                        |                         |         |
-    // 1 |      | [y] = arecip(y)        |                         |         |
-    // 2 | [e]  |                        |                         |         |
-    // 3 |      | [e] L16 = arecip(e)    | e = mad(-e, y, 1.0)     |         |
-    // 4 |      |                        |                         |         |
-    // 0 |      |                        | [e] = mad(e, e, e)      | [e]     |
-    // 1 | [t2] |                        |                         |         |
-    // 2 |      |                        | [t2] = mad(t2, e, t2)   | [y] L16 |
-    // 3 |      |                        |                         |         |
-    // 4 | [z]  | [t2] = swap(t2, 1.0)   |                         |         |
-    // 0 |      |                        |                         |         |
-    // 1 |      |                        | [z] L16 = mad(t2, z, z) |         |
-    // 2 |      |                        |                         |         |
-    // 3 |      |                        |                         | [z] L16 |
-
-    lltt::replay(0, 4);
-    TTI_SFPLOAD(7, 0, ADDR_MOD_6, 0);
-
-#pragma GCC unroll 7
-    for (int d = 0; d < iterations - 1; d++) {
-        lltt::replay(0, 5);
-    }
-
-    TTI_SFPNOP;
-    lltt::replay(1, 1);
-    TTI_SFPNOP;
-    lltt::replay(3, 2);
-
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-#endif
 }
 
 // ~7b precision; 1c/element
@@ -278,87 +231,6 @@ inline void _init_reciprocal_fast_8b_3c_() {
 #endif
 }
 
-inline void _init_reciprocal_fast_24b_5c_() {
-#ifndef DISABLE_SFPLOADMACRO
-    constexpr int e = p_sfpu::LREG0;
-    constexpr int t2 = p_sfpu::LREG1;
-    constexpr int z = p_sfpu::LREG2;
-    constexpr int y = p_sfpu::LREG3;
-
-    // InstructionTemplate[0]
-    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
-
-    // InstructionTemplate[1]
-    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, 0, 13, 0);
-
-    // InstructionTemplate[2]
-    // SFPMAD(VA=t2, VB=0 or VD, VC=VD or z)
-    TTI_SFPMAD(t2, p_sfpu::LREG0, z, 14, 0);
-
-    // InstructionTemplate[3]
-    TTI_SFPSWAP(0, p_sfpu::LCONST_1, 15, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-
-    // Macro 0: [y]
-    {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (6 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4, 0);
-    }
-
-    // Macro 1: [e]
-    {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (2 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (2 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 1, 0);
-    }
-
-    // Macro 2: [t2]
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (2 << 3) | (4 + 3);
-        constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (0 << 3) | (4 + 2);
-
-        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
-    }
-
-    // Macro 3: [z]
-    {
-        constexpr std::uint32_t simple_bits = 0;
-        constexpr std::uint32_t mad_bits = 0x80 | 0x40 | (1 << 3) | (4 + 2);
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 3, 0);
-    }
-
-    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all macros.
-    TTI_SFPCONFIG(0xff0, 8, 1);
-
-    constexpr std::uint32_t prev_offset = -2 & 0x3ff;
-    constexpr std::uint32_t offset = 0;
-
-    load_replay_buf(0, 6, [e, t2, z, y, offset, prev_offset] {
-        TTI_SFPLOADMACRO((0 << 2) | (y & 3), 0, ADDR_MOD_7, offset | (y >> 2));
-        TTI_SFPLOADMACRO((2 << 2) | (t2 & 3), 0, ADDR_MOD_7, prev_offset | (t2 >> 2));
-        TTI_SFPLOADMACRO((1 << 2) | (e & 3), 0, ADDR_MOD_7, offset | (e >> 2));
-        TTI_SFPMAD(p_sfpu::LREG0, y, p_sfpu::LCONST_1, 0, 1);  // SFPMAD_MOD1_NEGATE_VA
-        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_6, prev_offset | (z >> 2));
-        TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_7, prev_offset | (z >> 2));
-    });
-#endif
-}
-
 template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return sfpu_reciprocal_iter<APPROXIMATE ? 0 : 2>(in);
@@ -378,7 +250,7 @@ inline void calculate_reciprocal() {
     } else if constexpr (APPROXIMATION_MODE) {
         _calculate_reciprocal_fast_7b_(ITERATIONS);
     } else if constexpr (is_fp32_dest_acc_en) {
-        _calculate_reciprocal_fast_24b_5c_(ITERATIONS);
+        _calculate_reciprocal_fast_24b_(ITERATIONS);
     } else {
         _calculate_reciprocal_fast_8b_3c_(ITERATIONS);
     }
@@ -398,9 +270,7 @@ void recip_init() {
         sfpu_reciprocal_init<false>();  // set vConstFloatPrgm0 for sfpu_reciprocal_iter
         if constexpr (APPROXIMATION_MODE) {
             _init_reciprocal_fast_7b_();
-        } else if constexpr (is_fp32_dest_acc_en) {
-            _init_reciprocal_fast_24b_5c_();
-        } else {
+        } else if constexpr (!is_fp32_dest_acc_en) {
             _init_reciprocal_fast_8b_3c_();
         }
     }
