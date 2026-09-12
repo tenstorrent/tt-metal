@@ -144,7 +144,11 @@ def test_is_memory_cap_failure_reads_the_real_signatures(probes):
     assert not probes.is_memory_cap_failure("")
 
 
-def test_a_clean_success_is_not_retried(probes):
+def test_a_clean_success_is_not_retried(monkeypatch, probes):
+    # A HEALTHY BOX, ON PURPOSE: this isolates the REACTIVE retry from the PROACTIVE pre-launch
+    # check below (should_use_low_mem_reference) -- a box actually this loaded would legitimately
+    # set the signal before ever calling _run, which is a different behavior with its own tests.
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 999.0)
     calls = {"n": 0}
 
     def _run():
@@ -158,9 +162,10 @@ def test_a_clean_success_is_not_retried(probes):
     assert r.returncode == 0
 
 
-def test_a_non_memory_failure_is_not_retried(probes):
+def test_a_non_memory_failure_is_not_retried(monkeypatch, probes):
     """Retrying a PCC-threshold failure or any other ordinary crash under a different dtype would
     not fix it and would waste a full-depth build for nothing."""
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 999.0)  # see test above
     calls = {"n": 0}
 
     def _run():
@@ -199,6 +204,69 @@ def test_a_second_memory_cap_failure_is_not_retried_again(probes):
     r = probes.run_with_low_memory_fallback(_run, env)
     assert calls["n"] == 2, "must not retry a second time"
     assert r.returncode != 0
+
+
+# ------------------------------------------ decide BEFORE launch, not only after a clean failure
+#
+# RUN, 2026-09-12. Retrying after a clean failure cannot always fire: nvidia_nemotron_3_5_lightning_
+# 30b_a3b_bf16's fp32 reference build hit ~117-120 GB RSS TWICE with ~110 GB reported available at
+# launch, and the kernel OOM-killer killed the whole session's cgroup both times -- including the
+# orchestrator that would have retried. should_use_low_mem_reference lets a caller decide BEFORE the
+# first attempt, so a box already too loaded for the full-precision peak never has to risk it.
+
+
+def test_should_use_low_mem_reference_below_the_margin(monkeypatch, probes):
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 110.0)  # the exact reading measured
+    assert probes.should_use_low_mem_reference() is True
+
+
+def test_should_use_low_mem_reference_above_the_margin(monkeypatch, probes):
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 200.0)
+    assert probes.should_use_low_mem_reference() is False
+
+
+def test_should_use_low_mem_reference_no_reading_is_not_a_reason_to_intervene(monkeypatch, probes):
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: None)
+    assert probes.should_use_low_mem_reference() is False
+
+
+def test_should_use_low_mem_reference_respects_the_escape_hatch(monkeypatch, probes):
+    monkeypatch.setenv("PERF_MCP_DISABLE_MEM_CAP", "1")
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 1.0)
+    assert probes.should_use_low_mem_reference() is False
+
+
+def test_a_loaded_box_sets_the_signal_before_the_first_attempt(monkeypatch, probes):
+    """THE ACTUAL GAP: on a box already below the margin, the FIRST call must already see the
+    signal -- not just a retry after it fails once for nothing."""
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 110.0)
+    seen_by_first_call = {}
+
+    def _run():
+        if not seen_by_first_call:
+            seen_by_first_call.update(env)
+        return _FakeResult(0, "all good")
+
+    env = {}
+    probes.run_with_low_memory_fallback(_run, env)
+    assert (
+        seen_by_first_call.get(probes.LOW_MEM_REFERENCE_ENV) == "1"
+    ), "a box below the margin must set the signal before the FIRST attempt, not only on retry"
+
+
+def test_a_healthy_box_never_sets_the_signal_proactively(monkeypatch, probes):
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 999.0)
+    env = {}
+    probes.run_with_low_memory_fallback(lambda: _FakeResult(0, "all good"), env)
+    assert probes.LOW_MEM_REFERENCE_ENV not in env
+
+
+def test_an_explicitly_set_signal_is_left_alone(monkeypatch, probes):
+    """A caller (or a previous retry) that already set the signal is not re-decided against."""
+    monkeypatch.setattr(probes, "available_memory_gb", lambda: 999.0)
+    env = {probes.LOW_MEM_REFERENCE_ENV: "1"}
+    probes.run_with_low_memory_fallback(lambda: _FakeResult(0, "all good"), env)
+    assert env[probes.LOW_MEM_REFERENCE_ENV] == "1"
 
 
 # ------------------------------------------------------- every launch point wires the shared gate

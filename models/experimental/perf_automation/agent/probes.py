@@ -2183,10 +2183,47 @@ def is_memory_cap_failure(output: str) -> bool:
     return bool(output) and bool(_MEMORY_FAILURE_RE.search(output))
 
 
+def _fp32_reference_min_gb() -> float:
+    return float(os.environ.get("PERF_MCP_FP32_REFERENCE_MIN_GB", "140") or "140")
+
+
+def should_use_low_mem_reference() -> bool:
+    """True when there is not enough headroom to safely risk a full-fp32 reference build's peak.
+
+    PROACTIVE, NOT REACTIVE -- BECAUSE REACTIVE CANNOT ALWAYS FIRE. The retry this function guards
+    (run_with_low_memory_fallback, below) only helps when the subprocess FAILS CLEANLY; it cannot
+    help when the kernel OOM-killer kills the whole session's cgroup instead, which is what
+    happened on nvidia_nemotron_3_5_lightning_30b_a3b_bf16 TWICE on 2026-09-12 (~117-120 GB RSS
+    each time, with ~110 GB reported available at launch) -- the retry logic dies in the same sweep
+    as the process it would have retried. A hard RLIMIT cap would have contained it, but RLIMIT_AS
+    was retired the same day: it collided with the device driver's own large TLB-window mappings and
+    turned a healthy run into a device-level crash (see memory_cap_preexec_fn). Until there is a
+    containment mechanism that does both, deciding BEFORE launch is the only lever left -- ask a
+    model's reference build to use less memory from the start, on a box already too loaded to risk
+    the full-precision peak, rather than finding out by crashing.
+
+    140 GB is a real margin above the measured ~117-120 GB peak, not the peak itself -- a box that
+    clears this was NOT what OOM'd either time (~110 GB available both times). Returns False (never
+    intervene) if available memory cannot be read, or if capping is disabled via
+    PERF_MCP_DISABLE_MEM_CAP=1, matching memory_cap_preexec_fn's own escape hatch.
+    """
+    if os.environ.get("PERF_MCP_DISABLE_MEM_CAP") == "1":
+        return False
+    avail = available_memory_gb()
+    if avail is None:
+        return False
+    return avail < _fp32_reference_min_gb()
+
+
 def run_with_low_memory_fallback(run_once, env: dict):
-    """Run `run_once()` once; if it failed and the failure looks like a memory-cap hit, run it again
-    with LOW_MEM_REFERENCE_ENV=1 in `env` (mutated in place, so the retry actually sees it) and
-    return that second attempt instead.
+    """Decide BEFORE the first attempt whether the box has enough headroom to risk a full-precision
+    reference build (should_use_low_mem_reference); if not, set LOW_MEM_REFERENCE_ENV=1 up front so
+    the FIRST attempt already asks for the smaller footprint, not just a retry after it fails.
+
+    Then run `run_once()`; if it still failed and the failure looks like a memory-cap hit, run it
+    again with LOW_MEM_REFERENCE_ENV=1 in `env` (mutated in place, so the retry actually sees it) and
+    return that second attempt instead -- the reactive backstop for whatever the proactive check's
+    140 GB margin does not catch.
 
     THE GAP THIS CLOSES. A hard cap turns an uncontrolled whole-machine OOM into one subprocess
     failing on its own -- strictly safer, but a clean failure is still a failure, and a baseline that
@@ -2201,6 +2238,15 @@ def run_with_low_memory_fallback(run_once, env: dict):
     ONE retry only: a second memory-cap failure means the model does not honour the signal (or the
     box genuinely cannot fit it even at low memory), and retrying forever helps nobody.
     """
+    if LOW_MEM_REFERENCE_ENV not in env and should_use_low_mem_reference():
+        print(
+            "  [memory-gate] %.1f GB available, below the %.1f GB fp32-reference margin -- setting "
+            "%s=1 up front (ask the model to build its reference at lower precision from the start)"
+            % (available_memory_gb() or 0.0, _fp32_reference_min_gb(), LOW_MEM_REFERENCE_ENV),
+            file=sys.stderr,
+            flush=True,
+        )
+        env[LOW_MEM_REFERENCE_ENV] = "1"
     result = run_once()
     out = (getattr(result, "stdout", "") or "") + (getattr(result, "stderr", "") or "")
     failed = getattr(result, "returncode", 0) not in (0, None)
