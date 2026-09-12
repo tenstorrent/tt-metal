@@ -8,7 +8,7 @@
 
 void kernel_main() {
     constexpr uint32_t test_id = get_arg(args::test_id);
-    const uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t num_writes = get_arg(args::num_writes);
     constexpr uint32_t sub_base_addr = get_arg(args::sub_base_addr);
     constexpr uint32_t write_value_base = get_arg(args::write_val_base);
     constexpr uint32_t same_destination = get_arg(args::same_dest);

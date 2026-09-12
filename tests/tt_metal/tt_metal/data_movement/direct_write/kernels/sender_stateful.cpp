@@ -6,13 +6,11 @@
 #include "experimental/kernel_args.h"
 #include "internal/risc_attribs.h"
 
-// The value passed to noc_inline_dw_write_with_state is supplied on every call, even where
-// set_state already latched it (update_val = false). Gen1 ignores the argument and reuses the
-// latched value; Quasar has no value register in its inline-write state and always issues the
-// argument, so passing it keeps both generations writing the same data.
+// with_state is always passed the value: Gen1 reuses the latched one, Quasar has no value register
+// in its inline-write state and issues whatever it is given.
 void kernel_main() {
     constexpr uint32_t test_id = get_arg(args::test_id);
-    const uint32_t num_writes = get_arg(args::num_writes);
+    constexpr uint32_t num_writes = get_arg(args::num_writes);
     constexpr uint32_t write_value_base = get_arg(args::write_val_base);
     constexpr uint32_t use_posted_writes = get_arg(args::use_posted);
     constexpr uint32_t same_destination = get_arg(args::same_dest);

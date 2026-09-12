@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <optional>
+#include <string_view>
 
 #include <tt-logger/tt-logger.hpp>
 #include "device_fixture.hpp"
@@ -83,6 +84,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
 
         sender_compile_args = {
             {"test_id", test_config.test_id},
+            {"num_writes", test_config.num_writes},
             {"sub_base_addr", l1_base_address},
             {"write_val_base", test_config.write_value_base},
             {"same_dest", test_config.same_destination ? 1u : 0u},
@@ -102,6 +104,7 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
 
         sender_compile_args = {
             {"test_id", test_config.test_id},
+            {"num_writes", test_config.num_writes},
             {"write_val_base", test_config.write_value_base},
             {"use_posted", test_config.use_posted_writes ? 1u : 0u},
             {"same_dest", test_config.same_destination ? 1u : 0u},
@@ -144,7 +147,6 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
         .source = sender_kernel_path,
         .num_threads = 1,
         .compile_time_args = KernelSpec::CompileTimeArgs(sender_compile_args),
-        .runtime_arg_schema = {.runtime_arg_names = {"num_writes"}},
         .hw_config = sender_hw_config,
     };
 
@@ -159,17 +161,6 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
     };
 
     Program program = MakeProgramFromSpec(mesh_device, spec);
-
-    ProgramRunArgs run_params;
-    ProgramRunArgs::KernelRunArgs sender_run_params{.kernel = sender_spec.unique_id};
-    AddRuntimeArgsForNode(
-        sender_run_params.runtime_arg_values,
-        test_config.sender_core_coord,
-        {
-            {"num_writes", test_config.num_writes},
-        });
-    run_params.kernel_run_args.push_back(sender_run_params);
-    SetProgramRunArgs(program, run_params);
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
@@ -260,6 +251,11 @@ bool run_dm(distributed::MeshDevice& mesh_device, const DirectWriteConfig& test_
 
     return pass;
 }
+
+// Measured on emu-quasar-2x3_DISPATCH; the suite itself is ported to Metal 2.0 and passes on Gen1.
+constexpr std::string_view kQuasarInlineWriteBroken =
+    "Skipping on Quasar: noc_inline_dw_write does not work here - posted writes leave the destination "
+    "L1 unchanged, non-posted writes never ack and hang the write barrier - see issue #55386";
 
 std::optional<CoreCoord> select_receiver_core(const CoreCoord& grid, const CoreCoord& sender_core) {
     if (grid.x >= 2 && sender_core != CoreCoord{1, 0}) {
@@ -363,6 +359,9 @@ void multicast_test(distributed::MeshDevice& mesh_device, uint32_t test_id, Core
 }  // namespace unit_tests::dm::direct_write
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
     const CoreCoord sender_core = {0, 0};
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
@@ -374,6 +373,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDirectWritePerformanceComparison) {
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
     const CoreCoord sender_core = {0, 0};
     const CoreCoord grid = this->device().compute_with_storage_grid_size();
     const auto receiver_core = unit_tests::dm::direct_write::select_receiver_core(grid, sender_core);
@@ -385,6 +387,9 @@ TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteAddressPatterns) {
 }
 
 TEST_F(UnitMeshFastDispatchFixture, TensixDirectWriteMulticast) {
+    if (this->device().arch() == ARCH::QUASAR) {
+        GTEST_SKIP() << unit_tests::dm::direct_write::kQuasarInlineWriteBroken;
+    }
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(this->device(), test_id);
 }
