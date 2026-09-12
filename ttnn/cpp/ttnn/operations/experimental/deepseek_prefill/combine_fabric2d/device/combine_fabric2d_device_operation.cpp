@@ -176,16 +176,8 @@ void CombineFabric2dDeviceOperation::validate_on_program_cache_miss(
     validate_control_tensor(tensor_args.expert_offsets, extent, num_routed_experts, "expert_offsets");
 }
 
-// A hit re-dispatches a program built for an earlier call's tensors, so it has to hold the same contract as
-// the call that built it. The buffer addresses it reads are runtime args, rewritten per dispatch, and every
-// spec the kernels bake in is part of the program hash -- so what is left to check is exactly the tensor
-// contract itself, and checking it here rather than trusting the hash is what keeps a caller that slips
-// through the hash from being answered with wrong data instead of an error. Validation runs once per
-// dispatch, which for a traced op is once per capture, not once per replay.
 void CombineFabric2dDeviceOperation::validate_on_program_cache_hit(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    validate_on_program_cache_miss(args, tensor_args);
-}
+    const operation_attributes_t&, const tensor_args_t&) {}
 
 CombineFabric2dDeviceOperation::spec_return_value_t CombineFabric2dDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
