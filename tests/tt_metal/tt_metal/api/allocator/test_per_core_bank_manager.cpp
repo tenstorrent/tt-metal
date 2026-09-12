@@ -105,6 +105,19 @@ TEST(PerCoreAllocation, CPU_PerBankAvoidsLockstepRegion) {
     EXPECT_EQ(addr_b1, 4096u);
 }
 
+// Top-down placement must skip a trailing free range that is smaller than the
+// request instead of wrapping the unsigned candidate address below zero.
+TEST(PerCoreAllocation, CPU_TopDownSkipsUndersizedTrailingRange) {
+    auto bm = make_per_core_bank_manager(16 * 1024, 1024, 2);
+
+    auto trailing = alloc(bm, 2 * 1024, LOCKSTEP, /*bottom_up=*/false);  // [14K, 16K)
+    alloc(bm, 2 * 1024, LOCKSTEP, /*bottom_up=*/false);                  // [12K, 14K)
+    dealloc(bm, trailing, LOCKSTEP);                                     // leave [14K, 16K) free
+
+    // The 2K trailing range is too small; [0, 12K) has room for the request.
+    EXPECT_EQ(alloc(bm, 8 * 1024, BANK0, /*bottom_up=*/false), 4u * 1024);
+}
+
 // Deallocating per-bank regions lets lockstep reuse that space.
 TEST(PerCoreAllocation, CPU_DeallocatePerBankFreesForLockstep) {
     auto bm = make_per_core_bank_manager(1024 * 1024, 1024, 2);

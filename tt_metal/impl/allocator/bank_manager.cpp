@@ -495,6 +495,9 @@ uint64_t BankManager::allocate_buffer(
     } else {
         for (ssize_t i = static_cast<ssize_t>(available_ranges.size()) - 1; i >= 0; --i) {
             const auto& r = available_ranges[static_cast<size_t>(i)];
+            if (r.second - r.first < size_per_bank) {
+                continue;
+            }
             DeviceAddr s = r.second - size_per_bank;
             if (s >= r.first) {
                 chosen = s;
