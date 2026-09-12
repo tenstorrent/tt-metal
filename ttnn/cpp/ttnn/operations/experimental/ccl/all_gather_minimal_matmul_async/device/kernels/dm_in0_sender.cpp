@@ -69,8 +69,16 @@ constexpr ccl_routing_utils::line_unicast_route_info_t unicast_route_info_backwa
     ccl_routing_utils::get_line_unicast_route_info_from_args<
         mux_arg_count + ccl_routing_utils::num_line_unicast_args>();
 
-constexpr uint32_t ct_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
+constexpr uint32_t route_arg_count = mux_arg_count + 2 * ccl_routing_utils::num_line_unicast_args;
+
+// Cross-device entry barrier (see the `use_barrier_sem` block in kernel_main). 1 only when the op
+// was invoked with a `barrier_semaphore`; 0 otherwise, in which case no barrier code is emitted and
+// no barrier runtime args are pushed by the host.
+constexpr uint32_t use_barrier_sem = get_compile_time_arg_val(route_arg_count);
+
+constexpr uint32_t ct_arg_count = route_arg_count + 1;
 #else
+constexpr uint32_t use_barrier_sem = 0;
 constexpr uint32_t ct_arg_count = 27;
 #endif
 
@@ -101,6 +109,37 @@ bool valid_targets(const bool direction) {
 }
 }  // namespace detail
 
+#ifdef USE_MUX
+// Announce this device's arrival to the device `num_hops` away through `mux_connection_handle`, by
+// atomically incrementing the barrier semaphore on BOTH in0 fabric-core coordinates of this core's
+// chain. A fabric core owns exactly one direction, so the two cores of a chain must jointly cover
+// every peer; incrementing both coordinates is what makes each of them see one increment per peer.
+//
+// The packet header is rewritten for every send, so the header write is flushed before it is
+// reused -- the same discipline `forward_half_block_to_fabric_neighbor` uses for its headers.
+template <typename ConnectionHandleType>
+FORCE_INLINE void barrier_announce_arrival(
+    Noc noc,
+    ConnectionHandleType mux_connection_handle,
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* pkt_hdr,
+    uint64_t barrier_sem_noc_addr_fwd_core,
+    uint64_t barrier_sem_noc_addr_bwd_core,
+    uint32_t num_hops) {
+    fabric_unicast_noc_unicast_atomic_inc(
+        mux_connection_handle,
+        pkt_hdr,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_fwd_core, static_cast<uint32_t>(1)},
+        static_cast<uint8_t>(num_hops));
+    noc.async_writes_flushed();
+    fabric_unicast_noc_unicast_atomic_inc(
+        mux_connection_handle,
+        pkt_hdr,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_bwd_core, static_cast<uint32_t>(1)},
+        static_cast<uint8_t>(num_hops));
+    noc.async_writes_flushed();
+}
+#endif  // USE_MUX
+
 void kernel_main() {
     // Load common runtime args (same for all cores, updated in override_runtime_arguments)
     uint32_t cargidx = 0;
@@ -118,6 +157,15 @@ void kernel_main() {
 
     // Output tensor addresses from common args
     const uint32_t out_addr_common_arg_start = cargidx;
+
+    // Barrier semaphore address. Appended by the host AFTER the output addresses so that the
+    // default (no barrier_semaphore) common-arg layout is byte-for-byte unchanged. It lives in the
+    // common args so that override_runtime_arguments refreshes it on program-cache hits with the
+    // same single write that refreshes the out_ready semaphores.
+    [[maybe_unused]] uint32_t barrier_sem_addr = 0;
+    if constexpr (use_barrier_sem) {
+        barrier_sem_addr = get_common_arg_val<uint32_t>(out_addr_common_arg_start + N_chunks);
+    }
 
     // Load per-core runtime args
     uint32_t argidx = 0;
@@ -146,6 +194,20 @@ void kernel_main() {
     // Fabric-sender chain indices, supplied by the host (order: forward then backward)
     const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
+
+    // NOC coordinates of this chain's two in0 fabric cores (the barrier's increment targets).
+    // Pushed by the host only when use_barrier_sem, immediately before the mux connection args, so
+    // the default runtime-arg layout is unchanged and `argidx` stays aligned for the mux parse.
+    [[maybe_unused]] uint32_t barrier_fwd_core_noc_x = 0;
+    [[maybe_unused]] uint32_t barrier_fwd_core_noc_y = 0;
+    [[maybe_unused]] uint32_t barrier_bwd_core_noc_x = 0;
+    [[maybe_unused]] uint32_t barrier_bwd_core_noc_y = 0;
+    if constexpr (use_barrier_sem) {
+        barrier_fwd_core_noc_x = get_arg_val<uint32_t>(argidx++);
+        barrier_fwd_core_noc_y = get_arg_val<uint32_t>(argidx++);
+        barrier_bwd_core_noc_x = get_arg_val<uint32_t>(argidx++);
+        barrier_bwd_core_noc_y = get_arg_val<uint32_t>(argidx++);
+    }
 
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
@@ -285,6 +347,75 @@ void kernel_main() {
 
     auto pkt_hdrs_forward = allocate_and_init_packet_headers(
         detail::valid_targets(0), unicast_route_info_forward, in0_reader, num_tiles_to_write_per_packet, in3_tile_size);
+
+    if constexpr (use_barrier_sem) {
+        /**
+         * CROSS-DEVICE ENTRY BARRIER.
+         *
+         * The gather buffer a device pushes its in0 shard into is allocated per call on the peer,
+         * so a device that reaches this op ahead of a peer must not start sending before that peer
+         * has entered the op. Every in0 fabric core therefore announces its arrival to every other
+         * device and then blocks until all peers have announced theirs. This runs after the mux
+         * connections are open and before the first fabric data send / out_ready_sem wait, so the
+         * data path below is unchanged.
+         *
+         * Each in0 chain owns exactly two fabric cores, and each of them owns exactly ONE fabric
+         * direction: the core at backward_in0_core_order_index drives mux_backward, which carries
+         * the physical FORWARD direction (toward higher ring index, hops 1..num_targets_forward),
+         * and the core at forward_in0_core_order_index drives mux_forward, which carries the
+         * physical BACKWARD direction (hops 1..num_targets_backward). Because a core cannot reach
+         * the peers on its far side, each core increments the semaphore on BOTH fabric-core
+         * coordinates of its chain on every device it can reach. Summed over the two cores of a
+         * chain, and given that the two directions cover disjoint peer sets whose union is every
+         * peer (the host validates exactly this), each of the two coordinates on every device
+         * receives exactly one increment per peer -- hence the ring_size - 1 wait value.
+         *
+         * A core whose direction has no fabric connection on this device (a line end, or an
+         * interior device of a Linear uni-ring) sends nothing, but it still receives the peers'
+         * increments, so it waits and clears the semaphore exactly like a sending core does.
+         *
+         * Clearing the semaphore right after the wait is safe because the caller alternates
+         * between two barrier semaphores on consecutive calls
+         * (TT_CCL::get_and_cycle_barrier_semaphore_handle): no peer can already be incrementing
+         * THIS semaphore for the next call at the moment we zero it.
+         */
+        volatile tt_l1_ptr uint32_t* barrier_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem_addr);
+        const uint64_t barrier_sem_noc_addr_fwd_core =
+            safe_get_noc_addr(barrier_fwd_core_noc_x, barrier_fwd_core_noc_y, barrier_sem_addr, 0);
+        const uint64_t barrier_sem_noc_addr_bwd_core =
+            safe_get_noc_addr(barrier_bwd_core_noc_x, barrier_bwd_core_noc_y, barrier_sem_addr, 0);
+
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* barrier_pkt_hdr = PacketHeaderPool::allocate_header();
+
+        if (mux_backward.connection_valid) {
+            // Physical forward direction: peers at hop 1..num_targets_forward_direction.
+            for (uint32_t hop = 1; hop <= num_targets_forward_direction; hop++) {
+                barrier_announce_arrival(
+                    noc_obj,
+                    mux_connection_handle_backward,
+                    barrier_pkt_hdr,
+                    barrier_sem_noc_addr_fwd_core,
+                    barrier_sem_noc_addr_bwd_core,
+                    hop);
+            }
+        }
+        if (mux_forward.connection_valid) {
+            // Physical backward direction: peers at hop 1..num_targets_backward_direction.
+            for (uint32_t hop = 1; hop <= num_targets_backward_direction; hop++) {
+                barrier_announce_arrival(
+                    noc_obj,
+                    mux_connection_handle_forward,
+                    barrier_pkt_hdr,
+                    barrier_sem_noc_addr_fwd_core,
+                    barrier_sem_noc_addr_bwd_core,
+                    hop);
+            }
+        }
+
+        // num_devices is this op's ring_size.
+        noc_semaphore_wait_min(barrier_sem_ptr, num_devices - 1);
+        noc_semaphore_set(barrier_sem_ptr, 0);
+    }
 #endif
 
     /**

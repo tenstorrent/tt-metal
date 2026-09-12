@@ -164,7 +164,10 @@ class Qwen36DecoderLayer:
         chunk_start_idx_tensor=None,
         valid_len=None,
         gdn_collect=False,
+        gdn_masks=None,
     ):
+        # gdn_masks: persistent device (mask_f32, mask_q, conv_sel) for the traced masked-bucket
+        # prefill; only the TP GDN prefill branch consumes it (None => unchanged everywhere).
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
@@ -222,7 +225,11 @@ class Qwen36DecoderLayer:
                         )
                     else:
                         attn_output = self.attention.forward_prefill(
-                            attn_input, chunk_size=chunk_size, valid_len=valid_len, capture_state=True
+                            attn_input,
+                            chunk_size=chunk_size,
+                            valid_len=valid_len,
+                            capture_state=True,
+                            gdn_masks=gdn_masks,
                         )
                 else:
                     attn_output = self.attention.forward_decode(attn_input)

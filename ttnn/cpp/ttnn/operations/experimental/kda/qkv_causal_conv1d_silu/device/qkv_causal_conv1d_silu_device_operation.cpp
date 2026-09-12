@@ -25,11 +25,17 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     using namespace kda_factory_detail;
     constexpr std::string_view operation_name = "qkv_causal_conv1d_silu";
     check_allocated_device_tensor(in.input, operation_name, "input");
-    check_layout(in.input, Layout::ROW_MAJOR, operation_name, "input");
+    // Two input layouts are served by two kernel sets (selected in the program factory):
+    //   ROW_MAJOR - the reader gathers shifted row-major sticks and the compute kernel tilizes them.
+    //   TILE      - the reader hands over whole tiles and the compute kernel shifts rows by matmul.
+    // history must match: the TILE reader indexes it as tile pages, the ROW_MAJOR one as row sticks.
+    TT_FATAL(
+        in.input.layout() == Layout::ROW_MAJOR || in.input.layout() == Layout::TILE,
+        "qkv_causal_conv1d_silu: input must be ROW_MAJOR or TILE layout");
     check_dtype(in.input, DataType::BFLOAT16, operation_name, "input");
     check_interleaved(in.input, operation_name, "input");
     check_allocated_device_tensor(in.history, operation_name, "history");
-    check_layout(in.history, Layout::ROW_MAJOR, operation_name, "history");
+    check_layout(in.history, in.input.layout(), operation_name, "history");
     check_dtype(in.history, DataType::BFLOAT16, operation_name, "history");
     check_interleaved(in.history, operation_name, "history");
     check_allocated_device_tensor(in.tap0, operation_name, "tap0");

@@ -144,11 +144,17 @@ def _causal_conv1d_fir(
     weight_taps=None,
     bias_dev=None,
     valid_len=None,
+    conv_sel=None,
 ):
     """Depthwise causal conv1d + SiLU via K shifted multiply-accumulate slices.
 
     x [B,T,D]; conv_state [B,K-1,D] or list of [B,1,D]; weight_taps/bias_dev optional.
     Returns output [B,T,D], new_state [B,K-1,D].
+
+    conv_sel: pre-built DEVICE one-hot [B, K-1, (K-1)+T] selecting the decode conv window
+    (the trace-safe form of the valid_len path below: same matmul, but the one-hot values are
+    DMA'd into a persistent buffer by the caller instead of built here with a host
+    ``ttnn.from_torch``, which TT_FATALs inside a captured trace). None => unchanged behaviour.
     """
     mc = memory_config
     B, T, D = x.shape[0], x.shape[1], x.shape[2]
@@ -158,6 +164,10 @@ def _causal_conv1d_fir(
         return _causal_conv1d_decode_t1(
             x, conv_state, kernel_size, device, memory_config=mc, weight_taps=weight_taps, bias_dev=bias_dev
         )
+
+    # Trace-safety: the zero-pad below is only reached without a conv_state; the traced
+    # masked-bucket caller always carries a real (persistent) conv state.
+    assert conv_sel is None or conv_state is not None, "conv_sel requires conv_state (the zero-pad branch allocates)"
 
     if conv_state is not None:
         x_padded = ttnn.concat([conv_state, x], dim=1, memory_config=mc)
@@ -173,7 +183,12 @@ def _causal_conv1d_fir(
 
     # new_state: last K-1 tokens; land in DRAM (carry alive across downstream kernel CBs).
     total_len = (kernel_size - 1) + T
-    if valid_len is None:
+    if conv_sel is not None:
+        # Traced masked bucket: same one-hot matmul as the valid_len branch, with the caller's
+        # persistent device one-hot (no host write => capturable).
+        xp = ttnn.to_layout(x_padded, ttnn.TILE_LAYOUT)
+        new_state = ttnn.matmul(conv_sel, xp, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    elif valid_len is None:
         new_state = x_padded[:, total_len - (kernel_size - 1) :, :]
         # to_layout then to_memory_config: slice keeps L1 if memory_config passed to to_layout
         new_state = ttnn.to_layout(new_state, ttnn.TILE_LAYOUT)

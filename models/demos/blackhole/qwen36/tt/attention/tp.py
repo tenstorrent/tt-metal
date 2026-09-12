@@ -136,6 +136,22 @@ class TPAttention:
         self.compute_cfg = tpc.COMPUTE_HIFI2
         # bf8 SDPA (QWEN_SDPA_BF8=1): bf8 Q + bf8 KV; keeps HiFi2 (HiFi4 was slower)
         self._sdpa_bf8 = os.environ.get("QWEN_SDPA_BF8", "0") == "1"
+        # Chunked-prefill SDPA knobs (env-gated, defaults unchanged). QWEN36_SDPA_K_CHUNK: K chunk (128; 256 amortises
+        # the per-k-chunk handshakes of the GQA K/V multicast schedule, TT_SDPA_GQA_MCAST=1, at 2x the K/V CB L1).
+        # QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en for the SDPA compute config (8 fp32 dest tiles -> 2x4 subblocks).
+        self._sdpa_k_chunk = int(os.environ.get("QWEN36_SDPA_K_CHUNK", "128"))
+        self._sdpa_compute_cfg = self.compute_cfg
+        # QWEN36_SDPA_BF16_DEST=1: bf16 DEST accumulation for the chunked SDPA (8 dest tiles -> 2x4 subblocks; numerics change,
+        # gate on long-context PCC). QWEN36_SDPA_FULLSYNC=1: dst_full_sync_en (8 fp32 dest tiles).
+        _sdpa_bf16_dest = os.environ.get("QWEN36_SDPA_BF16_DEST", "0") == "1"
+        if os.environ.get("QWEN36_SDPA_FULLSYNC", "0") == "1" or _sdpa_bf16_dest:
+            self._sdpa_compute_cfg = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=self.compute_cfg.math_fidelity,
+                math_approx_mode=self.compute_cfg.math_approx_mode,
+                fp32_dest_acc_en=(not _sdpa_bf16_dest) and self.compute_cfg.fp32_dest_acc_en,
+                packer_l1_acc=self.compute_cfg.packer_l1_acc,
+                dst_full_sync_en=os.environ.get("QWEN36_SDPA_FULLSYNC", "0") == "1",
+            )
         # Must match load_attention_weights_tp gates
         self._dram_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         self._wo_sharded = getattr(args, "attn_wo_weight_memcfg", None) is not None
@@ -168,9 +184,37 @@ class TPAttention:
                 self._col_proj(x, tw["wk"], self.args.attn_k_progcfg),
                 self._col_proj(x, tw["wv"], self.args.attn_v_progcfg),
             )
+        # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
+        # return it whole (no gate wedged between q and k → no re-concat in _make_heads*). Gate is
+        # the trailing block. Sentinel: vp=None flags the fused/contiguous layout to _make_heads*.
+        qkv3_dim = self.NH * self.HD + 2 * self.NKV * self.HD
+        gate_dim = self.NH * self.HD
         # Prefill: x is K-sharded (norm skipped its AG) -> fused all-gather + QKV matmul. Output stays
         # DRAM: L1 clashes with a downstream matmul's CBs (verified; full-attn has more L1 pressure here).
         if self._fuse_agmm and x.shape[-2] > tpc.TILE_SIZE:
+            # QWEN36_GDN_PROJ_CHUNKS: both split widths are multiples of HD (=128), so the AGMM can
+            # write qkv3 and gate directly and the two ttnn.slice ops below disappear. No weight
+            # padding is needed here (qkv3_dim + gate_dim == attn_qkv_fused_dim_tp exactly), but the
+            # sum is asserted against the weight so a config change falls back instead of TT_FATALing.
+            _chunks = tpc.proj_chunks_mode()
+            if (
+                _chunks
+                and qkv3_dim % tpc.TILE_SIZE == 0
+                and gate_dim % tpc.TILE_SIZE == 0
+                and qkv3_dim + gate_dim == tw["wqkv_fused"].shape[-1]
+            ):
+                # One memory config for both chunks: DRAM, matching the un-chunked op output (mode 2
+                # forces L1 for A/B — that puts the FULL qkv width in L1, the clash noted above).
+                qkv3, gate = tpc.all_gather_matmul_prefill(
+                    x,
+                    tw["wqkv_fused"],
+                    self.tt_ccl,
+                    self.compute_cfg,
+                    self.args.ccl_topology(),
+                    out_memory_config=tpc.proj_chunks_memcfg(_chunks),
+                    chunk_sizes=[qkv3_dim, gate_dim],
+                )
+                return qkv3, gate, None
             qkv = tpc.all_gather_matmul_prefill(
                 x, tw["wqkv_fused"], self.tt_ccl, self.compute_cfg, self.args.ccl_topology()
             )
@@ -186,11 +230,6 @@ class TPAttention:
             )
         else:
             qkv = self._col_proj(x, tw["wqkv_fused"], self.args.attn_qkv_fused_progcfg)
-        # Fused weight is [q|k|v|gate] (prepare_attn_qkv_deint): the q|k|v block is contiguous, so
-        # return it whole (no gate wedged between q and k → no re-concat in _make_heads*). Gate is
-        # the trailing block. Sentinel: vp=None flags the fused/contiguous layout to _make_heads*.
-        qkv3_dim = self.NH * self.HD + 2 * self.NKV * self.HD
-        gate_dim = self.NH * self.HD
         sh = list(qkv.shape)
         # qkv3 short-lived (split by _make_heads then freed) -> L1 in PREFILL only; decode keeps DRAM
         # (L1 qkv3 breaks the decode trace). gate lives across SDPA (post-concat) -> always DRAM.
@@ -748,12 +787,14 @@ class TPAttention:
         else:
             cap = 128 if S >= 2048 else 64  # 128 beats 256
             qk_chunk = cap if not chunk_start_idx else min(cap, chunk_start_idx & -chunk_start_idx)
+        # K chunk may be larger than the Q chunk (QWEN36_SDPA_K_CHUNK, default = q chunk) for full 2048-token chunks.
+        k_chunk = max(qk_chunk, self._sdpa_k_chunk) if S >= 2048 else qk_chunk
         # Full BH grid for SDPA perf (bit-identical to 8×8; see test_tp_chunked_prefill_pcc_sweep)
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.mesh.compute_with_storage_grid_size(),
             exp_approx_mode=False,
             q_chunk_size=qk_chunk,
-            k_chunk_size=qk_chunk,
+            k_chunk_size=k_chunk,
         )
 
         # Pad page table to cover Q+offset and satisfy stick-size % 32 (extra blocks masked by causality)
@@ -779,7 +820,7 @@ class TPAttention:
                 input_tensor_v=v_paged,
                 page_table_tensor=sdpa_page_table,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
-                compute_kernel_config=self.compute_cfg,
+                compute_kernel_config=self._sdpa_compute_cfg,
                 program_config=sdpa_cfg,
             )
         else:
@@ -789,7 +830,7 @@ class TPAttention:
                 input_tensor_v=v_paged,
                 page_table_tensor=sdpa_page_table,
                 chunk_start_idx=chunk_start_idx,
-                compute_kernel_config=self.compute_cfg,
+                compute_kernel_config=self._sdpa_compute_cfg,
                 program_config=sdpa_cfg,
             )
         if sdpa_page_table is not page_table:
