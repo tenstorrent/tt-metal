@@ -37,6 +37,7 @@
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
+    const uint32_t bh = get_arg_val<uint32_t>(arg++);  // this group's slice
     const uint32_t grad_key_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t grad_value_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t coord_noc_x = get_arg_val<uint32_t>(arg++);
@@ -75,6 +76,8 @@ void kernel_main() {
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
     const auto grad_value = TensorAccessor(grad_value_args, grad_value_addr, grad_bytes);
+    const uint32_t row_base = bh * 2u * kCores * row_tiles;
+    const uint32_t val_base = bh * 2u * kCores * val_tiles;
 
 #if ENDPOINT_SYNC
     volatile tt_l1_ptr uint32_t* column_progress =
@@ -101,8 +104,8 @@ void kernel_main() {
         const bool column_ends =
             (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
         if (column_ends) {
-            write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
-            write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+            write_tiles_by_row(cb_grad_value, grad_value, val_base + (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
+            write_tiles_by_row(cb_grad_key, grad_key, row_base + (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
         }
 
 #if ENDPOINT_SYNC

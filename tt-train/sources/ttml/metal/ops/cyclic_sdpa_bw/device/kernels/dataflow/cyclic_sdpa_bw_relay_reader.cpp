@@ -104,6 +104,11 @@
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
+    // Which (batch, head) slice this core's group is working on. The grid
+    // holds one independent schedule per group -- the snake never leaves a
+    // group, so nothing crosses between them -- and a group touches only its
+    // own slice of every tensor.
+    const uint32_t bh = get_arg_val<uint32_t>(arg++);
     const uint32_t query_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t key_addr = get_arg_val<uint32_t>(arg++);
     const uint32_t value_addr = get_arg_val<uint32_t>(arg++);
@@ -209,6 +214,10 @@ void kernel_main() {
     const uint32_t stride_grad_output = val_tiles * tile_bytes;
     const uint32_t stride_interm = Bt * interm_bytes;
     const uint32_t stride_grad_query = row_tiles * grad_bytes;
+    // T = 2C blocks of Bt tiles each, so a slice is 2 * kCores * Bt tile rows.
+    const uint32_t row_base = bh * 2u * kCores * row_tiles;
+    const uint32_t val_base = bh * 2u * kCores * val_tiles;
+    const uint32_t stat_base = bh * 2u * kCores * Bt;
 
     volatile tt_l1_ptr uint32_t* release_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
@@ -325,8 +334,8 @@ void kernel_main() {
         // operations using that storage complete before it is reused.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
         if (column_changed) {
-            read_tiles_by_row(cb_key, key, (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
-            read_tiles_by_row(cb_value, value, (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
+            read_tiles_by_row(cb_key, key, row_base + (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+            read_tiles_by_row(cb_value, value, val_base + (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         }
 
         // Accumulated column gradients are needed only where an interval
@@ -348,9 +357,9 @@ void kernel_main() {
                 } while ((*release_sem) < t);
 #endif
                 WAYPOINT("COLD");
-                read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+                read_tiles_by_row(cb_grad_key_seed, grad_key, row_base + (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
                 read_tiles_by_row(
-                    cb_grad_value_seed, grad_value, (j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
+                    cb_grad_value_seed, grad_value, val_base + (j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
             }
             visited[owned_slot] = true;
         }
@@ -417,14 +426,14 @@ void kernel_main() {
 #endif
             DeviceZoneScopedN("LOAD-IMM-DRAM");
             for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_read_page((i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
+                noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
             }
             for (uint32_t k = 0; k < val_tiles; ++k) {
-                noc_async_read_page((i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
+                noc_async_read_page(val_base + (i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
             }
             for (uint32_t k = 0; k < Bt; ++k) {
-                noc_async_read_page((i - 1u) * Bt + k, lse, ls + k * interm_bytes);
-                noc_async_read_page((i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
+                noc_async_read_page(stat_base + (i - 1u) * Bt + k, lse, ls + k * interm_bytes);
+                noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
             }
             noc_async_read_barrier();
         }
@@ -502,7 +511,7 @@ void kernel_main() {
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
             for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_read_page((i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
+                noc_async_read_page(row_base + (i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
             }
             noc_async_read_barrier();
         }
@@ -536,7 +545,7 @@ void kernel_main() {
             // Streak end: spill dQ_i and complete the write, so the reload at
             // the next streak start observes it.
             for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_write_page((i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
+                noc_async_write_page(row_base + (i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
             }
             noc_async_write_barrier();
 #if ENDPOINT_SYNC

@@ -373,6 +373,37 @@ Gradients run_algorithm2(
 // base + (u mod 2) * stride, which is where the receiver's write pointer
 // stands after u pushes; every core has the same layout, so a producer can
 // use its own base as the receiver's.
+// The same matrix in every (batch, head) slice of a 4D tensor. Groups all
+// run the same problem here, which tests the partitioning without needing a
+// separate reference per group.
+xt::xarray<float> as_4d_repeated(const xt::xarray<float>& m, uint32_t groups) {
+    const auto shape = m.shape();
+    const auto rows = static_cast<uint32_t>(shape[0]);
+    const auto cols = static_cast<uint32_t>(shape[1]);
+    xt::xarray<float> out = xt::zeros<float>({1u, groups, rows, cols});
+    for (uint32_t g = 0; g < groups; ++g) {
+        xt::view(out, 0, g, xt::all(), xt::all()) = m;
+    }
+    return out;
+}
+
+xt::xarray<float> repeat_4d(const xt::xarray<float>& t, uint32_t groups) {
+    const auto shape = t.shape();
+    const auto rows = static_cast<uint32_t>(shape[2]);
+    const auto cols = static_cast<uint32_t>(shape[3]);
+    xt::xarray<float> out = xt::zeros<float>({1u, groups, rows, cols});
+    for (uint32_t g = 0; g < groups; ++g) {
+        xt::view(out, 0, g, xt::all(), xt::all()) = xt::view(t, 0, 0, xt::all(), xt::all());
+    }
+    return out;
+}
+
+// `groups` independent schedules on disjoint sub-rectangles of the grid, each
+// working a different (batch, head) slice. Nothing crosses between them: the
+// snake stays inside a group, and so does the barrier's multicast. This is
+// how the port fills a grid when the sequence length is fixed by the model --
+// T = 2C blocks means one schedule needs N = 2 C B rows, so a short sequence
+// leaves cores idle unless several heads run side by side.
 Gradients run_relay(
     uint32_t C,
     const Reference& ref,
@@ -380,7 +411,8 @@ Gradients run_relay(
     uint32_t grid_h,
     bool endpoint_sync = false,
     double* seconds = nullptr,
-    uint32_t Bt = 1) {
+    uint32_t Bt = 1,
+    uint32_t groups = 1) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -399,20 +431,42 @@ Gradients run_relay(
     const uint32_t valT = Bt * vWt;
     const uint32_t scoreT = Bt * Bt;
 
-    const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
-    const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
-    const auto value = ttml::core::from_xtensor(as_4d(ref.V), device);
-    const auto grad_output = ttml::core::from_xtensor(as_4d(ref.dO), device);
-    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.lse_tile, device);
-    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.u_tile, device);
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, groups), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, groups), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, groups), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, groups), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.lse_tile, groups), device);
+    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.u_tile, groups), device);
 
-    const xt::xarray<float> zeros = xt::zeros<float>({1u, 1u, ref.N, ref.d});
+    const xt::xarray<float> zeros = xt::zeros<float>({1u, groups, ref.N, ref.d});
     const auto grad_query = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
     const auto grad_key = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
     const auto grad_value = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
 
     auto program = CreateProgram();
-    const auto region = CoreRange(CoreCoord{0, 0}, CoreCoord{grid_w - 1, grid_h - 1});
+    // Groups tile the grid: as many across as fit, then down. The kernels are
+    // created once over the union, and each core is told which group it is in
+    // through its runtime arguments.
+    const auto dev_grid = device->compute_with_storage_grid_size();
+    const uint32_t groups_x =
+        std::max(1u, static_cast<uint32_t>(dev_grid.x) / grid_w);
+    std::vector<CoreCoord> group_origin;
+    for (uint32_t g = 0; g < groups; ++g) {
+        group_origin.push_back(CoreCoord{(g % groups_x) * grid_w, (g / groups_x) * grid_h});
+    }
+    const auto last = group_origin.back();
+    TT_FATAL(
+        last.x + grid_w <= dev_grid.x && last.y + grid_h <= dev_grid.y,
+        "{} groups of {}x{} do not fit a {}x{} grid",
+        groups,
+        grid_w,
+        grid_h,
+        dev_grid.x,
+        dev_grid.y);
+    const auto region = CoreRange(
+        CoreCoord{0, 0}, CoreCoord{last.x + grid_w - 1, last.y + grid_h - 1});
 
     const uint32_t bf16_tile = 2 * kTile * kTile;
     const uint32_t fp32_tile = 4 * kTile * kTile;
@@ -519,46 +573,52 @@ Gradients run_relay(
             .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt},
             .defines = compute_defines});
 
-    const auto coordinator_logical = placement_of(C, grid_w, 1);
-    const auto coordinator = device->worker_core_from_logical_core(
-        CoreCoord{coordinator_logical.x, coordinator_logical.y});
-    const auto mcast_start = device->worker_core_from_logical_core(CoreCoord{0, 0});
-    const auto mcast_end =
-        device->worker_core_from_logical_core(CoreCoord{grid_w - 1, grid_h - 1});
+    // Everything below is per group: the snake, the barrier's coordinator and
+    // its multicast rectangle all live inside one sub-rectangle, which is why
+    // several schedules can share a grid without knowing about each other.
+    for (uint32_t g = 0; g < groups; ++g) {
+        const auto origin = group_origin[g];
+        const auto logical_of = [&](uint32_t core) {
+            const auto xy = placement_of(C, grid_w, core);
+            return CoreCoord{origin.x + xy.x, origin.y + xy.y};
+        };
+        const auto noc_of_core = [&](uint32_t core) {
+            return device->worker_core_from_logical_core(logical_of(core));
+        };
+        const auto coordinator = noc_of_core(1);
+        const auto mcast_start = device->worker_core_from_logical_core(origin);
+        const auto mcast_end = device->worker_core_from_logical_core(
+            CoreCoord{origin.x + grid_w - 1, origin.y + grid_h - 1});
 
-    const auto noc_of_core = [&](uint32_t core) {
-        const auto xy = placement_of(C, grid_w, core);
-        return device->worker_core_from_logical_core(CoreCoord{xy.x, xy.y});
-    };
-
-    for (uint32_t c = 1; c <= C; ++c) {
-        const auto xy = placement_of(C, grid_w, c);
-        const auto core = CoreCoord{xy.x, xy.y};
-        const auto neighbors = snake_neighbors(C, c);
-        const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
-        const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
-        std::vector<uint32_t> relay_reader_args = {
-            c, query.buffer()->address(), key.buffer()->address(), value.buffer()->address(),
-            grad_output.buffer()->address(), lse.buffer()->address(), u_scalar.buffer()->address(),
-            grad_query.buffer()->address(), grad_key.buffer()->address(),
-            grad_value.buffer()->address(), static_cast<uint32_t>(prev.x),
-            static_cast<uint32_t>(prev.y), static_cast<uint32_t>(next.x),
-            static_cast<uint32_t>(next.y)};
-        // Every core's coordinates, for endpoint publication by unicast.
-        for (uint32_t r = 1; r <= C; ++r) {
-            const auto rc = noc_of_core(r);
-            relay_reader_args.push_back(static_cast<uint32_t>(rc.x));
-            relay_reader_args.push_back(static_cast<uint32_t>(rc.y));
+        for (uint32_t c = 1; c <= C; ++c) {
+            const auto core = logical_of(c);
+            const auto neighbors = snake_neighbors(C, c);
+            const auto prev = noc_of_core(neighbors.prev != kNoCore ? neighbors.prev : c);
+            const auto next = noc_of_core(neighbors.next != kNoCore ? neighbors.next : c);
+            std::vector<uint32_t> relay_reader_args = {
+                c, g, query.buffer()->address(), key.buffer()->address(),
+                value.buffer()->address(), grad_output.buffer()->address(),
+                lse.buffer()->address(), u_scalar.buffer()->address(),
+                grad_query.buffer()->address(), grad_key.buffer()->address(),
+                grad_value.buffer()->address(), static_cast<uint32_t>(prev.x),
+                static_cast<uint32_t>(prev.y), static_cast<uint32_t>(next.x),
+                static_cast<uint32_t>(next.y)};
+            // Every core in this group, for the endpoint reads.
+            for (uint32_t r = 1; r <= C; ++r) {
+                const auto rc = noc_of_core(r);
+                relay_reader_args.push_back(static_cast<uint32_t>(rc.x));
+                relay_reader_args.push_back(static_cast<uint32_t>(rc.y));
+            }
+            SetRuntimeArgs(program, reader, core, relay_reader_args);
+            SetRuntimeArgs(
+                program, writer, core,
+                {c, g, grad_key.buffer()->address(), grad_value.buffer()->address(),
+                 static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
+                 static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
+                 static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
+                 c == 1u ? 1u : 0u});
+            SetRuntimeArgs(program, compute, core, {c});
         }
-        SetRuntimeArgs(program, reader, core, relay_reader_args);
-        SetRuntimeArgs(
-            program, writer, core,
-            {c, grad_key.buffer()->address(), grad_value.buffer()->address(),
-             static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
-             static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
-             static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-             c == 1u ? 1u : 0u});
-        SetRuntimeArgs(program, compute, core, {c});
     }
 
     auto workload = tt_dist::MeshWorkload();
@@ -579,7 +639,8 @@ void expect_close(
     const xt::xarray<float>& got,
     const xt::xarray<float>& want,
     float tolerance,
-    const std::string& what) {
+    const std::string& what,
+    uint32_t slice = 0) {
     const uint32_t rows = static_cast<uint32_t>(want.shape()[0]);
     const uint32_t cols = static_cast<uint32_t>(want.shape()[1]);
     float max_abs = 0.0F;
@@ -589,7 +650,7 @@ void expect_close(
     for (uint32_t r = 0; r < rows; ++r) {
         for (uint32_t c = 0; c < cols; ++c) {
             max_abs = std::max(max_abs, std::abs(want(r, c)));
-            const float diff = std::abs(got(0, 0, r, c) - want(r, c));
+            const float diff = std::abs(got(0, slice, r, c) - want(r, c));
             if (diff > max_diff) {
                 max_diff = diff;
                 worst_r = r;
@@ -601,7 +662,7 @@ void expect_close(
     EXPECT_LT(relative, tolerance)
         << what << ": max |diff| " << max_diff << " against max |ref| " << max_abs
         << " (relative " << relative << "), worst at (" << worst_r << "," << worst_c << ") got "
-        << got(0, 0, worst_r, worst_c) << " want " << want(worst_r, worst_c);
+        << got(0, slice, worst_r, worst_c) << " want " << want(worst_r, worst_c);
 }
 
 void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64) {
@@ -615,6 +676,28 @@ void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d =
     expect_close(got.dQ, ref.dQ, 0.06F, "dQ");
     expect_close(got.dK, ref.dK, 0.06F, "dK");
     expect_close(got.dV, ref.dV, 0.06F, "dV");
+}
+
+// Every group runs the same problem on its own slice, so every slice has to
+// come out equal to the reference. A group reading or writing outside its
+// slice shows up as a wrong answer in some other group's.
+void check_relay_groups(
+    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t groups, uint32_t Bt = 1) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    const uint32_t groups_x = std::max(1u, static_cast<uint32_t>(grid.x) / grid_w);
+    const uint32_t rows = (groups + groups_x - 1u) / groups_x;
+    if (grid_w * std::min(groups, groups_x) > grid.x || grid_h * rows > grid.y) {
+        GTEST_SKIP() << groups << " groups of " << grid_w << "x" << grid_h << " do not fit";
+    }
+    const auto ref = make_reference(2u * C * Bt * kTile, 64);
+    const auto got = run_relay(
+        C, ref, grid_w, grid_h, /*endpoint_sync=*/true, nullptr, Bt, groups);
+    for (uint32_t g = 0; g < groups; ++g) {
+        const std::string at = " in group " + std::to_string(g);
+        expect_close(got.dQ, ref.dQ, 0.06F, "dQ" + at, g);
+        expect_close(got.dK, ref.dK, 0.06F, "dK" + at, g);
+        expect_close(got.dV, ref.dV, 0.06F, "dV" + at, g);
+    }
 }
 
 void check_relay(
@@ -710,6 +793,27 @@ TEST(CyclicSdpaBwRelayTest, FourCoresTallBlocks) {
 // register beside them, and FP32 dest has eight.
 TEST(CyclicSdpaBwRelayTest, FourCoresFourTileBlocks) {
     check_relay(4, 2, 2, 64, /* endpoint_sync */ false, /* Bt */ 4);
+}
+
+// Independent schedules side by side. T = 2C blocks means one schedule needs
+// N = 2 C B rows, so at a sequence length the model fixes, a single schedule
+// may not fill the grid -- four heads of a 16-core schedule do, on four
+// quadrants of an 8x8. Nothing crosses between them: the snake stays inside a
+// group and so does the barrier's multicast, which is why this works at all.
+TEST(CyclicSdpaBwGroupTest, TwoGroupsOfFour) {
+    check_relay_groups(4, 2, 2, /* groups */ 2);
+}
+
+TEST(CyclicSdpaBwGroupTest, FourGroupsOfFour) {
+    check_relay_groups(4, 2, 2, /* groups */ 4);
+}
+
+TEST(CyclicSdpaBwGroupTest, FourGroupsOfSixteen) {
+    check_relay_groups(16, 4, 4, /* groups */ 4);
+}
+
+TEST(CyclicSdpaBwGroupTest, FourGroupsWithTallBlocks) {
+    check_relay_groups(4, 2, 2, /* groups */ 4, /* Bt */ 2);
 }
 
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
@@ -1048,6 +1152,22 @@ void compare_with_sdpa_bw(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t
               << C << " cores, Bt=" << Bt << "): sdpa_bw " << sdpa_seconds * 1e6
               << " us, cyclic " << relay_seconds * 1e6 << " us | cyclic "
               << sdpa_seconds / relay_seconds << "x\n";
+}
+
+// What running several heads side by side is worth. One 16-core schedule
+// leaves 48 cores idle on an 8x8 grid; four of them fill it. If four heads
+// take about as long as one, the grid is being used four times over.
+TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheGroups) {
+    for (uint32_t groups : {1u, 2u, 4u}) {
+        const uint32_t C = 16;
+        const uint32_t Bt = 1;
+        const auto ref = make_reference(2u * C * Bt * kTile, 64);
+        double seconds = 0.0;
+        run_relay(C, ref, 4, 4, /*endpoint_sync=*/true, &seconds, Bt, groups);
+        std::cout << "  " << groups << " group(s) of " << C << " cores, N=" << ref.N
+                  << " each: " << seconds * 1e6 << " us for " << groups << " head(s)"
+                  << ", " << seconds * 1e6 / groups << " us per head\n";
+    }
 }
 
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareWithTheRepositorysBackward) {
