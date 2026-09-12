@@ -2871,7 +2871,7 @@ class ModelArgs:
         in turn attributes 0.80 ms/token to the two norm all-gathers and 0.92 ms/token to the
         two reduce-scatters, so ~17% of the token is in these four ops per layer.
         """
-        return (1, 1) if mode == Mode.DECODE else (10, 4)
+        return (1, 1) if mode == Mode.DECODE else (25, 4)
 
     def is_distributed_norm(self, mode: Mode):
         if not self.is_multichip:
