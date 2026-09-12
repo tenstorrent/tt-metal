@@ -173,4 +173,55 @@ def test_embedding_bw_with_program_cache(
         logger.debug(comp_out)
         assert comp_pass
 
-    assert device.cache_entries_counter.total == 1
+    # embedding_bw dispatches two programs: the device primitive, which
+    # accumulates into a private FLOAT32 result, and the typecast that converts
+    # it once to the public output dtype. Both are cached on the first call and
+    # neither is recreated on the second, so two entries is the cache-hit result.
+    assert device.cache_entries_counter.total == 2
+
+
+@pytest.mark.parametrize("collision_count", [32, 64, 128, 256, 512, 1024, 2048])
+def test_embedding_bw_repeated_indices_accumulate_exactly(collision_count, device):
+    batch_size = 32
+    seq_len = 64
+    embedding_dim = 128
+    num_embeddings = 64
+    target_index = 7
+    total_positions = batch_size * seq_len
+
+    non_target_indices = torch.tensor(
+        [index for index in range(num_embeddings) if index != target_index], dtype=torch.int64
+    )
+    input_index = non_target_indices[torch.arange(total_positions).remainder(num_embeddings - 1)]
+    target_positions = torch.div(
+        torch.arange(collision_count) * total_positions, collision_count, rounding_mode="floor"
+    )
+    input_index[target_positions] = target_index
+    input_index = input_index.reshape(batch_size, seq_len)
+
+    hidden_values = 1 + torch.arange(embedding_dim, dtype=torch.float32).remainder(8)
+    grad_data = (
+        hidden_values.view(1, 1, 1, embedding_dim)
+        .expand(1, 1, total_positions, embedding_dim)
+        .div(2048)
+        .to(torch.bfloat16)
+        .contiguous()
+    )
+    golden = torch.zeros(num_embeddings, embedding_dim, dtype=torch.float32)
+    golden.index_add_(0, input_index.reshape(-1), grad_data.float().reshape(-1, embedding_dim))
+
+    input_tensor = ttnn.from_torch(input_index, dtype=ttnn.uint32, device=device)
+    weights_tensor = ttnn.from_torch(
+        torch.zeros(num_embeddings, embedding_dim),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.embedding_bw(input_tensor, weights_tensor, grad_tensor, dtype=ttnn.bfloat16)
+    output_torch = ttnn.to_torch(output).float()
+
+    # Shape-agnostic on purpose: this test is about accumulation, not the
+    # returned rank.
+    assert torch.equal(golden, output_torch.reshape(num_embeddings, embedding_dim))

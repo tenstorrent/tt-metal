@@ -73,9 +73,15 @@ FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint3
 
 FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
     constexpr bool is_output_bfloat16 = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_output_float32 = get_compile_time_arg_val(7) == 1;
     auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 
-    if constexpr (is_output_bfloat16) {
+    if constexpr (is_output_float32) {
+        // 1024 * 4 = 4096 bytes = single tile of float32
+        for (uint32_t i = 0; i < 1024; ++i) {
+            input_l1_ptr[i] = 0;
+        }
+    } else if constexpr (is_output_bfloat16) {
         // 512 * 4 = 2048 bytes = single tile of bfloat16
         for (uint32_t i = 0; i < 512; ++i) {
             input_l1_ptr[i] = 0;
@@ -111,7 +117,7 @@ void kernel_main() {
     constexpr uint32_t grad_page_size = get_tile_size(cb_grad_idx);
     constexpr uint32_t out_page_size = get_tile_size(cb_id_out0_idx);
 
-    constexpr auto grad_args = TensorAccessorArgs<7>();
+    constexpr auto grad_args = TensorAccessorArgs<8>();
     constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
