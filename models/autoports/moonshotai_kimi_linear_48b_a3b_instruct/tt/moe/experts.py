@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Routed experts with ``ttnn.sparse_matmul`` (Gemma4/GPT-OSS active-expert pattern), TP over the expert intermediate dim.
 
-Weights: gate/up [1, E, H, I/tp] (column-parallel), down [1, E, I/tp, H] (row-parallel). ``forward`` returns the per-chip
+Weights: gate_up [1, E, H, 2*I/tp] = [up | gate] (column-parallel, fused on device from the cached gate/up shards),
+down [1, E, I/tp, H] (row-parallel). ``forward`` returns the per-chip
 PARTIAL combined expert output [1,1,S,H]; the caller adds the shared-expert partial and all-reduces once.
 Decode (S <= 32): sparsity = the dense routing tensor; ``nnz=None`` because on Blackhole a bf16 routing weight can flush to
 zero and a wrong static nnz deadlocks the kernel. Prefill: 32-token groups with all-ones sparsity (every expert computed,
@@ -74,8 +75,15 @@ class KimiExperts:
         u = None if sd is None else sd["moe.experts.up"]
         d = None if sd is None else sd["moe.experts.down"]
         kw = dict(cache_path=cache_path, dtype=dtype)
-        self.gate = as_device_tensor(mesh_device, prep(g, "gate"), name=f"{name}.gate", shard_dim=-1, **kw)
-        self.up = as_device_tensor(mesh_device, prep(u, "up"), name=f"{name}.up", shard_dim=-1, **kw)
+        gate = as_device_tensor(mesh_device, prep(g, "gate"), name=f"{name}.gate", shard_dim=-1, **kw)
+        up = as_device_tensor(mesh_device, prep(u, "up"), name=f"{name}.up", shard_dim=-1, **kw)
+        # One fused projection weight per chip: [1, E, H, 2*I_loc] = [up_local | gate_local] (ttnn.swiglu multiplies the
+        # first half by silu(second half)). Built on device from the cached per-tensor shards, so the weight cache layout is
+        # unchanged and the per-chip column order is right by construction (a host-side concat sharded on dim -1 is not).
+        # Allocated in __init__, before any trace capture.
+        self.gate_up = ttnn.concat([up, gate], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
         self.down = as_device_tensor(mesh_device, prep(d, "down"), name=f"{name}.down", shard_dim=-2, **kw)
         self.compute = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
@@ -95,7 +103,7 @@ class KimiExperts:
         S = x.shape[2]
         E, I, H = self.E, self.I_loc, self.H
         tile = ttnn.Tile([32, 32])
-        pc_gu = _sparse_program_config(S, I, self.in0_block_w)
+        pc_gu = _sparse_program_config(S, 2 * I, self.in0_block_w)
         pc_d = _sparse_program_config(S, H, self.in0_block_w_down)
         kw = dict(
             sparsity=sparsity,
@@ -105,25 +113,20 @@ class KimiExperts:
             compute_kernel_config=self.compute,
             dtype=ttnn.bfloat16,
         )
-        g = ttnn.sparse_matmul(x, self.gate, program_config=pc_gu, **kw)  # [1,1,E,S_tile,I]
-        g = (
-            ttnn.reshape(ttnn.transpose(g, 1, 3), (1, E, S, g.shape[-1]))
-            if len(g.shape) == 6
-            else ttnn.reshape(g, (1, E, S, g.shape[-1]))
-        )
-        u = ttnn.sparse_matmul(x, self.up, program_config=pc_gu, **kw)
-        u = (
-            ttnn.reshape(ttnn.transpose(u, 1, 3), (1, E, S, u.shape[-1]))
-            if len(u.shape) == 6
-            else ttnn.reshape(u, (1, E, S, u.shape[-1]))
-        )
-        h = ttnn.multiply(ttnn.silu(g), u)
-        ttnn.deallocate(g)
-        ttnn.deallocate(u)
+        gu = ttnn.sparse_matmul(x, self.gate_up, program_config=pc_gu, **kw)  # [1,1,E,S_tile,2I] = [up | gate]
+        # the kernel returns [1, S_tiles, 1, E, 32, N]; with a single 32-row tile (S <= 32, always the case here) the
+        # transpose(1, 3) is a permutation of unit dims, i.e. the same row-major order as a plain (view) reshape
+        if len(gu.shape) == 6 and gu.shape[1] != 1:
+            gu = ttnn.transpose(gu, 1, 3)
+        gu = ttnn.reshape(gu, (1, E, S, gu.shape[-1]))
+        h = ttnn.swiglu(gu, dim=-1)  # up * silu(gate) -> [1,E,S,I]
+        ttnn.deallocate(gu)
+        # per-(expert,row) scalar routing weight (0 for non-selected): applying it to h [1,E,S,I] before the down projection
+        # is exactly the same as applying it to d [1,E,S,H] afterwards and touches H/I = 9x fewer elements.
+        h = ttnn.multiply(h, ttnn.permute(routing, (0, 3, 2, 1)))
         d = ttnn.sparse_matmul(h, self.down, program_config=pc_d, is_input_a_sparse=True, **kw)  # [1,E,S,H]
         ttnn.deallocate(h)
         d = ttnn.reshape(d, (1, E, S, H))
-        d = ttnn.multiply(d, ttnn.permute(routing, (0, 3, 2, 1)))  # [1,E,S,1] per-row weights (0 for non-selected)
         out = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(d, dims=[1]))
         ttnn.deallocate(d)
         return ttnn.reshape(out, (1, 1, S, H))
@@ -171,7 +174,7 @@ class KimiExperts:
 
     def forward_prefill_dense(self, x: ttnn.Tensor, routing: ttnn.Tensor, chunk: int | None = None) -> ttnn.Tensor:
         """Every expert is applied to every token in prefill anyway, so run it as dense matmuls that fill the core grid:
-        g,u = x @ W[e] for all e (batch-broadcast matmul, [1,E,S,I]); h = silu(g)*u scaled by the per-row routing weight
+        [u|g] = x @ W[e] for all e (batch-broadcast matmul, [1,E,S,2I]); h = swiglu = u*silu(g) scaled by the per-row routing weight
         (0 for non-selected experts); permute to [S, E*I] and finish with ONE dense down projection against the down
         weights viewed as [E*I, H] (a free reshape of [1,E,I,H]). ~7 ops per sub-chunk instead of ~10 per 32-token group.
         """
@@ -186,23 +189,15 @@ class KimiExperts:
             n = min(step, T - s)
             xs = x if n == T else ttnn.slice(x, (0, 0, s, 0), (1, 1, s + n, H))
             rs = routing if n == T else ttnn.slice(routing, (0, 0, s, 0), (1, 1, s + n, E))
-            g = ttnn.matmul(
+            gu = ttnn.matmul(
                 xs,
-                self.gate,
+                self.gate_up,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat16,
                 compute_kernel_config=self.compute,
-            )  # [1,E,S,I]
-            u = ttnn.matmul(
-                xs,
-                self.up,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                dtype=ttnn.bfloat16,
-                compute_kernel_config=self.compute,
-            )
-            h = ttnn.multiply(ttnn.silu(g), u)
-            ttnn.deallocate(g)
-            ttnn.deallocate(u)
+            )  # [1,E,S,2I] = [up | gate]
+            h = ttnn.swiglu(gu, dim=-1)  # up * silu(gate) -> [1,E,S,I]
+            ttnn.deallocate(gu)
             h = ttnn.multiply(
                 h, ttnn.permute(rs, (0, 3, 2, 1))
             )  # [1,E,S,1] per-row expert weights (0 for non-selected)

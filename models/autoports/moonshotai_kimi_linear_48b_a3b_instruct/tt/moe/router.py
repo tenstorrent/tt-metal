@@ -65,15 +65,19 @@ class KimiRouter:
         scores = ttnn.sigmoid(logits)
         ttnn.deallocate(logits)
         choice = ttnn.add(scores, self.bias)
-        values, idx = ttnn.topk(choice, k=self.top_k, dim=-1)  # fp32 top-k (exact vs the HF fp32 router)
-        ttnn.deallocate(choice)
-        # scatter does not support fp32 tiled tensors: build the 0/1 selection mask in bf16, then combine in fp32
-        ones = ttnn.ones_like(ttnn.typecast(values, ttnn.bfloat16))
-        mask = ttnn.scatter(ttnn.zeros_like(ttnn.typecast(scores, ttnn.bfloat16)), dim=-1, index=idx, src=ones)
-        ttnn.deallocate(values)
+        values, idx = ttnn.topk(
+            choice, k=self.top_k, dim=-1
+        )  # fp32 top-k (exact vs the HF fp32 router), sorted descending
         ttnn.deallocate(idx)
-        ttnn.deallocate(ones)
-        chosen = ttnn.multiply(scores, ttnn.typecast(mask, ttnn.float32))  # scores at chosen experts, zero elsewhere
+        # selection mask = (choice >= k-th largest choice), all in fp32: 2 ops instead of the ones_like/zeros_like/scatter/
+        # 3x typecast chain (scatter has no fp32 tiled support). An exact fp32 tie at the k-th value would select k+1 experts
+        # for that token; the experts' sparsity/nnz are inferred from the routing tensor, so that is safe.
+        kth = ttnn.slice(values, (0, 0, 0, self.top_k - 1), (1, 1, values.shape[2], self.top_k))  # [1,1,S,1]
+        ttnn.deallocate(values)
+        mask = ttnn.ge(choice, kth)  # fp32 1.0 / 0.0, row-broadcast of the threshold
+        ttnn.deallocate(choice)
+        ttnn.deallocate(kth)
+        chosen = ttnn.multiply(scores, mask)  # scores at chosen experts, zero elsewhere
         ttnn.deallocate(scores)
         ttnn.deallocate(mask)
         if self.cfg.moe_renormalize:

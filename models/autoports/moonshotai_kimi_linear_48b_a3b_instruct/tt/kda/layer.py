@@ -24,7 +24,7 @@ from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.kda.chunked_pre
     chunked_kda_prefill_ttnn,
     make_constants,
 )
-from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.kda.decode_step import recurrent_kda_decode_ttnn
+from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.kda.decode_step import recurrent_kda_decode_step
 from models.autoports.moonshotai_kimi_linear_48b_a3b_instruct.tt.weights import as_device_tensor
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDA_SOFTPLUS_BETA, KDA_SOFTPLUS_THRESHOLD, KDAConfig
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE, KDAProgramConfig, KDARecurrenceProgramConfig
@@ -118,6 +118,23 @@ class KimiKDA:
             cache_path=weight_cache_path,
         )
         self._masks: dict[tuple[int, int], tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        # constant rms_norm weights that fold the decode step's L2 normalisation (K^-0.5) and the query scale into one op each
+        K = self.config.head_k_dim
+        mesh = ttnn.ReplicateTensorToMesh(mesh_device) if self.tp > 1 else None
+        self._l2_weight_q = ttnn.from_torch(
+            torch.full((1, 1, 1, K), K**-0.5 * self.scale),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=mesh,
+        )
+        self._l2_weight_k = ttnn.from_torch(
+            torch.full((1, 1, 1, K), K**-0.5),
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=mesh,
+        )
         # long-lived device tensors must exist BEFORE the first trace capture (a later allocation can land in a trace's
         # scratch region and be overwritten by every replay): allocate the exact-tail decode scratch now.
         self._tail_ds = self.allocate_decode_state(batch=1) if self.exact_tail is not None else None
@@ -398,28 +415,33 @@ class KimiKDA:
         for j in range(len(hist) - 1):
             ttnn.copy(hist[j + 1], hist[j])
         ttnn.copy(p.qkv, hist[-1])
-        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, c.q_dim)), (B, 1, c.num_heads, c.head_k_dim))
-        k = ttnn.reshape(
-            ttnn.slice(conv, (0, 0, c.q_dim), (1, B, c.q_dim + c.k_dim)), (B, 1, c.num_heads, c.head_k_dim)
-        )
-        v = ttnn.reshape(
-            ttnn.slice(conv, (0, 0, c.q_dim + c.k_dim), (1, B, self.conv_width)), (B, 1, c.num_heads, c.head_v_dim)
-        )
+        # head-major [B,H,1,K] / [B,H,1,V] straight from the slices (the recurrent step's native layout: one reshape each)
+        H, K, V = c.num_heads, c.head_k_dim, c.head_v_dim
+        q = ttnn.reshape(ttnn.slice(conv, (0, 0, 0), (1, B, c.q_dim)), (B, H, 1, K))
+        k = ttnn.reshape(ttnn.slice(conv, (0, 0, c.q_dim), (1, B, c.q_dim + c.k_dim)), (B, H, 1, K))
+        v = ttnn.reshape(ttnn.slice(conv, (0, 0, c.q_dim + c.k_dim), (1, B, self.conv_width)), (B, H, 1, V))
         ttnn.deallocate(conv)
         gate, beta = self._decode_gates_fp32(p.beta, p.decay_rank)  # gate [1,B,H_loc*K] fp32 (log decay), beta fp32
-        g = ttnn.reshape(gate, (B, 1, c.num_heads, c.head_k_dim))
-        beta = ttnn.reshape(beta, (B, 1, c.num_heads))
-        o, new_rec = recurrent_kda_decode_ttnn(
-            q, k, v, beta, g, ds.recurrent, scale=self.scale, device=self.mesh_device
+        g = ttnn.reshape(gate, (B, H, K, 1))
+        beta = ttnn.reshape(beta, (B, H, 1, 1))
+        o, _ = recurrent_kda_decode_step(
+            q,
+            k,
+            v,
+            beta,
+            g,
+            ds.recurrent,
+            scale=self.scale,
+            device=self.mesh_device,
+            l2_weight_q=self._l2_weight_q,
+            l2_weight_k=self._l2_weight_k,
+            state_out=ds.recurrent,  # new state written in place: the decode trace's state address stays stable
         )
-        ttnn.copy(new_rec, ds.recurrent)  # in place: keeps the decode trace's state address stable
-        ttnn.deallocate(new_rec)
-        # gated RMSNorm per head: norm(o) * w * sigmoid(gate)
-        o = ttnn.reshape(o, (B, c.num_heads, c.head_v_dim))
+        # gated RMSNorm per head: norm(o) * w * sigmoid(gate), on the step's [B,H,1,V] layout
         o = ttnn.rms_norm(o, epsilon=self.full_config.norm_eps, weight=w.norm)
-        og = ttnn.sigmoid(ttnn.reshape(p.output_gate, (B, c.num_heads, c.head_v_dim)))
+        og = ttnn.sigmoid(ttnn.reshape(p.output_gate, (B, H, 1, V)))
         o = ttnn.multiply(o, og)
-        o = ttnn.reshape(o, (1, B, c.num_heads * c.head_v_dim))
+        o = ttnn.reshape(o, (1, B, H * V))
         out = ttnn.linear(
             o,
             w.output_projection,
