@@ -17,9 +17,18 @@ uint32_t get_worker_noc_hop_distance(
 
     // Check if it's a MeshDevice and handle appropriately
     if (auto* mesh = dynamic_cast<distributed::MeshDevice*>(device)) {
-        TT_FATAL(mesh->num_devices() == 1, "get_worker_noc_hop_distance() is only supported on unit MeshDevice.");
+        // The hop metric is a device-local physical property (logical->physical worker coordinates
+        // come from that chip's SoC descriptor), so measuring it on the mesh's first local device is
+        // exact whenever the mesh is homogeneously harvested and a best-effort approximation
+        // otherwise -- the same stance the MeshCoordinate overload below already takes. Restricting
+        // this to a unit mesh gave callers no answer at all on a multi-device mesh: the DRAM-sharded
+        // matmul's multi-reader placement asks for it purely to rank candidate worker cores by NOC
+        // distance, so a unit-mesh-only assert silently barred every mesh from using more than one
+        // reader per DRAM bank.
+        const auto local_devices = mesh->get_devices();
+        TT_FATAL(!local_devices.empty(), "get_worker_noc_hop_distance: mesh has no local devices to measure on.");
         // Delegate to the underlying device
-        return get_worker_noc_hop_distance(mesh->get_devices().front(), logical_src, logical_dst, noc);
+        return get_worker_noc_hop_distance(local_devices.front(), logical_src, logical_dst, noc);
     }
 
     // Handle regular Device - cast to access internal physical_worker_core_from_logical_core
