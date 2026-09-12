@@ -561,6 +561,10 @@ void AttachBorrowedDFBBuffers(
 // ============================================================================
 
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+    // TEMPORARY (op-porting window): the skip_validation bypass is unhooked — see the note in
+    // BuildProgramFromSpec. To restore, delete this line.
+    skip_validation = false;
+
     log_debug(tt::LogMetal, "Setting ProgramRunArgs");
 
     // Metal 2.0 run-args API: only valid on a Program created from a ProgramSpec (the run-args
@@ -1153,6 +1157,12 @@ void ValidateUpdateProgramRunArgs(const Program& program, const ProgramRunArgs& 
 }
 
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation) {
+    // TEMPORARY (op-porting window): the skip_validation bypass is unhooked — see the note in
+    // BuildProgramFromSpec. This is the one that matters most for the custom-concept ports: the
+    // TensorSpec check reached from here is their only detection of a too-loose program hash.
+    // To restore, delete this line.
+    skip_validation = false;
+
     log_debug(tt::LogMetal, "Updating ProgramRunArgs (partial fast-path)");
 
     detail::ProgramImpl& program_impl = program.impl();
@@ -1324,6 +1334,10 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 }
 
 ProgramRunArgs MergeProgramRunArgs(ProgramRunArgs base, std::span<const ProgramRunArgs> rest, bool skip_validation) {
+    // TEMPORARY (op-porting window): the skip_validation bypass is unhooked — see the note in
+    // BuildProgramFromSpec. To restore, delete this line.
+    skip_validation = false;
+
     for (const ProgramRunArgs& other : rest) {
         // Tensor args: union by TensorParameter name (disjoint).
         for (const auto& [name, arg] : other.tensor_args) {

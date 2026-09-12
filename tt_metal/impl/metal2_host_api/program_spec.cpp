@@ -2946,6 +2946,13 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 namespace {
 
 Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation) {
+    // TEMPORARY (op-porting window): the skip_validation bypass is unhooked. Metal 2.0 legality
+    // checks are a ported op's primary safety net, and they must not be optional while ops are
+    // being ported. Every caller gets them, whatever it asks for. This covers all three public
+    // spec entry points (MakeProgramFromSpec, MakeMeshWorkloadFromSpec[s]), which funnel here.
+    // To restore the bypass, delete this line; the parameter is plumbed through untouched.
+    skip_validation = false;
+
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(&mesh_device));
     const Hal& hal = metal_ctx.hal();
