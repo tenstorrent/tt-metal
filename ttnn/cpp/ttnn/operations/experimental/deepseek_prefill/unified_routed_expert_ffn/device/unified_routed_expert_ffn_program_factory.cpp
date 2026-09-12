@@ -676,6 +676,45 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
 
+    // cb_push_back/cb_pop_front wrap the FIFO pointer only when it lands EXACTLY on
+    // fifo_limit; a ring that is not a whole number of the granule its kernels move
+    // leaves the pointer mid-ring forever and the next push walks into the neighbouring
+    // CB's L1. The granule is the FINEST push/pop any kernel issues on that CB, which is
+    // not always the block: the ragged down grid repeats on a whole output row, and the
+    // runtime per_core_M splits the x and intermediate blocks into strip-sized pieces.
+    // Checked here because the kernels cannot -- ASSERT is a no-op in Release.
+    const auto check_ring = [](const char* cb_name, uint32_t ring_tiles, uint32_t granule_tiles) {
+        TT_FATAL(
+            granule_tiles > 0 && ring_tiles % granule_tiles == 0,
+            "unified_routed_expert_ffn: {} ring ({} tiles) is not a whole number of the {}-tile "
+            "granule its kernels push; the FIFO pointer would never land on fifo_limit",
+            cb_name,
+            ring_tiles,
+            granule_tiles);
+    };
+    // x and its row-major staging move one in0_block_w_gu-wide tile-row strip at a time
+    // (the tilize helper pushes per strip; the per_core_M remainder is a pointer-only pad).
+    check_ring("cb_in0_x", gu_in0_block_num_tiles * (op.x_is_row_major ? 1u : 2u), in0_block_w_gu);
+    if (op.x_is_row_major) {
+        check_ring("cb_x_rm", gu_in0_block_num_tiles * 2, in0_block_w_gu);
+    }
+    // gate/up intermediates and their accumulators move one gate/up subblock at a time.
+    check_ring("cb_gate_intermed", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    check_ring("cb_partials_gu", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    check_ring("cb_partials_up", gu_out_block_num_tiles, gu_out_subblock_h * gu_out_subblock_w);
+    // The reader drains cb_activated one down K-block at a time; in0_block_w_d ==
+    // per_core_N_gu makes that granule the whole block, which this pins.
+    check_ring("cb_activated", gu_out_block_num_tiles, per_core_M * in0_block_w_d);
+    // Down partials and the output ring repeat on a whole output row when the N-subblock
+    // grid is ragged, and on a single subblock when it is exact.
+    const uint32_t d_row_granule = d_out_subblock_h * (d_subblocks_exact ? d_out_subblock_w : per_core_N_d);
+    check_ring("cb_mm_partials_d", d_out_block_num_tiles, d_row_granule);
+    check_ring("cb_out", cb_out_tiles, d_row_granule);
+    check_ring("cb_in0_down_full", d_in0_block_num_tiles * 2, d_in0_block_num_tiles);
+    check_ring("cb_in1_gate", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
+    check_ring("cb_in1_up", gu_in1_block_num_tiles * 2, gu_in1_block_num_tiles);
+    check_ring("cb_in1_down", d_in1_block_num_tiles * 2, d_in1_block_num_tiles);
+
     // Scratch CBs for the device-side count lookup. The reader does a single
     // noc_async_read_page(page=0, ...) of each tensor and then indexes
     // counts[global_expert_id] / idx[local_expert_id]. Both indices stay within
