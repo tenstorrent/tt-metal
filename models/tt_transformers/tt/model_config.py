@@ -1809,8 +1809,16 @@ class ModelArgs:
                 )
             )
         )
+        # A short prompt has very little to parallelise over: SDPA's work unit is
+        # (head, q_chunk), so a 128-token prefill at q_chunk=64 is 8 heads x 2 chunks = 16
+        # units, and the fixed (8, 8) grid leaves 48 of its 64 cores -- and 94 of the
+        # device's 110 -- with nothing to own. Halve the chunk on short prompts to double
+        # the units, and hand the op the grid the device actually has.
+        if seq_len <= 512 and (chunk_start_idx is None or chunk_start_idx == 0):
+            q_chunk = k_chunk = max(ttnn.TILE_SIZE, min(q_chunk, seq_len // 4))
+        grid = self.max_grid_size
         return ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
+            compute_with_storage_grid_size=(grid.x, grid.y),
             exp_approx_mode=False,
             q_chunk_size=q_chunk,
             k_chunk_size=k_chunk,
