@@ -696,8 +696,10 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         (1, 1),  # decode
         (128, 1),  # decode
         (32, 1),  # decode, 32 users on one mesh row (TP only, low-latency experts on the whole tile)
-        (16, 1),  # decode, 16 users: exercises the device-grid (13-wide on Blackhole) per-user placement
-        (22, 1),  # decode, 22 users: no rectangle of <= 8x8 cores holds one core per user (13 + 9 on Blackhole)
+        (
+            22,
+            1,
+        ),  # decode, 22 users: device-grid (13-wide on Blackhole) per-user placement, 13 + 9 cores (no <= 8x8 rectangle)
         (1, 128),  # prefill
         (1, 1024),  # prefill 1k
         (1, 4096),  # prefill 4k
@@ -706,7 +708,6 @@ def setup_decoder_layer(setup, reference_layer, local_batch_size, seq_len, layer
         "decode_low_latency",
         "decode_high_throughput",
         "decode_b32",
-        "decode_b16",
         "decode_b22",
         "prefill_128",
         "prefill_1024",
