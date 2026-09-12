@@ -109,6 +109,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     for (const auto& semaphore : program_descriptor.semaphores) {
         ttsl::hash::hash_combine(hash, hash_semaphore(semaphore));
     }
+    ttsl::hash::hash_combine(
+        hash, tt::tt_metal::experimental::blaze::hash_reload_table(program_descriptor.reload_table));
     return hash;
 }
 

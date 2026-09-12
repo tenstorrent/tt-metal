@@ -412,6 +412,9 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
+    // BRISC firmware source override (TT_METAL_FW_SRC_BRISC); empty means the in-tree source.
+    std::string fw_src_brisc;
+
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
     uint32_t device_print_dispatch_stall_us = 50;
@@ -954,6 +957,7 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
+    const std::string& get_fw_src_brisc() const { return fw_src_brisc; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

@@ -121,6 +121,9 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
         for (const auto& cb : other.cbs) {
             result.cbs.push_back(cb);
         }
+
+        // One launch message per merged program, so one reload table; two different ones is an error.
+        result.reload_table = experimental::blaze::merge_reload_tables(result.reload_table, other.reload_table);
     }
 
     // Custom program hash is invalidated after merge

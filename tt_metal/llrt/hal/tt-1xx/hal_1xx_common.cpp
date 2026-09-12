@@ -5,6 +5,7 @@
 #include "hal_1xx_common.hpp"
 #include "hal_types.hpp"
 #include "rtoptions.hpp"
+
 #include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal::hal_1xx {
@@ -87,7 +88,12 @@ std::vector<std::string> HalJitBuildQueryBase::srcs(const HalJitBuildQueryInterf
                     switch (params.processor_id) {
                         case 0:
                             if (params.is_fw) {
-                                srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisc.cc");
+                                // TT_METAL_FW_SRC_BRISC (captured in RunTimeOptions) names a BRISC firmware
+                                // source to build instead of the in-tree one, absolute or relative to
+                                // TT_METAL_HOME; it also disables the precompiled firmware.
+                                const std::string& fw_src_brisc = params.rtoptions.get_fw_src_brisc();
+                                srcs.push_back(
+                                    fw_src_brisc.empty() ? "tt_metal/hw/firmware/src/tt-1xx/brisc.cc" : fw_src_brisc);
                             } else {
                                 srcs.push_back("tt_metal/hw/firmware/src/tt-1xx/brisck.cc");
                             }
