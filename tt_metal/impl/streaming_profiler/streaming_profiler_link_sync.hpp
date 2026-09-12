@@ -25,6 +25,9 @@ constexpr uint32_t kPaceTicks = 500000;  // a round every 10 ms of the eth tile'
 constexpr uint32_t kL1Bytes = 128;
 
 enum class Role : uint32_t { None = 0, Sender = 1, Receiver = 2 };
+// TT_METAL_STREAMING_PROFILER_LINK_SYNC=0 leaves the link sync out of a profiler session: no links planned, every
+// router's role None. The rest of the profiler runs as usual; it is how the sync's own cost is measured.
+bool enabled();
 // The control word at the diagnostics' base (eth_ptp_link.hpp kCtlRun/kCtlStop): the sender issues rounds only while
 // it reads Run; a resident kernel exits on Stop and then sets the done word behind it.
 constexpr uint32_t kCtlRun = 1, kCtlStop = 2;

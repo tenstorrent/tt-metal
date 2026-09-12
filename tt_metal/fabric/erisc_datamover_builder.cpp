@@ -372,7 +372,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) : topo
     // Channel Allocations
     this->max_l1_loading_size =
         tt::tt_metal::hal::get_erisc_l1_unreserved_size() + tt::tt_metal::hal::get_erisc_l1_unreserved_base();
-    if (rtoptions.get_streaming_profiler_enabled()) {
+    if (rtoptions.get_streaming_profiler_enabled() && tt::tt_metal::streaming_profiler::link_sync::enabled()) {
         // The streaming profiler's link sync owns the top of the region (streaming_profiler_link_sync.hpp).
         this->max_l1_loading_size -= tt::tt_metal::streaming_profiler::link_sync::kL1Bytes;
     }
@@ -886,7 +886,7 @@ void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(
     // of the unreserved region, and the round period.
     namespace link_sync = tt::tt_metal::streaming_profiler::link_sync;
     link_sync::Role role = link_sync::Role::None;
-    if (rtoptions.get_streaming_profiler_enabled()) {
+    if (rtoptions.get_streaming_profiler_enabled() && link_sync::enabled()) {
         const auto chip = tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
             this->local_fabric_node_id);
         role = link_sync::role_of(
