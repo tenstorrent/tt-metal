@@ -22,6 +22,8 @@
  *   tile 2  in: ignored     out: cur_max = max(prev_max, worker_max)
  *   tile 3  in: prev_sum    out: exp_worker*worker_sum + exp_prev*prev_sum
  *   tile 4  in: worker_sum  out: exp_worker * worker_sum
+ *
+ * FP32 half-sync instead loads worker_sum into tile 2 and uses only tiles 0..3.
  */
 
 #include <cstdint>
@@ -49,7 +51,8 @@ constexpr bool SDPA_OP_IS_EXP = (SDPA_OP == OP_EXP_ACCURATE || SDPA_OP == OP_EXP
 
 // Derived from the op rather than passed in, so the tile count cannot disagree with the body.
 // Only the correction body works on more than one tile.
-constexpr std::uint32_t NUM_DST_TILES = (SDPA_OP == OP_CORRECTION) ? 5 : 1;
+constexpr bool REUSE_CUR_MAX_TILE     = is_fp32_dest_acc_en && dest_sync == ckernel::DstSync::SyncHalf;
+constexpr std::uint32_t NUM_DST_TILES = (SDPA_OP == OP_CORRECTION) ? (REUSE_CUR_MAX_TILE ? 4 : 5) : 1;
 
 static_assert(
     NUM_DST_TILES <= ckernel::get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, ckernel::DstTileShape::Tile32x32>(),
@@ -168,10 +171,7 @@ inline void sdpa_op(const std::uint32_t dst_index)
     else
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C,
-            static_cast<int>(EXP_SCALE_BF16));
+            sfpu::calculate_fused_max_sub_exp_add_tile<is_fp32_dest_acc_en, REUSE_CUR_MAX_TILE>, dst_index, VectorMode::C, static_cast<int>(EXP_SCALE_BF16));
     }
 }
 
