@@ -9,6 +9,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/operations/kernel_helper_functions/validation_helpers.hpp"
@@ -46,17 +47,22 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
-    DataflowBuffer batch_dfb(dfb::batch);
+    Scratchpad<volatile int> batch(scratch::batch);
 
-    volatile tt_l1_ptr int* addr_ptr = nullptr;
-
+    // Stage the b uint32 batch ids into the scratchpad, then index them back below. The
+    // `batch_id_size > 0` guard skips both the staging read and every later batch[] access when
+    // there are no ids, so the CPU never reads uninitialized scratch memory.
     if (batch_id_size > 0) {
-        batch_dfb.reserve_back(1);
-        uint32_t l1_write_addr = batch_dfb.get_write_ptr();
-        noc.async_read(batchAddr, batch_dfb, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read(batchAddr, batch, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-        batch_dfb.push_back(1);
-        addr_ptr = reinterpret_cast<volatile tt_l1_ptr int*>(l1_write_addr);
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+        // Quasar DM: the NoC wrote the ids straight to shared L1, but the CPU batch[] reads below go
+        // through the RISC's L2 cache, which invalidate_l1_cache() does not touch here. Drop the stale
+        // lines over the staged range so the CPU sees the NoC-written ids. No-op on WH/BH (CPU reads
+        // are coherent with NoC writes there and invalidate_l2_cache_range is tt-2xx-only).
+        invalidate_l2_cache_range(
+            static_cast<uintptr_t>(batch.get_base_address()), static_cast<size_t>(batch_id_size << 2));
+#endif
     }
 
     if constexpr (IS_SHARD_LOCAL) {
@@ -91,9 +97,9 @@ void kernel_main() {
             // indices give the last-listed value priority.
             bool replace_b = false;
             uint32_t replace_src = 0;
-            if (addr_ptr) {
+            if (batch_id_size > 0) {
                 for (uint32_t k = 0; k < batch_id_size; ++k) {
-                    if (static_cast<uint32_t>(addr_ptr[k]) == b_global) {
+                    if (static_cast<uint32_t>(batch[k]) == b_global) {
                         replace_b = true;
                         replace_src = k;
                     }
@@ -173,7 +179,7 @@ void kernel_main() {
             uint32_t batch_to_replace_id = 0;
             if (batch_id_size > 0) {
                 for (uint32_t i = 0; i < batch_id_size; ++i) {
-                    if (static_cast<uint32_t>(addr_ptr[i]) == my_batch_id) {
+                    if (static_cast<uint32_t>(batch[i]) == my_batch_id) {
                         replace_batch = true;
                         batch_to_replace_id = i;
                     }
@@ -238,9 +244,9 @@ void kernel_main() {
 
                 bool replace_batch = false;
                 uint32_t batch_to_replace_id = 0;
-                if (addr_ptr) {
+                if (batch_id_size > 0) {
                     for (uint32_t k = 0; k < batch_id_size; ++k) {
-                        if (static_cast<uint32_t>(addr_ptr[k]) == my_slice) {
+                        if (static_cast<uint32_t>(batch[k]) == my_slice) {
                             replace_batch = true;
                             batch_to_replace_id = k;
                         }
