@@ -80,7 +80,7 @@ METADATA_SIZE_BYTES = 12
 
 
 def _load_env_config() -> None:
-    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER
+    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS
     SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
     TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
     GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
@@ -91,6 +91,11 @@ def _load_env_config() -> None:
     # pattern) rather than a literal -- a hardcoded default silently under-covers any model
     # deeper than that literal when a manifest omits PREFILL_NUM_LAYERS.
     NUM_LAYERS = int(os.environ.get("PREFILL_NUM_LAYERS", ADAPTER.model_config.NUM_LAYERS))
+    # One ack fires per layer that WRITES KV, not per layer. Dense stacks are the same number, but a
+    # hybrid one is not: Kimi-K3 at 93 layers acks only its 24 full-attention layers, so draining
+    # NUM_LAYERS * pushes waits for acks that are never sent and burns the full 600 s timeout twice,
+    # once after warmup and once after the measured request.
+    NUM_ACK_LAYERS = getattr(ADAPTER, "num_kv_cache_layers", lambda n: n)(NUM_LAYERS)
 
 
 _load_env_config()
@@ -1142,7 +1147,7 @@ def main() -> None:
             push_chunk(0, cidx, cidx * CHUNK_SIZE, (cidx + 1) * CHUNK_SIZE)
         service.barrier()
         if ack_channel is not None:
-            _drain_layer_acks(ack_channel, NUM_LAYERS * warmup_chunks)
+            _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * warmup_chunks)
         logger.info("[producer] warmup complete; starting the measured request")
 
     stats = run_schedule(cfg, push_fn=push_chunk)
@@ -1157,7 +1162,7 @@ def main() -> None:
         f"p99={_percentile(sorted_ms, 0.99):.1f}"
     )
 
-    _drain_layer_acks(ack_channel, NUM_LAYERS * stats.total_pushes)
+    _drain_layer_acks(ack_channel, NUM_ACK_LAYERS * stats.total_pushes)
 
     if world_size > 1:
         _mr_bcast_resident(mr_rank, stats.resident)
