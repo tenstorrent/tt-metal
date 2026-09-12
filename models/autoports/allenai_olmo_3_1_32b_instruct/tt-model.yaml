@@ -36,7 +36,12 @@ serve:
   port: 8000
   block_size: 64
   capabilities:
-    tool_parser: olmo3
+    # olmo3_tt = vLLM's stock olmo3 pythonic parser + tolerance for a missing <function_calls> wrapper
+    # (vllm_bundle/olmo3/olmo3_tt_tool_parser.py, loaded by --tool-parser-plugin below). Under agentic system
+    # prompts that demand minimal output (OpenCode), Olmo 3 emits the bare call `read(filePath="...")` with no
+    # opening tag; the stock streaming parser then delivers the whole call as content and the agent never sees a
+    # tool call (campaign T7, 2026-09-11). Tagged output is parsed exactly as before.
+    tool_parser: olmo3_tt
   # Olmo 3 ends a tool-call turn with <|im_end|> (100265): in its chat template a function_calls turn is always followed by
   # an environment turn, so the model never learned to emit eos (<|endoftext|>, 100257) there. The upstream
   # generation_config.json lists only 100257, so after </function_calls> generation ran on and hallucinated the
@@ -45,6 +50,7 @@ serve:
   # 0.26's --override-generation-config only reaches the sampling defaults, not the eos list.
   args:
     - [--generation-config, /opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3]
+    - [--tool-parser-plugin, /opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3/olmo3_tt_tool_parser.py]
   additional_config:
     tt:
       trace_region_size: 160000000
@@ -94,7 +100,9 @@ verify:
   assert (d / 'config.json').is_file() and (d / 'performance_decoder_config.json').is_file() and (d / 'accuracy_decoder_config.json').is_file()
 - import json; m = json.load(open('/opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3/vllm_metadata.json'));
   assert m['arch'] == 'Olmo3ForCausalLM'
-- from vllm.tool_parsers import ToolParserManager; ToolParserManager.get_tool_parser('olmo3')
+- from vllm.tool_parsers import ToolParserManager; ToolParserManager.get_tool_parser('olmo3');
+  ToolParserManager.import_tool_parser('/opt/tt-metal/models/autoports/allenai_olmo_3_1_32b_instruct/vllm_bundle/olmo3/olmo3_tt_tool_parser.py');
+  assert ToolParserManager.get_tool_parser('olmo3_tt').__name__ == 'Olmo3LenientToolParser'
 - import inspect, transformers; from transformers.models.olmo3.modeling_olmo3 import Olmo3RotaryEmbedding as R;
   assert 'layer_type' in inspect.signature(R.forward).parameters, transformers.__version__
 card:
