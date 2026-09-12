@@ -49,7 +49,12 @@ void kernel_main() {
     constexpr uint32_t vWt = get_compile_time_arg_val(2);
     constexpr uint32_t arrive_sem_id = get_compile_time_arg_val(3);
     constexpr uint32_t release_sem_id = get_compile_time_arg_val(4);
-    constexpr auto grad_query_args = TensorAccessorArgs<5>();
+    // Row-tiles per block: B = Bt * 32, so a block is Bt * qWt tiles wide in
+    // memory and the statistics are Bt tiles instead of one.
+    constexpr uint32_t Bt = get_compile_time_arg_val(5);
+    constexpr uint32_t row_tiles = Bt * qWt;
+    constexpr uint32_t val_tiles = Bt * vWt;
+    constexpr auto grad_query_args = TensorAccessorArgs<6>();
     constexpr auto grad_key_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
 
@@ -81,9 +86,9 @@ void kernel_main() {
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
 
-        write_tiles_by_row(cb_grad_query, grad_query, (pair.i - 1u) * qWt, qWt, grad_bytes, qWt);
-        write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * qWt, qWt, grad_bytes, qWt);
-        write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * vWt, vWt, grad_bytes, vWt);
+        write_tiles_by_row(cb_grad_query, grad_query, (pair.i - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+        write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
+        write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
 
         noc_semaphore_inc(arrive_noc_addr, 1u);
 

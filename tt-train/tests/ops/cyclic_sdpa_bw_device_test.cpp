@@ -198,7 +198,12 @@ struct Gradients {
 };
 
 Gradients run_algorithm2(
-    uint32_t C, const Reference& ref, uint32_t grid_w, uint32_t grid_h, double* seconds = nullptr) {
+    uint32_t C,
+    const Reference& ref,
+    uint32_t grid_w,
+    uint32_t grid_h,
+    double* seconds = nullptr,
+    uint32_t Bt = 1) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -211,6 +216,11 @@ Gradients run_algorithm2(
     // so one value serves both loops.
     const uint32_t block_size = get_block_size(qWt, 4U);
     const uint32_t vWt = ref.d / kTile;
+    // A block is Bt tiles tall, so every operand of a block is that many
+    // times as many tiles and the score intermediates are Bt * Bt.
+    const uint32_t rowT = Bt * qWt;
+    const uint32_t valT = Bt * vWt;
+    const uint32_t scoreT = Bt * Bt;
 
     const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
     const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
@@ -238,35 +248,35 @@ Gradients run_algorithm2(
             CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
     };
     // Operands, per timestep.
-    make_cb(tt::CBIndex::c_0, qWt, tt::DataFormat::Float16_b);  // Q_i
-    make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);  // K_j
-    make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);  // V_j
-    make_cb(tt::CBIndex::c_3, vWt, tt::DataFormat::Float16_b);  // dO_i
-    make_cb(tt::CBIndex::c_4, 1, tt::DataFormat::Float32);      // L_i
-    make_cb(tt::CBIndex::c_5, 1, tt::DataFormat::Float32);      // D_i
-    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);    // causal mask
+    make_cb(tt::CBIndex::c_0, rowT, tt::DataFormat::Float16_b);  // Q_i
+    make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);  // K_j
+    make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);  // V_j
+    make_cb(tt::CBIndex::c_3, valT, tt::DataFormat::Float16_b);  // dO_i
+    make_cb(tt::CBIndex::c_4, Bt, tt::DataFormat::Float32);      // L_i
+    make_cb(tt::CBIndex::c_5, Bt, tt::DataFormat::Float32);      // D_i
+    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);     // causal mask
     // Intermediates.
-    make_cb(tt::CBIndex::c_10, 1, tt::DataFormat::Float32);  // P
-    make_cb(tt::CBIndex::c_11, 1, tt::DataFormat::Float32);  // dP
-    make_cb(tt::CBIndex::c_12, 1, tt::DataFormat::Float32);  // dS
-    make_cb(tt::CBIndex::c_13, 1, tt::DataFormat::Float32);  // dS^T
-    make_cb(tt::CBIndex::c_14, 1, tt::DataFormat::Float32);  // P^T
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P
+    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);  // dP
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);  // dS
+    make_cb(tt::CBIndex::c_13, scoreT, tt::DataFormat::Float32);  // dS^T
+    make_cb(tt::CBIndex::c_14, scoreT, tt::DataFormat::Float32);  // P^T
     // Each gradient: seed from the reader, accumulator, output to the writer.
-    make_cb(tt::CBIndex::c_15, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_18, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_19, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_20, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_21, vWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_22, vWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_23, vWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_15, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // control word
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
 
-    std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem};
+    std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
                           &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
@@ -278,7 +288,7 @@ Gradients run_algorithm2(
             .noc = NOC::RISCV_1_default,
             .compile_args = reader_args});
 
-    std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem};
+    std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem, Bt};
     for (const auto* t : {&grad_query, &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
@@ -302,7 +312,7 @@ Gradients run_algorithm2(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size}});
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt}});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
     const auto coordinator = device->worker_core_from_logical_core(
@@ -362,7 +372,8 @@ Gradients run_relay(
     uint32_t grid_w,
     uint32_t grid_h,
     bool endpoint_sync = false,
-    double* seconds = nullptr) {
+    double* seconds = nullptr,
+    uint32_t Bt = 1) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
 
@@ -375,6 +386,11 @@ Gradients run_relay(
     // so one value serves both loops.
     const uint32_t block_size = get_block_size(qWt, 4U);
     const uint32_t vWt = ref.d / kTile;
+    // A block is Bt tiles tall, so every operand of a block is that many
+    // times as many tiles and the score intermediates are Bt * Bt.
+    const uint32_t rowT = Bt * qWt;
+    const uint32_t valT = Bt * vWt;
+    const uint32_t scoreT = Bt * Bt;
 
     const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
     const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
@@ -400,27 +416,27 @@ Gradients run_relay(
             CircularBufferConfig(tiles * page, {{index, format}}).set_page_size(index, page));
     };
     // The packet buffers hold two slots; everything else holds one.
-    make_cb(tt::CBIndex::c_0, 2 * qWt, tt::DataFormat::Float16_b);  // Q_i
-    make_cb(tt::CBIndex::c_3, 2 * vWt, tt::DataFormat::Float16_b);  // dO_i
-    make_cb(tt::CBIndex::c_4, 2, tt::DataFormat::Float32);          // L_i
-    make_cb(tt::CBIndex::c_5, 2, tt::DataFormat::Float32);          // D_i
-    make_cb(tt::CBIndex::c_15, 2 * qWt, tt::DataFormat::Float32);   // dQ_i, travels along
-    make_cb(tt::CBIndex::c_1, qWt, tt::DataFormat::Float16_b);      // K_j
-    make_cb(tt::CBIndex::c_2, vWt, tt::DataFormat::Float16_b);      // V_j
-    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);        // causal mask
-    make_cb(tt::CBIndex::c_10, 1, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_11, 1, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_12, 1, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_13, 1, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_14, 1, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_16, qWt, tt::DataFormat::Float32);  // dQ accumulator
-    make_cb(tt::CBIndex::c_17, qWt, tt::DataFormat::Float32);  // dQ to the relay
-    make_cb(tt::CBIndex::c_18, qWt, tt::DataFormat::Float32);  // dK seed
-    make_cb(tt::CBIndex::c_19, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_20, qWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_21, vWt, tt::DataFormat::Float32);  // dV seed
-    make_cb(tt::CBIndex::c_22, vWt, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_23, vWt, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_0, 2 * rowT, tt::DataFormat::Float16_b);  // Q_i
+    make_cb(tt::CBIndex::c_3, 2 * valT, tt::DataFormat::Float16_b);  // dO_i
+    make_cb(tt::CBIndex::c_4, 2 * Bt, tt::DataFormat::Float32);      // L_i
+    make_cb(tt::CBIndex::c_5, 2 * Bt, tt::DataFormat::Float32);      // D_i
+    make_cb(tt::CBIndex::c_15, 2 * rowT, tt::DataFormat::Float32);   // dQ_i, travels along
+    make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);      // K_j
+    make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);      // V_j
+    make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);         // causal mask
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_13, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_14, scoreT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float32);  // dQ accumulator
+    make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);  // dQ to the relay
+    make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);  // dK seed
+    make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);  // dV seed
+    make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
     make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
@@ -452,7 +468,7 @@ Gradients run_relay(
     std::vector<uint32_t> reader_args = {
         C, qWt, vWt, release_sem, ready_imm0_sem, ready_imm1_sem, ready_dq0_sem,
         ready_dq1_sem, credit_prev_sem, credit_next_sem, credit_self_sem, endpoint1_sem,
-        endpoint2_sem};
+        endpoint2_sem, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
                           &grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(reader_args);
@@ -465,7 +481,7 @@ Gradients run_relay(
             .compile_args = reader_args,
             .defines = sync_defines});
 
-    std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem};
+    std::vector<uint32_t> writer_args = {C, qWt, vWt, arrive_sem, release_sem, Bt};
     for (const auto* t : {&grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
@@ -487,7 +503,7 @@ Gradients run_relay(
         ComputeConfig{
             .fp32_dest_acc_en = true,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt},
             .defines = compute_defines});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
@@ -589,14 +605,20 @@ void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d =
 }
 
 void check_relay(
-    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d = 64, bool endpoint_sync = false) {
+    uint32_t C,
+    uint32_t grid_w,
+    uint32_t grid_h,
+    uint32_t d = 64,
+    bool endpoint_sync = false,
+    uint32_t Bt = 1) {
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     if (grid_w > grid.x || grid_h > grid.y) {
         GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
     }
-    const uint32_t N = 2u * C * kTile;
+    // T = 2C blocks of B = Bt * 32 rows each.
+    const uint32_t N = 2u * C * Bt * kTile;
     const auto ref = make_reference(N, d);
-    const auto got = run_relay(C, ref, grid_w, grid_h, endpoint_sync);
+    const auto got = run_relay(C, ref, grid_w, grid_h, endpoint_sync, nullptr, Bt);
     expect_close(got.dQ, ref.dQ, 0.06F, "dQ");
     expect_close(got.dK, ref.dK, 0.06F, "dK");
     expect_close(got.dV, ref.dV, 0.06F, "dV");
@@ -654,6 +676,20 @@ TEST(CyclicSdpaBwRelayTest, FourCores) {
 
 TEST(CyclicSdpaBwRelayTest, EightCores) {
     check_relay(8, 4, 2);
+}
+
+// Blocks two tiles tall. The schedule is untouched -- a block is still a
+// block, and T is still 2C -- but each one covers 64 rows instead of 32, so
+// the packet carries twice the tiles, the score stages have four instead of
+// one, and the diagonal block needs the triangle handled per tile. What it
+// buys is FPU occupancy: measured on a single block pair, four times the
+// score-stage arithmetic for 2.12x the cycles.
+TEST(CyclicSdpaBwRelayTest, TwoCoresTallBlocks) {
+    check_relay(2, 1, 2, 64, /* endpoint_sync */ false, /* Bt */ 2);
+}
+
+TEST(CyclicSdpaBwRelayTest, FourCoresTallBlocks) {
+    check_relay(4, 2, 2, 64, /* endpoint_sync */ false, /* Bt */ 2);
 }
 
 // ------------------------------------------ Algorithm 4: no chip-wide barrier
@@ -890,6 +926,31 @@ TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
     const auto ref = make_reference(2u * C * kTile, 64);
     run_relay(C, ref, 4, 4, /*endpoint_sync=*/false, nullptr);
     ttml::autograd::ctx().close_device();
+}
+
+// The same total sequence length, cut into blocks two ways: C cores with
+// blocks one tile tall, and half as many cores with blocks two tiles tall.
+// Same arithmetic either way -- 2C^2 tile pairs -- so this is purely what
+// block shape does to how fast a core gets through it.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareBlockShapes) {
+    struct Shape {
+        uint32_t C, w, h, Bt;
+    };
+    for (const auto s : {Shape{16, 4, 4, 1}, Shape{8, 4, 2, 2},
+                         Shape{32, 8, 4, 1}, Shape{16, 4, 4, 2},
+                         Shape{64, 8, 8, 1}, Shape{32, 8, 4, 2},
+                         Shape{64, 8, 8, 2}}) {
+        const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+        if (s.w > grid.x || s.h > grid.y) {
+            continue;
+        }
+        const uint32_t N = 2u * s.C * s.Bt * kTile;
+        const auto ref = make_reference(N, 64);
+        double seconds = 0.0;
+        run_relay(s.C, ref, s.w, s.h, /* endpoint_sync */ false, &seconds, s.Bt);
+        std::cout << "  N=" << N << " on " << s.C << " cores, Bt=" << s.Bt << ": "
+                  << seconds * 1e6 << " us\n";
+    }
 }
 
 TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheHeadDimension) {

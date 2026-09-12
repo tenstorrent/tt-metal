@@ -143,7 +143,12 @@ void kernel_main() {
     constexpr uint32_t credit_self_sem_id = get_compile_time_arg_val(10);
     constexpr uint32_t endpoint1_sem_id = get_compile_time_arg_val(11);
     constexpr uint32_t endpoint2_sem_id = get_compile_time_arg_val(12);
-    constexpr auto query_args = TensorAccessorArgs<13>();
+    // Row-tiles per block: B = Bt * 32. Every packet field and every column
+    // buffer is that many times taller, and the row-packet strides with it.
+    constexpr uint32_t Bt = get_compile_time_arg_val(13);
+    constexpr uint32_t row_tiles = Bt * qWt;  // Q, dQ, K, dK per block
+    constexpr uint32_t val_tiles = Bt * vWt;  // dO, V, dV per block
+    constexpr auto query_args = TensorAccessorArgs<14>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
     constexpr auto grad_output_args = TensorAccessorArgs<value_args.next_compile_time_args_offset()>();
@@ -200,10 +205,10 @@ void kernel_main() {
     const uint32_t base_lse = get_write_ptr(cb_lse);
     const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
     const uint32_t base_grad_query = get_write_ptr(cb_grad_query_seed);
-    const uint32_t stride_query = qWt * tile_bytes;
-    const uint32_t stride_grad_output = vWt * tile_bytes;
-    const uint32_t stride_interm = interm_bytes;
-    const uint32_t stride_grad_query = qWt * grad_bytes;
+    const uint32_t stride_query = row_tiles * tile_bytes;
+    const uint32_t stride_grad_output = val_tiles * tile_bytes;
+    const uint32_t stride_interm = Bt * interm_bytes;
+    const uint32_t stride_grad_query = row_tiles * grad_bytes;
 
     volatile tt_l1_ptr uint32_t* release_sem =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(release_sem_id));
@@ -320,8 +325,8 @@ void kernel_main() {
         // operations using that storage complete before it is reused.
         const bool column_changed = (t == 0u) || (sched.pair(my_core, t - 1u).j != j);
         if (column_changed) {
-            read_tiles_by_row(cb_key, key, (j - 1u) * qWt, qWt, tile_bytes, qWt);
-            read_tiles_by_row(cb_value, value, (j - 1u) * vWt, vWt, tile_bytes, vWt);
+            read_tiles_by_row(cb_key, key, (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
+            read_tiles_by_row(cb_value, value, (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         }
 
         // Accumulated column gradients are needed only where an interval
@@ -343,9 +348,9 @@ void kernel_main() {
                 } while ((*release_sem) < t);
 #endif
                 WAYPOINT("COLD");
-                read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * qWt, qWt, grad_bytes, qWt);
+                read_tiles_by_row(cb_grad_key_seed, grad_key, (j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
                 read_tiles_by_row(
-                    cb_grad_value_seed, grad_value, (j - 1u) * vWt, vWt, grad_bytes, vWt);
+                    cb_grad_value_seed, grad_value, (j - 1u) * val_tiles, val_tiles, grad_bytes, val_tiles);
             }
             visited[owned_slot] = true;
         }
@@ -353,11 +358,11 @@ void kernel_main() {
         // release of t - 2 becoming a credit for whoever fills it.
         {
             DeviceZoneScopedN("SLOT-RESERVE");
-            cb_reserve_back(cb_query, qWt);
-            cb_reserve_back(cb_grad_output, vWt);
-            cb_reserve_back(cb_lse, 1);
-            cb_reserve_back(cb_u_scalar, 1);
-            cb_reserve_back(cb_grad_query_seed, qWt);
+            cb_reserve_back(cb_query, row_tiles);
+            cb_reserve_back(cb_grad_output, val_tiles);
+            cb_reserve_back(cb_lse, Bt);
+            cb_reserve_back(cb_u_scalar, Bt);
+            cb_reserve_back(cb_grad_query_seed, row_tiles);
         }
 
         const uint32_t qs = base_query + slot * stride_query;
@@ -411,24 +416,26 @@ void kernel_main() {
             }
 #endif
             DeviceZoneScopedN("LOAD-IMM-DRAM");
-            for (uint32_t k = 0; k < qWt; ++k) {
-                noc_async_read_page((i - 1u) * qWt + k, query, qs + k * tile_bytes);
+            for (uint32_t k = 0; k < row_tiles; ++k) {
+                noc_async_read_page((i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
             }
-            for (uint32_t k = 0; k < vWt; ++k) {
-                noc_async_read_page((i - 1u) * vWt + k, grad_output, os + k * tile_bytes);
+            for (uint32_t k = 0; k < val_tiles; ++k) {
+                noc_async_read_page((i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
             }
-            noc_async_read_page(i - 1u, lse, ls);
-            noc_async_read_page(i - 1u, u_scalar, ds);
+            for (uint32_t k = 0; k < Bt; ++k) {
+                noc_async_read_page((i - 1u) * Bt + k, lse, ls + k * interm_bytes);
+                noc_async_read_page((i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
+            }
             noc_async_read_barrier();
         }
 
         // The compute kernel can start on S, P, dP and dS now. It does not
         // touch dQ until after dS, so the rest of the packet has that long to
         // arrive.
-        cb_push_back(cb_query, qWt);
-        cb_push_back(cb_grad_output, vWt);
-        cb_push_back(cb_lse, 1);
-        cb_push_back(cb_u_scalar, 1);
+        cb_push_back(cb_query, row_tiles);
+        cb_push_back(cb_grad_output, val_tiles);
+        cb_push_back(cb_lse, Bt);
+        cb_push_back(cb_u_scalar, Bt);
 
         // Forward the immutable fields straight away, before this core has
         // computed anything: the packet carries them unchanged, so they never
@@ -452,11 +459,11 @@ void kernel_main() {
         if (receiver == my_core) {
             // The self-transition: reserving the destination slot is the
             // credit, and the copies are local.
-            cb_reserve_back(cb_query, qWt);
-            cb_reserve_back(cb_grad_output, vWt);
-            cb_reserve_back(cb_lse, 1);
-            cb_reserve_back(cb_u_scalar, 1);
-            cb_reserve_back(cb_grad_query_seed, qWt);
+            cb_reserve_back(cb_query, row_tiles);
+            cb_reserve_back(cb_grad_output, val_tiles);
+            cb_reserve_back(cb_lse, Bt);
+            cb_reserve_back(cb_u_scalar, Bt);
+            cb_reserve_back(cb_grad_query_seed, row_tiles);
             noc_async_write(qs, get_noc_addr(dst_query), stride_query);
             noc_async_write(os, get_noc_addr(dst_grad_output), stride_grad_output);
             noc_async_write(ls, get_noc_addr(dst_lse), stride_interm);
@@ -494,17 +501,17 @@ void kernel_main() {
             WAYPOINT("DQRD");
         } else {
             DeviceZoneScopedN("LOAD-DQ-DRAM");
-            for (uint32_t k = 0; k < qWt; ++k) {
-                noc_async_read_page((i - 1u) * qWt + k, grad_query, gs + k * grad_bytes);
+            for (uint32_t k = 0; k < row_tiles; ++k) {
+                noc_async_read_page((i - 1u) * row_tiles + k, grad_query, gs + k * grad_bytes);
             }
             noc_async_read_barrier();
         }
-        cb_push_back(cb_grad_query_seed, qWt);
+        cb_push_back(cb_grad_query_seed, row_tiles);
 
         // This core's contribution closes the packet.
         {
             DeviceZoneScopedN("WAIT-COMPUTE-DQ");
-            cb_wait_front(cb_grad_query_out, qWt);
+            cb_wait_front(cb_grad_query_out, row_tiles);
         }
         const uint32_t dq_out = get_read_ptr(cb_grad_query_out);
 
@@ -528,8 +535,8 @@ void kernel_main() {
         } else {
             // Streak end: spill dQ_i and complete the write, so the reload at
             // the next streak start observes it.
-            for (uint32_t k = 0; k < qWt; ++k) {
-                noc_async_write_page((i - 1u) * qWt + k, grad_query, dq_out + k * grad_bytes);
+            for (uint32_t k = 0; k < row_tiles; ++k) {
+                noc_async_write_page((i - 1u) * row_tiles + k, grad_query, dq_out + k * grad_bytes);
             }
             noc_async_write_barrier();
 #if ENDPOINT_SYNC
@@ -547,7 +554,7 @@ void kernel_main() {
 
         }
 
-        cb_pop_front(cb_grad_query_out, qWt);
+        cb_pop_front(cb_grad_query_out, row_tiles);
 
         // The compute kernel has popped this timestep's slot, so it is free
         // for destination t + 2 and its producer can be told now rather than
