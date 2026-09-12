@@ -128,9 +128,9 @@ void kernel_main() {
         for (uint32_t row = 0; row < k_rows_per_block; ++row) {
             const uint32_t source_tile =
                 (block * k_rows_per_block + row) * bank_row_stride_tiles + shard_column_offset_tiles;
-            const uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
+            constexpr uint32_t read_size = tiles_per_k_row * in1_tile_size_bytes;
             const uint32_t read_address = in1_tensor_addr + source_tile * in1_tile_size_bytes;
-            noc.async_read<NocOptions::TXN_ID, NOC_MAX_BURST_SIZE>(
+            noc.async_read<NocOptions::TXN_ID, read_size>(
                 dram_bank,
                 CoreLocalMem<uint32_t>(l1_write_addr_in1),
                 read_size,

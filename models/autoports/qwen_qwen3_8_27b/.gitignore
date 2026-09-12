@@ -1,0 +1,30 @@
+# Runtime and profiler output must stay local. Keep source, tests, and compact
+# Markdown reviews in Git; regenerate the evidence below when needed.
+*.log
+*.csv
+*.tracy
+*.pftrace
+*.jsonl
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.npy
+*.npz
+*.png
+*.jpg
+*.jpeg
+*.gz
+*.zip
+doc/**/*.json
+doc/**/*.txt
+readiness_*.json
+*.refpt
+*.commit
+*.exit_status
+*.sha256
+__pycache__/
+tracy/
+generated/
+autoregressive/
+weight_cache/

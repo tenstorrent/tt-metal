@@ -1,0 +1,6 @@
+# Keep bulky collection intermediates locally; compact ops CSVs and reports
+# are retained in the stage checkpoint with hashes in evidence_manifest.json.
+tracy/*/.logs/
+tracy/*/reports/
+tracy/*/*_stacked.png
+synthetic_pytest_tmp/

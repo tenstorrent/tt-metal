@@ -312,6 +312,180 @@ def test_matmul_in1_dram_sharded_worker_counts(
     )
 
 
+def _check_mesh_dram_reader_placement(mesh, attributes, inputs, output, storage_grid, readers, expect_error):
+    factory = ttnn._ttnn.operations.matmul.MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory
+    with expect_error(RuntimeError, "requires a mesh dispatch coordinate"):
+        factory.create_descriptor(attributes, inputs, [output], storage_grid)
+
+    worker_grid = mesh.compute_with_storage_grid_size()
+    candidates = [(x, y) for x in range(worker_grid.x) for y in range(worker_grid.y)]
+    excluded = {
+        (x, y)
+        for cr in storage_grid.ranges()
+        for x in range(cr.start.x, cr.end.x + 1)
+        for y in range(cr.start.y, cr.end.y + 1)
+    }
+    for col in range(mesh.get_num_devices()):
+        coord = ttnn.MeshCoordinate(0, col)
+        # The fourth positional argument retains the legacy core_range_set API.
+        descriptor = factory.create_descriptor(
+            attributes, inputs, [output], storage_grid, mesh_dispatch_coordinate=coord
+        )
+        kernel = next(
+            k
+            for k in descriptor.kernels
+            if k.kernel_source.endswith("reader_bmm_tile_layout_in1_sender_dram_sharded.cpp")
+        )
+        assignments = {}
+        storage_width = output.memory_config().shard_spec.shape[1] // 32
+        logical_width = output.shape[-1] // 32
+        storage_capacity = ((logical_width + storage_width - 1) // storage_width) * storage_width
+        reader_width = kernel.compile_time_args[11]
+        for cr in kernel.core_ranges.ranges():
+            for x in range(cr.start.x, cr.end.x + 1):
+                for y in range(cr.start.y, cr.end.y + 1):
+                    args = kernel.runtime_args[x][y]
+                    if args[0]:
+                        assignments[(args[3], args[5])] = (x, y)
+                        reader_start = (args[3] * readers + args[5]) * reader_width
+                        if reader_start >= storage_capacity:
+                            assert reader_start >= logical_width
+                            assert args[6] == 0
+                            assert len(args) >= 11
+        assert len(set(assignments.values())) == len(assignments)
+        active_banks = max(bank for bank, _ in assignments) + 1
+        assert set(assignments) == {(bank, reader) for bank in range(active_banks) for reader in range(readers)}
+
+        primary = mesh.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0, coord)
+        used = {(core.x, core.y) for core in primary.values()}
+        for bank in range(active_banks):
+            assert assignments[(bank, 0)] == (primary[bank].x, primary[bank].y)
+            for reader in range(1, readers):
+                selected = assignments[(bank, reader)]
+                eligible = [core for core in candidates if core not in used and core not in excluded]
+                assert selected in eligible
+
+                def distance(core):
+                    return ttnn._ttnn.multi_device.experimental.get_worker_noc_hop_distance(
+                        mesh, coord, ttnn.CoreCoord(*core), primary[bank], ttnn.NOC.NOC_0
+                    )
+
+                # Placement must minimize this chip's physical distance, including harvesting.
+                assert distance(selected) == min(map(distance, eligible))
+                used.add(selected)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("readers", [1, 2, 3])
+@pytest.mark.parametrize("offset_submesh", [False, True], ids=["tp4", "offset_tp2"])
+@pytest.mark.parametrize(
+    "k,n,storage_cores",
+    [(2048, 1024, 8), (5120, 4160, 10), (5120, 256, 10), (5120, 8192, 8)],
+    ids=["regular", "padding_only_reader", "narrow_projection", "wide_bfp8_row"],
+)
+def test_matmul_dram_sharded_mesh_readers_cache(
+    mesh_device, readers, offset_submesh, k, n, storage_cores, expect_error
+):
+    if not is_blackhole():
+        pytest.skip("Multiple DRAM-sharded matmul readers are Blackhole-only")
+    mesh = (
+        mesh_device.create_submesh(ttnn.MeshShape(1, 2), ttnn.MeshCoordinate(0, 2)) if offset_submesh else mesh_device
+    )
+    mesh.enable_program_cache()
+    ranks = mesh.get_num_devices()
+    m = 32
+    storage_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(storage_cores - 1, 0))])
+    banks = mesh.dram_grid_size().x
+    padded_n = pad_to_dram_banks(n, banks * readers)
+    dram_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, mesh.dram_grid_size().y - 1))]
+    )
+    a_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(storage_grid, [m, k // storage_cores], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    b_memory = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, [k, padded_n // banks], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    output_memory = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
+    config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+        in0_block_w=2,
+        per_core_M=1,
+        per_core_N=(padded_n // 32 + storage_cores - 1) // storage_cores,
+        num_workers_per_dram_bank=readers,
+    )
+    compute = ttnn.init_device_compute_kernel_config(
+        mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=True
+    )
+    # Retain every allocation so subsequent same-shape calls must patch different addresses.
+    retained = []
+    addresses = []
+    cache_entries = None
+    for iteration in range(3):
+        torch.manual_seed(iteration)
+        a = torch.randn(ranks, 1, m, k).bfloat16().float()
+        b = torch.randn(ranks, 1, k, n).bfloat16().float()
+        a_tt = ttnn.from_torch(
+            a,
+            device=mesh,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=a_memory,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        b_tt = ttnn.from_torch(
+            b,
+            device=mesh,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=b_memory,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+        )
+        out = ttnn.matmul(
+            a_tt,
+            b_tt,
+            program_config=config,
+            memory_config=output_memory,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute,
+        )
+        result = ttnn.to_torch(
+            ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG), mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0)
+        )
+        for rank in range(ranks):
+            assert_numeric_metrics(
+                a[rank] @ b[rank],
+                result[rank],
+                check_allclose=False,
+                frobenius_threshold=0.02,
+                pcc_threshold=0.999,
+                check_ulp=False,
+            )
+        retained.append((a_tt, b_tt, out))
+        addresses.append((a_tt.buffer_address(), b_tt.buffer_address(), out.buffer_address()))
+        if cache_entries is None:
+            cache_entries = mesh.num_program_cache_entries()
+            assert cache_entries > 0
+            if readers > 1:
+                parameters = ttnn.MatmulParams()
+                parameters.program_config = config
+                parameters.output_mem_config = output_memory
+                parameters.output_dtype = ttnn.bfloat16
+                parameters.compute_kernel_config = compute
+                attributes = ttnn.create_matmul_attributes(a_tt, b_tt, parameters, [])
+                inputs = ttnn.MatmulInputs()
+                inputs.input_tensors = [a_tt, b_tt]
+                inputs.optional_input_tensors = [None]
+                _check_mesh_dram_reader_placement(mesh, attributes, inputs, out, storage_grid, readers, expect_error)
+        else:
+            assert mesh.num_program_cache_entries() == cache_entries
+    for tensor_index in range(3):
+        assert len({addresses[i][tensor_index] for i in range(3)}) == 3
+
+
 @pytest.mark.parametrize(
     "num_workers_per_dram_bank,shard_width_tiles",
     [(2, 8), (3, 12)],

@@ -12,6 +12,8 @@
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
@@ -810,9 +812,15 @@ static ProgramDescriptor create_program_dram_sharded_descriptor(
         mm_in1_sender_writer_args.push_back((std::uint32_t)vc);
         mm_in1_sender_writer_args.push_back(reader_assignment.worker_index);
 
-        if (per_core_N_in1_sender < per_core_N_storage) {
-            TT_FATAL(curr_storage_core_idx < num_cores_written_back, "Worker {} has no storage area assigned", core);
-
+        if (per_core_N_in1_sender < per_core_N_storage && curr_storage_core_idx >= num_cores_written_back) {
+            TT_FATAL(
+                i * per_core_N_in1_sender >= N,
+                "Worker {} has no output storage but still owns logical output columns",
+                core);
+            // DRAM bank padding can leave a final reader beyond all output shards.
+            // It must still feed compute and drain its output CB, but writes nothing.
+            mm_in1_sender_writer_args.push_back(0);
+        } else if (per_core_N_in1_sender < per_core_N_storage) {
             uint32_t remaining_per_core_N_storage = (per_core_N_storage - per_core_N_storage_curr_stride);
             uint32_t per_core_N_reshard_1 = (remaining_per_core_N_storage > per_core_N_in1_sender)
                                                 ? per_core_N_in1_sender
@@ -938,7 +946,7 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
     const ttnn::prim::MatmulParams& operation_attributes,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    const std::optional<CoreRangeSet>& /*core_range_set*/) {
+    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     const auto& input_tensors = tensor_args.input_tensors;
     const auto& optional_input_tensors = tensor_args.optional_input_tensors;
     const auto& output_tensors = tensor_return_value;
@@ -976,7 +984,24 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
 
     const bool row_broadcast_bias = operations::matmul::utilities::fused_matmul_bias_row_broadcastable(bias);
 
-    tt::tt_metal::IDevice* device = a.device();
+    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
+        operation_attributes.program_config.value());
+    auto* mesh = a.device();
+    tt::tt_metal::IDevice* device = mesh;
+    // Keep the single-reader mesh path, including remote coordinates. Multiple
+    // readers need the target chip's physical topology for placement and NoC args.
+    if (program_config.num_workers_per_dram_bank > 1) {
+        TT_FATAL(
+            mesh_dispatch_coordinate.has_value() || mesh->num_devices() == 1,
+            "Multi-reader DRAM matmul requires a mesh dispatch coordinate");
+        const auto coord =
+            mesh_dispatch_coordinate.value_or(ttnn::MeshCoordinate::zero_coordinate(mesh->shape().dims()));
+        TT_FATAL(mesh->get_view().contains(coord), "Mesh coordinate {} is out of bounds", coord);
+        TT_FATAL(
+            mesh->get_view().is_local(coord), "Multi-reader DRAM matmul requires a local physical device at {}", coord);
+        device = mesh->get_device(coord);
+        TT_FATAL(device != nullptr, "No physical device at mesh coordinate {}", coord);
+    }
 
     TT_FATAL(
         a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
@@ -1024,8 +1049,6 @@ ProgramDescriptor MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create
         in1_tile_shape[1]);
 
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config.value();
-    const auto& program_config = std::get<operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>(
-        operation_attributes.program_config.value());
     const auto& in0_block_w = program_config.in0_block_w;
     const auto& per_core_M = program_config.per_core_M;
     const auto& per_core_N = program_config.per_core_N;

@@ -2949,6 +2949,10 @@ __attribute__((optimize("Os"))) void teardown(
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
+    // Transaction barriers leave packet tags set. Restore this ERISC's owned NoC
+    // before the kernel-exit checks, without touching its peer's command buffers.
+    noc_clear_packet_tags(noc_index);
+
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
