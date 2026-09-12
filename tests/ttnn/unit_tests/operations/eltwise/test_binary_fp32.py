@@ -327,6 +327,34 @@ def test_bias_gelu_fp32(device, ttnn_function):
     assert status
 
 
+@pytest.mark.parametrize("scalar_bias", [False, True], ids=["tensor_bias", "scalar_bias"])
+def test_bias_gelu_fp32_defaults_to_accurate(device, scalar_bias):
+    # bias_gelu compiled the approximate gelu on every surface while ttnn.gelu defaulted to the
+    # accurate one, so fusing the bias silently changed the numerics with no way to opt out.
+    # The tensor-scalar and tensor-tensor overloads reached it by different routes, so both are
+    # covered here.
+    x_torch = torch.linspace(-5.0, 5.0, 1024, dtype=torch.float32).reshape(32, 32)
+    bias = 0.5
+    expected = torch.nn.functional.gelu(x_torch.double() + bias)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    bias_arg = (
+        bias
+        if scalar_bias
+        else ttnn.from_torch(torch.full_like(x_torch, bias), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    )
+
+    accurate_err = (ttnn.to_torch(ttnn.bias_gelu(x_tt, bias_arg)).double() - expected).abs().max()
+    approx_err = (
+        (ttnn.to_torch(ttnn.bias_gelu(x_tt, bias_arg, fast_and_approximate_mode=True)).double() - expected).abs().max()
+    )
+
+    # The default tracks ttnn.gelu's accurate path, which lands near 1e-06 over this range.
+    assert accurate_err < 1e-5
+    # The flag still has to reach the lookup table, or it is not wired up at all.
+    assert approx_err > 1e-3
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [
