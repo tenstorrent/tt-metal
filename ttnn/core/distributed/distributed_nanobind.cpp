@@ -1480,35 +1480,26 @@ void py_module(nb::module_& mod) {
                     coord (MeshCoordinate, optional): Which device of the mesh; the first when omitted.
             )doc");
     m_experimental.def(
-        "read_kernel_config",
+        "capture_kernel_config",
         [](MeshDevice* device, const CoreCoord& logical_core, const std::optional<MeshCoordinate>& coord) {
-            auto cfg = tt::tt_metal::experimental::ReadKernelConfig(device_at(device, coord), logical_core);
-            std::map<std::string, std::vector<uint32_t>> out;
-            out["kernel_config_base"] = cfg.kernel_config_base;
-            out["kernel_text_offset"] = cfg.kernel_text_offset;
-            out["kernel_text_size"] = cfg.kernel_text_size;
-            out["sem_offset"] = cfg.sem_offset;
-            out["rta_offset"] = cfg.rta_offset;
-            out["crta_offset"] = cfg.crta_offset;
-            out["local_cb_offset"] = {cfg.local_cb_offset};
-            out["remote_cb_offset"] = {cfg.remote_cb_offset};
-            out["local_cb_mask"] = {
-                static_cast<uint32_t>(cfg.local_cb_mask & 0xFFFFFFFFu), static_cast<uint32_t>(cfg.local_cb_mask >> 32)};
-            out["enables"] = {cfg.enables};
-            out["min_remote_cb_start_index"] = {cfg.min_remote_cb_start_index};
+            auto cfg = tt::tt_metal::experimental::CaptureKernelConfig(device_at(device, coord), logical_core);
+            const auto& launch_kernel_config = cfg.launch_kernel_config();
+            nb::dict out;
+            out["kernel_config_base"] = cfg.kernel_config_base();
+            out["kernel_config_size"] = cfg.kernel_config_size();
+            out["launch_kernel_config"] =
+                nb::bytes(reinterpret_cast<const char*>(launch_kernel_config.data()), launch_kernel_config.size());
             return out;
         },
         nb::arg("mesh_device"),
         nb::arg("logical_core"),
         nb::arg("coord") = nb::none(),
         R"doc(
-                Read back the kernel config a core is running, field by field.
+                Capture the kernel config a core is running.
 
-                Everything a kernel needs -- circular buffers, runtime args, semaphores,
-                text -- is addressed as kernel_config_base + offset, so these offsets plus
-                the bytes at that base are a complete description of a program on a core.
-                The runtime binary reload captures both after a stage has run once, and
-                replays them at a new base to bring that stage back.
+                Returns the L1 base and size of the relocatable kernel-config block plus an
+                opaque copy of the launch kernel config. Its detailed layout remains private
+                to Metal.
             )doc");
     m_experimental.def(
         "get_worker_noc_hop_distance",

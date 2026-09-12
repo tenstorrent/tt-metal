@@ -41,7 +41,7 @@ def _marker_program(target, cores=CORE_SET):
     for core in ttnn.corerange_to_cores(cores, row_wise=True):
         rt[core.x][core.y] = [target.buffer_address(), MARKER]
     kernel = ttnn.KernelDescriptor(
-        kernel_source="tests/ttnn/unit_tests/base_functionality/kernels/write_marker.cpp",
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/misc/write_l1_marker.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=cores,
         compile_time_args=[],
@@ -101,10 +101,10 @@ def test_configure_only_installs_the_program_and_never_runs_it(mesh_device):
     finally:
         ttnn.experimental.reload.set_configure_only(mesh_device, False)
     assert _words(mesh_device, addr, 1) == [0], "configure-only must not run the kernel"
-    cfg = ttnn.experimental.reload.read_kernel_config(mesh_device, CORE)
-    assert set(cfg) >= {"kernel_config_base", "kernel_text_offset", "kernel_text_size", "enables", "rta_offset"}
-    assert max(cfg["kernel_text_size"]) > 0, "but the configured program's binary is on the core"
-    assert cfg["enables"][0] != 0
+    cfg = ttnn.experimental.reload.capture_kernel_config(mesh_device, CORE)
+    assert set(cfg) == {"kernel_config_base", "kernel_config_size", "launch_kernel_config"}
+    assert cfg["kernel_config_size"] > 0, "but the configured program's binary is on the core"
+    assert cfg["launch_kernel_config"], "but the configured launch message is empty"
 
     ttnn.generic_op([other, scratch], program)
     # Raw L1 reads do not wait for the asynchronously launched kernel to finish.
@@ -126,7 +126,7 @@ def test_a_coordinate_outside_the_mesh_is_a_managed_error(mesh_device, expect_er
     with expect_error(RuntimeError, "outside the mesh"):
         ttnn.experimental.reload.write_core_l1(mesh_device, CORE, addr, [0], outside)
     with expect_error(RuntimeError, "outside the mesh"):
-        ttnn.experimental.reload.read_kernel_config(mesh_device, CORE, outside)
+        ttnn.experimental.reload.capture_kernel_config(mesh_device, CORE, outside)
     ttnn.deallocate(scratch)
 
 
