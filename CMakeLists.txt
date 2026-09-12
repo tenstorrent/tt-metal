@@ -251,6 +251,10 @@ if(TT_METAL_ENABLE_LOGGING)
     add_compile_definitions(SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE)
 endif()
 
+# The host-to-host RMA transport behind D2H2H2DSocket rides on MPI one-sided RMA, so it needs
+# no probe of its own: it is built whenever ENABLE_DISTRIBUTED brings MPI in. See
+# tt_metal/distributed/CMakeLists.txt, where TT_METAL_HOST_BRIDGE follows USE_MPI.
+
 include(GNUInstallDirs)
 # GNUInstallDirs takes PROJECT_DIR verbatim, but directories should always be lowercase
 string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)

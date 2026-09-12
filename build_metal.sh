@@ -485,6 +485,9 @@ if [ "$cxx_compiler_path" == "" ]; then
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
 
+# D2H2H2DSocket's host-to-host leg runs on MPI one-sided RMA, so it is built whenever
+# --enable-distributed brings MPI in. Nothing to probe here.
+
 echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
