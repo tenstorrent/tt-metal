@@ -1279,7 +1279,6 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         num_tile_cols,
         block_size,
         /*stats_tiles_cols=*/args.ring_size,
-        /*use_legacy_rsqrt=*/0u,
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,

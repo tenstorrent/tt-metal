@@ -607,17 +607,13 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
     }
-    else if constexpr (OPERATION == SfpuType::reciprocal)
+    else if constexpr (OPERATION == SfpuType::reciprocal || OPERATION == SfpuType::reciprocal_compat)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
     }
-    else if constexpr (OPERATION == SfpuType::reciprocal_compat)
-    {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en, true /* legacy_compat */>);
-    }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
-        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE, false /* legacy_compat */>);
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(rsqrt_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::sine)
     {
@@ -981,25 +977,9 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_negative_, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
         }
     }
-    else if constexpr (OPERATION == SfpuType::reciprocal)
+    else if constexpr (OPERATION == SfpuType::reciprocal || OPERATION == SfpuType::reciprocal_compat)
     {
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reciprocal, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode);
-    }
-    else if constexpr (OPERATION == SfpuType::reciprocal_compat)
-    {
-        // Legacy-compat reciprocal (legacy_compat = true routes calculate_reciprocal to
-        // _calculate_reciprocal_compat_). Distinct from SfpuType::reciprocal, which exercises
-        // the accurate legacy_compat = false path. Both are covered because the Compute API's
-        // recip_tile()/recip_tile_init() default to legacy_compat = true, so the *default*
-        // production path is this one -- and without this op the suite would only ever build
-        // the non-default kernel.
-        SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_reciprocal,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS, true /* legacy_compat */),
-            dst_index,
-            vector_mode);
     }
     else if constexpr (OPERATION == SfpuType::rsqrt)
     {
@@ -1007,7 +987,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_rsqrt,
-            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE, false /* legacy_compat */),
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE),
             dst_index,
             vector_mode);
     }
@@ -1557,14 +1537,11 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::rsqrt_compat)
     {
-        // Legacy-compat rsqrt: reciprocal-root method (legacy_compat = true routes
-        // calculate_rsqrt to _calculate_rsqrt_compat_). Distinct from SfpuType::rsqrt,
-        // which exercises the accurate legacy_compat = false path.
         SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_rsqrt,
-            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE, true /* legacy_compat */),
+            (APPROX_MODE, ITERATIONS, is_fp32_dest_acc_en, FAST_MODE),
             dst_index,
             vector_mode);
     }

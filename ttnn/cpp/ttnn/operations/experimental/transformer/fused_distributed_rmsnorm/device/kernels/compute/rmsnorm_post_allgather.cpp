@@ -38,10 +38,9 @@ void kernel_main() {
     constexpr uint32_t num_tile_cols = get_compile_time_arg_val(12);
     constexpr uint32_t block_size = get_compile_time_arg_val(13);
     constexpr uint32_t stats_tiles_cols = get_compile_time_arg_val(14);
-    constexpr bool use_legacy_rsqrt = get_compile_time_arg_val(15);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(16);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(17);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(18);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(15);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(16);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(17);
 
     const uint32_t num_tile_rows_to_process = get_arg_val<uint32_t>(0);
 
@@ -102,8 +101,8 @@ void kernel_main() {
         add_init(reduce_result_cb, epsilon_cb);
         tile_regs_acquire();
         add_tiles(reduce_result_cb, epsilon_cb, 0, 0, 0);
-        rsqrt_tile_init<use_legacy_rsqrt>();
-        rsqrt_tile<use_legacy_rsqrt>(0);
+        rsqrt_tile_init();
+        rsqrt_tile(0);
         tile_regs_commit();
         cb_reduce_result.pop_front(1);
         cb_reduce_result.reserve_back(1);
