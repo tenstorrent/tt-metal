@@ -53,7 +53,17 @@ class DistributedNorm(LightweightModule):
     identity (it still divides by RMS), hence this explicit mode.
     """
 
-    def __init__(self, norm, args, tt_ccl, prefetcher=None, TG=False, ag_config_key=None, enable_all_gather=True):
+    def __init__(
+        self,
+        norm,
+        args,
+        tt_ccl,
+        prefetcher=None,
+        TG=False,
+        ag_config_key=None,
+        enable_all_gather=True,
+        prefill_handover_cfg=None,
+    ):
         if norm is None and TG:
             raise NotImplementedError("Gather-only DistributedNorm (norm=None) is not supported on Galaxy (TG)")
         self.norm = norm
@@ -61,6 +71,13 @@ class DistributedNorm(LightweightModule):
         self.tt_ccl = tt_ccl
         self.prefetcher = prefetcher
         self.ag_config_key = ag_config_key
+        # ``seq_len -> memory config`` (or None) naming the layout the PROJECTION that
+        # consumes this norm wants its in0 in. The block-sharded prefill norm otherwise
+        # hands back L1-interleaved and the projection reshards that into its own width
+        # shard, so the activation is relaid out twice in a row; knowing the destination
+        # lets the norm land it in one. A caller that does not pass this (or returns
+        # None) keeps the interleaved handover, which every projection accepts.
+        self.prefill_handover_cfg = prefill_handover_cfg
 
         # Flag to control whether all_gather is performed after distributed norm (can be disabled when output should remain sharded)
         self.enable_all_gather = enable_all_gather
@@ -99,6 +116,24 @@ class DistributedNorm(LightweightModule):
     def _prefill_block_shard_cfg(self, x):
         """Block-shard configs for a prefill ``[1, 1, S, D]`` norm input, or ``(None, None)``."""
         return self._prefill_block_shard_cfg_for_shape(tuple(x.shape))
+
+    def _prefill_handover(self, x):
+        """The consumer's in0 shard for this chunk, or ``None`` to hand over interleaved.
+
+        Declines whenever the projection would not take the tensor as-is anyway: no
+        caller-supplied config, or a chunk long enough that the projection RESHAPES its
+        activation first (a reshape does not survive a shard spec), in which case the
+        interleaved handover is the only correct one.
+        """
+        if self.prefill_handover_cfg is None:
+            return None
+        seq_len = int(x.shape[-2])
+        if seq_len >= self.args.prefill_len_cutoff or seq_len > 1024:
+            return None
+        try:
+            return self.prefill_handover_cfg(seq_len)
+        except Exception:  # noqa: BLE001 -- a config we cannot build is just no handover
+            return None
 
     def _prefill_block_shard_cfg_for_shape(self, shape):
         """As above, from a SHAPE rather than a tensor.
@@ -277,8 +312,15 @@ class DistributedNorm(LightweightModule):
                 ttnn.deallocate(x_sharded)
                 # L1, not DRAM: this feeds the QKV / ff1-ff3 projection in the same layer
                 # and nothing else, so a DRAM round-trip here is ~2 MB of pure waste per
-                # norm. Interleaved, so the projection's in0 contract is unchanged.
-                x = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+                # norm. Interleaved, so the projection's in0 contract is unchanged --
+                # unless the caller named the projection's OWN in0 shard, in which case
+                # go straight there and the projection's reshard drops out.
+                handover = self._prefill_handover(x)
+                x = (
+                    ttnn.to_memory_config(y, handover)
+                    if handover is not None
+                    else ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+                )
                 ttnn.deallocate(y)
             else:
                 x = self.norm(

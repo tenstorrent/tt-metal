@@ -146,6 +146,11 @@ class TransformerBlock(LightweightModule):
             prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
+            # Name the layout QKV wants its in0 in, so the norm lands the activation
+            # there instead of handing back interleaved for QKV to reshard.
+            prefill_handover_cfg=lambda seq_len: args.prefill_1d_in0_memcfg(
+                args.get_attn_qkv_program_config(Mode.PREFILL, seq_len, self.prefetcher)
+            ),
         )
         self.ff_norm = DistributedNorm(
             RMSNorm(
@@ -168,6 +173,10 @@ class TransformerBlock(LightweightModule):
             prefetcher=self.prefetcher,
             TG=args.is_galaxy,
             ag_config_key="FFN_LN_AG_CONFIG",
+            # As above, for the ff1/ff3 pair this norm feeds.
+            prefill_handover_cfg=lambda seq_len: args.prefill_1d_in0_memcfg(
+                args.get_mlp_ff1_3_prg_config(Mode.PREFILL, seq_len, self.prefetcher)
+            ),
         )
         if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
