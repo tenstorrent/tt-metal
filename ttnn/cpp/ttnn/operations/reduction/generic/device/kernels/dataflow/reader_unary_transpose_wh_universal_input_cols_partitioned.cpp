@@ -26,6 +26,11 @@ void kernel_main() {
     constexpr bool use_welford = get_arg(args::use_welford) != 0;
     constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
     constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
+    // H-axis split geometry: the reduction axis is cut into `num_h_slices` slices of `slice_Ht` tiles
+    // each, and the work units become (nc, slice, wt) triples over a (N, C, num_h_slices, W) result.
+    // {1, Ht} is the un-split reduce.
+    constexpr auto num_h_slices = get_arg(args::num_h_slices);
+    constexpr auto slice_Ht = get_arg(args::slice_Ht);
 
     // Welford must process one column at a time because the SFPU can only maintain
     // a single running mean/M2 state. DEST_AUTO_LIMIT interleaves multiple columns
@@ -55,6 +60,65 @@ void kernel_main() {
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 
     auto tensor_accessor = TensorAccessor(tensor::src);
+
+    if constexpr (num_h_slices > 1) {
+        // Work units are (nc, slice, wt) in wt-fastest order. col_start_tile_id is the global id
+        // (curr_col_in_batch unused). Nesting matches the un-split DEST_AUTO_LIMIT chunking.
+        //
+        // Reads batch along the whole (i, j, k) stream rather than the k loop alone: the split sizes
+        // num_cols to fill the grid, so a core usually owns one column and its consecutive reads run
+        // down the slice's H. Only the trailing push is short, so every full reserve stays aligned to
+        // tiles_per_batch and none straddles the buffer wrap.
+        const uint32_t work_start = col_start_tile_id;
+        uint32_t filled = 0;
+        bool padded = false;
+        for (uint32_t i = 0; i < num_cols; i += row_chunk) {
+            const uint32_t chunk_end = std::min(i + row_chunk, num_cols);
+            for (uint32_t j = 0; j < slice_Ht; ++j) {
+                for (uint32_t k = i; k < chunk_end; ++k) {
+                    const uint32_t id = work_start + k;
+                    const uint32_t wt = id % Wt;
+                    const uint32_t slice = (id / Wt) % num_h_slices;
+                    const uint32_t nc = id / (Wt * num_h_slices);
+                    const uint32_t ht = slice * slice_Ht + j;
+
+                    if (filled == 0) {
+                        dfb_in0.reserve_back(tiles_per_batch);
+                    }
+                    if (ht < Ht) {
+                        noc.async_read(
+                            tensor_accessor,
+                            dfb_in0,
+                            tile_bytes,
+                            {.page_id = nc * HtWt + ht * Wt + wt},
+                            {.offset_bytes = filled * tile_bytes});
+                    } else {
+                        // slice_Ht is rounded up; pad past Ht with the SUM identity.
+                        noc.async_write_zeros(dfb_in0, tile_bytes, {.offset_bytes = filled * tile_bytes});
+                        padded = true;
+                    }
+
+                    if (++filled == tiles_per_batch) {
+                        noc.async_read_barrier();
+                        if (padded) {
+                            noc.write_zeros_l1_barrier();
+                        }
+                        dfb_in0.push_back(tiles_per_batch);
+                        filled = 0;
+                        padded = false;
+                    }
+                }
+            }
+        }
+        if (filled > 0) {
+            noc.async_read_barrier();
+            if (padded) {
+                noc.write_zeros_l1_barrier();
+            }
+            dfb_in0.push_back(filled);
+        }
+        return;
+    }
 
     uint32_t w = curr_col_in_batch;
 

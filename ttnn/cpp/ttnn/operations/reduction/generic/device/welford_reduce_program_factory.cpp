@@ -323,6 +323,9 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"enable_fp32_sfpu", 0u},
             // Welford is compute-bound: batching the reader's tiles measures flat, so it stays off.
             {"tiles_per_batch", 1u},
+            // Welford never splits the H axis; {1, Ht} selects the reader's un-split path.
+            {"num_h_slices", 1u},
+            {"slice_Ht", Ht},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
     } else {
