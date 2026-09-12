@@ -61,8 +61,8 @@ set_property(
 include(${SFPI_BASE}/sfpi-version.cmake)
 
 if(TT_USE_SYSTEM_SFPI)
-    # we'll use the system's version
-    set(SFPI_BASE "/opt/tenstorrent")
+    # Use an externally provided SFPI installation.
+    set(SFPI_DIR "${SFPI_ROOT}")
 elseif(NOT "${SFPI_hash}" STREQUAL "")
     # download a toolchain
     include(FetchContent)
@@ -75,6 +75,7 @@ elseif(NOT "${SFPI_hash}" STREQUAL "")
         "${SFPI_BASE}/sfpi"
     )
     FetchContent_MakeAvailable(sfpi)
+    set(SFPI_DIR "${SFPI_BASE}/sfpi")
 else()
     message(STATUS "No downloadable SFPI tarball for ${SFPI_arch} ${SFPI_dist}")
     if(IS_READABLE "${SFPI_BASE}/${SFPI_filename}")
@@ -104,9 +105,10 @@ else()
             COMMAND_ERROR_IS_FATAL ANY
         )
     endif()
+    set(SFPI_DIR "${SFPI_BASE}/sfpi")
 endif()
 
-set(GPP_CMD "${SFPI_BASE}/sfpi/compiler/bin/riscv-tt-elf-g++")
+set(GPP_CMD "${SFPI_DIR}/compiler/bin/riscv-tt-elf-g++")
 if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
@@ -125,10 +127,7 @@ message(STATUS "Using SFPI compiler: ${GPP_CMD} ${GPP_VERSION}")
 string(REGEX REPLACE "^\\([^:]+:([^[)]+)(\\[[0-9]+\\])?\\) .*$" "\\1" GPP_VERSION ${GPP_VERSION})
 if(NOT ${GPP_VERSION} STREQUAL "${SFPI_version}")
     if(TT_USE_SYSTEM_SFPI)
-        message(
-            FATAL_ERROR
-            "Installed SFPI version ${GPP_VERSION} does not match required version ${SFPI_version}\nYou need to run `${PROJECT_SOURCE_DIR}/install_dependencies.sh --sfpi`."
-        )
+        message(FATAL_ERROR "Provided SFPI version ${GPP_VERSION} does not match required version ${SFPI_version}.")
     else()
         message(FATAL_ERROR "SFPI packaging malfunction, ${SFPI_version} delivers ${GPP_VERSION}")
     endif()
@@ -140,8 +139,8 @@ if(NOT TT_USE_SYSTEM_SFPI)
     # undefined symbol: blob\t(./a.out)
     file(
         GLOB SFPI_BINARIES
-        "${SFPI_BASE}/sfpi/compiler/bin/*"
-        "${SFPI_BASE}/sfpi/compiler/libexec/gcc/riscv-tt-elf/*/*"
+        "${SFPI_DIR}/compiler/bin/*"
+        "${SFPI_DIR}/compiler/libexec/gcc/riscv-tt-elf/*/*"
     )
     execute_process(
         COMMAND
