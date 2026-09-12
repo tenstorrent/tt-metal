@@ -359,7 +359,13 @@ class MLP(LightweightModule):
                 w2_in,
                 self.w2,
                 compute_kernel_config=li_ff2_compute_kernel_cfg,
-                dtype=self.args.ccl_dtype if TG else activation_dtype or ttnn.bfloat16,
+                # ff2's only consumer is the reduce-scatter below, and that collective is
+                # byte-bound: pack the projection straight to the CCL dtype instead of
+                # handing it bf16. The attention side already hands its wo output over in
+                # bf8_b; this is the same narrowing on the MLP side, and it needs no
+                # typecast op because the matmul itself packs the smaller format. Only the
+                # layer's own contribution is quantized -- the residual stream stays bf16.
+                dtype=self.args.ccl_dtype,
                 program_config=None if use_tg_decode_no_prefetch else pc_2,
                 memory_config=(
                     ttnn.DRAM_MEMORY_CONFIG
