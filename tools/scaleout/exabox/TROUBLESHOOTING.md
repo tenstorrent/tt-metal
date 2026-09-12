@@ -272,7 +272,7 @@ timeout 30 mpirun --host bh-glx-120-c07u02 -np 1 hostname; echo "exit=$?"    # e
 
 **Other things to check if SSH is fine but the probe still fails**:
 
-- **Wrong `mpirun` on PATH**: `which mpirun` should ideally be the ULFM build (`/opt/openmpi-v5.0.7-ulfm/bin/mpirun`). Prepend it to PATH if a different OpenMPI is picked up.
+- **Wrong `mpirun` on PATH**: `which mpirun` should ideally be the ULFM build (`/opt/openmpi-v5.0.10-ulfm/bin/mpirun`). Prepend it to PATH if a different OpenMPI is picked up.
 - **Subnet/routing mismatch**: if the hostname resolves to an address *outside* your MPI interface's subnet (e.g. host resolves to `10.32.28.1` but `ens5f0np0` is `10.32.28.33/27`), forcing OOB/BTL onto that interface can break the `orted` callback. SSH launch still works over the management net, but you may hit an OOB/BTL connectivity error mid-run. Compare `getent hosts <host>` against `ip addr show <interface>`.
 
 ---
