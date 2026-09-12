@@ -61,10 +61,13 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
     float n4 = static_cast<float>(n + 4);
     float n5 = static_cast<float>(n + 5);
     float nf = static_cast<float>(n);
-    float inv_nf = 1.0f / nf;
-    float c_b2 = n1 / 12.0f;                           // B_2 term coefficient
-    float c_b4 = -(n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
-    float c_b6 = (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    // The scale (-1)^(n+1) * n! goes into every term rather than onto the final sum: the unscaled
+    // sum sits n! below the result and flushes to zero while the result is still a normal float.
+    float inv_nf = scale / nf;
+    float c_b2 = scale * n1 / 12.0f;                           // B_2 term coefficient
+    float c_b4 = -scale * (n1 * n2 * n3) / 720.0f;             // B_4 term coefficient
+    float c_b6 = scale * (n1 * n2 * n3 * n4 * n5) / 30240.0f;  // B_6 term coefficient
+    float half_scale = 0.5f * scale;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -72,7 +75,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
         sfpi::vFloat sum = sfpi::vFloat(0.0f);
 
         // Part 1: Exact summation of first NUM_TERMS terms
-        // Σ_{k=0}^{NUM_TERMS-1} 1/(x+k)^(n+1)
+        // Σ_{k=0}^{NUM_TERMS-1} scale/(x+k)^(n+1)
         for (int k = 0; k < NUM_TERMS; k++) {
             sfpi::vFloat xi = x + static_cast<float>(k);
 
@@ -86,7 +89,7 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
                 inv_xi = sfpu_reciprocal_iter<1>(xi);
             }
 
-            sfpi::vFloat inv_power = inv_xi;
+            sfpi::vFloat inv_power = inv_xi * scale;
             for (int j = 1; j < n_plus_1; j++) {
                 inv_power = inv_power * inv_xi;
             }
@@ -110,21 +113,19 @@ inline void calculate_polygamma(std::uint32_t n_packed, std::uint32_t scale_pack
 
         sfpi::vFloat inv_z2 = inv_z * inv_z;
 
-        // Compute inv_z^n by repeated multiplication
-        sfpi::vFloat inv_z_n = inv_z;  // inv_z^1
-        for (int j = 1; j < n; j++) {
-            inv_z_n = inv_z_n * inv_z;  // inv_z^n
-        }
-
         // Use PolynomialEvaluator for the Bernoulli polynomial in the tail:
         // E = inv_nf + c_b2*inv_z2 + c_b4*inv_z2^2 + c_b6*inv_z2^3
         sfpi::vFloat E = PolynomialEvaluator::eval(inv_z2, inv_nf, c_b2, c_b4, c_b6);
-        sfpi::vFloat tail = inv_z_n * (E + 0.5f * inv_z);
+        // Multiply inv_z^n into the scaled tail one factor at a time, so that no intermediate
+        // falls below the result.
+        sfpi::vFloat tail = E + half_scale * inv_z;
+        for (int j = 0; j < n; j++) {
+            tail = tail * inv_z;
+        }
 
         sum = sum + tail;
 
-        // Apply scale: (-1)^(n+1) * n!
-        sfpi::vFloat result = sum * scale;
+        sfpi::vFloat result = sum;
 
         if constexpr (!is_fp32_dest_acc_en) {
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);

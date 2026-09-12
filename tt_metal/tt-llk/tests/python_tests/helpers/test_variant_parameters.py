@@ -342,6 +342,29 @@ class SFPU_SHIFT_AMOUNT(TemplateParameter):
 
 
 @dataclass
+class SFPU_POLYGAMMA_ORDER(TemplateParameter):
+    """Order n for polygamma, emitted as the (n, scale) fp32 bit patterns ttnn passes.
+
+    ``scale`` is (-1)^(n+1) * n!, exact in fp32 for every supported order (1..11). Macros
+    rather than constexprs for the same reason as :class:`SFPU_SHIFT_AMOUNT`: sfpu_operations.h
+    selects on ``#ifdef``, and a test that does not set this keeps trigamma (n = 1).
+    """
+
+    polygamma_order: int = 1
+
+    def convert_to_cpp(self) -> str:
+        n = self.polygamma_order
+        scale = (-1) ** (n + 1) * math.factorial(n)
+        n_bits, scale_bits = (
+            struct.unpack("<I", struct.pack("<f", v))[0] for v in (n, scale)
+        )
+        return (
+            f"#define SFPU_POLYGAMMA_N_BITS {n_bits:#x}u\n"
+            f"#define SFPU_POLYGAMMA_SCALE_BITS {scale_bits:#x}u"
+        )
+
+
+@dataclass
 class DISABLE_SRC_ZERO_FLAG(TemplateParameter):
     disable_src_zero_flag: bool
 

@@ -734,6 +734,17 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
 #else
     constexpr std::uint32_t SHIFT_AMOUNT = 3u;
 #endif
+    // Polygamma order n and its scale (-1)^(n+1) * n!, as the fp32 bit patterns ttnn passes to
+    // polygamma_tile. Overridable via the SFPU_POLYGAMMA_ORDER template parameter so the Python
+    // side can sweep n = 1..11; a test that does not set it keeps trigamma (n = 1, scale = 1).
+    // The golden reads the same order through UnarySFPUGolden's polygamma_order argument.
+#ifdef SFPU_POLYGAMMA_N_BITS
+    constexpr std::uint32_t POLYGAMMA_N_BITS     = SFPU_POLYGAMMA_N_BITS;
+    constexpr std::uint32_t POLYGAMMA_SCALE_BITS = SFPU_POLYGAMMA_SCALE_BITS;
+#else
+    constexpr std::uint32_t POLYGAMMA_N_BITS     = 0x3f800000u; // n = 1.0f
+    constexpr std::uint32_t POLYGAMMA_SCALE_BITS = 0x3f800000u; // scale = 1.0f
+#endif
     // Integer threshold for relu_min's vInt branch, as a two's-complement uint32 (_relu_min_
     // declares the parameter std::uint32_t and immediately static_casts it to int). Overridable
     // via the SFPU_RELU_MIN_INT_THRESHOLD template parameter, on the same #ifdef arrangement as
@@ -1506,16 +1517,8 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
-        // order n = 1 (trigamma); scale = (-1)^(n+1) * n! = 1.0f.
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE,
-            DST_ACCUM_MODE,
-            calculate_polygamma,
-            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
-            dst_index,
-            vector_mode,
-            0x3f800000u /* n = 1.0f */,
-            0x3f800000u /* scale = 1.0f */);
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_polygamma, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, POLYGAMMA_N_BITS, POLYGAMMA_SCALE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {
