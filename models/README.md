@@ -46,6 +46,12 @@
 | [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 163       | 105.0  | 45           | 105.0   | [v0.65.0-dev20251208](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-dev20251208) |
 | [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/whisper)  | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole)        | 63       | 263.4  |            | 263.4   | [v0.65.0-dev20251208](https://github.com/tenstorrent/tt-metal/tree/v0.65.0-dev20251208) |
 
+## Text-to-Speech
+
+| Model                                                                                      | Batch | Hardware                                                       | Real-time factor | Latency (≈2.4 s clip) | TT-Metalium Release                                                     |
+|--------------------------------------------------------------------------------------------|-------|----------------------------------------------------------------|------------------|-----------------------|-------------------------------------------------------------------------|
+| [Kokoro-82M](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/audio/kokoro)  | 1     | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 2.7×             | 0.88 s                | bring-up ([#50489](https://github.com/tenstorrent/tt-metal/issues/50489)) |
+
 ## Diffusion Models
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
