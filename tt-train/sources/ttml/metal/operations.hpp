@@ -7,6 +7,7 @@
 #include "ops/cross_entropy_bw/cross_entropy_bw.hpp"
 #include "ops/cross_entropy_fw/cross_entropy_fw.hpp"
 #include "ops/frobenius_normalize/frobenius_normalize.hpp"
+#include "ops/gumbel_sample/gumbel_sample.hpp"
 #include "ops/k_split_gram_matmul/k_split_gram_matmul.hpp"
 #include "ops/layernorm_bw/layernorm_bw.hpp"
 #include "ops/layernorm_fw/layernorm_fw.hpp"
