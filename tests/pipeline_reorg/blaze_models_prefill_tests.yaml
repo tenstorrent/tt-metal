@@ -1377,7 +1377,8 @@
       # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
       # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
       # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
-      # Sized off the slower measurement; the shield/demo cap for bh_sc4 is 120.
+      # Sized off the slower measurement. shield/demo bh_sc4 is a SUM over the team's legs on that
+      # SKU, not a per-leg cap, so this raises it to 150: 20 (Kimi-K2.7) + 30 (GLM-5.2) + 100.
       timeout: 100
       tier: 1
       release_ready: false

@@ -192,7 +192,11 @@ shield:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 120
+    # Sum of the three SC4 disaggregated-prefill legs: Kimi-K2.7 20, GLM-5.2 30, Kimi-K3 100.
+    # Kimi-K3 is 93 layers against the others' depths and its bringup is dominated by streaming a
+    # 1.5 TB TTNN cache off the models share on four ranks at once -- measured 42.6 and 65.9 min to
+    # all ranks serving on runs 34648535999 and 34659612357.
+    bh_sc4: 150
     bh_sc1: 105
 
 scaleout:
