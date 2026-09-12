@@ -2786,8 +2786,6 @@ class MiniMaxH3Pipeline:
                 t_first = t_step
             else:
                 t_steady += t_step
-            if i % 10 == 0 or i == len(timesteps) - 1:
-                self._log(f"  step {i + 1}/{len(timesteps)} t={float(t):.4f}")
             on_event(DenoiseStep(step=i + 1, total=len(timesteps), sigma=float(t)))
 
         # This rung is now warm: any later request that pads to it may trace. Set only after the loop
