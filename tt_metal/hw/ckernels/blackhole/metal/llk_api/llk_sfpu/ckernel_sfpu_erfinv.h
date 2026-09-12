@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
+#include "ckernel_sfpu_erfinv_bf16.h"
 #include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_sqrt_custom.h"
 
@@ -28,7 +29,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
 
     // Paper sets a constant a = 0.147.
     // This constant is used to compute two constant expressions:
-    constexpr float TwoPiA = -4.330746750799873f;   // -2 / (pi * a)
+    constexpr float TwoPiA = -4.330746750799873f;  // -2 / (pi * a)
     constexpr float OneDivA = 6.802721088435375f;  // 1/a
 
     // tmp = -2 / (pi * a) - log(1 - x^2)/2
@@ -45,22 +46,32 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void calculate_erfinv() {
     constexpr int ITERATIONS = 8;
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat result = calculate_erfinv_body<false>(in);
-        in = sfpi::dst_reg[0];  // reload due to register pressure
-        sfpi::dst_reg[0] = sfpi::copysgn(result, in);
-        sfpi::dst_reg++;
+    if constexpr (is_fp32_dest_acc_en) {
+        // fp32 destination: pre-existing Winitzki implementation.
+        for (int d = 0; d < ITERATIONS; d++) {
+            sfpi::vFloat in = sfpi::dst_reg[0];
+            sfpi::vFloat result = calculate_erfinv_body<false>(in);
+            in = sfpi::dst_reg[0];  // reload due to register pressure
+            sfpi::dst_reg[0] = sfpi::copysgn(result, in);
+            sfpi::dst_reg++;
+        }
+    } else {
+        // BF16 destination: exhaustively validated kernel (see the header).
+        calculate_erfinv_bf16<ITERATIONS>();
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void erfinv_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    log_init<false, false, false>();
+    if constexpr (is_fp32_dest_acc_en) {
+        // Winitzki `calculate_erfinv_body` hardcodes `calculate_log_body<false, false, false>`,
+        // so keep this log_init instantiation literally (do not forward dest-acc).
+        log_init<false, false, false>();
+    }
 }
 
 }  // namespace sfpu
