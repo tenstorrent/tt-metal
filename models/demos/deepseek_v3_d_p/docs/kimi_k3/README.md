@@ -59,15 +59,64 @@ the one it is finishing.
 
 | rank | layers | 1 user | 2 users | delta |
 |---|---|---|---|---|
-| 0 | 0-23 | 829 ms | 707 ms | -122 |
-| 1 | 24-47 | 853 ms | 699 ms | -154 |
-| 2 | 48-71 | 858 ms | 714 ms | -144 |
-| 3 | 72-92 | 706 ms | 568 ms | -138 |
+| 0 | 0-23 | 727 ms | 707 ms | -20 |
+| 1 | 24-47 | 738 ms | 699 ms | -39 |
+| 2 | 48-71 | 747 ms | 714 ms | -33 |
+| 3 | 72-92 | 603 ms | 568 ms | -35 |
 
 Both columns are per-rank MEDIAN `CHUNK_COMPUTE` with the first two chunks per rank dropped, so they
 are comparable to each other but NOT to the `pipeline_4rank_93L_rebased` table above, which reports
 means over every chunk including the cold ones. Two slots is faster per chunk than one on every rank:
 one slot pays a fill and drain bubble on every chunk, two slots hide it.
+
+The 1-user column was previously 829/853/858/706, taken from the pre-rebase run of 2026-09-07. That
+made the benefit read as 122 to 154 ms when it is 20 to 39 ms: the old numbers carried a build
+difference as well as a slot difference. Both columns above are now the same build, measured on
+2026-09-12.
+
+## What concurrency buys, and where chunk 0 goes
+
+One 93-layer 24/24/24/21 configuration at three slot counts, same build (2026-09-12), 11 chunks of
+5120 per slot, untraced, `PREFILL_SYNC_PER_CHUNK=1`.
+
+| users | bottleneck rank median | steady state | end-to-end | chunk 0, share of rank-compute |
+|---|---|---|---|---|
+| 1 | 747 ms | 6857 tok/s | -- | 55% |
+| 2 | 714 ms | 7174 tok/s | 2263 tok/s | 42% |
+| 8 | 713 ms | 7177 tok/s | 4600 tok/s | 15% |
+
+Steady state saturates at TWO slots: 1 to 2 buys 4.6%, 2 to 8 buys 0.04%. The pipeline is
+compute-bound from two slots on, so extra concurrency does not make a chunk cheaper. What it does is
+amortise a fixed cost. `wall = fill + users * 11 * bottleneck` fits both measured runs with the same
+fill -- 34.1 s at two users, 35.2 s at eight -- so end-to-end throughput climbs from 2263 to 4600
+tok/s purely because the fill is spread over 88 chunks instead of 22. **7177 tok/s is the ceiling for
+this split**; more slots approach it and none exceed it.
+
+Quoting the producer's end-to-end number alone therefore understates the model by up to 3x, and by a
+factor that depends on how many chunks the run happened to push.
+
+### Chunk 0 is one program build, not a per-slot cost
+
+Chunk 0 costs 8 to 14 s per rank against a 0.6 to 0.75 s steady chunk, and it does not move with slot
+count -- 1, 2 and 8 users all pay it once. Every later slot's first chunk is normal (685-710 ms), so
+it is once per process.
+
+`PREFILL_ACK_TIMING=1` splits `zero_pad_and_ack` into its zero and its ack. On the first MLA layer of
+the first chunk, against every later call:
+
+    ACK_TIMING layer=3 zero_ms=5863.5 ack_ms=577.7 total_ms=6441.2   <- first call
+    ACK_TIMING layer=3 zero_ms=0.3    ack_ms=0.4   total_ms=0.7      <- steady state
+
+6.4 s of the ~8.1 s chunk 0, 79%, is the first-ever build of the `zero_padded_kv_cache` and
+`outbound_socket_service_sync` programs. The remaining five MLA layers cost 0.3 ms even on chunk 0,
+so only the first pays the kernel build and the per-`layer_idx` hash variants hit build-once dedup.
+
+The warm-up pass cannot absorb it as things stand: `zero_pad_and_ack`'s body is gated on
+`d2h_service is not None or on_layer_complete is not None` (`tt/kv_ack.py`), and neither transport is
+wired when `runtime.compile()` runs -- the D2H service is built later, inside `_serve_request`. So
+the warm-up never enters the function and never builds those two programs. The traced path already
+warms them explicitly before capture, with the comment that a capture cannot absorb a program-cache
+miss; the eager path wants the same treatment, which would reclaim ~6 s per rank of the fill.
 
 ## The KDA inverse, after #55626
 
