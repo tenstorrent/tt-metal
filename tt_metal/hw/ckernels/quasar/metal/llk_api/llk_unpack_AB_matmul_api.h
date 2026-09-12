@@ -163,6 +163,14 @@ inline void llk_unpack_AB_matmul(
     // In1/InB -> srcA
     LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
     LLK_TDMA_GUARD_NOTE_TDMA(operandB);
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp1,
+        operandA,
+        "unpack_AB_matmul operandA DFB differs from the one llk_unpack_AB_matmul_init programmed");
+    LLK_REINIT_GUARD_ASSERT_MATCHES(
+        ckernel::trisc::BfdResource::Unp0,
+        operandB,
+        "unpack_AB_matmul operandB DFB differs from the one llk_unpack_AB_matmul_init programmed");
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);

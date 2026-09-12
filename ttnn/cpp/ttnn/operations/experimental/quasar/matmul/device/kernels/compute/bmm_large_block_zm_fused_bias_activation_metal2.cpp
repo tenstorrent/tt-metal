@@ -481,6 +481,9 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 pack_reconfig_data_format(out_cb_id);
 #endif
+#ifdef ARCH_QUASAR
+                pack_init(out_cb_id);
+#endif
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
 #endif

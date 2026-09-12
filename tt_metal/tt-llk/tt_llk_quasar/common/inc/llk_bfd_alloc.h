@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-#include "ckernel_trisc_common.h"
+#include "ckernel_buf_desc.h"
 #include "ckernel_trisc_id.h"
 #include "llk_assert.h"
 
@@ -42,18 +42,6 @@
 
 namespace ckernel::trisc
 {
-
-// Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
-// compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
-enum class BfdResource : std::uint8_t
-{
-    Unp0 = 0,
-    Unp1,
-    Pack0,
-    Pack1,
-    Count
-};
-
 // Sentinel for "no id allocated yet" in current[]. Real ids are 0..31, so 128 is safely out of
 // range and fits uint8_t. current[] is bss zero-init on device (0 is a valid id), so it must be
 // set to this sentinel inside the lazy-init block, not via a static initializer.
