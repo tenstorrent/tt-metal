@@ -317,6 +317,7 @@ class TTFastDecoder:
         t[0, 0, 0] = hidden.to(torch.bfloat16)
         host = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._x_mapper)
         ttnn.copy_host_to_device_tensor(host, self.x0_dev)
+        self._x_host = host  # keep the source alive until the next write (the copy is enqueued, not awaited)
 
     def _set_token(self, code: int):
         t = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
@@ -325,6 +326,7 @@ class TTFastDecoder:
             t, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh)
         )
         ttnn.copy_host_to_device_tensor(host, self.tok_dev)
+        self._tok_host = host  # see _set_hidden
 
     def _read_logits(self, logits: ttnn.Tensor) -> torch.Tensor:
         t = ttnn.to_torch(ttnn.get_device_tensors(logits)[0]).float()
@@ -356,7 +358,10 @@ class TTFastDecoder:
     def _run(self, name: str) -> ttnn.Tensor:
         if self.use_trace and self.traces:
             tid, out = self.traces[name]
-            ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=True)
+            # step0 keeps the host sync (one per frame); the 9 "step" replays are enqueued non-blocking and the
+            # logits read-back that follows each of them is the sync: everything is on cq 0, so the token write,
+            # the replay and the read stay ordered and the host stops paying a round trip per step.
+            ttnn.execute_trace(self.mesh, tid, cq_id=0, blocking=(name == "step0"))
             return out
         return self._body_step0() if name == "step0" else self._body_step()
 

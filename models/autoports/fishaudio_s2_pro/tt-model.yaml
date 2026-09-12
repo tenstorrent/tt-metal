@@ -55,6 +55,7 @@ serve:
     FISH_S2_CODEC_DEVICE: cpu
     FISH_S2_FAST_DEVICE: tt
     FISH_S2_STREAM_CHUNK_FRAMES: "32"
+    FISH_S2_FIRST_CHUNK_FRAMES: "4"      # first streamed segment after 4 frames (~0.19 s of audio) instead of 8
     FISH_S2_WARMUP: "1"
     TT_METAL_OPERATION_TIMEOUT_SECONDS: "120.0"
   args: ["--timeout-keep-alive", "75"]
