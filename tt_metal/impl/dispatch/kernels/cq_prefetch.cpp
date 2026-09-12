@@ -531,7 +531,7 @@ FORCE_INLINE uint32_t read_from_pcie(
         size);
 #endif
     noc_async_read_set_trid(trid);
-    noc_async_read(host_src_addr, dst_addr, size);
+    noc_async_read_pcie(host_src_addr, dst_addr, size);
     // Avoid leaking this trid to unrelated reads.
     noc_async_read_set_trid(0U);
     pending_read_size = needed_bytes;
