@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
+
 import ttnn
 
 Topology = ttnn._ttnn.operations.ccl.Topology
@@ -32,7 +34,6 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
         placement.dim if isinstance(placement, ttnn.PlacementShard) else None
         for placement in tensor_topology.placements()
     )
-
     function_args = list(function_args)
     function_kwargs = dict(function_kwargs)
     if function_args:
@@ -48,20 +49,24 @@ def _preprocess_collective_golden_inputs(function_args, function_kwargs):
 def _mesh_coordinate_to_index(coordinate, mesh_shape):
     """Convert a row-major mesh coordinate to its flat device index."""
 
+    coordinate_key = tuple(int(value) for value in coordinate)
     index = 0
-    for value, dimension in zip(coordinate, mesh_shape):
-        index = index * dimension + int(value)
+    for value, dimension in zip(coordinate_key, mesh_shape):
+        index = index * dimension + value
     return index
 
 
 def _get_collective_groups(mesh_shape, cluster_axis):
     """Return row-major device indices grouped along the collective axis."""
 
-    import itertools
     import math
 
     if cluster_axis is None:
         return [list(range(math.prod(mesh_shape)))]
+    if cluster_axis < 0:
+        cluster_axis += len(mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {mesh_shape}")
 
     groups = {}
     for coordinate in itertools.product(*(range(dimension) for dimension in mesh_shape)):
@@ -73,7 +78,6 @@ def _get_collective_groups(mesh_shape, cluster_axis):
 def _compose_mesh_golden_outputs(per_device_outputs, mesh_shape, mesh_shard_dims):
     """Compose per-device Torch values according to mesh shard placements."""
 
-    import itertools
     import math
     import torch
 
@@ -542,6 +546,9 @@ def _preprocess_moe_routing_remap_golden_inputs(function_args, function_kwargs):
     golden_args, golden_kwargs = ttnn.decorators.default_preprocess_golden_function_inputs(
         function_args, function_kwargs
     )
+    # cluster_axis indexes the physical device mesh, so use the physical mesh shape (the
+    # tensor's distribution shape may differ, e.g. a default replicated topology is 1D
+    # even on a 2D device mesh).
     golden_kwargs["_ttnn_golden_mesh_shape"] = tuple(input_tensor.device().shape)
     return golden_args, golden_kwargs
 
@@ -555,6 +562,8 @@ def _golden_function_moe_routing_remap(
     _ttnn_golden_mesh_shape=None,
     **kwargs,
 ):
+    import math
+
     import torch
 
     if _ttnn_golden_mesh_shape is None:
@@ -563,22 +572,22 @@ def _golden_function_moe_routing_remap(
     non_zero_indices = torch.nonzero(routing_weights_tensor.flatten(), as_tuple=False).flatten()
     local_non_zero_size = non_zero_weight_size // expert_parallel_size
 
-    num_devices = 1
-    for dimension in _ttnn_golden_mesh_shape:
-        num_devices *= dimension
+    if cluster_axis < 0:
+        cluster_axis += len(_ttnn_golden_mesh_shape)
+    if cluster_axis < 0 or cluster_axis >= len(_ttnn_golden_mesh_shape):
+        raise ValueError(f"Collective axis {cluster_axis} is invalid for mesh shape {_ttnn_golden_mesh_shape}")
     member_stride = 1
     for dimension in _ttnn_golden_mesh_shape[cluster_axis + 1 :]:
         member_stride *= dimension
 
     per_device_outputs = []
-    for device_index in range(num_devices):
+    for device_index in range(math.prod(_ttnn_golden_mesh_shape)):
         member_index = (device_index // member_stride) % _ttnn_golden_mesh_shape[cluster_axis]
         local_start = member_index * local_non_zero_size
         local_indices = non_zero_indices[local_start : local_start + local_non_zero_size]
         output = torch.zeros_like(routing_weights_tensor)
         output.flatten()[local_indices] = routing_weights_tensor.flatten()[local_indices]
         per_device_outputs.append(output)
-    # Comparison composes the mesh output by concatenating its per-device [1, experts] rows.
     return torch.cat(per_device_outputs, dim=0)
 
 
