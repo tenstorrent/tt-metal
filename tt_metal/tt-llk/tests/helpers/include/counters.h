@@ -16,18 +16,21 @@
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 
 #ifdef ARCH_QUASAR
-#error "Perf counters are not supported on Quasar yet (no Quasar hw_counters.h; untested register set)."
+#error "Perf counters are not supported on Quasar yet (no Quasar tables in perf_counters/; untested register set)."
 #endif
 
-// Include order matters: hw_counters.h uses PerfCounterType, which perf_counters.hpp defines.
+// Counter inventory, register map and register primitives are shared with the metal profiler.
 #include <array>
-// clang-format off
-#include "perf_counters.hpp"
-#include "hw_counters.h"
-// clang-format on
+
+#include "perf_counters/hw.h"
+#include "perf_counters/inventory.h"
+#include "perf_counters/registers.h"
 
 namespace llk_perf
 {
+
+using llk::perf::Bank;
+using llk::perf::PerfCounterType;
 
 constexpr std::uint32_t PERF_COUNTERS_MAX_ZONES = 8;
 constexpr std::uint32_t SYNC_ZONE_COMPLETE      = 0xFFu; // written after readout; host polls for it
@@ -57,17 +60,8 @@ constexpr std::uint32_t PERF_COUNTERS_LAYOUT_END        = PERF_COUNTERS_VALID_CO
 // A literal because BRISC has no llk_profiler namespace; the LLK_PROFILER section asserts it symbolically.
 static_assert(PERF_COUNTERS_LAYOUT_END <= 0x16AFF0u, "Perf counter L1 layout overflows into the profiler region");
 
-// On-wire bank IDs; the order is a contract with base_addrs[], banks[] and the host.
-enum class counter_bank : std::uint8_t
-{
-    instrn_thread = 0,
-    fpu           = 1,
-    tdma_unpack   = 2,
-    l1            = 3,
-    tdma_pack     = 4,
-};
-
-constexpr std::uint32_t COUNTER_BANK_COUNT = 5;
+// On-wire bank IDs are llk::perf::Bank; the order is a contract with the host.
+constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
 
 // Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
@@ -80,10 +74,8 @@ constexpr std::uint32_t PERF_CFG_COUNTER_SHIFT = 8; // bits 16:8 (9-bit counter_
 constexpr std::uint32_t PERF_CFG_COUNTER_MASK  = 0x1FFu;
 constexpr std::uint32_t PERF_CFG_BANK_MASK     = 0xFFu; // bits 7:0
 
-// hw_counters.h is the authority and L1_MUX_MASK arrives already shifted.
-constexpr std::uint32_t PERF_CNT_MUX_CTRL_SHIFT = 4;
-constexpr std::uint32_t PERF_CNT_MUX_CTRL_MASK  = L1_MUX_MASK;
-constexpr std::uint32_t PERF_L1_MUX_MAX         = PERF_CNT_MUX_CTRL_MASK >> PERF_CNT_MUX_CTRL_SHIFT;
+// The arch header is the authority and L1_MUX_MASK arrives already shifted.
+constexpr std::uint32_t PERF_L1_MUX_MAX = llk::perf::L1_MUX_MASK >> llk::perf::L1_MUX_SHIFT;
 
 constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uint8_t mux = 0)
 {
@@ -92,19 +84,12 @@ constexpr std::uint32_t _perf_cfg(std::uint8_t bank, std::uint16_t cid, std::uin
 }
 
 // The volatile index stops GCC emitting a CSWTCH table, which shifts GP offsets and breaks NC/WC .text equality.
-inline std::uint32_t get_counter_base_addr(counter_bank bank)
+inline const llk::perf::BankRegs& get_bank_regs(Bank bank)
 {
-    static constexpr std::uint32_t base_addrs[COUNTER_BANK_COUNT] = {
-        RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,
-        RISCV_DEBUG_REG_PERF_CNT_FPU0,
-        RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,
-        RISCV_DEBUG_REG_PERF_CNT_L1_0,
-        RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,
-    };
-    static_assert(
-        static_cast<std::uint32_t>(counter_bank::tdma_pack) == COUNTER_BANK_COUNT - 1, "counter_bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
+    static_assert(static_cast<std::uint32_t>(Bank::TDMA_PACK) == COUNTER_BANK_COUNT - 1, "Bank enumerators must be contiguous 0..COUNTER_BANK_COUNT-1");
+    static constexpr llk::perf::BankRegs none {};
     volatile auto b = static_cast<std::uint32_t>(bank);
-    return b < COUNTER_BANK_COUNT ? base_addrs[b] : 0u;
+    return b < COUNTER_BANK_COUNT ? llk::perf::bank_regs(static_cast<Bank>(b)) : none;
 }
 
 // Only 8 physical L1 counters exist, and the mux selects which group feeds them while they count,
@@ -117,21 +102,17 @@ constexpr std::uint8_t L1_MUX_GROUP = LLK_PERF_L1_MUX_GROUP;
 
 constexpr std::uint32_t l1_group_size(std::uint8_t mux)
 {
-    return mux == 0   ? l1_0_counters.size()
-           : mux == 1 ? l1_1_counters.size()
-           : mux == 2 ? l1_2_counters.size()
-           : mux == 3 ? l1_3_counters.size()
-           : mux == 4 ? l1_4_counters.size()
-           : mux == 5 ? l1_5_counters.size()
-                      : 0u;
+    return llk::perf::table_for(Bank::L1, mux).size;
 }
 
 static_assert(L1_MUX_GROUP <= PERF_L1_MUX_MAX, "LLK_PERF_L1_MUX_GROUP does not fit this architecture's PERF_CNT_MUX_CTRL mux field");
+static_assert(L1_MUX_GROUP < llk::perf::L1_MUX_POSITIONS, "LLK_PERF_L1_MUX_GROUP is past the L1 mux positions this architecture decodes");
 static_assert(l1_group_size(L1_MUX_GROUP) > 0, "LLK_PERF_L1_MUX_GROUP selects an L1 mux group this architecture does not expose");
 
 constexpr std::uint32_t builtin_counter_count()
 {
-    return instrn_counters.size() + fpu_counters.size() + unpack_counters.size() + pack_counters.size() + l1_group_size(L1_MUX_GROUP);
+    return llk::perf::table_for(Bank::INSTRN_THREAD).size + llk::perf::table_for(Bank::FPU).size + llk::perf::table_for(Bank::TDMA_UNPACK).size +
+           llk::perf::table_for(Bank::TDMA_PACK).size + l1_group_size(L1_MUX_GROUP);
 }
 
 // Fixed order, matched by the readout: INSTRN, FPU, TDMA_UNPACK, TDMA_PACK, selected L1 group.
@@ -139,45 +120,21 @@ constexpr std::array<std::uint32_t, builtin_counter_count()> build_builtin_confi
 {
     std::array<std::uint32_t, builtin_counter_count()> cfg {};
     std::uint32_t k = 0;
-    const auto emit = [&](const auto& arr, counter_bank bank, std::uint8_t mux)
+    const auto emit = [&](Bank bank, std::uint8_t mux)
     {
-        for (const auto& entry : arr)
+        const llk::perf::Table table = llk::perf::table_for(bank, mux);
+        for (std::size_t i = 0; i < table.size; ++i)
         {
-            cfg[k++] = _perf_cfg(static_cast<std::uint8_t>(bank), entry.second, mux);
+            cfg[k++] = _perf_cfg(static_cast<std::uint8_t>(bank), table.data[i].second, mux);
         }
     };
-    emit(instrn_counters, counter_bank::instrn_thread, 0);
-    emit(fpu_counters, counter_bank::fpu, 0);
-    emit(unpack_counters, counter_bank::tdma_unpack, 0);
-    emit(pack_counters, counter_bank::tdma_pack, 0);
-    if constexpr (L1_MUX_GROUP == 0)
-    {
-        emit(l1_0_counters, counter_bank::l1, 0);
-    }
-    else if constexpr (L1_MUX_GROUP == 1)
-    {
-        emit(l1_1_counters, counter_bank::l1, 1);
-    }
-    else if constexpr (L1_MUX_GROUP == 2)
-    {
-        emit(l1_2_counters, counter_bank::l1, 2);
-    }
-    else if constexpr (L1_MUX_GROUP == 3)
-    {
-        emit(l1_3_counters, counter_bank::l1, 3);
-    }
-    else if constexpr (L1_MUX_GROUP == 4)
-    {
-        emit(l1_4_counters, counter_bank::l1, 4);
-    }
-    else if constexpr (L1_MUX_GROUP == 5)
-    {
-        emit(l1_5_counters, counter_bank::l1, 5);
-    }
+    emit(Bank::INSTRN_THREAD, 0);
+    emit(Bank::FPU, 0);
+    emit(Bank::TDMA_UNPACK, 0);
+    emit(Bank::TDMA_PACK, 0);
+    emit(Bank::L1, L1_MUX_GROUP);
     return cfg;
 }
-
-static_assert(L1_MUX_GROUP <= 5, "LLK_PERF_L1_MUX_GROUP has no emitter in build_builtin_config()");
 
 constexpr auto BUILTIN_COUNTER_CONFIG         = build_builtin_config();
 constexpr std::uint32_t BUILTIN_COUNTER_COUNT = BUILTIN_COUNTER_CONFIG.size();
@@ -207,18 +164,13 @@ inline void configure_hardware()
         {
             continue;
         }
-        const counter_bank bank = static_cast<counter_bank>(bank_id);
-        if (bank == counter_bank::l1)
+        const Bank bank = static_cast<Bank>(bank_id);
+        if (bank == Bank::L1)
         {
             const std::uint8_t l1_mux = (metadata >> PERF_CFG_L1_MUX_SHIFT) & PERF_CFG_L1_MUX_MASK;
-            std::uint32_t cur         = ckernel::reg_read(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-            ckernel::reg_write(
-                RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL,
-                (cur & ~PERF_CNT_MUX_CTRL_MASK) | ((static_cast<std::uint32_t>(l1_mux) << PERF_CNT_MUX_CTRL_SHIFT) & PERF_CNT_MUX_CTRL_MASK));
+            llk::perf::set_l1_mux(l1_mux);
         }
-        std::uint32_t counter_base = get_counter_base_addr(bank);
-        ckernel::reg_write(counter_base, 0xFFFFFFFF);
-        ckernel::reg_write(counter_base + 4, 0);
+        llk::perf::configure(get_bank_regs(bank));
         configured_mask |= bank_bit;
     }
 }
@@ -231,12 +183,12 @@ inline void arm_hardware()
         {
             continue;
         }
-        std::uint32_t counter_base = get_counter_base_addr(static_cast<counter_bank>(b));
-        ckernel::reg_write(counter_base + 8, 1);
-        ckernel::reg_write(counter_base + 8, 0);
+        const llk::perf::BankRegs& regs = get_bank_regs(static_cast<Bank>(b));
+        llk::perf::write(regs.control, llk::perf::START);
+        llk::perf::write(regs.control, 0);
     }
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_ALL, 1);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_ALL, 0);
+    llk::perf::start_all();
+    llk::perf::write(llk::perf::PERF_CNT_ALL, 0);
 }
 
 inline void configure_all_zones()
@@ -268,7 +220,7 @@ inline void configure_all_zones()
 
     if (found_valid)
     {
-        ckernel::reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);
+        llk::perf::clear_debug_feature_disable();
         configure_hardware();
         arm_hardware();
     }
@@ -347,46 +299,32 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 
 static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
+// PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_ALL, 1u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 1u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_L1_2, 1u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 1u);
+    llk::perf::start_all();
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::START);
+    llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::START);
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::START);
     ckernel::fence_compiler();
 }
 
 inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uint32_t zone_id)
 {
     ckernel::fence_compiler();
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_ALL, 2u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK2, 2u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_L1_2, 2u);
-    ckernel::reg_write(RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK2, 2u);
-
-    struct bank_regs
-    {
-        std::uint32_t mode_reg;
-        std::uint32_t out_l;
-    };
-
-    // Per-bank readout pair: mode_reg drives counter_sel; out_l is the bank's reference count, OUT_H (at out_l + 4)
-    // the selected counter.
-    static constexpr bank_regs banks[5] = {
-        {RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD},
-        {RISCV_DEBUG_REG_PERF_CNT_FPU1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU},
-        {RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK},
-        {RISCV_DEBUG_REG_PERF_CNT_L1_1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1},
-        {RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK1, RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK},
-    };
+    llk::perf::stop_all();
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::STOP);
+    llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::STOP);
+    llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::STOP);
 
     std::uint32_t cycles_base              = PERF_COUNTERS_ZONES_BASE + zone_id * PERF_COUNTERS_ZONE_SIZE;
     volatile std::uint32_t* bank_cycles    = reinterpret_cast<volatile std::uint32_t*>(cycles_base);
     volatile std::uint32_t* counter_counts = bank_cycles + PERF_COUNTERS_BANK_CYCLES_WORDS;
-    for (std::uint32_t b = 0; b < 5; ++b)
+    // One reference count per bank, in Bank order.
+    for (std::uint32_t b = 0; b < COUNTER_BANK_COUNT; ++b)
     {
-        bank_cycles[b] = ckernel::reg_read(banks[b].out_l);
+        bank_cycles[b] = llk::perf::read_ref(llk::perf::bank_regs(static_cast<Bank>(b)));
     }
 
     const volatile std::uint32_t* cfg = reinterpret_cast<volatile std::uint32_t*>(PERF_COUNTERS_SHARED_CONFIG_ADDR);
@@ -403,17 +341,13 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         std::uint32_t counter_id = (cw >> PERF_CFG_COUNTER_SHIFT) & PERF_CFG_COUNTER_MASK;
         if (bank_id >= COUNTER_BANK_COUNT)
         {
-            continue; // corrupt config word: do not index banks[] out of range
+            continue; // corrupt config word: do not index the register table out of range
         }
-        const bank_regs& br = banks[bank_id];
+        const llk::perf::BankRegs& regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
-        const std::uint32_t expected_mode = counter_id << PERF_CFG_COUNTER_SHIFT;
-        ckernel::reg_write(br.mode_reg, expected_mode);
-        // reg_write is only a volatile store, so without this fence the read samples the previous counter.
-        for (std::uint32_t spin = 0; spin < MODE_REG_POLL_LIMIT && ckernel::reg_read(br.mode_reg) != expected_mode; ++spin)
-        {
-        }
-        counter_counts[out_idx] = ckernel::reg_read(br.out_l + 4u);
+        // select() polls the mode register back; without that the read samples the previous counter.
+        llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
+        counter_counts[out_idx] = llk::perf::read_count(regs);
         ++out_idx;
     }
 
