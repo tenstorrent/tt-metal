@@ -36,6 +36,7 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
@@ -884,11 +885,39 @@ def pytest_runtest_teardown(item, nextitem):
         _reset_simulator_pending = True
 
 
+_worker_connected = False
+
+
+def _connect_worker_to_server(port: int) -> None:
+    """xdist worker on the RTL simulator: the controller owns the server, connect to it once."""
+    global _worker_connected
+    deadline = time.time() + ExalensServer.READY_TIMEOUT_S
+    while True:
+        try:
+            tt_exalens_init.init_ttexalens_remote(port=port)
+            break
+        except Exception as exc:
+            if time.time() > deadline:
+                raise
+            logger.info("waiting for the tt-exalens server ({})", exc)
+            time.sleep(5)
+    TestConfig.resolve_worker_tensix_location()
+    _worker_connected = True
+
+
 def pytest_runtest_setup(item):
     """Start the server on the first test, or restart between tests if requested."""
     global _exalens_server, _reset_simulator_pending
 
     if _exalens_server is None:
+        if (
+            not _worker_connected
+            and hasattr(item.config, "workerinput")
+            and TestConfig.TEST_TARGET.run_simulator
+            and _SIMULATOR_PATH
+            and not _SIMULATOR_PATH.endswith(".so")
+        ):
+            _connect_worker_to_server(TestConfig.TEST_TARGET.simulator_port)
         return
 
     if not _exalens_server.running and not _exalens_server.ever_started:
@@ -913,6 +942,14 @@ def pytest_runtest_setup(item):
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    # Under xdist no test runs on the controller, so pytest_runtest_setup never starts the server here;
+    # bring it up now and let the workers connect in their own pytest_runtest_setup.
+    if (
+        _exalens_server is not None
+        and not _exalens_server.ever_started
+        and getattr(session.config.option, "numprocesses", None)
+    ):
+        _exalens_server.start()
 
 
 @pytest.fixture(scope="module", autouse=True)
