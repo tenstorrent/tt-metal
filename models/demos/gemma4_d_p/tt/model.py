@@ -181,12 +181,14 @@ class Gemma4Model:
         ring_kv_caches=None,
     ):
         mesh_device = mesh_config.device
+
         if max_seq_len <= 0 or prefill_chunk_size <= 0:
             raise ValueError("sequence and chunk lengths must be positive")
         if max_seq_len % prefill_chunk_size or prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE):
             raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
         if prefill_chunk_size < 1024 * mesh_config.cp_degree:
             raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
+
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.prefill_chunk_size = prefill_chunk_size
@@ -199,7 +201,8 @@ class Gemma4Model:
         self.ccl_manager = ccl_manager
         self._rope_prefill_positions = None
         self._packed_global_rope_trans_mat = None
-        if mesh_config is not None and mesh_config.cp_degree > 1:
+
+        if mesh_config.cp_degree > 1:
             self._packed_global_rope_trans_mat = ttnn.from_torch(
                 get_rot_transformation_mat(),
                 device=mesh_device,
@@ -208,28 +211,22 @@ class Gemma4Model:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
+
         # When True the caller refreshes the ring metadata itself, outside any trace.
         self._ring_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
 
-        # Per-module dtype resolution. ``precision`` (Gemma4Precision) holds
-        # any overrides loaded from precision_overrides.json; modules without
-        # an override fall back to ``dtype`` (the model-wide default). Dtypes
-        # are then threaded explicitly through DecoderLayer / used directly
-        # for embedding + lm_head, so each weight loads at the right precision
-        # and lands in a cache file tagged with that dtype.
         from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 
         if precision is None:
             precision = Gemma4Precision()
+
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
         embedding_dtype = precision.get("embedding", dtype)
         lm_head_dtype = precision.get("lm_head", dtype)
-        # Paged K/V storage, not a weight: it sizes with context rather than with the model,
-        # so it is the one tensor whose precision trades against how long a prompt fits.
         kv_cache_dtype = precision.get("kv_cache", dtype)
 
         # RoPE caches per layer type (sliding vs global)
