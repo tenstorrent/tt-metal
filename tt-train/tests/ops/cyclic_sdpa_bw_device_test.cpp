@@ -662,7 +662,31 @@ void expect_identical(
     }
 }
 
-TEST(CyclicSdpaBwIdentityTest, AllThreeVariantsAgreeBitwise) {
+float max_relative_error(const xt::xarray<float>& got, const xt::xarray<float>& want) {
+    const uint32_t rows = static_cast<uint32_t>(want.shape()[0]);
+    const uint32_t cols = static_cast<uint32_t>(want.shape()[1]);
+    float max_abs = 0.0F;
+    float max_diff = 0.0F;
+    for (uint32_t r = 0; r < rows; ++r) {
+        for (uint32_t c = 0; c < cols; ++c) {
+            max_abs = std::max(max_abs, std::abs(want(r, c)));
+            max_diff = std::max(max_diff, std::abs(got(0, 0, r, c) - want(r, c)));
+        }
+    }
+    return max_abs > 0.0F ? max_diff / max_abs : max_diff;
+}
+
+// Removing the barrier changes nothing at all: the relay and the endpoint
+// relay differ only in synchronisation, so they agree to the bit. Algorithm 2
+// agrees on dQ too, whose route is the same in all three.
+//
+// Its column gradients differ in the last bits, and that is not a defect in
+// either: Algorithm 2 reloads dK_j and dV_j every timestep, and the copy back
+// into the accumulator goes through the Src registers, which do not carry
+// Float32. Residency keeps the accumulator in L1 across the whole interval
+// and never takes that copy, so it is the more accurate of the two -- which
+// the next test checks rather than assumes.
+TEST(CyclicSdpaBwIdentityTest, RemovingTheBarrierChangesNothing) {
     const uint32_t C = 4;
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     if (grid.x < 2 || grid.y < 2) {
@@ -674,10 +698,35 @@ TEST(CyclicSdpaBwIdentityTest, AllThreeVariantsAgreeBitwise) {
     const auto relay = run_relay(C, ref, 2, 2, /*endpoint_sync=*/false);
     const auto endpoint = run_relay(C, ref, 2, 2, /*endpoint_sync=*/true);
 
-    expect_identical(algorithm2.dQ, relay.dQ, "dQ, Algorithm 2 against the relay");
-    expect_identical(algorithm2.dK, relay.dK, "dK, Algorithm 2 against the relay");
-    expect_identical(algorithm2.dV, relay.dV, "dV, Algorithm 2 against the relay");
     expect_identical(relay.dQ, endpoint.dQ, "dQ, the relay against endpoint counters");
     expect_identical(relay.dK, endpoint.dK, "dK, the relay against endpoint counters");
     expect_identical(relay.dV, endpoint.dV, "dV, the relay against endpoint counters");
+
+    // dQ travels the same route in all three.
+    expect_identical(algorithm2.dQ, relay.dQ, "dQ, Algorithm 2 against the relay");
+}
+
+// The column gradients are where the two differ, and residency is the more
+// accurate side. Worth pinning: it says the per-timestep reload was costing
+// precision, not just bandwidth, and it would catch a regression that made
+// residency the worse of the two.
+TEST(CyclicSdpaBwIdentityTest, ResidencyIsTheMoreAccurateColumnPath) {
+    const uint32_t C = 4;
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid.x < 2 || grid.y < 2) {
+        GTEST_SKIP() << "needs a 2x2 region";
+    }
+    const auto ref = make_reference(2u * C * kTile, 64);
+    const auto algorithm2 = run_algorithm2(C, ref, 2, 2);
+    const auto relay = run_relay(C, ref, 2, 2, /*endpoint_sync=*/false);
+
+    const float reload_dk = max_relative_error(algorithm2.dK, ref.dK);
+    const float resident_dk = max_relative_error(relay.dK, ref.dK);
+    const float reload_dv = max_relative_error(algorithm2.dV, ref.dV);
+    const float resident_dv = max_relative_error(relay.dV, ref.dV);
+    std::cout << "  dK relative error: reloaded " << reload_dk << ", resident " << resident_dk
+              << "\n  dV relative error: reloaded " << reload_dv << ", resident " << resident_dv
+              << "\n";
+    EXPECT_LE(resident_dk, reload_dk);
+    EXPECT_LE(resident_dv, reload_dv);
 }

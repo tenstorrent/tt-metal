@@ -88,8 +88,17 @@ void kernel_main() {
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
 
-        write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * qWt, qWt, grad_bytes, qWt);
-        write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * vWt, vWt, grad_bytes, vWt);
+        // The column gradients are handed over once per residency interval,
+        // at its end -- which the schedule says is a column change or the
+        // last timestep. Writing them back before reusing their storage is
+        // the paper's rule; here the storage is released by the handover
+        // itself.
+        const bool column_ends =
+            (t + 1u == kTimesteps) || (sched.pair(my_core, t + 1u).j != pair.j);
+        if (column_ends) {
+            write_tiles_by_row(cb_grad_value, grad_value, (pair.j - 1u) * vWt, vWt, grad_bytes, vWt);
+            write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * qWt, qWt, grad_bytes, qWt);
+        }
 
 #if ENDPOINT_SYNC
         // This core's own reader is the only thing waiting on these writes.
