@@ -34,28 +34,41 @@ inline constexpr bool _typecast_is_mx_format_(DataFormat fmt) {
  *  Float16_b <-> UInt16
  *  Float16_b <-> UInt32
  *  Float16_b <-> UInt8
+ *  Float16_b <-> Int8
  *  Float32 <-> Int32
  *  Float32 <-> UInt16
  *  Float32 <-> UInt32
  *  Float32 <-> UInt8
+ *  Float32 <-> Int8
  *  Bfp8_b <-> Int32
  *  Bfp8_b <-> UInt16
  *  Bfp8_b <-> UInt32
  *  Bfp8_b <-> UInt8
+ *  Bfp8_b <-> Int8
  *  Bfp8_b <-> Float16_b
  *  Bfp8_b <-> Float32
  *  Bfp4_b <-> Int32
  *  Bfp4_b <-> UInt16
  *  Bfp4_b <-> UInt32
  *  Bfp4_b <-> UInt8
+ *  Bfp4_b <-> Int8
  *  Bfp4_b <-> Bfp8_b
  *  Bfp4_b <-> Float16_b
  *  Bfp4_b <-> Float32
  *  UInt16 <-> UInt32
  *  UInt16 <-> Int32
  *  UInt16 <-> UInt8
+ *  UInt16 <-> Int8
+ *  Int32 <-> Int8
+ *  UInt32 <-> Int8
+ *  UInt8 <-> Int8
  *
  * For input/output to be UInt32, Int32, or Float32, Dest must be in 32 bit mode.
+ *
+ * For input/output to be Int8, the caller must additionally declare the circular buffers as UInt8 instead
+ * of Int8, so the raw 2's complement byte is zero-extended instead of being decoded as sign-magnitude,
+ * and must put Dest in 32 bit mode. The kernels below do the sign handling themselves on that raw byte.
+ * Int8 is not available on Quasar.
  *
  * Return value: None
  *
@@ -72,6 +85,11 @@ ALWI void typecast_tile(uint32_t idst) {
     constexpr DataFormat out_format = static_cast<DataFormat>(OUT_DTYPE);
 
 #ifdef ARCH_QUASAR
+    // The shared Quasar kernel loads and stores Int8 as sign-magnitude, but callers configure Int8 CBs
+    // as UInt8. The byte would be decoded wrong with no error. Reject it here.
+    static_assert(
+        in_format != DataFormat::Int8 && out_format != DataFormat::Int8, "Int8 typecast is not supported on Quasar");
+
     // An MX endpoint is unpacked to / packed from Float16_b by the format, so at the SFPU level an MX
     // format behaves as Float16_b. Route through that effective format: MX <-> Float16_b (and MX <-> MX)
     // collapse to a pure format no-op, while MX <-> {Float32, Int32, ...} run the Float16_b <-> X SFPU
@@ -349,7 +367,7 @@ ALWI void typecast_tile(uint32_t idst) {
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
-        out_format == DataFormat::UInt8) {
+        (out_format == DataFormat::UInt8 || out_format == DataFormat::Int8)) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
@@ -359,7 +377,7 @@ ALWI void typecast_tile(uint32_t idst) {
             VectorMode::RC));
     } else if constexpr (
         (in_format == DataFormat::Int32 || in_format == DataFormat::UInt32 || in_format == DataFormat::UInt16) &&
-        out_format == DataFormat::UInt8) {
+        (out_format == DataFormat::UInt8 || out_format == DataFormat::Int8)) {
         MATH(SFPU_UNARY_CALL(
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
@@ -393,6 +411,30 @@ ALWI void typecast_tile(uint32_t idst) {
             DST_SYNC_MODE,
             is_fp32_dest_acc_en,
             calculate_typecast_uint32_to_uint16,
+            (APPROX, 8 /* ITERATIONS */),
+            idst,
+            VectorMode::RC));
+    } else if constexpr (
+        (in_format == DataFormat::UInt8 && out_format == DataFormat::Int8) ||
+        (in_format == DataFormat::Int8 && out_format == DataFormat::UInt8)) {
+        // No SFPU kernel needed.
+    } else if constexpr (
+        in_format == DataFormat::Int8 &&
+        (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32 || out_format == DataFormat::UInt16)) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_typecast_int8_to_int32,
+            (APPROX, 8 /* ITERATIONS */, (out_format == DataFormat::UInt16) /* CLAMP_TO_UINT16 */),
+            idst,
+            VectorMode::RC));
+    } else if constexpr (
+        in_format == DataFormat::Int8 && (out_format == DataFormat::Float32 || out_format == DataFormat::Float16_b ||
+                                          out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            is_fp32_dest_acc_en,
+            calculate_typecast_int8_to_fp32,
             (APPROX, 8 /* ITERATIONS */),
             idst,
             VectorMode::RC));
@@ -454,11 +496,11 @@ ALWI void typecast_tile_init() {
     } else if constexpr (
         (in_format == DataFormat::Float32 || in_format == DataFormat::Float16_b || in_format == DataFormat::Bfp8_b ||
          in_format == DataFormat::Bfp4_b) &&
-        out_format == DataFormat::UInt8) {
+        (out_format == DataFormat::UInt8 || out_format == DataFormat::Int8)) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_fp32_to_uint8, (APPROX)));
     } else if constexpr (
         (in_format == DataFormat::Int32 || in_format == DataFormat::UInt32 || in_format == DataFormat::UInt16) &&
-        out_format == DataFormat::UInt8) {
+        (out_format == DataFormat::UInt8 || out_format == DataFormat::Int8)) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint_to_uint8, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::Float32) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp32, (APPROX)));
@@ -468,6 +510,14 @@ ALWI void typecast_tile_init() {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_fp16b, (APPROX)));
     } else if constexpr (in_format == DataFormat::UInt8 && out_format == DataFormat::UInt16) {
         MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_uint32_to_uint16, (APPROX)));
+    } else if constexpr (
+        in_format == DataFormat::Int8 &&
+        (out_format == DataFormat::Int32 || out_format == DataFormat::UInt32 || out_format == DataFormat::UInt16)) {
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int8_input, (APPROX)));
+    } else if constexpr (
+        in_format == DataFormat::Int8 && (out_format == DataFormat::Float32 || out_format == DataFormat::Float16_b ||
+                                          out_format == DataFormat::Bfp8_b || out_format == DataFormat::Bfp4_b)) {
+        MATH(SFPU_UNARY_INIT_FN(typecast, sfpu::init_typecast_int8_to_fp32, (APPROX)));
     } else {
         MATH(SFPU_UNARY_INIT(typecast));
     }

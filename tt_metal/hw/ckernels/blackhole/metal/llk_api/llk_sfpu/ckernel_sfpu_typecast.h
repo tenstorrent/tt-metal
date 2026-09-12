@@ -12,6 +12,7 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "ckernel_ops.h"
+#include "ckernel_sfpu_quant.h"  // for INT8_SIGN_MASK
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
 
@@ -26,6 +27,12 @@ constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
 // SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
 // lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
 constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
+
+// -128.0f as the upper 16 bits
+constexpr std::uint32_t TYPECAST_INT8_MINUS_128_IMM16 = 0xC300;
+
+// -128 as SFPIADD's 12-bit signed immediate
+constexpr std::int32_t TYPECAST_INT8_MINUS_128_IMM12 = -128 & 0xfff;
 
 // SFPGT mod1 selector that sets the destination to all-ones (-1) when the comparison is true.
 constexpr std::uint32_t SFPGT_MOD1_SET_ALL_ONES = 8;
@@ -983,6 +990,85 @@ inline void calculate_typecast_uint_to_uint8() {
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS, bool CLAMP_TO_UINT16 = false>
+inline void calculate_typecast_int8_to_int32() {
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 to get excess 128
+        if constexpr (CLAMP_TO_UINT16) {
+            TTI_SFPIADD(
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);  // negatives clamp to 0
+            TTI_SFPENCC(0, 0, 0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_6, 0);
+        } else {
+            TTI_SFPIADD(
+                TYPECAST_INT8_MINUS_128_IMM12,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        }
+    }
+}
+
+// Also serves the Float16_b/Bfp8_b/Bfp4_b outputs. Those need no FP32_TO_FP16B round before the
+// store the way the uint path does, because every value here is in [-128, 127] and so is exact in
+// bfloat16's 8-bit significand.
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_typecast_int8_to_fp32() {
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; ++d) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);  // e = b ^ 0x80 in [0, 255]
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPADDI(TYPECAST_INT8_MINUS_128_IMM16, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
+    }
+#else
+    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row. The XOR -> CAST
+    // order is forced (SFPCAST reads sign-magnitude), so only the scheduling changes: the three
+    // macros below hold the same XOR, CAST and subtract, spread across the Simple, MAD and Store
+    // sub-units so consecutive rows overlap.
+    //
+    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
+    //
+    // Note: L0=-128.0, added by MAD to undo the excess 128 bias the XOR applied to a.
+    //
+    // t | Load | Simple         | MAD              | Round | Store    |
+    // - | ---- | -------------- | ---------------- | ----- | -------- |
+    // 0 | [a]  |                |                  |       |          |
+    // 1 | [b]  | [a] = a ^ 0x80 |                  |       |          |
+    // 2 | [L7] | [b] = cast(a)  |                  |       |          |
+    // 0 | ...  |                |                  |       |          |
+    // 1 | ...  |                | [b] L16 = L0 + b |       |          |
+    // 2 | ...  |                |                  |       |          |
+    // 0 | ...  |                |                  |       | [L7] L16 |
+
+    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, TYPECAST_INT8_MINUS_128_IMM16);
+
+    constexpr int a = p_sfpu::LREG2;
+    constexpr int b = p_sfpu::LREG3;
+    constexpr int L7 = p_sfpu::LREG7;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::INT32, ADDR_MOD_7, a >> 2);
+        TTI_SFPLOADMACRO((1 << 2) | (b & 3), InstrModLoadStore::INT32, ADDR_MOD_7, b >> 2);
+        TTI_SFPLOADMACRO((2 << 2) | (L7 & 3), InstrModLoadStore::INT32, ADDR_MOD_6, L7 >> 2);
+    }
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+#endif
+}
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint8() {
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
@@ -996,6 +1082,65 @@ inline void init_typecast_uint_to_uint8() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     sfpi::vConstIntPrgm0 = 0xFF;
     sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_input() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void init_typecast_int8_to_fp32() {
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    math::reset_counters(p_setrwc::SET_ABD_F);
+    sfpi::vConstIntPrgm0 = INT8_SIGN_MASK;
+#ifndef DISABLE_SFPLOADMACRO
+    constexpr int a = p_sfpu::LREG2;
+
+    // InstructionTemplate[0]
+    TTI_SFPXOR(0, p_sfpu::LREG12, 12, 0);
+
+    // InstructionTemplate[1]
+    TTI_SFPCAST(a, 13, 0);
+
+    // InstructionTemplate[2]
+    TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LCONST_1, 0, 14, 0);
+
+    // Macro 0: [a]
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
+        constexpr std::uint32_t mad_bits = 0;
+
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 0, 1);
+    }
+    // Macro 1: [b]
+    {
+        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 1);
+        constexpr std::uint32_t mad_bits = 0x00 | 0x40 | (2 << 3) | (4 + 2);
+
+        TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);
+    }
+    // Macro 2: [L7]
+    {
+        constexpr std::uint32_t simple_bits = 0;
+        constexpr std::uint32_t mad_bits = 0;
+        constexpr std::uint32_t round_bits = 0;
+        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 2, 0);
+    }
+
+    // Misc: {
+    //   StoreMod0: FP32,
+    //   UsesLoadMod0ForStore: {0,0,0},
+    //   UnitDelayKind: {1,1,1}, (WaitForElapsedInstructions=1)
+    // }
+    TTI_SFPCONFIG(0x700 | InstrModLoadStore::FP32, 8, 1);
+#endif
 }
 
 }  // namespace sfpu

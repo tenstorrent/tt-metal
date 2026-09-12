@@ -104,6 +104,11 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
     }
 }
 
+tt::DataFormat cb_dataformat_for(tt::tt_metal::DataType datatype) {
+    return datatype == tt::tt_metal::DataType::INT8 ? tt::DataFormat::UInt8
+                                                    : datatype_to_dataformat_converter(datatype);
+}
+
 tt::tt_metal::DataType dataformat_to_datatype_converter(tt::DataFormat dataformat) {
     switch (dataformat) {
         case tt::DataFormat::Float16_b: return tt::tt_metal::DataType::BFLOAT16;
