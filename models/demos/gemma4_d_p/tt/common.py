@@ -51,11 +51,12 @@ def create_tt_model(
         raise ValueError("mesh_config must match the device mesh")
     if prefill_chunk_size is None:
         prefill_chunk_size = min(8192, max_seq_len)
+    SLIDING_WINDOW_SIZE = 1024
     if max_seq_len <= 0 or prefill_chunk_size <= 0:
         raise ValueError("sequence and chunk lengths must be positive")
     if prefill_chunk_size % (mesh_config.cp_degree * ttnn.TILE_SIZE) or max_seq_len % prefill_chunk_size:
         raise ValueError("prefill chunks must divide max_seq_len and contain whole CP-local tiles")
-    if prefill_chunk_size < 1024 * mesh_config.cp_degree:
+    if prefill_chunk_size < SLIDING_WINDOW_SIZE * mesh_config.cp_degree:
         raise ValueError("prefill chunk size must cover the sliding window on each CP rank")
 
     model_path = model_path or os.getenv("HF_MODEL")
@@ -72,22 +73,10 @@ def create_tt_model(
 
     ccl_manager = CCLManager(mesh_device)
 
-    # Warm ttnn cache => skip the full HF weight load and build from .tensorbin. Hybrid: the few
-    # host-consumed weights (token embedding and layer scalars) are served real from the
-    # sidecar, the rest as dataless placeholders. Generalizes PR #50550 to gemma4 (#45400).
-    # Qualify the cache by mesh geometry BEFORE resolving cache_dir: ttnn.as_tensor
-    # reloads tensorbins as-is and ignores mesh_mapper, so a TP=4 cache built on
-    # MeshShape([2,4]) must not be reused on [1,4] (QB2). Setting cluster_shape here
-    # keeps the warm-cache marker (cache_dir) and the tensorbin path on the same
-    # directory instead of letting them diverge.
+    # Reuse cached device weights; load embeddings and layer scalars from the host weight cache.
     _worker_mesh = tuple(mesh_device.shape)
     model_args.cluster_shape = _worker_mesh
     cache_dir = model_args.weight_cache_path(dtype)
-    # Resolved early so it can key the cache identity: gemma4 embeds each module's dtype in its
-    # tensorbin FILENAME (attention/shared_mlp *_{dtype} suffixes), so an edit to
-    # precision_overrides.json changes which files a build needs. Without the precision in the
-    # variant, a marker seeded under the old overrides would certify a warm build whose files do
-    # not exist -- and as_tensor would persist placeholders for them. (#45400 review, finding B2)
     _precision_for_variant = Gemma4Precision.load(model_path, _worker_mesh)
     cache_identity = dict(
         model_name=os.path.basename(str(model_path).rstrip("/")) or "gemma4",
@@ -102,7 +91,7 @@ def create_tt_model(
     loaded_real_weights = False
     if state_dict is None:
         if not force_rebuild and num_layers is None and weight_cache_is_complete(cache_dir, **cache_identity):
-            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load (gemma4 hybrid).")
+            logger.info("Warm ttnn weight cache detected -- skipping HF state_dict load.")
             state_dict = build_cached_state_dict(
                 cache_dir, args=model_args, build_variant=cache_identity["build_variant"]
             )
