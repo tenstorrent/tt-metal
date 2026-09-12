@@ -20,6 +20,7 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
+#include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sdpa_zones.hpp"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
@@ -326,11 +327,14 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
+            {
+            SDPA_ZACC(6);
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+            }
             }
             tile_regs_commit();
 
@@ -1597,6 +1601,7 @@ void sdpa_inner_loop(
     const uint32_t q_per_core = iter_q_end - iter_q_start;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
+        SDPA_ZRAW("QCHUNK");
         uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
         uint32_t q_high_tile = 0;     // STANDARD: upper tile bound for K iteration
         uint32_t causal_k_limit = 0;  // RING: K-chunk index beyond which all K is above the diagonal
@@ -1672,6 +1677,7 @@ void sdpa_inner_loop(
             }
 
             KV_chunks_processed_in_iter++;
+            SDPA_ZACC(0);
 
             // Chunked-prefill: never take this skip (local-frame causal_k_limit doesn't apply —
             // the diag stamp uses absolute coords every k_chunk instead).
@@ -1689,8 +1695,17 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
-            reconfig_data_format(cb_k_in, cb_q_in);
-            pack_reconfig_data_format(cb_qk_im);
+            {
+                SDPA_ZACC(1);
+                cb_k_in_obj.wait_front(k_chunk_tiles);
+            }
+            {
+                SDPA_ZACC(4);
+                reconfig_data_format(cb_k_in, cb_q_in);
+                pack_reconfig_data_format(cb_qk_im);
+            }
+            {
+            SDPA_ZACC(7);
             matmul_blocks(
                 cb_q_in,
                 cb_k_in,
@@ -1705,6 +1720,7 @@ void sdpa_inner_loop(
                 qk_subblock_h,
                 qk_subblock_w,
                 true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1757,6 +1773,7 @@ void sdpa_inner_loop(
             }
 
             if (apply_mask) {
+                SDPA_ZACC(8);
                 /* QK += MASK */
                 reconfig_data_format(cb_qk_im, cb_mask_in);
                 if constexpr (lightweight_mask_enabled) {
@@ -1831,9 +1848,15 @@ void sdpa_inner_loop(
              * reduce_tile + binary_max_tile. The overload with cols as a template arg
              * is bf16-only but cb_qk_im could be fp32.
              */
-            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
-                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            {
+                SDPA_ZACC(4);
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+            }
+            {
+                SDPA_ZACC(9);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
+                    alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+            }
 
             /**
              * sub_exp fuses a few operations.
@@ -1845,15 +1868,27 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            {
+                SDPA_ZACC(5);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            }
 
             // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
             // matmul)
-            reconfig_data_format(cb_v_in, cb_qk_im);
-            pack_reconfig_data_format(alias_mm2_cur_out);
+            {
+                SDPA_ZACC(12);
+                cb_v_in_obj.wait_front(v_chunk_tiles);
+            }
+            {
+                SDPA_ZACC(4);
+                reconfig_data_format(cb_v_in, cb_qk_im);
+                pack_reconfig_data_format(alias_mm2_cur_out);
+            }
 
             /* OUT_IM = QK @ V_CHUNK */
+            {
+            SDPA_ZACC(13);
             matmul_blocks(
                 cb_qk_im,
                 cb_v_in,
@@ -1868,9 +1903,16 @@ void sdpa_inner_loop(
                 out_subblock_h,
                 out_subblock_w,
                 false /*transpose*/);
+            }
 
-            cb_qk_im_obj.pop_front(qk_chunk_tiles);
-            reconfig_data_format(alias_prev_max, alias_cur_max);
+            {
+                SDPA_ZACC(19);
+                cb_qk_im_obj.pop_front(qk_chunk_tiles);
+            }
+            {
+                SDPA_ZACC(4);
+                reconfig_data_format(alias_prev_max, alias_cur_max);
+            }
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
@@ -1878,8 +1920,12 @@ void sdpa_inner_loop(
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.
                  */
-                sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
-                CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+                {
+                    SDPA_ZACC(15);
+                    sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
+                    CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+                }
+                SDPA_ZACC(16);
 
                 /**
                  * cb_prev_sum *= cb_exp_max_diff
@@ -1910,7 +1956,10 @@ void sdpa_inner_loop(
         /**
          * Performs final row-reduction on the partial sum.
          */
-        matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+        {
+            SDPA_ZACC(17);
+            matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+        }
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2022,6 +2071,7 @@ void sdpa_inner_loop(
                 copy_block(alias_prev_max, cb_lse_out, Sq_chunk_t);
             }
         } else {
+            SDPA_ZACC(17);
             /* cb_cur_sum = 1.0 / cb_cur_sum */
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 

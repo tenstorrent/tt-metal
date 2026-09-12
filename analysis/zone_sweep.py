@@ -56,12 +56,16 @@ def test_zone_sweep(device):
         k_chunk_size=kc,
         exp_approx_mode=exp_approx,
     )
+    fp32_acc = os.environ.get("SDPA_FP32_ACC", "0") == "1"  # True selects the non-streaming compute_common.hpp path
+    packer_l1_acc = os.environ.get("SDPA_PACKER_L1_ACC", "0") == "1"
+    math_approx = os.environ.get("SDPA_MATH_APPROX", "1") == "1"
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
-        math_approx_mode=True,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=False,
+        math_approx_mode=math_approx,
+        fp32_dest_acc_en=fp32_acc,
+        packer_l1_acc=packer_l1_acc,
     )
+    print(f"[zone_sweep] fp32_dest_acc_en={fp32_acc} packer_l1_acc={packer_l1_acc} math_approx_mode={math_approx}", flush=True)
     Q = fa_rand(1, nh, s, d)
     K = fa_rand(1, nkv, s, d)
     V = fa_rand(1, nkv, s, d)

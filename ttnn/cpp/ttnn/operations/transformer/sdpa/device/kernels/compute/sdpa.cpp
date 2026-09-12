@@ -294,6 +294,20 @@ void kernel_main() {
                 cb_out,
                 lw_mask,
                 use_zigzag_balancing);
+            SDPA_ZFLUSH(0, "STEP");
+            SDPA_ZFLUSH(1, "K_WAIT");
+            SDPA_ZFLUSH(4, "RECONFIG");
+            SDPA_ZFLUSH(5, "SUBEXP");
+            SDPA_ZFLUSH(6, "EXP");
+            SDPA_ZFLUSH(7, "QK_MM");
+            SDPA_ZFLUSH(8, "MASK");
+            SDPA_ZFLUSH(9, "REDUCE");
+            SDPA_ZFLUSH(12, "V_WAIT");
+            SDPA_ZFLUSH(13, "PV_MM");
+            SDPA_ZFLUSH(15, "SALAD_EXP");
+            SDPA_ZFLUSH(16, "SALAD_CORR");
+            SDPA_ZFLUSH(17, "NORM");
+            SDPA_ZFLUSH(19, "POPS");
         }
     }
 }
