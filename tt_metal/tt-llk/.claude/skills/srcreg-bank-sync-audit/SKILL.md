@@ -93,10 +93,10 @@ A desync → the FPU reads a bank the unpacker is still filling, or a thread clo
 
    **(b) Unpack side — which bank the dummy publication waits on.** These moves depend on the unpacker publishing a dummy DVALID to hand the bank over. **Two instruction shapes do this and they are not equivalent** — get this right before judging any site:
 
-   | shape | what it does |
-   |---|---|
+   | shape                 | what it does |
+   | --------------------- | --- |
    | `ZEROSRC` / `CLR_SRC` | **waits** for bank access, then writes the clear value into `Unpackers[i].SrcBank`. Clears *data*; leaves `AllowedClient` and the bank pointer alone. |
-   | `SET_DVALID` | sets `AllowedClient = MatrixUnit`, flips `Unpackers[i].SrcBank`, sets `SrcRow` (BH also latches `ImpliedSrc?Fmt`). Writes **no data** and performs **no wait**. |
+   | `SET_DVALID`          | sets `AllowedClient = MatrixUnit`, flips `Unpackers[i].SrcBank`, sets `SrcRow` (BH also latches `ImpliedSrc?Fmt`). Writes **no data** and performs **no wait**. |
 
    BH's 9-operand form can do both in one instruction; WH needs two. A **bare `SET_DVALID` has no wait to classify**, so the pipelined/serializing question below does not apply to it — per `UNPACR_NOP_SETDVALID.md` it must **inherit** a wait by sequencing, from a preceding real `UNPACR`, *either* form of `ZEROSRC` (the ISA asks only that the predecessor waited), or an explicit `STALLWAIT` on `SRCA_CLR`/`SRCB_CLR`. One that inherits nothing hands over a bank having waited on nothing — flag it.
 
