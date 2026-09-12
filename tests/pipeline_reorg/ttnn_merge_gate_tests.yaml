@@ -139,3 +139,72 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U09BX3N0N95 # Mateusz Nowak
+
+# Matmul, fused and reduction coverage, reusing the Sanity op groups ("ttnn matmul group",
+# "ttnn fused group 1/2" and "ttnn reduce group" in ttnn_sanity_tests.yaml). Those groups run
+# whole directories under 40-45 minute timeouts, so they only run nightly, and a break in one of
+# these three families lands on main and is first seen when nightly sanity goes red. This entry
+# gates the basic API of each family on a PR instead.
+#
+# Selection is by test function, so it stays small as those files grow:
+#   matmul ........... matched width/height (2D and 4D), dot product, transpose a/b, the
+#                      tutorial shapes, optional output tensor, small-shape pcc, sharded
+#                      (2D mcast, mcast in0/in1, bmm), and linear with a core grid, with
+#                      fp32 dest acc and bias, and the bloom ff2 shape
+#   fused ............ softmax over every dim of a 3D input, layer_norm with and without
+#                      weight and bias, rms_norm, group_norm height-sharded and with optional
+#                      weight/bias, batch_norm queue-id and preallocated-output overloads
+#   reduction ........ sum, mean, max over each dim of a 2D input, global min, argmax tie order
+#                      and argmax into a preallocated output
+#   program cache .... the matmul and reduce cache-key tests, which catch a wrong hash
+#                      silently reusing a program built for another shape or dtype
+#
+# Deliberately excluded: topk, whose full matrix is ~4 minutes and whose tie order is sensitive
+# to index packing; cumsum and the full argmax matrix, ~1.5 minutes each; and the large-shape
+# matmul cases, where test_matmul_with_core_grid[batch_size=7] alone takes 10s on a cold kernel
+# cache and breaks the merge gate's 5s-per-test rule.
+#
+# 718 tests, all passing on five consecutive local runs on a P150. There the selection is 57s of
+# pytest / 66s of wall-clock with a warm kernel cache and 83s / 92s with a partly cold one; the
+# slowest single test is 1.2s warm. The spread is all kernel compilation, and this job runs with
+# enable-kernel-ccache against the shared Redis backend, so it sits at the warm end. One pytest
+# invocation on purpose: device bring-up is ~7s, so splitting the three families into separate
+# entries would cost more than the tests do.
+- name: "ttnn matmul fused reduction ops"
+  cmd: >-
+    pytest --timeout 60 -xv
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_matched_width_height
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_matched_width_height_4D
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_does_dot_product
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_with_transpose_a_or_b
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_tutorial_matmul
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_optional_output_argument
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_small_matmul_pcc
+    tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_sharded_matmul
+    tests/ttnn/unit_tests/operations/matmul/test_matmul_program_cache.py
+    tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_core_grid
+    tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_bloom_ff2_linear
+    tests/ttnn/unit_tests/operations/matmul/test_linear.py::test_linear_with_fp32_dest_acc_and_bias
+    tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax
+    tests/ttnn/unit_tests/operations/fused/test_softmax.py::test_softmax_with_3D
+    tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_layer_norm
+    tests/ttnn/unit_tests/operations/fused/test_layer_norm.py::test_layer_norm_with_weight_and_bias
+    tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_with_height_sharded
+    tests/ttnn/unit_tests/operations/fused/test_group_norm.py::test_group_norm_optional_weight_bias
+    tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_qid
+    tests/ttnn/unit_tests/operations/fused/test_batch_norm.py::test_batch_norm_output_Default
+    tests/ttnn/unit_tests/operations/reduce/test_sum.py::test_sum
+    tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py::test_mean
+    tests/ttnn/unit_tests/operations/reduce/test_max.py::test_max_2d
+    tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py::test_min_global
+    tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax_nc_ties_first_index_wins
+    tests/ttnn/unit_tests/operations/reduce/test_argmax.py::test_argmax_nc_preallocated_output
+    tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py
+  skus:
+    wh_n150_civ2:
+      timeout: 10
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
