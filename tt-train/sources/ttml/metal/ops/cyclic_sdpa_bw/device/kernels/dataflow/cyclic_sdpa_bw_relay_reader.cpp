@@ -74,21 +74,29 @@
 // later streak start and progress is published only for spill events, so
 // waiting for t waits for a publication that never comes.
 //
-// Publication is a set of ordered unicast writes, which the paper allows
-// alongside multicast. Multicast would be one write instead of C, and it is
-// measurably worth having -- at C = 32 there are 93 inter-streak spills, each
-// writing 32 semaphores, and that is enough to put Algorithm 4 *behind*
-// Algorithm 3 on a first timing. But a multicast issued from this kernel
-// hangs in its write barrier, on this RISC's own NoC 1 and on NoC 0 with the
-// rectangle and the write both named there. The release multicast in the write
-// kernel, on the same rectangle, works; so the obstacle is which RISC issues
-// it, not the coordinates.
+// Progress is pulled, not pushed, and that is a departure from the paper
+// worth explaining. The paper has each endpoint publish its value into a
+// local copy on every participating core, and each consumer poll its own L1.
+// Measured, that is what made this variant slower than the barrier it
+// replaces: a publication is C writes, the number of publications grows with
+// C too, so the traffic is quadratic in C while the work per core is not --
+// 12096 semaphore writes at C = 64, and a 1.53x deficit against Algorithm 3.
+// Multicast would fix the constant but cannot be issued from this RISC; it
+// hangs in its write barrier, on this NoC and on NoC 0 with the rectangle
+// named there, while the identical multicast from the write kernel works.
 //
-// Getting the multicast therefore means moving publication to the write
-// kernel, which needs a local handoff to tell it what to publish and when.
-// That is worth doing and is not done here. The unicast version is correct
-// and satisfies the ordering rule the paper asks for, being issued in
-// increasing value order on one NoC from one thread.
+// So an endpoint now writes only its own word -- one write per inter-streak
+// spill -- and a consumer that needs the value reads that word remotely,
+// which is what the cross-core barrier in tt-metal's own debug checkpoint
+// does for its non-coordinators. The traffic becomes one write per spill plus
+// a few reads per wait, and only the cores that actually wait pay anything:
+// 189 wait events at C = 64 against 12096 writes.
+//
+// The safety property is unchanged, which is what matters: the endpoint sets
+// its word only after its spill has completed, so observing a value at least
+// t_prev + 1 still certifies that spill is visible. What is lost is the
+// paper's local-polling property, and with it any need for ordered
+// publication -- there is only one writer of each word now.
 #ifndef ENDPOINT_SYNC
 #define ENDPOINT_SYNC 0
 #endif
@@ -221,6 +229,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint1_sem_id)),
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(endpoint2_sem_id))};
     const uint32_t endpoint_sem_ids[2] = {endpoint1_sem_id, endpoint2_sem_id};
+    // A dedicated word to read a remote endpoint's progress into, clear of the
+    // one used to publish readiness tags.
+    const uint32_t endpoint_read_l1 = scratch_l1 + 16u;
+    volatile tt_l1_ptr uint32_t* endpoint_read =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(endpoint_read_l1);
     // This core's write kernel says when the column gradients have landed.
     volatile tt_l1_ptr uint32_t* column_progress =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_column_progress));
@@ -370,10 +383,26 @@ void kernel_main() {
                 // timestep t - 1.
                 const uint32_t e = sched.spill_endpoint(i, t);
                 const uint32_t want = sched.endpoint_threshold(i, t);
+                const uint32_t endpoint_x = get_arg_val<uint32_t>(core_coords_arg + 2u * (e - 1u));
+                const uint32_t endpoint_y =
+                    get_arg_val<uint32_t>(core_coords_arg + 2u * (e - 1u) + 1u);
+                const uint64_t endpoint_addr =
+                    get_noc_addr(endpoint_x, endpoint_y, get_semaphore(endpoint_sem_ids[e - 1u]));
                 WAYPOINT("ENDW");
-                do {
-                    invalidate_l1_cache();
-                } while ((*endpoint_sem[e - 1u]) < want);
+                if (e == my_core) {
+                    // Its own word: a later streak of this row can be consumed
+                    // on the endpoint itself, which is the case the paper's
+                    // remark works through.
+                    do {
+                        invalidate_l1_cache();
+                    } while ((*endpoint_sem[e - 1u]) < want);
+                } else {
+                    do {
+                        noc_async_read(endpoint_addr, endpoint_read_l1, sizeof(uint32_t));
+                        noc_async_read_barrier();
+                        invalidate_l1_cache();
+                    } while ((*endpoint_read) < want);
+                }
                 WAYPOINT("ENDD");
             }
 #endif
@@ -490,22 +519,9 @@ void kernel_main() {
             // it writes its own copy too, since a later streak of this row may
             // well be consumed here.
             if (sched.has_later_active(i, t)) {
-                const uint32_t sem_id = endpoint_sem_ids[my_core - 1u];
-                *scratch = t + 1u;
-                for (uint32_t r = 1; r <= kCores; ++r) {
-                    if (r == my_core) {
-                        // Its own copy, which matters: a later streak of this
-                        // row may well be consumed here.
-                        noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
-                        continue;
-                    }
-                    const uint32_t x = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u));
-                    const uint32_t y = get_arg_val<uint32_t>(core_coords_arg + 2u * (r - 1u) + 1u);
-                    noc_semaphore_set_remote(scratch_l1, get_noc_addr(x, y, get_semaphore(sem_id)));
-                }
-                // Keep the source word valid until every publication is done
-                // with it, and order this publication before the next.
-                noc_async_write_barrier();
+                // The spill above has completed, so this value certifies it.
+                // One local write: consumers read it from here.
+                noc_semaphore_set(endpoint_sem[my_core - 1u], t + 1u);
             }
 #endif
         }
