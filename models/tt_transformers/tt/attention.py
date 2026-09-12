@@ -1386,6 +1386,9 @@ class Attention(LightweightModule):
 
         # Reduce-scatter
         if not self.use_fused_all_gather_matmul:
+            # Take the stage's sync granularity rather than tt_all_reduce's defaults, so
+            # the prefill collectives are tunable from one place (ModelArgs.ccl_sync_params).
+            rs_chunks, rs_workers = self.args.ccl_sync_params(Mode.PREFILL)
             output_11SH = tt_all_reduce(
                 output_11SH,
                 self.mesh_device,
@@ -1395,6 +1398,8 @@ class Attention(LightweightModule):
                 topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
+                chunks_per_sync=rs_chunks,
+                num_workers_per_link=rs_workers,
             )
 
         return output_11SH

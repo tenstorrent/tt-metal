@@ -434,10 +434,12 @@ class MLP(LightweightModule):
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
             topology=self.args.ccl_topology(),
-            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"] if mode == Mode.DECODE else 10,
+            chunks_per_sync=self.model_config["MLP_RS_CONFIG"]["chunks_per_sync"]
+            if mode == Mode.DECODE
+            else self.args.ccl_sync_params(mode)[0],
             num_workers_per_link=self.model_config["MLP_RS_CONFIG"]["num_workers_per_link"]
             if mode == Mode.DECODE
-            else 2,
+            else self.args.ccl_sync_params(mode)[1],
             subdevice_id=self.prefetcher.worker_sub_device_id
             if mode == Mode.DECODE and self.prefetcher is not None
             else None,
