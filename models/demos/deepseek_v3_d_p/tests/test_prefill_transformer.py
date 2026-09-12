@@ -3,9 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Test for TtPrefillTransformer — verifies composition of embed -> [block x N] -> norm.
+Test for TtPrefillTransformer — verifies composition of embed -> [block x N].
 
-Validates output shapes and PCC against torch reference.
+Validates output shapes and PCC against torch reference. For the full model the run also derives
+the first token on the HOST (final norm + LM head on the CPU over the last layer's hidden state) and
+compares it with the reference's first token; the device has no tail, so a wrong token points at
+something before it.
 
 Reference sources are checked in priority order:
 1. Debug trace on disk (pre-computed safetensors from a known-good run)
@@ -50,25 +53,27 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
-from models.demos.deepseek_v3_d_p.utils.test_utils import save_intermediate_output, token_normalized
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     ReferenceCacheKey,
-    check_first_token_match,
-    check_first_token_match_host_ref,
     check_reference_cache_exists,
     create_hf_model,
     download_infinitebench_subset,
+    execute_tail_host,
     extract_tt_state_dict,
     find_trace_dir,
+    first_token_from_logits,
     load_and_compute_layer_by_layer,
     load_debug_trace,
+    load_host_tail_weights,
     load_reference_cache,
+    log_and_compare_first_token,
     mla_kvpe_width,
     save_reference_cache,
     slice_debug_trace,
     slice_non_padded,
     tokenize_prompt_to_isl,
+    trace_first_token_id,
 )
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -126,27 +131,6 @@ def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_p
     """
     pcc_results = []
     for label, ref_host in reference_items:
-        # For lm_head TT only emits logits at the next-token position, not the full sequence.
-        # Compare the single meaningful position against the same slice of the full-seq reference.
-        if label == "lm_head":
-            tt_host = tt_intermediates.get("logits")
-            if tt_host is None:
-                logger.error(f"{label:<20s}  Missing 'logits' single-position extract in TT intermediates")
-                pcc_results.append((label, -1.0, None))
-                continue
-            last_token_idx = number_of_non_padded_tokens - 1 if padding_side == "right" else ref_host.shape[-2] - 1
-            try:
-                ref_slice = ref_host.narrow(-2, last_token_idx, 1).float()
-                tt_slice = tt_host.float()
-                _, pcc = comp_pcc(ref_slice, tt_slice)
-                _, npcc = comp_pcc(token_normalized(ref_slice), token_normalized(tt_slice))
-                logger.debug(f"{label:<20s}  PCC = {pcc:.6f}  nPCC = {npcc:.6f}")
-                pcc_results.append((label, pcc, npcc))
-            except Exception as e:
-                logger.error(f"{label:<20s}  PCC comparison failed: {e}")
-                pcc_results.append((label, -1.0, None))
-            continue
-
         if label not in tt_intermediates:
             logger.error(f"{label:<20s}  Missing from TT intermediates")
             pcc_results.append((label, -1.0, None))
@@ -185,7 +169,6 @@ def run_model(
     input_source,
     use_pretrained,
     return_kv_cache,
-    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -210,7 +193,6 @@ def run_model(
     mesh_shape = list(mesh_device.shape)
     sp_factor = mesh_shape[sp_axis]
     tp_factor = mesh_shape[tp_axis]
-    emb_dim = config.hidden_size
     isl_per_chip = isl_total // sp_factor
 
     weight_type = "pretrained" if use_pretrained else "random"
@@ -280,9 +262,8 @@ def run_model(
         )
         trace_dir = Path(_pinned)
         trace = load_debug_trace(trace_dir, num_layers=num_layers, isl=isl_total)
-        # load_debug_trace(isl=...) chops the per-row tensors, but the stored logits/next_token_id stay
-        # full-sequence. Mark a chopped golden sliced so the later full-model checks are skipped instead
-        # of comparing this shorter prefill against the golden's final-token logits.
+        # load_debug_trace(isl=...) chops the per-row tensors; record that this golden was sliced to a
+        # prefix (informational: the per-layer / KVPE comparisons are exact for a causal nopad prefix).
         native_isl = len(trace.metadata.get("token_ids", []))
         if native_isl > isl_total:
             trace_sliced = True
@@ -372,6 +353,7 @@ def run_model(
     state_dict = None
     ref_snapshots = None
     ref_kvpe_list = None
+    model_path = None
 
     if use_pretrained:
         model_path = request.getfixturevalue("model_path")
@@ -443,7 +425,6 @@ def run_model(
         tp_axis=tp_axis,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
     )
     ttnn.ReadDeviceProfiler(mesh_device)
     ttnn.synchronize_device(mesh_device)
@@ -513,7 +494,7 @@ def run_model(
 
     # --- Determinism check (isolated from the pcc_validation path below) ---
     # Run num_iterations forwards on identical input and compare every iteration's per-stage
-    # intermediates + final logits + sampled token against the iter-0 baseline.
+    # intermediates (embed + every layer output) against the iter-0 baseline.
     if determinism_check:
         if pcc_validation:
             pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one")
@@ -522,48 +503,28 @@ def run_model(
         threshold = DETERMINISM_PCC_THRESHOLD
         logger.info(f"Determinism check (threshold={threshold}, baseline=iter0)")
         profiler.start("tt_forward")
-        baseline_items = baseline_logits = baseline_first_token_id = None
+        baseline_items = None
         det_failures = []
         for i in range(num_iterations):
             logger.info(f"Determinism iteration: {i}")
-            # Seed the host sampler so identical (bit-exact) logits sample the same token
-            # -> first_token_id reflects only device determinism.
-            torch.manual_seed(0)
-            first_token_id, _, tt_intermediates = transformer(
+            tt_intermediates = transformer(
                 tt_tokens,
                 tt_kvpe_cache,
                 actual_isl=number_of_non_padded_tokens,
                 return_intermediates=True,
                 read_profiler=False,
-                temperature=temperature,
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
             if i == 0:
-                # lm_head is a fixed 32-row tile (not the full sequence) -> exclude it from the
-                # per-stage slicer; the "logits" comparison below covers the LM-head output.
-                excluded = {"first_token", "logits", "lm_head"}
                 baseline_items = [
-                    (k, v.clone().detach())
-                    for k, v in tt_intermediates.items()
-                    if isinstance(v, torch.Tensor) and k not in excluded
+                    (k, v.clone().detach()) for k, v in tt_intermediates.items() if isinstance(v, torch.Tensor)
                 ]
-                _bl = tt_intermediates.get("logits")
-                baseline_logits = _bl.clone().detach() if isinstance(_bl, torch.Tensor) else None
-                baseline_first_token_id = first_token_id
                 logger.info(f"Determinism: captured iter0 baseline ({len(baseline_items)} tensors)")
                 continue
             iter_pcc = _compare_intermediate_pcc(
                 baseline_items, tt_intermediates, number_of_non_padded_tokens, padding_side
             )
-            if baseline_logits is not None and isinstance(tt_intermediates.get("logits"), torch.Tensor):
-                try:
-                    _, lp = comp_pcc(baseline_logits.float(), tt_intermediates["logits"].float())
-                    iter_pcc.append(("logits", lp, None))
-                except Exception as e:
-                    logger.error(f"logits PCC comparison failed: {e}")
-                    iter_pcc.append(("logits", -1.0, None))
-            iter_pcc.append(("first_token_id", 1.0 if first_token_id == baseline_first_token_id else -1.0, None))
             logger.info(f"\n--- Determinism iter {i} vs iter0 ---")
             # Determinism compares TT against TT, so raw PCC is the right score: the two tensors are
             # in the same units and normalising would hide a scale-only divergence.
@@ -590,13 +551,12 @@ def run_model(
     for i in range(num_iterations):
         start = time.time()
         logger.info(f"Starting iteration: {i}")
-        first_token_id, first_token_prob, tt_intermediates = transformer(
+        tt_intermediates = transformer(
             tt_tokens,
             tt_kvpe_cache,
             actual_isl=number_of_non_padded_tokens,
             return_intermediates=pcc_validation,
             read_profiler=False,
-            temperature=temperature,
             index_kv_cache=tt_index_kv_cache,
         )
         logger.info(f"Starting completion sync on iteration: {i}")
@@ -604,42 +564,10 @@ def run_model(
         end = time.time()
         logger.info(f"Iteration {i} completed in {end - start} seconds.")
     profiler.end("tt_forward")
-    logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
-
-    # --- Save intermediate outputs ---
+    logger.info("Forward pass completed.")
 
     if pcc_validation:
         assert tt_intermediates is not None, "Expected intermediates dict"
-        test_params = {
-            "mesh_shape": mesh_shape,
-            "isl_total": isl_total,
-            "isl_per_chip": isl_per_chip,
-            "num_layers": num_layers,
-            "n_routed_experts": n_routed_experts,
-            "dispatch_buffer_capacity_factor": dispatch_buffer_capacity_factor,
-            "gate_fallback_mode": gate_fallback_mode,
-            "use_pretrained": use_pretrained,
-            "input_source": input_source,
-            "topology": str(topology),
-            "num_links": num_links,
-            "emb_dim": emb_dim,
-            "sp_factor": sp_factor,
-            "tp_factor": tp_factor,
-        }
-
-        assert "norm" in tt_intermediates, "Expected 'norm' in intermediates"
-        save_intermediate_output(
-            tensor=tt_intermediates["norm"],
-            name="norm",
-            test_params=test_params,
-        )
-
-        assert "lm_head" in tt_intermediates, "Expected 'lm_head' in intermediates"
-        save_intermediate_output(
-            tensor=tt_intermediates["lm_head"],
-            name="lm_head",
-            test_params=test_params,
-        )
 
     logger.info(
         f"Params: pcc_validation={pcc_validation}, return_kv_cache={return_kv_cache}, do_return_kv={do_return_kv} is_balanced={is_balanced} ref_kvpe_list={ref_kvpe_list is not None}"
@@ -682,7 +610,15 @@ def run_model(
                 logger.info("Loading reference from cache...")
                 ref_snapshots, ref_kvpe_list = load_reference_cache(variant, cache_key)
 
-            ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)] + ["norm", "lm_head"]
+            # Reference layout: embed + one snapshot per layer. Reference caches written before the
+            # norm / LM-head tail was removed carry two extra trailing snapshots (norm, lm_head); zip
+            # ignores them, so old caches stay usable.
+            ref_labels = ["embed"] + [f"layer_{i}" for i in range(num_layers)]
+            if len(ref_snapshots) > len(ref_labels):
+                logger.info(
+                    f"Reference has {len(ref_snapshots)} snapshots for {len(ref_labels)} labels; "
+                    "ignoring the trailing (pre-tail-removal norm/lm_head) entries"
+                )
             reference_items = zip(ref_labels, ref_snapshots)
 
         pcc_results.extend(
@@ -736,31 +672,6 @@ def run_model(
                     pcc_results.append((f"{label}_kv", -1.0, None))
                     pcc_results.append((f"{label}_pe", -1.0, None))
 
-        # --- Logits PCC check (last-token logits vs trace reference) ---
-        # Trace logits / next-token are products of the full traced model. They are
-        # only meaningful when the TT model ran the same number of layers as the trace.
-        # A sliced trace's stored logits/next-token belong to the full (longer) sequence,
-        # so they are not a valid reference for the shorter prefill — skip those checks.
-        trace_full_model = trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers")
-        if trace_full_model and trace.logits is not None and "logits" in tt_intermediates:
-            try:
-                ref_logits = trace.logits.float()
-                tt_logits = tt_intermediates["logits"].float()
-                _, logits_pcc = comp_pcc(ref_logits, tt_logits)
-                _, logits_npcc = comp_pcc(token_normalized(ref_logits), token_normalized(tt_logits))
-                logger.info(f"{'logits':<20s}  PCC = {logits_pcc:.6f}  nPCC = {logits_npcc:.6f}")
-                pcc_results.append(("logits", logits_pcc, logits_npcc))
-            except Exception as e:
-                logger.error(f"{'logits':<20s}  PCC comparison failed: {e}")
-                pcc_results.append(("logits", -1.0, None))
-        elif trace is not None and not trace_full_model:
-            reason = (
-                "trace sliced to a shorter isl (full-sequence logits/next-token invalid)"
-                if trace_sliced
-                else f"num_layers={num_layers} != trace n_layers={trace.metadata.get('n_layers')}"
-            )
-            logger.info(f"Skipping trace logits/first-token checks: {reason}")
-
         profiler.end("pcc_validation")
 
         # --- Summary table ---
@@ -779,52 +690,48 @@ def run_model(
                 failures.append((label, score))
         logger.info(f"{'='*72}")
 
-        # --- First token info ---
-        tok = tokenizer
-        token_text = tok.decode([first_token_id]) if tok else "N/A"
-        first_temp = temperature[0] if isinstance(temperature, list) else temperature
-        logger.info(
-            f"First Token: ID={first_token_id} [{repr(token_text)}] prob={first_token_prob*100:.1f}% temp={first_temp}"
-        )
-
-        # First-token cross-check against the reference
-        # (skipped for a sliced trace: its next_token_id is the full sequence's, not the prefix's)
-        # Both references hold an ARGMAX, so compare TT's argmax, not `first_token_id` -- that is a
-        # temperature-sampled draw, and on a flat distribution the two are unrelated (at isl 5120 with
-        # random ids the sampler returned a token of probability 0.0% against a 17.1% argmax).
-        _tt_logits = tt_intermediates.get("logits") if tt_intermediates else None
-        tt_argmax = int(_tt_logits.float().flatten().argmax().item()) if _tt_logits is not None else first_token_id
-        if input_source == "random":
-            # Uniform random ids are not language: the next-token distribution is near-flat, so token
-            # equality carries no signal either way. The PCC stages still cover this input.
-            logger.info("Skipping first-token equality for random token ids")
-        elif trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers"):
-            token_match = check_first_token_match(trace, trace_dir, tt_argmax, first_token_prob)
-            if token_match is False:
-                failures.append(("first_token_match", -1.0))
-        elif trace is None and num_layers == config.num_hidden_layers:
-            hf_match = check_first_token_match_host_ref(
-                ref_snapshots, number_of_non_padded_tokens, padding_side, tt_argmax, tok
-            )
-            if hf_match is False:
-                failures.append(("first_token_match", -1.0))
+        # --- First token ---
+        # The device has no norm / LM-head tail, so the token is derived on the CPU from the last layer's
+        # hidden state, then cross-checked against the reference exactly as before: full model only, a
+        # mismatch is a failure, a reference without a recorded token is N/A.
+        trace_full_model = trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers")
+        host_full_model = trace is None and ref_snapshots is not None and num_layers == config.num_hidden_layers
+        if use_pretrained and (trace_full_model or host_full_model):
+            tail_weights = load_host_tail_weights(model_path, config)
+            if tail_weights is not None:
+                norm_weight, lm_head_weight = tail_weights
+                # Every tail op runs in the reference's dtype: bf16 -> bf16 like the GPU trace, fp32 like HF.
+                tail_args = (
+                    number_of_non_padded_tokens,
+                    padding_side,
+                    norm_weight,
+                    lm_head_weight,
+                    config.rms_norm_eps,
+                    torch.bfloat16 if trace_full_model else torch.float32,
+                )
+                tt_logits = execute_tail_host(tt_intermediates[f"layer_{num_layers - 1}"], *tail_args)
+                tt_token_id, tt_top5 = first_token_from_logits(tt_logits, tokenizer)
+                for rank, (tid, prob, text) in enumerate(tt_top5, start=1):
+                    logger.info(f"  TT top{rank}: ID={tid:6d} | prob={prob * 100:6.2f}% | {text!r}")
+                if trace_full_model:
+                    ref_token_id, ref_token_text = trace_first_token_id(trace, trace_dir)
+                    ref_source = "trace next_token_id"
+                    if ref_token_id is None:
+                        logger.info(f"Trace first token: TT={tt_token_id}, Trace=N/A [{ref_token_text!r}], Match=N/A")
+                else:
+                    # Same host tail over the HF reference's last-layer hidden state. Index by layer
+                    # (snapshot 0 is embed), not [-1]: a reference cache written before the tail was
+                    # removed still carries trailing norm / lm_head snapshots.
+                    ref_token_id = int(execute_tail_host(ref_snapshots[num_layers], *tail_args).argmax().item())
+                    ref_source = "HF layer_{N-1} + host tail"
+                if ref_token_id is not None and not log_and_compare_first_token(
+                    tt_token_id, ref_token_id, tokenizer, ref_source
+                ):
+                    failures.append(("first_token_match", -1.0))
+                del norm_weight, lm_head_weight, tail_weights, tt_logits
+                gc.collect()
         else:
             logger.debug("Skipping first token check")
-
-        # Log all temperature results from intermediates
-        if tt_intermediates and "first_token" in tt_intermediates:
-            for result in tt_intermediates["first_token"]:
-                tid = result["token_id"]
-                tprob = result["probability"]
-                ttemp = result["temperature"]
-                ttext = tok.decode([tid]) if tok else "N/A"
-                logger.debug(f"First Token: ID={tid} [{repr(ttext)}] prob={tprob*100:.1f}% temp={ttemp}")
-                if "top5" in result:
-                    for i, t5 in enumerate(result["top5"]):
-                        t5_id = t5["token_id"]
-                        t5_prob = t5["probability"]
-                        t5_text = tok.decode([t5_id]) if tok else "N/A"
-                        logger.debug(f"  top{i+1}: ID={t5_id} [{repr(t5_text)}] prob={t5_prob*100:.1f}%")
 
         has_pcc_failures = len(failures) > 0
 
@@ -908,7 +815,6 @@ def run_model(
 
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
-@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize(
     "input_source, pcc_validation, use_pretrained",
@@ -990,7 +896,6 @@ def test_ds_prefill_transformer(
     input_source,
     use_pretrained,
     return_kv_cache,
-    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -1017,7 +922,6 @@ def test_ds_prefill_transformer(
         input_source,
         use_pretrained,
         return_kv_cache,
-        temperature,
         weight_cache_path,
         is_ci_env,
         is_ci_v2_env,
@@ -1028,7 +932,6 @@ def test_ds_prefill_transformer(
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
-@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize(
     "input_source, pcc_validation, use_pretrained",
@@ -1102,7 +1005,6 @@ def test_kimi_prefill_transformer(
     input_source,
     use_pretrained,
     return_kv_cache,
-    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -1129,7 +1031,6 @@ def test_kimi_prefill_transformer(
         input_source,
         use_pretrained,
         return_kv_cache,
-        temperature,
         weight_cache_path,
         is_ci_env,
         is_ci_v2_env,
@@ -1140,7 +1041,6 @@ def test_kimi_prefill_transformer(
 
 @pytest.mark.skipif(not is_blackhole(), reason="GLM-5.1 requires Blackhole")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
-@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize("use_pretrained", [True], ids=["pretrained"])
 @pytest.mark.parametrize(
@@ -1206,7 +1106,6 @@ def test_glm_prefill_transformer(
     input_source,
     use_pretrained,
     return_kv_cache,
-    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -1235,7 +1134,6 @@ def test_glm_prefill_transformer(
         input_source,
         use_pretrained,
         return_kv_cache,
-        temperature,
         weight_cache_path,
         is_ci_env,
         is_ci_v2_env,

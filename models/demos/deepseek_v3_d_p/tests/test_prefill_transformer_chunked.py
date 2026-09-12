@@ -679,7 +679,6 @@ def run_chunked_transformer_padded(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -725,9 +724,9 @@ def run_chunked_transformer_padded(
         )
 
         # forward (not a separate forward_chunk) drives the chunked path via actual_start/actual_end;
-        # it uses self.indexed_rope, runs the norm/lm_head/sample tail (token ignored), and with
-        # return_intermediates snapshots each layer to host as intermediates["layer_i"].
-        _, _, layer_outputs = transformer.forward(
+        # it uses self.indexed_rope, and with return_intermediates snapshots each layer to host as
+        # intermediates["layer_i"] (the last rank returns that dict; there is no norm/LM-head tail).
+        layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
             actual_isl=isl,
@@ -880,7 +879,6 @@ def run_chunked_transformer(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         tp_shard_kv=tp_shard_kv,
@@ -996,7 +994,7 @@ def run_chunked_transformer(
         # forward (not a separate forward_chunk): full chunk, all positions real, so actual_end is
         # kv_actual + CHUNK. With return_intermediates it snapshots each layer to host as
         # intermediates["layer_i"]; forward uses self.indexed_rope.
-        _, _, layer_outputs = transformer.forward(
+        layer_outputs = transformer.forward(
             tt_tokens,
             tt_kvpe_cache,
             actual_isl=CHUNK,
@@ -1703,16 +1701,14 @@ def run_chunked_transformer_updated(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
         tp_shard_kv=tp_shard_kv,
-        # Strip the tail (LM head + final norm + sampling): the populated KV cache is this runner's
-        # output, so the tail is dead work that would otherwise land inside the measured per-chunk
-        # time. It is also what makes the forward DEVICE-ONLY and therefore capturable — the LM head
-        # does an all-gather + a host read, and a read inside begin_capture() is a hard TT_FATAL
-        # ("Reads are not supported during trace capture"). Set for BOTH modes, not just use_trace,
-        # so traced and untraced timings measure the same work and stay comparable.
+        # Run the last layer kv-only: the populated KV cache is this runner's output, so the last layer's
+        # Q/SDPA/output projection and FFN/MoE are dead work that would otherwise land inside the
+        # measured per-chunk time. Set for BOTH modes, not just use_trace, so traced and untraced
+        # timings measure the same work and stay comparable. (The forward is device-only regardless:
+        # there is no norm / LM-head tail with a host read anymore.)
         kv_only_last_layer=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
     )
@@ -1848,8 +1844,8 @@ def run_chunked_transformer_updated(
     # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
     # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
     # into 1-element uint32 DRAM tensors the metadata ops read on-device; the token input moves into a
-    # persistent buffer refreshed in place. kv_only_last_layer=True (set on the transformer above) is what makes the forward
-    # device-only and therefore capturable at all.
+    # persistent buffer refreshed in place. With return_intermediates=False the forward is device-only
+    # (no host readback), so it is capturable.
     trace_controller = None
     trace_input = None
     trace_metadata = None
@@ -1964,10 +1960,11 @@ def run_chunked_transformer_updated(
             # return_intermediates only when the caller asked for per-layer PCC: it clones every layer to
             # host, which both costs time (so the timing table stops being a perf number) and is illegal
             # under capture. Otherwise nothing is cloned. Chunked prefill is full-chunk (all positions
-            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The small
-            # (first_token) return is discarded.
+            # real) so actual_end is kv_actual + CHUNK; forward uses self.indexed_rope. The return is the
+            # intermediates dict, or None when none were requested -- no first_token: the transformer has
+            # no norm / LM-head / sampling tail.
             reset_fused_ring_host_timing()
-            fwd_out = transformer.forward(
+            layer_outputs = transformer.forward(
                 tt_tokens,
                 tt_kvpe_cache,
                 actual_isl=CHUNK,
@@ -1981,7 +1978,6 @@ def run_chunked_transformer_updated(
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
-                layer_outputs = fwd_out[2]
                 local_pos = chunk_local_pos[c]
                 for i in range(num_layers):
                     # kv_only_last_layer=True strips the LAST layer's output path (it writes KV and
@@ -2717,10 +2713,10 @@ def run_chunked_transformer_padded_trace(
         is_balanced=False,
         gate_fallback_mode=gate_fallback_mode,
         weight_cache_path=effective_cache_path,
-        lm_head_is_column_parallel=True,
         is_chunked=True,
         slot_num=1,
-        # kv_only_last_layer -> device-only forward (no host readback) so ttnn trace can capture it.
+        # kv_only_last_layer: the last layer only fills its KV cache (dead work trimmed; the KV cache is
+        # the output). The forward is device-only either way, so ttnn trace can capture it.
         kv_only_last_layer=True,
         overlap_shared_expert_with_dispatch=True,
         routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
@@ -2776,8 +2772,8 @@ def run_chunked_transformer_padded_trace(
         # Layers 0..num_layers-2 only: the transformer is built kv_only_last_layer=True, so the LAST
         # layer is kv_only (attn_norm + the KV branch) and never produces a hidden state — the loop
         # returns before snapshotting it (tt_prefill_transformer: `if self.kv_only_last_layer and
-        # i == len(self.layers)-1: return None, None, intermediates`). Its correctness is covered by
-        # the KV PCC below. The norm / LM head / logits tail is likewise not built in this config.
+        # i == len(self.layers)-1: return intermediates`). Its correctness is covered by the KV PCC
+        # below.
         emb_dim = config.hidden_size
         n_decoder_layers = num_layers - 1
         layer_min_pcc = {i: 1.0 for i in range(n_decoder_layers)}
@@ -2801,7 +2797,7 @@ def run_chunked_transformer_padded_trace(
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=sp_mapper,
             )
-            _, _, layer_outputs = transformer.forward(
+            layer_outputs = transformer.forward(
                 tt_tokens,
                 cache,
                 actual_isl=isl,
