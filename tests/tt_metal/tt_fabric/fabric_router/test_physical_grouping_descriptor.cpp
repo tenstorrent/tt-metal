@@ -3758,9 +3758,7 @@ TEST(AdjacencyGuidedPlacement, DescriptorsThatDisagreeOnInterMeshPolicyAreReject
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
-    ASSERT_TRUE(mgds[0].inter_mesh_policy().has_value());
-    ASSERT_TRUE(mgds[1].inter_mesh_policy().has_value());
-    ASSERT_NE(*mgds[0].inter_mesh_policy(), *mgds[1].inter_mesh_policy())
+    ASSERT_NE(mgds[0].is_inter_mesh_policy_relaxed(), mgds[1].is_inter_mesh_policy_relaxed())
         << "the two descriptors have to disagree for this test to mean anything";
 
     EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&mgds[0], &mgds[1]}))
@@ -3771,18 +3769,17 @@ TEST(AdjacencyGuidedPlacement, DescriptorsThatDisagreeOnInterMeshPolicyAreReject
         << "the vector overload should reject the pair before it does any work";
 }
 
-// A descriptor that states no policy abstains rather than conflicting, so it can still be paired with one
-// that does. Otherwise a single-mesh MGD, which has no inter-mesh connection to carry a policy, could
-// never be merged with anything.
-TEST(AdjacencyGuidedPlacement, DescriptorWithNoStatedPolicyDoesNotConflict) {
+// A descriptor with no inter-mesh connections defaults to STRICT, so it conflicts with a RELAXED sibling.
+TEST(AdjacencyGuidedPlacement, DescriptorWithoutInterMeshConnectionsDefaultsToStrictPolicy) {
     MeshGraphDescriptor relaxed{
         std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
     MeshGraphDescriptor single{
         std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
 
-    ASSERT_FALSE(single.inter_mesh_policy().has_value()) << "the single-mesh descriptor states no policy";
-    EXPECT_NO_THROW(utils::validate_shared_inter_mesh_policy({&relaxed, &single}))
-        << "abstaining should not count as disagreeing with the descriptor that does state a policy";
+    EXPECT_FALSE(single.is_inter_mesh_policy_relaxed()) << "no inter-mesh connections defaults to STRICT";
+    EXPECT_TRUE(relaxed.is_inter_mesh_policy_relaxed());
+    EXPECT_ANY_THROW(utils::validate_shared_inter_mesh_policy({&relaxed, &single}))
+        << "STRICT default and RELAXED cannot be merged into one topology";
 }
 
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {

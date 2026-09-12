@@ -8,6 +8,8 @@
 #include <functional>
 #include <ostream>
 #include <optional>
+#include <vector>
+#include <tt_stl/assert.hpp>
 #include <tt_stl/strong_type.hpp>
 
 #include <fmt/format.h>
@@ -75,6 +77,51 @@ bool has_flag(FabricType flags, FabricType test_flag);
 // A declared torus dimension realizes a distinct wrap edge only at size three or
 // larger. Size-one and size-two dimensions retain ordinary mesh links.
 constexpr bool is_genuine_torus_dim(uint32_t dim_size) { return dim_size > 2; }
+
+inline std::vector<int32_t> row_major_coords_from_linear_index(
+    uint32_t linear_index, const std::vector<int32_t>& dims) {
+    std::vector<int32_t> coords(dims.size());
+    int32_t remaining = static_cast<int32_t>(linear_index);
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        const int32_t dim_size = dims[static_cast<size_t>(dim_idx)];
+        coords[static_cast<size_t>(dim_idx)] = remaining % dim_size;
+        remaining /= dim_size;
+    }
+    return coords;
+}
+
+inline uint32_t row_major_linear_index_from_coords(
+    const std::vector<int32_t>& coords, const std::vector<int32_t>& dims) {
+    uint32_t linear_index = 0;
+    uint32_t multiplier = 1;
+    for (int32_t dim_idx = static_cast<int32_t>(dims.size()) - 1; dim_idx >= 0; --dim_idx) {
+        linear_index += static_cast<uint32_t>(coords[static_cast<size_t>(dim_idx)]) * multiplier;
+        multiplier *= static_cast<uint32_t>(dims[static_cast<size_t>(dim_idx)]);
+    }
+    return linear_index;
+}
+
+// Row-major chip index in device_dims -> host-partition index in host_dims. Matches MeshGraph host-rank tiling.
+inline uint32_t host_partition_index_for_row_major_chip(
+    uint32_t chip_index, const std::vector<int32_t>& device_dims, const std::vector<int32_t>& host_dims) {
+    TT_FATAL(
+        device_dims.size() == host_dims.size(),
+        "Device topology dims {} do not match host topology dims {}",
+        device_dims.size(),
+        host_dims.size());
+    const std::vector<int32_t> device_coords = row_major_coords_from_linear_index(chip_index, device_dims);
+    std::vector<int32_t> host_coords(host_dims.size());
+    for (size_t dim_idx = 0; dim_idx < device_dims.size(); ++dim_idx) {
+        TT_FATAL(
+            host_dims[dim_idx] > 0 && device_dims[dim_idx] % host_dims[dim_idx] == 0,
+            "Device dim {} is not divisible by host dim {}",
+            device_dims[dim_idx],
+            host_dims[dim_idx]);
+        const int32_t tiles_per_host = device_dims[dim_idx] / host_dims[dim_idx];
+        host_coords[dim_idx] = device_coords[dim_idx] / tiles_per_host;
+    }
+    return row_major_linear_index_from_coords(host_coords, host_dims);
+}
 
 // MeshShape axis 0 (north/south) maps to TORUS_Y; axis 1 (east/west) maps to TORUS_X.
 constexpr FabricType torus_flag_for_axis(uint32_t axis) {
