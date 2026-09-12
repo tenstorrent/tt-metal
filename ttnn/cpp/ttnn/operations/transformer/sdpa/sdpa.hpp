@@ -120,7 +120,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    std::optional<uint32_t> tokens_per_frame = std::nullopt,
+    std::optional<uint32_t> num_frames_padded = std::nullopt,
+    std::vector<uint32_t> sparse_frame_mask = {});
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
