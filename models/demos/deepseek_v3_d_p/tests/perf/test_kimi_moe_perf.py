@@ -7,11 +7,15 @@ Kimi MoE device-perf gate on the 8x4 galaxy, one test parametrized over the Kimi
 (K2.7 dense-expert MoE and K3 LatentMoE), measured with the real-time program profiler -- same
 mechanism as ``test_ttnn_hca_perf.py``, which already gates HCA perf on this SKU.
 
-What the number is: over the programs the MoE forward dispatched, the sum of each program's
-critical path (max duration across the 32 chips). Close to but NOT the same as the tracy
-baseline it replaces -- ``merge_device_rows`` averages CCL ops across devices where this takes
-their max -- so these baselines were measured with the real-time profiler and must not be
+What the number is: over the programs the MoE forward dispatched EXCEPT the dispatch program, the
+sum of each program's critical path (max duration across the 32 chips). Close to but NOT the same as
+the tracy baseline it replaces -- ``merge_device_rows`` averages CCL ops across devices where this
+takes their max -- so these baselines were measured with the real-time profiler and must not be
 back-ported to the tracy path.
+
+The dispatch program is excluded because its record does not consistently bracket its own work,
+which made this gate bimodal (#55439). ``_split_off_dispatch`` carries the measurements; read it
+before re-cutting any baseline here, and do not re-add that program without re-cutting both.
 
 What the number excludes, verified on an 8x4 galaxy (warm caches, 58 programs x 32 chips =
 1856 records, 0 dropped, no program dispatched more than once per chip):
@@ -86,28 +90,39 @@ class _MoEPerfCase:
 
 # K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-centred 2026-09-03: device time came in at 5,413,674 ns, 9.9% below the old band's lower edge
-# (previous midpoint 6,260,834). Per the repo's rule that is fixed by lowering the midpoint, never by
-# widening the margin. ONE sample, from the failing gate run itself.
+# Re-cut 2026-09-08 for #55439, from the MEDIAN of the nine runs that measured today's metric rather
+# than from one sample. The previous 5,413,674 was one sample of a number that was bimodal: it came
+# from a run where the dispatch program measured ~0.7 us, while runs of the same commit measured it
+# at ~1.12 ms and read 1.10 ms higher. ``_split_off_dispatch`` now keeps that program out of the
+# gated total, so the two clusters collapse into one and the midpoint describes every run.
 #
-# This drop is an order of magnitude larger than the previous re-centre (13.5% vs 0.8%), so it is a
-# real change in the work rather than drift: it is a SPEEDUP, and this branch reorders the shared
-# expert against dispatch, which is exactly the kind of change that moves this number. If a later
-# run does not reproduce ~5.41 ms, treat that as evidence this sample caught something transient and
-# re-cut from the median of several runs rather than re-lowering again.
+# Nine CI measurements of the gated metric. Six predate the fix but measured the dispatch program
+# async, so their total already WAS this metric (less the ~720 ns async record):
+#   5,403,820  run 33946052498 att1        5,483,890  run 33871606089 att1
+#   5,412,954  run 33787697384 att3        5,494,937  run 33787697384 att2
+#   5,442,976  run 33871578406 att3        5,511,528  run 33871618241 att3
+# Three measure it directly, on runs that all landed BRACKETED and so would have failed on the old
+# metric at 6,377,518 / 6,502,417 / 6,551,469:
+#   5,280,196  run 34224607638             5,434,881  run 34224698012
+#   5,389,948  run 34224663346
+# Median 5,434,881, 4.26% peak to peak. Centred on the median rather than the mean so the lowest
+# sample keeps 1.20% inside the lower edge instead of 0.66%. Nine local runs on a single box agreed
+# at 5,445,011 mean, 0.60% sd -- the CI spread is across hosts, the local one is not.
 #
-# Previous history: re-centred 2026-09-02 to 6,260,834 from 6,574,780 (run 33194039175).
+# Previous history: 5,413,674 from 2026-09-03 (one sample, run 33787697384); 6,260,834 from
+# 2026-09-02; 6,574,780 from run 33194039175.
 #
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
 # MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=5_413_674,
+    expected_ns=5_434_881,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
-    # running second on an already-warm device, does not -- five samples on the previous shape spanned
-    # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
-    # property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
+    # running second on an already-warm device, does not. Do NOT tighten this to match K3; the
+    # asymmetry is a property of the job order, not of the midpoint. Sub-nominal DDR doubles it to 8%.
+    # The 1.10 ms swing this margin used to be blamed for was the dispatch program, not warm-up, and
+    # is gone -- the remaining spread is 4.26% across the nine CI samples above, all cross-host.
     margin=0.04,
     shape_note="384 experts / top-8, 7168 emb",
 )
@@ -125,6 +140,12 @@ _K2_7 = _MoEPerfCase(
 # over the same 35 programs -- that count is what separates a real drop from a record window closing
 # early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
 # margin below.
+#
+# Unchanged by the #55439 dispatch exclusion. K3 carries the same bimodal dispatch program (measured
+# locally at ~0.74 us async and ~1.55 ms bracketed), but every CI sample of this case has been async:
+# K3 runs SECOND, on a host the K2.7 case has already warmed, and 24 CI samples span 8,166,412 to
+# 8,601,784 with no second cluster. So this midpoint was already measuring the dispatch-excluded
+# number to within the ~0.74 us the exclusion removes.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
@@ -149,6 +170,54 @@ _CASES = [
     pytest.param("kimi_k2_7", _K2_7, id="k2_7"),
     pytest.param("kimi_k3", _K3, id="k3"),
 ]
+
+
+# A dispatch record at or above this is one that waited for its own fabric transfer; a record below
+# it is one that returned before the transfer landed. Measured states are ~0.7 us and ~1.12 ms, so
+# anything in this range is decisive and the exact threshold does not matter.
+_DISPATCH_BRACKETED_NS = 100_000
+
+# The MoE dispatch op's kernels. Matched on the sender writer alone: it is the kernel that owns the
+# fabric writes, and it appears in no other program in this forward.
+_DISPATCH_KERNEL = "writer_sender_dispatch.cpp"
+
+
+def _split_off_dispatch(per_program: dict, label: str) -> tuple[float, float]:
+    """Return (dispatch program ns, summed ns of every other program).
+
+    Why dispatch is not in the gated number (#55439). This metric is a sum of per-program critical
+    paths, and the dispatch program's record does not consistently bracket its own work: its workers
+    hand the payload to the fabric mux and, depending on whether they return before or after the
+    transfer lands, the SAME code measures the program at ~0.7 us or ~1.12 ms. The state is fixed for
+    the life of a process -- five measured passes in one process all agree -- so it cannot be averaged
+    out by sampling, and it moved the gated total between two clusters 1.10 ms apart (5.46 ms vs
+    6.56 ms) with nothing else in the forward changing by more than ~45 us. That is what made this
+    gate flaky, and it is why the midpoint must never be cut from a single sample: 5,413,674 was cut
+    from one run that happened to land in the async state.
+
+    Excluding it leaves the other 23 programs, which are tight: nine runs on one box spanned 1.97%
+    peak to peak (sd 0.60%) against the 3-4% bands here.
+
+    What this gives up. ``test_dispatch_combine_perf.py`` gates DispatchDeviceOperation per-op, but
+    only for the K2.6/K2.7 shape (its ``_MODELS`` has no K3 entry) and only on torus-y 8x1. So the
+    K2.7 dispatch op keeps a gate on a different SKU, and K3's dispatch op is now gated nowhere --
+    it was only ever covered here, and only in whichever of the two states a run happened to land
+    in, which is not coverage. Closing that needs a K3 case in the per-op gate; tracked on #55439.
+    """
+    dispatch = [
+        entry
+        for entry in per_program.values()
+        if any(_DISPATCH_KERNEL in source.replace("\\", "/") for source in entry["kernel_sources"])
+    ]
+    # One match, or the number silently changes meaning: no match would fold nothing out (and put the
+    # bimodality straight back), several would mean this forward no longer has a single dispatch.
+    assert len(dispatch) == 1, (
+        f"{label}: expected exactly one program with {_DISPATCH_KERNEL}, got {len(dispatch)}. The "
+        "gated total excludes that program, so a rename or a second dispatch has to be handled here "
+        "rather than change the number underneath the baseline."
+    )
+    dispatch_ns = dispatch[0]["duration_ns"]
+    return dispatch_ns, sum(entry["duration_ns"] for entry in per_program.values()) - dispatch_ns
 
 
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi prefill MoE requires Blackhole")
@@ -219,13 +288,23 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
     # i.e. the forward was not the thing profiled. Never report green off that.
     assert per_program, f"real-time profiler produced no program records for the {case.label} MoE forward"
 
-    total_ns = sum(entry["duration_ns"] for entry in per_program.values())
+    dispatch_ns, total_ns = _split_off_dispatch(per_program, case.label)
+    gated_programs = len(per_program) - 1
     tag = f"{case.label} moe 8x4 realtime perf ({case.shape_note})"
+    # WARNING, not info, on the bracketed state: it is the state whose 1.10 ms this gate used to
+    # swallow, so it must be greppable in a job log that is otherwise green.
+    dispatch_log = logger.warning if dispatch_ns >= _DISPATCH_BRACKETED_NS else logger.info
+    dispatch_log(
+        f"{tag}: dispatch program {dispatch_ns:,.0f} ns, "
+        f"{'BRACKETED (workers waited for the transfer)' if dispatch_ns >= _DISPATCH_BRACKETED_NS else 'ASYNC (workers returned first)'}"
+        " -- excluded from the gated total, see _split_off_dispatch"
+    )
 
     if case.expected_ns is None:
         logger.warning(
-            f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {len(per_program)} programs "
-            f"-- REPORT ONLY, this run does NOT gate perf. Set expected_ns = {total_ns:,.0f} for "
+            f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {gated_programs} gated programs "
+            f"(+1 dispatch, excluded) -- REPORT ONLY, this run does NOT gate perf. "
+            f"Set expected_ns = {total_ns:,.0f} for "
             f"{case.label} in {os.path.basename(__file__)} to start gating."
         )
         return
@@ -233,8 +312,8 @@ def test_kimi_moe_perf_galaxy(variant, case, config_only, mesh_device, device_pa
     margin = adjust_margin_for_ddr_speed(case.margin)
     lower, upper = case.expected_ns * (1 - margin), case.expected_ns * (1 + margin)
     logger.info(
-        f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {len(per_program)} programs, "
-        f"expected {case.expected_ns:,} ns, band [{lower:,.0f}, {upper:,.0f}] "
+        f"{tag}: {total_ns:,.0f} ns ({total_ns / 1e6:.3f} ms) over {gated_programs} gated programs "
+        f"(+1 dispatch, excluded), expected {case.expected_ns:,} ns, band [{lower:,.0f}, {upper:,.0f}] "
         f"(margin +/- {margin * 100:.1f}%)"
     )
     assert lower <= total_ns <= upper, (
