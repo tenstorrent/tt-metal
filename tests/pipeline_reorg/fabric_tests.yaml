@@ -27,6 +27,7 @@
     wh_n300_civ2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U08RRAU5E15 # Ridvan Song
 
 # ============================================================================
@@ -44,6 +45,7 @@
     wh_llmbox_civ2:
       timeout: 30
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
   upload_benchmarks: true
 
@@ -56,6 +58,7 @@
     wh_llmbox_civ2:
       timeout: 30
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 # ============================================================================
@@ -78,6 +81,7 @@
     wh_galaxy:
       timeout: 25
   team: scaleout
+  budget_type: unit
   owner_id: U0845EV7A5U # Umair Cheema
   upload_benchmarks: true
 
@@ -100,6 +104,7 @@
     wh_galaxy:
       timeout: 25
   team: scaleout
+  budget_type: unit
   owner_id: U0845EV7A5U # Umair Cheema
   auto_triage: false
 
@@ -117,6 +122,7 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric 2D fixture unit tests
@@ -131,6 +137,7 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric mux v2 unit tests
@@ -143,6 +150,7 @@
     bh_quietbox_2:
       timeout: 5
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric UDM mode unit tests
@@ -158,6 +166,7 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH ttnn UDM unit tests
@@ -170,6 +179,7 @@
     bh_quietbox_2:
       timeout: 10
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric system health tests
@@ -182,6 +192,7 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric stability nightly tests
@@ -195,6 +206,7 @@
     bh_quietbox_2:
       timeout: 30
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH ccl nightly tests
@@ -207,6 +219,7 @@
     bh_quietbox_2:
       timeout: 30
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar
 
 - name: BH fabric infra unit tests
@@ -223,4 +236,5 @@
     bh_quietbox_2:
       timeout: 15
   team: scaleout
+  budget_type: unit
   owner_id: U06US5C7M7X # Sean Nijjar

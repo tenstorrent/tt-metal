@@ -132,6 +132,12 @@ def set_tg_attention_config(
 
 
 class TtQwenModelArgs(TtModelArgs):
+    # Qwen Galaxy needs decode program buffers allocated before prefill traces.
+    prepare_decode_before_prefill = True
+
+    # Preserve FF2 partial sums through the prefill reduction across devices.
+    prefill_mlp_output_dtype = ttnn.bfloat16
+
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",

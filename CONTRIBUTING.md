@@ -50,8 +50,13 @@ Thank you for your interest in this project.
 If you are interested in making a contribution, then please familiarize
 yourself with our technical contribution standards as set forth in this guide.
 
-[Fork the repo](https://github.com/tenstorrent/tt-metal/fork) and submit your
-pull request from your personal fork.
+External contributors without repository write access should
+[fork the repo](https://github.com/tenstorrent/tt-metal/fork) and submit pull
+requests from their personal fork.
+
+Contributors with write access should create branches directly in this
+repository and submit pull requests from those branches so repository workflows
+can run against them.
 
 All contributions require:
 - an issue

@@ -19,7 +19,7 @@ on:
         required: false
         type: string
         default: unit
-        description: "merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly). Selects yaml and verify_time_budget.py key."
+        description: "Selects the tests yaml. merge_gate: core triage (merge-gate); unit: hang-report test (L2 nightly)."
       enable-watcher:
         description: "Enable watcher"
         default: false
@@ -32,14 +32,6 @@ on:
         description: "Enable LLK asserts"
         default: false
         type: boolean
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
       summary-scope:
         required: false
         type: string
@@ -68,19 +60,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -euo pipefail
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}" \
-            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: prepare
         run: |

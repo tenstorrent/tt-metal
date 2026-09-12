@@ -5,7 +5,6 @@
 // Note: The sender kernels in One To All write the same transaction_size_bytes amount of data to the same location
 // num_of_transactions times
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -623,7 +622,7 @@ void custom_test(
 /* ========== UNICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 0;
 
@@ -640,7 +639,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2Pac
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 1;
 
@@ -657,7 +656,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5Pac
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 2;
 
@@ -678,7 +677,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes) {
 /* ========== MULTICAST ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 3;
 
@@ -696,7 +695,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2P
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 4;
 
@@ -714,7 +713,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5P
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 5;
 
@@ -735,7 +734,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes)
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 6;
 
@@ -753,7 +752,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 7;
 
@@ -771,7 +770,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
 }
 
 /* ========== 11x10 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID + 8;
 
@@ -791,7 +790,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
 
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore2x2PacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
@@ -821,7 +820,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== 5x5 ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphore5x5PacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
@@ -851,7 +850,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== All ========= */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphorePacketSizes) {
     GTEST_SKIP() << "Skipping test because CI timeout issue (#35788)";
 
     // Parameters
@@ -884,7 +883,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 /* ========== DIRECTED IDEAL ========== */
 
 /* ========== UNICAST ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -938,7 +937,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal)
 }
 
 /* ========== MULTICAST ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 53;  // Arbitrary test id
 
@@ -969,7 +968,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdea
 }
 
 /* ========== MULTICAST LINKED ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 54;  // Arbitrary test id
 
@@ -1000,7 +999,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
 }
 
 /* ========== MULTICAST LINKED WITH SEMAPHORE ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedSemaphoreDirectedIdeal) {
     // Parameters
     uint32_t test_case_id = 56;  // Arbitrary test id
 
@@ -1035,7 +1034,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedSemaph
 }
 
 /* ========== VIRTUAL CHANNELS ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastVirtualChannels) {  // Expose loopback here?
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
@@ -1067,7 +1066,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannel
         loopback);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastCustom) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
@@ -1108,7 +1107,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
 /* ========== UNICAST 2.0 ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 0;
 
@@ -1125,7 +1124,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast2x2Pac
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 1;
 
@@ -1142,7 +1141,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllUnicast5x5Pac
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 2;
 
@@ -1189,7 +1188,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastPacketSizes2_0
 /* ========== MULTICAST 2.0 ========== */
 
 /* ========== 2x2 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 3;
 
@@ -1207,7 +1206,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast2x2P
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 4;
 
@@ -1225,7 +1224,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticast5x5P
 }
 
 /* ========== All ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 5;
 
@@ -1272,7 +1271,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastPacketSizes2
 /* ========== MULTICAST LINKED ========== */
 
 /* ========== 2x2 ========= */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked2x2PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 6;
 
@@ -1290,7 +1289,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
 }
 
 /* ========== 5x5 ========== */
-TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLinked5x5PacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 7;
 
@@ -1308,7 +1307,7 @@ TEST_F(GenericMeshDeviceFixture, NIGHTLY_TensixDataMovementOneToAllMulticastLink
 }
 
 /* ========== 11x10 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedPacketSizes2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 8;
 
@@ -1353,7 +1352,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedPacket
 }
 
 /* ========== MULTICAST LINKED WITH LOOPBACK ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastLinkedDirectedIdeal2_0) {
     // Parameters
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 9;
 
@@ -1383,7 +1382,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastLinkedDirect
         0);  // multicast_scheme_type (not used here)
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 11;
 
     auto mesh_device = get_mesh_device();
@@ -1433,7 +1432,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastDirectedIdeal_
         0);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastDirectedIdeal_2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 12;
 
     auto mesh_device = get_mesh_device();

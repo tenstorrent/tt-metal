@@ -16,6 +16,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -30,6 +31,7 @@
     cpu_medium:
       timeout: 25
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -50,6 +52,7 @@
       # see https://github.com/tenstorrent/tt-metal/issues/49313.)
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -61,6 +64,7 @@
       # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -74,6 +78,7 @@
       # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
       timeout: 55
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -84,6 +89,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -96,6 +102,7 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -108,6 +115,7 @@
       # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
       timeout: 40
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -120,6 +128,7 @@
       # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
       timeout: 30
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song
 
@@ -135,5 +144,6 @@
       # than local (the 4-stage step measured 5m34s on CI). Budgeted from local end-to-end x4 + margin.
       timeout: 45
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
   owner_id: U08RRAU5E15 # Ridvan Song

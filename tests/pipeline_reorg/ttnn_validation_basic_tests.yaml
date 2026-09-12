@@ -12,4 +12,5 @@
     bh_p150b_civ2_viommu:
       timeout: 15
   team: ttnn
+  budget_type: merge_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
