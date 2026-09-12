@@ -233,6 +233,13 @@ class Qwen36Model:
             os.environ.get("QWEN36_PREFILL_BUCKET_TRACE"), self._PREFILL_MASK_BUCKETS
         )
         self._mb_traces = {}  # bucket -> _MaskedBucketTrace (empty unless the gate is on)
+        # DFlash2 drafter: 5-tap capture from the verify (layers [5,19,33,47,61]). GATED — set True
+        # BEFORE capture_verify_trace to bake the tap copies into the trace; default OFF so the
+        # native-MTP verify trace is byte-identical.
+        self._dflash_tap = False
+        self._dflash_tap_layers = (5, 19, 33, 47, 61)  # residual taps after these layers (drafter config)
+        self._dflash_tap_bufs = None
+        self._dflash_eager_taps = None  # residual clones from the last eager masked prefill chunk
         # Scratch physical KV block for the fixed-width fill page table's pad entries; set by
         # allocate_kv_caches (last block, or QWEN36_PREFILL_BUCKET_PAD_BLOCK).
         self._pad_kv_block = None
@@ -1375,7 +1382,7 @@ class Qwen36Model:
         x = self.embd(self._vfy_token_buf)
         x = ttnn.reshape(x, (1, 1, T, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        for layer in self.layers:
+        for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 # Hybrid verify: T candidates as T pseudo-users of ONE sequence. cur_pos row i is
                 # p+1+i, so the decode SDPA's own causal bound gives row i exactly [0, p+1+i] — the
@@ -1409,6 +1416,10 @@ class Qwen36Model:
                 )
             ttnn.deallocate(x)
             x = x_new
+            if self._dflash_tap and _li in self._dflash_tap_layers:
+                # Trace-safe DFlash2 tap: copy the residual after this layer into a fixed-address buf
+                # (gated OFF for native MTP -> its trace has no such op). Fractured [1,1,T,dim/tp].
+                ttnn.copy(x, self._dflash_tap_bufs[self._dflash_tap_layers.index(_li)])
         # The bucket IS the T real positions (the hybrid verify runs at the candidate width), so no
         # row-select: just a memory-config move. The prefill-SDPA verify needed a 128-row bucket and
         # a one-hot select matmul to pull the T real rows back out; both are gone with it.
@@ -1434,6 +1445,55 @@ class Qwen36Model:
         ids = ttnn.argmax(u, dim=-1, keepdim=False)  # [1,1,T] uint32 ROW_MAJOR
         ttnn.deallocate(u)
         return logits, rows, ids
+
+    def alloc_dflash_tap_bufs(self, T):
+        """Fresh persistent dim-fractured [1,1,T,dim/tp] tap buffers (one per tap layer)."""
+        _shard = ttnn.ShardTensorToMesh(self.device, dim=-1)
+        return [
+            ttnn.from_torch(
+                torch.zeros(1, 1, T, self.args.dim),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.device,
+                mesh_mapper=_shard,
+            )
+            for _ in self._dflash_tap_layers
+        ]
+
+    def free_dflash_tap_bufs(self):
+        if self._dflash_tap_bufs is not None:
+            for b in self._dflash_tap_bufs:
+                ttnn.deallocate(b)
+            self._dflash_tap_bufs = None
+
+    def take_dflash_eager_taps(self):
+        """Hand over (and forget) the 5 eager prompt/seed taps captured by the last
+        _forward_prefill_chunk_masked_tp call (list of fractured [1,1,bucket,dim/tp] device
+        tensors, in layer order [5,19,33,47,61]); None if none were captured. The caller frees them."""
+        taps = self._dflash_eager_taps
+        self._dflash_eager_taps = None
+        if taps is None or any(t is None for t in taps):
+            return None
+        return taps
+
+    def _free_dflash_eager_taps(self):
+        taps = self._dflash_eager_taps
+        self._dflash_eager_taps = None
+        if taps:
+            for t in taps:
+                if t is not None:
+                    ttnn.deallocate(t)
+
+    def dflash_taps(self):
+        """Gather the 5 DFlash2 verify taps -> (1, T, 25600) host: concat of the residual after
+        layers [5,19,33,47,61], each gathered across the TP mesh. Only valid when _dflash_tap and a
+        verify trace has run (the buffers hold the LAST verify's taps)."""
+        comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
+        outs = [
+            ttnn.to_torch(b, mesh_composer=comp).reshape(1, -1, self.args.dim)[:, : self._vfy_T, :]
+            for b in self._dflash_tap_bufs
+        ]
+        return torch.cat(outs, dim=-1)
 
     def capture_verify_trace(
         self, page_table, T, gdn_recurrent=True, decode_cfg=None, warm_start=0, commit_warmup=False
@@ -1547,6 +1607,19 @@ class Qwen36Model:
         self._vfy_sin_buf = ttnn.from_torch(
             sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
         )
+
+        if self._dflash_tap:
+            # Persistent fixed-address, dim-fractured buffers the verify trace copies each tap into.
+            # A decoder may pre-allocate them (the TP drafter reads them directly and needs them to
+            # exist before its own pre-capture warmups); then they are reused, not re-allocated.
+            if self._dflash_tap_bufs is not None and (
+                len(self._dflash_tap_bufs) != len(self._dflash_tap_layers) or self._dflash_tap_bufs[0].shape[-2] != T
+            ):
+                for b in self._dflash_tap_bufs:
+                    ttnn.deallocate(b)
+                self._dflash_tap_bufs = None
+            if self._dflash_tap_bufs is None:
+                self._dflash_tap_bufs = self.alloc_dflash_tap_bufs(T)
 
         # Prep GDN layers for slot capture (fixed slot bufs; verify writes per-token state into them).
         gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -3136,6 +3209,11 @@ class Qwen36Model:
             else None
         )
         _cap = getattr(self, "_capture_layer", None)
+        if self._dflash_tap:
+            # DFlash2 prompt/seed taps (eager path only; gated OFF by default). Fresh list per
+            # chunk; the consumer (DFlash2Decoder) takes and frees them via take_dflash_eager_taps.
+            self._free_dflash_eager_taps()
+            self._dflash_eager_taps = [None] * len(self._dflash_tap_layers)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 x_new = layer.forward(
@@ -3163,6 +3241,12 @@ class Qwen36Model:
             x = x_new
             if _cap is not None and _li == _cap:  # debug: capture hidden after layer _cap
                 self._cap_chunk = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self._dflash_tap and _li in self._dflash_tap_layers:
+                # Residual after this layer, fractured [1,1,bucket,dim/tp]; cloned because x is
+                # freed by the next layer.
+                self._dflash_eager_taps[self._dflash_tap_layers.index(_li)] = ttnn.clone(
+                    x, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
         # Deallocate per-chunk inputs; only hidden survives (avoids OOM in eager 64k loop).
         ttnn.deallocate(cos)
         ttnn.deallocate(sin)

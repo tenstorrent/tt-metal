@@ -678,10 +678,17 @@ class SpeculativeDecoder:
         # trace is parked clobbers it. Its two throwaway passes write junk KV at [T+1, T+1+K] — past
         # the seed's slot at T, and overwritten by the first real verify — and restore the GDN state
         # they advance. Counts toward TTFT, not decode_time.
-        if not self._vfy_captured:
+        # Per-MODEL check as well as per-instance: another decoder on this model (e.g. a DFlash2Decoder)
+        # may have re-captured or released the model's verify trace since this instance captured it.
+        if (
+            not self._vfy_captured
+            or getattr(model, "_vfy_owner", None) is not self
+            or getattr(model, "_vfy_trace_id", None) is None
+        ):
             model.capture_verify_trace(
                 self.page_table, self.K + 1, warm_start=T + 1, decode_cfg=True, commit_warmup=self.traced_commit
             )
+            model._vfy_owner = self
             self._vfy_captured = True
         # Commit traces, one per accepted-prefix index mi in 0..K-1 (mi == K is full acceptance,
         # which commit_verify_slot early-outs to nothing). MUST come after the verify capture: the

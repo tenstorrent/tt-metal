@@ -158,9 +158,12 @@ def _get_prompt(seqlen, tokenizer, max_prompt_len=None):
         suffix_ids = tokenizer(suffix, add_special_tokens=False, return_tensors="pt")["input_ids"]
         return torch.cat([prefix_ids, context_ids, suffix_ids], dim=1)[:, :cap]
 
-    # Medium sequences (1k–8k): static prompt files
+    # Medium sequences (1k–8k): static prompt files; sizes without their own file (1k, 2k) clip the
+    # 4k prompt to `cap` tokens.
     size_label = f"{seqlen // 1024}k" if seqlen >= 1024 else str(seqlen)
     path = f"{SAMPLE_PROMPTS_DIR}/input_data_long_{size_label}.json"
+    if not os.path.exists(path):
+        path = f"{SAMPLE_PROMPTS_DIR}/input_data_long_4k.json"
     with open(path) as f:
         data = json.load(f)
     prompt_text = data[0]["prompt"]
@@ -209,6 +212,8 @@ def _blocks_for(seqlen, max_generated_tokens):
     [
         pytest.param(128, 50, True, 1, 1, id="traced_128"),
         pytest.param(128, 8, True, 1, 1, id="traced_128_g8"),  # short decode run for device-profiler runs
+        pytest.param(1024, 100, True, 1, 1, id="traced_1k"),
+        pytest.param(2048, 100, True, 1, 1, id="traced_2k"),
         pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
         pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
         pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
@@ -389,6 +394,8 @@ def _profiler_flush(model):
     """
     if os.environ.get("QWEN36_DEMO_PROFILER_FLUSH") == "1":
         ttnn.ReadDeviceProfiler(model.mesh_device)
+
+
 def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks):
     """MTP speculative decode: the default single-user TP decode path (QWEN36_SPEC=0 opts out).
     draft -> traced verify -> slot commit via SpeculativeDecoder. Returns (tokens, perf_dict) shaped
@@ -400,7 +407,22 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     """
     from models.demos.blackhole.qwen36.tt.spec_decode import SpeculativeDecoder
 
+    # QWEN36_DRAFTER: "mtp" (default) = the native MTP head; "dflash2" = the DFlash2 block-diffusion
+    # drafter (tt/dflash2_decode.py) on the same verify/accept/commit substrate, fixed K=7 (T=8).
+    _drafter = os.environ.get("QWEN36_DRAFTER", "mtp").lower()
     T = token_ids.shape[1]
+    # Per-ISL policy: the DFlash drafter attends only its 2048-token sliding window of context, so its
+    # acceptance falls below native MTP's on long prompts (measured 2026-09-12: 128 -> 99 vs 81 tok/s,
+    # 4k -> 58 vs 69, 16k -> 43 vs 51). Above QWEN36_DFLASH_MAX_PROMPT tokens the native MTP head drafts.
+    _dflash_max = int(os.environ.get("QWEN36_DFLASH_MAX_PROMPT", "2048"))
+    if _drafter == "dflash2" and T > _dflash_max:
+        logger.info(f"[TP SPEC] prompt T={T} > QWEN36_DFLASH_MAX_PROMPT={_dflash_max}: native MTP drafts this request")
+        _drafter = "mtp"
+    if _drafter == "dflash2":
+        from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder as _Decoder
+    else:
+        assert _drafter == "mtp", f"QWEN36_DRAFTER={_drafter!r}: expected 'mtp' or 'dflash2'"
+        _Decoder = SpeculativeDecoder
     # Draft width. K is chosen so that T=K+1 is a layout the fused verify SDPA (spec_multi_pos_tiles)
     # supports: it splits the T candidates into L1-fitting groups of 4 and reads KV once per group
     # rather than once per candidate. Short prompts (<=4k) accept many drafts, so K=11 -> T=12 =
@@ -410,8 +432,12 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     # QWEN36_SPEC_DRAFT_LEN, when set, overrides this (draft_len=None defers to the env in
     # SpeculativeDecoder, whose own library default stays 3).
     draft_len = None if os.environ.get("QWEN36_SPEC_DRAFT_LEN") else (11 if T <= 4096 else 7)
+    if _drafter == "dflash2":
+        from models.demos.blackhole.qwen36.tt.dflash2_decode import default_draft_len
+
+        draft_len = default_draft_len()  # drafter block_size - 1 (QWEN36_DFLASH_BLOCK overrides)
     logger.info(
-        f"[TP SPEC] T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
+        f"[TP SPEC] drafter={_drafter} T={T} -> K={draft_len if draft_len is not None else os.environ['QWEN36_SPEC_DRAFT_LEN']}"
         f"{'' if draft_len is not None else ' (QWEN36_SPEC_DRAFT_LEN)'}"
         " (generate() logs the resolved K + reseed mode)"
     )
@@ -431,13 +457,13 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
     signpost("compile_decode")
     profiler.start("compile_decode")
-    SpeculativeDecoder(model, page_table, draft_len=draft_len).generate(prompt_ids, min(6, max_generated_tokens))
+    _Decoder(model, page_table, draft_len=draft_len).generate(prompt_ids, min(6, max_generated_tokens))
     profiler.end("compile_decode")
     model.free_kv_caches()
 
     # Timed run. generate() records dec.prefill_time (TTFT) and dec.decode_time (spec loop) internally.
     model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
-    dec = SpeculativeDecoder(model, page_table, draft_len=draft_len)
+    dec = _Decoder(model, page_table, draft_len=draft_len)
     signpost("inference_prefill")
     profiler.start("inference_prefill")
     generated = dec.generate(prompt_ids, max_generated_tokens)
@@ -451,7 +477,7 @@ def _run_tp_spec_generation(model, tokenizer, token_ids, max_generated_tokens, n
     ttft = dec.prefill_time
     decode_tok_s = (len(generated) / dec.decode_time) if dec.decode_time > 0 else 0.0
     logger.info(
-        f"[TP SPEC] accept={dec.accept_rate():.2f}/{dec.K} "
+        f"[TP SPEC] drafter={_drafter} accept={dec.accept_rate():.2f}/{dec.K} "
         f"-> {dec.accept_rate() + 1:.2f} committed/iter over {dec.iters} iters; "
         f"ttft={ttft:.2f}s decode={decode_tok_s:.2f} tok/s (compare vs a QWEN36_SPEC=0 run)"
     )

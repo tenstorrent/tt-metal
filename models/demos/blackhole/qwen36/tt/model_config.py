@@ -35,6 +35,16 @@ _QWEN36_SERVING_OPT_DEFAULTS = {
     "QWEN36_PREFILL_LOGITS_FAST": "1",
     "QWEN36_PREFILL_BUCKET_TRACE": "1",
     "QWEN_SDPA_BF8": "1",
+    # Speculative-decode drafter (demo/spec path): "dflash2" = the DFlash block-diffusion drafter
+    # (tt/dflash2_decode.py) on the same verify/accept substrate; "mtp" = the native MTP head.
+    # Measured 2026-09-12 (ISL 130, lossless): DFlash v1 K=11 107.8 tok/s vs native MTP 80.9.
+    "QWEN36_DRAFTER": "dflash2",
+    # The drafter checkpoint MUST match the served target: z-lab/Qwen3.6-27B-DFlash for Qwen3.6-27B
+    # (the incoai/z-lab *DFlash2* drafters target Qwen3.8-27B, a different checkpoint).
+    "DFLASH_WEIGHTS": "/home/ttuser/experiments/qwen36_27b/dflash_v1_weights",
+    # Draft block: 12 -> K=11 -> T=12 fused verify SDPA (the measured sweet spot; 16 = the
+    # checkpoint's native block, legacy T=16 verify).
+    "QWEN36_DFLASH_BLOCK": "12",
 }
 for _k, _v in _QWEN36_SERVING_OPT_DEFAULTS.items():
     os.environ.setdefault(_k, _v)
