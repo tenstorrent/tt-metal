@@ -29,7 +29,6 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     require_tensor_prefetcher,
 )
 
-
 pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
@@ -51,6 +50,14 @@ def _bank_receivers_row_major(bank_idx: int, recv_per_bank: int, ring_cols: int,
         row = ring_pos // ring_cols + row_offset
         cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
     return ttnn.CoreRangeSet(cores)
+
+
+def _receiver_rows(num_dram_banks: int, recv_per_bank: int) -> int:
+    """Rows the receiver grid for `recv_per_bank` receivers per bank occupies. A second delivery
+    target on the same prefetcher must be offset by this much to keep the two receiver sets
+    disjoint."""
+    ring_size = num_dram_banks * recv_per_bank
+    return ring_size // _ring_grid_cols(num_dram_banks, ring_size)
 
 
 def _setup_weight_and_gcb_dram_sender(device, K, N, dtype, recv_per_bank, num_layers, row_offset=0, dual_senders=False):
@@ -335,25 +342,30 @@ def test_validator_worker_sender(device, K, N, dtype, recv_per_bank, num_layers)
         device.remove_sub_device_manager(sub_device_manager)
 
 
-def _setup_weight_and_gcb_recv_contig(
+def _recv_contig_weight_and_bank_map(
     device,
     K,
     N,
     dtype,
     recv_per_bank,
-    num_layers,
-    dual_senders=False,
     distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    row_offset=0,
 ):
-    """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the
-    receiver-contiguous DRAM-core path. num_shards = ring_size > num_dram_banks
-    triggers the manager's recv-contig detection.
+    """Weight + bank->receiver pairing shared by both DRAM-sender transports.
 
-    The weight's shard distribution and the GCB sender->receiver pairing must
-    agree: round-robin shards pair with strided arcs, shard-contiguous (CONTIGUOUS_1D)
-    shards pair with contiguous arcs. Either pairing yields shard index == ring
-    position, so the validator's per-receiver column slice is unchanged."""
-    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    Both factories go through build_dram_sender_mapping, so a tensor laid out for a GCB is laid out
+    for PrefetcherPipes; deriving the geometry once here is what keeps that true. num_shards =
+    ring_size > num_dram_banks triggers the manager's recv-contig detection.
+
+    The weight's shard distribution and the sender->receiver pairing must agree: round-robin shards
+    pair with strided arcs, shard-contiguous (CONTIGUOUS_1D) shards pair with contiguous arcs.
+    Either pairing yields shard index == ring position, so the validator's per-receiver column slice
+    is unchanged.
+
+    ``row_offset`` shifts the receiver grid down, which is how the multi-target tests place two
+    delivery targets on disjoint receivers for one prefetcher.
+
+    Returns (tt_weight, bank_to_receivers, push_page_size, ring_size)."""
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -373,15 +385,35 @@ def _setup_weight_and_gcb_recv_contig(
         device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
     )
 
-    if is_shard_contiguous:
+    if distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D:
         bank_to_receivers = [
-            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
+            (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols, row_offset=row_offset))
+            for b in range(num_dram_banks)
         ]
     else:
         bank_to_receivers = [
-            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols))
+            (b, _bank_receivers_strided(b, recv_per_bank, num_dram_banks, ring_cols=ring_cols, row_offset=row_offset))
             for b in range(num_dram_banks)
         ]
+    return tt_weight, bank_to_receivers, push_page_size, ring_size
+
+
+def _setup_weight_and_gcb_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    num_layers,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    row_offset=0,
+):
+    """Build a DRAM-sender GCB + NdShardSpec-allocated weight for the receiver-contiguous
+    DRAM-core path. See _recv_contig_weight_and_bank_map for the geometry both transports share."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
+    )
     gcb_size = _GCB_DEPTH_PAGES * push_page_size
     gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
         device, bank_to_receivers, gcb_size, support_multi_receiver_shards=not dual_senders
@@ -431,6 +463,337 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
             streaming=streaming,
             rotation=rotation,
         )
+
+
+def _setup_weight_and_pipes_recv_contig(
+    device,
+    K,
+    N,
+    dtype,
+    recv_per_bank,
+    dual_senders=False,
+    distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    row_offset=0,
+    num_entries=_GCB_DEPTH_PAGES,
+):
+    """PrefetcherPipe analogue of _setup_weight_and_gcb_recv_contig: same weight and the same
+    bank->receiver pairing (see _recv_contig_weight_and_bank_map), differing only in the target
+    object. It is created at entry_size == the per-receiver block size, so `num_entries` is a depth
+    in whole blocks of this tensor; a later request may push any other block size the ring holds."""
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank, distribution_strategy=distribution_strategy, row_offset=row_offset
+    )
+    pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=push_page_size,
+        num_entries=num_entries,
+        support_multi_receiver_shards=not dual_senders,
+    )
+    return tt_weight, pipes, push_page_size, ring_size
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["batched", "streaming"])
+@pytest.mark.parametrize(
+    "K,N,dtype,recv_per_bank,num_layers,dual_senders",
+    [
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, False),  # ring=16, num_shards=16 > num_banks=8
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, False),  # FF1 ring=64
+        (2048, 7168, ttnn.bfloat8_b, 4, 1, False),  # ring=32, single-sender nr=4 (discriminator)
+        (2048, 3584, ttnn.bfloat8_b, 2, 2, False),  # two layers through one ring
+        (448, 1792, ttnn.bfloat16, 1, 1, False),  # ring=8, bfloat16 tiles, one receiver per bank
+        # Dual-sender: each bank's receivers split ceil/floor across two DRISC cores.
+        (2048, 3584, ttnn.bfloat8_b, 2, 1, True),  # ring=16, even split 1/1 per bank
+        (4096, 14336, ttnn.bfloat8_b, 8, 1, True),  # FF1 ring=64, even split 4/4 per bank
+        (2304, 5376, ttnn.bfloat8_b, 3, 1, True),  # ring=24, odd split 2/1 per bank (ceil/floor)
+    ],
+    ids=["multi_ksub", "ff1", "single_r4", "multi_layer", "bf16_r1", "multi_ksub_dual", "ff1_dual", "odd_dual"],
+)
+def test_validator_pipe_recv_contig(device, K, N, dtype, recv_per_bank, num_layers, dual_senders, streaming):
+    """Prefetcher -> PrefetcherPipe delivery, validated byte-for-byte against the source tensor.
+
+    The streaming case is the pipe twin of test_validator_dram_sender_recv_contig[streaming]: the
+    rotation changes which DRAM block feeds a receiver at each push step, not how much any receiver
+    is credited, so a pipe sender's write cursors stay in lockstep across receivers exactly as they
+    do for batched delivery. A byte mismatch here means the rotation reached the wrong receiver."""
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, dual_senders=dual_senders
+    )
+    # Non-identity rotation (cyclic shift by 1), so this only passes if the prefetcher slices by the
+    # supplied rotation rather than the bare ring index. Empty == batched.
+    rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size, rotation)] * num_layers, prefetcher_pipes=pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device,
+            tt_weight,
+            num_layers=num_layers,
+            print_stride=max(1, ring_size // 4),
+            prefetcher_pipes=pipes,
+            streaming=streaming,
+            rotation=rotation,
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pipe_recv_contig_shard_contiguous(device, K, N, dtype, recv_per_bank):
+    """CONTIGUOUS_1D shards paired with contiguous ring arcs, rather than round-robin/strided."""
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device,
+        K,
+        N,
+        dtype,
+        recv_per_bank,
+        distribution_strategy=ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pipe_cursor_persists_across_requests(device, K, N, dtype, recv_per_bank):
+    """Two separate queue calls of one layer each, drained by one two-layer validator.
+
+    A PrefetcherPipe sender keeps each receiver's write cursor beside that receiver's credit
+    counters, in the durable config page. The second request must therefore resume where the first
+    stopped, which this only detects because the validator expects block b of layer 2 in the slot
+    following layer 1's."""
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipes)
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+@pytest.mark.parametrize("num_entries", [5, 7], ids=["ring_2.5_blocks", "ring_3.5_blocks"])
+def test_validator_pipe_block_size_not_dividing_ring(device, K, N, dtype, recv_per_bank, num_entries):
+    """A pushed block size need not divide the ring: the remainder becomes a trailing gap.
+
+    Pipes are created at half this tensor's block size and an odd depth, so the ring is N-and-a-half
+    blocks. The DRAM sender stops at the page-aligned usable limit and credits the leftover half
+    block as padding at each wrap, so a lap credits the whole ring and its cursor comes back to the
+    ring base on a block boundary. Two layers so the ring wraps at least once with a gap in play.
+    """
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank
+    )
+    gapped_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=push_page_size // 2,
+        num_entries=num_entries,
+        support_multi_receiver_shards=True,
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)] * 2, prefetcher_pipes=gapped_pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=2, print_stride=max(1, ring_size // 4), prefetcher_pipes=gapped_pipes
+        )
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+@pytest.mark.parametrize("entry_divisor,num_entries", [(1, 1), (2, 3)], ids=["ring_1_block", "ring_1.5_blocks"])
+def test_validator_pipe_ring_holds_one_block(device, K, N, dtype, recv_per_bank, entry_divisor, num_entries):
+    """A ring with room for a single block: every push is a whole lap of that receiver's ring.
+
+    The transport only needs somewhere to put one block -- it is a consumer that wants a second one
+    for lookahead -- so this is a supported (if unpipelined) geometry. The 1.5-block variant puts a
+    half-block trailing gap after that one block, so each push credits payload plus gap and the
+    cursor wraps back to zero every time.
+    """
+    tt_weight, bank_to_receivers, push_page_size, ring_size = _recv_contig_weight_and_bank_map(
+        device, K, N, dtype, recv_per_bank
+    )
+    shallow_pipes = ttnn.experimental.create_prefetcher_pipes_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        entry_size=push_page_size // entry_divisor,
+        num_entries=num_entries,
+        support_multi_receiver_shards=True,
+    )
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device, [(tt_weight, ring_size)], prefetcher_pipes=shallow_pipes
+        )
+        ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+            device, tt_weight, num_layers=1, print_stride=max(1, ring_size // 4), prefetcher_pipes=shallow_pipes
+        )
+
+
+def _queue_and_validate_pipes(device, tt_weight, pipes, ring_size, num_layers=1):
+    """One PrefetcherPipe request plus the validator that drains it."""
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device, [(tt_weight, ring_size)] * num_layers, prefetcher_pipes=pipes
+    )
+    ttnn.experimental.test_tensor_prefetcher_pipe_validator(
+        device, tt_weight, num_layers=num_layers, print_stride=max(1, ring_size // 4), prefetcher_pipes=pipes
+    )
+
+
+def _queue_and_validate_gcb(device, tt_weight, gcb, ring_size, num_layers=1):
+    """The GlobalCircularBuffer twin of _queue_and_validate_pipes."""
+    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
+    ttnn.experimental.test_dram_prefetcher_validator(
+        device, tt_weight, num_layers=num_layers, print_stride=max(1, ring_size // 4), global_cb=gcb
+    )
+
+
+@pytest.mark.parametrize("K,N,dtype", [(448, 1792, ttnn.bfloat8_b)])
+def test_validator_pipe_dual_single_receiver_bank(device, K, N, dtype):
+    """Dual senders requested (support_multi_receiver_shards=False) with one receiver per bank.
+
+    Two things at once. A single receiver cannot be split across two senders, so every bank falls
+    back to its primary sender: one pipe per bank, each with slab base 0. And one shard per bank is
+    where the two DRAM layouts coincide -- ttnn hands such an NdShardSpec back as a legacy
+    WIDTH_SHARDED ShardSpec, so the manager can only tell them apart by what the transport
+    consumes, and for pipes that is receiver-contiguous. The pipe twin of
+    test_validator_dram_sender_dual_single_receiver_bank, which reads the same bytes as K-row-major.
+    """
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank=1, dual_senders=True
+    )
+    assert len({p.sender_core().x for p in pipes}) == len(pipes), "a single-receiver bank must fall back to one sender"
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_pipe_multi_set_switching(device, K, N, dtype, recv_per_bank):
+    """Two pipe sets share one prefetcher; interleave A -> B -> A.
+
+    Every pipe owns its own DRISC config page, and a sender's write cursors live in that page
+    beside its credit counters, so switching sets mid-stream has to leave each set's cursors where
+    they were. The third request is the one that catches a set whose state the B request disturbed.
+    Receivers are stacked vertically so the sets are disjoint; both run on the same DRAM senders.
+    The pipe twin of test_validator_dram_sender_multi_gcb_switching.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    tt_weight_a, pipes_a, _push_a, ring_size = _setup_weight_and_pipes_recv_contig(device, K, N, dtype, recv_per_bank)
+    tt_weight_b, pipes_b, _push_b, _ring_b = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
+    )
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_size)
+
+
+def test_validator_pipe_mixed_num_receivers(device):
+    """Two pipe sets with DIFFERENT receiver counts share one prefetcher.
+
+    A sender reads num_receivers out of the config page each request names, so a request against
+    the three-receiver set must not walk the two-receiver set's NOC XY table, or vice versa. Sizes
+    are derived from the bank count so both sets work whatever the part's DRAM harvest. The pipe
+    twin of test_validator_dram_sender_mixed_num_receivers.
+    """
+    K, dtype = 448, ttnn.bfloat8_b
+    num_dram_banks = device.dram_grid_size().x
+    # Receivers per bank of 2 and 3: both leave num_shards > num_dram_banks, which is what keeps the
+    # weight an NdShardSpec (one shard per bank canonicalizes to legacy WIDTH_SHARDED, and this
+    # transport takes receiver-contiguous only). N covers 6 = lcm(2, 3) receivers per bank so both
+    # ring sizes divide it.
+    N = num_dram_banks * 6 * 2 * ttnn.TILE_SIZE
+    tt_weight_a, pipes_a, _push_a, ring_a = _setup_weight_and_pipes_recv_contig(device, K, N, dtype, recv_per_bank=2)
+    tt_weight_b, pipes_b, _push_b, ring_b = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank=3, row_offset=_receiver_rows(num_dram_banks, 2)
+    )
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
+        _queue_and_validate_pipes(device, tt_weight_b, pipes_b, ring_b)
+        _queue_and_validate_pipes(device, tt_weight_a, pipes_a, ring_a)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_pipe_list_order_is_enforced(device, K, N, dtype, recv_per_bank, expect_error):
+    """A delivery target is a list of pipes, so a caller can hand over one the factory never built.
+
+    Order is not decoration: a pipe's position in the list is what assigns its sender a bank-local
+    slab base, derived by accumulating receiver counts within a run of one bank. Each list below
+    would silently deliver a tensor's blocks to the wrong receivers, so queueing has to reject it.
+    """
+    tt_weight, pipes, _push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, dual_senders=True
+    )
+    assert len(pipes) > len({p.sender_core().x for p in pipes}), "this case needs a bank with two senders"
+
+    def queue(pipe_list):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)], prefetcher_pipes=pipe_list)
+
+    with tensor_prefetcher_session(device):
+        # Every bank appears twice, so its second run duplicates a bank already delivered to.
+        with expect_error(RuntimeError, "appear once"):
+            queue(pipes + pipes)
+        # Interleaved: each bank's two senders are split apart, so no bank's pipes are adjacent,
+        # and every bank opens a second run.
+        with expect_error(RuntimeError, "appear once"):
+            queue(pipes[::2] + pipes[1::2])
+        # One bank's senders swapped: the trailing pipe would take slab base 0.
+        swapped = list(pipes)
+        swapped[0], swapped[1] = swapped[1], swapped[0]
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(swapped)
+        # A trailing sender cannot open a bank, even when no other pipe follows it in that bank.
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(pipes[1:])
+        # Apply the same guard to later banks, not just the first pipe in the list.
+        with expect_error(RuntimeError, "not in sender order"):
+            queue(pipes[:2] + pipes[3:])
+        # The list as the factory returned it still works, on the same prefetcher.
+        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(448, 1792, ttnn.bfloat8_b, 1)])
+def test_pipe_outlives_the_list_it_came_in(device, K, N, dtype, recv_per_bank):
+    """A pipe kept out of the returned list still holds its device, and the rest still deliver.
+
+    A pipe's destructor frees its ring out of the device's persistent L1, so each pipe keeps the
+    device alive on its own rather than relying on the list that carried it.
+    """
+    tt_weight, pipes, push_page_size, ring_size = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank
+    )
+    kept = pipes[0]
+    assert kept.sender_core_type() == "dram"
+    assert kept.ring_size() == push_page_size * _GCB_DEPTH_PAGES
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_pipes(device, tt_weight, pipes, ring_size)
+    # Reading through the surviving handle after the list is gone must not touch freed device state.
+    del pipes
+    assert kept.config_address() > 0
+
+
+@pytest.mark.parametrize("K,N,dtype,recv_per_bank", [(2048, 3584, ttnn.bfloat8_b, 2)])
+def test_validator_gcb_and_pipe_interleaved(device, K, N, dtype, recv_per_bank):
+    """One prefetcher, both transports: GCB -> pipes -> GCB.
+
+    Which transport a request uses is in its header, and the kernel keeps a single interface slot,
+    so each request has to rebuild that slot for the target it names -- including the stride between
+    per-receiver counter pairs, which is the one thing the two transports lay out differently. The
+    third request is what catches a GCB whose ring state the pipe request left behind.
+    """
+    num_dram_banks = device.dram_grid_size().x
+    tt_weight_gcb, gcb, _iters, _push_gcb, ring_size = _setup_weight_and_gcb_recv_contig(
+        device, K, N, dtype, recv_per_bank, num_layers=1
+    )
+    tt_weight_pipe, pipes, _push_pipe, _ring_pipe = _setup_weight_and_pipes_recv_contig(
+        device, K, N, dtype, recv_per_bank, row_offset=_receiver_rows(num_dram_banks, recv_per_bank)
+    )
+    with tensor_prefetcher_session(device):
+        _queue_and_validate_gcb(device, tt_weight_gcb, gcb, ring_size)
+        _queue_and_validate_pipes(device, tt_weight_pipe, pipes, ring_size)
+        _queue_and_validate_gcb(device, tt_weight_gcb, gcb, ring_size)
 
 
 @pytest.mark.parametrize("K,N,dtype,num_layers", [(448, 1792, ttnn.bfloat16, 2)])

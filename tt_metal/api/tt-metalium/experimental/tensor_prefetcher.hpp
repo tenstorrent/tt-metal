@@ -20,6 +20,8 @@
 #include <optional>
 #include <vector>
 
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
+
 namespace tt::tt_metal {
 
 class MeshTensor;
@@ -131,6 +133,39 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 void QueueTensorPrefetcherRequest(
     distributed::MeshDevice& mesh_device,
     const GlobalCircularBuffer& gcb,
+    const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
+    const std::vector<TensorPrefetcherInput>& input_tensors,
+    distributed::MeshCommandQueue* trace_capture_cq = nullptr);
+
+// Queue one prefetch request against PrefetcherPipes instead of a GlobalCircularBuffer. The target
+// object is what selects the delivery transport; everything else behaves as documented above, and
+// requests against a GCB and against PrefetcherPipes may be interleaved on one running prefetcher.
+//
+// `prefetcher_pipes` must be what CreatePrefetcherPipesForTensorPrefetcher returned for the same
+// mesh device, in that order: a bank's pipes must stay adjacent and in sender order, since that is
+// what assigns each sender its bank-local slab base.
+// Consumers of the delivered pages Attach each pipe on its own receivers and read through the
+// device-side experimental::PrefetcherPipe.
+//
+// Additional preconditions for this transport, all TT_FATAL with the offending values:
+//   - every pipe has a DRAM sender, and they share one entry size and ring size;
+//   - each bank's pipes form one contiguous run, in sender order, and receiver sets are disjoint
+//     across every pipe;
+//   - every tensor must resolve to the receiver-contiguous layout (each receiver owning a disjoint
+//     contiguous shard). One receiver per bank qualifies: a bank's whole shard is then that
+//     receiver's slab, which is why such a weight is read as receiver-contiguous here even though
+//     ttnn reports it as legacy WIDTH_SHARDED (the two layouts name the same bytes, and a GCB still
+//     reads it as K-row-major).
+//
+// Everything else carries over: the streaming `rotation` works the same way it does for a GCB, and
+// a tensor's per-receiver block size need not equal the pipes' `entry_size` nor divide the ring --
+// the sender re-grids its write cursor per tensor, and any trailing remainder of the ring is a gap
+// both endpoints credit at the wrap. The ring itself is fixed at creation and never resizes, so
+// size it for the consumer: one block is enough for the transport, while a consumer that keeps a
+// block of lookahead (a streaming matmul) needs two.
+void QueueTensorPrefetcherRequest(
+    distributed::MeshDevice& mesh_device,
+    const std::vector<std::shared_ptr<PrefetcherPipe>>& prefetcher_pipes,
     const std::optional<distributed::MeshCoordinateRangeSet>& device_subset,
     const std::vector<TensorPrefetcherInput>& input_tensors,
     distributed::MeshCommandQueue* trace_capture_cq = nullptr);

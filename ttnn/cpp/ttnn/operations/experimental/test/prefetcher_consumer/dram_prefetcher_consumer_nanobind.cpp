@@ -6,10 +6,13 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/vector.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "dram_prefetcher_consumer.hpp"
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
 
 namespace ttnn::operations::experimental::test {
 
@@ -36,6 +39,30 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("page_size_bytes"),
         nb::kw_only(),
         nb::arg("global_cb"));
+
+    ttnn::bind_function<"test_tensor_prefetcher_pipe_consumer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Bench-only consumer companion for PrefetcherPipe delivery: the PrefetcherPipe
+            counterpart of test_dram_prefetcher_consumer. Attaches every pipe on its receiver cores
+            and loops num_iters times of wait_front(1)+pop_front(1), discarding the data, so the
+            two transports can be benched head to head.
+            Used for debugging purposes, please avoid to use in any production code.
+
+            Args:
+                mesh_device: the MeshDevice to enqueue on.
+                num_iters (int): total entries each receiver should consume (= num_layers * num_blocks).
+                page_size_bytes (int): entry size to Attach at; must match the per-receiver block
+                    size the sender pushes.
+                prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
+                    from create_prefetcher_pipes_for_tensor_prefetcher.
+        )doc",
+        &test_tensor_prefetcher_pipe_consumer,
+        nb::arg("mesh_device"),
+        nb::arg("num_iters"),
+        nb::arg("page_size_bytes"),
+        nb::kw_only(),
+        nb::arg("prefetcher_pipes"));
 
     ttnn::bind_function<"test_dram_prefetcher_validator", "ttnn.experimental.">(
         mod,
@@ -74,6 +101,45 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::arg("print_stride"),
         nb::kw_only(),
         nb::arg("global_cb"),
+        nb::arg("streaming") = false,
+        nb::arg("rotation") = std::vector<uint32_t>{});
+
+    ttnn::bind_function<"test_tensor_prefetcher_pipe_validator", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Byte-for-byte validator receiver for PrefetcherPipe delivery: the PrefetcherPipe
+            counterpart of test_dram_prefetcher_validator. Attaches every pipe on its receiver
+            cores and, for each delivered entry, reads the expected tile range from source_tensor
+            via TensorAccessor and compares it against the received bytes. On a mismatch it DPRINTs
+            (layer, block, word) plus the diverging bytes and hangs the core; otherwise it DPRINTs
+            progress and a final OK, then polls briefly for an extra entry (sender overshoot) and
+            hangs on overflow.
+
+            Used for debugging purposes; please avoid in any production code.
+
+            Args:
+                mesh_device: the MeshDevice to enqueue on.
+                source_tensor (ttnn.Tensor): the same receiver-contiguous DRAM tensor the
+                    prefetcher is being driven with.
+                num_layers (int): number of layers the prefetcher will push.
+                print_stride (int): DPRINT every Nth iter; first/last always logged. 0 = first/last only.
+                prefetcher_pipes (List[PrefetcherPipe]): the DRAM-sender pipes being pushed into,
+                    from create_prefetcher_pipes_for_tensor_prefetcher.
+                streaming (bool): when True, expect the streaming prefetcher's ring-rotated
+                    delivery (entry at FIFO position p is physical block (lead_block + p) mod
+                    num_blocks). Must match the streaming flag passed to the prefetcher.
+                    Defaults to False.
+                rotation (List[int]): per-receiver streaming rotation indexed by global ring
+                    position (must match the rotation queued to the prefetcher). Empty == identity
+                    (lead_block = ring_pos), the natural topology order. Defaults to empty.
+        )doc",
+        &test_tensor_prefetcher_pipe_validator,
+        nb::arg("mesh_device"),
+        nb::arg("source_tensor"),
+        nb::arg("num_layers"),
+        nb::arg("print_stride"),
+        nb::kw_only(),
+        nb::arg("prefetcher_pipes"),
         nb::arg("streaming") = false,
         nb::arg("rotation") = std::vector<uint32_t>{});
 }

@@ -10,6 +10,7 @@
 #include <array>
 #include <experimental/type_traits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <reflect>
@@ -314,6 +315,34 @@ constexpr bool supports_compile_time_attributes_v = std::experimental::is_detect
 template <typename T>
 constexpr bool supports_conversion_to_string_v =
     detail::supports_to_string_v<T> or detail::supports_compile_time_attributes_v<T>;
+
+// A std::shared_ptr whose pointee asked to be traversed through the pointer, by declaring
+//
+//     static constexpr bool ttsl_reflect_through_shared_ptr = true;
+//
+// Such a pointer is hashed, encoded and printed as the object it points at -- see the
+// std::shared_ptr branches of hash_object, append_canonical and to_json_t -- because what identifies
+// a handle held behind a shared_ptr is its contents, not where its control block happens to sit.
+//
+// Declaring it, rather than inferring it from the pointee being reflectable, is deliberate: several
+// reflectable types describe geometry only (GlobalSemaphore's attributes are its cores and buffer
+// type), and for those the pointer's address is the more discriminating key. Silently swapping one
+// for the other would turn a program-cache key that distinguishes two live objects into one that
+// does not. A type opts in when its attributes identify the object.
+template <typename T>
+using has_reflect_through_shared_ptr_t = std::enable_if_t<T::ttsl_reflect_through_shared_ptr>;
+
+template <typename T>
+struct is_reflective_shared_ptr : std::false_type {};
+
+template <typename T>
+struct is_reflective_shared_ptr<std::shared_ptr<T>>
+    : std::bool_constant<
+          std::experimental::is_detected_v<has_reflect_through_shared_ptr_t, T> and
+          supports_compile_time_attributes_v<T>> {};
+
+template <typename T>
+constexpr bool is_reflective_shared_ptr_v = is_reflective_shared_ptr<T>::value;
 }  // namespace detail
 
 template <typename T>
@@ -1196,6 +1225,20 @@ struct get_first_object_of_type_t<T> {
     }
 };
 
+// A reflective handle held behind a shared_ptr prints as what it points at, matching how
+// hash_object, append_canonical and to_json_t traverse it. Declared after the operator<< it calls so
+// that lookup finds that one.
+template <typename T>
+    requires detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+std::ostream& operator<<(std::ostream& os, const std::shared_ptr<T>& pointer) {
+    if (pointer == nullptr) {
+        os << "nullptr";
+    } else {
+        os << *pointer;
+    }
+    return os;
+}
+
 }  // namespace reflection
 
 // operator<< for SmallVector lives in namespace ttsl (same as SmallVector)
@@ -1246,6 +1289,19 @@ struct fmt::formatter<T> {
     constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
 
     auto format(const T& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
+        using ttsl::reflection::operator<<;
+        std::stringstream ss;
+        ss << object;
+        return fmt::format_to(ctx.out(), "{}", ss.str());
+    }
+};
+
+template <typename T>
+    requires ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+struct fmt::formatter<std::shared_ptr<T>> {
+    constexpr auto parse(fmt::format_parse_context& ctx) -> fmt::format_parse_context::iterator { return ctx.end(); }
+
+    auto format(const std::shared_ptr<T>& object, fmt::format_context& ctx) const -> fmt::format_context::iterator {
         using ttsl::reflection::operator<<;
         std::stringstream ss;
         ss << object;
@@ -1306,6 +1362,17 @@ inline hash_t hash_object(const T& object) noexcept {
             fmt::print("Hashing integer of type {}: {}\n", get_type_name<T>(), object);
         }
         return object;
+    } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
+        // Ahead of the std::hash branch on purpose: std::hash<std::shared_ptr<T>> exists and hashes
+        // the address, which would key a reflective handle on where it was allocated. Null hashes to
+        // 0, as an empty std::optional does.
+        if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
+            fmt::print("Hashing std::shared_ptr of type {}\n", get_type_name<T>());
+        }
+        if (object == nullptr) {
+            return 0;
+        }
+        return hash_object(*object);
     } else if constexpr (detail::is_std_hashable_v<T>) {
         if constexpr (DEBUG_HASH_OBJECT_FUNCTION) {
             fmt::print("Hashing {} using std::hash: {}\n", get_type_name<T>(), object);
@@ -1515,6 +1582,14 @@ inline void append_canonical(std::string& out, const T& object) {
         std::visit([&out](const auto& value) { append_canonical(out, value); }, object);
     } else if constexpr (is_specialization_v<T, std::reference_wrapper>) {
         append_canonical(out, object.get());
+    } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
+        // Descend into the pointee, so a reflective handle contributes its own values rather than
+        // the address bytes the is_std_hashable_v fallback below would emit.
+        const char has = object == nullptr ? 0 : 1;
+        out.push_back(has);
+        if (object != nullptr) {
+            append_canonical(out, *object);
+        }
     } else if constexpr (std::is_same_v<T, std::vector<bool>>) {
         // std::vector<bool> is a bit-packed specialization: iterating yields a proxy reference
         // (not bool&), so it can't go through the generic vector branch.
@@ -1735,6 +1810,17 @@ struct from_json_t<std::variant<Ts...>> {
 template <typename T>
 struct to_json_t<std::reference_wrapper<T>> {
     nlohmann::json operator()(const std::reference_wrapper<T>& reference) noexcept { return to_json(reference.get()); }
+};
+
+template <typename T>
+    requires ttsl::reflection::detail::is_reflective_shared_ptr_v<std::shared_ptr<T>>
+struct to_json_t<std::shared_ptr<T>> {
+    nlohmann::json operator()(const std::shared_ptr<T>& pointer) noexcept {
+        if (pointer == nullptr) {
+            return nullptr;
+        }
+        return to_json(*pointer);
+    }
 };
 
 template <typename T>

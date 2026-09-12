@@ -24,61 +24,82 @@ DriscL1Arena::DriscL1Arena(ContextId context_id) {
     unreserved_base_ = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     drisc_unreserved_size_ = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
     TT_FATAL(
-        kGcbZoneSize < drisc_unreserved_size_,
-        "DRISC L1 GCB zone ({} B) must leave room for the above-zone kernel working region "
+        kSenderStateZoneSize < drisc_unreserved_size_,
+        "DRISC L1 sender-state zone ({} B) must leave room for the above-zone kernel working region "
         "(unreserved size: {} B)",
-        kGcbZoneSize,
+        kSenderStateZoneSize,
         drisc_unreserved_size_);
 }
 
 std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate(uint32_t size, uint32_t alignment) {
-    TT_FATAL(size > 0, "DriscL1Arena::allocate requires size > 0");
+    return allocate_impl(/*core=*/std::nullopt, size, alignment);
+}
+
+std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_on(
+    const CoreCoord& dram_sender_logical, uint32_t size, uint32_t alignment) {
+    return allocate_impl(dram_sender_logical, size, alignment);
+}
+
+std::shared_ptr<DriscL1Allocation> DriscL1Arena::allocate_impl(
+    std::optional<CoreCoord> core, uint32_t size, uint32_t alignment) {
+    TT_FATAL(size > 0, "DriscL1Arena allocation requires size > 0");
     TT_FATAL(alignment > 0 && (alignment & (alignment - 1)) == 0, "alignment must be a power of two");
 
     const uint32_t aligned_size = tt::align(size, alignment);
     const DeviceAddr zone_begin = unreserved_base_;
-    const DeviceAddr zone_end = unreserved_base_ + kGcbZoneSize;
+    const DeviceAddr zone_end = unreserved_base_ + kSenderStateZoneSize;
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    // First-fit search across the single uniform-offset pool.
+    // Two ranges can share addresses as long as no DRAM bank sees both: a range on one
+    // core only blocks a uniform range or another range on that same core.
+    auto shares_a_bank_with_request = [&core](const LiveRange& range) {
+        return !range.core.has_value() || !core.has_value() || *range.core == *core;
+    };
+
+    // First-fit over the blocking ranges. live_ is sorted ascending by base, so a single
+    // forward pass that steps past every overlap lands on the lowest free candidate.
     DeviceAddr candidate = tt::align(zone_begin, alignment);
-    while (candidate + aligned_size <= zone_end) {
-        // Find first live range whose end is > candidate (the earliest range that could overlap).
-        auto it = std::lower_bound(
-            live_.begin(), live_.end(), candidate, [](const std::pair<DeviceAddr, uint32_t>& range, DeviceAddr val) {
-                return range.first + range.second <= val;
-            });
-        if (it == live_.end() || it->first >= candidate + aligned_size) {
-            // No overlap — insert and return.
-            auto insert_it = std::lower_bound(
-                live_.begin(),
-                live_.end(),
-                candidate,
-                [](const std::pair<DeviceAddr, uint32_t>& range, DeviceAddr val) { return range.first < val; });
-            live_.insert(insert_it, {candidate, aligned_size});
-            return std::shared_ptr<DriscL1Allocation>(new DriscL1Allocation(weak_from_this(), candidate, aligned_size));
+    for (const LiveRange& range : live_) {
+        if (!shares_a_bank_with_request(range)) {
+            continue;
         }
-        // Overlap with `*it` — advance past its end (aligned) and retry.
-        candidate = tt::align(it->first + it->second, alignment);
+        if (range.base >= candidate + aligned_size) {
+            break;  // sorted: this and every later range start above the candidate window
+        }
+        if (candidate < range.base + range.size) {
+            candidate = tt::align(range.base + range.size, alignment);
+        }
+    }
+    if (candidate + aligned_size <= zone_end) {
+        auto insert_it =
+            std::lower_bound(live_.begin(), live_.end(), candidate, [](const LiveRange& range, DeviceAddr val) {
+                return range.base < val;
+            });
+        live_.insert(insert_it, LiveRange{candidate, aligned_size, core});
+        return std::shared_ptr<DriscL1Allocation>(
+            new DriscL1Allocation(weak_from_this(), candidate, aligned_size, core));
     }
 
     TT_THROW(
-        "DRISC L1 GCB zone full: requested {} B (aligned {} B); zone is {} B starting at 0x{:x}",
+        "DRISC L1 sender zone full: requested {} B (aligned {} B) {}; zone is {} B starting at 0x{:x}",
         size,
         aligned_size,
-        kGcbZoneSize,
+        core.has_value() ? fmt::format("on DRAM sender core ({}, {})", core->x, core->y) : "on every bank",
+        kSenderStateZoneSize,
         zone_begin);
 }
 
-void DriscL1Arena::release(DeviceAddr base, uint32_t size) {
+void DriscL1Arena::release(DeviceAddr base, uint32_t size, const std::optional<CoreCoord>& core) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto it = std::lower_bound(
-        live_.begin(), live_.end(), base, [](const std::pair<DeviceAddr, uint32_t>& range, DeviceAddr val) {
-            return range.first < val;
-        });
-    if (it != live_.end() && it->first == base && it->second == size) {
-        live_.erase(it);
+        live_.begin(), live_.end(), base, [](const LiveRange& range, DeviceAddr val) { return range.base < val; });
+    // Ranges on different cores can share a base, so match the core too.
+    for (; it != live_.end() && it->base == base; ++it) {
+        if (it->size == size && it->core == core) {
+            live_.erase(it);
+            return;
+        }
     }
 }
 
@@ -88,7 +109,7 @@ DriscL1Allocation::~DriscL1Allocation() {
     // destructor becomes a no-op — no UAF on the arena pointer. Same shape as
     // MeshBuffer::deallocate() locking its weak_ptr<MeshDevice>.
     if (auto arena = arena_.lock()) {
-        arena->release(base_, size_);
+        arena->release(base_, size_, core_);
     }
 }
 
