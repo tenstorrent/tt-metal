@@ -491,8 +491,9 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t c_tile_bytes = static_cast<uint32_t>(c_tile.get_tile_size(c_df));
 
     // --- OpConfig + compute defines (mirrors the descriptor factory). ---
-    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype)
-                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype);
+    const auto gelu_fa = op.gelu_fast_and_approximate;
+    OpConfig op_config = is_sfpu ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>, a_dtype, gelu_fa)
+                                 : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>, a_dtype, gelu_fa);
     std::map<std::string, std::string> compute_defines = op_config.as_defines(a_dtype);
 
     // ISCLOSE: the DFB SFPU kernel reads rtol/atol as named args (args::rtol_bits/atol_bits), so the

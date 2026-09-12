@@ -17,8 +17,8 @@ pytestmark = pytest.mark.use_module_device
 def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9999, exact=False):
     """Run a binary eltwise op on bf16 inputs in [low, high) and assert vs the torch golden.
 
-    Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy/bias_gelu) where
-    the expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
+    Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy) where the
+    expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
     is a bit-exact selection or boolean (maximum/minimum, logical_and/or/xor)."""
     torch.manual_seed(0)
     low = low
