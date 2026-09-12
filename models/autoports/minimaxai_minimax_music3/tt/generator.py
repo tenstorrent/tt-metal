@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -49,6 +50,7 @@ class GenStats:
     depth_s: float = 0.0
     denoise_s: float = 0.0
     decode_s: float = 0.0
+    vocoder_s: float = 0.0  # summed per-window vocoder compute (overlaps denoise_s when pipelined)
     total_s: float = 0.0
     audio_s: float = 0.0
     chunks: int = 0
@@ -183,6 +185,8 @@ class Music3Generator:
         ]
         if load_vocoder and self.vocoder_dtype != torch.float32:
             self.ref.vocoder = self.ref.vocoder.to(self.vocoder_dtype)
+        # vocode window k on a worker thread while the DiT denoises window k+1 (MUSIC3_PIPELINE_VOCODER=0 disables)
+        self.pipeline_vocoder = os.environ.get("MUSIC3_PIPELINE_VOCODER", "1") not in ("0", "false", "no")
         self.dit = None
         if load_dit and dit_device == "tt":
             from models.autoports.minimaxai_minimax_music3.tt.dit import TTDiT
@@ -366,9 +370,16 @@ class Music3Generator:
         return self.dit(latents, timestep, condition)
 
     @torch.inference_mode()
-    def denoise(self, frame_hiddens: torch.Tensor, generator, num_steps: int = DIT_NUM_STEPS, record_steps=()):
+    def denoise(
+        self, frame_hiddens: torch.Tensor, generator, num_steps: int = DIT_NUM_STEPS, record_steps=(), on_chunk=None
+    ):
         return self.ref.denoise(
-            frame_hiddens, generator, num_steps=num_steps, record_steps=record_steps, dit_forward=self.dit_forward
+            frame_hiddens,
+            generator,
+            num_steps=num_steps,
+            record_steps=record_steps,
+            dit_forward=self.dit_forward,
+            on_chunk=on_chunk,
         )
 
     @torch.inference_mode()
@@ -400,22 +411,53 @@ class Music3Generator:
         sem = self.semantic_generation(text_ids, mf, generator, stats=stats, on_frame=on_frame)
         out = {**sem, "text_ids": text_ids}
         if "denoise" in stages and "frame_hiddens" in sem:
+            pipelined = "decode" in stages and self.pipeline_vocoder
+            # Pipelined: the (host, torch) vocoder runs window k on one worker thread while the DiT denoises window
+            # k+1 on the chip. Each window is vocoded by the identical call in the identical order, and the crop /
+            # stitch happens once at the end exactly as in the reference decode(), so the audio bytes are unchanged
+            # (the torch.Generator is only consumed on the denoise side).
+            wav_futures: List = []
+            vocoder_s = [0.0]
+
+            def vocode_window(lat):
+                t = time.time()
+                with torch.inference_mode():  # inference_mode is thread-local
+                    wav = self.ref.vocode(lat)
+                vocoder_s[0] += time.time() - t
+                return wav
+
             t1 = time.time()
-            den = self.denoise(sem["frame_hiddens"], generator, num_steps=num_steps)
-            stats.denoise_s = time.time() - t1
+            if pipelined:
+                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="music3-vocoder") as pool:
+                    den = self.denoise(
+                        sem["frame_hiddens"],
+                        generator,
+                        num_steps=num_steps,
+                        on_chunk=lambda k, lat: wav_futures.append(pool.submit(vocode_window, lat)),
+                    )
+                    stats.denoise_s = time.time() - t1
+                    t2 = time.time()
+                    wavs = [f.result() for f in wav_futures]
+                out["audio"] = self.ref.stitch(wavs)
+            else:
+                den = self.denoise(sem["frame_hiddens"], generator, num_steps=num_steps)
+                stats.denoise_s = time.time() - t1
+                t2 = time.time()
+                if "decode" in stages:
+                    out["audio"] = self.ref.stitch([vocode_window(lat) for lat in den["latent_chunks"]])
             stats.chunks = len(den["latent_chunks"])
             out.update(den)
             if "decode" in stages:
-                t2 = time.time()
-                out["audio"] = self.decode(den["latent_chunks"])
                 stats.decode_s = time.time() - t2
+                stats.vocoder_s = vocoder_s[0]
                 stats.audio_s = out["audio"].shape[-1] / self.cfg.vocoder.sampling_rate
                 out["sample_rate"] = self.cfg.vocoder.sampling_rate
         stats.total_s = time.time() - t0
         out["stats"] = stats
         self.log(
             f"generate: {stats.frames} frames, {stats.audio_s:.1f}s audio in {stats.total_s:.1f}s (RTF {stats.rtf:.2f}; prefill {stats.prefill_s:.1f}s, "
-            f"llm {stats.ms_per_frame_llm:.1f} ms/f, depth {stats.ms_per_frame_depth:.1f} ms/f, denoise {stats.denoise_s:.1f}s, vocoder {stats.decode_s:.1f}s)"
+            f"llm {stats.ms_per_frame_llm:.1f} ms/f, depth {stats.ms_per_frame_depth:.1f} ms/f, denoise {stats.denoise_s:.1f}s, "
+            f"vocoder {stats.vocoder_s:.1f}s{' pipelined' if self.pipeline_vocoder else ''}, decode tail {stats.decode_s:.1f}s)"
         )
         return out
 

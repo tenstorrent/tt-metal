@@ -230,10 +230,13 @@ class Music3Reference:
         guidance_scale: float = DIT_GUIDANCE_SCALE,
         record_steps: Sequence[int] = (),
         dit_forward=None,
+        on_chunk=None,
     ) -> dict:
         """before_denoise.py + denoise.py. Returns dict(latent_chunks [list of [1,128,L]], chunk_starts, and when
         record_steps: per-chunk dicts with condition / noise / timesteps / (t, latents_in, pred_cond, pred_uncond)).
-        `dit_forward(latents [B,128,L], t [B], cond [B,L,2048]) -> velocity` lets a TT DiT drive the same loop."""
+        `dit_forward(latents [B,128,L], t [B], cond [B,L,2048]) -> velocity` lets a TT DiT drive the same loop.
+        `on_chunk(k, latents)` is called as soon as window k is final (the caller may start vocoding it while the
+        next window denoises); the latents handed over are never mutated afterwards."""
         dit_forward = dit_forward or (lambda x, t, c: self.dit(x, t, c))
         starts = chunk_starts(frame_hiddens.shape[1])
         timesteps, sigmas = flow_schedule(num_steps)
@@ -288,24 +291,36 @@ class Music3Reference:
             oe = max(os_, latents.shape[-1] - OVERLAP_LATENT_LENGTH)
             prev_latent, prev_cond = latents[..., os_:oe], condition[:, os_:oe]
             latent_chunks.append(latents)
+            if on_chunk is not None:
+                on_chunk(k, latents)
             if rec is not None:
                 rec["latents_out"] = latents.detach().cpu()
                 chunk_records.append(rec)
         return {"latent_chunks": latent_chunks, "chunk_starts": starts, "chunk_records": chunk_records}
 
     @torch.no_grad()
-    def decode(self, latent_chunks: List[torch.Tensor], vocoder=None) -> torch.Tensor:
-        """decoders.py: vocode each window, crop overlaps, stitch -> [1, 2, samples] float32 in [-1, 1] at 44.1 kHz."""
+    def vocode(self, latents: torch.Tensor, vocoder=None) -> torch.Tensor:
+        """decoders.py, one window: latents [1,128,L] -> uncropped waveform [1, 2, L*hop]."""
+        vocoder = vocoder or self.vocoder
+        return vocoder(latents.to(vocoder.dec_in_proj.weight.dtype).to(self.device))
+
+    @torch.no_grad()
+    def stitch(self, wavs: List[torch.Tensor], vocoder=None) -> torch.Tensor:
+        """decoders.py: crop the window overlaps and concatenate -> [1, 2, samples] float32 in [-1, 1] at 44.1 kHz."""
         vocoder = vocoder or self.vocoder
         hop = vocoder.hop_length
-        n = len(latent_chunks)
+        n = len(wavs)
         chunks = []
-        for i, lat in enumerate(latent_chunks):
-            wav = vocoder(lat.to(vocoder.dec_in_proj.weight.dtype).to(self.device))
+        for i, wav in enumerate(wavs):
             left = 0 if i == 0 else CROP_LEFT_LATENT * hop
             right = 0 if i == n - 1 else CROP_RIGHT_LATENT * hop
             chunks.append(wav[..., left : wav.shape[-1] - right])
         return torch.cat(chunks, dim=-1).float().clamp(-1.0, 1.0).cpu()
+
+    @torch.no_grad()
+    def decode(self, latent_chunks: List[torch.Tensor], vocoder=None) -> torch.Tensor:
+        """decoders.py: vocode each window, crop overlaps, stitch -> [1, 2, samples] float32 in [-1, 1] at 44.1 kHz."""
+        return self.stitch([self.vocode(lat, vocoder) for lat in latent_chunks], vocoder)
 
     # ------------------------------------------------------------------ end to end
     @torch.no_grad()
