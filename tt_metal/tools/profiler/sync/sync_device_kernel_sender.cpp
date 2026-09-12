@@ -92,11 +92,13 @@ static void hw_sender_loop(uint32_t stop_addr, uint32_t pace_ticks) {
     volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
     const uint32_t burst_ticks = pace_ticks / eth_ptp::kBurstsPerRound;
     const eth_ptp::Instant start = eth_ptp::read_instant();
-    eth_ptp::Instant at_burst = start;
-    // Wall cycles per refclk tick, x16, from the previous burst's interval: the frames' phases of the tick are spun
-    // in wall cycles, and a grid scaled by a stale AICLK covers more or less than the tick, which biases the
-    // stamps' rounding by stamp kind. 1.25 GHz until measured.
+    // Wall cycles per refclk tick, x16: the frames' phases of the tick are spun in wall cycles, and a grid scaled by
+    // the wrong AICLK covers more or less than the tick, which biases the stamps' rounding by stamp kind. AICLK is a
+    // PLL multiple of the refclk's crystal in steps of an eighth (6.25 MHz, measured: every run's slope is on that
+    // grid to 1e-9), so a rough ratio over the kRatioTicks before each slot rounds to the exact value; one that
+    // rounds badly has a DVFS step inside it and the previous value stands. 1.25 GHz until measured.
     uint32_t c16 = 400;
+    constexpr uint32_t kRatioTicks = 1000;  // 20 us: read jitter of tens of cycles is under a tenth of a step
     eth_ptp::Pacer pacer;
     pacer.calibrate();
     eth_ptp::StopDiag diag;
@@ -122,7 +124,12 @@ static void hw_sender_loop(uint32_t stop_addr, uint32_t pace_ticks) {
     uint64_t slot_cfr = start.refclk + eth_ptp::kFrameTicks;
     bool stop = false;
     for (uint64_t b = 0; !stop; b++, slot_cfr += burst_ticks) {
-        while (eth_ptp::read_cfr() < slot_cfr) {
+        eth_ptp::Instant pre{};
+        uint64_t cfr;
+        while ((cfr = eth_ptp::read_cfr()) < slot_cfr) {
+            if (pre.refclk == 0 && cfr + kRatioTicks >= slot_cfr) {
+                pre = eth_ptp::read_instant();
+            }
             if (*stopw != 0) {
                 stop = true;
                 break;
@@ -134,11 +141,14 @@ static void hw_sender_loop(uint32_t stop_addr, uint32_t pace_ticks) {
         }
         const eth_ptp::Instant now = eth_ptp::read_instant();
         const uint32_t hold0 = now.wall_lo;
-        if (b != 0) {
-            c16 = (static_cast<uint32_t>(now.wall() - at_burst.wall()) * 16u) /
-                  static_cast<uint32_t>(now.refclk - at_burst.refclk);
+        if (pre.refclk != 0 && now.refclk > pre.refclk) {
+            const uint32_t q8 = (static_cast<uint32_t>(now.wall() - pre.wall()) * 256u) /
+                                static_cast<uint32_t>(now.refclk - pre.refclk);  // ratio x256: a grid step is 32
+            const uint32_t snapped = ((q8 + 16u) / 32u) * 32u;
+            if (q8 + 12u >= snapped && q8 <= snapped + 12u) {
+                c16 = snapped >> 4;
+            }
         }
-        at_burst = now;
         eth_ptp::rx_stamps_drain(g_hw, [&](uint64_t ts) { rnd.rx.add(ts); });
         const uint32_t j0 = static_cast<uint32_t>(b % eth_ptp::kBurstsPerRound) * eth_ptp::kBurstFrames;
         if (j0 == 0) {
