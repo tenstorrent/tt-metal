@@ -4,6 +4,9 @@
 
 from __future__ import annotations
 
+import os
+import time
+
 import torch
 
 import ttnn
@@ -17,6 +20,10 @@ from ....parallel.manager import CCLManager
 from ....utils.tensor import pad_single
 from ....utils.tracing import StateTensor, traced_function
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
+
+# MINIMAX_H3_STEP_TIMERS=1: per-section, device-synchronised step timing (see `MiniMaxH3Transformer.forward`
+# and the pipeline's denoise breakdown). Diagnostic only; the syncs cost throughput.
+_STEP_TIMERS = os.environ.get("MINIMAX_H3_STEP_TIMERS", "0") == "1"
 from .transformer_block_minimax_h3 import MiniMaxH3TransformerBlock
 
 # shift, scale -- the order `norm_out.linear` emits them in.
@@ -487,6 +494,25 @@ class MiniMaxH3Transformer3DModel(Module):
         if static_prefix is None:
             raise RuntimeError("prepare_static_sources must run before forward: the source-table prefix is unbound")
 
+        # MINIMAX_H3_STEP_TIMERS=1: device-synchronised wall time of the three sections of a step --
+        # the eager shell before the block stack, the (traced or eager) block stack, and the shell
+        # after it -- into `self.last_step_timers`. The syncs serialise host and device, so this is a
+        # diagnostic for where a step's time goes, not a mode to serve in. On a 4x8 at 15 s the block
+        # stack measures 3.8 s/step device time against a 5.96 s eager step, and that gap grows with
+        # the sequence (0.3 s at 5 s), so it is device work in the shell, not per-op dispatch.
+        timers = _STEP_TIMERS
+        if timers:
+            ttnn.synchronize_device(self.mesh_device)
+            t_mark = time.perf_counter()
+            self.last_step_timers = {}
+
+            def lap(name: str) -> None:
+                nonlocal t_mark
+                ttnn.synchronize_device(self.mesh_device)
+                now = time.perf_counter()
+                self.last_step_timers[name] = now - t_mark
+                t_mark = now
+
         # Integer index tensors for the gathers. ttnn.embedding wants [batch, seq] uint32.
         def as_indices(t: ttnn.Tensor) -> ttnn.Tensor:
             t = ttnn.reshape(t, (1, t.shape[-1]))
@@ -515,6 +541,8 @@ class MiniMaxH3Transformer3DModel(Module):
         ts_state = self._timestep_idx_state.setdefault(pad_to, StateTensor())
         ts_state.update(as_indices(timestep_indices), traced=traced)
         timestep_idx = ts_state.value
+        if timers:
+            lap("shell_in")
 
         # 4. The traced block stack -- `pad_to` keys the capture, see its parameter doc above.
         hidden = self.run_blocks(
@@ -527,6 +555,8 @@ class MiniMaxH3Transformer3DModel(Module):
             traced=traced,
             tracer_trace_key=pad_to,
         )
+        if timers:
+            lap("blocks")
 
         # 5. Output norm, then the two heads. Both heads are narrow (96 and 32), so projecting while
         # still SP-fractured and gathering afterwards moves far less data than gathering the 5376-wide
@@ -556,7 +586,10 @@ class MiniMaxH3Transformer3DModel(Module):
             table = ttnn.reshape(all_rows, (all_rows.shape[2], all_rows.shape[3]))
             return ttnn.unsqueeze(ttnn.embedding(as_indices(indices), table, layout=ttnn.TILE_LAYOUT), 0)
 
-        return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+        video_out, audio_out = select(video_all, video_out_indices), select(audio_all, audio_out_indices)
+        if timers:
+            lap("shell_out")
+        return video_out, audio_out
 
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
