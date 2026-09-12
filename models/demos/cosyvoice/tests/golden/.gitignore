@@ -1,0 +1,19 @@
+# Captured PyTorch goldens -- deliberately NOT committed yet.
+#
+# 65 MB after compaction (461 MB raw; content-hash dedup plus fp16 for arrays
+# above 1 M elements does the rest). Whether that belongs in the tt-metal tree is
+# an open decision -- see 05/README.md D4. Three options were put forward:
+#   (a) commit as-is;
+#   (b) commit the 24 small modules (~42 MB) and regenerate the AR-decoder KV
+#       cache golden (23 MB) on demand;
+#   (c) shorten the golden utterance so T_prefill drops from 209 to ~50.
+#
+# Until that is settled, regenerate locally -- it takes ~40 s on CPU:
+#
+#   export PYTHONPATH=/mnt/CosyVoice:/mnt/CosyVoice/third_party/Matcha-TTS
+#   /mnt/cosyvoice_env/bin/python ../../scripts/gen_golden.py --mode zero_shot
+#
+# Tests that need a golden skip cleanly when it is absent (see `needs_golden` in
+# tests/pcc/test_istft.py), so an un-regenerated checkout still runs green.
+*.npz
+manifest.json
