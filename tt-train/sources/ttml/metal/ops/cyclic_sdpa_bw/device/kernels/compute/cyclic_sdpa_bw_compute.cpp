@@ -81,6 +81,17 @@
 #define COLUMN_RESIDENT 0
 #endif
 
+#ifndef RELEASE_TOKEN
+#define RELEASE_TOKEN 0
+#endif
+
+// RELEASE_TOKEN: publish a token once this timestep's packet slot has been
+// popped, so the relay reader knows the slot is free and can hand its
+// producer the credit at the release -- the paper's timing -- instead of two
+// timesteps later when it reserves the slot itself. The reader cannot see the
+// pop any other way: the release happens on this RISC, and a circular
+// buffer's acked count is not something the other side can read.
+
 namespace {
 
 constexpr uint32_t kCores = get_compile_time_arg_val(0);
@@ -99,6 +110,7 @@ constexpr uint32_t cb_grad_output = tt::CBIndex::c_3;
 constexpr uint32_t cb_lse = tt::CBIndex::c_4;
 constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
 constexpr uint32_t cb_attn_mask = tt::CBIndex::c_6;
+constexpr uint32_t cb_slot_release = tt::CBIndex::c_7;
 
 // Intermediates.
 constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;
@@ -335,5 +347,11 @@ void kernel_main() {
         cb_pop_front(cb_u_scalar, onetile);
         cb_pop_front(cb_attention_weights, onetile);
         cb_pop_front(cb_grad_attn_weights, onetile);
+
+#if RELEASE_TOKEN
+        // Slot t mod 2 is free now: every read of it is done.
+        cb_reserve_back(cb_slot_release, 1);
+        cb_push_back(cb_slot_release, 1);
+#endif
     }
 }
