@@ -186,6 +186,7 @@ private:
         uint32_t stop_a = 0, stop_b = 0;
     };
     std::vector<ResidentSync> link_syncs_;
+    bool fabric_link_sync_ = false;  // fabric is on: the routers on the planned links run the ends, nothing is launched
     // GDDR spool: the HAL's PROFILER DRAM region, which MetalEnv sizes for the spool when the streaming profiler
     // is on, so it lies below every allocator's unreserved base. Bytes 0 = direct push.
     uint32_t spool_bytes_ = 0;

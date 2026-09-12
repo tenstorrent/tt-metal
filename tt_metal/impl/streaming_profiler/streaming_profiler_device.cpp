@@ -38,6 +38,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/kernels/kernel.hpp"  // DramConfig (a DRISC kernel is not in the public headers yet)
 #include "llrt/tt_cluster.hpp"
+#include "impl/streaming_profiler/streaming_profiler_link_sync.hpp"
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt::tt_metal::streaming_profiler {
@@ -75,11 +76,6 @@ static_assert(
 constexpr uint32_t kLinkSyncChannels = 1;
 constexpr uint32_t kLinkSyncSamples = 240;
 constexpr uint32_t kLinkSyncSampleSize = 16;
-// The resident link sync's round period, as a refclk interval; the sender spreads a round's frames over it in bursts
-// (eth_ptp_link.hpp). The link relation is two crystals against each other and the host fits it over a 250 ms
-// window, so the cadence only sets how many rounds the fit averages: at 100 Hz the fit's own noise is ~0.1 ns against
-// the tracker's ~0.6 ns floor.
-constexpr uint32_t kLinkSyncPaceTicks = 500000;  // 10 ms at the eth tile's 50 MHz refclk
 
 // Bring-up runs several MMIO paths and a hang in any of them reports only "MMIO per-op timeout"; this names
 // the stall site.
@@ -785,6 +781,8 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
     // The chip's active eth cores join the decode roster the same way (padded 5-lane cores, zeroed, unarmed for
     // now) and become this pusher's linked set. Only cores no dispatch tunnel reserved; lowest (y, x) first.
     if (aeth_ok_) {
+        const bool fabric_on =
+            MetalContext::instance(context_id_).get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
         const auto active_set = ctx.device->get_active_ethernet_cores(/*skip_reserved_tunnel_cores=*/true);
         std::vector<CoreCoord> active(active_set.begin(), active_set.end());
         std::sort(active.begin(), active.end(), [](const CoreCoord& a, const CoreCoord& b) {
@@ -798,8 +796,27 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
                 cluster.get_physical_coordinate_from_logical_coordinates(chip, al, CoreType::ETH, /*no_warn=*/true);
             ln.xy = packed_xy(ln.virt);
             ln.prof_l1 = static_cast<uint32_t>(aeth_prof_l1_);
-            cluster.write_core(
-                zero_ctrl.data(), static_cast<uint32_t>(zero_ctrl.size()), tt_cxy_pair(chip, ln.virt), aeth_prof_l1_);
+            if (fabric_on) {
+                // A fabric router already owns this core and seeded its ring cursor from the tail it found; zeroing
+                // the words now would have the pusher ship from 0 while the producer writes on from there. Adopt
+                // the ring where it stands: the pusher starts at the tail.
+                std::array<uint32_t, kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE / sizeof(uint32_t)> cv{};
+                cluster.read_core(cv.data(), sizeof(cv), tt_cxy_pair(chip, ln.virt), aeth_prof_l1_);
+                for (uint32_t r = 0; r < kNRisc; r++) {
+                    cv[kernel_profiler::SPSC_RING_HEAD_0 + r] = cv[kernel_profiler::SPSC_RING_TAIL_0 + r];
+                }
+                cluster.write_core(
+                    cv.data(),
+                    static_cast<uint32_t>(kNRisc * sizeof(uint32_t)),
+                    tt_cxy_pair(chip, ln.virt),
+                    aeth_prof_l1_ + kernel_profiler::SPSC_RING_HEAD_0 * sizeof(uint32_t));
+            } else {
+                cluster.write_core(
+                    zero_ctrl.data(),
+                    static_cast<uint32_t>(zero_ctrl.size()),
+                    tt_cxy_pair(chip, ln.virt),
+                    aeth_prof_l1_);
+            }
             cap.core_xy.push_back(ln.xy);
             for (uint32_t r = 0; r < kNRisc; r++) {
                 cap.lanes.push_back(experimental::streaming_profiler::Core{
@@ -916,33 +933,24 @@ void Devices::set_producers_armed(const DeviceCtx& ctx, bool armed) {
 // the idle pusher can only drain to a FIFO the receiver is emptying.
 void Devices::plan_link_sync() {
     auto& mc = MetalContext::instance(context_id_);
-    if (mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED) {
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] fabric is enabled: the active eth cores hold live routers, so the boot-time link "
-            "sync is skipped (link data must come from the router's own hook)");
-        return;
-    }
+    fabric_link_sync_ = mc.get_fabric_config() != tt_fabric::FabricConfig::DISABLED;
     auto& cluster = mc.get_cluster();
     for (size_t a = 0; a < devices_.size(); a++) {
         const uint32_t chip_a = devices_[a].chip_id;
-        const auto connected = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_a);
         for (size_t b = a + 1; b < devices_.size(); b++) {
             const uint32_t chip_b = devices_[b].chip_id;
-            const auto it = connected.find(chip_b);
-            if (it == connected.end() || it->second.empty()) {
+            const auto link = link_sync::link_between(cluster, chip_a, chip_b);
+            if (!link) {
                 continue;
             }
-            const CoreCoord eth_sender = it->second[0];
-            const CoreCoord eth_receiver =
-                std::get<1>(cluster.get_connected_ethernet_core(std::make_tuple(chip_a, eth_sender)));
+            const bool flip = link->chip_a != chip_a;  // the lower chip sends
             links_.push_back(CaptureContext::Link{
-                .dev_a = static_cast<uint32_t>(a),
-                .dev_b = static_cast<uint32_t>(b),
-                .chip_a = chip_a,
-                .chip_b = chip_b,
-                .eth_a = eth_sender,
-                .eth_b = eth_receiver});
+                .dev_a = static_cast<uint32_t>(flip ? b : a),
+                .dev_b = static_cast<uint32_t>(flip ? a : b),
+                .chip_a = link->chip_a,
+                .chip_b = link->chip_b,
+                .eth_a = link->eth_a,
+                .eth_b = link->eth_b});
         }
     }
     if (links_.empty() && devices_.size() > 1) {
@@ -976,7 +984,8 @@ void Devices::run_link_sync() {
         log_info(tt::LogMetal, "[streaming profiler] link sync: 1588 hardware stamps");
     }
     // The stop/done words sit at the top of the active eth core's UNRESERVED region, clear of the sync kernel's eth
-    // channels (which start at its base) and its profiler ring: stop at -64, done at -60.
+    // channels (which start at its base) and its profiler ring: stop at -64, done at -60. A router-hosted end keeps
+    // its diagnostics at the same place (link_sync::kL1Bytes).
     const uint32_t stop_addr = aeth_unreserved_ + aeth_unres_size_ - 64;
     for (const CaptureContext::Link& L : links_) {
         IDevice* dev_a = devices_[L.dev_a].device;
@@ -985,6 +994,31 @@ void Devices::run_link_sync() {
             cluster.get_virtual_coordinate_from_logical_coordinates(L.chip_a, L.eth_a, CoreType::ETH);
         const CoreCoord virt_b =
             cluster.get_virtual_coordinate_from_logical_coordinates(L.chip_b, L.eth_b, CoreType::ETH);
+        if (fabric_link_sync_) {
+            // The routers on this link run the two ends (fabric_erisc_router.cpp, LINK_SYNC_ROLE); nothing to
+            // launch: the sender waits for the run word, and their diagnostics are read where the resident kernels
+            // leave theirs.
+            link_syncs_.push_back(ResidentSync{
+                .dev_a = dev_a,
+                .dev_b = dev_b,
+                .virt_a = virt_a,
+                .virt_b = virt_b,
+                .chip_a = L.chip_a,
+                .chip_b = L.chip_b,
+                .stop_a = stop_addr,
+                .stop_b = stop_addr});
+            log_info(
+                tt::LogMetal,
+                "[streaming profiler] link sync {} eth({},{}) -> {} eth({},{}): in the fabric routers at {} Hz",
+                L.chip_a,
+                L.eth_a.x,
+                L.eth_a.y,
+                L.chip_b,
+                L.eth_b.x,
+                L.eth_b.y,
+                50'000'000u / link_sync::kPaceTicks);
+            continue;
+        }
         const uint32_t zero[2] = {0, 0};  // stop + done, clear before launch
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_a, virt_a), stop_addr);
         cluster.write_core(zero, sizeof(zero), tt_cxy_pair(L.chip_b, virt_b), stop_addr);
@@ -1004,7 +1038,7 @@ void Devices::run_link_sync() {
             EthernetConfig{.noc = NOC::RISCV_0_default, .compile_args = ct, .defines = sync_defines});
         // The stop word and pace ride as RUNTIME args (positional compile args past index 2 do not reach an eth
         // kernel here). Sender: {stop_addr, pace}; receiver: {stop_addr}.
-        SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, kLinkSyncPaceTicks});
+        SetRuntimeArgs(*ps, kid_s, L.eth_a, {stop_addr, link_sync::kPaceTicks});
         SetRuntimeArgs(*pr, kid_r, L.eth_b, {stop_addr});
         try {
             detail::CompileProgram(dev_a, *ps, /*force_slow_dispatch=*/true);
@@ -1043,7 +1077,11 @@ void Devices::run_link_sync() {
             L.chip_b,
             L.eth_b.x,
             L.eth_b.y,
-            50'000'000u / kLinkSyncPaceTicks);
+            50'000'000u / link_sync::kPaceTicks);
+    }
+    // Every planned end is in place (launched here, or a router that has been waiting): let the senders go.
+    for (const ResidentSync& r : link_syncs_) {
+        cluster.write_core(&link_sync::kCtlRun, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
     }
 }
 
@@ -1067,25 +1105,30 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     };
-    const uint32_t one = 1;
     for (const ResidentSync& r : link_syncs_) {
-        // Sender first: its current round still completes off the live receiver, then it exits between rounds.
-        cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
-        poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
-        // What each end left past its stop word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path,
+        const bool resident = r.ps != nullptr;
+        // Sender first: its current round still completes off the live receiver, then it stops between rounds; a
+        // resident sender exits, a router-hosted one goes quiet.
+        cluster.write_core(&link_sync::kCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a);
+        if (resident) {
+            poll_done(r.chip_a, r.virt_a, r.stop_a + 4, "sender");
+        }
+        // What each end left past its control word (eth_ptp::StopDiag): rounds, the timer word (0 no hardware path,
         // 1 ran, 2 never acknowledged its rate, in which case that end emitted no hardware stamps), wall cycles
         // inside bursts, wall cycles and refclk ticks of the run, the longest burst in wall cycles, and the rounds
-        // dropped: any stamp count off the frame count, then egress stamps over, under, ingress stamps off, and
-        // waits given up.
+        // dropped, then bursts with an egress stamp over the frame count, bursts whose stamps did not come, rounds
+        // with the ingress count off, and waits for a frame or echo given up.
         struct StopDiag {
             uint32_t rounds, timer, hold_lo, hold_hi, wall_lo, wall_hi, ref_lo, ref_hi, hold_max, drop[5];
         };
         static_assert(sizeof(StopDiag) == 14 * sizeof(uint32_t));
         StopDiag da{}, db{};
         cluster.read_core(&da, sizeof(da), tt_cxy_pair(r.chip_a, r.virt_a), r.stop_a + 8);
-        // Now the receiver's message wait sees no further message; its stop breaks it.
-        cluster.write_core(&one, sizeof(one), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
-        poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
+        // Now the receiver sees no further frame; a resident one exits on its stop word.
+        if (resident) {
+            cluster.write_core(&link_sync::kCtlStop, sizeof(uint32_t), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b);
+            poll_done(r.chip_b, r.virt_b, r.stop_b + 4, "receiver");
+        }
         cluster.read_core(&db, sizeof(db), tt_cxy_pair(r.chip_b, r.virt_b), r.stop_b + 8);
         const auto u64 = [](uint32_t lo, uint32_t hi) { return static_cast<double>((uint64_t{hi} << 32) | lo); };
         const auto pct = [&](const StopDiag& d) {
@@ -1098,7 +1141,7 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
         };
         log_info(
             tt::LogMetal,
-            "[streaming profiler] resident link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in bursts: "
+            "[streaming profiler] link sync chip {} -> chip {}: {} rounds over {:.0f} ms; core time in bursts: "
             "sender {:.2f} % (longest {:.2f} us), receiver {:.2f} % (longest {:.2f} us)",
             r.chip_a,
             r.chip_b,
@@ -1112,8 +1155,8 @@ void Devices::stop_link_syncs(tt::Cluster& cluster) {
             if (d->drop[0] != 0 || d->drop[4] != 0) {
                 log_info(
                     tt::LogMetal,
-                    "[streaming profiler] resident link sync chip {} {} dropped {} hardware rounds (egress stamps over "
-                    "{}, under {}, ingress off {}) and gave up {} waits",
+                    "[streaming profiler] link sync chip {} {} dropped {} hardware rounds: bursts with an egress "
+                    "stamp over {}, bursts short {}, ingress count off {}, waits given up {}",
                     chip,
                     name,
                     d->drop[0],

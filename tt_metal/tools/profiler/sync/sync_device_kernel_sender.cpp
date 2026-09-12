@@ -121,13 +121,12 @@ void kernel_main() {
     const uint32_t stop_addr = get_arg_val<uint32_t>(0);
     const uint32_t pace_ticks = get_arg_val<uint32_t>(1);
 #if defined(LINK_HW)
-    g_link.start(g_slot_base, pace_ticks);
-    volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
-    while (*stopw == 0) {
+    g_link.start(g_slot_base, pace_ticks, stop_addr);
+    volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
+    while (*ctl != eth_ptp::kCtlStop) {
         g_link.step();
-        invalidate_l1_cache();
     }
-    g_link.stop(stop_addr);
+    g_link.stop();
 #else
     volatile tt_l1_ptr uint32_t* stopw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stop_addr);
     const eth_ptp::Instant start = eth_ptp::read_instant();

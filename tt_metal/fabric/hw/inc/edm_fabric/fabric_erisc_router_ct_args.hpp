@@ -469,6 +469,12 @@ constexpr PerfTelemetryRecorderType perf_telemetry_mode =
 
 constexpr size_t perf_telemetry_buffer_addr = NAMED_CT_ARG("PERF_TELEMETRY_BUFFER_ADDR");
 
+// The streaming profiler's device-to-device link sync on this core (tools/profiler/sync/eth_ptp_link.hpp): 0 none,
+// 1 this end sends the frames, 2 it echoes them; the L1 it owns and its round period in refclk ticks.
+constexpr uint32_t link_sync_role = NAMED_CT_ARG("LINK_SYNC_ROLE");
+constexpr uint32_t link_sync_addr = NAMED_CT_ARG("LINK_SYNC_ADDR");
+constexpr uint32_t link_sync_pace = NAMED_CT_ARG("LINK_SYNC_PACE");
+
 // ============================================================================
 // Code Profiling
 // ============================================================================

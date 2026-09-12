@@ -462,11 +462,20 @@ inline StreamDecoder::Produced StreamDecoder::decode_frame(const uint32_t* frame
             }
             TT_FATAL(
                 got != 0,
-                "streaming profiler: undecodable word {:#010x} at offset {} of lane {}'s run of {}",
+                "streaming profiler: undecodable word {:#010x} at offset {} of lane {}'s run of {}; the run's first words "
+                "{:#010x} {:#010x} {:#010x} {:#010x} {:#010x} {:#010x} {:#010x} {:#010x}",
                 src[0],
                 i,
                 lane,
-                run);
+                run,
+                src[-static_cast<ptrdiff_t>(i)],
+                run > 1 ? src[1 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 2 ? src[2 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 3 ? src[3 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 4 ? src[4 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 5 ? src[5 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 6 ? src[6 - static_cast<ptrdiff_t>(i)] : 0u,
+                run > 7 ? src[7 - static_cast<ptrdiff_t>(i)] : 0u);
             i += got;
         }
         L.last_ts = lane_ts;

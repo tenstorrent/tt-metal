@@ -178,6 +178,7 @@ set(TT_METAL_SOURCES
     impl/graph/graph_tracking.cpp
     impl/streaming_profiler/streaming_profiler_api.cpp
     impl/streaming_profiler/streaming_profiler_device.cpp
+    impl/streaming_profiler/streaming_profiler_link_sync.cpp
     impl/streaming_profiler/streaming_profiler_ops_csv.cpp
     impl/streaming_profiler/streaming_profiler_receiver.cpp
     impl/streaming_profiler/streaming_profiler_service.cpp
