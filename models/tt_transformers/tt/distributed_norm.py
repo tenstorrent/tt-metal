@@ -97,7 +97,14 @@ class DistributedNorm(LightweightModule):
         self._prefill_shard_cfg_cache = {}
 
     def _prefill_block_shard_cfg(self, x):
-        """Block-shard configs for a prefill ``[1, 1, S, D]`` norm input, or ``(None, None)``.
+        """Block-shard configs for a prefill ``[1, 1, S, D]`` norm input, or ``(None, None)``."""
+        return self._prefill_block_shard_cfg_for_shape(tuple(x.shape))
+
+    def _prefill_block_shard_cfg_for_shape(self, shape):
+        """As above, from a SHAPE rather than a tensor.
+
+        Taking the shape lets the caller ask what the norm will want BEFORE the tensor
+        exists -- specifically, what layout the gather feeding it should write.
 
         An interleaved ``rms_norm`` only parallelises over tile ROWS, so a 128-token
         prefill chunk runs its reduction on ``S/32 = 4`` cores of a 130-core grid --
@@ -107,13 +114,13 @@ class DistributedNorm(LightweightModule):
         ``S/32`` cores the interleaved kernel already gets, the reshard is not worth
         paying for and we stay interleaved.
         """
-        key = tuple(x.shape)
+        key = tuple(shape)
         cached = self._prefill_shard_cfg_cache.get(key)
         if cached is not None:
             return cached
 
         cfg = (None, None)
-        seq, dim = int(x.shape[-2]), int(x.shape[-1])
+        seq, dim = int(shape[-2]), int(shape[-1])
         if seq % 32 == 0 and dim % 32 == 0:
             grid = self.args.mesh_device.compute_with_storage_grid_size()
             m_tiles, n_tiles = seq // 32, dim // 32
@@ -185,6 +192,20 @@ class DistributedNorm(LightweightModule):
 
         input_mem_cfg = sharded_output_config if mode == Mode.DECODE else ttnn.DRAM_MEMORY_CONFIG
 
+        # Have the gather WRITE the layout the norm is about to want. In prefill the
+        # gather landed DRAM-interleaved and the norm then resharded it into L1 -- 2.2
+        # us/norm for a copy whose only purpose was to change the layout of a tensor the
+        # gather had just written. The gather knows the gathered width, so it can ask for
+        # the block shard directly. (Only for the prefill norm: the decode norm reads the
+        # replicated residual and does no gather at all.)
+        prefill_ag_shard_cfg = None
+        if mode == Mode.PREFILL and self.norm is not None and not self.args.is_distributed_norm(mode):
+            ring_size = max(list(self.args.mesh_device.shape))
+            gathered_shape = tuple(x.shape)[:-1] + (int(x.shape[-1]) * ring_size,)
+            prefill_ag_shard_cfg = self._prefill_block_shard_cfg_for_shape(gathered_shape)[0]
+            if prefill_ag_shard_cfg is not None:
+                input_mem_cfg = prefill_ag_shard_cfg
+
         # Distributed norm already performs a gather
         # ...and so does a replicated decode residual: the sub-layer's all_reduce left the
         # activation whole on every device, so there is nothing here to gather.
@@ -240,8 +261,9 @@ class DistributedNorm(LightweightModule):
             )
             if shard_mem_cfg is not None:
                 # Occupy the grid: run the prefill norm block-sharded in L1, then hand
-                # DRAM-interleaved back to the projection that consumes it.
-                x_sharded = ttnn.to_memory_config(x, shard_mem_cfg)
+                # DRAM-interleaved back to the projection that consumes it. When the
+                # gather above already wrote this layout there is nothing to reshard.
+                x_sharded = x if x.memory_config() == shard_mem_cfg else ttnn.to_memory_config(x, shard_mem_cfg)
                 y = self.norm(
                     x_sharded,
                     mode=mode,
