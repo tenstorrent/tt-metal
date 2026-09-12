@@ -134,6 +134,7 @@ concept batch_callback = is_batch<std::remove_cvref_t<callback_param_t<F>>>;
 
 int64_t sync_correction_ns(uint16_t chip_id, int64_t host_ns) noexcept;
 void sync_correction_span_ns(uint16_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
+int64_t sync_error_ns(uint16_t chip_id, int64_t host_ns) noexcept;
 }  // namespace detail
 
 /** @brief Base class of every record: its site, core, program id and clock. */
@@ -151,6 +152,10 @@ public:
     }
     /** @brief Host runtime ID of the program. */
     uint32_t runtime_id() const { return runtime_id_; }
+    /** @brief The uncertainty of this record's host time against records of other chips. */
+    std::chrono::nanoseconds host_time_error() const {
+        return std::chrono::nanoseconds(detail::sync_error_ns(chip_id_, base_ns(timestamp_)));
+    }
     /** @brief The chip's clock frequency in GHz. */
     double frequency_ghz() const { return frequency_hz_ * 1e-9; }
     /** @brief Host ns of a device tick from the chip's static anchor alone, before the d2d correction. */
