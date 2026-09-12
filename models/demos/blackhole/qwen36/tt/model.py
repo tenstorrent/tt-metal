@@ -1683,6 +1683,31 @@ class Qwen36Model:
         )
         logger.info(f"Verify trace (T={T}, decode_cfg={decode_cfg}) captured successfully! verify SDPA: {_how}")
 
+    def refresh_verify_page_table(self, page_table):
+        """Re-point the captured verify trace at another sequence's KV blocks.
+
+        The trace reads its page tables from the persistent _vfy_kvpt_buf (one row per candidate) and
+        _vfy_kvpt1_buf (one row per fused-SDPA candidate group), both built from the table given to
+        capture_verify_trace. A server replays ONE capture for every request, so it restages those
+        buffers from the request's own vLLM page-table row (torch [1, num_blocks], same width) whenever
+        vLLM hands it a different row -- a host->device copy, no capture. Serving only; the demo's
+        identity table never changes."""
+        assert getattr(self, "_vfy_trace_id", None) is not None, "capture_verify_trace first"
+        page_table = torch.as_tensor(page_table).reshape(1, -1).to(torch.int32)
+        nb = int(self._vfy_kvpt_buf.shape[-1])
+        assert page_table.shape[-1] == nb, f"page table width {page_table.shape[-1]} != captured {nb}"
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        for buf in (self._vfy_kvpt_buf, self._vfy_kvpt1_buf):
+            rows = int(buf.shape[0])
+            h = ttnn.from_torch(
+                page_table.repeat(rows, 1).contiguous(),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(h, buf)
+
     # --------------------------------------------------------------------- #
     # Traced commit (see TTGatedDeltaNetTP.commit_verify_slot_ops)
     # --------------------------------------------------------------------- #

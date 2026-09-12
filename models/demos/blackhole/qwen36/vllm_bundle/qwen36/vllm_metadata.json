@@ -1,4 +1,4 @@
 {
     "arch": "Qwen3_5ForConditionalGeneration",
-    "main_class": "models.demos.blackhole.qwen36.tt.qwen36_vllm:Qwen36ForCausalLM"
+    "main_class": "models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash:Qwen36DFlashForCausalLM"
 }
