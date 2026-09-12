@@ -32,7 +32,7 @@ from models.demos.gpt_oss.config import MeshConfig, ModeConfig
 
 from .config import ExpertConfig, ProgramConfig
 from .decode import decode_forward
-from .prefill import prefill_forward
+from .prefill import prefill_forward, warmup_prefill_programs
 from .weights import load_expert_weights
 
 __all__ = ["Experts", "ExpertConfig", "ProgramConfig"]
@@ -117,6 +117,13 @@ class Experts:
                 mesh_shape=self.mesh_device.shape,
                 mesh_device=self.mesh_device,
             ),
+        )
+
+    def warmup_prefill_programs(self, seq_lens):
+        """Compile the prompt-data-dependent prefill programs now (see experts/prefill.py warmup_prefill_programs);
+        call once per model before any trace is captured."""
+        warmup_prefill_programs(
+            self.weights, self.config, self.program_config, self.mesh_config, self.mesh_device, seq_lens
         )
 
     def __call__(

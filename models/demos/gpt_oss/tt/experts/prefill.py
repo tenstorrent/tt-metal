@@ -440,6 +440,7 @@ _SORTED_MOE_DEBUG = os.getenv("GPT_OSS_SORTED_MOE_DEBUG", "0") == "1"
 # Last plan chosen by _sorted_moe_plan ({"split", "cap", "hot"}); read by tests to assert which path ran.
 LAST_SORTED_MOE_PLAN = {}
 _SORTED_MOE_MAX_HOT = 16  # more hot experts than this -> dense per-expert loop for the split
+_SORTED_CAPS = (32, 64, 96, 128, 160, 192, 256)  # gathered rows per cold expert the plan may choose from
 # Cost model (ms per 1024-token split, P150, 120B shapes) used to pick the hot/cold threshold on the host:
 _SORTED_FIXED_MS, _SORTED_PER_KROW_MS, _HOT_FIXED_MS, _HOT_PER_EXPERT_MS = 2.5, 0.27, 1.0, 0.25
 _DENSE_PER_EXPERT_MS = (
@@ -476,7 +477,7 @@ def _sorted_moe_plan(routing_tokens_all, token_offset, split_len, config):
     # one device's counts suffice (mesh tensors need a composer for a direct to_torch)
     counts_host = ttnn.to_torch(ttnn.get_device_tensors(counts)[0]).reshape(-1).to(torch.int64)
     best = None
-    for cap in (32, 64, 96, 128, 160, 192, 256):
+    for cap in _SORTED_CAPS:
         if cap > split_len:
             break
         hot = (counts_host > cap).sum().item()
@@ -747,6 +748,80 @@ def _batched_matmul(a, b, activation_dtype, dense_core_grid):
         compute_kernel_config=_DENSE_COMPUTE_KERNEL_CONFIG,
         **grid_kwargs,
     )
+
+
+def warmup_prefill_programs(weights, config, program_config, mesh_config, mesh_device, seq_lens):
+    """Compile every program of the single-row dense prefill path whose SHAPE depends on the prompt's data, so that
+    none is compiled after a trace has been captured (a program compiled next to a live trace can be overwritten by
+    its replays, tenstorrent/tt-metal#55588: garbage or a hang on the first prompt that needs it). The expert-sorted
+    path plans per split from the routed-token counts, so `cap` (topk k and the gathered-row counts), the number of
+    hot experts (the batched group's shapes) and WHICH experts are hot (one ttnn.slice program per expert id) all
+    vary with the prompt; the per-expert loop it falls back to depends on the shapes only but is rarely taken. Each
+    variant runs once here with synthetic inputs, for every down-split length the model uses (identical kernels
+    dedup, so this is mostly device time: ~1-2 s per split length once the kernels are built). The <= 256-token
+    batched path depends on the padded length only and is compiled by the ordinary warm-up of each length."""
+    mode = mesh_config.get_config(Mode.PREFILL)
+    if not (mode.ep == 1 and mode.sp == 1) or config.num_experts < _SORTED_MOE_MIN_EXPERTS:
+        return
+    E, H = config.num_experts, config.hidden_size
+    grid = _dense_core_grid(mesh_device)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+
+    def upload(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper)
+
+    for t in _slice_experts(weights.gate_up_proj, range(E)) + _slice_experts(weights.down_proj, range(E)):
+        t.deallocate(True)  # the hot group gathers weights by expert id: one slice program per id
+    for split_len in sorted({program_config.get_down_split_size(s) for s in seq_lens}):
+        top = torch.rand(split_len, E).topk(config.num_experts_per_tok, dim=-1)
+        routing = torch.zeros(split_len, E).scatter(1, top.indices, torch.softmax(top.values, dim=-1))
+        routing_tokens_all = upload(routing.reshape(1, 1, split_len, E))
+        scratch = {}
+        variants = [(cap, 0) for cap in _SORTED_CAPS if cap <= split_len]
+        variants += [(_SORTED_CAPS[1], n_hot) for n_hot in range(1, _SORTED_MOE_MAX_HOT + 1)]
+        for cap, n_hot in variants:
+            routing_t = ttnn.transpose(routing_tokens_all, 2, 3)  # [1, 1, E, split], a copy (the forward frees it)
+            cold = torch.ones(1, 1, E, 1)
+            cold[0, 0, :n_hot] = 0.0
+            plan = (routing_t, cap, list(range(n_hot)), upload(cold))
+            out = _sorted_moe_forward(
+                upload(torch.randn(1, 1, split_len, H)),
+                plan,
+                routing_tokens_all,
+                0,
+                split_len,
+                weights,
+                config,
+                ttnn.bfloat8_b,
+                grid,
+                scratch,
+            )
+            out.deallocate(True)
+        per_expert = _slice_experts(weights.gate_up_proj, range(E))
+        gate_up = _dense_gate_up_loop(
+            upload(torch.randn(1, 1, split_len, H)), per_expert, weights, ttnn.bfloat8_b, grid
+        )
+        routing_split = upload(routing.T.reshape(1, E, split_len, 1))
+        out = _dense_tail(
+            gate_up,
+            routing_split,
+            routing_tokens_all,
+            0,
+            split_len,
+            weights,
+            config,
+            ttnn.bfloat8_b,
+            grid,
+            weights.intermediate_padded_per_device,
+        )
+        out.deallocate(True)
+        routing_split.deallocate(True)
+        for t in per_expert:
+            t.deallocate(True)
+        for t in scratch.values():
+            t.deallocate(True)
+        routing_tokens_all.deallocate(True)
+        logger.info(f"pre-compiled the expert-sorted prefill variants for {split_len}-token splits")
 
 
 def _dense_core_grid(mesh_device):

@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
+
 import torch
 from loguru import logger
 
@@ -212,6 +214,12 @@ class Model:
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
+        # Compile the prompt-data-dependent prefill programs before any trace exists (experts/prefill.py
+        # warmup_prefill_programs; all layers share them). GPT_OSS_PREFILL_PROGRAM_WARMUP=0 skips it.
+        if os.getenv("GPT_OSS_PREFILL_PROGRAM_WARMUP", "1") == "1" and self.layers:
+            experts = getattr(self.layers[0].mlp, "experts", None)
+            if hasattr(experts, "warmup_prefill_programs"):
+                experts.warmup_prefill_programs((1024, 64 * 1024))  # both down-split lengths (1024, and 512 above 32K)
         self.norm = RMSNorm(
             mesh_device,
             hf_config,
