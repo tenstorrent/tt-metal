@@ -16,9 +16,16 @@ global layer index) plus the mesh device and the trace controller, so the move n
 
 from __future__ import annotations
 
+import os
+import time
 from typing import Optional
 
+from loguru import logger
+
 import ttnn
+
+# Read once: this sits in the per-MLA-layer, per-chunk path.
+_ACK_TIMING = os.environ.get("PREFILL_ACK_TIMING") == "1"
 
 
 def zero_pad_and_ack(
@@ -61,6 +68,12 @@ def zero_pad_and_ack(
     #       across pipeline ranks).
     # cache_layer_idx is the LOCAL per-rank cache slot in both.
     if d2h_service is not None or on_layer_complete is not None:
+        # PREFILL_ACK_TIMING splits this window into its zero and its ack. The whole body is skipped
+        # during warmup (neither transport is wired at runtime.compile() time), so both programs are
+        # first compiled here, on the first REAL chunk -- which is where the pipeline's one-time
+        # chunk-0 cost lives. Host wall time only; deliberately no added synchronize, since a sync
+        # here would change what the pipeline does as well as what it reports.
+        _t0 = time.perf_counter() if _ACK_TIMING else 0.0
         assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
         assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
         # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
@@ -90,6 +103,7 @@ def zero_pad_and_ack(
                     seq_len_local * sp_factor,
                     sp_axis,
                 )
+        _t_zero = time.perf_counter() if _ACK_TIMING else 0.0
         if d2h_service is not None:
             # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
             # host before the zero has executed, so the ack implies zero-complete with no host sync —
@@ -112,3 +126,9 @@ def zero_pad_and_ack(
             else:
                 ttnn.synchronize_device(mesh_device)
                 on_layer_complete(global_layer_idx)
+        if _ACK_TIMING:
+            _end = time.perf_counter()
+            logger.info(
+                f"ACK_TIMING layer={global_layer_idx} zero_ms={(_t_zero - _t0) * 1000:.1f} "
+                f"ack_ms={(_end - _t_zero) * 1000:.1f} total_ms={(_end - _t0) * 1000:.1f}"
+            )
