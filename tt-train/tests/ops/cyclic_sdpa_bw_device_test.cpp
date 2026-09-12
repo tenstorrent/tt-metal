@@ -1147,7 +1147,12 @@ TEST(CyclicSdpaBwProfileTest, DISABLED_ProfileTheRelay) {
 // attention output, while this port is handed L and D. Both are timed over
 // the backward call alone.
 void compare_with_sdpa_bw(
-    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt, uint32_t groups = 1) {
+    uint32_t C,
+    uint32_t grid_w,
+    uint32_t grid_h,
+    uint32_t Bt,
+    uint32_t groups = 1,
+    uint32_t d = 64) {
     using namespace tt::tt_metal;
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
@@ -1155,7 +1160,6 @@ void compare_with_sdpa_bw(
         GTEST_SKIP() << "needs " << grid_w << "x" << grid_h;
     }
     const uint32_t N = 2u * C * Bt * kTile;
-    const uint32_t d = 64;
     // Inputs only: nothing here is checked, and the dense host backward at
     // these sizes costs more than the measurement.
     const auto ref = make_reference_inputs_only(N, d);
@@ -1222,6 +1226,23 @@ TEST(CyclicSdpaBwTimingTest, DISABLED_ScaleTheGroups) {
 // side -- which is also the shape sdpa_bw fills a grid with, since it splits
 // NC * St/2 pairs across the cores. So these are matched on cores, on shape,
 // and on total arithmetic.
+// Does the relay's traffic advantage ever show in wall clock? Both
+// implementations are compute bound at d = 64 -- theirs by a prefetching
+// reader, this one by the relay -- so the traffic this port saves should buy
+// nothing there. The head dimension is the lever: it multiplies the bytes a
+// row operand costs without changing how many score tiles there are, so at
+// d = 256 a packet is four times heavier while the score stages are
+// identical. If the ratio climbs past what fusion and block height explain,
+// the saved traffic has started to pay.
+TEST(CyclicSdpaBwTimingTest, DISABLED_CompareAcrossHeadDimensions) {
+    for (uint32_t d : {64u, 128u, 256u}) {
+        compare_with_sdpa_bw(110, 11, 10, /* Bt */ 1, /* groups */ 1, d);
+    }
+    for (uint32_t d : {64u, 128u, 256u}) {
+        compare_with_sdpa_bw(55, 11, 5, /* Bt */ 2, /* groups */ 2, d);
+    }
+}
+
 TEST(CyclicSdpaBwTimingTest, DISABLED_CompareWithTheRepositorysBackward) {
     struct Shape {
         uint32_t C, w, h, Bt, groups;
