@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4_d_p.config import MeshConfig
+from models.demos.gemma4_d_p.tt.precision import dtype_to_str
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 from .global_kv_cache import GLOBAL_ROTARY_DIM, global_kv_indices, sliding_kv_indices
@@ -164,8 +165,6 @@ def load_attention_weights(
     if is_global and is_context_parallel:
         o_proj_cache_suffix += "_packed640"
     tp_suffix = f"_tp{tp}" if tp > 1 else ""
-    from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-
     dtype_suffix = f"_{dtype_to_str(weight_dtype)}"
 
     packed_cache_suffix = (
