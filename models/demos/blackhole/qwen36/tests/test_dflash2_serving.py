@@ -1,18 +1,22 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""The SERVING session decoder (tt/dflash2_serving.py) must be lossless across consecutive requests on
-ONE set of captures, the way vLLM drives it: eager tap-capturing prefill -> ingest -> begin (seed the
-runner's anchor) -> step() until the block budget is met -> end, then the next request re-uses every
-trace/buffer (different prompt, different page-table row). Same bar and method as
-test_dflash2_lossless (plain greedy reference; the first mismatch must be a near-tie).
+"""The MULTI-SLOT serving decoder (tt/dflash2_serving.py) must be lossless per request while requests
+join and leave a live batch on ONE set of captures, the way vLLM drives it:
 
-Sessions: A = prompt 1 on the identity page table (also performs the one-time capture; eager seed);
-B = a different prompt on a PERMUTED page table (exercises refresh_verify_page_table; traced seed);
-C, D = prompt 1 again through the traced seed (persistence: D identical to C).
+  slot 0 joins (prefill -> ingest -> begin), speculates alone for a few steps;
+  slot 1 joins WHILE slot 0 is mid-generation (its seed is a hold-replay for slot 0);
+  both speculate together; each leaves when it has MAX_NEW tokens;
+  a THIRD request joins the freed slot 0 while slot 1 may still be live, and runs to MAX_NEW.
+
+Every request's tokens are then checked against a teacher-forced single-user plain greedy reference
+(test_spec_lossless._reference_greedy on a separate max_batch_size=1 model), with the near-tie gate
+(test_spec_batched._assert_lossless). A hold that is not a bit-exact no-op, a per-slot seed that
+touches another slot, or a stale page-table row shows up here as a confident mismatch.
 
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_dflash2_serving.py -v -s
+Needs the DFlash2 drafter matched to the served weights (DFLASH_WEIGHTS) and the full 64-layer model.
 """
-import os
+import gc
 
 import pytest
 import torch
@@ -20,87 +24,50 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BLOCK_SIZE, DEVICE_PARAMS, _get_prompt
-from models.demos.blackhole.qwen36.tests.test_spec_lossless import (
-    DEFAULT_NEAR_TIE_GAP,
-    MAX_NEW,
-    NUM_BLOCKS,
-    PROMPT_LEN,
-    _reference_greedy,
+from models.demos.blackhole.qwen36.demo.text_demo import _MESH_SHAPE, _MULTI, BLOCK_SIZE, DEVICE_PARAMS
+from models.demos.blackhole.qwen36.tests.test_spec_batched import (
+    _assert_lossless,
+    _batch_prompts,
+    _blocks_per_user,
+    _reference_model,
+    _release,
 )
+from models.demos.blackhole.qwen36.tests.test_spec_lossless import MAX_NEW, NUM_BLOCKS, _reference_greedy
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 
-PROMPT_LEN_B = int(os.environ.get("QWEN36_SERVING_PROMPT_LEN_B", 300))
-# QWEN36_SERVING_CHAT=1: chat-templated prompts (what vLLM serves) instead of document continuations, to
-# compare the drafter's acceptance under the serving text distribution.
-CHAT_PROMPTS = (
-    "Explain, step by step, how a transformer neural network processes a sequence of tokens to predict the next one.",
-    "Give me a Python function that checks whether a string is a palindrome, with a docstring and three test cases.",
-)
+B = 2
+K = 7
 
 
-def _chat_prompt(tokenizer, text, thinking=False):
-    rendered = tokenizer.apply_chat_template(
-        [{"role": "user", "content": text}], add_generation_prompt=True, enable_thinking=thinking, tokenize=False
-    )
-    return [int(t) for t in tokenizer(rendered, add_special_tokens=False).input_ids]
-
-
-def _serving_prefill(model, prompt_ids, page_table):
-    """What Qwen36DFlashForCausalLM.prefill_forward does: the TP serving prefill with the taps armed.
-    Returns (anchor token = greedy argmax of the prompt logits, taps)."""
+def _prefill(model, dec, u, prompt_ids, page_tables):
+    """The serving prefill of one request into slot u: eager, taps armed, each chunk's taps ingested into
+    the drafter's ring for that slot. Returns the greedy first token."""
     T = len(prompt_ids)
-    tokens = torch.tensor([list(prompt_ids)], dtype=torch.int32)
+    prompt = torch.tensor([list(prompt_ids)], dtype=torch.int32)
+    pt_u = page_tables[u : u + 1].contiguous()
+
+    def on_chunk(hidden, chunk_start, valid_len):
+        taps = model.take_dflash_eager_taps()
+        assert taps is not None, "eager prefill captured no drafter taps"
+        dec.ingest_prompt(u, taps, chunk_start + valid_len, chunk_start=chunk_start)
+
     model._dflash_tap = True
     try:
-        logits = model.prefill_traced_chunked(tokens, page_table, actual_len=T)
+        logits = model.prefill_for_spec(prompt, pt_u, T, on_chunk, slot=u)
     finally:
         model._dflash_tap = False
     lt = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+    ttnn.deallocate(logits)
     first = int(lt.reshape(-1)[: model.vocab_size].float().argmax())
-    taps = model.take_dflash_eager_taps()
-    assert taps is not None, "eager masked prefill captured no taps"
-    return first, taps
-
-
-def _serving_session(dec, model, prompt_ids, page_table, max_new, capture=False):
-    first, taps = _serving_prefill(model, prompt_ids, page_table)
-    T = len(prompt_ids)
-    dec.ingest_prompt(taps, T)
-    dec.begin(first, T, page_table)
-    if capture:
-        dec.capture()
-    out = [first]
-    while len(out) < max_new:
-        committed = dec.step()
-        assert committed is not None, "session hit capacity unexpectedly"
-        out.extend(committed)
-    dec.end()
-    return out[:max_new]
-
-
-def _check(tag, ref, gaps, got, tokenizer, near_tie_gap):
-    n = min(len(ref), len(got))
-    assert n == MAX_NEW, f"{tag}: expected {MAX_NEW} tokens, got ref={len(ref)} got={len(got)}"
-    div = next((i for i in range(n) if got[i] != ref[i]), None)
-    logger.info(f"[{tag}] ref  : {ref}")
-    logger.info(f"[{tag}] spec : {got}")
-    logger.info(f"[{tag}] text : {tokenizer.decode(got)!r}")
-    if div is None:
-        logger.info(f"[{tag}] PASSED: reproduced plain greedy for all {n} tokens")
-        return
-    gap = gaps[div]
-    assert gap < near_tie_gap, (
-        f"{tag}: diverged from plain greedy at token {div} where the reference was CONFIDENT "
-        f"(gap {gap:.4f} >= {near_tie_gap}): expected {ref[div]} got {got[div]}"
-    )
-    logger.info(f"[{tag}] PASSED: lossless up to {div}, near-tie flip (gap={gap:.4f})")
+    assert dec.ctx_len[u] == T, f"slot {u}: ingested {dec.ctx_len[u]} of {T} positions"
+    return first
 
 
 @run_for_blackhole()
+@pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
-def test_dflash2_serving_sessions_are_lossless(mesh_device):
+def test_dflash2_serving_slots_are_lossless(mesh_device):
     if not _MULTI:
         pytest.skip("spec decode is the TP path; run with MESH_DEVICE=P150x4")
     from transformers import AutoTokenizer
@@ -109,45 +76,80 @@ def test_dflash2_serving_sessions_are_lossless(mesh_device):
 
     device = mesh_device
     device.enable_program_cache()
-    model = Qwen36Model.from_pretrained(device, max_batch_size=1, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    model = Qwen36Model.from_pretrained(device, max_batch_size=B, max_seq_len=NUM_BLOCKS * BLOCK_SIZE)
+    assert len(model.layers) >= 62, "the DFlash2 taps live at layers 5..61: run the full model"
+    model.set_gdn_fused_decode(True)
     tokenizer = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
-    if os.environ.get("QWEN36_SERVING_CHAT", "0") == "1":
-        thinking = os.environ.get("QWEN36_SERVING_THINKING", "0") == "1"
-        prompt_a = _chat_prompt(tokenizer, CHAT_PROMPTS[0], thinking)
-        prompt_b = _chat_prompt(tokenizer, CHAT_PROMPTS[1], thinking)
-        logger.info(f"[serving] chat prompts: {len(prompt_a)} / {len(prompt_b)} tokens (thinking={thinking})")
-    else:
-        prompt_a = _get_prompt(PROMPT_LEN, tokenizer)[0].tolist()
-        prompt_b = _get_prompt(PROMPT_LEN_B, tokenizer)[0].tolist()
-    kv_shape = [NUM_BLOCKS, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
-    ident = torch.arange(NUM_BLOCKS, dtype=torch.int32).reshape(1, NUM_BLOCKS)
-    # A "vLLM-like" row for request B: blocks handed out from the top of the pool, block 0 unused.
-    perm = torch.cat([torch.arange(NUM_BLOCKS - 1, 0, -1, dtype=torch.int32), torch.zeros(1, dtype=torch.int32)])
-    perm = perm.reshape(1, NUM_BLOCKS)
-    near_tie_gap = float(os.environ.get("QWEN36_SPEC_NEAR_TIE_GAP", DEFAULT_NEAR_TIE_GAP))
-    for layer in model.layers:
-        if not layer.is_full_attention:
-            layer.attention.use_fused_recurrent_decode = True
-
-    ref_a, gaps_a = _reference_greedy(model, prompt_a, ident, kv_shape, MAX_NEW, use_decode_step=True)
-    ref_b, gaps_b = _reference_greedy(model, prompt_b, ident, kv_shape, MAX_NEW, use_decode_step=True)
-
+    prompts = _batch_prompts(3, tokenizer)  # three distinct, ragged prompts (130 / 147 / 165 tokens)
+    bpu = _blocks_per_user(max(len(p) for p in prompts), K, MAX_NEW + 8)
+    page_tables = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])
+    kv_shape = [B * bpu, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
     model.free_kv_caches()
-    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=1)
-    dec = DFlash2ServingDecoder(model, NUM_BLOCKS, ctx_blocks=NUM_BLOCKS)
-    dec.alloc()
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=B)
+
+    dec = DFlash2ServingDecoder(model, num_blocks=bpu)
+    outs = {}
     try:
-        got_a = _serving_session(dec, model, prompt_a, ident, MAX_NEW, capture=True)
-        _check("serving-A", ref_a, gaps_a, got_a, tokenizer, near_tie_gap)
-        got_b = _serving_session(dec, model, prompt_b, perm, MAX_NEW)
-        _check("serving-B(permuted)", ref_b, gaps_b, got_b, tokenizer, near_tie_gap)
-        got_c = _serving_session(dec, model, prompt_a, ident, MAX_NEW)
-        _check("serving-C", ref_a, gaps_a, got_c, tokenizer, near_tie_gap)
-        # A seeded eagerly (before the capture), B/C/D through the verify trace: A and C may differ at a
-        # near-tie (both pass the bar above); two traced-seed sessions of the same prompt must be identical.
-        got_d = _serving_session(dec, model, prompt_a, ident, MAX_NEW)
-        _check("serving-D", ref_a, gaps_a, got_d, tokenizer, near_tie_gap)
-        assert got_d == got_c, "the same prompt on the same captures must reproduce the previous traced-seed session"
+        # ---- server warm-up: allocate, compile every program eagerly, capture, dummy session -------- #
+        dec.alloc()
+        dec.warm()
+        first_w = _prefill(model, dec, 0, prompts[0], page_tables)  # compiles the prefill bucket + ingest
+        dec.capture(warm_position=len(prompts[0]) + 1)
+        dec.begin(0, first_w, len(prompts[0]), page_tables[0])
+        for _ in range(3):
+            dec.step()  # captures the drafter's draft/extend traces
+        dec.end(0)
+
+        # ---- scenario --------------------------------------------------------------------------- #
+        # request A -> slot 0, alone for 3 steps
+        firstA = _prefill(model, dec, 0, prompts[0], page_tables)
+        dec.begin(0, firstA, len(prompts[0]), page_tables[0])
+        outA = [firstA]
+        for _ in range(3):
+            outA.extend(dec.step()[0])
+        logger.info(f"[serving] A alone: {len(outA)} tokens after 3 steps")
+        # request B joins slot 1 while A is mid-generation (its seed holds A's rows)
+        firstB = _prefill(model, dec, 1, prompts[1], page_tables)
+        dec.begin(1, firstB, len(prompts[1]), page_tables[1])
+        outB = [firstB]
+        outC = None
+        while dec.active[0] or dec.active[1]:
+            com = dec.step()
+            if 0 in com:
+                cur = outA if outC is None else outC
+                cur.extend(com[0])
+                if len(cur) >= MAX_NEW:
+                    dec.end(0)
+            if 1 in com:
+                outB.extend(com[1])
+                if len(outB) >= MAX_NEW:
+                    dec.end(1)
+            if outC is None and not dec.active[0]:
+                # A is done: request C joins the freed slot 0 (while B is live, if B is still running)
+                logger.info(f"[serving] C joins slot 0 (B live: {dec.active[1]})")
+                firstC = _prefill(model, dec, 0, prompts[2], page_tables)
+                dec.begin(0, firstC, len(prompts[2]), page_tables[0])
+                outC = [firstC]
+        outs = {"A": outA, "B": outB, "C": outC}
+        for name in ("A", "B", "C"):
+            outs[name] = outs[name][:MAX_NEW]
+            logger.info(f"[serving] {name}: {outs[name]}")
+            logger.info(f"[serving] {name} text: {tokenizer.decode(outs[name])!r}")
+            assert len(outs[name]) == MAX_NEW, f"{name}: {len(outs[name])} tokens"
     finally:
         dec.release()
-        model.free_kv_caches()
+        _release(model)
+
+    # NOTE: C joined slot 0 while B was live only if A finished first; either way every request ran
+    # at least part of its life next to another slot's holds or speculation.
+    del dec, model
+    gc.collect()
+
+    ref_model, pt1, kv1 = _reference_model(device)
+    try:
+        for name, prompt in (("A", prompts[0]), ("B", prompts[1]), ("C", prompts[2])):
+            ref, gaps = _reference_greedy(ref_model, prompt, pt1, kv1, outs[name])
+            _assert_lossless(outs[name], ref, gaps, tokenizer, f"serving request {name}")
+    finally:
+        _release(ref_model)
+    logger.info("[serving] all three requests lossless across joins and leaves")

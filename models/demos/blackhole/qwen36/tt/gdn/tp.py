@@ -66,8 +66,15 @@ def spec_state_blk_idx(mi, n_users, nv):
     return idx
 
 
-def spec_conv_sel(mi, n_users, T, kc):
+def spec_conv_sel(mi, n_users, T, kc, hold=None):
     """One-hot row selector that rebuilds every user's conv window for the next verify.
+
+    ``hold``: optional set of users whose window must NOT change: their selector is the identity
+    over the first kc-1+T rows of concat (= E_prev itself), so a replay with the same tokens,
+    positions and mi as that user's last verify reproduces its GDN state exactly (the ring kernel
+    reads each core's initial block before writing its own slots, and the conv input is unchanged).
+    A serving session uses it to seed one joining user through the shared verify trace while the
+    other users stand still.
 
     The verify concatenates last iteration's window with this iteration's new qkv rows:
         concat = cat([E_prev [n_users, kc-1+T, C], qkv_new [n_users, T, C]], dim=1)
@@ -81,7 +88,12 @@ def spec_conv_sel(mi, n_users, T, kc):
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     rows, cols = kc - 1 + T, kc - 1 + 2 * T
     sel = torch.zeros(n_users, rows, cols, dtype=torch.bfloat16)
+    hold = set(hold or ())
     for u in range(n_users):
+        if u in hold:
+            for r in range(rows):
+                sel[u, r, r] = 1.0
+            continue
         m = int(mi[u])
         assert 0 <= m < T, f"mi[{u}]={m} out of range [0,{T})"
         for r in range(kc - 1):
@@ -2066,6 +2078,63 @@ class TPGatedDeltaNet:
             ttnn.deallocate(full)
         # Both mirrors now hold the same (live) shift register.
         self._conv_taps_stale, self._conv_win_stale = False, False
+
+    def seed_spec_state_user(self, u):
+        """``seed_spec_state`` for ONE user of a live batch (serving: a request joining slot ``u``).
+
+        Only user u's rows move: rec_state row u -> ring token-slot 0 blocks [u*Nv, (u+1)*Nv) via a
+        slice_write, and its conv shift register -> E_prev rows [0, K) of row u through an exact
+        one-hot matmul over cat([E_prev, conv_win_padded], dim=1) that is the identity for every
+        other user (a slice_write cannot target row u alone: K-1+T rows are not tile-aligned). The
+        other users' ring blocks and window rows are untouched, so their in-flight speculative state
+        survives. Every op here is fixed-shape except the slice_write offset, which hashes per u:
+        warm all B offsets before the verify trace is captured.
+        """
+        assert self._spec_ring is not None, "seed_spec_state_user before prepare_spec_verify"
+        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        T = self._spec_shape[1]
+        assert 0 <= u < B, f"user {u} of {B}"
+        # --- recurrent state row u -> ring blocks [u*Nv, (u+1)*Nv) of token slot 0 ---
+        row = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))  # [1, Nv, Dk, Dv]
+        cast = None if row.dtype == ttnn.float32 else ttnn.typecast(row, ttnn.float32)
+        sharded = ttnn.to_memory_config(row if cast is None else cast, self._row_shard_memcfg(Nv * Dk, Dv))
+        ttnn.deallocate(row)
+        if cast is not None:
+            ttnn.deallocate(cast)
+        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
+        assert ring4.buffer_address() == self._spec_ring.buffer_address(), "rank-4 ring view copied"
+        ttnn.experimental.slice_write(sharded, ring4, [0, u * Nv, 0, 0], [1, (u + 1) * Nv, Dk, Dv], [1, 1, 1, 1])
+        ttnn.deallocate(sharded)
+        # --- conv shift register row u -> E_prev row u, rows [0, K) (rows K.. zero) ---
+        self.sync_conv_win()  # mirror the taps (user u's are fresh from its prefill; others' are unread)
+        full = (
+            self._conv_win_buf
+            if self._spec_win_pad is None
+            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        )
+        R = K - 1 + T
+        cat = ttnn.concat([self._verify_win_buf, full], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, 2R, C]
+        if full is not self._conv_win_buf:
+            ttnn.deallocate(full)
+        sel = torch.zeros(B, R, 2 * R, dtype=torch.bfloat16)
+        for v in range(B):
+            for r in range(R):
+                sel[v, r, (R + r) if v == u else r] = 1.0
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        new_win = ttnn.matmul(
+            sel_tt, cat, compute_kernel_config=self._cfg_onehot, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        ttnn.deallocate(cat)
+        ttnn.deallocate(sel_tt)
+        ttnn.copy(new_win, self._verify_win_buf)  # full-shape, in place
+        ttnn.deallocate(new_win)
 
     def materialize_spec_state(self, mi):
         """Pull the accepted state out of the spec buffers back into the durable decode state.

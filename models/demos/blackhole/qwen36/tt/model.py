@@ -1635,6 +1635,38 @@ class Qwen36Model:
             f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
         )
 
+    def refresh_verify_page_tables(self, page_tables):
+        """Re-point the captured MULTI-USER verify trace at new per-user KV blocks (serving).
+
+        ``page_tables``: torch int32 [B, nb] (B = captured users, nb = captured width). Restages the
+        three page-table buffers the trace reads exactly as capture_verify_trace built them: the
+        per-ROW table (row u*T+j = user u), the per-USER table for the grouped KV write, and the
+        per-GROUP table for the fused spec SDPA. Host->device copies into the baked buffers; no
+        capture, no allocation. Users whose blocks changed since the last call are the reason to
+        call it; the others are simply rewritten with the same rows.
+        """
+        assert getattr(self, "_vfy_trace_id", None) is not None, "capture_verify_trace first"
+        pt = torch.as_tensor(page_tables).to(torch.int32)
+        pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+        B, T = self._vfy_B, self._vfy_T
+        nb = int(self._vfy_kvpt_buf.shape[-1])
+        assert tuple(pt.shape) == (B, nb), f"page tables {tuple(pt.shape)} != captured ({B}, {nb})"
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        groups = int(self._vfy_spec_groups)
+        if groups >= B and groups % B == 0:
+            pt1 = pt.repeat_interleave(groups // B, dim=0)
+        else:
+            pt1 = pt[:1].repeat(groups, 1)
+        for host, buf in (
+            (pt.repeat_interleave(T, dim=0), self._vfy_kvpt_buf),
+            (pt, self._vfy_kvpt_users),
+            (pt1, self._vfy_kvpt1_buf),
+        ):
+            h = ttnn.from_torch(
+                host.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
+            )
+            ttnn.copy_host_to_device_tensor(h, buf)
+
     def refresh_verify_page_table(self, page_table):
         """Re-point the captured verify trace at another sequence's KV blocks.
 
@@ -1660,7 +1692,7 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(h, buf)
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False):
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, hold=None):
         """Replay the captured verify trace for B users x T candidates.
 
         ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
@@ -1679,6 +1711,11 @@ class Qwen36Model:
         ``feed_rows`` is the trace's OWN output buffer: do not deallocate it, and be done with it
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter, both
         within the iteration).
+
+        ``hold``: users whose GDN state this replay must leave unchanged (serving: everyone but a
+        joining user). Their rows must carry the SAME tokens, positions and mi_prev as their last
+        replay; the conv selector is then the identity and the ring kernel rewrites their slots
+        with identical values (see gdn.tp.spec_conv_sel).
         """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
@@ -1718,7 +1755,7 @@ class Qwen36Model:
         )
         ttnn.copy_host_to_device_tensor(_h, self._vfy_state_idx)
         _h = ttnn.from_torch(
-            spec_conv_sel(mi_prev, B, T, self._vfy_Kc),
+            spec_conv_sel(mi_prev, B, T, self._vfy_Kc, hold=hold),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=None,

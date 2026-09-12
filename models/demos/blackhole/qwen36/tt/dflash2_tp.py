@@ -143,6 +143,7 @@ class DFlash2DrafterTP:
             )
         )
         # per-generate state
+        self.ring = 0  # ring_tokens (serving) or 0
         self.kv = None
         self.page_tables = None  # torch int32 [U, nb]: user u's context blocks (row u)
         self.page_table = None  # alias of page_tables (kept for single-user callers)
@@ -404,8 +405,15 @@ class DFlash2DrafterTP:
                 ttnn.deallocate(t)
 
     # ------------------------------------------------------------------ per-generate state
-    def alloc(self, page_tables_torch, block_size, tap_bufs):
+    def alloc(self, page_tables_torch, block_size, tap_bufs, ring_tokens=None):
         """Draft KV + persistent staging buffers for U users. Call BEFORE any trace is captured.
+
+        ``ring_tokens`` (serving): treat each user's table as a CIRCULAR buffer of that many
+        positions (a multiple of block_size, >= the widest sliding window + block, so every key a
+        block row can attend is still resident): KV writes land at position % ring_tokens and the
+        paged decode SDPA looks its keys up the same way (cache_position_modulo) while the causal /
+        sliding-window bound stays on absolute positions. A user then costs ring_tokens/block_size
+        blocks however long its request runs. Off (None): plain per-position tables (the demo).
 
         ``page_tables_torch``: torch int32 [U, nb] (a [nb] / [1, nb] table is U = 1), user u's
         context blocks in row u — the drafter mirrors the target's per-user block layout in its own
@@ -431,6 +439,21 @@ class DFlash2DrafterTP:
         nb = int(self.page_tables.shape[-1])
         self.block_size = int(block_size)
         self.scratch_block = int(self.page_tables.max()) + 1
+        self.ring = int(ring_tokens) if ring_tokens else 0
+        if self.ring:
+            widest = max(self.windows) if any(self.windows) else 0
+            assert all(
+                self.windows
+            ), "a ring context needs every drafter layer windowed (DFlash v1 has a full-attention layer)"
+            assert (
+                self.ring % self.block_size == 0
+            ), f"ring {self.ring} is not a multiple of block_size {self.block_size}"
+            assert (
+                self.ring >= widest + Bk
+            ), f"ring {self.ring} < window {widest} + block {Bk}: a block row would evict a key it attends"
+            assert (
+                nb * self.block_size == self.ring
+            ), f"ring tables need exactly {self.ring // self.block_size} blocks per user, got {nb}"
         self.tap_bufs = list(tap_bufs)
         assert (
             len(self.tap_bufs) == len(self.taps) and self.tap_bufs[0].shape[-2] == R
@@ -466,6 +489,7 @@ class DFlash2DrafterTP:
             "cos": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
             "sin": self._dev(z(1, R, 1, HD, dtype=torch.bfloat16)),
             "pos": self._rm(z(R, dtype=torch.int32)),
+            "wpos": self._rm(z(R, dtype=torch.int32)),  # KV write positions (== pos, or pos % ring)
             "cur": self._rm(z(R, dtype=torch.int32)),
             "xpos": self._rm(z(R, dtype=torch.int32)),
             "xpt": self._rm(pt_rows.clone()),
@@ -514,24 +538,35 @@ class DFlash2DrafterTP:
         self.tap_bufs = None
 
     # ------------------------------------------------------------------ context: prompt fill (eager)
-    def fill_context(self, taps_dev, chunk_start, user=0):
+    def fill_context(self, taps_dev, chunk_start, user=0, valid_len=None):
         """Prompt chunk of ONE user: taps_dev = list of fractured [1,1,S,dim_tp] (S = bucket rows,
         block-aligned), chunk_start block-aligned -> k/v of hctx into user ``user``'s blocks of the
-        draft KV via paged_fill_cache."""
+        draft KV via paged_fill_cache. ``valid_len``: real rows in the chunk (the rest are bucket
+        padding); writes are rounded up to whole blocks. On a ring the chunk's blocks are the
+        user's table entries (chunk_start/bs + i) % nblk, and no more than the ring holds."""
         assert self.kv is not None
         assert 0 <= user < self.U, f"user {user} of {self.U}"
         S = taps_dev[0].shape[-2]
         bs = self.block_size
         assert S % bs == 0 and chunk_start % bs == 0
+        nblk_tab = int(self.page_tables.shape[-1])
+        n_valid = S if valid_len is None else min(S, int(valid_len))
+        nblk = -(-n_valid // bs)
         blk0 = chunk_start // bs
-        blkN = min(blk0 + S // bs, int(self.page_tables.shape[-1]))
-        rows = (blkN - blk0) * bs
+        if self.ring:
+            assert nblk <= nblk_tab, f"a {nblk}-block chunk does not fit the {nblk_tab}-block ring"
+            ids = [(blk0 + i) % nblk_tab for i in range(nblk)]
+            chunk_tab = self.page_tables[user, ids].reshape(1, nblk)
+        else:
+            nblk = min(nblk, nblk_tab - blk0)
+            chunk_tab = self.page_tables[user : user + 1, blk0 : blk0 + nblk]
+        rows = nblk * bs
         assert rows > 0
         hctx = self._hctx(taps_dev, S)
         cos, sin = rope_tables(self.theta, torch.arange(chunk_start, chunk_start + S))
         cos = self._dev(cos.reshape(1, 1, S, HD))
         sin = self._dev(sin.reshape(1, 1, S, HD))
-        chunk_pt = self._rm(self.page_tables[user : user + 1, blk0:blkN].contiguous())
+        chunk_pt = self._rm(chunk_tab.contiguous())
         for li, lw in enumerate(self.layers):
             kc, vc = self.kv[li]
             k, v = self._ctx_kv(hctx, lw, S)
@@ -589,8 +624,8 @@ class DFlash2DrafterTP:
             r0 = u * Bk
             pos[r0 : r0 + n] = torch.arange(s0, s0 + n, dtype=torch.int32)
             pt[r0 : r0 + n, :] = self.page_tables[u]
-        cos, sin = rope_tables(self.theta, pos)
-        self._stage(pos, self._bufs["xpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        cos, sin = rope_tables(self.theta, pos)  # RoPE at the ABSOLUTE position
+        self._stage(pos % self.ring if self.ring else pos, self._bufs["xpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(pt, self._bufs["xpt"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(cos.reshape(1, R, 1, HD).bfloat16(), self._bufs["xcos"], ttnn.bfloat16)
         self._stage(sin.reshape(1, R, 1, HD).bfloat16(), self._bufs["xsin"], ttnn.bfloat16)
@@ -667,9 +702,11 @@ class DFlash2DrafterTP:
         ttnn.deallocate(qn)
         kr = apply_partial_rope_decode(kn, b["cos"], b["sin"], self.NKVl, B, HD)
         ttnn.deallocate(kn)
-        self._write_rows(li, kr, v, b["pos"], b["ptB"])
+        self._write_rows(li, kr, v, b["wpos"], b["ptB"])
         kc, vc = self.kv[li]
         kw = {"sliding_window_size": self.windows[li]} if self.windows[li] else {}
+        if self.ring:
+            kw["cache_position_modulo"] = self.ring  # ring lookup; cur_pos / window bound stay absolute
         o = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             qr,
             kc,
@@ -753,6 +790,7 @@ class DFlash2DrafterTP:
         self._stage(cos.reshape(1, R, 1, HD).bfloat16(), self._bufs["cos"], ttnn.bfloat16)
         self._stage(sin.reshape(1, R, 1, HD).bfloat16(), self._bufs["sin"], ttnn.bfloat16)
         self._stage(pos, self._bufs["pos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
+        self._stage(pos % self.ring if self.ring else pos, self._bufs["wpos"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
         self._stage(cur, self._bufs["cur"], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
 
     _trace_armed = False
