@@ -1518,7 +1518,14 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     else if constexpr (OPERATION == SfpuType::polygamma)
     {
         SFPU_UNARY_CALL(
-            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_polygamma, (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS), dst_index, vector_mode, POLYGAMMA_N_BITS, POLYGAMMA_SCALE_BITS);
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_polygamma,
+            (APPROX_MODE, is_fp32_dest_acc_en, ITERATIONS),
+            dst_index,
+            vector_mode,
+            POLYGAMMA_N_BITS,
+            POLYGAMMA_SCALE_BITS);
     }
     else if constexpr (OPERATION == SfpuType::xielu)
     {
