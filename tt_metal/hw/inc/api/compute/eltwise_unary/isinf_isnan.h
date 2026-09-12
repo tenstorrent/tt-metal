@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_isinf_isnan.h"
+#include "ckernel_sfpu_isinf_isnan.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
@@ -29,7 +29,7 @@ ALWI void isinf_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
+        calculate_sfpu_isinf_isnan,
         (SfpuType::isinf, APPROX, 8),
         idst,
         VectorMode::RC));
@@ -58,7 +58,7 @@ ALWI void isposinf_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
+        calculate_sfpu_isinf_isnan,
         (SfpuType::isposinf, APPROX, 8),
         idst,
         VectorMode::RC));
@@ -87,7 +87,7 @@ ALWI void isneginf_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
+        calculate_sfpu_isinf_isnan,
         (SfpuType::isneginf, APPROX, 8),
         idst,
         VectorMode::RC));
@@ -116,7 +116,7 @@ ALWI void isnan_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
+        calculate_sfpu_isinf_isnan,
         (SfpuType::isnan, APPROX, 8),
         idst,
         VectorMode::RC));
@@ -145,7 +145,7 @@ ALWI void isfinite_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _calculate_sfpu_isinf_isnan_,
+        calculate_sfpu_isinf_isnan,
         (SfpuType::isfinite, APPROX, 8),
         idst,
         VectorMode::RC));

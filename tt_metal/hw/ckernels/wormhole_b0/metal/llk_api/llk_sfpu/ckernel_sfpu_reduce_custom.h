@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_instr_params.h"
 #include "lltt.h"
-#include "sfpi.h"
 
 namespace ckernel
 {
@@ -26,14 +25,14 @@ inline void sfpu_reduce_max_col_subblock_4x2_configure_addrmod()
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
     }
-        .set(ADDR_MOD_3);
+        .set(ADDR_MOD_7);
 
     addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 64},
     }
-        .set(ADDR_MOD_2);
+        .set(ADDR_MOD_6);
 }
 
 inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values()
@@ -50,7 +49,7 @@ inline void sfpu_reduce_max_col_subblock_4x2_load_initial_values()
 }
 
 template <DataFormat format>
-inline void _init_reduce_max_col_subblock_4x2_()
+inline void reduce_max_col_subblock_4x2_init()
 {
     static_assert(format == DataFormat::Float16_b, "Unsupported data format. Supported formats: Float16_b");
 
@@ -94,7 +93,7 @@ inline void _move_to_next_subblock_4x2_()
 }
 
 template <PoolType pool_type, ReduceDim reduce_dim, DataFormat format>
-inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_height /*, const uint32_t block_width*/)
+inline void calculate_reduce_max_col_subblock_4x2(const std::uint32_t block_height /*, const uint32_t block_width*/)
 {
     static_assert(reduce_dim == ReduceDim::REDUCE_COL, "Only column reduction (REDUCE_COL) is currently supported");
     static_assert(pool_type == PoolType::MAX, "Only MAX pool type is currently supported");
@@ -132,6 +131,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG0 /*lreg_src_c*/, p_sfpu::LREG4 /*lreg_dest*/, 1 /*instr_mod1*/);
 
     sfpu_reduce_max_col_subblock_4x2_load_initial_values();
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     TTI_SFPLOAD(8, InstrModLoadStore::FP16B, ADDR_MOD_2, 0); // dummy
 
@@ -161,7 +161,7 @@ inline void _calculate_reduce_max_col_subblock_4x2_(const std::uint32_t block_he
     TTI_SFPSWAP(0 /*unused*/, p_sfpu::LREG1 /*lreg_src_c*/, p_sfpu::LREG4 /*lreg_dest*/, 1 /*instr_mod1*/);
 }
 
-inline void _reduce_max_col_subblock_4x2_prologue_()
+inline void reduce_max_col_subblock_4x2_prologue()
 {
     constexpr std::uint16_t neg_inf_fp16b = 0xFF80;
 
@@ -170,7 +170,7 @@ inline void _reduce_max_col_subblock_4x2_prologue_()
     TTI_SFPLOADI(p_sfpu::LREG1, InstrModLoadStore::FP16B, neg_inf_fp16b);
 }
 
-inline void _reduce_max_col_subblock_4x2_epilogue_()
+inline void reduce_max_col_subblock_4x2_epilogue()
 {
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 

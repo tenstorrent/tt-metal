@@ -13,7 +13,7 @@
 #include "ckernel_sfpu_exp.h"  // For _sfpu_round_to_nearest_int32_
 #include "sfpu/ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
-#include "sfpu/ckernel_sfpu_cdf.h"
+#include "ckernel_sfpu_cdf.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
