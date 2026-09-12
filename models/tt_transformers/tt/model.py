@@ -356,7 +356,10 @@ class Transformer(LightweightModule):
             x = ttnn.interleaved_to_sharded(x, lm_head_input_mem_cfg)
         logits = self.lm_head(x)
         logits = self._apply_final_logit_softcapping(logits)
-        logits = ttnn.to_memory_config(logits, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # L1, not DRAM: these logits are consumed by the sampling chain (typecast ->
+        # top-k) in the same step and by nothing else, so the ~2 MB round-trip through
+        # DRAM is pure overhead.
+        logits = ttnn.to_memory_config(logits, memory_config=ttnn.L1_MEMORY_CONFIG)
         return logits
 
     def process_hidden_states_after_prefill_trace(self, hidden_states, last_token_idx):
@@ -1040,6 +1043,6 @@ class Transformer(LightweightModule):
         x = self.lm_head(x)
         x = self._apply_final_logit_softcapping(x)
         if mode == Mode.PREFILL:
-            x = ttnn.to_memory_config(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x = ttnn.to_memory_config(x, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         return x
