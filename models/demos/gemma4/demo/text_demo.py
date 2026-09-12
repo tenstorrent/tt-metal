@@ -981,6 +981,8 @@ def run_generation(
             tb.print_exc()
             raise
         warmup_logits.deallocate(True)
+        # Finish queued warmup work before starting the measured TTFT window.
+        ttnn.synchronize_device(mesh_device)
         profiler.end(f"compile_prefill", iteration=prompt_idx)
         logger.info(f"Prefill warmup done in {profiler.get_duration('compile_prefill', iteration=prompt_idx):.2f}s")
 

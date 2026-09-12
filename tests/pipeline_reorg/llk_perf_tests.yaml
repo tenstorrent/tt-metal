@@ -13,6 +13,7 @@
 - name: llk_perf_wormhole group 1/5
   split_group: 1
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
@@ -24,6 +25,7 @@
 - name: llk_perf_wormhole group 2/5
   split_group: 2
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
@@ -35,6 +37,7 @@
 - name: llk_perf_wormhole group 3/5
   split_group: 3
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
@@ -46,6 +49,7 @@
 - name: llk_perf_wormhole group 4/5
   split_group: 4
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
@@ -57,6 +61,7 @@
 - name: llk_perf_wormhole group 5/5
   split_group: 5
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_wormhole.sh {split_group} 5
@@ -68,6 +73,7 @@
 - name: llk_perf_blackhole group 1/5
   split_group: 1
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
@@ -79,6 +85,7 @@
 - name: llk_perf_blackhole group 2/5
   split_group: 2
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
@@ -90,6 +97,7 @@
 - name: llk_perf_blackhole group 3/5
   split_group: 3
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
@@ -101,6 +109,7 @@
 - name: llk_perf_blackhole group 4/5
   split_group: 4
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_blackhole.sh {split_group} 5
@@ -112,6 +121,7 @@
 - name: llk_perf_blackhole group 5/5
   split_group: 5
   team: llk
+  budget_type: perf
   cmd: |
     set -euo pipefail
     ./tests/run_llk_perf_blackhole.sh {split_group} 5

@@ -80,7 +80,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     # Single-source-of-truth per-job timeout: compute_sweep_matrix.py stamps
     # matrix.timeout onto every entry from tests/pipeline_reorg/ttnn_sweep_tests.yaml
-    # (checked against .github/time_budget.yaml by verify_time_budget.py). Run types
+    # (checked against .github/time_budget.yaml by pr-gate's verify-time-budgets). Run types
     # not budget-tracked in the yaml (nightly/comprehensive) are stamped with the
     # 60-min default in matrix_runner_config.get_timeout_for, so the value is always
     # present and consumed here directly.

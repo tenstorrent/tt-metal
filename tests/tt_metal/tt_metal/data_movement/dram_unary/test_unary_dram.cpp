@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -298,7 +297,7 @@ void packet_sizes_test(
 }  // namespace unit_tests::dm::dram
 
 /* ========== Test case for varying transaction numbers and sizes; Test id = 0 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMPacketSizes) {
     unit_tests::dm::dram::packet_sizes_test(
         get_mesh_device(),
         0,      // Test case ID
@@ -307,7 +306,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes) {
 }
 
 /* ========== Test case for varying core locations; Test id = 1 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMCoreLocations) {
     uint32_t test_case_id = 1;
 
     auto mesh_device = get_mesh_device();
@@ -332,7 +331,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations) {
 // DRAM channels
 
 /* ========== Test case for varying DRAM channels; Test id = 2 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMChannels) {
     uint32_t test_case_id = 2;
 
     auto mesh_device = get_mesh_device();
@@ -348,7 +347,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels) {
 }
 
 /* ========== Directed ideal test case; Test id = 3 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
@@ -370,7 +369,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal) {
 }
 
 /* ========== Test case for varying transaction numbers and sizes with 2.0 API; Test id = 40 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMPacketSizes2_0) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         // Quasar emulator: full sweep is too slow (same as legacy
@@ -394,7 +393,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMPacketSizes2_0) {
     unit_tests::dm::dram::packet_sizes_test(mesh_device, 40, {0, 0}, 0);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMDirectedIdeal2_0) {
     auto mesh_device = get_mesh_device();
     if (mesh_device->impl().get_device(0)->arch() == ARCH::QUASAR) {
         auto [bytes_per_page, max_transmittable_bytes, max_transmittable_pages] =
@@ -415,7 +414,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMDirectedIdeal2_0) {
     unit_tests::dm::dram::directed_ideal_test(mesh_device, 41, {0, 0}, 0, 0);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMCoreLocations2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -432,7 +431,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMCoreLocations2_0) {
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementDRAMChannels2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementDRAMChannels2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 

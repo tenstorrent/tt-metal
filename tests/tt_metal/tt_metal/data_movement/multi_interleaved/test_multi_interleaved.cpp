@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -405,7 +405,7 @@ void grid_packet_sizes_test(
 }  // namespace unit_tests::dm::multi_interleaved
 
 /* ========== Full grid directed ideal ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -417,7 +417,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal
 }
 
 /* ========== Full grid packet sizes sweep ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -429,7 +429,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
 }
 
 /* ========== Full grid read kernel directed ideal ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -441,7 +441,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedI
 }
 
 /* ========== Full grid read kernel packet sizes sweep ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -453,7 +453,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
 }
 
 /* ========== Full grid write kernel directed ideal ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -465,7 +465,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirected
 }
 
 /* ========== Full grid write kernel packet sizes sweep ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -478,7 +478,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
 
 /* ========== 2x2 CORE TESTS ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
     uint32_t test_case_id = 116;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -486,7 +486,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedDirectedId
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedSizes) {
     uint32_t test_case_id = 117;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -494,7 +494,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedSizes) {
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
     uint32_t test_case_id = 118;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -502,7 +502,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadDirect
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
     uint32_t test_case_id = 119;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -510,7 +510,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadSizes)
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
     uint32_t test_case_id = 120;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -518,7 +518,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteDirec
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
     uint32_t test_case_id = 121;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
@@ -528,7 +528,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteSizes
 
 /* ========== 6x6 CORE TESTS ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedDirectedIdeal) {
     uint32_t test_case_id = 122;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -536,7 +536,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedDirectedId
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedSizes) {
     uint32_t test_case_id = 123;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -544,7 +544,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedSizes) {
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
     uint32_t test_case_id = 124;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -552,7 +552,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadDirect
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
     uint32_t test_case_id = 125;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -560,7 +560,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadSizes)
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
     uint32_t test_case_id = 126;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -568,7 +568,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteDirec
         get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
     uint32_t test_case_id = 127;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
@@ -578,17 +578,17 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes
 
 /* ========== GRID SWEEP TESTS ========== */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedGridSweepSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedGridSweepSizes) {
     uint32_t test_case_id = 128;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, true);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadGridSweepSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedReadGridSweepSizes) {
     uint32_t test_case_id = 129;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, true, false);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteGridSweepSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementMultiInterleavedWriteGridSweepSizes) {
     uint32_t test_case_id = 130;
     unit_tests::dm::multi_interleaved::grid_packet_sizes_test(get_mesh_device(), test_case_id, false, true);
 }
