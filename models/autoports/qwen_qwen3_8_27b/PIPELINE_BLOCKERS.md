@@ -13,3 +13,14 @@
 
 For later blockers, record the UTC date, symptom, root cause, repair, validation,
 and resume point here before continuing the pipeline.
+
+## 2026-09-12: resume prompt selection
+
+- Symptom: the no-model dry-run paired stage 7 with `01-functional-decoder`
+  and numbered the final prompt as stage 17.
+- Cause: `--start-index 7` controls numbering; it does not remove the first six
+  prompt files from an all-prompts glob.
+- Repair: supply only prompt files 07 through 11 and retain `--start-index 7`.
+- Validation: require the corrected dry-run manifest to map stages 7 through 11
+  to `optimized-full-model` through `tti-release` before launching Astra.
+- Resume point: stage 7.
