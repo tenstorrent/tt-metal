@@ -150,12 +150,20 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.zero_accept = 0
 
     # ------------------------------------------------------------------ one-time captures
+    def prepare_draft(self):
+        """After the FIRST begin(): run one eager draft so every draft program is compiled before any
+        trace is captured (its block KV write is exactly what the first real draft repeats)."""
+        assert self.active and not self._captured
+        self._draft_warmup(self.pending, self.Hp, self.p)
+        self._draft_prepared = True
+
     def capture(self):
-        """After the FIRST begin(): compile the remaining draft programs and capture the verify + commit
-        traces (the drafter's own draft/extend traces are captured by the first step())."""
+        """After begin() (+ prepare_draft()): capture the verify + commit traces; the drafter's own
+        draft/extend traces are captured by the first step()."""
         assert self.active and not self._captured
         model = self.model
-        self._draft_warmup(self.pending, self.Hp, self.p)
+        if not getattr(self, "_draft_prepared", False):
+            self.prepare_draft()
         model._dflash_tap = True  # the trace body copies the taps into the (pre-allocated) tap bufs
         try:
             model.capture_verify_trace(

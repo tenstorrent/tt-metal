@@ -35,8 +35,9 @@ source:
 runtime:
   vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
   # plugin main bef89e4 + arg/gemma4_spec_serving (adaptive block-output, TT_MODEL_CLASS_OVERRIDES) + the
-  # block-output KV-lookahead capability the DFlash2 serving class needs (branch dflash2-spec-decode).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 29fbe15d8afe15bf4c3b57c666293abab3e31747}
+  # block-output KV-lookahead capability the DFlash2 serving class needs, plus keeping the request's sampling
+  # controls / rejecting multimodal prompts on the adaptive profile (branch dflash2-spec-decode).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 751ec33573aa30be03f8a9bda8d36a3cd3259158}
   extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle  # same adapter the plugin registers built-in
 
 serve:

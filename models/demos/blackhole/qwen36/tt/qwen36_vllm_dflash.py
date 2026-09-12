@@ -23,6 +23,7 @@ then the verify/commit/draft/extend traces are captured ONCE and reused by every
 (DFlash2ServingDecoder). Per request: prompt taps -> drafter context, eager seed, then W-token blocks.
 """
 import json
+import math
 import os
 import time
 
@@ -36,12 +37,8 @@ _SPEC_ON = (
     and int(os.environ.get("QWEN36_DFLASH_SERVE_BLOCK", "32")) > 1
 )
 if _SPEC_ON:
-    _gate = os.environ.get("QWEN36_PREFILL_BUCKET_TRACE")
-    if _gate not in (None, "", "0", "off", "false"):
-        logger.warning(
-            f"QWEN36_PREFILL_BUCKET_TRACE={_gate!r} is incompatible with DFlash2 serving (the traced masked "
-            "bucket captures no drafter taps); forcing the eager masked-bucket prefill"
-        )
+    # (model_config's own setdefault may already have set it to "1" in this process; the model reads
+    # the gate at construction, so overriding it here is effective either way.)
     os.environ["QWEN36_PREFILL_BUCKET_TRACE"] = "0"
 
 from vllm.model_executor.models.qwen3_5 import Qwen3VLDummyInputsBuilder, Qwen3VLMultiModalProcessor  # noqa: E402
@@ -90,7 +87,9 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._spec = None  # DFlash2ServingDecoder, armed at warmup
+        self._spec = None  # DFlash2ServingDecoder, armed at warmup (phase 2)
+        self._spec_pre = None  # prepared (allocated + compiled) decoder between warmup phases
+        self._in_warmup = False
         self._spec_pending = None  # (taps, prompt_len, page_table_row) from the last spec-eligible prefill
         self._spec_req_prompt_len = None  # prompt length of the live single request (block gate mirror)
         self._spec_last_pt = None
@@ -177,44 +176,94 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     # ------------------------------------------------------------------ warmup: arm the session once
     def warmup_model_decode(self, *args, **kwargs):
-        out = super().warmup_model_decode(*args, **kwargs)
-        if _W > 1 and kwargs.get("enable_trace") and self._spec is None:
-            num_blocks = kwargs.get("num_blocks")
-            if not num_blocks:
-                kv = kwargs.get("kv_cache")
-                num_blocks = int(kv[0][0].shape[0]) if kv else 4096
-            self._spec_warmup(int(num_blocks))
+        """Two-phase like the runner's own warmup: phase 1 (enable_trace=False) ALLOCATES every spec
+        buffer and COMPILES every spec program while no trace is parked yet; phase 2 (enable_trace=True)
+        only CAPTURES the spec traces, after the plain decode traces. Buffers the parked traces bake must
+        exist before any capture, and nothing spec-related may compile once one is parked."""
+        self._in_warmup = True
+        try:
+            out = super().warmup_model_decode(*args, **kwargs)
+            if _W <= 1:
+                return out
+            self._spec_warmup_phases(kwargs)
+        finally:
+            self._in_warmup = False
         return out
 
-    def _spec_warmup(self, num_blocks):
+    def warmup_model_prefill(self, *args, **kwargs):
+        self._in_warmup = True
+        try:
+            return super().warmup_model_prefill(*args, **kwargs)
+        finally:
+            self._in_warmup = False
+
+    def _spec_warmup_phases(self, kwargs):
+        num_blocks = kwargs.get("num_blocks")
+        if not num_blocks:
+            kv = kwargs.get("kv_cache")
+            num_blocks = int(kv[0][0].shape[0]) if kv else 4096
+        if not kwargs.get("enable_trace"):
+            if self._spec_pre is None:
+                self._spec_pre = self._spec_prepare(int(num_blocks), kwargs.get("kv_cache"))
+        elif self._spec is None:
+            if self._spec_pre is None:  # a runner that skipped phase 1 (no compile warmup)
+                self._spec_pre = self._spec_prepare(int(num_blocks), kwargs.get("kv_cache"))
+            self._spec_capture()
+
+    def _spec_prepare(self, num_blocks, kv_cache):
+        """Phase 1: allocate + compile (no capture). Returns the prepared decoder."""
         model = self.model[0]
         t0 = time.perf_counter()
         ctx_blocks = int(os.environ.get("QWEN36_DFLASH_SERVE_CTX_BLOCKS", "0")) or num_blocks
         dec = DFlash2ServingDecoder(model, num_blocks, ctx_blocks=ctx_blocks, stop_tokens=self._eos)
+        assert dec.K <= _MAX_DRAFT, f"drafter K={dec.K} exceeds the KV lookahead bound {_MAX_DRAFT}"
         dec.alloc()
         pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
-        buckets = [b for b in model._PREFILL_MASK_BUCKETS if b <= max(_MAX_PROMPT, model._PREFILL_MASK_BUCKETS[0])]
-        # 1) Compile pass: the eager tap-capturing prefill + drafter context fill for EVERY mask bucket a
-        #    spec-eligible prompt can take (each bucket is its own program set), before any spec capture.
+        # The serving prefill pads vLLM's page-table row to the width warmup_model_prefill captures the
+        # chunk trace with (a multiple of 32 covering the whole KV pool); use that width now, before the
+        # chunk buffer exists, so the masked-bucket programs compiled here are the ones requests replay.
+        if kv_cache:
+            nb_pref = math.ceil(int(kv_cache[0][0].shape[0]) / 32) * 32
+        else:
+            nb_pref = num_blocks
+        pt_pref = torch.arange(nb_pref, dtype=torch.int32).reshape(1, nb_pref)
+        # 1) The eager tap-capturing prefill + drafter context fill for EVERY mask bucket a spec-eligible
+        #    prompt can take (each bucket is its own program set). The largest bucket is exercised with a
+        #    (chunk-1)-token prompt: an exact chunk multiple would replay the chunk trace (see _MAX_PROMPT).
+        top = model._mask_bucket_for(_MAX_PROMPT)
+        buckets = [b for b in model._PREFILL_MASK_BUCKETS if b <= top] or [top]
         for S in buckets:
-            # The largest bucket is exercised with a (chunk-1)-token prompt: an exact chunk multiple would
-            # replay the chunk trace instead of the eager masked bucket (see _MAX_PROMPT).
             T = min(S, _MAX_PROMPT)
-            _, taps = self._spec_prefill_taps(model, dummy_prompt(T), pt, T)
+            _, taps = self._spec_prefill_taps(model, dummy_prompt(T), pt_pref, T)
             assert taps is not None, "eager masked prefill captured no drafter taps (bucket trace gate on?)"
             dec.ingest_prompt(taps, T)
+        # 2) Seed (allocates the persistent anchor buffer, compiles the eager verify + extend) and the
+        #    eager draft (compiles every draft program) -- all before any trace exists.
         S = min(buckets[-1], _MAX_PROMPT)
-        # 2) Seed + draft warmup, then the one-time verify/commit captures; the first two steps capture
-        #    the drafter's draft/extend traces and replay them once.
         dec.begin(first=int(dummy_prompt(1, seed=99)[0, 0]), T=S, page_table_row=pt)
+        dec.prepare_draft()
+        # 3) The plain-block fallback's eager decode step (spec-eligible request without taps).
+        logits, hidden = model.decode_step_paged(int(dummy_prompt(1, seed=3)[0, 0]), dec.p + 1, dec.page_table)
+        ttnn.deallocate(hidden)
+        del logits
+        ttnn.synchronize_device(model.mesh_device)
+        logger.info(f"Qwen36DFlash phase-1 warmup (alloc + compile) done in {time.perf_counter() - t0:.1f}s")
+        return dec
+
+    def _spec_capture(self):
+        """Phase 2: capture the verify/commit traces, then the drafter's draft/extend traces (first
+        traced step), then a replay-only dummy session that proves nothing compiles any more."""
+        model = self.model[0]
+        dec = self._spec_pre
+        t0 = time.perf_counter()
         dec.capture()
         for _ in range(2):
             dec.step()
         dec.end()
-        # 3) A second, replay-only session on the smallest bucket: proves every program is cached (no
-        #    compile with the traces parked) and reports the steady-state iteration time.
-        S2 = min(buckets[0], _MAX_PROMPT)
-        _, taps = self._spec_prefill_taps(model, dummy_prompt(S2, seed=7), pt, S2)
+        num_blocks = dec.nb_v
+        pt = torch.arange(num_blocks, dtype=torch.int32).reshape(1, num_blocks)
+        S2 = min(model._PREFILL_MASK_BUCKETS[0], _MAX_PROMPT)
+        _, taps = self._spec_prefill_taps(model, dummy_prompt(S2, seed=7), self._spec_pref_pt(model, pt), S2)
         dec.ingest_prompt(taps, S2)
         dec.begin(first=int(dummy_prompt(1, seed=5)[0, 0]), T=S2, page_table_row=pt)
         ttnn.synchronize_device(model.mesh_device)
@@ -226,14 +275,39 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         t2 = time.perf_counter()
         dec.end()
         self._spec = dec
+        self._spec_pre = None
         logger.info(
-            f"Qwen36DFlash warmup done in {time.perf_counter() - t0:.1f}s: {(t2 - t1) / 3 * 1e3:.1f} ms/iter, "
-            f"{n / 3:.2f} tok/iter on the dummy session (K={dec.K}, W={_W})"
+            f"Qwen36DFlash phase-2 warmup (captures) done in {time.perf_counter() - t0:.1f}s: "
+            f"{(t2 - t1) / 3 * 1e3:.1f} ms/iter, {n / 3:.2f} tok/iter on the dummy session (K={dec.K}, W={_W})"
         )
 
+    @staticmethod
+    def _spec_pref_pt(model, pt):
+        buf = getattr(model, "_chunk_full_page_table_buf", None)
+        if buf is None:
+            return pt
+        nb = int(buf.shape[-1])
+        if pt.shape[1] >= nb:
+            return pt[:, :nb]
+        return torch.cat([pt, torch.zeros(1, nb - pt.shape[1], dtype=torch.int32)], dim=1)
+
     # ------------------------------------------------------------------ prefill: capture the prompt taps
+    def _spec_ready(self):
+        """True once the session is armed; False for the base warmup's own forwards (they must pass
+        through to the plain path); raises if a request arrives without a session, since the declared
+        block-output contract could not be honoured (a width mismatch would kill the engine later)."""
+        if self._spec is not None:
+            return True
+        if self._in_warmup:
+            return False
+        raise RuntimeError(
+            "Qwen36DFlash: speculative session not armed -- the plugin's decode warmup (enable_model_warmup "
+            "with decode traces) did not run, but the block-output contract is declared; serve with "
+            "warmup on, or QWEN36_DRAFTER=mtp for plain decode"
+        )
+
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
-        if _W <= 1 or self._spec is None:
+        if _W <= 1 or not self._spec_ready():
             return super().prefill_forward(tokens, page_table, kv_cache, prompt_lens, **kwargs)
         model = self.model[0]
         # B=1 serving: a new prompt means the previous request is gone (finished or aborted).
@@ -270,7 +344,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
 
     # ------------------------------------------------------------------ decode: one block per solo step
     def decode_forward(self, *args, **kwargs):
-        if _W <= 1 or self._spec is None:
+        if _W <= 1 or not self._spec_ready():
             return super().decode_forward(*args, **kwargs)
         tokens = kwargs.get("tokens", args[0] if args else None)
         start_pos = kwargs.get("start_pos", args[1] if len(args) > 1 else None)
