@@ -467,6 +467,9 @@ TEST_F(SwiGLUBackwardTest, BackwardAccuracy_2x1x32x128) {
 TEST_F(SwiGLUBackwardTest, BackwardAccuracy_4x1x64x256) {
     CompareSwiGLUBackwardAgainstReference({4, 1, 64, 256}, 256);
 }
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_MultiBatchNonAlignedSequence) {
+    CompareSwiGLUBackwardAgainstReference({2, 1, 48, 32}, 32);
+}
 TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_2x1x128x512) {
     CompareSwiGLUBackwardAgainstReference({2, 1, 128, 512}, 512);
 }
