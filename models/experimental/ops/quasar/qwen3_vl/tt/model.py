@@ -495,6 +495,7 @@ class Transformer(TTTransformer):
     # eagerly so the all-gather re-acquires a fresh multi_device_global_semaphore each
     # step instead of reusing a stale one frozen into a captured trace.
     _tt_vllm_always_refresh_decode_trace_inputs = True
+    _tt_supports_decode_token_feedback = False
     _tt_disable_sampling_trace = True
 
     def __init__(
