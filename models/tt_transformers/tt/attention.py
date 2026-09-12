@@ -1012,7 +1012,13 @@ class Attention(LightweightModule):
                 core_grid=ttnn.CoreGrid(y=4, x=8) if self.TG else None,
                 program_config=self.args.get_attn_wo_program_config(Mode.DECODE, 1, self.prefetcher),
                 memory_config=self.args.get_attn_wo_output_mem_config(Mode.DECODE, self.prefetcher),
-                dtype=ttnn.bfloat8_b if self.TG else None,
+                # wo's only consumer is the all-reduce below, and that collective is
+                # byte-bound at decode's one-token payload: the MLP's bf8_b reduction runs
+                # 11.9 us/layer against 17.3 for this bf16 one on the same shape. Pack the
+                # projection straight to the CCL dtype -- no typecast op, since the matmul
+                # packs the narrower format itself, and only this layer's contribution is
+                # quantized (the residual stream it is added into stays bf16).
+                dtype=ttnn.bfloat8_b if self.TG else self.ccl_dtype,
                 compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
                 global_cb=self.prefetcher.global_cb if self.prefetcher is not None else None,
                 sub_device_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
