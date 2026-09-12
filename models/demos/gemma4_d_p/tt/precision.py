@@ -5,7 +5,6 @@
 
 import json
 import os
-import re
 
 import ttnn
 
@@ -65,25 +64,14 @@ class Gemma4Precision:
         model_path: full path to the HF checkpoint; we key on the basename.
         mesh_shape: (rows, cols) tuple, formatted as "RxC" for the JSON key.
         """
-        path = str(model_path).rstrip("/")
-        model_key = os.path.basename(path)
-        # Under HF_HUB_OFFLINE vLLM replaces the repo id with the resolved
-        # snapshot directory (.../models--{org}--{name}/snapshots/{hash}), so
-        # the basename is the snapshot hash and the variant lookup silently
-        # misses every override (31B then loads all-bf16: +~7.9 GB/chip at
-        # tp=4, which OOM'd the QB2 vLLM CI cell at 256k context). Recover the
-        # repo basename from the hub layout.
-        hub_match = re.search(r"models--[^/]+--([^/]+)/snapshots/[^/]+$", path)
-        if hub_match:
-            model_key = hub_match.group(1)
-        mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
-
         try:
             with open(_PATH) as f:
                 table = json.load(f)
         except FileNotFoundError:
             return cls({})
 
+        model_key = os.path.basename(str(model_path).rstrip("/"))
+        mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
         model_entry = table.get(model_key)
         if not model_entry:
             return cls({})
