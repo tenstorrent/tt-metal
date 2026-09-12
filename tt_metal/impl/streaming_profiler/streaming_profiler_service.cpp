@@ -7,6 +7,9 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <deque>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -19,6 +22,7 @@
 #include "llrt/rtoptions.hpp"
 #include "impl/streaming_profiler/streaming_profiler_decode.hpp"
 #include "impl/streaming_profiler/streaming_profiler_ops_csv.hpp"
+#include "impl/streaming_profiler/streaming_profiler_sync_correction.hpp"
 #include "impl/streaming_profiler/streaming_profiler_tracy.hpp"
 #include "impl/streaming_profiler/streaming_profiler_zone_csv.hpp"
 
@@ -40,6 +44,8 @@ struct Service::AttachedStream {
     uint64_t cursor = 0;   // bytes, absolute: the next frame this consumer reads
     uint64_t dropped = 0;  // bytes of frames this consumer never saw
     uint64_t stalls_reported = 0;
+    uint32_t chip = 0;
+    bool blocked = false;  // within one drain: a batch of this stream waits, so its later ones wait too
 };
 struct Service::Attached {
     Producer* producer = nullptr;
@@ -49,6 +55,76 @@ struct Service::Attached {
 
 // Frames decoded per delivery; bounds the consumer's scratch and the callback's batch.
 constexpr uint32_t kBatchFrames = 64;
+
+namespace {
+
+// A consumer's decoded records live in three arenas (zones, events, timestamped data). A batch keeps its ranges until
+// it is delivered and batches are released in decode order, so each arena is a ring whose free space runs from the
+// write position to the oldest live range; the stretch a wrap leaves dead at the end is skipped once the tail
+// reaches it. Pages are touched only as far as batches ever reached. Sized for the records a waiting consumer holds
+// during the sync's cover latency (a few ms) at the highest ingest rates (records are ~3x their frame bytes), and
+// well past one batch's worst case (64 full frames: 4.1 MB of records per kind, 4.8 MB of data).
+constexpr size_t kZonesArenaBytes = size_t{128} << 20;
+constexpr size_t kEventsArenaBytes = size_t{64} << 20;
+constexpr size_t kDataArenaBytes = size_t{64} << 20;
+// A batch parked this long is delivered regardless: its chip's cover stopped advancing (a link that never solved, a
+// starved sync consumer), and records should not wait on it forever.
+constexpr int64_t kMaxParkNs = 1'000'000'000;
+
+struct Arena {
+    std::unique_ptr<uint8_t[]> buf;
+    size_t cap = 0;
+    size_t head = 0;  // next write
+    size_t tail = 0;  // oldest live byte
+    size_t wrap = 0;  // end of the live stretch before the jump to 0, while wrapped
+    size_t live = 0;  // ranges committed and not yet released
+    bool wrapped = false;
+    explicit Arena(size_t bytes) : buf(std::make_unique_for_overwrite<uint8_t[]>(bytes)), cap(bytes) {}
+    // `n` contiguous bytes at the write position, or nullptr when the live ranges leave no such room.
+    uint8_t* reserve(size_t n) {
+        if (live == 0) {
+            head = tail = 0;
+            wrapped = false;
+        }
+        if (!wrapped) {
+            if (head + n <= cap) {
+                return buf.get() + head;
+            }
+            if (n <= tail) {
+                wrap = head;
+                head = 0;
+                wrapped = true;
+                return buf.get();
+            }
+            return nullptr;
+        }
+        return head + n <= tail ? buf.get() + head : nullptr;
+    }
+    // An empty range owns nothing: it is not live, so the range before it still ends where the next one starts.
+    void commit(uint8_t* p, size_t used) {
+        head = static_cast<size_t>(p - buf.get()) + used;
+        live += used != 0;
+    }
+    // Frees the oldest live range.
+    void release(uint8_t* p, size_t used) {
+        if (used == 0) {
+            return;
+        }
+        tail = static_cast<size_t>(p - buf.get()) + used;
+        live--;
+        if (wrapped && tail == wrap) {
+            tail = 0;
+            wrapped = false;
+        }
+    }
+};
+
+int64_t now_ns() {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+}  // namespace
 
 struct Service::Consumer {
     std::string name;
@@ -62,6 +138,7 @@ struct Service::Consumer {
     std::mutex control_mu;
     std::vector<std::pair<Producer*, bool>> control;  // (producer, attach), in order
     std::atomic<uint64_t> dropped{0};
+    std::atomic<uint64_t> unplaced{0};  // batches delivered before the sync covered them
 };
 
 Service::Service() { init_site_registry(); }
@@ -133,10 +210,14 @@ void Service::attach_producer(Producer& producer) {
         std::find(producers_.begin(), producers_.end(), &producer) == producers_.end(),
         "streaming profiler: producer attached twice");
     producers_.push_back(&producer);
-    for (auto& c : consumers_) {
-        post_control(*c, &producer, true);
+    for (const bool waits : {false, true}) {
+        for (auto& c : consumers_) {
+            if (c->hooks.waits_for_sync == waits) {
+                post_control(*c, &producer, true);
+            }
+        }
+        wait_acks(lk);
     }
-    wait_acks(lk);
 }
 
 void Service::detach_producer(Producer& producer) {
@@ -146,10 +227,14 @@ void Service::detach_producer(Producer& producer) {
         std::unique_lock<std::mutex> lk(mu_);
         auto it = std::find(producers_.begin(), producers_.end(), &producer);
         TT_FATAL(it != producers_.end(), "streaming profiler: detaching a producer that is not attached");
-        for (auto& c : consumers_) {
-            post_control(*c, &producer, false);
+        for (const bool waits : {false, true}) {
+            for (auto& c : consumers_) {
+                if (c->hooks.waits_for_sync == waits) {
+                    post_control(*c, &producer, false);
+                }
+            }
+            wait_acks(lk);
         }
-        wait_acks(lk);
         producers_.erase(it);
         last = producers_.empty();
     }
@@ -175,6 +260,13 @@ void Service::warn_missed(const Consumer& c) {
     if (const uint64_t dropped = c.dropped.load(std::memory_order_relaxed); dropped != 0) {
         log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" missed {} bytes of frames", c.name, dropped);
     }
+    if (const uint64_t unplaced = c.unplaced.load(std::memory_order_relaxed); unplaced != 0) {
+        log_warning(
+            tt::LogMetal,
+            "[streaming profiler] consumer \"{}\" received {} batches before the d2d sync covered their records",
+            c.name,
+            unplaced);
+    }
 }
 
 void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptions) {
@@ -183,8 +275,9 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
             tracy_ = std::make_unique<TracySink>(*this);
         }
         {
-            // Device<->device sync: consumes only the PP_CLOCK samples (idle-eth trackers and link stamps), fits
-            // at capture end. Its batch callback is a no-op; the decode pass is what routes the samples to it.
+            // Device<->device sync: consumes only the PP_CLOCK samples (idle-eth trackers and link stamps) and
+            // publishes the corrections the other consumers wait on. Its batch callback is a no-op; the decode pass
+            // is what routes the samples to it.
             auto c = std::make_shared<D2dSyncConsumer>();
             add_consumer(
                 "d2d-sync",
@@ -192,7 +285,8 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
                 ConsumerHooks{
                     .on_attach = [c](const CaptureContext& ctx) { c->on_attach(ctx); },
                     .clock_sink = [c](const ClockSample& cs) { c->on_clock(cs); },
-                    .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); }});
+                    .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); },
+                    .waits_for_sync = false});
         }
         auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
             using B = typename C::Batch;
@@ -218,25 +312,35 @@ void Service::consumer_thread(Consumer& c) {
     tracy::SetThreadName(name.c_str());
     set_os_thread_name(name);
     t_in_consumer = true;
-    std::vector<Attached> attached;
-    const size_t rec_bytes =
-        (size_t{kBatchFrames} * kFrameRecsReserve + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
-    const size_t data_bytes = size_t{kBatchFrames} * kFrameDataBytesReserve;
-    auto zones_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
-    auto events_buf = std::make_unique_for_overwrite<uint8_t[]>(rec_bytes);
-    auto data_buf = std::make_unique_for_overwrite<uint8_t[]>(data_bytes);
+    std::vector<std::unique_ptr<Attached>> attached;
+    Arena zones_arena(kZonesArenaBytes), events_arena(kEventsArenaBytes), data_arena(kDataArenaBytes);
+    // A decoded batch, waiting in the arenas until the sync covers its newest record (or at once, for a consumer
+    // that does not wait). Released in decode order once delivered; `a` is null once its producer detached.
+    struct Parked {
+        Attached* a;
+        uint32_t stream;
+        bool delivered;
+        uint8_t* zones;
+        uint8_t* events;
+        uint8_t* data;
+        StreamDecoder::Produced n;
+        uint64_t dropped;
+        uint64_t stalls;
+        int64_t parked_at_ns;
+    };
+    std::deque<Parked> parked;
     constexpr size_t kFramesBytes = size_t{kBatchFrames} * profiler::kSpscMaxFrameWords * 4;
     std::array<uint32_t, kBatchFrames> frame_words;
     auto frames_buf = std::make_unique_for_overwrite<std::byte[]>(kFramesBytes);
-
     auto attach = [&](Producer* p) {
-        Attached a;
-        a.producer = p;
+        auto a = std::make_unique<Attached>();
+        a->producer = p;
         const CaptureContext& ctx = p->capture_context();
         for (const ProducerStream& ps : p->streams()) {
             auto s = std::make_unique<AttachedStream>();
             s->cursor = ps.walked->load(std::memory_order_acquire);
             const CaptureContext::Device& dev = ctx.devices[ps.dev];
+            s->chip = dev.chip_id;
             s->state.reset(dev.lanes.size() / profiler::kSpscNRiscDecode);
             s->state.core_of_xy.load(dev.core_xy);
             s->lanes.reserve(dev.lanes.size());
@@ -259,35 +363,100 @@ void Service::consumer_thread(Consumer& c) {
                     static_cast<Consumer*>(ctx)->hooks.clock_sink(cs);
                 };
             }
-            a.streams.push_back(std::move(s));
+            a->streams.push_back(std::move(s));
         }
         if (c.hooks.on_attach) {
             c.hooks.on_attach(ctx);
         }
-        a.capture = ++c.captures;
+        a->capture = ++c.captures;
         attached.push_back(std::move(a));
     };
-
-    auto deliver = [&](Attached& a, AttachedStream& s, const StreamDecoder::Produced& n, uint64_t dropped) {
+    auto deliver = [&](Parked& pk) {
         api::Batch<api::RecordType::All> b;
-        b.zones_ = std::span<const api::Zone>(reinterpret_cast<const api::Zone*>(zones_buf.get()), n.zones);
-        b.events_ = std::span<const api::Event>(reinterpret_cast<const api::Event*>(events_buf.get()), n.events);
+        b.zones_ = std::span<const api::Zone>(reinterpret_cast<const api::Zone*>(pk.zones), pk.n.zones);
+        b.events_ = std::span<const api::Event>(reinterpret_cast<const api::Event*>(pk.events), pk.n.events);
         b.timestamped_data_ = std::ranges::subrange(
-            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get())),
-            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(data_buf.get()) + n.data_bytes));
-        b.dropped_ = dropped;
-        b.stall_count_ = s.dec.stall_zones - s.stalls_reported;
-        s.stalls_reported = s.dec.stall_zones;
+            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(pk.data)),
+            api::TimestampedData::iterator(reinterpret_cast<const std::byte*>(pk.data) + pk.n.data_bytes));
+        b.dropped_ = pk.dropped;
+        b.stall_count_ = pk.stalls;
         try {
-            c.cb(b, a.capture);
+            c.cb(b, pk.a->capture);
         } catch (const std::exception& ex) {
             log_warning(tt::LogMetal, "[streaming profiler] consumer \"{}\" threw: {}", c.name, ex.what());
         }
-        s.dec.commit();
+        pk.delivered = true;
     };
-
-    // One delivery of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position.
-    // False when the stream had nothing new.
+    auto release_delivered = [&] {
+        while (!parked.empty() && parked.front().delivered) {
+            const Parked& pk = parked.front();
+            zones_arena.release(pk.zones, size_t{pk.n.zones} * profiler::kSpscRecBytes);
+            events_arena.release(pk.events, size_t{pk.n.events} * profiler::kSpscRecBytes);
+            data_arena.release(pk.data, pk.n.data_bytes);
+            parked.pop_front();
+        }
+    };
+    // Delivers, per stream in decode order, every batch the sync covers, then frees behind the delivered ones.
+    auto drain = [&] {
+        bool any = false;
+        for (auto& a : attached) {
+            for (auto& s : a->streams) {
+                s->blocked = false;
+            }
+        }
+        int64_t now = 0;
+        for (Parked& pk : parked) {
+            if (pk.delivered) {
+                continue;
+            }
+            AttachedStream& s = *pk.a->streams[pk.stream];
+            if (s.blocked) {
+                continue;
+            }
+            if (c.hooks.waits_for_sync && pk.n.newest_ns > SyncCorrections::cover_ns(s.chip)) {
+                if (now == 0) {
+                    now = now_ns();
+                }
+                if (now - pk.parked_at_ns < kMaxParkNs) {
+                    s.blocked = true;
+                    continue;
+                }
+                c.unplaced.fetch_add(1, std::memory_order_relaxed);
+            }
+            deliver(pk);
+            any = true;
+        }
+        release_delivered();
+        return any;
+    };
+    // Room for a batch of `words` frame words in every arena; the oldest waiting batch goes out uncovered when the
+    // arenas are full.
+    auto reserve = [&](size_t words, uint32_t frames, uint8_t*& z, uint8_t*& e, uint8_t*& d) {
+        const size_t rec_bytes = (words / 2 + profiler::kSpscSinkSlackRecs) * profiler::kSpscRecBytes;
+        const size_t data_bytes = rec_bytes + words * 4 + size_t{32} * frames;
+        for (;;) {
+            z = zones_arena.reserve(rec_bytes);
+            e = events_arena.reserve(rec_bytes);
+            d = data_arena.reserve(data_bytes);
+            if (z != nullptr && e != nullptr && d != nullptr) {
+                return;
+            }
+            TT_FATAL(
+                !parked.empty(),
+                "streaming profiler: a batch of {} frame words does not fit a consumer's arenas",
+                words);
+            for (Parked& pk : parked) {
+                if (!pk.delivered) {
+                    deliver(pk);
+                    c.unplaced.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                }
+            }
+            release_delivered();
+        }
+    };
+    // One batch of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position and
+    // decoded into the arenas. False when the stream had nothing new.
     auto read = [&](Attached& a, AttachedStream& s, uint32_t stream_index) {
         const ProducerStream& ps = a.producer->streams()[stream_index];
         const Walked w = walk_frames(
@@ -303,44 +472,73 @@ void Service::consumer_thread(Consumer& c) {
         }
         s.cursor = w.cursor;
         s.dropped += w.dropped;
-        StreamDecoder::Produced n{0, 0, 0};
+        size_t words = 0;
+        for (uint32_t i = 0; i < w.frames; i++) {
+            words += frame_words[i];
+        }
+        uint8_t *z = nullptr, *e = nullptr, *d = nullptr;
+        reserve(words, w.frames, z, e, d);
+        StreamDecoder::Produced n{0, 0, 0, std::numeric_limits<int64_t>::min()};
         const std::byte* p = frames_buf.get();
         for (uint32_t i = 0; i < w.frames; i++) {
             const uint32_t fw = frame_words[i];
             const auto out = s.dec.decode_frame(
                 reinterpret_cast<const uint32_t*>(p),
                 fw,
-                {zones_buf.get() + size_t{n.zones} * profiler::kSpscRecBytes,
-                 events_buf.get() + size_t{n.events} * profiler::kSpscRecBytes,
-                 data_buf.get() + n.data_bytes});
+                {z + size_t{n.zones} * profiler::kSpscRecBytes,
+                 e + size_t{n.events} * profiler::kSpscRecBytes,
+                 d + n.data_bytes});
             n.zones += out.zones;
             n.events += out.events;
             n.data_bytes += out.data_bytes;
+            n.newest_ns = std::max(n.newest_ns, out.newest_ns);
             p += size_t{fw} * 4;
         }
-        deliver(a, s, n, w.dropped);
+        s.dec.commit();
+        zones_arena.commit(z, size_t{n.zones} * profiler::kSpscRecBytes);
+        events_arena.commit(e, size_t{n.events} * profiler::kSpscRecBytes);
+        data_arena.commit(d, n.data_bytes);
+        parked.push_back(Parked{
+            .a = &a,
+            .stream = stream_index,
+            .delivered = false,
+            .zones = z,
+            .events = e,
+            .data = d,
+            .n = n,
+            .dropped = w.dropped,
+            .stalls = s.dec.stall_zones - s.stalls_reported,
+            .parked_at_ns = c.hooks.waits_for_sync ? now_ns() : 0});
+        s.stalls_reported = s.dec.stall_zones;
         return true;
     };
-    // One delivery per stream per round, so no stream's ring laps while an earlier one is drained to empty.
+    // One batch per stream per pass, so no stream's ring laps while an earlier one is drained to empty.
     auto pass = [&](Attached& a) {
         bool any = false;
-        for (bool progress = true; progress;) {
-            progress = false;
-            for (uint32_t i = 0; i < a.streams.size(); i++) {
-                progress |= read(a, *a.streams[i], i);
-            }
-            any |= progress;
+        for (uint32_t i = 0; i < a.streams.size(); i++) {
+            any |= read(a, *a.streams[i], i);
         }
         return any;
     };
-
     auto detach = [&](Producer* p) {
-        auto it = std::find_if(attached.begin(), attached.end(), [&](const Attached& a) { return a.producer == p; });
+        auto it = std::find_if(attached.begin(), attached.end(), [&](const auto& a) { return a->producer == p; });
         if (it == attached.end()) {
             return;
         }
-        Attached& a = *it;
+        Attached& a = **it;
         while (pass(a)) {
+        }
+        // The producer's waiting batches go out now: the sync's consumer detached first, so their covers are final.
+        for (Parked& pk : parked) {
+            if (!pk.delivered && pk.a == &a) {
+                deliver(pk);
+            }
+        }
+        release_delivered();
+        for (Parked& pk : parked) {
+            if (pk.a == &a) {
+                pk.a = nullptr;
+            }
         }
         if (c.hooks.on_capture_end) {
             c.hooks.on_capture_end(p->capture_context());
@@ -351,7 +549,6 @@ void Service::consumer_thread(Consumer& c) {
         }
         attached.erase(it);
     };
-
     auto handle_control = [&](bool run) {
         std::vector<std::pair<Producer*, bool>> control;
         {
@@ -367,12 +564,12 @@ void Service::consumer_thread(Consumer& c) {
         pending_acks_ -= control.size();
         ack_cv_.notify_all();
     };
-
     auto pass_all = [&] {
         bool any = false;
-        for (Attached& a : attached) {
-            any |= pass(a);
+        for (auto& a : attached) {
+            any |= pass(*a);
         }
+        any |= drain();
         return any;
     };
     IdleBackoff backoff(0);
@@ -395,8 +592,8 @@ void Service::consumer_thread(Consumer& c) {
         wait_wake(seen);
     }
     // Stopped mid-capture: the readers go before the queues they read.
-    for (const Attached& a : attached) {
-        for (const auto& s : a.streams) {
+    for (const auto& a : attached) {
+        for (const auto& s : a->streams) {
             c.dropped.fetch_add(s->dropped, std::memory_order_relaxed);
         }
     }

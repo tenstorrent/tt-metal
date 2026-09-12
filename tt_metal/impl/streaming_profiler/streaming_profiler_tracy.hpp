@@ -5,7 +5,6 @@
 #pragma once
 
 #include <array>
-#include <deque>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -58,16 +57,6 @@ private:
     };
 
     void on_batch(const Batch& batch, uint64_t capture);
-    // Records wait here until the d2d corrections cover them (SyncCorrections::published_until_ns for their chip),
-    // so each is placed against nodes on both sides of it instead of the last segment extended; the final publish
-    // at capture end releases the rest. TimestampedData carries its payload, so it is held as bytes.
-    struct Held {
-        std::deque<experimental::streaming_profiler::Zone> zones;
-        std::deque<experimental::streaming_profiler::Event> events;
-        std::deque<std::vector<std::byte>> data;
-    };
-    std::map<uint16_t, Held> held_;
-    void flush_held(bool all);
     // TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY: the trace carries the clock and d2d sync plots and no records,
     // so an hours-long stress capture stays a few MB.
     const bool plots_only_ = std::getenv("TT_METAL_STREAMING_PROFILER_TRACY_PLOTS_ONLY") != nullptr;
@@ -102,8 +91,8 @@ private:
         uint32_t runtime_id,
         std::span<const uint64_t> values);
     // Device<->device sync plots, all RATES. Per chip and per sync kind (the 3 us LOCAL tracker, the LINK stamps
-    // at the rounds' cadence): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that scales its
-    // wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
+    // at the rounds' cadence): the chip's applied AICLK over the ROOT chip's at the same instant -- the factor that
+    // scales its wall-clock rate onto the root's; the root reads exactly 1. Each stream's AICLK comes from a sliding
     // dwall/drefclk over its PP_CLOCK samples. Plus the cross-chip refclk scale regression the d2d consumer publishes
     // through SyncPlots.
     struct FreqPoint {
@@ -120,7 +109,7 @@ private:
 
     Service& service_;
     ConsumerHandle handle_ = 0;
-    uint64_t capture_ = 0;      // the capture the map holds for; a new one starts a new map
+    uint64_t capture_ = 0;  // the capture the map holds for; a new one starts a new map
     // Read only from the Tracy-enabled paths below, so it is unused in a build without Tracy.
     [[maybe_unused]] int64_t anchor_tracy_ = 0;  // Tracy timer at construction; every context's cpuTime
     // The GPU contexts' origin sits this far before anchor_tracy_, so a record or clock sample from device bring-up,
@@ -130,17 +119,17 @@ private:
     // Records the origin still could not hold (a correction beyond its bound): clamped to the origin and counted;
     // nonzero means a defect upstream, never expected in a healthy capture.
     uint64_t clamped_zones_ = 0, clamped_markers_ = 0, clamped_plot_points_ = 0;
-    Probe base_{};              // taken at construction; every slope is measured against it
+    Probe base_{};  // taken at construction; every slope is measured against it
     std::vector<Segment> segments_;
     int64_t next_refine_ns_ = 0;
     uint64_t lane_key_ = ~uint64_t{0};
     Lane lane_hit_;
     std::unordered_map<uint64_t, CoreEntry> cores_;
     // Keyed by the name's address: a callback's name strings never move or die while it lives.
-    std::vector<SrclocEntry> srcloc_table_;  // open addressing, power-of-two size, at most half full
+    std::vector<SrclocEntry> srcloc_table_;     // open addressing, power-of-two size, at most half full
     [[maybe_unused]] size_t srcloc_count_ = 0;  // ditto: only the Tracy-enabled srcloc path touches it
     std::unordered_map<std::string, const void*> srclocs_;
-    std::vector<DeviceClock> clocks_;  // per device index, for mapping a clock sample's device time to the timeline
+    std::vector<DeviceClock> clocks_;      // per device index, for mapping a clock sample's device time to the timeline
     std::vector<DeviceClock> eth_clocks_;  // per device index, the idle-eth wall anchor for PP_CLOCK samples
     struct PlotSample {
         uint32_t dev;
@@ -149,7 +138,7 @@ private:
         uint64_t ts;
         uint64_t value;  // the refclk reading
     };
-    std::vector<PlotSample> plot_samples_;  // accumulated during the capture, drained in emit_plots()
+    std::vector<PlotSample> plot_samples_;        // accumulated during the capture, drained in emit_plots()
     std::unordered_set<std::string> plot_names_;  // interned: PlotDataAt keys a plot by its name pointer
 };
 
