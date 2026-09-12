@@ -656,6 +656,14 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
         torch.manual_seed(0)
         latent = torch.randn(1, als.frames, pipeline.in_channels, dtype=torch.float32) * 0.92 + 0.2
 
+    # AUDIO_WARM_N=<tokens>: first decode an all-zero latent of that length, the way the distilled
+    # pipeline's warmup does at its audio bucket, so the real decode below runs as the second shape
+    # this process has seen. Exposes state the decoder carries across input lengths.
+    warm_n = int(os.environ.get("AUDIO_WARM_N", "0"))
+    if warm_n:
+        logger.info(f"AUDIO_WARM_N={warm_n}: eager warm decode at {warm_n} tokens before the {als.frames}-token decode")
+        pipeline._warmup_audio_decode(torch.zeros(1, warm_n, pipeline.in_channels), num_frames, fps=24.0)
+
     t0 = time.perf_counter()
     audio = pipeline.decode_audio(latent, num_frames, fps=24.0)  # cold: weight load + compile (+ capture)
     cold_ms = (time.perf_counter() - t0) * 1000
@@ -699,7 +707,7 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
     mel = pipeline.tt_mel_decoder(audio_spatial)  # TT mel, fed to both TT and torch
     w_conv = pipeline.tt_vocoder_with_bwe(mel).squeeze(0).float()
     with torch.no_grad():
-        w_torch = _build_torch_stage_c_real(ckpt)(mel.float()).squeeze(0).float()
+        w_torch = _build_torch_stage_c_real(pipeline.checkpoint_name)(mel.float()).squeeze(0).float()
     _save(w_conv, f"girl_audio_conv1d{'_traced' if traced else ''}.wav")
     _save(w_torch, "girl_audio_torch.wav")
 

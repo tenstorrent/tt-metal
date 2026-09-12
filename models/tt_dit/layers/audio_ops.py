@@ -288,9 +288,12 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
     K = len(taps)
     T_out = (T_pad - K) // stride + 1
 
-    # Cache the prepared (tilized/sharded) weight to keep the on-device path; key on
-    # (C, stride, taps) since the upsampler reuses one cache for distinct sub-tap vectors.
-    wkey = ("w", C, stride, K, tuple(taps))
+    # Cache the prepared (tilized/sharded) weight to keep the on-device path. ttnn prepares conv
+    # weights for one input geometry (input_length and batch fix the HEIGHT_SHARDED parallelization),
+    # so the key carries (B, T_pad) as well as (C, stride, taps): a weight prepared for one clip length
+    # reused at another produces garbage without erroring. The upsampler reuses one cache for
+    # distinct sub-tap vectors, hence taps in the key.
+    wkey = ("w", C, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:
@@ -419,7 +422,7 @@ def _depthwise_tap_conv1d_chunked(
     the mantissa to TF32.
     """
     assert (chunk * 4) % 64 == 0, f"C-chunk {chunk} would make ttnn.concat(dim=-1) lossy in fp32"
-    wkey = ("w", chunk, stride, K, tuple(taps))
+    wkey = ("w", chunk, stride, K, tuple(taps), B, T_pad)
     weight = cache.get(wkey)
     prepared = weight is not None
     if weight is None:

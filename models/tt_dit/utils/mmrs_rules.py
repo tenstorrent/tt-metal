@@ -33,7 +33,11 @@ K_block = the smallest divisor of K_tiles keeping the K-chunk count (K_tiles / K
 N_block = 8, except in the short-N regime (N_tiles <= 128, which separates LTX 4096x4096 from
   Wan/H3/Flux at 160/168/192 without naming the family): there N_block = 6 while pcM < 24, and
   N_block = 16 (one block covering the core's width) above, walking K_block down its divisor
-  ladder until the combo fits the L1 budget -- at K_block = 8 the wide-N CBs are L1-illegal.
+  ladder until the combo fits the L1 budget. The budget counts the circular buffers AND the
+  op's rolling L1 window over the matmul output (`mm_window_blocks` M blocks per core, the
+  FusedMMRSConfig default); if no K_block fits, the branch falls back to N_block = 6 and
+  re-fits K there. For N = 4096 the wide-N CBs plus the window exceed L1 at every K_block, so
+  that family lands on N_block = 6 at any M.
 
 Subblock: 2x2 when both blocks are even, else the largest h*w <= 4 dividing both (fp32 dest
   accumulation halves the DEST register file to 4 tiles).
@@ -62,9 +66,14 @@ K_BLOCK_MIN, K_BLOCK_MAX = 2, 16
 # (the two are within ~1.5% of each other there), so the exact threshold is not knife-edge.
 WIDE_N_PCM = 24
 
-# L1 circular-buffer budget used to gate the wide-N branch (KB). Blackhole usable L1 is
-# ~1464 KB; the margin covers kernel/firmware overhead.
+# L1 budget the short-N branches must fit in (KB): circular buffers plus the matmul-output
+# window. Blackhole usable L1 is ~1464 KB; the margin covers kernel/firmware overhead.
 BLACKHOLE_L1_BUDGET_KB = 1400
+
+# M blocks of matmul output the fused op keeps resident in L1 per core (FusedMMRSConfig's
+# mm_window_blocks default). The shard is allocated as an L1 buffer next to the circular buffers,
+# so a blocking that budgets the CBs alone can still clash with it.
+MM_WINDOW_BLOCKS = 2
 
 
 def estimate_l1_kb(m_blk: int, k_blk: int, n_blk: int) -> int:
@@ -91,8 +100,26 @@ def estimate_l1_kb(m_blk: int, k_blk: int, n_blk: int) -> int:
     )
 
 
+def estimate_window_kb(m_blk: int, n_tiles: int, window_blocks: int = MM_WINDOW_BLOCKS) -> int:
+    """L1 footprint in KB of the fused op's resident matmul-output window on one core:
+    ``window_blocks * M_block`` tile-rows by the core's N tiles (N spread over the grid's x
+    dimension; the fused op never transposes), bf16."""
+    bf16_kb = 2
+    return window_blocks * m_blk * _ceil(n_tiles, MM_GRID[0]) * bf16_kb
+
+
 def _ceil(a: int, b: int) -> int:
     return -(-a // b)
+
+
+def _fit_k_block(m_blk: int, k_blk: int, n_blk: int, k_divs: list[int], n_tiles: int, l1_budget_kb: int) -> int | None:
+    """Largest K_block <= ``k_blk`` on the divisor ladder whose CBs plus window fit the budget,
+    or None when none does."""
+    window_kb = estimate_window_kb(m_blk, n_tiles)
+    for k in sorted((d for d in k_divs if d <= k_blk), reverse=True):
+        if estimate_l1_kb(m_blk, k, n_blk) + window_kb <= l1_budget_kb:
+            return k
+    return None
 
 
 def _k_divisors(k_tiles: int) -> list[int]:
@@ -151,15 +178,13 @@ def pick_v23(
 
     if n_tiles <= 128:
         # Short-N regime (LTX-class shapes).
-        if pc_m < WIDE_N_PCM:
-            n_blk = 6
-        else:
-            n_blk = 16
-            while estimate_l1_kb(m_blk, k_blk, n_blk) > l1_budget_kb:
-                lower = [d for d in k_divs if d < k_blk]
-                if not lower:
-                    break
-                k_blk = lower[-1]
+        n_blk = 6
+        if pc_m >= WIDE_N_PCM:
+            wide_k = _fit_k_block(m_blk, k_blk, 16, k_divs, n_tiles, l1_budget_kb)
+            if wide_k is not None:
+                n_blk, k_blk = 16, wide_k
+        if n_blk == 6:
+            k_blk = _fit_k_block(m_blk, k_blk, n_blk, k_divs, n_tiles, l1_budget_kb) or k_blk
     else:
         n_blk = 8
 

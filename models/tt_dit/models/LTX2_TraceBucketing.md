@@ -210,12 +210,11 @@ and the fused matmul reduce-scatter buffers add ~N x 1 KB x 2 per rung. This is 
 - **Audio branch nondeterminism (pre-existing).** The transformer block's audio output differs
   run to run with identical inputs (see test 3). Worth a separate investigation; suspects are the
   gathered-K/V masked audio self-attention or the audio FFN.
-- **`utils/mmrs_rules.py` wide-N branch (pre-existing).** For short-N shapes with per-core
-  M >= 24 tiles it picks `N_block = 16` while budgeting only the circular buffers; the windowed
-  L1 output handoff then clashes ("Statically allocated circular buffers ... clash with L1
-  buffers"). Worked around with explicit table entries for the LTX rung shapes; the rule should
-  either include the window in its budget or set `mm_window_blocks=None` on that branch. The
-  four new entries are unswept (they reuse the swept stage-2 blocking) and can be tuned with
+- **`utils/mmrs_rules.py` wide-N branch.** Its L1 budget now includes the fused op's rolling
+  matmul-output window, and it falls back to `N_block = 6` when wide-N cannot fit (for N = 4096 it
+  never can), so any per-device M resolves to a legal blocking; `tests/unit/test_mmrs_rules.py`
+  checks every tile-aligned M up to 40k. The four explicit LTX rung entries in `utils/matmul.py`
+  remain and are unswept (they reuse the swept stage-2 blocking); tune with
   `sweep_mm_block_sizes.py`.
 - **Upsampler / VAE decode for non-hot shapes run eagerly.** Correct, but this is now the
   dominant per-request cost for non-hot configs (600 s for 1080p/25/8 vs 11.9 s for the hot
