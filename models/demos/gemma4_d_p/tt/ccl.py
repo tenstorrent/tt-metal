@@ -11,31 +11,8 @@ from models.common.utility_functions import is_blackhole
 from models.demos.gemma4_d_p.config import MeshConfig
 
 
-def default_num_links():
-    # GEMMA4_NUM_LINKS overrides the CCL link count. Used to test whether the ring
-    # replay deadlock involves the two parallel link workers racing each other.
-    import os as _os
-
-    _forced = _os.environ.get("GEMMA4_NUM_LINKS")
-    if _forced:
-        return int(_forced)
-    return _default_num_links_impl()
-
-
 def _default_num_links_impl():
-    """Default TP-collective link count for the current arch.
-
-    Blackhole boards expose 2 ethernet links between adjacent mesh devices, so
-    reduce-scatter / all-gather can run at ~2x bandwidth vs a single link — and
-    on Gemma4 prefill the per-layer all-reduces are ~31% of device time, so this
-    is the single highest-ROI CCL knob. Wormhole (T3K) defaults to 1 link here
-    (its multi-link tuning needs a separate sweep).
-
-    Override with ``GEMMA4_CCL_NUM_LINKS``.
-    """
-    env = os.environ.get("GEMMA4_CCL_NUM_LINKS")
-    if env is not None:
-        return max(1, int(env))
+    """Return the default link count: two on Blackhole, one otherwise."""
     return 2 if is_blackhole() else 1
 
 
@@ -89,7 +66,7 @@ class CCLManager:
 
     def __init__(self, mesh_device, num_links=None, topology=None):
         if num_links is None:
-            num_links = default_num_links()
+            num_links = _default_num_links_impl()
         if topology is None:
             topology = default_ccl_topology()
         self.mesh_device = mesh_device
@@ -134,12 +111,8 @@ class CCLManager:
         # asserts ccl_core_grid_offset.x < sdpa_grid.x, so both must derive from this
         # same grid (Blackhole is wider than 8x8).
         self.ring_attention_ccl_core_grid_offset = (self.compute_grid_size.x - 1, 0)
-        # THREE, not the usual forward/backward pair. The third is the neighbor-halo
-        # exchange's own counter. With only two, the halo reuses semaphores[0] — the
-        # all-gather's backward semaphore — and lands on the same worker core, so two
-        # protocols with different arrival counts share one counter. The halo's completion
-        # then destroys all-gather increments and the ring deadlocks at depth. See
-        # docs/superpowers/specs/2026-08-06-ring-trace-replay-deadlock.md.
+        # Three semaphores are needed: two for forward/backward all-gather
+        # and one for neighbor-halo exchange.
         self.ring_attention_ccl_semaphore_handles = [
             ttnn.create_global_semaphore(mesh_device, core_range_set, 0) for _ in range(3)
         ]
