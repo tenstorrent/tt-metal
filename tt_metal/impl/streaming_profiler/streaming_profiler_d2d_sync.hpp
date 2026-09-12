@@ -104,6 +104,17 @@ struct LocalClockFit {
             sxy += dx * dy;
             n++;
         }
+        // A sample older than the run's own (handed over from the run before): the sums and the start move, the
+        // newest-sample bookkeeping does not.
+        void add_front(double x, double y) {
+            r_first = std::min(r_first, x);
+            const long double dx = x - ax, dy = y - ay;
+            sx += dx;
+            sy += dy;
+            sxx += dx * dx;
+            sxy += dx * dy;
+            n++;
+        }
         // Takes the newest sample back out; the sums are exact, so this is exact.
         void remove_last() {
             const long double dx = last_x - ax, dy = last_y - ay;
@@ -170,8 +181,7 @@ private:
         const double off_cur = std::abs(y - cur.wall_of_refclk(x));
         if (off_cur < off_prev) {
             prev.remove_last();
-            cur.add(x, y);
-            cur.r_first = std::min(cur.r_first, x);
+            cur.add_front(x, y);
             handed_over++;
         }
     }
@@ -254,7 +264,6 @@ public:
 private:
     struct LocalState {
         LocalClockFit fit;
-        uint64_t next_publish_refclk = 0;
         std::vector<std::pair<uint64_t, uint64_t>> samples;  // (refclk, wall) as received, kept for the CSV dump only
     };
     // One end's stamp of a round: the reading (refclk ticks for software stamps, ns for hardware ones) and the eth
@@ -360,29 +369,47 @@ private:
     std::vector<std::vector<SyncPlotPoint>> live_err_;
     std::vector<size_t> live_done_;
 
-    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at.
-    // Segments interpolate between nodes.
+    // A correction node: at host time H the chip's record time moves by d (ns); r is the refclk it was placed at and
+    // tangent the correction's slope along the run it sits on (ns per ns), the map past the newest node.
     struct Node {
-        double H, d, r;
+        double H, d, r, tangent;
     };
-    // Nodes already published for a chip are frozen: the sink has placed records against them, so a later publish
-    // only appends nodes beyond them, at the newest estimate's values.
-    // How far a series' nodes reach: the run boundaries (knots) already published and the refclk of its last node.
-    struct SeriesCursor {
+    // One published series of a chip. Its nodes are frozen (consumers have placed records against them), so a
+    // publish only appends beyond them; `cover_H` is how far the newest node's tangent has been confirmed by the
+    // fit, `knots` how many run boundaries have their nodes, `last_r` the refclk of the newest node or cover.
+    struct Series {
+        std::vector<Node> nodes;
         size_t knots = 0;
         double last_r = -1.0;
+        double cover_H = -1.0;
+        double cover_r = -1.0;
+        size_t dropped = 0;   // nodes refused: behind the frozen series, or not a correction below one ns per ns
+        size_t extended = 0;  // frontier samples that only advanced the cover
     };
     struct Published {
-        std::vector<Node> linked, local;
-        size_t dropped = 0;  // nodes with a non-finite or absurd correction, refused
-        SeriesCursor linked_cur, local_cur;
+        Series linked, local;
     };
     std::map<uint32_t, Published> published_;
     std::map<uint32_t, Frame> frames_;
-    // The published form of a node series: host time rounded to the ns, a later node that rounds onto the same ns
-    // dropped (the correction cannot differ measurably within one ns).
-    static std::vector<SyncNode> to_published(const std::vector<Node>& nodes);
-    static void append_slewed(std::vector<Node>& frozen, std::vector<Node> fresh, size_t& dropped);
+    // The composed root transforms as of the newest accepted link solution.
+    std::map<uint32_t, RootXf> to_root_;
+    uint64_t solve_gen_ = 0;
+    uint64_t to_root_gen_ = ~0ull;
+    // The nodes a chip's fit yields beyond a series: those at run boundaries, and the open run's frontier.
+    struct Fresh {
+        std::vector<Node> knots;
+        std::optional<Node> frontier;
+        size_t knots_after = 0;  // run boundaries consumed once the knots are placed
+    };
+    template <typename Corr>
+    Fresh fresh_nodes(const Series& s, const LocalClockFit& fit, const DeviceClock& eclk, const Corr& corr) const;
+    // Publishes one chip's series from its fit as it stands; true when the chip's linked cover moved.
+    bool publish_dev(uint32_t dev);
+    // Appends the knots and, if the frontier left the newest tangent by more than kFreezeNs, freezes the tangent where
+    // it stood and appends the frontier; otherwise advances the cover. True when the cover moved.
+    bool advance(Series& s, SyncSeries kind, uint32_t chip, Fresh fresh);
+    void freeze_append(Series& s, SyncSeries kind, uint32_t chip, const Node& n);
+    void push_node(Series& s, SyncSeries kind, uint32_t chip, const Node& n);
     CaptureContext ctx_;
     std::map<uint32_t, LocalState> local_;  // device index -> local fit
     const char* const csv_path_ = std::getenv("TT_METAL_STREAMING_PROFILER_D2D_CSV");
@@ -398,7 +425,12 @@ private:
     // delayed on one leg, and its offset is off by that same amount; the delay itself holds to 0.5 ns.
     static constexpr double kPathDevNs = 2.0;
     static constexpr double kProvisionalTicks = 1500.0;  // the open run's newest 30 us: no node is frozen there
-    static constexpr uint64_t kPublishEveryTicks = 2'500'000;  // 50 ms of a chip's tracker time between live publications
+    // A frontier within this much of the newest tangent extends the cover instead of freezing a node; the published
+    // map then sits within it of the fit's own estimate. A mature run's estimate moves ~0.02 ns per keepalive sample,
+    // so it adds a node every few hundred ms; a young run adds one per burst sample for its first ms.
+    static constexpr double kFreezeNs = 0.25;
+    // The refclk span the tangent is measured over along a run's exact line; any span gives the same slope.
+    static constexpr double kTangentTicks = 50000.0;
     // A knot (where two runs' exact lines meet) must land within this much refclk (50 us) of the samples that
     // bracket the transition; a split is detected up to ~10 us after the transition it follows.
     // The link solve's window in the sender chip's refclk, re-solved every half window. Two chips' crystals hold a

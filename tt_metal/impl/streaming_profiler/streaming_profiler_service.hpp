@@ -198,6 +198,11 @@ struct ConsumerHooks {
     std::function<void(const CaptureContext&)> on_attach;  // a producer's context, before its first batch
     std::function<void(const ClockSample&)> clock_sink;
     std::function<void(const CaptureContext&)> on_capture_end;
+    // Whether the consumer's batches wait until the d2d sync covers their records, so every record it converts to
+    // host time lies between frozen correction nodes. The sync's own consumer does not wait; it is also attached
+    // first and detached first, so its covers exist before the others' batches and its final publish precedes their
+    // drain.
+    bool waits_for_sync = true;
 };
 
 class Service {

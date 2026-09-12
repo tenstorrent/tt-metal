@@ -205,7 +205,7 @@ public:
     std::chrono::steady_clock::time_point start_time() const { return host_time(timestamp_); }
     /** @brief End of the zone on the host clock. */
     std::chrono::steady_clock::time_point end_time() const { return host_time(timestamp_ + duration_); }
-    /** @brief Start and end of the zone on the host's std::chrono::steady_clock, converted through one d2d correction snapshot. */
+    /** @brief Start and end of the zone on the host's std::chrono::steady_clock. */
     std::pair<std::chrono::steady_clock::time_point, std::chrono::steady_clock::time_point> host_span() const {
         const int64_t b0 = base_ns(timestamp_), b1 = base_ns(timestamp_ + duration_);
         int64_t d0 = 0, d1 = 0;

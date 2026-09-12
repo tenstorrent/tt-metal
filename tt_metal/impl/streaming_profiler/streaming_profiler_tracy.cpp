@@ -107,7 +107,6 @@ TracySink::TracySink(Service& service) :
             .on_capture_end =
                 [this](const CaptureContext&) {
                     SyncPlots::wait_complete(std::chrono::seconds(10));
-                    flush_held(true);
                     emit_plots();
                 }});
 }
@@ -134,38 +133,13 @@ void TracySink::on_batch(const Batch& batch, uint64_t capture) {
         return;
     }
     for (const api::Zone& z : batch.zones()) {
-        held_[z.core().chip_id].zones.push_back(z);
+        emit_zone(z);
     }
     for (const api::TimestampedData& d : batch.timestamped_data()) {
-        std::vector<std::byte> bytes(d.size_bytes());
-        std::memcpy(bytes.data(), &d, d.size_bytes());
-        held_[d.core().chip_id].data.push_back(std::move(bytes));
+        emit_data(d);
     }
     for (const api::Event& e : batch.events()) {
-        held_[e.core().chip_id].events.push_back(e);
-    }
-    flush_held(false);
-}
-
-void TracySink::flush_held(bool all) {
-    for (auto& [chip, held] : held_) {
-        const int64_t until = all ? std::numeric_limits<int64_t>::max() : SyncCorrections::published_until_ns(chip);
-        while (!held.zones.empty() && held.zones.front().base_ns(held.zones.front().end_timestamp()) <= until) {
-            emit_zone(held.zones.front());
-            held.zones.pop_front();
-        }
-        while (!held.data.empty()) {
-            const auto& d = *reinterpret_cast<const api::TimestampedData*>(held.data.front().data());
-            if (d.base_ns(d.timestamp()) > until) {
-                break;
-            }
-            emit_data(d);
-            held.data.pop_front();
-        }
-        while (!held.events.empty() && held.events.front().base_ns(held.events.front().timestamp()) <= until) {
-            emit_event(held.events.front());
-            held.events.pop_front();
-        }
+        emit_event(e);
     }
 }
 

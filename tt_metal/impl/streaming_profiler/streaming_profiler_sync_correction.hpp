@@ -14,41 +14,50 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-// One node of a chip's time-indexed correction, keyed by the record's host time BEFORE the correction (its static
-// anchor's placing): the correction is delta_ns there and linear between neighbouring nodes. The d2d sync places a
-// node at every DVFS transition and at each publish, so between nodes the chip's clock ran at one rate.
+// One frozen node of a chip's time-indexed correction, keyed by the record's host time BEFORE the correction (its
+// static anchor's placing): the correction is delta_ns there, linear to the next node, and past the newest node it
+// follows that node's tangent (the correction's slope along the chip's current constant-rate run) as far as the
+// series' cover reaches. The d2d sync freezes a node where the map bends (a DVFS transition) and where its estimate
+// has drifted from the frozen tangent; between nodes the chip's clock ran at one rate.
 struct SyncNode {
     int64_t host_ns = 0;
     double delta_ns = 0.0;
+    double tangent = 0.0;
 };
 
-// Per-chip published series of nodes, strictly increasing in host_ns. Readers (every consumer thread converting a
-// record's time) are lock-free: they load the current snapshot and binary-search it; a publish swaps in a new
-// snapshot. Before any publish the correction is 0 and records convert exactly as they did without the d2d sync;
-// before a chip's first node it is that node's value.
+enum class SyncSeries : uint8_t { Linked, Local };
+
+// Per-chip append-only series of frozen nodes, strictly increasing in host_ns, written by the d2d sync consumer and
+// read by every consumer thread converting a record's time. Nodes never move or go away within a capture, so a
+// reader keeps a thread-local cursor on the segment it last used and converts without touching shared state until
+// the record leaves the segment. Before any node the correction is 0 and records convert exactly as they did
+// without the d2d sync; before a chip's first node it is that node's value.
+//
+// The cover is the base host time up to which the newest node's tangent has been confirmed: a record at or before it
+// converts against frozen data on both sides. Writer order is nodes, count, cover (release); readers load the cover
+// before the count (acquire), so a cover a reader sees implies the nodes behind it.
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Beyond the last node a live sink slightly ahead of the fit extends the last two nodes' line, but only this far;
-    // further out the correction holds constant rather than extrapolating a slope.
+    // Beyond the cover the newest tangent is extended, but only this far; further out the correction holds constant
+    // rather than extrapolating a slope.
     static constexpr int64_t kHoldNs = 50'000'000;
-
-    // `nodes` must be strictly increasing in host_ns.
-    static void publish(uint32_t chip_id, std::vector<SyncNode> nodes);
+    // Appends a node past every earlier one (a node at the last node's ns is dropped) and moves the cover to it.
+    static void append(uint32_t chip_id, SyncNode node, SyncSeries series = SyncSeries::Linked);
+    // The newest node's tangent holds up to cover_ns; the cover never moves back.
+    static void extend(uint32_t chip_id, int64_t cover_ns, SyncSeries series = SyncSeries::Linked);
+    // The series is complete for the capture: every later instant converts on the newest tangent.
+    static void finish(uint32_t chip_id, SyncSeries series = SyncSeries::Linked);
+    // Empties both of a chip's series for a new capture.
     static void clear(uint32_t chip_id);
-    static int64_t lookup_ns(uint32_t chip_id, int64_t host_ns) noexcept;
-    // Both ends of one record from the same snapshot; the end never precedes the start.
+    static int64_t lookup_ns(uint32_t chip_id, int64_t host_ns, SyncSeries series = SyncSeries::Linked) noexcept;
+    // Both ends of one record; the end never precedes the start.
     static void lookup_span_ns(
         uint32_t chip_id, int64_t start_ns, int64_t end_ns, int64_t& d_start, int64_t& d_end) noexcept;
-    // A parallel LOCAL-only series (each chip's own-anchor + local-AICLK term, no cross-chip link). Used only
-    // for the Tracy/CSV local-vs-linked plots; Record::host_time uses the linked series above.
-    static void publish_local(uint32_t chip_id, std::vector<SyncNode> nodes);
-    static int64_t lookup_local_ns(uint32_t chip_id, int64_t host_ns) noexcept;
-    // How many nodes a chip currently has published (0 = none).
+    // How many linked nodes a chip has (0 = none).
     static size_t published(uint32_t chip_id) noexcept;
-    // The host time of the chip's last published linked node; INT64_MIN before any publish. A record behind it
-    // converts against nodes on both sides; ahead of it, against the last two nodes' line extended.
-    static int64_t published_until_ns(uint32_t chip_id) noexcept;
+    // The base host time the chip's linked series covers: INT64_MIN before its first node, INT64_MAX once finished.
+    static int64_t cover_ns(uint32_t chip_id) noexcept;
 };
 
 // A named (host ns, value) series a consumer computes once a capture is complete -- the d2d sync's running
