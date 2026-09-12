@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import pytest
+import torch
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import data_gen_with_range, compare_pcc
 from tests.ttnn.utils_for_testing import (
@@ -507,3 +507,66 @@ def test_pow_arange_masking_fp32(exponent, device):
     golden = flush_subnormal_values_to_zero(golden)
 
     assert_allclose(golden, result, atol=5e-4, rtol=8e-7)
+
+
+# Regression for https://github.com/tenstorrent/tt-metal/issues/52593
+# ttnn.pow must propagate IEEE-754 NaN instead of silently producing a finite value.
+#   pow(NaN,  0.0) = 1.0
+#   pow(NaN, -0.0) = 1.0
+#   pow(NaN,  y  ) = NaN       for y != +-0
+#   pow(1.0,  NaN) = 1.0
+#   pow(x,    NaN) = NaN       for x != 1.0
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+@pytest.mark.parametrize("shape", [[1, 1, 32, 32], [2, 32, 320]])
+def test_binary_sfpu_pow_nan_propagation(shape, dtype, device):
+    torch.manual_seed(0)
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+    nan = float("nan")
+
+    # Finite values: base in [1, 2], exponent in [0, 1] so every normal lane is
+    # finite and in [1, 2] and tolerates the bf16 approximation well.
+    base = torch.rand(shape, dtype=torch_dtype) + 1.0
+    exp = torch.rand(shape, dtype=torch_dtype) * 0.5
+
+    b = base.flatten()
+    e = exp.flatten()
+
+    # Fully deterministic injected lanes (no random-value dependence).
+    # pow(NaN, y) = NaN for y != +-0
+    b[0] = nan
+    e[0] = 2.0
+    b[1] = nan
+    e[1] = 0.5
+    # pow(NaN, +-0) = 1 (idempotency exception)
+    b[2] = nan
+    e[2] = 0.0
+    b[3] = nan
+    e[3] = -0.0
+    # pow(x, NaN) = NaN for x != 1
+    b[4] = 2.0
+    e[4] = nan
+    b[5] = 4.0
+    e[5] = nan
+    # pow(1, NaN) = 1 (idempotency exception)
+    b[6] = 1.0
+    e[6] = nan
+
+    base = b.reshape(shape)
+    exp = e.reshape(shape)
+
+    # torch.pow implements IEEE-754 pow() semantics.
+    golden = torch.pow(base, exp)
+
+    in_base = ttnn.from_torch(base, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    in_exp = ttnn.from_torch(exp, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.pow(in_base, in_exp)
+    out = ttnn.to_torch(out)
+
+    # NaN handling: it must match IEEE (NaN in -> NaN out, with the x^0 and 1^x
+    # idempotency exceptions). Finite lanes must also match within tolerance.
+    if dtype == "bfloat16":
+        assert_allclose(out, golden, atol=2.5e-2, rtol=5e-3)
+    else:
+        assert_allclose(out, golden, atol=1e-5, rtol=1e-4)
