@@ -108,9 +108,30 @@ def test_dflash2_serving_slots_are_lossless(mesh_device):
         for _ in range(3):
             outA.extend(dec.step()[0])
         logger.info(f"[serving] A alone: {len(outA)} tokens after 3 steps")
-        # request B joins slot 1 while A is mid-generation (its seed holds A's rows)
+        # request B joins slot 1 while A is mid-generation (its seed HOLDS A's rows). A hold must be a
+        # bit-exact no-op for A's durable spec state: its GDN ring slot mi, its conv window row and its
+        # attention KV blocks are read back before and after and compared exactly.
+        gdn0 = dec._gdn[0]
+        att0 = next(layer.attention for layer in model.layers if layer.is_full_attention)
+
+        def _snap():
+            Nv, Dk, Dv, K_ = gdn0.Nv, gdn0.Dk, gdn0.Dv, gdn0.K
+            blk = (dec.mi[0] * B + 0) * Nv
+            ring = ttnn.to_torch(ttnn.get_device_tensors(gdn0._spec_ring)[0])[blk : blk + Nv].clone()
+            win = ttnn.to_torch(ttnn.get_device_tensors(gdn0._verify_win_buf)[0])[0].clone()
+            blocks = page_tables[0].tolist()
+            kc = ttnn.to_torch(ttnn.get_device_tensors(att0.paged_k)[0])[blocks].clone()
+            return ring, win, kc
+
+        before = _snap()
         firstB = _prefill(model, dec, 1, prompts[1], page_tables)
         dec.begin(1, firstB, len(prompts[1]), page_tables[1])
+        after = _snap()
+        for name, x, y in zip(("GDN ring slot", "conv window row", "attention K blocks"), before, after):
+            assert torch.equal(
+                x, y
+            ), f"HOLD is not a no-op for slot 0's {name} (max |delta| {float((x.float() - y.float()).abs().max()):.3e})"
+        logger.info("[serving] HOLD replay left slot 0's ring slot, conv window and KV blocks bit-identical")
         outB = [firstB]
         outC = None
         while dec.active[0] or dec.active[1]:

@@ -1712,10 +1712,12 @@ class Qwen36Model:
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter, both
         within the iteration).
 
-        ``hold``: users whose GDN state this replay must leave unchanged (serving: everyone but a
-        joining user). Their rows must carry the SAME tokens, positions and mi_prev as their last
-        replay; the conv selector is then the identity and the ring kernel rewrites their slots
-        with identical values (see gdn.tp.spec_conv_sel).
+        ``hold``: users whose durable spec state this replay must leave bit-identical (serving:
+        everyone but a joining or stepping user). Their rows are staged at position -1
+        (paged_update_cache and the decode SDPA skip such rows: no KV write, no read), the conv
+        selector is the identity (window unchanged) and their ring index is the HOLD sentinel, so
+        the fused op skips their state writes (their mi_prev is irrelevant; the caller passes its
+        current mi). Tokens for held rows are irrelevant too.
         """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_state_blk_idx
 
@@ -1736,6 +1738,9 @@ class Qwen36Model:
         # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
         # per-row cur_pos, which is what makes the hybrid verify causal.
         pos = self._vfy_row_positions(positions)
+        held = set(hold or ())
+        for u in held:
+            pos[u * T : (u + 1) * T] = -1  # skipped by the KV write and the decode SDPA
         _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
         ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
         # Hybrid verify: per-ROW decode rope at the rows' own positions.
@@ -1747,7 +1752,7 @@ class Qwen36Model:
         # The deferred commit (see capture_verify_trace): where each user's recurrence and conv
         # window resume. Two small host-built tensors, shared by every GDN layer.
         _h = ttnn.from_torch(
-            spec_state_blk_idx(mi_prev, B, self._vfy_Nv),
+            spec_state_blk_idx(mi_prev, B, self._vfy_Nv, hold=held),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=None,

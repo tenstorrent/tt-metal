@@ -48,8 +48,16 @@ def _silu_mul(x, z, memory_config):
 # tensors that carry mi into the trace.
 
 
-def spec_state_blk_idx(mi, n_users, nv):
+HOLD_SENTINEL = 0xFFFFFFFF  # block index that makes the ring-mode op skip a head's state writes
+
+
+def spec_state_blk_idx(mi, n_users, nv, hold=None):
     """Ring block index per (user, value-head) for the fused recurrent op's deferred-select mode.
+
+    ``hold``: users whose entries are the HOLD sentinel (0xFFFFFFFF): the op's writer skips those
+    heads' per-token state writes and the reader substitutes a valid block, so a held user's ring
+    slots are bit-identical after the replay (serving: a slot standing still while another joins or
+    steps). Staged as uint32; torch int32 -1 is the same bit pattern.
 
     The ring holds T*n_users*nv state blocks laid out (token slot, user, head)-major, so the state
     user u produced after accepting through row mi[u] lives at block (mi[u]*n_users + u)*nv + h.
@@ -61,8 +69,12 @@ def spec_state_blk_idx(mi, n_users, nv):
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     idx = torch.empty(n_users * nv, dtype=torch.int32)
     head = torch.arange(nv, dtype=torch.int32)
+    hold = set(hold or ())
     for u in range(n_users):
-        idx[u * nv : (u + 1) * nv] = (int(mi[u]) * n_users + u) * nv + head
+        if u in hold:
+            idx[u * nv : (u + 1) * nv] = -1  # uint32 0xFFFFFFFF once staged
+        else:
+            idx[u * nv : (u + 1) * nv] = (int(mi[u]) * n_users + u) * nv + head
     return idx
 
 
@@ -70,11 +82,10 @@ def spec_conv_sel(mi, n_users, T, kc, hold=None):
     """One-hot row selector that rebuilds every user's conv window for the next verify.
 
     ``hold``: optional set of users whose window must NOT change: their selector is the identity
-    over the first kc-1+T rows of concat (= E_prev itself), so a replay with the same tokens,
-    positions and mi as that user's last verify reproduces its GDN state exactly (the ring kernel
-    reads each core's initial block before writing its own slots, and the conv input is unchanged).
-    A serving session uses it to seed one joining user through the shared verify trace while the
-    other users stand still.
+    over the first kc-1+T rows of concat (= E_prev itself). Together with the HOLD sentinel in
+    spec_state_blk_idx (the op skips their state writes) and position -1 on their rows (no KV
+    write), a replay leaves a held user's durable spec state bit-identical. A serving session uses it to seed one
+    joining user through the shared verify trace while the other users stand still.
 
     The verify concatenates last iteration's window with this iteration's new qkv rows:
         concat = cat([E_prev [n_users, kc-1+T, C], qkv_new [n_users, T, C]], dim=1)

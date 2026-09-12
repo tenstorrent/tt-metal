@@ -16,17 +16,17 @@ request as a slot of the batched substrate:
   ingest_prompt(u, taps, T, chunk_start)   per request: its prompt taps -> slot u's drafter ring.
   begin(u, first, T, page_table_row)       per request: seed slot u THROUGH the verify trace: slot u
               replays [first, pad x K] at T with its GDN state loaded from its prefilled decode row
-              (seed_spec_state_user), every other slot replays its LAST inputs with a HOLD selector,
-              which is a bit-exact no-op for them (the ring kernel reads its initial block before
-              writing, the conv window is left as is). Row 0 of slot u gives its pending token and
-              its tap row extends the drafter context by slot T.
+              (seed_spec_state_user); every other slot HOLDS: the ring op skips its state writes
+              (HOLD sentinel index), identity conv selector, position -1 rows (no KV write), so its
+              durable spec state is bit-identical afterwards. Row 0 of slot u gives its pending
+              token and its tap row extends the drafter context by slot T.
   step()      ONE draft (all slots) + verify replay (live slots speculate, idle slots hold) + greedy
               accept + extend; returns {slot: committed ids} for the live slots.
   end(u)      slot u leaves (its rows keep holding until another request joins it).
   release()   shutdown.
 
 Deferred commit: like the demo, a slot's accepted-prefix index mi is folded into the NEXT replay's
-selectors; a slot's HOLD replays reuse the mi_prev, tokens and positions of its last real replay.
+selectors; a held slot's replay reads (and rewrites, unchanged) exactly that slot.
 Page tables: the verify trace's per-user tables are restaged (host->device copy) whenever a slot's
 vLLM row changes; idle slots point at block 0 (vLLM's never-allocated null block) so their held
 rows write nowhere that matters.
@@ -71,9 +71,6 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.p = [0] * B
         self.pending = [0] * B
         self.mi = [0] * B  # accepted-prefix index the slot's NEXT replay commits
-        self.tok_last = [[0] * T for _ in range(B)]  # inputs of the slot's last real replay (for holds)
-        self.pos_last = [0] * B
-        self.mi_last = [0] * B  # mi_prev that replay used
         self.iters = [0] * B
         self.accepted = [0] * B
         self.drafted = [0] * B
@@ -190,12 +187,10 @@ class DFlash2ServingDecoder(DFlash2Decoder):
             self.model.refresh_verify_page_tables(self.tables)
 
     def _hold_inputs(self):
+        """Replay inputs for a step in which every slot HOLDS (tokens and positions irrelevant: verify_traced
+        stages -1 positions and the HOLD ring index for held users; mi is passed for the stepping ones)."""
         T = self.K + 1
-        tokens = [list(self.tok_last[u]) for u in range(self.B)]
-        positions = list(self.pos_last)
-        mi_prev = list(self.mi_last)
-        assert all(len(t) == T for t in tokens)
-        return tokens, positions, mi_prev
+        return [[0] * T for _ in range(self.B)], [0] * self.B, list(self.mi)
 
     def begin(self, u, first, T, page_table_row):
         """Start slot u's session after ingest_prompt(u, ...): seed through the verify trace."""
@@ -226,22 +221,24 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.ctx_len[u] = int(T) + 1
         self.p[u] = int(T)
         self.mi[u] = 0
-        self.tok_last[u], self.pos_last[u], self.mi_last[u] = tokens[u], int(T), 0
         self.active[u] = self.joined[u] = True
         self.iters[u] = self.accepted[u] = self.drafted[u] = 0
         self.hist[u] = [0] * (self.K + 1)
         _dbg(f"seed slot={u} -> pending {self.pending[u]}")
 
     # ------------------------------------------------------------------ the loop
-    def step(self):
-        """One speculative iteration over the live slots. Returns {slot: committed ids}."""
+    def step(self, only=None):
+        """One speculative iteration over the live slots (or over ``only`` those live slots: the others
+        HOLD -- replay their last inputs, advance nothing -- which bounds how far a fast slot can run
+        ahead of what its caller has consumed and, with it, its KV write reach). Returns
+        {slot: committed ids} for the slots that stepped."""
         assert self._captured
         B, T = self.B, self.K + 1
-        live = [u for u in range(B) if self.active[u]]
+        live = [u for u in range(B) if self.active[u] and (only is None or u in only)]
         if not live:
             return {}
-        anchors = [self.pending[u] if self.active[u] else 0 for u in range(B)]
-        Cs = [self.p[u] + 1 if self.active[u] else 1 for u in range(B)]  # idle slots draft junk into their own ring
+        anchors = [self.pending[u] if u in live else 0 for u in range(B)]
+        Cs = [self.p[u] + 1 if u in live else 1 for u in range(B)]  # held/idle slots draft junk into their own ring
         for u in live:
             assert self.ctx_len[u] >= self.p[u] + 1, f"slot {u}: context {self.ctx_len[u]} < p+1 {self.p[u] + 1}"
         if not self._armed and _DRAFT_TRACED:
@@ -253,7 +250,7 @@ class DFlash2ServingDecoder(DFlash2Decoder):
             tokens[u] = [self.pending[u]] + [int(d) for d in drafts[u]]
             positions[u] = self.p[u] + 1
             mi_prev[u] = self.mi[u]
-        hold = [u for u in range(B) if not self.active[u]]
+        hold = [u for u in range(B) if u not in live]
         ids, _feed, _ = self.model.verify_traced(tokens, positions, mi_prev, read_logits=False, hold=hold)
         committed = {}
         slot0 = [0] * B
@@ -269,7 +266,6 @@ class DFlash2ServingDecoder(DFlash2Decoder):
             mi_u = len(com) - 1
             committed[u] = com
             next_pending[u] = int(row_ids[mi_u])
-            self.tok_last[u], self.pos_last[u], self.mi_last[u] = tokens[u], positions[u], mi_prev[u]
             self.mi[u] = mi_u
             slot0[u], nrows[u] = self.p[u] + 1, len(com)
             self.iters[u] += 1

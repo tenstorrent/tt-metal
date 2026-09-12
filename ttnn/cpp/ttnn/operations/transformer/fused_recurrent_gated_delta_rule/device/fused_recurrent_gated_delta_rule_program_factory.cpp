@@ -44,6 +44,7 @@ constexpr uint32_t kcol = tt::CBIndex::c_13;      // [K,1]  transpose(k)
 constexpr uint32_t supd = tt::CBIndex::c_14;      // [K,V]  k^T (x) u
 constexpr uint32_t delta = tt::CBIndex::c_15;     // [1,V]  v - vread
 constexpr uint32_t blkidx = tt::CBIndex::c_16;    // [BH]   uint32 scratch, ring mode only
+constexpr uint32_t blkidx_w = tt::CBIndex::c_17;  // [BH]   the writer's own copy (skip-write sentinel), ring mode only
 }  // namespace cb
 
 tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::create_descriptor(
@@ -108,13 +109,15 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     add_cb(cb::delta, Vt);
     if (ring) {
         const tt::DataFormat idx_fmt = datatype_to_dataformat_converter(in.initial_state_block_idx->dtype());
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = blk_page_bytes,
-            .core_ranges = cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(cb::blkidx),
-                .data_format = idx_fmt,
-                .page_size = blk_page_bytes}}}});
+        for (uint32_t cbi : {static_cast<uint32_t>(cb::blkidx), static_cast<uint32_t>(cb::blkidx_w)}) {
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = blk_page_bytes,
+                .core_ranges = cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(cbi),
+                    .data_format = idx_fmt,
+                    .page_size = blk_page_bytes}}}});
+        }
     }
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/fused_recurrent_gated_delta_rule/device/kernels/";
@@ -129,9 +132,13 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
     TensorAccessorArgs(in.initial_state.has_value() ? in.initial_state->buffer() : nullptr).append_to(reader_ct);
     TensorAccessorArgs(blk_buf).append_to(reader_ct);
 
-    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token};
+    // Ring mode: the writer also reads the block-index page, so a head whose index is the
+    // 0xFFFFFFFF sentinel skips its per-token state writes (a HELD user of a multi-user verify keeps
+    // its ring slots bit-identical). The accessor is appended even when absent, like the reader's.
+    std::vector<uint32_t> writer_ct = {Kt, Vt, per_token, use_blk_idx};
     TensorAccessorArgs(*outputs[0].buffer()).append_to(writer_ct);
     TensorAccessorArgs(*outputs[1].buffer()).append_to(writer_ct);
+    TensorAccessorArgs(blk_buf).append_to(writer_ct);
 
     KernelDescriptor reader;
     reader.kernel_source = kdir + "dataflow/reader_fused_recurrent_gated_delta_rule.cpp";
@@ -178,7 +185,7 @@ tt::tt_metal::ProgramDescriptor FusedRecurrentGatedDeltaRuleProgramFactory::crea
         reader.emplace_runtime_args(
             core, {h, T, q_buf, k_buf, v_buf, decay_buf, beta_buf, s0_buf, blk_buf, blk_page_bytes});
         // BH is needed by the writer to place per-token state token-major (page t*BH + h).
-        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH});
+        writer.emplace_runtime_args(core, {h, T, o_buf, st_buf, BH, blk_buf, blk_page_bytes});
         compute.emplace_runtime_args(core, {T});
     }
 

@@ -76,6 +76,11 @@ void kernel_main() {
         noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
         s0_block = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1)[h];
+        if (s0_block == 0xFFFFFFFFu) {
+            // HOLD sentinel: the writer skips this head's state writes, so any valid block will do
+            // for the (discarded) recurrence -- this head's own slot-0 block.
+            s0_block = h;
+        }
     }
     read_into(s0_acc, cb_S, s0_block * kv, kv);
 

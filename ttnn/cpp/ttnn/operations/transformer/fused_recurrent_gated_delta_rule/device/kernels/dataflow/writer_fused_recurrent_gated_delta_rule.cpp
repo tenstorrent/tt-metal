@@ -17,20 +17,28 @@
 #include "api/tensor/noc_traits.h"
 
 constexpr uint32_t cb_out = 6, cb_state = 7;
+constexpr uint32_t cb_blkidx_w = 17;  // ring mode only: the writer's copy of the [BH] block-index vector
+// Ring mode: a head whose block index is this sentinel is HELD -- its per-token state writes are
+// skipped (the reader substitutes a valid block for its initial-state read), so a multi-user verify
+// can replay while some users' ring slots stay bit-identical.
+constexpr uint32_t HOLD_SENTINEL = 0xFFFFFFFFu;
 
 void kernel_main() {
     constexpr uint32_t Kt = get_compile_time_arg_val(0);
     constexpr uint32_t Vt = get_compile_time_arg_val(1);
     constexpr uint32_t per_token = get_compile_time_arg_val(2);
+    constexpr uint32_t use_blk_idx = get_compile_time_arg_val(3);
 
-    constexpr auto o_a = TensorAccessorArgs<3>();
+    constexpr auto o_a = TensorAccessorArgs<4>();
     constexpr auto st_a = TensorAccessorArgs<o_a.next_compile_time_args_offset()>();
+    constexpr auto idx_a = TensorAccessorArgs<st_a.next_compile_time_args_offset()>();
 
     const uint32_t h = get_arg_val<uint32_t>(0);
     const uint32_t T = get_arg_val<uint32_t>(1);
     const uint32_t o_addr = get_arg_val<uint32_t>(2);
     const uint32_t st_addr = get_arg_val<uint32_t>(3);
     const uint32_t BH = get_arg_val<uint32_t>(4);  // set by the program factory; token-major stride
+    // rt 5 = idx buffer address (0 when absent), rt 6 = its aligned page size; read below.
 
     const uint32_t tb = get_tile_size(cb_out);  // fp32; o and state share it
     const auto o_acc = TensorAccessor(o_a, o_addr, tb);
@@ -42,6 +50,18 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cbout(cb_out);
     CircularBuffer cbst(cb_state);
+
+    bool hold = false;
+    if constexpr (use_blk_idx) {
+        const uint32_t idx_addr = get_arg_val<uint32_t>(5);
+        const uint32_t idx_page_bytes = get_arg_val<uint32_t>(6);
+        CircularBuffer cb_idx(cb_blkidx_w);
+        const uint32_t idx_l1 = cb_idx.get_write_ptr();
+        const auto idx_acc = TensorAccessor(idx_a, idx_addr, idx_page_bytes);
+        noc.async_read(idx_acc, cb_idx, idx_page_bytes, {.page_id = 0}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        hold = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1)[h] == HOLD_SENTINEL;
+    }
 
     auto write_from = [&](CircularBuffer& cb, const auto& acc, uint32_t base, uint32_t n) {
         cb.wait_front(n);
@@ -56,7 +76,14 @@ void kernel_main() {
     for (uint32_t t = 0; t < T; t++) {
         write_from(cbout, o_acc, (h * T + t) * cv, cv);  // o stays head-major
         if (per_token) {
-            write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
+            if (hold) {
+                // Consume compute's state pages without writing them: the held head's ring slots keep
+                // their previous contents.
+                cbst.wait_front(kv);
+                cbst.pop_front(kv);
+            } else {
+                write_from(cbst, st_acc, (t * BH + h) * kv, kv);  // state is token-major
+            }
         }
     }
     if (!per_token) {
