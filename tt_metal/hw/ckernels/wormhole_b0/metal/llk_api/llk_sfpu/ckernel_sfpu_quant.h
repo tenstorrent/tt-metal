@@ -183,7 +183,7 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     for (int d = 0; d < ITERATIONS; d++) {
         TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
         TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
-        lltt::replay(QUANT_REPLAY_SLOT, quant_replay_len<OUTPUT_FORMAT>());  // MAD + SFPNOP + [clamp] + STOCH_RND
+        lltt::replay(QUANT_REPLAY_SLOT, quant_replay_len<OUTPUT_FORMAT>());       // MAD + SFPNOP + [clamp] + STOCH_RND
         TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);                // store + dst_reg += 2
     }
 }
