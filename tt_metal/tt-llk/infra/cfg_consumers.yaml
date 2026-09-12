@@ -1,0 +1,4048 @@
+# Config-field consumers: which Tensix thread's instructions READ each field.
+# GENERATED from the Tensix hazard database (2aa39f8) on 2026-09-12.
+# Do not hand-edit -- rerun infra/gen_cfg_consumers.py.
+#
+# A field ABSENT here has no reader row recorded upstream: that is UNKNOWN, not
+# 'unconsumed'. Coverage is very uneven between architectures -- see the counts below.
+#
+#   wormhole_b0    141 reader rows -> 100 fields
+#   blackhole       16 reader rows ->  78 fields
+#   quasar          34 reader rows ->  64 fields
+
+blackhole:
+  ADDR_MOD_AB2_SEC0_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC0_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC1_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC1_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC2_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC2_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC3_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC3_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC4_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC4_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC5_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC5_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC6_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC6_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC7_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB2_SEC7_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC0_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC1_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC2_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC3_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC4_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC5_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC6_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcACR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcAClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcAIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcBCR:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcBClear:
+  - MATH
+  - PACK
+  ADDR_MOD_AB_SEC7_SrcBIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC0_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC0_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC1_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC1_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC2_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC2_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC3_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC3_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC4_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC4_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC5_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC5_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC6_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC6_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC7_BiasClear:
+  - MATH
+  - PACK
+  ADDR_MOD_BIAS_SEC7_BiasIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC0_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC1_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC2_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC3_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC4_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC5_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC6_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_DestCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_DestCToCR:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_DestClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_DestIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_FidelityClear:
+  - MATH
+  - PACK
+  ADDR_MOD_DST_SEC7_FidelityIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YdstCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YsrcCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_YsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_ZdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_ZdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_ZsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC0_ZsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YdstCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YsrcCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_YsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_ZdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_ZdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_ZsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC1_ZsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YdstCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YsrcCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_YsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_ZdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_ZdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_ZsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC2_ZsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YdstCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YsrcCR:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_YsrcIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_ZdstClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_ZdstIncr:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_ZsrcClear:
+  - MATH
+  - PACK
+  ADDR_MOD_PACK_SEC3_ZsrcIncr:
+  - MATH
+  - PACK
+  ALU_ACC_CTRL_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_INT8_math_enabled:
+  - MATH
+  ALU_ACC_CTRL_SFPU_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_dst:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_src:
+  - MATH
+  ALU_FORMAT_SPEC_REG0_SrcA:
+  - MATH
+  ALU_FORMAT_SPEC_REG2_Dstacc:
+  - PACK
+  ALU_FORMAT_SPEC_REG_Dstacc_override:
+  - PACK
+  ALU_FORMAT_SPEC_REG_Dstacc_val:
+  - PACK
+  ALU_ROUNDING_MODE_Bfp8_HF:
+  - MATH
+  ALU_ROUNDING_MODE_Fpu_srnd_en:
+  - MATH
+  ALU_ROUNDING_MODE_Packer_srnd_en:
+  - PACK
+  CFG_STATE_ID_StateID:
+  - MATH
+  - PACK
+  DEST_OFFSET_Enable:
+  - MATH
+  DEST_TARGET_REG_CFG_PACK_SEC0_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC0_ZOffset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC1_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC1_ZOffset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC2_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC2_ZOffset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC3_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC3_ZOffset:
+  - PACK
+  DISABLE_IMPLIED_SRCA_FMT_Base:
+  - MATH
+  FPU_BIAS_SEL_Pointer:
+  - MATH
+  INT_DESCALE_Enable:
+  - PACK
+  INT_DESCALE_Mode:
+  - PACK
+  PACK_CONCAT_MASK_SEC0_pack_concat_mask:
+  - PACK
+  PACK_CONCAT_MASK_SEC1_pack_concat_mask:
+  - PACK
+  PACK_CONCAT_MASK_SEC2_pack_concat_mask:
+  - PACK
+  PACK_CONCAT_MASK_SEC3_pack_concat_mask:
+  - PACK
+  PACK_COUNTERS_SEC0_auto_ctxt_inc_xys_cnt:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_reads_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_xys_per_tile:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_yz_transposed:
+  - PACK
+  PACK_COUNTERS_SEC1_auto_ctxt_inc_xys_cnt:
+  - PACK
+  PACK_COUNTERS_SEC1_pack_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC1_pack_reads_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC1_pack_xys_per_tile:
+  - PACK
+  PACK_COUNTERS_SEC1_pack_yz_transposed:
+  - PACK
+  PACK_COUNTERS_SEC2_auto_ctxt_inc_xys_cnt:
+  - PACK
+  PACK_COUNTERS_SEC2_pack_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC2_pack_reads_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC2_pack_xys_per_tile:
+  - PACK
+  PACK_COUNTERS_SEC2_pack_yz_transposed:
+  - PACK
+  PACK_COUNTERS_SEC3_auto_ctxt_inc_xys_cnt:
+  - PACK
+  PACK_COUNTERS_SEC3_pack_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC3_pack_reads_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC3_pack_xys_per_tile:
+  - PACK
+  PACK_COUNTERS_SEC3_pack_yz_transposed:
+  - PACK
+  PACK_GLOBAL_CFG_CTL_pack_disable_fast_tile_end_drain:
+  - PACK
+  PCK0_ADDR_BASE_REG_0_Base:
+  - PACK
+  PCK0_ADDR_BASE_REG_1_Base:
+  - PACK
+  PCK0_ADDR_CTRL_XY_REG_0_Xstride:
+  - PACK
+  PCK0_ADDR_CTRL_XY_REG_0_Ystride:
+  - PACK
+  PCK0_ADDR_CTRL_XY_REG_1_Xstride:
+  - PACK
+  PCK0_ADDR_CTRL_XY_REG_1_Ystride:
+  - PACK
+  PCK0_ADDR_CTRL_ZW_REG_0_Wstride:
+  - PACK
+  PCK0_ADDR_CTRL_ZW_REG_0_Zstride:
+  - PACK
+  PCK0_ADDR_CTRL_ZW_REG_1_Wstride:
+  - PACK
+  PCK0_ADDR_CTRL_ZW_REG_1_Zstride:
+  - PACK
+  PCK_DEST_RD_CTRL_Read_32b_data:
+  - PACK
+  PCK_DEST_RD_CTRL_Read_int8:
+  - PACK
+  PCK_DEST_RD_CTRL_Read_unsigned:
+  - PACK
+  PCK_DEST_RD_CTRL_Round_10b_mant:
+  - PACK
+  PCK_EDGE_MODE_mode:
+  - PACK
+  PCK_EDGE_OFFSET_SEC0_mask:
+  - PACK
+  PCK_EDGE_OFFSET_SEC1_mask:
+  - PACK
+  PCK_EDGE_OFFSET_SEC2_mask:
+  - PACK
+  PCK_EDGE_OFFSET_SEC3_mask:
+  - PACK
+  PCK_EDGE_TILE_FACE_SET_SELECT_enable:
+  - PACK
+  PCK_EDGE_TILE_FACE_SET_SELECT_select:
+  - PACK
+  PCK_EDGE_TILE_ROW_SET_SELECT_select:
+  - PACK
+  STACC_RELU_ApplyRelu:
+  - PACK
+  STACC_RELU_ReluThreshold:
+  - PACK
+  THCON_CFGREG_BASE:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG0_TileDescriptor:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG10_Packer_Reg_Wr_Addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG10_Unpack_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG10_Unpack_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG10_Unpack_limit_address_en:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG10_Unpacker_Reg_Wr_Addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG11_Metadata_cntxt_switch_unpacr_count:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG11_Metadata_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG11_Metadata_l1_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG11_Metadata_limit_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG11_Metadata_z_cntr_rst_unpacr_count:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Add_l1_dest_addr_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Add_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_All_pack_disable_zero_compress_ovrd:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Auto_set_last_pacr_intf_sel:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Dis_shared_exp_assembler:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Disable_pack_zero_flags:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Disable_zero_compress:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Downsample_mask:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Downsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Enable_out_fifo:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_threshold:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_threshold_en:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_In_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_L1_Dest_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_L1_source_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Pac_LF8_4b_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Pack_L1_Acc:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Row_start_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Source_interface_selection:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Sub_l1_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Unp_LF8_4b_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_ovrd_default_throttle_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_pack_dis_y_pos_start_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_pack_start_intf_pos:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Context_count:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Context_count_non_log2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Context_count_non_log2_en:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Force_shared_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Haloize_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Metadata_x_end:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Ovrd_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Throttle_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Tileize_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_If_Sel:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Upsample_and_interleave:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Upsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx4_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx5_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx6_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx7_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx0_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Buffer_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Destination_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Metadata_misc:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Source_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Transfer_direction:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Add_l1_dest_addr_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Add_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Auto_set_last_pacr_intf_sel:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Dis_shared_exp_assembler:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Disable_pack_zero_flags:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Disable_zero_compress:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Downsample_mask:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Downsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Enable_out_fifo:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_threshold:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_threshold_en:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_In_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_L1_Dest_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_L1_source_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Pack_L1_Acc:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Row_start_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Source_interface_selection:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Sub_l1_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Unused1:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_pack_dis_y_pos_start_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_unpack_tile_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_0_2_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_0_2_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_1_3_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_1_3_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG0_TileDescriptor:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG10_Packer_Reg_Wr_Addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG10_Unpack_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG10_Unpack_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG10_Unpack_limit_address_en:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG10_Unpacker_Reg_Wr_Addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG11_Metadata_cntxt_switch_unpacr_count:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG11_Metadata_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG11_Metadata_l1_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG11_Metadata_limit_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG11_Metadata_z_cntr_rst_unpacr_count:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Add_l1_dest_addr_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Add_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_All_pack_disable_zero_compress_ovrd:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Auto_set_last_pacr_intf_sel:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Dis_shared_exp_assembler:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Disable_pack_zero_flags:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Disable_zero_compress:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Downsample_mask:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Downsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Enable_out_fifo:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_threshold:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_threshold_en:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_In_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_L1_Dest_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_L1_source_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Pac_LF8_4b_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Pack_L1_Acc:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Row_start_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Source_interface_selection:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Sub_l1_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Unp_LF8_4b_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_ovrd_default_throttle_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_pack_dis_y_pos_start_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_pack_start_intf_pos:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Context_count:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Context_count_non_log2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Context_count_non_log2_en:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Force_shared_exp:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Haloize_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Metadata_x_end:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Ovrd_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Throttle_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Tileize_mode:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_If_Sel:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_Src_Reg_Set_Upd:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Upsample_and_interleave:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Upsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx4_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx5_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx6_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx7_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx0_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Buffer_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Destination_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Metadata_misc:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Source_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Transfer_direction:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx1_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx2_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx3_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx0:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx2:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx3:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx4:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx5:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx6:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx7:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Add_l1_dest_addr_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Add_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Auto_set_last_pacr_intf_sel:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Dis_shared_exp_assembler:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Disable_pack_zero_flags:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Disable_zero_compress:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Downsample_mask:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Downsample_rate:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Enable_out_fifo:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_threshold:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_threshold_en:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_In_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_L1_Dest_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_L1_source_addr:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Out_data_format:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Pack_L1_Acc:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Row_start_section_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Source_interface_selection:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Sub_l1_tile_header_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Unused1:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_pack_dis_y_pos_start_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_unpack_tile_offset:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_0_2_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_0_2_limit_address:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_1_3_fifo_size:
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_1_3_limit_address:
+  - PACK
+  - UNPACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_0:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_1:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_10:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_11:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_12:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_13:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_14:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_15:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_2:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_3:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_4:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_5:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_6:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_7:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_8:
+  - PACK
+  TILE_FACE_SET_MAPPING_0_face_set_mapping_9:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_0:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_1:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_10:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_11:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_12:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_13:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_14:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_15:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_2:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_3:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_4:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_5:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_6:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_7:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_8:
+  - PACK
+  TILE_ROW_SET_MAPPING_0_row_set_mapping_9:
+  - PACK
+quasar:
+  ALU_ACC_CTRL_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_INT8_math_enabled:
+  - MATH
+  ALU_ACC_CTRL_SFPU_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_dst:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_src:
+  - MATH
+  ALU_FORMAT_SPEC_REG0_SrcA:
+  - MATH
+  ALU_FORMAT_SPEC_REG1_SrcB:
+  - MATH
+  ALU_FORMAT_SPEC_REG2_Dstacc:
+  - MATH
+  BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG0_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG10_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG11_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG12_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG13_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG14_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG15_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG16_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG17_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG18_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG19_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG1_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG20_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG21_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG22_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG23_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG24_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG25_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG26_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG27_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG28_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG29_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG2_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG30_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG31_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG3_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG4_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG5_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG6_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG7_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG8_UNUSED3:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_L1_BASE_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_L1_LIMIT_ADDR:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_TILE_FORMAT:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_TILE_X_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_TILE_Y_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_TILE_Z_DIM:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_UNUSED0:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_UNUSED1:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_UNUSED2:
+  - PACK
+  - UNPACK
+  BUFFER_DESCRIPTOR_TABLE_REG9_UNUSED3:
+  - PACK
+  - UNPACK
+  INT_DESCALE_VALUES_SEC0_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC10_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC11_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC12_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC13_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC14_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC15_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC1_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC2_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC3_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC4_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC5_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC6_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC7_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC8_Value:
+  - PACK
+  INT_DESCALE_VALUES_SEC9_Value:
+  - PACK
+  RISC_DEST_ACCESS_CTRL_SEC0_fmt:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC0_no_swizzle:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC0_unsigned_int:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC1_fmt:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC1_no_swizzle:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC1_unsigned_int:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC2_fmt:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC2_no_swizzle:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC2_unsigned_int:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC3_fmt:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC3_no_swizzle:
+  - RISC
+  RISC_DEST_ACCESS_CTRL_SEC3_unsigned_int:
+  - RISC
+  SFPU_DEST_DVALID_CTRL_disable_auto_bank_id_toggle:
+  - MATH
+  SFPU_DEST_DVALID_CTRL_toggle_mask:
+  - MATH
+  SFPU_DEST_DVALID_CTRL_wait_mask:
+  - MATH
+  SFPU_DEST_DVALID_CTRL_wait_polarity:
+  - MATH
+  SFPU_DEST_FMT_SEC0_Base:
+  - MATH
+  SFPU_DEST_FMT_SEC0_Enable:
+  - MATH
+  SFPU_DEST_FMT_SEC1_Base:
+  - MATH
+  SFPU_DEST_FMT_SEC1_Enable:
+  - MATH
+  SFPU_DEST_FMT_SEC2_Base:
+  - MATH
+  SFPU_DEST_FMT_SEC2_Enable:
+  - MATH
+  SFPU_DEST_FMT_SEC3_Base:
+  - MATH
+  SFPU_DEST_FMT_SEC3_Enable:
+  - MATH
+  SFPU_SRCS_BANK0_FORMAT:
+  - MATH
+  SFPU_SRCS_BANK1_FORMAT:
+  - MATH
+  SFPU_STACK_SEC0_Incr:
+  - MATH
+  SFPU_STACK_SEC1_Incr:
+  - MATH
+  SFPU_STACK_SEC2_Incr:
+  - MATH
+  SFPU_STACK_SEC3_Incr:
+  - MATH
+wormhole_b0:
+  ADDR_MOD_AB_SEC0_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC0_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC0_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC1_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC1_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC1_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC2_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC2_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC2_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC3_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC3_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC3_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC4_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC4_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC4_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC5_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC5_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC5_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC6_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC6_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC6_SrcBIncr:
+  - MATH
+  ADDR_MOD_AB_SEC7_BiasCntClear:
+  - MATH
+  ADDR_MOD_AB_SEC7_BiasCntIncr:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcACR:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcAClear:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcAIncr:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcBCR:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcBClear:
+  - MATH
+  ADDR_MOD_AB_SEC7_SrcBIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC0_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC0_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC1_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC1_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC2_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC2_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC3_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC3_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC4_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC4_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC5_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC5_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC6_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC6_BiasIncr:
+  - MATH
+  ADDR_MOD_BIAS_SEC7_BiasClear:
+  - MATH
+  ADDR_MOD_BIAS_SEC7_BiasIncr:
+  - MATH
+  ADDR_MOD_DST_SEC0_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC0_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC0_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC0_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC0_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC0_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC1_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC1_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC1_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC1_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC1_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC1_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC2_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC2_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC2_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC2_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC2_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC2_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC3_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC3_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC3_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC3_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC3_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC3_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC4_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC4_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC4_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC4_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC4_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC4_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC5_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC5_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC5_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC5_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC5_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC5_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC6_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC6_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC6_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC6_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC6_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC6_FidelityIncr:
+  - MATH
+  ADDR_MOD_DST_SEC7_DestCR:
+  - MATH
+  ADDR_MOD_DST_SEC7_DestCToCR:
+  - MATH
+  ADDR_MOD_DST_SEC7_DestClear:
+  - MATH
+  ADDR_MOD_DST_SEC7_DestIncr:
+  - MATH
+  ADDR_MOD_DST_SEC7_FidelityClear:
+  - MATH
+  ADDR_MOD_DST_SEC7_FidelityIncr:
+  - MATH
+  ADDR_MOD_SET_Base:
+  - MATH
+  ALU_ACC_CTRL_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_INT8_math_enabled:
+  - MATH
+  ALU_ACC_CTRL_SFPU_Fp32_enabled:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_dst:
+  - MATH
+  ALU_ACC_CTRL_Zero_Flag_disabled_src:
+  - MATH
+  ALU_FORMAT_SPEC_REG0_SrcA:
+  - MATH
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG0_SrcAUnsigned:
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG0_SrcBUnsigned:
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG1_SrcB:
+  - MATH
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG2_Dstacc:
+  - PACK
+  ALU_FORMAT_SPEC_REG_Dstacc_val:
+  - MATH
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG_SrcA_val:
+  - MATH
+  - PACK
+  - UNPACK
+  ALU_FORMAT_SPEC_REG_SrcB_val:
+  - MATH
+  - PACK
+  - UNPACK
+  ALU_ROUNDING_MODE_Bfp8_HF:
+  - MATH
+  ALU_ROUNDING_MODE_Fpu_srnd_en:
+  - MATH
+  ALU_ROUNDING_MODE_GS_LF:
+  - MATH
+  ALU_ROUNDING_MODE_Gasket_srnd_en:
+  - PACK
+  ALU_ROUNDING_MODE_Packer_srnd_en:
+  - PACK
+  DEST_OFFSET_Enable:
+  - MATH
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC0_Offset:
+  - MATH
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC0_ZOffset:
+  - MATH
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC1_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC1_ZOffset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC2_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC2_ZOffset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC3_Offset:
+  - PACK
+  DEST_TARGET_REG_CFG_PACK_SEC3_ZOffset:
+  - PACK
+  FP16A_FORCE_Enable:
+  - MATH
+  INT_DESCALE_Enable:
+  - PACK
+  INT_DESCALE_Mode:
+  - PACK
+  NOC_OVERLAY_MSG_CLEAR_MsgNum_0:
+  - PACK
+  - UNPACK
+  NOC_OVERLAY_MSG_CLEAR_StreamId_0:
+  - PACK
+  - UNPACK
+  PACK0_CFGREG_BASE:
+  - MATH
+  - PACK
+  - UNPACK
+  PACK_CONCAT_MASK_SEC0_pack_concat_mask:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_per_xy_plane_offset:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_reads_per_xy_plane:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_xys_per_tile:
+  - PACK
+  PACK_COUNTERS_SEC0_pack_yz_transposed:
+  - PACK
+  PCK_DEST_RD_CTRL_Read_32b_data:
+  - PACK
+  PCK_EDGE_MODE_mode:
+  - PACK
+  PCK_EDGE_OFFSET_SEC0_mask:
+  - PACK
+  PCK_EDGE_TILE_FACE_SET_SELECT_enable:
+  - PACK
+  PCK_EDGE_TILE_FACE_SET_SELECT_select:
+  - PACK
+  PCK_EDGE_TILE_ROW_SET_SELECT_select:
+  - PACK
+  RISC_PREFETCH_CTRL_Enable_Brisc:
+  - MATH
+  - PACK
+  - RISC
+  - UNPACK
+  RISC_PREFETCH_CTRL_Enable_NocRisc:
+  - MATH
+  - PACK
+  - RISC
+  - UNPACK
+  RISC_PREFETCH_CTRL_Enable_Trisc:
+  - MATH
+  - PACK
+  - RISC
+  - UNPACK
+  RISC_PREFETCH_CTRL_Max_Req_Count:
+  - MATH
+  - PACK
+  - RISC
+  - UNPACK
+  STACC_RELU_ApplyRelu:
+  - PACK
+  STACC_RELU_ReluThreshold:
+  - PACK
+  THCON_CFGREG_BASE:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG0_TileDescriptor:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Add_l1_dest_addr_offset:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Add_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Addr_cnt_context:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_All_pack_disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_All_pack_disable_zero_compress_ovrd:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Dis_shared_exp_assembler:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Disable_pack_zero_flags:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Downsample_mask:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Downsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Enable_out_fifo:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_threshold:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Exp_threshold_en:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Force_pack_per_max_xy_plane:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_In_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_L1_Dest_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_L1_source_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Pack_L1_Acc:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Read_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Row_start_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Source_interface_selection:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG1_Sub_l1_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Context_count:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Disable_zero_compress_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Force_shared_exp:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Haloize_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Ovrd_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Shift_amount_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Throttle_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Tileize_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_If_Sel:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_Src_Reg_Set_Upd:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_if_sel_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Unpack_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Upsample_and_interleave:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG2_Upsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG3_Base_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx4_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx5_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx6_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG4_Base_cntx7_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx0_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Dest_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG5_Tile_x_dim_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Buffer_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Destination_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Source_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG6_Transfer_direction:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Offset_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_data_format_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG7_Unpack_out_data_format_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Add_l1_dest_addr_offset:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Add_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Addr_cnt_context:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Dis_shared_exp_assembler:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Disable_pack_zero_flags:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Downsample_mask:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Downsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Enable_out_fifo:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_threshold:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Exp_threshold_en:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Force_pack_per_max_xy_plane:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_In_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_L1_Dest_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_L1_source_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Pack_L1_Acc:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Read_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Row_start_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Source_interface_selection:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG8_Sub_l1_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_0_2_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_0_2_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_1_3_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC0_REG9_Pack_1_3_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG0_TileDescriptor:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Add_l1_dest_addr_offset:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Add_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Addr_cnt_context:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_All_pack_disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_All_pack_disable_zero_compress_ovrd:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Dis_shared_exp_assembler:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Disable_pack_zero_flags:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Downsample_mask:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Downsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Enable_out_fifo:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_threshold:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Exp_threshold_en:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Force_pack_per_max_xy_plane:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_In_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_L1_Dest_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_L1_source_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Pack_L1_Acc:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Read_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Row_start_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Source_interface_selection:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG1_Sub_l1_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Context_count:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Disable_zero_compress_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Force_shared_exp:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Haloize_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Ovrd_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Shift_amount_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Throttle_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Tileize_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_If_Sel:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_Src_Reg_Set_Upd:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_if_sel_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Unpack_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Upsample_and_interleave:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG2_Upsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG3_Base_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx4_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx5_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx6_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG4_Base_cntx7_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx0_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Dest_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG5_Tile_x_dim_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Buffer_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Destination_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Source_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG6_Transfer_direction:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx1_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx2_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Offset_cntx3_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_data_format_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx0:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx1:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx2:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx3:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx4:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx5:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx6:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG7_Unpack_out_data_format_cntx7:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Add_l1_dest_addr_offset:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Add_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Addr_cnt_context:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Dis_shared_exp_assembler:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Disable_pack_zero_flags:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Disable_zero_compress:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Downsample_mask:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Downsample_rate:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Enable_out_fifo:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_threshold:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Exp_threshold_en:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Force_pack_per_max_xy_plane:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_In_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_L1_Dest_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_L1_source_addr:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Out_data_format:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Pack_L1_Acc:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Read_mode:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Row_start_section_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Source_interface_selection:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG8_Sub_l1_tile_header_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_0_2_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_0_2_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_1_3_fifo_size:
+  - MATH
+  - PACK
+  - UNPACK
+  THCON_SEC1_REG9_Pack_1_3_limit_address:
+  - MATH
+  - PACK
+  - UNPACK
+  UNP0_BLOBS_Y_START_CNTX_01_blobs_y_start:
+  - PACK
+  - UNPACK
+  UNPACK0_CFGREG_BASE:
+  - MATH
+  - PACK
+  - UNPACK
+  UNPACK1_CFGREG_BASE:
+  - MATH
+  - PACK
+  - UNPACK
