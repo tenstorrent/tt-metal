@@ -82,12 +82,34 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         has_mask ? datatype_to_dataformat_converter(tensor_args.mask.value().dtype()) : tt::DataFormat::Float16_b;
     const std::uint32_t mask_tile_size = tt::tile_size(mask_cb_data_format);
 
-    const tt::DataFormat im_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    // The intermediate buffers split into two groups with different needs, and treating them alike
+    // is what makes fp32 accumulation look expensive in L1.
+    //
+    // The bulk buffers - EXPS, X, SCALE_MASK - are Wt deep in the small kernel and capped near 80
+    // entries in the large one. They hold one value per element, so widening them buys element
+    // precision, which is not what is wrong, and costs L1 that grows with the row length. Widening
+    // them also pulls the use_large_kernel switch below down to shorter rows. They stay 16-bit. A
+    // float32 input keeps the wide buffers it has always had, since narrowing those would throw
+    // away input precision rather than accumulator precision.
+    //
+    // The sum accumulators - RECIP_SUM_EXPS, its PREV_REDUCE ping-pong partner in the large kernel,
+    // and RECIP - are one entry each and carry the running sum, which round-trips through L1 once
+    // per pass. That round trip is exactly where a 16-bit store undoes what an fp32 Dest just
+    // earned, and one entry of it costs 2 KB. They follow fp32_dest_acc_en.
+    //
+    // MAX and PREV_MAX stay with the bulk group. They are subtracted from the bulk buffers for
+    // numeric stability, and fp32 there against 16-bit operands widened the per-row spread at
+    // w <= 4096 (worst row 0.9916 -> 0.9648) for no gain in the mean.
+    const tt::DataFormat im_cb_data_format = (fp32_dest_acc_en && in0_cb_data_format == tt::DataFormat::Float32)
+                                                 ? tt::DataFormat::Float32
+                                                 : tt::DataFormat::Float16_b;
     const std::uint32_t im_tile_size = tt::tile_size(im_cb_data_format);
 
-    const tt::DataFormat sum_scaler_cb_data_format =
-        im_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    const std::uint32_t sum_scaler_tile_size = tt::tile_size(sum_scaler_cb_data_format);
+    const tt::DataFormat acc_cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint32_t acc_tile_size = tt::tile_size(acc_cb_data_format);
+
+    const tt::DataFormat sum_scaler_cb_data_format = acc_cb_data_format;
+    const std::uint32_t sum_scaler_tile_size = acc_tile_size;
 
     // Fixed block size that maximizes dest register usage: 4 with fp32 accumulation, 8 otherwise.
     // Widths not divisible by block_size are handled by the kernels via a clamped final block.
@@ -231,15 +253,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         .data_format_metadata = out0_cb_data_format});
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = RECIP_SUM_EXPS,
-        .entry_size = im_tile_size,
+        .entry_size = acc_tile_size,
         .num_entries = im1_t,
-        .data_format_metadata = im_cb_data_format});
+        .data_format_metadata = acc_cb_data_format});
     if (use_large_kernel) {
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = PREV_REDUCE,
-            .entry_size = im_tile_size,
+            .entry_size = acc_tile_size,
             .num_entries = im1_t,
-            .data_format_metadata = im_cb_data_format});
+            .data_format_metadata = acc_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = PREV_MAX,
             .entry_size = im_tile_size,
@@ -247,9 +269,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             .data_format_metadata = im_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = RECIP,
-            .entry_size = im_tile_size,
+            .entry_size = acc_tile_size,
             .num_entries = im1_t,
-            .data_format_metadata = im_cb_data_format});
+            .data_format_metadata = acc_cb_data_format});
     }
     dfbs.push_back(DataflowBufferSpec{
         .unique_id = MAX_SCALER,
