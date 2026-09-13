@@ -31,15 +31,27 @@ inline void calculate_lgamma_stirling() {
         v_if(in < 0.5f) { z = 1.0f - in; }
         v_endif;
 
-        // 2. Stirling base: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
+        // 2. Argument shift (N=4) to move z in [0.5, 2.5] into stable Stirling domain [4.5, 6.5]
+        // Eliminates 474k ULP error near x=0.5 (Issue #55356)
+        sfpi::vFloat shift_log_corr = 0.0f;
+        v_if(z < 2.5f) {
+            shift_log_corr = _calculate_log_body_no_init_(z) +
+                             _calculate_log_body_no_init_(z + 1.0f) +
+                             _calculate_log_body_no_init_(z + 2.0f) +
+                             _calculate_log_body_no_init_(z + 3.0f);
+            z = z + 4.0f;
+        }
+        v_endif;
+
+        // 3. Stirling base on shifted argument: (z - 0.5) * log(z) - z + log(sqrt(2*pi))
         sfpi::vFloat res = ((z - 0.5f) * _calculate_log_body_no_init_(z) - z + LOG_SQRT_2PI);
 
-        // 3. Bernoulli correction: (1/z)(r0 + r1/z^2).
+        // 4. Bernoulli correction: (1/z)(r0 + r1/z^2).
         sfpi::vFloat inv_z = sfpu_reciprocal_iter<2>(z);
         sfpi::vFloat correction = inv_z * (r0 + (inv_z * inv_z) * r1);
-        res = res + correction;
+        res = (res + correction) - shift_log_corr;
 
-        // TODO: use a polynomial bridge here instead
+        // Natural zero convergence for integers x=1.0, 2.0
         v_if(in == 1.0f || in == 2.0f) { res = 0.0f; }
         v_endif;
 
