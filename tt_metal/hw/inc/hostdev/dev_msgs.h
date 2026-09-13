@@ -173,8 +173,6 @@ struct kernel_config_msg_t {
     volatile uint16_t cross_node_dfb_offset;
     volatile uint32_t kernel_text_offset[MaxProcessorsPerCoreType];
     volatile uint32_t kernel_text_size[MaxProcessorsPerCoreType];
-    // On odd-processor architectures, reduce the prior 12-byte pad to 4 bytes. Both sizes preserve
-    // local_cb_mask's 8-byte alignment; the freed bytes make room for the fields below.
     volatile uint8_t pad4[(MaxProcessorsPerCoreType % 2) * 4];  // CODEGEN:skip
     volatile uint64_t local_cb_mask;
 
@@ -198,8 +196,6 @@ struct kernel_config_msg_t {
     // REMOTE_DFB_OFFSET_NONE (0xFF) means no PrefetcherPipes on this launch.
     // Placed after the 2-byte origin pair so the field is uint16-aligned.
     volatile uint16_t prefetcher_pipe_offset;
-    // Balance reload_table_addr and pad4 so kernel_config_msg_t keeps its previous size for both
-    // odd and even processor counts.
     volatile uint8_t pad3[9 - (MaxProcessorsPerCoreType % 2) * 2];  // CODEGEN:skip
 
     // Per-processor kernel thread info (Quasar: num threads for kernel on this processor; thread_id in that kernel;
