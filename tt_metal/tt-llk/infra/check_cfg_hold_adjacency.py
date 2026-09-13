@@ -39,12 +39,19 @@ the dependency, port and operand-readiness holds are longer than the post-operat
 fixed length. The Blackhole predicate is "a write to one of those fields inside a stretch of math
 work with no intervening math drain" -- no inducer, no adjacency, no window.
 
-LIMITATION, and it bounds what a clean run means. A fixed post-instruction stall is not the only
-way an instruction is held at issue on Wormhole: an ALU instruction is also held while the Dest
-dependency scoreboard matches an in-flight overlapping write, and that match does not compare thread
-ids. Such a hold has no adjacent inducer to key on, and the write it waits for may be another
-thread's, so it is not decidable from the text of one file. This check therefore covers the
-adjacency-decidable shape only; a clean run is not a proof that no config write can land in a hold.
+WHY THE INDUCER LIST IS WHAT IT IS. A fixed post-instruction stall is not the only way an
+instruction is held at issue on Wormhole. A Dest-reading instruction is also held while any Dest
+write is in flight, so in principle any Dest writer -- not just the move forms listed below -- could
+open this window. That was measured and it does NOT: injecting a Dest write with no post-move stall
+attached (a single-register ZEROACC, and four of them back to back) leaves the test green at the
+site where the move-form inducer turns it red through the full ladder, with a live detector and a
+distinct binary on every arm. So the exposing hold here is the post-move stall, and widening the
+inducer list to every Dest writer would add reach this check cannot justify.
+
+What that does NOT cover, and neither does a clean run: the same scoreboard also holds an ALU
+instruction on a fine-grained address match that does not compare thread ids, so the write being
+waited on may be another thread's. An ALU victim needs its source operands valid, which the probe
+above could not arrange without wedging the card, so that half is untested rather than cleared.
 
 Quasar has a DIFFERENT, inverted hazard (a following instruction reading a stale write, closed by
 one slot of separation) which this check does not model. Pointing this check at another
