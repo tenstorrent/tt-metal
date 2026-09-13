@@ -1019,6 +1019,34 @@ def before_loop(
         print(f"      depth-bridge skipped: {str(_bl_e)[:160]}", file=sys.stderr, flush=True)
         print(_tb.format_exc()[-600:], file=sys.stderr, flush=True)
 
+    # CAPACITY BRIDGE. measure_runs() (the remeasure/candidate loop, same make_run_profiled path)
+    # already shrinks OSL/flush-cadence via _capacity_scaled_osl when a model's own coverage probe
+    # measured too many op invocations per decode step for the declared OSL to profile safely --
+    # but this baseline (the FIRST tracy capture of the run, before any candidate) called
+    # profile_model directly and never went through that check. nemotron's own coverage probe
+    # already measures 27,577 op invocations per decode step (dense 128-expert MoE); at OSL=128
+    # that overflowed the per-core profiler buffer AND grew per-core tracy contexts without bound,
+    # OOMing the baseline before a single candidate ever ran. Reusing the SAME function, not a
+    # second copy: a model that never trips its budget is left completely untouched, exactly as
+    # for the remeasure loop.
+    try:
+        from . import gitio
+        from .measure import _capacity_scaled_osl
+
+        if not (os.environ.get("TT_PERF_OSL_TOKENS") or os.environ.get("PERF_MCP_PROFILE_TOKENS")):
+            _cap_scaled = _capacity_scaled_osl(None, gitio.repo_root(model_root), perf_rel, case, 128)
+            if _cap_scaled:
+                os.environ["TT_PERF_OSL_TOKENS"], os.environ["TT_PERF_FLUSH_EVERY"] = _cap_scaled
+                print(
+                    f"      capacity-bridge: OSL scaled to {_cap_scaled[0]} (flush every "
+                    f"{_cap_scaled[1]}) -- this model's own coverage probe measured too many op "
+                    f"invocations per step for the declared OSL to profile safely",
+                    file=sys.stderr,
+                    flush=True,
+                )
+    except Exception as _cap_e:  # noqa: BLE001
+        print(f"      capacity-bridge skipped: {str(_cap_e)[:160]}", file=sys.stderr, flush=True)
+
     def _run_baseline():
         return profile_model(
             perf_test=perf_rel,

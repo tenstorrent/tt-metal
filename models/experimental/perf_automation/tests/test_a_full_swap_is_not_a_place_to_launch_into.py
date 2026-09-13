@@ -482,3 +482,111 @@ def test_nemotron_pipeline_respects_the_low_memory_signal():
     src = inspect.getsource(P.build_pipeline)
     assert "PERF_MCP_LOW_MEM_REFERENCE" in src, "nemotron's build_pipeline does not honour the fallback signal"
     assert "torch.bfloat16" in src.split("load_reference")[0][-400:], "no bf16 branch precedes the reference load"
+
+
+# --------------------------------- the baseline's OWN tracy capture never had the capacity bridge --
+#
+# 2026-09-13. measure_runs() (agent.measure, the remeasure/candidate loop) already shrinks OSL and
+# flush cadence via _capacity_scaled_osl when a model's own coverage probe measured too many op
+# invocations per decode step for the declared OSL to profile safely -- built and documented for
+# THIS exact model (nvidia_nemotron_3_5_lightning_30b_a3b_bf16, 27,577+ op invocations/step, dense
+# 128-expert MoE). But before_loop.py's own _run_baseline -- the FIRST tracy capture of the run,
+# before any candidate exists to remeasure -- calls profile_model directly and never went through
+# that check, so the baseline itself OOM'd (anon-rss 78GB, confirmed live via py-spy sitting inside
+# ttnn.ReadDeviceProfiler) before a single lever was ever tried. Root cause, confirmed by reading
+# tt-metal's own vendored Tracy source (tt_metal/third_party/tracy/public/tracy/TracyTTDevice.hpp):
+# every NEW (chip, core) pair the profiler observes gets a permanent, never-freed ~16-64MB TTCtx
+# (a fixed 65536-slot event-record ring buffer) -- independent of flush cadence, so flushing more OR
+# less never fixed it; only touching fewer distinct cores (a shorter decode) does. Validated live:
+# capping the baseline the same way measure_runs() already does (OSL 128 -> 2, flush 32 -> 4 for
+# this model) kept peak RSS at ~43GB (vs the unbounded climb past 78GB) and produced a complete,
+# valid 59,063-row ops_perf_results CSV with no crash.
+
+
+def test_before_loop_baseline_reuses_the_capacity_bridge_not_a_copy():
+    """_run_baseline must call the SAME _capacity_scaled_osl measure_runs() already uses -- not a
+    second, duplicated shrink calculation -- so a fix to the one formula covers both launch points."""
+    import inspect
+
+    import models.experimental.perf_automation.agent.before_loop as BL
+
+    src = inspect.getsource(BL.before_loop)
+    assert "_capacity_scaled_osl(" in src, "the baseline path never calls the capacity bridge at all"
+    assert (
+        "from .measure import _capacity_scaled_osl" in src
+    ), "must import the shared implementation, not redefine the shrink formula locally"
+
+
+def test_before_loop_baseline_respects_an_explicit_osl_override():
+    """A caller (or a human) who explicitly set TT_PERF_OSL_TOKENS or PERF_MCP_PROFILE_TOKENS means
+    it -- the capacity bridge must not silently override a deliberate choice, matching
+    measure_runs()'s own '_explicit_osl' guard."""
+    import inspect
+
+    import models.experimental.perf_automation.agent.before_loop as BL
+
+    src = inspect.getsource(BL.before_loop)
+    i = src.index("_capacity_scaled_osl(")
+    window = src[max(0, i - 400) : i]
+    assert 'os.environ.get("TT_PERF_OSL_TOKENS")' in window, "no explicit-OSL guard precedes the call"
+    assert 'os.environ.get("PERF_MCP_PROFILE_TOKENS")' in window, "no explicit-PERF_MCP_PROFILE_TOKENS guard"
+
+
+def test_before_loop_baseline_call_precedes_run_baseline_definition():
+    """The bridge must set the env vars BEFORE _run_baseline is defined/called -- a fix that lands
+    after the capture already started would be a no-op."""
+    import inspect
+
+    import models.experimental.perf_automation.agent.before_loop as BL
+
+    src = inspect.getsource(BL.before_loop)
+    i = src.index("_capacity_scaled_osl(")
+    j = src.index("def _run_baseline():")
+    assert i < j, "the capacity bridge runs after _run_baseline is already defined"
+
+
+def test_capacity_scaled_osl_still_shrinks_for_nemotrons_measured_density():
+    """Regression pin for the exact numbers that drove this incident: this model's own coverage
+    cache already measured 38,604+ op invocations per decode step (dense 128-expert MoE) -- at the
+    declared OSL=128 that is millions of profiled invocations. The shrink must still trigger and
+    land at a small, safe OSL, not silently stop shrinking if the budget constant ever moves."""
+    from models.experimental.perf_automation.agent.measure import _capacity_scaled_osl
+
+    class _FakeRun:
+        @staticmethod
+        def coverage_cache_get_ops_per_step(repo_root, node, case):
+            return 38_604
+
+    import models.experimental.perf_automation.agent.probes as probes_mod
+
+    orig = probes_mod._cc_optimize
+    probes_mod._cc_optimize = lambda name: _FakeRun()
+    try:
+        result = _capacity_scaled_osl(None, "unused", "unused-node", "unused-case", 128)
+    finally:
+        probes_mod._cc_optimize = orig
+    assert result is not None, "a model this op-dense at OSL=128 must trigger the shrink"
+    osl, flush_every = result
+    assert int(osl) < 128, "the shrunk OSL is not actually smaller than the declared one"
+    assert int(flush_every) > 0
+
+
+def test_capacity_scaled_osl_leaves_a_light_model_untouched():
+    """A model whose coverage probe measured a normal op count per step must NOT be shrunk -- the
+    bridge's whole point is to leave everyone else exactly as before."""
+    from models.experimental.perf_automation.agent.measure import _capacity_scaled_osl
+
+    class _FakeRun:
+        @staticmethod
+        def coverage_cache_get_ops_per_step(repo_root, node, case):
+            return 200  # a normal model: 200 * 128 = 25,600, well under the 60,000 budget
+
+    import models.experimental.perf_automation.agent.probes as probes_mod
+
+    orig = probes_mod._cc_optimize
+    probes_mod._cc_optimize = lambda name: _FakeRun()
+    try:
+        result = _capacity_scaled_osl(None, "unused", "unused-node", "unused-case", 128)
+    finally:
+        probes_mod._cc_optimize = orig
+    assert result is None, "a model well under budget was shrunk anyway"
