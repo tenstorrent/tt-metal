@@ -16,7 +16,6 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
-    GlobalRingKVCache,
     ring_packed_prefill_attention,
     ring_prefill_attention,
     write_chunk_to_packed_ring_cache,
@@ -46,7 +45,7 @@ def prefill_forward(
         raise ValueError("Galaxy prefill requires a ring KV cache")
     tp = mesh_config.tp_degree
     chunk_offset = int(chunk_start_idx)
-    kv_tied = weights.is_global
+    kv_tied = config.is_kv_tied
     xqkv = apply_qkv_projection(hidden_states, weights, kv_tied=kv_tied)
 
     # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
@@ -64,8 +63,8 @@ def prefill_forward(
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
-    packed_global_ring = weights.is_global and isinstance(ring_kv_cache, GlobalRingKVCache)
-    packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
+    is_global = not config.is_sliding
+    is_sliding = config.is_sliding
     if weights.is_global:
         # The tied projection is one semantic KV value. Normalize it once without
         # gamma: this entire 512-wide result is V. K branches from this value;
@@ -80,7 +79,7 @@ def prefill_forward(
         tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
 
     # Apply RoPE to Q and the rotary part of K.
-    if packed_global_ring:
+    if is_global:
         if packed_global_rope is None:
             raise RuntimeError("packed global ring attention requires pre-gathered packed RoPE tensors")
         q_cos, q_sin, _, _, trans_mat = packed_global_rope
@@ -103,7 +102,7 @@ def prefill_forward(
         tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=act_mc)
         for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
             tensor.deallocate(True)
-    elif packed_sliding_ring:
+    elif is_sliding:
         if packed_sliding_rope is None:
             raise RuntimeError("packed sliding ring attention requires pre-gathered adjacent RoPE tensors")
         sliding_cos, sliding_sin, trans_mat = packed_sliding_rope
@@ -118,7 +117,7 @@ def prefill_forward(
         )
         k_unrotated.deallocate(True)
     sliding_window = config.sliding_window
-    if packed_global_ring:
+    if is_global:
         packed_q = tt_q
         packed_kv = pack_global_kv_device(
             tt_v,
@@ -161,7 +160,7 @@ def prefill_forward(
     )
     num_local_kv_heads_ring = tt_v.shape[1]
     ring_logical_n = ring_max_seq_len
-    if packed_global_ring:
+    if is_global:
         tt_sdpa = ring_packed_prefill_attention(
             packed_q,
             ring_kv_cache.kv,
