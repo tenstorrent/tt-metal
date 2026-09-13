@@ -1899,3 +1899,859 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 used.add(slot)
             slots.append(slot)
         return slots
+
+
+# ── TT-native speculative serving (B=1, session pattern) ─────────────────────
+#
+# Selected by the plugin's TT_GEMMA4_SPEC env (arg/gemma4_spec_serving):
+# same HF checkpoint/architectures, different decode class. Speculation is
+# model-internal (draft + verify inside ONE device step); each decode_forward
+# call emits exactly the step's contracted width: the full N-token block on a
+# solo decode step (EOS-filled at a genuine stop), or a width-1 row on batched
+# decode / prefill-anchor steps (the adaptive scheduler reserves one
+# placeholder there). No sentinel padding.
+# vLLM's speculative_config stays unset -- the platform assert is untouched.
+
+
+def _dflash_default_snapshot():
+    """Locate the z-lab drafter snapshot in the HF cache (harness parity)."""
+    import glob as _glob
+
+    hits = _glob.glob(os.path.expanduser("~/.cache/huggingface/hub/models--z-lab--gemma-4-31B-it-DFlash/snapshots/*/"))
+    return hits[0] if hits else None
+
+
+def _assistant_default_snapshot(hf_model):
+    """Resolve the it-assistant (MTP drafter) checkpoint path.
+
+    On the server ``HF_MODEL`` is a LOCAL weights-symlink dir, so the harness
+    default ``f"{HF_MODEL}-assistant"`` yields a bogus path that
+    AutoConfig.from_pretrained rejects (HFValidationError). Resolve robustly:
+    (1) if ``{hf_model}-assistant`` is an existing dir, use it; else (2) infer
+    the size (12B/31B) from the model string and glob the HF cache snapshot.
+    """
+    import glob as _glob
+
+    cand = f"{hf_model}-assistant"
+    if os.path.isdir(cand):
+        return cand
+    size = "12B" if "12B" in str(hf_model) else "31B"
+    hits = _glob.glob(
+        os.path.expanduser(f"~/.cache/huggingface/hub/models--google--gemma-4-{size}-it-assistant/snapshots/*/")
+    )
+    return hits[0] if hits else cand
+
+
+class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
+    """Gemma4 with the z-lab dFlash block-diffusion drafter, serving at B=1.
+
+    Session pattern (DiffusionGemma precedent): prefill captures the residual
+    taps (untraced -- traced prefill REPLAYS skip python-side hooks), the
+    first decode call seeds the fused decoder (drafter ctx ingest + one-time
+    trace capture at this request's horizon).
+
+    PERF: each vLLM decode step runs a tight INTERNAL loop of dFlash iterations
+    and commits a BLOCK of up to ``_SPEC_BLOCK`` tokens, so vLLM's ~135ms/iter
+    host overhead is amortized over the whole block (like DiffusionGemma's
+    256-token canvas) instead of one ~5-token iteration. This makes the server
+    decode rate device-bound and ~metal-parity (measured 31B P150X8: code
+    ~62 tok/s / prose ~47, vs metal demo 68/55 and baseline serving 26). The
+    runner-supplied per-token inputs are advisory: the fused decoder owns the
+    request's anchor/position state.
+    """
+
+    _SPEC_V = min(int(os.environ.get("GEMMA4_DFLASH_VERIFY", "7")), 15)
+    _SPEC_N = _SPEC_V + 1
+    # Server BLOCK size: one vLLM decode step runs a tight INTERNAL loop of
+    # dFlash iterations and emits up to this many committed tokens. This
+    # amortizes vLLM's ~135ms/iter host overhead over a whole block (like
+    # DiffusionGemma's 256-token canvas), so the server rate becomes
+    # device-bound and matches the metal-demo speculation gain instead of
+    # paying the host overhead once per ~5-token iteration.
+    _SPEC_BLOCK = int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64"))
+
+    model_capabilities = {
+        **Gemma4ForCausalLM.model_capabilities,
+        # Async overlaps host scheduling with the device decode for the ADAPTIVE
+        # BATCHED baseline fallback (conc>1), which returns raw device output the
+        # runner reads on the deferred pipeline -- baseline-entry parity (sync
+        # cost the fallback ~20-35% at conc-32). The plugin scheduler carries
+        # each step's block decision on its SchedulerOutput, so the solo spec
+        # block step (which returns committed host tokens with no read to
+        # overlap) stays correct under the async schedule/commit lag. Kill
+        # switch: GEMMA4_SUPPORTS_ASYNC_DECODE=0.
+        "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
+        "supports_sample_on_device": True,  # decode returns TOKENS (host)
+        # A solo-decode vLLM step commits exactly _SPEC_BLOCK valid tokens
+        # (short blocks are EOS-filled at a genuine stop; upstream trims).
+        # GEMMA4_DFLASH_SERVE_BLOCK=1 turns block-output OFF, so this impl can
+        # also be deployed as a plain batched baseline (max_num_seqs>1) for the
+        # concurrency>1 / throughput operating point -- see decode_forward.
+        "output_tokens_per_step": _SPEC_BLOCK,
+        # ADAPTIVE block-output: emit the spec block only when decoding ALONE
+        # (batch==1); batch>1 decodes as plain baseline (exactly 1 token per
+        # request, width-1 row -- the adaptive scheduler reserved exactly one
+        # placeholder for such steps; NO sentinel padding).
+        # This lets ONE server run max_num_seqs>1 -- dFlash at conc-1, baseline
+        # batched at conc>1 (never worse) -- instead of the static max_num_seqs=1
+        # block-output deployment. The scheduler reserves the K-token block only
+        # on a solo decode step. Off when block-output itself is off (BLOCK<=1).
+        "tt_adaptive_block_output": _SPEC_BLOCK > 1,
+        # Spec-capture DRAM frontier (GEMMA4_DFLASH_MAX_SPEC_ISL, 0 = no limit):
+        # a prompt longer than this serves as plain baseline for its whole
+        # lifetime (prefill_forward never arms a session -- see the ceiling gate
+        # there), so the adaptive scheduler must reserve width-1 for it even on
+        # solo decode steps. Declaring the SAME value here keeps the scheduler's
+        # reservation and the model's emission in lockstep with no sentinel.
+        "tt_adaptive_block_max_prompt_tokens": int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0")),
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._spec_drafter = None
+        self._spec_decoder = None
+        self._spec_decoder_bucket = None  # packed-verify width bucket of the cached decoder (reuse key)
+        self._spec_trace_ids = []
+        self._spec_pending = None  # (taps, prompt_len) awaiting first decode
+        # Identity of the request the pending/active session BELONGS to (see
+        # _spec_pt_identity). The session is a single global slot, so a solo
+        # decode must refuse taps captured for a different prompt.
+        self._spec_pending_owner = None
+        self._spec_active = False
+        self._spec_horizon = int(os.environ.get("GEMMA4_DFLASH_SERVE_HORIZON", "2048"))
+        logger.info(
+            f"Gemma4DFlash serving: V={self._SPEC_V} (N={self._SPEC_N}/step), "
+            f"horizon={self._spec_horizon} new tokens/request, B=1 sessions"
+        )
+
+    # -- drafter ------------------------------------------------------------
+    def _spec_get_drafter(self):
+        if self._spec_drafter is not None:
+            return self._spec_drafter
+        from models.demos.gemma4.tt.dflash_drafter import DFlashDrafter
+
+        snap = os.environ.get("GEMMA4_DFLASH_DRAFTER") or _dflash_default_snapshot()
+        if not snap:
+            raise RuntimeError("dFlash drafter snapshot not found; set GEMMA4_DFLASH_DRAFTER")
+        model0 = self.model[0]
+        weights_dir = os.environ.get("MODEL_WEIGHTS_DIR")
+
+        def _embed_loader():
+            import json as _json
+
+            from safetensors import safe_open
+
+            idx = _json.load(open(f"{weights_dir}/model.safetensors.index.json"))
+            key = next(
+                k
+                for k in idx["weight_map"]
+                if k.endswith("language_model.embed_tokens.weight") or k.endswith("model.embed_tokens.weight")
+            )
+            with safe_open(f"{weights_dir}/{idx['weight_map'][key]}", framework="pt") as f:
+                return f.get_tensor(key)
+
+        self._spec_drafter = DFlashDrafter(
+            mesh_device=self.mesh_device,
+            drafter_path=snap,
+            target_embed_weight_loader=_embed_loader,
+            mesh_config=model0.mesh_config,
+            ccl_manager=model0.ccl_manager,
+            tensor_cache_path=None,
+        )
+        return self._spec_drafter
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """Warm the BATCHED BASELINE decode buckets -- in spec mode too.
+
+        The adaptive model serves every concurrency>1 step through the plain
+        batched baseline, so those buckets need warming exactly like a non-spec
+        model. Only the SOLO spec step is a per-session fused trace, and that
+        genuinely cannot be pre-warmed: its capture is per request and bucketed
+        by prompt length (pv_bucket).
+
+        This used to no-op in spec mode because the base warmup reader rejected
+        the old sentinel-PADDED block output. That padding is gone -- the
+        batched and no-session paths now return RAW DEVICE OUTPUT at width 1 --
+        so the base warmup applies again. Skipping it made the first conc>1
+        request of a run pay trace capture inside the measured window: on a
+        P150x8 31B benchmark the 128/128 conc-32 cell showed TTFT 27.1 s cold
+        against 11.7 s once the same shape had been driven first.
+
+        Kill switch: GEMMA4_DFLASH_WARMUP_DECODE=0 restores the old no-op.
+        """
+        if self._SPEC_BLOCK <= 1:
+            return super().warmup_model_decode(*args, **kwargs)
+        if os.environ.get("GEMMA4_DFLASH_WARMUP_DECODE", "1").lower() not in (
+            "1",
+            "true",
+            "yes",
+        ):
+            del args, kwargs
+            self._decode_warmup_complete = True
+            logger.info("Gemma4DFlash: batched decode warmup disabled by env")
+            return None
+        logger.info("Gemma4DFlash: warming batched baseline decode buckets")
+        return super().warmup_model_decode(*args, **kwargs)
+
+    @staticmethod
+    def _spec_pt_identity(page_table):
+        """Stable identity for the request a spec session belongs to: the first
+        block id of its page-table row.
+
+        Serving runs with prefix caching OFF, so live requests own disjoint KV
+        blocks and a row's first block does not move while the request lives.
+        Available on BOTH the prefill and the decode call (``page_table``
+        kwarg), which is what lets the owner recorded at capture time be
+        re-checked before the taps are bootstrapped.
+        """
+        if page_table is None:
+            return None
+        try:
+            row = page_table[0] if page_table.dim() > 1 else page_table
+            return int(row.reshape(-1)[0])
+        except Exception:
+            return None
+
+    def _spec_pending_is_mine(self, page_table):
+        """True when the pending session was captured for the request whose
+        page table this is. Unknown identity on either side (no page table)
+        falls back to True: that is the pre-existing single-session behaviour,
+        and the scheduler's mirror still owns the width contract."""
+        owner = self._spec_pending_owner
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_drop_session(self, why):
+        """Drop the single global spec session (pending taps AND any live one).
+
+        Called on every path that serves a prefill as plain baseline. The taps
+        are only valid for the prompt they were captured from, and the session
+        slot is global: leaving it armed lets an unrelated later solo decode
+        bootstrap another prompt's residuals, and leaving a live session armed
+        lets it outlive the request whose width the scheduler reserved. The
+        plugin's scheduler mirrors exactly these transitions, so the reserved
+        width and the emitted width stay in lockstep.
+        """
+        if self._spec_pending is not None or self._spec_active:
+            logger.info(f"Gemma4DFlash: dropping spec session ({why})")
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        if self._spec_active:
+            self._spec_release_decoder()
+        # DISARM the residual-tap hook. capture() arms it with buffers=tap_bufs,
+        # which are sized for the fused DECODE body (P_v rows), and nothing
+        # disarms it when the session ends -- so it stays armed after any spec
+        # request. A later prefill served as plain baseline then runs the eager
+        # chunked forward with that hook still live and ttnn.copy's a full
+        # prefill chunk into a P_v-row buffer, killing the engine:
+        #   TT_FATAL: Input tensor shape Shape([1, 1, 4096, 5376]) does not
+        #   match output tensor shape Shape([1, 1, 6, 5376])
+        # (copy_device_operation.cpp:112 -- 4096 = prefill chunk, 6 = P_v at
+        # GEMMA4_DFLASH_VERIFY=5). Reproduced on a P150x8 256K benchmark sweep at
+        # the first point above GEMMA4_DFLASH_MAX_SPEC_ISL: 131072 served fine,
+        # 196608 took the engine down. Disarming here covers every drop path.
+        try:
+            self.model[0].dflash_capture_taps(None)
+        except Exception:
+            pass
+
+    # -- prefill: capture taps (untraced) ------------------------------------
+    def prefill_forward(self, *args, **kwargs):
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        # Baseline pickup: dFlash spec is B=1 block-output. In a non-block-output
+        # / throughput deployment (GEMMA4_DFLASH_SERVE_BLOCK=1) or for any
+        # batched (concurrency>1) prefill, serve via the plain baseline path and
+        # skip the drafter tap capture entirely.
+        if self._SPEC_BLOCK <= 1 or (tokens is not None and int(tokens.shape[0]) != 1):
+            # model0's dFlash tap-capture state is SHARED; a prior solo session
+            # can leave it armed (with decode-sized buffers). Disarm before a
+            # plain baseline prefill so the tap hook does not fire on it (a stale
+            # buffer copy would shape-mismatch against the prefill hidden).
+            try:
+                self.model[0].dflash_capture_taps(None)
+            except Exception:
+                pass
+            self._spec_drop_session("baseline prefill")
+            if self._SPEC_BLOCK > 1:
+                # gemma4's prefill KV-history write (_left_pad_kv_to_hist) is not
+                # trace-safe; the dFlash spec prefill runs untraced for the same
+                # reason. Keep the adaptive batched baseline prefill untraced too.
+                kwargs["enable_trace"] = False
+            return super().prefill_forward(*args, **kwargs)
+        drafter = self._spec_get_drafter()
+        model0 = self.model[0]
+        # Boot warmup prefills feed all-zero dummy tokens (and warmup_prefill=1);
+        # capturing their taps would seed the drafter ctx with garbage. Only the
+        # REAL prompt prefill sets the pending spec session.
+        is_warmup = bool(kwargs.get("warmup_prefill")) or (tokens is not None and int(tokens.abs().sum()) == 0)
+        # Force EAGER prefill: the residual taps are captured by a python hook in
+        # the eager forward, which a traced replay skips. enable_trace=False gates
+        # the prefill-bucket trace; GEMMA4_CHUNKED_PREFILL_TRACE=0 (model spec)
+        # gates the per-chunk trace so multi-chunk prefills (ISL > one chunk)
+        # still fire the hook -- without it the drafter gets empty taps at ISL
+        # above the chunk size and the request fails.
+        kwargs["enable_trace"] = False
+        if is_warmup:
+            return super().prefill_forward(*args, **kwargs)
+        # SPEC-ISL CEILING (GEMMA4_DFLASH_MAX_SPEC_ISL, 0=off): above this prompt
+        # length the fused-verify capture no longer fits in DRAM alongside the
+        # batched-baseline persistent buffers (max_num_seqs>1) -- the capture
+        # allocation OOMs (bank_manager.cpp:462) and kills the engine. Serve such
+        # requests as plain baseline through the existing solo-no-session adaptive
+        # path instead: skip the tap capture entirely so decode finds no pending
+        # session. Frontier measured on P150x8 @ ctx=262144:
+        # max_num_seqs=32 -> 131072 OK / 196608 OOM; 16 -> 196608 OK / 229376 OOM;
+        # 1 -> 253952 OK. Keeps full batch fallback capacity while long-context
+        # requests degrade gracefully to baseline speed rather than crashing.
+        _max_spec_isl = int(os.environ.get("GEMMA4_DFLASH_MAX_SPEC_ISL", "0"))
+        if _max_spec_isl > 0:
+            _pl = kwargs.get("prompt_lens")
+            _n0 = int(_pl[0]) if _pl is not None else int(tokens.shape[1])
+            if _n0 > _max_spec_isl:
+                logger.info(
+                    f"Gemma4DFlash: prompt {_n0} > spec ceiling {_max_spec_isl}; "
+                    "serving as plain baseline (no spec session)"
+                )
+                self._spec_drop_session("prompt over spec ceiling")
+                return super().prefill_forward(*args, **kwargs)
+        model0.dflash_capture_taps(drafter.target_layer_ids, keep_last=12)
+        try:
+            out = super().prefill_forward(*args, **kwargs)
+        finally:
+            taps = model0.pop_dflash_taps()
+            model0.dflash_capture_taps(None)
+        prompt_lens = kwargs.get("prompt_lens")
+        n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
+        self._spec_pending = (taps, n)
+        self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
+        self._spec_active = False
+        return out
+
+    # -- decode: one fused spec iteration per call ----------------------------
+    def _spec_bootstrap(self, anchor_id, start, page_table, kv_cache, page_tables_per_layer=None):
+        import time as _time
+
+        from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
+
+        taps, n = self._spec_pending
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        if start != n:
+            logger.warning(f"Gemma4DFlash: first decode start_pos {start} != prompt_len {n}")
+        kv_layers = kv_cache
+        if (
+            isinstance(kv_layers, (list, tuple))
+            and kv_layers
+            and isinstance(kv_layers[0], (list, tuple))
+            and kv_layers[0]
+            and isinstance(kv_layers[0][0], (list, tuple))
+        ):
+            kv_layers = kv_layers[0]
+        model0 = self.model[0]
+        # BOUNDED sliding target (auto-enabled at >=131072): install the hybrid
+        # per-layer page tables so the fused verify's v_ptl / _pv_setup read the
+        # small RING pool for sliding layers and the flat global table for full-
+        # attention layers -- the exact set the metal harness installs via
+        # build_hybrid_page_tables (dflash_isl_sweep.py). Without it the verify
+        # falls through to the flat table for EVERY layer, so sliding layers read
+        # the wrong physical blocks, every draft is rejected, and acceptance
+        # collapses (~1 tok/iter) at >=131072. Unbounded (<131072) leaves it unset
+        # (flat table is already correct), preserving the current path.
+        if self._bounded_sliding_kv_cache and page_table is not None:
+            # No fallback: continuing with the flat table makes sliding layers
+            # read the wrong physical blocks and silently collapses acceptance
+            # (~1 tok/iter) -- fail the request loudly instead (review finding
+            # on tt-metal#56048).
+            _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
+            _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
+            if not _ptpl:
+                raise RuntimeError(
+                    "Gemma4DFlash: bounded per-layer page-table install produced "
+                    "no tables; refusing to speculate against the flat table"
+                )
+            model0._active_page_tables_per_layer = _ptpl
+        pt = page_table[:1] if page_table is not None else None
+        horizon = self._spec_horizon
+        t0 = _time.time()
+        # REUSE the cached fused decoder when the new request shares its packed-
+        # verify width bucket (pv_sk buckets by start/1024): the captured trace
+        # reads persistent input buffers, so refreshing the KV page tables +
+        # re-ingesting the prompt taps + re-uploading the anchor/pv inputs
+        # re-points it at this request WITHOUT the ~2.6 s capture and WITHOUT
+        # allocating/freeing a fresh decoder's buffers (which fragments DRAM).
+        # A bucket change (different prompt length band) releases + re-captures.
+        dec = self._spec_decoder
+        # Cross-request decoder reuse: DEFAULT OFF, conservatively -- the two
+        # paths are now EQUIVALENT, so OFF is simply the unchanged behaviour and
+        # not a considered preference.
+        #
+        # The earlier rationale here ("reseeded sessions draft worse": capture
+        # 4.2-5.5 vs reseeded 1.9-3.7 tokens/iter, reuse ON ~2x slower at
+        # ISL >= 1024) was an ARTIFACT of the page-table lifetime bug and is
+        # retracted. That bug corrupted the no-reuse branch only -- release
+        # deleted the per-layer tables the bootstrap had just installed -- so it
+        # made freshly CAPTURED sessions look bad and, when the numbers happened
+        # to fall the other way, reuse look bad. reseed() was never the problem.
+        #
+        # Re-measured on a P150x8 31B server AFTER that fix, 40,624-token prompt,
+        # 4 identical requests, temperature 0 -- byte-identical replies both ways:
+        #   acceptance   OFF 3.05/4.12/4.16/4.16   ON 3.05/4.12/4.16/4.16
+        #   wall/request OFF 13.8-13.9 s           ON 12.7-12.8 s
+        #   median TPOT  OFF 29.16 ms              ON 30.16 ms  (random ISL 32768)
+        # ON saves the ~1.1 s capture per request and costs nothing measurable in
+        # TPOT, so GEMMA4_DFLASH_DECODER_REUSE=1 is a safe win on workloads that
+        # stay inside one packed-verify width bucket; it is not the default only
+        # because bucket churn re-captures anyway and the DRAM-fragmentation
+        # question for long-lived servers has not been measured.
+        _reuse_ok = os.environ.get("GEMMA4_DFLASH_DECODER_REUSE", "0").lower() in ("1", "true", "yes")
+        reused = (
+            _reuse_ok
+            and dec is not None
+            and pt is not None
+            and dec.pv_bucket(int(start), horizon) == self._spec_decoder_bucket
+        )
+        if reused:
+            dec.refresh_page_tables(pt)
+            dec.prefill_ingest(taps, n)
+            dec.reseed(int(anchor_id), int(start))
+        else:
+            # Keep the per-layer tables installed above: the new decoder reads
+            # them in __init__ (see _spec_release_decoder's drop_page_tables).
+            self._spec_release_decoder(drop_page_tables=False)
+            dec = DFlashFusedDecoder(model0, self._spec_get_drafter(), kv_layers, pt)
+            dec.prefill_ingest(taps, n)
+            dec.capture(int(anchor_id), int(start), max_new=horizon)
+            self._spec_decoder = dec
+            self._spec_decoder_bucket = dec.pv_bucket(int(start), horizon)
+        self._spec_active = True
+        self._spec_first_step = True
+        self._spec_last_pt = None
+        # verify masks/tables were sized for this horizon; past it the packed
+        # verify would attend past its capture -- end the request cleanly then.
+        self._spec_budget_end = int(start) + horizon - self._SPEC_N - 1
+        logger.info(
+            f"Gemma4DFlash session: {'REUSE' if reused else 'capture'} {_time.time()-t0:.2f}s "
+            f"(anchor={int(anchor_id)}, start={start}, bucket={self._spec_decoder_bucket})"
+        )
+
+    def _spec_release_decoder(self, drop_page_tables=True):
+        dec = self._spec_decoder
+        self._spec_decoder = None
+        self._spec_decoder_bucket = None
+        self._spec_active = False
+        # Drop the bounded per-layer tables installed for this session so a later
+        # BATCHED baseline decode (adaptive fallback) rebuilds its own set instead
+        # of reading this request's stale ring tables. Re-installed on next
+        # bootstrap; kept alive DURING the session because refresh reads it.
+        #
+        # ``drop_page_tables=False`` is for the one caller that releases the OLD
+        # decoder AFTER installing the NEW request's tables (_spec_bootstrap's
+        # no-reuse branch). Dropping them there deletes the install that the
+        # DFlashFusedDecoder constructed on the next line depends on: its v_ptl
+        # comes from model._active_page_tables_per_layer, so the new session
+        # would fall back to the FLAT table for sliding layers and decode
+        # garbage at long context.
+        if drop_page_tables:
+            try:
+                if hasattr(self.model[0], "_active_page_tables_per_layer"):
+                    del self.model[0]._active_page_tables_per_layer
+            except Exception:
+                pass
+        if dec is None:
+            return
+        try:
+            if getattr(dec, "trace", None) is not None:
+                ttnn.release_trace(self.mesh_device, dec.trace)
+        except Exception as e:
+            logger.warning(f"Gemma4DFlash: trace release failed: {e!r}")
+        for attr in ("ctx_k", "ctx_v"):
+            for t in getattr(dec, attr, None) or []:
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+        for attr in (
+            "ctx_dev",
+            "fc_prev",
+            "merge_idx",
+            "commit_pos",
+            "noise_rows",
+            "anchor_row",
+            "anchor_tok",
+            "blk_pos",
+            "mask_full",
+            "mask_slide",
+            "pv_iota",
+            "pv_mask_slide",
+            "pv_pos",
+            "pv_widx_all",
+            "out_ids",
+        ):
+            t = getattr(dec, attr, None)
+            if t is not None:
+                try:
+                    t.deallocate(True)
+                except Exception:
+                    pass
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        start_pos = kwargs.get("start_pos")
+        if start_pos is None and len(args) > 1:
+            start_pos = args[1]
+        if tokens is None:
+            raise ValueError("Gemma4DFlash decode expects token input")
+        batch = int(tokens.shape[0])
+        # Throughput mode (GEMMA4_DFLASH_SERVE_BLOCK=1 -> block-output OFF): plain
+        # batched baseline at width 1, no spec, no padding.
+        if self._SPEC_BLOCK <= 1:
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        # Adaptive block-output: a BATCHED decode step (concurrency>1) runs plain
+        # baseline and returns a host block padded to the reserved width K, so the
+        # width-1 row (one valid token per request, no padding). The scheduler
+        # reserved a single placeholder for this batched step (see TTScheduler),
+        # matching the one real token per row. A solo request that just joined a
+        # batch drops its dFlash session first -- baseline then owns its KV from
+        # vLLM's committed position.
+        if batch != 1:
+            if self._spec_active or self._spec_pending is not None:
+                self._spec_pending = None
+                self._spec_release_decoder()
+            # Disarm any shared tap capture so the baseline decode forward does
+            # not fire the dFlash tap hook (see prefill_forward).
+            try:
+                self.model[0].dflash_capture_taps(None)
+            except Exception:
+                pass
+            # Return the RAW device output (honoring read_from_device): the
+            # runner's read_decode_output/process_decode_output_host/
+            # _get_output_tokens pipeline converts, trims to the real batch, and
+            # samples exactly as for a plain baseline model -- and under async
+            # scheduling the deferred read overlaps the next step's host
+            # scheduling (the whole point of the batched fallback). The width-1
+            # rows commit through the adaptive scheduler's non-block path.
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        anchor_from_runner = int(tokens.reshape(-1)[0])
+        if self._spec_pending is not None and not self._spec_pending_is_mine(kwargs.get("page_table")):
+            # The pending taps were captured for a DIFFERENT request (its
+            # owner finished or was aborted before it ever decoded).
+            # Bootstrapping them here would speculate from another prompt's
+            # residuals and another prompt's length -- wrong tokens, not just
+            # a wrong width. Drop them and serve this request as plain
+            # baseline, which is also the width the scheduler reserved (its
+            # session mirror sees this request as a non-owner too).
+            logger.warning(
+                "Gemma4DFlash: pending spec session belongs to another request; " "serving this one as plain baseline"
+            )
+            self._spec_pending = None
+            self._spec_pending_owner = None
+        if self._spec_pending is not None:
+            start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
+            self._spec_bootstrap(
+                anchor_from_runner,
+                start,
+                kwargs.get("page_table"),
+                kwargs.get("kv_cache"),
+                page_tables_per_layer=page_tables_per_layer,
+            )
+        if not self._spec_active:
+            # Solo decode but no dFlash session -- e.g. a request that prefilled
+            # BATCHED (concurrency>1, no tap capture) and is now decoding alone
+            # after its peers finished. It cannot speculate (no taps), so serve
+            # it as plain baseline: raw device output, one width-1 row through
+            # the runner's baseline pipeline (same as the batched branch above).
+            try:
+                self.model[0].dflash_capture_taps(None)
+            except Exception:
+                pass
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
+        dec = self._spec_decoder
+        if not self._spec_first_step and anchor_from_runner != dec.anchor:
+            logger.warning(
+                f"Gemma4DFlash: runner anchor {anchor_from_runner} != session anchor "
+                f"{dec.anchor}; trusting the session (advisory-input contract)"
+            )
+        # Refresh the verify page tables from vLLM's CURRENT per-request block
+        # table when it CHANGES (the KV manager allocates a new block only every
+        # ~block_size tokens).
+        cur_pt = kwargs.get("page_table")
+        if cur_pt is not None:
+            row = cur_pt[:1] if cur_pt.dim() > 1 else cur_pt
+            prev = getattr(self, "_spec_last_pt", None)
+            if prev is None or not torch.equal(prev, row):
+                dec.refresh_page_tables(row)
+                self._spec_last_pt = row.clone()
+        # BLOCK LOOP: run dFlash iterations back-to-back until this step's block
+        # of up to _SPEC_BLOCK tokens is filled (or EOS / horizon). This is the
+        # metal-demo tight loop, moved INSIDE one vLLM decode step so vLLM's
+        # per-step host overhead is amortized over the whole block instead of
+        # one ~5-token iteration -- the server rate then tracks the device-bound
+        # speculation gain.
+        eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
+        eos_set = set(eos) if isinstance(eos, (list, tuple)) else {int(eos)}
+        vocab = dec.drafter.vocab
+        block = []
+        while len(block) < self._SPEC_BLOCK:
+            if dec.start >= self._spec_budget_end:
+                block.append(min(eos_set))
+                break
+            accepted, bonus, produced = dec.step(first=self._spec_first_step)
+            self._spec_first_step = False
+            self._spec_iters = getattr(self, "_spec_iters", 0) + 1
+            self._spec_tokens = getattr(self, "_spec_tokens", 0) + produced
+            committed = list(accepted) + [bonus]
+            oov = [t for t in committed if not 0 <= t < vocab]
+            if oov:
+                # The verify posterior produced an id outside the vocab -- a
+                # sign of upstream corruption, not a normal decode event.
+                # Substitute to keep the wire valid but SAY so (review finding
+                # on tt-metal#56048: never mask this silently).
+                if not getattr(self, "_spec_oov_warned", False):
+                    self._spec_oov_warned = True
+                    logger.warning(
+                        f"Gemma4DFlash: {len(oov)} out-of-vocab committed id(s) "
+                        f"(first={oov[0]}, vocab={vocab}); substituting. "
+                        "Investigate verify integrity if this repeats."
+                    )
+                committed = [t if 0 <= t < vocab else int(bonus if 0 <= bonus < vocab else 1) for t in committed]
+            block.extend(committed)
+            if eos_set & set(committed):
+                break
+        block = block[: self._SPEC_BLOCK]
+        # Exactly-K valid tokens: a short block happens only at a genuine stop
+        # (EOS emitted or horizon exhausted), so fill the tail with EOS -- the
+        # scheduler trims committed tokens at the first stop token, and the
+        # plugin no longer accepts sentinel padding.
+        out = torch.full((1, self._SPEC_BLOCK), min(eos_set), dtype=torch.int32)
+        out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
+        return out
+
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        # A SOLO SPEC BLOCK step returns committed host tokens from
+        # decode_forward -- nothing to read, pass them straight through (no
+        # events). Every other output is a DEVICE tensor: throughput mode, and
+        # the adaptive batched / no-session baseline steps that now return raw
+        # device output for the async read overlap. Route those to the base
+        # reader (events under async_read) so the deferred pipeline reads them.
+        import torch
+
+        if self._SPEC_BLOCK > 1 and isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+        return super().read_decode_output(tt_out, async_read, *_, **__)
+
+    # -- plugin lifecycle hooks (block-output contract) -----------------------
+    def release_request(self, row: int) -> None:
+        """Request finished (B=1 -> row ignored). KEEP the cached fused decoder
+        alive so the next request in the same packed-verify width bucket reuses
+        it -- no ~2.6 s re-capture, no per-request buffer churn. The decoder is
+        released on a bucket change (_spec_bootstrap) or at capture teardown
+        (release_persistent_capture)."""
+        it = getattr(self, "_spec_iters", 0)
+        if it:
+            tk = getattr(self, "_spec_tokens", 0)
+            logger.info(f"Gemma4DFlash decode summary: {it} iters, {tk} tokens, " f"{tk/max(1,it):.2f} tokens/iter")
+        self._spec_iters = 0
+        self._spec_tokens = 0
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        self._spec_active = False  # session inactive, decoder retained for reuse
+
+    def release_persistent_capture(self) -> None:
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        self._spec_release_decoder()
+
+
+class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
+    """Gemma4 with the it-assistant (KV-shared) drafter, serving at B=1.
+
+    Same session pattern as :class:`Gemma4DFlashForCausalLM` but no prefill
+    taps (the drafter cross-attends the target's own KV), so prefill stays on
+    the normal traced path. Each decode call is ONE fused draft+verify
+    iteration via ``SpeculativeDecoder.serving_step``.
+    """
+
+    _SPEC_K = int(os.environ.get("GEMMA4_SPEC_DRAFT_LEN", "5").replace("auto", "5"))
+    _SPEC_N = _SPEC_K + 1
+
+    model_capabilities = {
+        **Gemma4ForCausalLM.model_capabilities,
+        "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
+        "supports_sample_on_device": True,
+        "output_tokens_per_step": _SPEC_N,
+        "tt_spec_variable_output": True,
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._spec_assistant = None
+        self._spec = None
+        self._spec_pending = None  # prompt_len awaiting first decode
+        self._spec_first_step = True
+        self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
+        logger.info(
+            f"Gemma4MTP serving: K={self._SPEC_K} (N={self._SPEC_N}/step), "
+            f"horizon={self._spec_horizon} new tokens/request, B=1 sessions"
+        )
+
+    def warmup_model_decode(self, *args, **kwargs):
+        """No-op: decode is the per-session fused spec trace (see dFlash twin)."""
+        del args, kwargs
+        self._decode_warmup_complete = True
+        logger.info("Gemma4MTP: decode warmup is a no-op (per-session fused spec trace)")
+
+    def prefill_forward(self, *args, **kwargs):
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        if tokens is not None and int(tokens.shape[0]) != 1:
+            raise ValueError(
+                "Gemma4MTP serving is B=1 (set max_num_seqs=1 in the model spec); "
+                f"got prefill batch {int(tokens.shape[0])}"
+            )
+        out = super().prefill_forward(*args, **kwargs)
+        prompt_lens = kwargs.get("prompt_lens")
+        n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
+        self._spec_pending = n
+        return out
+
+    def _spec_bootstrap(self, anchor_id, start, page_table, kv_cache, page_tables_per_layer=None):
+        import time as _time
+
+        from models.demos.gemma4.tt.common import create_assistant_model
+        from models.demos.gemma4.tt.spec_decode import SpeculativeDecoder
+
+        n = self._spec_pending
+        self._spec_pending = None
+        if start != n:
+            logger.warning(f"Gemma4MTP: first decode start_pos {start} != prompt_len {n}")
+        if self._spec is not None:
+            self._spec.serving_release()
+            self._spec = None
+        model0 = self.model[0]
+        # BOUNDED sliding target (auto-enabled at >=131072): install the hybrid
+        # per-layer page tables BEFORE the SpeculativeDecoder capture so its
+        # fused body reads the small RING pool for sliding layers and the flat
+        # global table for full attention (spec_decode.py reads
+        # ``_active_page_tables_per_layer`` throughout -- built for the metal
+        # harness, which always installs this set). Without it the verify reads
+        # the flat table for EVERY layer, sliding layers hit wrong physical
+        # blocks, and acceptance collapses -- the same serving gap fixed for
+        # dFlash. MTP is B=1 with a fresh capture per request and block-output
+        # pre-allocates the full block table, so a one-time install per
+        # bootstrap suffices (no per-block refresh needed).
+        if self._bounded_sliding_kv_cache and page_table is not None:
+            # No fallback: a missing install means the fused verify reads the
+            # flat table for sliding layers and acceptance silently collapses
+            # -- fail loudly instead (review finding on tt-metal#56048).
+            if hasattr(model0, "_active_page_tables_per_layer"):
+                del model0._active_page_tables_per_layer
+            _ptpl = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
+            _ptpl = self._pad_sliding_page_tables_for_bounded(_ptpl, kv_cache, authoritative=True)
+            if not _ptpl:
+                raise RuntimeError(
+                    "Gemma4MTP: bounded per-layer page-table install produced "
+                    "no tables; refusing to speculate against the flat table"
+                )
+            model0._active_page_tables_per_layer = _ptpl
+        if self._spec_assistant is None:
+            assistant_path = os.environ.get("GEMMA4_ASSISTANT_MODEL") or _assistant_default_snapshot(
+                os.environ.get("HF_MODEL", "google/gemma-4-31B-it")
+            )
+            _, self._spec_assistant = create_assistant_model(
+                mesh_device=self.mesh_device,
+                target_model=model0,
+                mesh_config=model0.mesh_config,
+                ccl_manager=model0.ccl_manager,
+                assistant_path=assistant_path,
+                max_seq_len=int(start) + self._spec_horizon + 64,
+            )
+        kv_layers = kv_cache
+        if (
+            isinstance(kv_layers, (list, tuple))
+            and kv_layers
+            and isinstance(kv_layers[0], (list, tuple))
+            and kv_layers[0]
+            and isinstance(kv_layers[0][0], (list, tuple))
+        ):
+            kv_layers = kv_layers[0]
+        t0 = _time.time()
+        spec = SpeculativeDecoder(
+            target_model=model0,
+            assistant_model=self._spec_assistant,
+            mesh_device=self.mesh_device,
+            tt_kv_cache=kv_layers,
+            page_table_torch=page_table[:1] if page_table is not None else None,
+            stop_tokens=set(),
+            draft_len=self._SPEC_K,
+        )
+        spec._use_trace = True
+        spec.serving_setup(int(anchor_id), int(start), max_new_tokens=self._spec_horizon)
+        self._spec = spec
+        self._spec_cur = (int(anchor_id), int(start))
+        self._spec_first_step = True
+        self._spec_budget_end = int(start) + self._spec_horizon - self._SPEC_N - 1
+        logger.info(
+            f"Gemma4MTP session: seed+capture {_time.time()-t0:.1f}s " f"(anchor={int(anchor_id)}, start={start})"
+        )
+
+    def decode_forward(self, *args, page_tables_per_layer=None, **kwargs):
+        tokens = kwargs.get("tokens")
+        if tokens is None and args:
+            tokens = args[0]
+        start_pos = kwargs.get("start_pos")
+        if start_pos is None and len(args) > 1:
+            start_pos = args[1]
+        if tokens is None or int(tokens.shape[0]) != 1:
+            raise ValueError("Gemma4MTP decode expects B=1 token input")
+        anchor_from_runner = int(tokens.reshape(-1)[0])
+        if self._spec_pending is not None:
+            start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
+            self._spec_bootstrap(
+                anchor_from_runner,
+                start,
+                kwargs.get("page_table"),
+                kwargs.get("kv_cache"),
+                page_tables_per_layer=page_tables_per_layer,
+            )
+        if self._spec is None:
+            raise RuntimeError("Gemma4MTP decode without an active session (prefill first)")
+        cur_token, cur_pos = self._spec_cur
+        if cur_pos >= self._spec_budget_end:
+            eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
+            if isinstance(eos, (list, tuple)):
+                eos = eos[0]
+            logger.warning(
+                f"Gemma4MTP: horizon ({self._spec_horizon} new tokens) exhausted at "
+                f"position {cur_pos}; ending the request with EOS"
+            )
+            out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
+            out[0, 0] = int(eos)
+            return out
+        committed, m = self._spec.serving_step(cur_token, cur_pos)
+        self._spec_cur = (committed[-1], cur_pos + m + 1)
+        out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
+        out[0, : len(committed)] = torch.tensor(committed, dtype=torch.int32)
+        return out
+
+    def read_decode_output(self, tt_out, async_read=False, *_, **__):
+        return (tt_out, []) if async_read else tt_out
+
+    # -- plugin lifecycle hooks (block-output contract) -----------------------
+    def release_request(self, row: int) -> None:
+        self._spec_pending = None
+        if self._spec is not None:
+            self._spec.serving_release()
+            self._spec = None
+
+    def release_persistent_capture(self) -> None:
+        self._spec_pending = None
+        if self._spec is not None:
+            self._spec.serving_release()
+            self._spec = None
