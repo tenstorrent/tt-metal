@@ -11,9 +11,7 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rop
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
-from models.demos.gemma4_d_p.tt.rms_norm import RMSNorm
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
-from models.demos.gemma4_d_p.utils.substate import substate
 
 
 def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
@@ -294,15 +292,7 @@ class Gemma4Model:
 
         self.tt_kv_cache = [layer.self_attn.ring_kv_cache for layer in self.layers]
 
-        # Final norm
-        norm_state = substate(state_dict, "model.language_model.norm")
-
-        self.norm = RMSNorm(
-            mesh_config=mesh_config,
-            hf_config=hf_config,
-            state_dict=norm_state,
-            tensor_cache_path=f"{tensor_cache_path}/final_norm" if tensor_cache_path else None,
-        )
+        # Skip final norm
 
     def _get_rope_mats(self, layer_idx, seq_len=None, start_pos=0):
         """Slice chunk-major RoPE caches using a CP-local row offset."""
@@ -330,7 +320,7 @@ class Gemma4Model:
         d2h_service=None,
         metadata_msg=None,
     ):
-        """Prefill one user's chunk and return its post-norm hidden states.
+        """Prefill one user's chunk and return its final decoder hidden states.
 
         The caller owns trace staging and runs the LM head on the final token
         after the last chunk. Migration acknowledgements follow each layer's KV writes.
@@ -383,7 +373,7 @@ class Gemma4Model:
                 else:
                     ttnn.synchronize_device(self.mesh_device)
                     on_layer_complete(i)
-        return self.norm.forward(hidden_states)
+        return hidden_states
 
     def _cp_gather_prefill_sequence(self, hidden_states):
         """Gather a chunk across CP ranks without freeing the caller-owned hidden states."""
