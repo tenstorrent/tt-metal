@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -324,6 +325,47 @@ std::vector<uint32_t> make_compute_ct(
     };
 }
 
+// A gate/up weight run is ONE NoC transaction only while it stays inside a single shard. The reader
+// and the writer walk each core's hidden slice in gu_chunk_w-wide chunks (read_weight_chunk in
+// kernels/moe_fused_swiglu_dataflow.hpp), so a shard width that does not tile that walk splits every
+// crossing chunk into two transactions -- correct, and half the coalescing an ND-sharded placement
+// exists to buy. Counted against the real walk rather than a divisibility rule, because hn_starts is
+// ragged whenever the hidden split is balanced.
+//
+// A warning, not a fatal: the width is the CALLER's, it is pinned to whatever grid the weights were
+// built for, and this op takes a core_grid per call -- a mismatch here is slow, never wrong.
+void warn_if_gate_up_shard_splits_runs(const geo::Blocking& blocking, uint32_t shard_w) {
+    if (shard_w == 0) {
+        return;
+    }
+    uint32_t split = 0;
+    uint32_t total = 0;
+    for (uint32_t x = 0; x < blocking.hgroups; ++x) {
+        for (uint32_t chunk = 0; chunk < blocking.gu_chunks; ++chunk) {
+            const uint32_t col0 = chunk * blocking.gu_chunk_w;
+            if (col0 >= blocking.hn_sizes[x]) {
+                continue;
+            }
+            const uint32_t width = std::min(blocking.gu_chunk_w, blocking.hn_sizes[x] - col0);
+            const uint32_t start = blocking.hn_starts[x] + col0;
+            ++total;
+            split += static_cast<uint32_t>(start / shard_w != (start + width - 1) / shard_w);
+        }
+    }
+    if (split != 0) {
+        log_warning(
+            tt::LogOp,
+            "moe_fused_swiglu: gate/up DRAM ND shard width {} tiles does not tile this grid's chunk "
+            "walk (hn_pad {}, chunk {} tiles): {} of {} weight reads per K-row cross a shard edge "
+            "and issue as two transactions",
+            shard_w,
+            blocking.hn_pad,
+            blocking.gu_chunk_w,
+            split,
+            total);
+    }
+}
+
 }  // namespace
 
 tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
@@ -436,9 +478,23 @@ tt::tt_metal::ProgramDescriptor create_moe_fused_swiglu_program_descriptor(
     const uint32_t wg = [&]() {
         const uint32_t gate_width = geo::nd_shard_n_tiles(tensor_arguments.w_gates[0]);
         const uint32_t up_width = geo::nd_shard_n_tiles(tensor_arguments.w_ups[0]);
-        return gate_width == up_width ? gate_width : 0u;
+        // Both tensors are read through ONE compile-time width, so widths that disagree leave no
+        // correct value to take: a run sized to either one crosses the other's real shard boundary
+        // and would issue a single transaction spanning two banks.
+        TT_FATAL(
+            gate_width == up_width,
+            "moe_fused_swiglu: w_gate and w_up must share a weight placement; DRAM ND shard widths "
+            "are {} and {} tiles",
+            gate_width,
+            up_width);
+        return gate_width;
     }();
+    // W_down carries no such check: its shard is deliberately WIDER than the ec slice one core
+    // reads, which costs nothing (a slice inside a shard is still one transaction) and keeps the
+    // shards-per-row count coprime with the bank count, which is what rotates a core's K-rows
+    // across all DRAM banks.
     const uint32_t wd = geo::nd_shard_n_tiles(tensor_arguments.w_downs[0]);
+    warn_if_gate_up_shard_splits_runs(blocking, wg);
     const uint32_t experts_per_chip = operation_arguments.experts_per_chip;
 
     auto reader_ct = make_reader_ct(
