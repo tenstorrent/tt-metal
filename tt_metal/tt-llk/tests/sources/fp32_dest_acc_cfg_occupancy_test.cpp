@@ -225,6 +225,9 @@ void run_kernel(RUNTIME_PARAMETERS)
     // Leave the three dest-acc fields as the variant was built. Every replica trial sets them and
     // only PCK_DEST_RD_CTRL is cleared, by the following trial -- so the last one leaves all three
     // set, and a later test on a path that skips _llk_math_hw_configure_ would inherit them.
+    // Ordered behind PACK's last sample: these writes target the field PACK reads back, and the
+    // final trial's sample is still outstanding when the last arm returns.
+    (void)mailbox_read(ThreadId::PackThreadId);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);
@@ -314,6 +317,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         dir_occupied[i] = measure();
     }
+
+    // Every sample is taken. MATH restores the dest-acc fields once it reads this, so that its
+    // restore cannot land while the final trial is still being sampled.
+    mailbox_write(ThreadId::MathThreadId, PACK_READY);
 
     res[0] = TRIALS;
     res[1] = g_desync;
