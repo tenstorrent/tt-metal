@@ -64,14 +64,8 @@ def split_qkv_heads_prefill(
 def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None):
     """Normalize each token and head independently along head_dim."""
     orig_shape = tensor.shape
-    head_dim = orig_shape[-1]
-    if len(orig_shape) == 4 and orig_shape[0] > 1:
-        batch, num_heads, seq_len, _ = orig_shape
-        flat = ttnn.reshape(tensor, (1, 1, batch * num_heads * seq_len, head_dim))
-    else:
-        num_heads = orig_shape[1]
-        seq_or_batch = orig_shape[2]
-        flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
+    _, num_heads, seq_len, head_dim = orig_shape
+    flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_len, head_dim))
     # Match Hugging Face's FP32 per-head Q/K/V RMSNorm computation.
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tensor.device().arch(),
