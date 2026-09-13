@@ -1238,28 +1238,11 @@ class DiffusionNABlock(Module):
                 (band.layout_hi - band.pad_lo) // frame_step * rows,
             )
 
-            with timing_tree.span(self.mesh_device, "context-inject", category=timing_tree.CONTEXT_INJECT):
-                context_rows = _slice_rows(context, band.pad_lo // frame_step * rows, band.pad_hi // frame_step * rows)
-                injected = self.context_proj(context_rows)
-                if context_rows is not context:
-                    ttnn.deallocate(context_rows)
-                xs = ttnn.add(padded, injected)
-                ttnn.deallocate(injected)
-                if padded is not live[index]:
-                    ttnn.deallocate(padded)
-
-            with timing_tree.span(
-                self.mesh_device, "norm+modulate (pre-attn)", category=timing_tree.NORM_ROPE, deep=True
-            ):
-                modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
-            with timing_tree.span(self.mesh_device, "attention", category=timing_tree.ATTENTION):
-                attended = self.attn(
-                    modulated,
-                    Grid(grid.batch, min(band.pad_hi, grid.t) - band.pad_lo, grid.h, grid.w),
-                    tables[index],
-                    brick=brick,
-                )
-            ttnn.deallocate(modulated)
+            xs = self._inject_context(padded, context, band, rows, frame_step, owned=padded is live[index])
+            band_grid = Grid(grid.batch, min(band.pad_hi, grid.t) - band.pad_lo, grid.h, grid.w)
+            attended = self._attend(
+                self._modulated("pre-attn", self.norm1, xs, scale_msa, shift_msa), band_grid, tables[index], brick
+            )
 
             with timing_tree.span(
                 self.mesh_device, "residual crop+add (attn)", category=timing_tree.RESHAPE, deep=True
@@ -1272,16 +1255,7 @@ class DiffusionNABlock(Module):
                     ttnn.deallocate(attended)
                 y = _add_consuming(residual, cropped)
 
-            with timing_tree.span(
-                self.mesh_device, "norm+modulate (pre-mlp)", category=timing_tree.NORM_ROPE, deep=True
-            ):
-                modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
-            with timing_tree.span(self.mesh_device, "mlp", category=timing_tree.MLP):
-                hidden = self.mlp_gate_up(modulated)
-                ttnn.deallocate(modulated)
-                projected = self.mlp_down(hidden)
-                ttnn.deallocate(hidden)
-                out.append(_add_consuming(y, projected))
+            out.append(self._mlp(self._modulated("pre-mlp", self.norm2, y, scale_mlp, shift_mlp), y))
 
             # A band's input rows are read as halo by its neighbours, so they die a beat after the
             # band itself. Releasing them as soon as no band still to come reaches back that far is
@@ -1292,6 +1266,44 @@ class DiffusionNABlock(Module):
                     ttnn.deallocate(entry)
                     live[other] = None
         return out
+
+    @timing_tree.span("mesh_device", "context-inject", category=timing_tree.CONTEXT_INJECT)
+    def _inject_context(
+        self, padded: ttnn.Tensor, context: ttnn.Tensor, band: _Band, rows: int, frame_step: int, *, owned: bool
+    ) -> ttnn.Tensor:
+        """``padded`` plus the projected context rows of its frames. **Consumes** ``padded`` unless it is
+        a band's own tensor (``owned``), which the caller's bookkeeping still has to read."""
+        context_rows = _slice_rows(context, band.pad_lo // frame_step * rows, band.pad_hi // frame_step * rows)
+        injected = self.context_proj(context_rows)
+        if context_rows is not context:
+            ttnn.deallocate(context_rows)
+        xs = ttnn.add(padded, injected)
+        ttnn.deallocate(injected)
+        if not owned:
+            ttnn.deallocate(padded)
+        return xs
+
+    @timing_tree.span(
+        "mesh_device", lambda self, phase, *a: f"norm+modulate ({phase})", category=timing_tree.NORM_ROPE, deep=True
+    )
+    def _modulated(self, phase: str, norm, x: ttnn.Tensor, scale: ttnn.Tensor, shift: ttnn.Tensor) -> ttnn.Tensor:
+        return _modulate_consuming(norm(x), scale, shift)
+
+    @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION)
+    def _attend(self, modulated: ttnn.Tensor, band_grid: Grid, tables: _RopeTables, brick) -> ttnn.Tensor:
+        """Attention over one padded band. **Consumes** ``modulated``."""
+        attended = self.attn(modulated, band_grid, tables, brick=brick)
+        ttnn.deallocate(modulated)
+        return attended
+
+    @timing_tree.span("mesh_device", "mlp", category=timing_tree.MLP)
+    def _mlp(self, modulated: ttnn.Tensor, y: ttnn.Tensor) -> ttnn.Tensor:
+        """SwiGLU plus the residual add. **Consumes** ``modulated`` and ``y``."""
+        hidden = self.mlp_gate_up(modulated)
+        ttnn.deallocate(modulated)
+        projected = self.mlp_down(hidden)
+        ttnn.deallocate(hidden)
+        return _add_consuming(y, projected)
 
     def _padded_rows(
         self,

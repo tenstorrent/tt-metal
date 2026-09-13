@@ -45,12 +45,21 @@ with NO aliases (`TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG`,
 - Found on the way (job 459): `time_diff_block.py` had been broken since the stage-5 brick hoist (791d033abfd): it took
   bands aligned to the brick's T extent but handed the block un-bricked activations, so `_padded_rows` sliced past the
   tensor. It now bricks x and context the way `DiffVAEStage5.forward` does and passes `brick=` to the block.
-- Decorator conversion, step 1+2 (2026-09-13, commit 0013d5f7d25): `@timing_tree.span("mesh_device", ...)` on `DiffVAEDecoder.decode` (`decode TOTAL`,
-  root), `forward_context`, `DiffVAEStage5.forward`, `forward_diff_step`; `NABlock.forward` has one body and two deep-decorated
-  helpers `_attention` / `_mlp`. Same labels, same nesting, verified by diffing the rendered tree rows against job 458 (job 466).
-  Left for later (proposals 3-5 in the conversation of 2026-09-13): phase methods in `NeighborhoodAttention.forward`,
-  `_run_stage` in `DeterministicStages.forward`, and the per-band helpers in `DiffusionNABlock.forward` (memory-lifetime care).
-  `_to_pixels` and the stage-5 lane closure stay `with`.
+- Decorator conversion (2026-09-13, commits 0013d5f7d25, 205fe53f4d7, ffc915b8ee5, and the stage-5 one after):
+  `@timing_tree.span("mesh_device", label, ...)` on `DiffVAEDecoder.decode` (root), `forward_context`,
+  `DiffVAEStage5.forward`, `forward_diff_step`; `NABlock` -> `_attention`/`_mlp` (one body, no `if DEEP`);
+  `DeterministicStages` -> `_conv_in`, `_run_stage`, `_stage_setup`, `_run_blocks`, `_upsample`, and `_wshard`/`_wgather`
+  decorated in place; `NeighborhoodAttention` -> `_project_qkv`, `_norm_and_scale`, `_attend` (label = backend; the
+  W-sharded executor now has its own `attention bricked_sp_w_sharded` row on stages 2-4), `_out_proj`;
+  `DiffusionNABlock` -> `_inject_context`, `_modulated(phase, ...)`, `_attend`, `_mlp` (all consuming, same free points).
+  Still `with`: the two RoPE variants and `qkv-to-volume`, `halo assemble`, `residual crop+add`, `_to_pixels`, the
+  stage-5 lane closure. Each step verified by `test_decode_timing -k s16` with both gates on and the rendered tree
+  diffed row for row (jobs 466, 468, 470, 472, 474, 476; 478 with `DIFFVAE_STAGES_WSP=1`); the stage-5 step also by the
+  decoder gate, the stage-5 parity tests and the `PROFILE=1` pipeline (jobs 480-482): 480 timing 5 passed, tree rows identical to 476; 481 decoder gate `bricked_matches_replicated` 6 passed
+  and stage-5 parity 6 passed (PCC vs ltx_core 0.99989-0.99993); 482 `PROFILE=1` pipeline PASSED, ANOMALIES none, VAE decode
+  13.94 s under BLOCK_PROF (sync-inflated; 14.03 s before the conversion).
+  `timing_tree` itself: `span` is one class (context manager + decorator), one module-level stack, no thread-local,
+  no lock, no handle class; 341 lines.
 
 ## Planners split from executors; na3d.py gone (2026-09-13 01:45, DONE, device-verified; read this first)
 
