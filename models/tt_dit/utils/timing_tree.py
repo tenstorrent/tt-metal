@@ -5,7 +5,7 @@
 
 ``span`` is the one timing primitive: synchronise the device, open a node, run the body, synchronise
 again, close the node with the elapsed milliseconds. It doubles as a decorator for a method whose
-whole body is one span. Spans nest by a thread-local stack, so attribution needs no
+whole body is one span. Spans nest by one module-level stack, so attribution needs no
 argument threaded down the call chain: a stage contains its blocks, a block its attention, an
 attention its collectives, and the tree is that stack remembered. A layer and a model both record
 into it by importing this module alone.
@@ -31,7 +31,6 @@ from __future__ import annotations
 import functools
 import os
 import sys
-import threading
 import time
 from collections import OrderedDict, deque
 
@@ -60,9 +59,10 @@ _MAX_DEPTH = 64
 _WIDTH = 104
 _LABEL_W = 56
 _CAT_W = 16
+#: Finished trees, newest last. One stack and one deque: every span is opened on the thread that runs
+#: the decode, which is single-threaded, so there is nothing to keep per thread or under a lock.
 _ROOTS: deque = deque(maxlen=8)
-_LOCK = threading.Lock()
-_local = threading.local()
+_STACK: list = []
 
 
 class Node:
@@ -90,10 +90,7 @@ class Span:
 
 
 def _stack() -> list:
-    st = getattr(_local, "stack", None)
-    if st is None:
-        st = _local.stack = []
-    return st
+    return _STACK
 
 
 def _live(mark: str, depth: int, label: str, tail: str = "") -> None:
@@ -167,8 +164,7 @@ def _finish(root: Node, st: list) -> None:
     for leftover in st:  # a raise inside decode can leave these open
         leftover.node.flags.add("unclosed")
     del st[:]
-    with _LOCK:
-        _ROOTS.append(root)
+    _ROOTS.append(root)
 
 
 # ---------------------------------------------------------------------------------- timing spans
@@ -228,20 +224,17 @@ class span:
 
 
 def root_count() -> int:
-    with _LOCK:
-        return len(_ROOTS)
+    return len(_ROOTS)
 
 
 def roots() -> list:
-    with _LOCK:
-        return list(_ROOTS)
+    return list(_ROOTS)
 
 
 def reset() -> None:
     """Drop recorded roots and any half-open stack. For tests; not used by the decode path."""
-    del _stack()[:]
-    with _LOCK:
-        _ROOTS.clear()
+    del _STACK[:]
+    _ROOTS.clear()
 
 
 # --------------------------------------------------------------------------------------- reporting

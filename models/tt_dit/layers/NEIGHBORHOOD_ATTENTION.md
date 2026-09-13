@@ -324,7 +324,7 @@ followed on 2026-09-11.
 
 The timing module. `span(device, label, category=, root=, deep=)` is the one primitive: sync,
 open a node, body, sync, close with the elapsed ms; the same object is a decorator for a method
-whose whole body is one span (`@span("mesh_device", label, ...)`, label and device may be callables). Spans nest by a thread-local stack; siblings with the same
+whose whole body is one span (`@span("mesh_device", label, ...)`, label and device may be callables). Spans nest by one module-level stack (the decode is single-threaded); siblings with the same
 label are pooled with an `n` count. `open_span` / `close_span`, `Node`, `roots()`, `render()`.
 `ENABLED` ← `TT_DIT_STAGE_TIMING`, `DEEP` ← `TT_DIT_BLOCK_PROF` (the `deep=True` spans inside
 the blocks), `LIVE` ← `TT_DIT_STAGE_LOG` (one stdout line per span open/close while the decode
