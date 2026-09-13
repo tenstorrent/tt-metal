@@ -211,16 +211,17 @@ def test_prefill_long_context_traced(
         chunk_size=chunk_size,
         context_len=context_len,
     )
+
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
-    host_input = ttnn.from_torch(
+    host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
         device=None,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
-    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
     device_positions = ttnn.to_device(
         ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
@@ -231,6 +232,7 @@ def test_prefill_long_context_traced(
         ),
         device=mesh_device,
     )
+
     model.set_prefill_rope_positions(device_positions)
     model._ring_metadata_external = True
 
@@ -238,7 +240,9 @@ def test_prefill_long_context_traced(
 
     def _stage(chunk_idx):
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
+
         chunk_start = chunk_idx * chunk_size
+
         _t = time.time()
         staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
@@ -247,17 +251,15 @@ def test_prefill_long_context_traced(
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
-        ttnn.copy_host_to_device_tensor(staged, device_input)
+        ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
         stage_breakdown["tokens"] += time.time() - _t
+
         _t = time.time()
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
         stage_breakdown["metadata"] += time.time() - _t
+
+        # Update absolute token positions across CP ranks.
         _t = time.time()
-        # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
-        # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
-        # Absolute global positions for this chunk, CP-sharded the same way tokens are.
-        # Contiguous sharding of [chunk_start, chunk_start+chunk) hands rank r exactly the
-        # rows chunk-major CP assigns it, so the gather inside the trace lands correctly.
         pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
             device=None,
@@ -267,10 +269,11 @@ def test_prefill_long_context_traced(
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         stage_breakdown["rope"] += time.time() - _t
+
         return chunk_start
 
     def _forward(chunk_start):
-        embeds = model.transform_and_embed_prefill_inputs_device(device_input)
+        embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
         return model(hidden_states=embeds, chunk_start_idx=chunk_start, user_id=0)
 
     # ── Compile the graph that will be captured ──────────────────────
@@ -418,14 +421,14 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         f"types=({type_desc})"
     )
 
-    host_input = ttnn.from_torch(
+    host_input_tokens = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
         device=None,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
-    device_input = ttnn.to_device(host_input, device=mesh_device)
+    device_input_tokens = ttnn.to_device(host_input_tokens, device=mesh_device)
     device_positions = ttnn.to_device(
         ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
@@ -449,7 +452,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
-        ttnn.copy_host_to_device_tensor(staged, device_input)
+        ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
         pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
@@ -475,7 +478,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         pack_rope = pack_global_rope_device if lt == "global" else pack_sliding_rope_device
 
         def forward(chunk_start):
-            embeds = model.transform_and_embed_prefill_inputs_device(device_input)
+            embeds = model.transform_and_embed_prefill_inputs_device(device_input_tokens)
             cos = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, cos_2d, layout=ttnn.TILE_LAYOUT))
             sin = ttnn.unsqueeze_to_4D(ttnn.embedding(model._rope_prefill_positions, sin_2d, layout=ttnn.TILE_LAYOUT))
             packed_rope = (*pack_rope(cos, sin), model._packed_global_rope_trans_mat)
