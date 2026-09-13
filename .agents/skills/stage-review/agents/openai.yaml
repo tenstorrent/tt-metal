@@ -1,0 +1,4 @@
+interface:
+  display_name: "Stage Review"
+  short_description: "Independent review of a bringup stage"
+  default_prompt: "Use $stage-review to independently review a completed bringup stage against its goal contract and evidence before allowing it to pass."

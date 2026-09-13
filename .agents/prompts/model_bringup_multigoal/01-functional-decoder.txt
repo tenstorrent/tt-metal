@@ -1,0 +1,21 @@
+/goal Use $functional-decoder and $tt-device-usage for HF_MODEL in the current tt-metal checkout.
+
+As the user, I explicitly authorize you to use subagents when a selected skill requests or recommends them.
+
+This goal creates the functional-decoder state for the repo-local TTNN autoport pipeline. Work only on the functional decoder under models/autoports/<model>; do not begin optimized-decoder, multichip-decoder, full-model, or vLLM work in this goal.
+
+Goal completion requirements:
+- models/autoports/<model>/tt/functional_decoder.py exists with a documented prefill/decode contract suitable for the target HF decoder layer or layer kinds.
+- Decode forward pass runs fully with ttnn's traced execution.
+- Tests cover every meaningful target layer kind with real target config shapes, including paged prefill, paged decode, page table handling, current-position handling, the longest feasible sequence/context lengths, and valid non-aligned sequence lengths around chunk/page/tile boundaries.
+- models/autoports/<model>/doc/context_contract.json records the HF-advertised context length, tested functional-decoder prefill/decode context, and any capability reduction. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- At least one test uses real weights and evidence shows it passes.
+- HF-vs-TTNN prefill and decode PCC meet the functional-decoder acceptance bar. The default is PCC >= 0.995 unless a model-specific issue in the agentic-research project specifies otherwise. Any different threshold needs model-specific evidence in the report.
+- Warmed prefill and traced warmed decode performance are measured and recorded, with human-readable tt-perf-report tables plus CSV/provenance logs.
+- The runtime fallback audit is clean: no torch, ttnn.from_torch, ttnn.to_torch, or host fallback inside a single measured prefill/decode pass.
+- Determinism/repeated-input evidence and a watcher-clean run exist.
+- models/autoports/<model>/doc/functional_decoder/README.md and work_log.md record commands, PCC, perf, limitations, and exact artifacts.
+- The functional-decoder skill's final objectives are satisfied.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
+
+Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

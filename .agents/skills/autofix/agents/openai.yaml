@@ -1,0 +1,6 @@
+interface:
+  display_name: "AutoFix"
+  short_description: "Fix hard bugs with forked subagents"
+  default_prompt: "Use $autofix to investigate this hard bug with forked subagents and keep only verified fixes."
+policy:
+  allow_implicit_invocation: true
