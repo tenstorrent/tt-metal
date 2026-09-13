@@ -777,6 +777,10 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
     if (!this->is_fw_) {
         this->lflags_ += "-Wl,--emit-relocs ";
+        if (env_.get_arch() == tt::ARCH::BLACKHOLE && operation_pch_enabled()) {
+            // Optimize in the LTO link step instead of streaming the single partition to an LTRANS job.
+            this->lflags_ += "-flto-partition=none ";
+        }
     }
 
     // Precompute the weakened firmware path
