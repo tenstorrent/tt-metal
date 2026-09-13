@@ -20,7 +20,7 @@ class Gemma4AttentionConfig:
         self.rms_norm_eps = hf_config.rms_norm_eps
 
         self.is_sliding = self.layer_type == "sliding_attention"
-        self.use_kv_tying = hf_config.attention_k_eq_v and not self.is_sliding
+        self.is_kv_tied = hf_config.attention_k_eq_v and not self.is_sliding
 
         if self.is_sliding:
             self.num_key_value_heads = hf_config.num_key_value_heads

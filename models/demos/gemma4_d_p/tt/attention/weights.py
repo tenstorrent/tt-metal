@@ -53,7 +53,7 @@ def load_attention_weights(
     """Load TP-sharded QKV or tied QK weights with the packed-cache permutations."""
     mesh_device = mesh_config.device
     is_global = not config.is_sliding
-    tied_qkv = config.use_kv_tying
+    tied_qkv = config.is_kv_tied
     q_size = config.num_attention_heads * config.head_dim
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp_degree

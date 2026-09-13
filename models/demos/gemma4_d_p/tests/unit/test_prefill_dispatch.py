@@ -113,7 +113,7 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
         row_parallel=lambda: None,
     )
     config = SimpleNamespace(
-        use_kv_tying=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
+        is_kv_tied=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
     )
     result = weights.load_attention_weights(mesh_config, config, {}, tensor_cache_path="/tmp/weights")
     assert (result.wqk is not None) == is_global
