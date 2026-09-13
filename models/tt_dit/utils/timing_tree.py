@@ -82,17 +82,6 @@ class Node:
         return f"<Node {self.label!r} {self.incl_ms:.1f}ms kids={len(self.children)}>"
 
 
-class Span:
-    __slots__ = ("node",)
-
-    def __init__(self, node):
-        self.node = node
-
-
-def _stack() -> list:
-    return _STACK
-
-
 def _live(mark: str, depth: int, label: str, tail: str = "") -> None:
     """One progress line: wall-clock stamp, depth as indent, ``>`` opening / ``<`` closing / ``!``
     aborted. Written straight to stdout and flushed, so it streams through ``pytest -s`` and a
@@ -103,67 +92,62 @@ def _live(mark: str, depth: int, label: str, tail: str = "") -> None:
 
 
 def open_span(label, *, category=None, root=False):
-    """Push a span. ``label`` is required: a node names itself from birth, so a span that never
+    """Push a node. ``label`` is required: a node names itself from birth, so a span that never
     closes still says which one it was -- anonymous orphans are useless exactly when a leak needs
     finding. Returns ``None`` when disabled, and every close/abort accepts ``None``, so no call site
     needs a guard."""
     if not ENABLED:
         return None
-    st = _stack()
     if root:
-        del st[:]
-    if len(st) >= _MAX_DEPTH:
+        del _STACK[:]
+    if len(_STACK) >= _MAX_DEPTH:
         return None  # runaway guard: record nothing rather than grow the tree without bound
-    parent = st[-1].node if st else None
+    parent = _STACK[-1] if _STACK else None
     node = Node(label, category, parent)
     if parent is not None:
         parent.children.append(node)
-    span = Span(node)
     if LIVE:
-        _live(">", len(st), label)
-    st.append(span)
-    return span
+        _live(">", len(_STACK), label)
+    _STACK.append(node)
+    return node
 
 
-def close_span(span, ms) -> None:
-    if span is None or not ENABLED:
+def close_span(node, ms) -> None:
+    if node is None or not ENABLED:
         return
-    st = _stack()
-    if not any(s is span for s in st):
+    if not any(n is node for n in _STACK):
         return  # double close: drop it rather than corrupt a live parent
-    while st[-1] is not span:  # something opened below us never closed -- and it can name itself
-        orphan = st.pop().node
-        orphan.flags.add("unclosed")  # incl_ms stays 0, so it lands in the parent's remainder
-    st.pop()
-    span.node.incl_ms = ms  # a node closes exactly once: assignment, not accumulation
+    while _STACK[-1] is not node:  # something opened below us never closed -- and it can name itself
+        _STACK.pop().flags.add("unclosed")  # incl_ms stays 0, so it lands in the parent's remainder
+    _STACK.pop()
+    node.incl_ms = ms  # a node closes exactly once: assignment, not accumulation
     if LIVE:
-        _live("<", len(st), span.node.label, f"  {ms:.1f} ms")
-    if span.node.parent is None:
-        _finish(span.node, st)
+        _live("<", len(_STACK), node.label, f"  {ms:.1f} ms")
+    if node.parent is None:
+        _finish(node)
 
 
-def abort_span(span) -> None:
+def abort_span(node) -> None:
     """Exception path: keep the partial node but mark it, and never leave the stack deeper than it
     started."""
-    if span is None or not ENABLED:
+    if node is None or not ENABLED:
         return
-    st = _stack()
-    if not any(s is span for s in st):
+    if not any(n is node for n in _STACK):
         return
-    while st[-1] is not span:
-        st.pop().node.flags.add("unclosed")
-    st.pop()
-    span.node.flags.add("aborted")
+    while _STACK[-1] is not node:
+        _STACK.pop().flags.add("unclosed")
+    _STACK.pop()
+    node.flags.add("aborted")
     if LIVE:
-        _live("!", len(st), span.node.label, "  aborted")
-    if span.node.parent is None:
-        _finish(span.node, st)
+        _live("!", len(_STACK), node.label, "  aborted")
+    if node.parent is None:
+        _finish(node)
 
 
-def _finish(root: Node, st: list) -> None:
-    for leftover in st:  # a raise inside decode can leave these open
-        leftover.node.flags.add("unclosed")
-    del st[:]
+def _finish(root: Node) -> None:
+    for leftover in _STACK:  # a raise inside decode can leave these open
+        leftover.flags.add("unclosed")
+    del _STACK[:]
     _ROOTS.append(root)
 
 

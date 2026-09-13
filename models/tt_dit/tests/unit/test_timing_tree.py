@@ -135,7 +135,7 @@ def test_abort_unwinds_and_still_records_a_marked_root():
     (node,) = dt.roots()
     assert "aborted" in node.flags
     assert "unclosed" in node.children[0].children[0].flags
-    assert dt._stack() == []  # a raise must not leave the stack deeper than it started
+    assert dt._STACK == []  # a raise must not leave the stack deeper than it started
 
 
 def test_new_root_resets_a_dirty_stack():
@@ -274,7 +274,7 @@ def test_span_aborts_on_raise_and_propagates(syncs, expect_error):
                 raise RuntimeError("boom")
     (root,) = dt.roots()
     assert "aborted" in root.flags and "aborted" in root.children[0].flags
-    assert dt._stack() == []
+    assert dt._STACK == []
 
 
 class _Model:
