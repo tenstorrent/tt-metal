@@ -5,12 +5,13 @@
 
 import ttnn
 
+from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
+
 from .weights import load_attention_weights
 from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
-    apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
@@ -291,5 +292,5 @@ class Gemma4Attention:
         tt_v.deallocate(True)
         tt_out = concat_heads(tt_sdpa)
         tt_out = apply_output_projection(tt_out, self.weights)
-        tt_out = apply_allreduce(tt_out, self.mesh_config, self.ccl_manager, self.config.hidden_size)
+        tt_out = ccl_allreduce(tt_out, self.mesh_config, self.ccl_manager)
         return tt_out

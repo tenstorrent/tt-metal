@@ -18,7 +18,6 @@ Handles:
 import os
 
 import ttnn
-from models.demos.gemma4_d_p.tt.ccl import ccl_allreduce
 
 from .weights import AttentionWeights
 
@@ -96,8 +95,3 @@ def apply_output_projection(tensor, weights: AttentionWeights):
     out = ttnn.linear(tensor, weights.o_proj)
     tensor.deallocate(True)
     return out
-
-
-def apply_allreduce(tensor, mesh_config, ccl_manager, hidden_size: int):
-    """Apply tensor-parallel allreduce if TP > 1."""
-    return ccl_allreduce(tensor, mesh_config, ccl_manager)
