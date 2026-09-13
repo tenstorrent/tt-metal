@@ -182,6 +182,8 @@ void kernel_main() {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
             CircularBuffer cb_stats_obj(cb_stats);
 
+            // The factory gives cb_var and cb_x2 the same cb_data_format, so the existing packer
+            // configuration also covers this INPUT-only reduce after the stats handshake.
             ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
