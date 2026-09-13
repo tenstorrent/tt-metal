@@ -55,6 +55,7 @@ tests/pipeline_reorg/t3k_profiler_tests.yaml @mo-tenstorrent @akerteszTT @yusufb
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
+scripts/validate_api/ @tenstorrent/metalium-api-owners
 cmake/ @tenstorrent/metalium-developers-infra
 CMakePresets.json @tenstorrent/metalium-developers-infra
 **/CMakeLists.txt @tenstorrent/metalium-developers-infra
