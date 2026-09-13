@@ -253,15 +253,6 @@ def test_prefill_long_context_traced(
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
         stage_breakdown["metadata"] += time.time() - _t
         _t = time.time()
-        # REQUIRED for liveness, not an optimization. Ring attention's global semaphores
-        # persist across replays, and back-to-back replays deadlock without this: 256k
-        # runs hung at chunk 54 and 59 of 64 (deep ring depth, no error, all threads in
-        # futex_wait). readback_all hides it because _cp_gather_torch issues an eager
-        # ttnn.all_gather between every replay, which drains the state this restores.
-        # Costs ~4ms/chunk. Belongs in the op — either resetting its own semaphores or
-        # having the reset captured inside the trace — rather than in every caller.
-        for _sem in model.ccl_manager.ring_attention_ccl_semaphore_handles:
-            ttnn.reset_global_semaphore_value(_sem, 0)
         # Under CP the prefill RoPE cache is chunk-major per rank, so the local slice
         # advances by the per-rank slab, matching _get_rope_mats' start_pos // cp.
         # Absolute global positions for this chunk, CP-sharded the same way tokens are.
@@ -460,9 +451,6 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         )
         ttnn.copy_host_to_device_tensor(staged, device_input)
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
-        # Reset persistent semaphores before each replay.
-        for semaphore in model.ccl_manager.ring_attention_ccl_semaphore_handles:
-            ttnn.reset_global_semaphore_value(semaphore, 0)
         pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
             device=None,
