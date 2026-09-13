@@ -12,7 +12,10 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include <map>
 #include <numeric>
+#include <thread>
+#include <chrono>
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -441,4 +444,135 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GridMulticastFanOut) {
     std::cout << "[MCAST] " << grid.x << "x" << grid.y << " multicast map (. ok / X fail):\n" << map_str;
     std::cout << "[MCAST] ok=" << ok << " fail=" << fail << " total=" << (grid.x * grid.y) << std::endl;
     EXPECT_EQ(fail, 0u);
+}
+
+
+// qsr.s1 bring-up probe: does a DEVICE-initiated NoC write reach the tile the host intended?
+// Every test that hangs on qsr.s1 (DmLoopback, BmmMultinode, PackReluZero, the SD prefetcher battery)
+// performs device-initiated inter-tile NoC writes; every test that passes stays on-tile or goes via the
+// host. One DM kernel on logical {0,0} unicasts a marker to another worker's L1 and to a DRAM tile; the
+// host seeds sentinels on every worker and reads everything back, including L1[0] (the firmware launch
+// word), and prints where the writes landed.
+TEST_F(QuasarMeshDeviceSingleCardFixture, Qsr1NocUnicastProbe) {
+    if (std::getenv("TT_METAL_SIMULATOR") == nullptr) {
+        GTEST_SKIP() << "This test can only be run using a simulator.";
+    }
+    auto mesh_device = devices_[0];
+    const auto grid = mesh_device->compute_with_storage_grid_size();
+    if (grid.x * grid.y < 2) {
+        GTEST_SKIP() << "needs at least two worker nodes (got " << grid.x << "x" << grid.y << ")";
+    }
+    const uint32_t result_addr = MetalContext::instance().hal().get_dev_addr(
+                                     HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED) +
+                                 0x1000;
+    const uint32_t value = 0x51DE0001u;
+    const uint32_t sentinel = 0xCAFEF00Du;
+    // First 23 MiB of DRAM are reserved by metal; probe just above the allocator base.
+    const uint32_t dram_addr =
+        static_cast<uint32_t>(mesh_device->get_devices()[0]->allocator()->get_base_allocator_addr(HalMemType::DRAM)) + 0x1000;
+
+    const experimental::NodeCoord src{0, 0};
+    const experimental::NodeCoord dst = (grid.x > 1) ? experimental::NodeCoord{1, 0} : experimental::NodeCoord{0, 1};
+    const CoreCoord dst_phys = mesh_device->worker_core_from_logical_core(dst);
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device->get_devices()[0]->id());
+    const CoreCoord dram_core = soc.get_preferred_worker_core_for_dram_view(0, NOC::NOC_0);
+    std::cout << "[NOCPROBE] src logical " << src.x << "," << src.y << "  dst logical " << dst.x << "," << dst.y
+              << " -> phys " << dst_phys.x << "-" << dst_phys.y << "  dram ch0 core " << dram_core.x << "-"
+              << dram_core.y << "  result_addr 0x" << std::hex << result_addr << " dram_addr 0x" << dram_addr
+              << std::dec << std::endl;
+
+    std::map<std::pair<uint32_t, uint32_t>, uint32_t> l1zero_before;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> s{sentinel};
+            slow_dispatch::WriteToL1(this->device(), experimental::NodeCoord{x, y}, result_addr, s);
+            std::vector<uint32_t> z(1, 0);
+            slow_dispatch::ReadFromL1(this->device(), experimental::NodeCoord{x, y}, 0, sizeof(uint32_t), z);
+            l1zero_before[{x, y}] = z[0];
+        }
+    }
+    {
+        std::vector<uint32_t> s{sentinel};
+        tt::tt_metal::detail::WriteToDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_addr, s);
+    }
+
+    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    const experimental::KernelSpecName K{"noc_probe"};
+    experimental::KernelSpec spec_k{
+        .unique_id = K,
+        .source = OVERRIDE_KERNEL_PREFIX "tests/tt_metal/tt_metal/test_kernels/dataflow/qsr1_noc_unicast_probe.cpp",
+        .num_threads = 1,
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"value", "result_addr", "dst_x", "dst_y", "dram_x", "dram_y", "dram_addr"}},
+        .hw_config = experimental::DataMovementGen2Config{},
+    };
+    experimental::WorkUnitSpec wu{.name = "main", .kernels = {K}, .target_nodes = src};
+    experimental::ProgramSpec spec{.name = "qsr1_noc_probe", .kernels = {spec_k}, .work_units = {wu}};
+    Program program = experimental::MakeProgramFromSpec(this->device(), spec);
+    experimental::ProgramRunArgs params;
+    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        .kernel = K,
+        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            src,
+            {{"value", value},
+             {"result_addr", result_addr},
+             {"dst_x", static_cast<uint32_t>(dst_phys.x)},
+             {"dst_y", static_cast<uint32_t>(dst_phys.y)},
+             {"dram_x", static_cast<uint32_t>(dram_core.x)},
+             {"dram_y", static_cast<uint32_t>(dram_core.y)},
+             {"dram_addr", dram_addr}})}};
+    experimental::SetProgramRunArgs(program, params);
+    workload.add_program(device_range, std::move(program));
+    // Non-blocking launch: a barrier-less kernel finishes on its own, and if the launch itself never
+    // completes we still want to read the tiles. Give the emulator time, then inspect.
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    std::this_thread::sleep_for(std::chrono::seconds(60));
+    {
+        std::vector<uint32_t> f(1, 0);
+        slow_dispatch::ReadFromL1(this->device(), src, result_addr + 4, sizeof(uint32_t), f);
+        std::cout << "[NOCPROBE] kernel done-flag on SRC = 0x" << std::hex << f[0] << std::dec
+                  << (f[0] == 0xD0DE0001u ? "  (kernel ran to completion)" : "  (kernel did NOT reach the end)") << std::endl;
+        std::vector<uint32_t> g(4, 0);
+        slow_dispatch::ReadFromL1(this->device(), src, result_addr + 8, 4 * sizeof(uint32_t), g);
+        std::cout << "[NOCPROBE] firmware self-view on SRC: my_x=" << (g[0] & 0xff) << " my_y=" << ((g[0] >> 8) & 0xff)
+                  << " noc_index=" << ((g[0] >> 16) & 0xff) << "  raw NOC_NODE_ID=0x" << std::hex << g[1]
+                  << "  programmed DEST_COORD=0x" << g[2] << " (x=" << std::dec << (g[2] & 0x3f) << ",y=" << ((g[2] >> 6) & 0x3f)
+                  << ")  DEST_ADDR=0x" << std::hex << g[3] << std::dec << "   [host intended dst phys " << dst_phys.x << "-"
+                  << dst_phys.y << "]" << std::endl;
+    }
+
+    bool dst_ok = false, others_clean = true, l1zero_ok = true;
+    for (uint32_t y = 0; y < grid.y; ++y) {
+        for (uint32_t x = 0; x < grid.x; ++x) {
+            std::vector<uint32_t> r(1, 0), z(1, 0);
+            slow_dispatch::ReadFromL1(this->device(), experimental::NodeCoord{x, y}, result_addr, sizeof(uint32_t), r);
+            slow_dispatch::ReadFromL1(this->device(), experimental::NodeCoord{x, y}, 0, sizeof(uint32_t), z);
+            const CoreCoord phys = mesh_device->worker_core_from_logical_core(experimental::NodeCoord{x, y});
+            const bool is_src = (x == src.x && y == src.y), is_dst = (x == dst.x && y == dst.y);
+            std::cout << "[NOCPROBE] node " << x << "," << y << " (phys " << phys.x << "-" << phys.y << ")"
+                      << (is_src ? " SRC" : is_dst ? " DST" : "    ") << "  result=0x" << std::hex << r[0]
+                      << "  L1[0] before=0x" << l1zero_before[{x, y}] << " after=0x" << z[0] << std::dec << std::endl;
+            if (is_dst) {
+                dst_ok = (r[0] == value);
+            } else if (!is_src && r[0] != sentinel) {
+                others_clean = false;
+            }
+            if (z[0] != l1zero_before[{x, y}]) {
+                l1zero_ok = false;
+            }
+        }
+    }
+    std::vector<uint32_t> d(1, 0);
+    tt::tt_metal::detail::ReadFromDeviceDRAMChannel(mesh_device->get_devices()[0], 0, dram_addr, sizeof(uint32_t), d);
+    std::cout << "[NOCPROBE] dram ch0 @0x" << std::hex << dram_addr << " = 0x" << d[0] << std::dec
+              << (d[0] == value ? "  (device DRAM write LANDED)" : "  (device DRAM write DID NOT land)") << std::endl;
+    std::cout << "[NOCPROBE] VERDICT: L1 unicast " << (dst_ok ? "landed on intended tile" : "MISSED intended tile")
+              << "; other tiles " << (others_clean ? "untouched" : "CORRUPTED") << "; L1[0] "
+              << (l1zero_ok ? "intact" : "CLOBBERED") << "; DRAM " << (d[0] == value ? "ok" : "MISSED") << std::endl;
+    EXPECT_TRUE(dst_ok);
+    EXPECT_TRUE(others_clean);
+    EXPECT_TRUE(l1zero_ok);
+    EXPECT_EQ(d[0], value);
 }
