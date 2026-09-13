@@ -294,7 +294,7 @@ def sliding_ring_prefill_attention(
     max_seq_len,
     logical_n,
     kv_actual_global,
-    sliding_window=None,
+    sliding_window_size=None,
     scale=1.0,
     compute_kernel_config=None,
     program_config=None,
@@ -315,7 +315,7 @@ def sliding_ring_prefill_attention(
         max_seq_len=max_seq_len,
         logical_n=logical_n,
         kv_actual_global=kv_actual_global,
-        sliding_window=sliding_window,
+        sliding_window_size=sliding_window_size,
         scale=scale,
         compute_kernel_config=compute_kernel_config,
         program_config=program_config,
@@ -337,7 +337,7 @@ def _ring_prefill_attention(
     max_seq_len,
     logical_n,
     kv_actual_global,
-    sliding_window=None,
+    sliding_window_size=None,
     scale=1.0,
     compute_kernel_config=None,
     program_config=None,
@@ -362,7 +362,7 @@ def _ring_prefill_attention(
         # at 32k, per-chunk device time at ring depth 7: k=256 gives 197.8 ms against 201.2 at
         # k=128. q stays 64: it is a true optimum, worse in both directions (214.8 ms at q=32,
         # 221.7 at q=128), and q>=256 overflows L1.
-        _k_chunk = 128 if sliding_window else 256
+        _k_chunk = 128 if sliding_window_size else 256
         program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
@@ -377,9 +377,9 @@ def _ring_prefill_attention(
     # buffer (gathered rows < cache_seq * ring), rejecting a full-capacity one with
     # "requires a compact halo buffer". Size it to the halo, which is the window
     # rounded up to whole k chunks.
-    if sliding_window:
+    if sliding_window_size:
         k_chunk = program_config.k_chunk_size
-        halo_tokens = -(-(sliding_window - 1) // k_chunk) * k_chunk
+        halo_tokens = -(-(sliding_window_size - 1) // k_chunk) * k_chunk
         gather_seq = max(halo_tokens, TILE_HEIGHT)
     else:
         gather_seq = cache_seq * cp
@@ -426,6 +426,6 @@ def _ring_prefill_attention(
         kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
         kv_cache_num_layers=num_layers,
         kv_cache_layer_idx=layer_idx,
-        sliding_window_size=sliding_window,
+        sliding_window_size=sliding_window_size,
     )
     return out
