@@ -50,14 +50,9 @@ class MLP:
             col_mapper = None
             row_mapper = None
 
-        if state_dict:
-            gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
-        else:
-            gate_proj_weight = None
-            up_proj_weight = None
-            down_proj_weight = None
+        gate_proj_weight = state_dict["gate_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+        up_proj_weight = state_dict["up_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+        down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
         common = dict(device=mesh_device, dtype=dtype, layout=ttnn.TILE_LAYOUT)
         self.gate_proj = ttnn.as_tensor(
             gate_proj_weight,
