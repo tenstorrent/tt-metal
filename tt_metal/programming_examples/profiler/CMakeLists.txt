@@ -17,6 +17,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 # looks for it, not under the profiler/ subdirectory CREATE_PGM_EXAMPLES_EXE uses.
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_zones)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_eth_ptp_sync)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_streaming_profiler_pingpong)
 
 add_custom_target(
     profiler_examples
@@ -24,4 +25,5 @@ add_custom_target(
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
         test_streaming_profiler_zones
         test_eth_ptp_sync
+        test_streaming_profiler_pingpong
 )
