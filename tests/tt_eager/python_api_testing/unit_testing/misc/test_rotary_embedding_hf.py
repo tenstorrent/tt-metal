@@ -342,7 +342,16 @@ def test_rotary_embedding_hf_decode_per_batch_position(device, head_dim):
 
 
 @pytest.mark.parametrize("head_dim", [32, 128])
-def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
+@pytest.mark.parametrize(
+    "input_dtype, cache_dtype",
+    [
+        (ttnn.bfloat16, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.float32),
+    ],
+)
+def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim, input_dtype, cache_dtype):
     """Decode mode regression: force ``batch_per_core > 1`` and verify per-batch cos/sin rows are honored."""
     torch.manual_seed(0)
 
@@ -351,8 +360,6 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
     batch = num_cores * 2  # Forces batch_per_core = 2 with exact height-shard packing.
     num_heads = 8
     cache_size = max(2048, batch * 4)
-    dtype = ttnn.bfloat16
-
     positions = torch.arange(0, batch, dtype=torch.int64) * 3
     positions = positions.remainder(cache_size)
 
@@ -388,21 +395,21 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
     )
     input_tensor = ttnn.from_torch(
         inp_for_dev.to(torch.bfloat16),
-        dtype=dtype,
+        dtype=input_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=qk_mem,
     )
     cos_interleaved = ttnn.from_torch(
         cos_1b1d.to(torch.bfloat16),
-        dtype=dtype,
+        dtype=cache_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     sin_interleaved = ttnn.from_torch(
         sin_1b1d.to(torch.bfloat16),
-        dtype=dtype,
+        dtype=cache_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -717,7 +724,7 @@ def test_rotary_embedding_hf_row_major(W, Z, Y, X, cache_size, device):
         (128, 64),
     ],
 )
-def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device):
+def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(input_seq, head_dim, device, expect_error):
     torch.manual_seed(0)
     num_heads = 8
     x = torch.randn([1, num_heads, input_seq, head_dim]).bfloat16().float()
@@ -729,7 +736,7 @@ def test_rotary_embedding_hf_prefill_rejects_cos_seq_smaller_than_input_seq(inpu
     sint = ttnn.Tensor(sin, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
 
     rope_cfg = _hf_rope_compute_kernel_config()
-    with pytest.raises(RuntimeError, match="Cos seq_len must be >= input seq_len"):
+    with expect_error(RuntimeError, "Cos seq_len must be >= input seq_len"):
         ttnn.experimental.rotary_embedding_hf(
             xt,
             cost,
