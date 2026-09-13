@@ -1200,7 +1200,7 @@ bool write_to_device_buffer(
                     tt::LogMetal,
                     "Pinned source memory start address {:#x} must be aligned {} B",
                     reinterpret_cast<uintptr_t>(src_region_start),
-                    hal.get_read_alignment(HalMemType::HOST));
+                    hal.get_read_alignment(HalMemType::L1));
             } else if ((src_region_start < pinned_host_base) or (pinned_host_base + pinned_size < src_region_end)) {
                 log_info(
                     tt::LogMetal,
