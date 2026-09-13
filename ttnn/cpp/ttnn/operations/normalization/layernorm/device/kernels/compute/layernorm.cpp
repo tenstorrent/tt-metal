@@ -297,7 +297,7 @@ void kernel_main() {
         tile_regs_acquire();
         add_init(dfb_ex2_id, dfb_eps_id);
         add_tiles(dfb_ex2_id, dfb_eps_id, 0, 0, dst0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
+        rsqrt_tile_init<false>();
         rsqrt_tile<LEGACY_RSQRT>(dst0);
         tile_regs_commit();
 
