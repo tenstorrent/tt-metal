@@ -26,7 +26,7 @@ jobs:
   # The job MUST be called 'copilot-setup-steps' to be recognized by GitHub Copilot Agent
   copilot-setup-steps:
     # Dedicated ARC scale set; capped separately from the build runner pool.
-    runs-on: tt-ubuntu-2204-copilot-stable
+    runs-on: tt-ubuntu-2404-copilot-stable
     # Copilot caps this at 59. Submodule checkout is the bulk of it.
     timeout-minutes: 50
 
