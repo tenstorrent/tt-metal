@@ -399,48 +399,8 @@ class NeighborhoodAttention(Module):
         t, h, w = dims
         tokens = t * h * w
         heads = self.heads_local
-        with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
-            if self.fused_qkv:
-                flat = self.qkv(x)
-                ttnn.deallocate(x)
-                qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
-                if not self.colpar_qkv and self.tp > 1:
-                    # The head partition lands here rather than inside the attention, so the norms, the
-                    # scale and both RoPEs below see heads/tp instead of computing every head and
-                    # letting the attention discard all but this chip's. Under colpar_qkv the matmul
-                    # already emitted only this chip's heads, so there is nothing to slice.
-                    partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
-                    ttnn.deallocate(qkv)
-                    qkv = partitioned
-                q, k, v = ttnn.experimental.nlp_create_qkv_heads(
-                    qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
-                )
-                ttnn.deallocate(qkv)
-            else:
-                heads_shape = (tokens * heads, self.head_dim)
-
-                def own_heads(part: ttnn.Tensor) -> ttnn.Tensor:
-                    """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP.
-
-                    Only the bricked executor needs it here: handed every head, it would gather
-                    ``tp`` copies of them back and the out-proj would see ``tp * dim`` channels.
-                    """
-                    if self.tp == 1 or not self.bricked:
-                        return part
-                    rows = ttnn.reshape(part, (1, 1, tokens, self.dim))
-                    partitioned = ttnn.mesh_partition(rows, dim=3, cluster_axis=self.tp_axis)
-                    ttnn.deallocate(part)
-                    return partitioned
-
-                q, k, v = (
-                    ttnn.reshape(own_heads(project(x)), heads_shape) for project in (self.to_q, self.to_k, self.to_v)
-                )
-                ttnn.deallocate(x)
-
-        with timing_tree.span(self.mesh_device, "qkv-norm", category=timing_tree.NORM_ROPE, deep=True):
-            q = self.q_norm(q)
-            k = self.k_norm(k)
-            q = ttnn.multiply(q, self.scale)
+        q, k, v = self._project_qkv(x, tokens)
+        q, k = self._norm_and_scale(q, k)
 
         if self.fused_rope:
             with timing_tree.span(self.mesh_device, "qkv-rope (fused op)", category=timing_tree.NORM_ROPE, deep=True):
@@ -471,13 +431,67 @@ class NeighborhoodAttention(Module):
                 q = apply_rope(q, cos, sin)
                 k = apply_rope(k, cos, sin)
 
+        attended = self._attend(q, k, v, dims=dims, device_plan=device_plan)
+        return self._out_proj(attended, tokens)
+
+    @timing_tree.span("mesh_device", "qkv-proj", category=timing_tree.PROJ, deep=True)
+    def _project_qkv(self, x: ttnn.Tensor, tokens: int) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Project ``x`` to per-head q, k, v, this chip's heads only. **Consumes** ``x``."""
+        heads = self.heads_local
+        if self.fused_qkv:
+            flat = self.qkv(x)
+            ttnn.deallocate(x)
+            qkv = ttnn.reshape(flat, (1, 1, tokens, int(flat.shape[-1])))
+            if not self.colpar_qkv and self.tp > 1:
+                # The head partition lands here rather than inside the attention, so the norms, the
+                # scale and both RoPEs see heads/tp instead of computing every head and letting the
+                # attention discard all but this chip's. Under colpar_qkv the matmul already emitted
+                # only this chip's heads, so there is nothing to slice.
+                partitioned = ttnn.mesh_partition(qkv, dim=3, cluster_axis=self.tp_axis)
+                ttnn.deallocate(qkv)
+                qkv = partitioned
+            q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+                qkv, num_heads=heads, num_kv_heads=heads, transpose_k_heads=False
+            )
+            ttnn.deallocate(qkv)
+            return q, k, v
+
+        heads_shape = (tokens * heads, self.head_dim)
+
+        def own_heads(part: ttnn.Tensor) -> ttnn.Tensor:
+            """This chip's contiguous head block of a ``(tokens, dim)`` projection under TP.
+
+            Only the bricked executor needs it here: handed every head, it would gather ``tp``
+            copies of them back and the out-proj would see ``tp * dim`` channels.
+            """
+            if self.tp == 1 or not self.bricked:
+                return part
+            rows = ttnn.reshape(part, (1, 1, tokens, self.dim))
+            partitioned = ttnn.mesh_partition(rows, dim=3, cluster_axis=self.tp_axis)
+            ttnn.deallocate(part)
+            return partitioned
+
+        q, k, v = (ttnn.reshape(own_heads(project(x)), heads_shape) for project in (self.to_q, self.to_k, self.to_v))
+        ttnn.deallocate(x)
+        return q, k, v
+
+    @timing_tree.span("mesh_device", "qkv-norm", category=timing_tree.NORM_ROPE, deep=True)
+    def _norm_and_scale(self, q: ttnn.Tensor, k: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        return ttnn.multiply(self.q_norm(q), self.scale), self.k_norm(k)
+
+    @timing_tree.span(
+        "mesh_device", lambda self, *a, **k: f"attention {self.na3d_backend}", category=timing_tree.SDPA, deep=True
+    )
+    def _attend(self, q, k, v, *, dims: tuple[int, int, int], device_plan: NA3DDevicePlan) -> ttnn.Tensor:
+        """Run the executor this block was built for. Named after it so a stage is not one opaque row."""
+        t, h, w = dims
         if self.na3d_backend == "bricked_sp_w_sharded":
-            # Full-stage spatial-W SP: x/q/k/v are this chip's W-slice, so `dims` here is local (w is
+            # Full-stage spatial-W SP: q/k/v are this chip's W-slice, so `dims` here is local (w is
             # W/sp). K/V are halo-exchanged in bricked order inside, and the dedicated neighborhood op
-            # runs over 32-site bricks. cos/sin were W-sharded the same way, so the RoPE above used
-            # each column's global W.
+            # runs over 32-site bricks. cos/sin were W-sharded the same way, so the RoPE used each
+            # column's global W.
             sp = int(list(q.device().shape)[self.sp_axis])
-            attended = neighborhood_attention_3d_bricked_w_sharded(
+            return neighborhood_attention_3d_bricked_w_sharded(
                 q,
                 k,
                 v,
@@ -490,24 +504,22 @@ class NeighborhoodAttention(Module):
                 heads_presharded=True,  # every projection form hands this executor its own heads
                 stride=(1, 1, 1),
             )
-        else:
-            # Stage 0's path: the grouped-gather executor. Named so stage 0 stops being one opaque row.
-            with timing_tree.span(
-                self.mesh_device, f"attention {self.na3d_backend}", category=timing_tree.SDPA, deep=True
-            ):
-                attended = neighborhood_attention_3d_linear_order(
-                    q,
-                    k,
-                    v,
-                    kernel_size=self.kernel_size,
-                    scale=1.0,
-                    device_plan=device_plan,
-                    ccl_manager=self.ccl_manager,
-                )
-        with timing_tree.span(self.mesh_device, "out-proj", category=timing_tree.PROJ, deep=True):
-            attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
-            out = self.proj(attended)
-            ttnn.deallocate(attended)
+        # Stage 0's path: the linear-order executor over the replicated volume.
+        return neighborhood_attention_3d_linear_order(
+            q,
+            k,
+            v,
+            kernel_size=self.kernel_size,
+            scale=1.0,
+            device_plan=device_plan,
+            ccl_manager=self.ccl_manager,
+        )
+
+    @timing_tree.span("mesh_device", "out-proj", category=timing_tree.PROJ, deep=True)
+    def _out_proj(self, attended: ttnn.Tensor, tokens: int) -> ttnn.Tensor:
+        attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
+        out = self.proj(attended)
+        ttnn.deallocate(attended)
         return out
 
 
