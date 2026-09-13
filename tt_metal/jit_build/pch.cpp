@@ -5,6 +5,7 @@
 #include "pch.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -49,13 +50,14 @@ std::string ensure_pch(
     static std::mutex mutex;
     static std::unordered_map<std::string, std::string> staged;
     std::lock_guard lock(mutex);
-    if (auto it = staged.find(dir.string()); it != staged.end()) {
+    const fs::path header = dir / umbrella.filename();
+    const fs::path gch = header.string() + ".gch";
+    if (auto it = staged.find(dir.string());
+        it != staged.end() && (it->second.empty() || (fs::exists(header) && fs::exists(gch)))) {
         return it->second;
     }
     std::string& result = staged[dir.string()];
-
-    const fs::path header = dir / umbrella.filename();
-    const fs::path gch = header.string() + ".gch";
+    result.clear();
 
     std::error_code ec;
     fs::create_directories(dir, ec);
@@ -109,6 +111,7 @@ std::string ensure_pch(
     args.push_back(temp.string());
 
     const std::string log_path = (dir / "build.log").string();
+    const auto started = std::chrono::steady_clock::now();
     if (!utils::exec_command(args, dir.string(), log_path)) {
         log_warning(
             tt::LogBuildKernels,
@@ -126,6 +129,11 @@ std::string ensure_pch(
         return result;
     }
 
+    log_info(
+        tt::LogBuildKernels,
+        "PCH STL built {} in {} ms",
+        gch.string(),
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count());
     result = header.string();
     return result;
 }

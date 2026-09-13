@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -15,6 +16,28 @@
 
 #include "jit_build/depend.hpp"
 #include "jit_build/pch.hpp"
+#include "jit_build/jit_build_utils.hpp"
+
+TEST(JitBuildUtils, TemporaryPathsAreUniqueAcrossThreads) {
+    constexpr size_t num_threads = 8;
+    constexpr size_t paths_per_thread = 32;
+    const std::filesystem::path target = "kernel.o";
+    std::vector<std::string> paths(num_threads * paths_per_thread);
+    std::vector<std::thread> threads;
+    for (size_t thread = 0; thread < num_threads; ++thread) {
+        threads.emplace_back([&, thread] {
+            for (size_t path = 0; path < paths_per_thread; ++path) {
+                paths[thread * paths_per_thread + path] = tt::jit_build::utils::FileRenamer::generate_temp_path(target);
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    std::ranges::sort(paths);
+    EXPECT_EQ(std::ranges::adjacent_find(paths), paths.end());
+}
 
 TEST(JitBuildTests, ParseDependencyFile) {
     constexpr auto dep_file_content = R"(
@@ -82,6 +105,28 @@ TEST_F(JitBuildDependencyTests, UpToDate) {
 
     // Verify that dependencies are up to date
     EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj_file_name));
+}
+
+TEST_F(JitBuildDependencyTests, SingleNormalizedTargetIsAccepted) {
+    constexpr auto normalized_target = "normalized-output.o";
+    const auto obj_path = out_dir_ / normalized_target;
+    const tt::jit_build::ParsedDependencies dependencies{{normalized_target, {"a.txt", "b.txt"}}};
+    create_dependency_files(dependencies, normalized_target);
+
+    std::ofstream hash_file{obj_path.string() + ".dephash"};
+    tt::jit_build::write_dependency_hashes(dependencies, out_dir_.string(), obj_path.string(), hash_file);
+    hash_file.close();
+
+    ASSERT_FALSE(hash_file.fail());
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), normalized_target));
+}
+
+TEST_F(JitBuildDependencyTests, SingleUnrelatedTargetIsRejected) {
+    const tt::jit_build::ParsedDependencies dependencies{{"unrelated.o", {}}};
+    std::ofstream hash_file{out_dir_ / "expected.o.dephash"};
+    tt::jit_build::write_dependency_hashes(
+        dependencies, out_dir_.string(), (out_dir_ / "expected.o").string(), hash_file);
+    EXPECT_TRUE(hash_file.fail());
 }
 
 TEST_F(JitBuildDependencyTests, OutOfDateAfterModification) {
@@ -153,6 +198,37 @@ TEST_F(JitBuildDependencyTests, ExplicitPchDependency) {
     EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
     std::filesystem::remove(umbrella);
     EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+}
+
+TEST_F(JitBuildDependencyTests, NormalizedTargetRetainsExplicitPchDependency) {
+    const auto obj = (out_dir_ / "test.o").string();
+    const auto hash_path = obj + ".dephash";
+    const auto umbrella = (out_dir_ / "pch.h").string();
+    std::ofstream{out_dir_ / "test.cpp"} << "int value;\n";
+    std::ofstream{umbrella} << "#include <array>\n";
+    std::ofstream{out_dir_ / "test.d"} << "test.o: test.cpp\n";
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    ASSERT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n";
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    ASSERT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    std::filesystem::remove(umbrella);
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+}
+
+TEST_F(JitBuildDependencyTests, MultipleNormalizedTargetsRejectExplicitPchDependency) {
+    const auto obj = (out_dir_ / "test.o").string();
+    const auto hash_path = obj + ".dephash";
+    const auto umbrella = (out_dir_ / "pch.h").string();
+    std::ofstream{out_dir_ / "test.cpp"} << "int value;\n";
+    std::ofstream{umbrella} << "#include <array>\n";
+    std::ofstream{out_dir_ / "test.d"} << "test.o: test.cpp\nother.o: test.cpp\n";
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_FALSE(std::filesystem::exists(hash_path));
 }
 
 TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {

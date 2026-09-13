@@ -92,6 +92,7 @@ private:
     std::string firmware_binary_root_;
 
     // Tools
+    std::string compiler_launcher_;
     std::string gpp_;
     std::string gpp_include_dir_;
 

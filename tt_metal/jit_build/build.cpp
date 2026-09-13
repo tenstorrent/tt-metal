@@ -214,13 +214,10 @@ void JitBuildEnv::init(
     this->max_cbs_ = config.max_cbs;
 
     // Tools
-    const static bool use_ccache = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr;
-    if (use_ccache) {
-        // ccache requires sloppiness settings for both PCH creation and consumption
-        this->gpp_ = "ccache sloppiness=pch_defines,time_macros ";
-    } else {
-        this->gpp_ = "";
-    }
+    this->compiler_launcher_ = std::getenv("TT_METAL_CCACHE_KERNEL_SUPPORT") != nullptr
+                                   ? "env CCACHE_SLOPPINESS=pch_defines,time_macros,include_file_mtime,include_file_ctime ccache "
+                                   : "";
+    this->gpp_ = "";
 
     // Use local sfpi for development
     // Use system sfpi for production to avoid packaging it
@@ -761,12 +758,12 @@ void JitBuildState::compile_one(
 
     // Add the machine-local PCH here so exported recipes remain portable.
     // Exclude build-map dump flags from the PCH profile.
-    const std::string pch = tt::jit_build::ensure_pch(
+    const std::string pch = tt::parse_env<bool>("TT_METAL_STDLIB_PCH", true) ? tt::jit_build::ensure_pch(
         env_.gpp_,
         recipe.compiler_opt_level,
         recipe.cflags,
         recipe.pch_umbrella,
-        fs::path(env_.out_root_) / std::to_string(env_.build_key_) / "pch");
+        fs::path(env_.out_root_) / std::to_string(env_.build_key_) / "pch") : "";
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
@@ -799,7 +796,7 @@ void JitBuildState::compile_one(
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
-        env_.gpp_,
+        env_.compiler_launcher_ + env_.gpp_,
         recipe.compiler_opt_level,
         cflags,
         recipe.includes,

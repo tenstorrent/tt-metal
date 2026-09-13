@@ -178,6 +178,13 @@ void write_dependency_hashes(
     const std::string& obj,
     std::ostream& hash_file) {
     auto iter = dependencies.find(obj);
+    // ccache may make the dependency target relative to CCACHE_BASEDIR.
+    if (iter == dependencies.end() && dependencies.size() == 1) {
+        auto normalized = dependencies.begin();
+        if (std::filesystem::path(normalized->first).filename() == std::filesystem::path(obj).filename()) {
+            iter = normalized;
+        }
+    }
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
         hash_file.setstate(std::ios::badbit);
@@ -225,10 +232,10 @@ void write_dependency_hashes(
         hash_file.setstate(std::ios::badbit);
     } else {
         auto dependencies = parse_dependency_file(dep_file);
-        if (!extra_dependency.empty() && dependencies.contains(obj)) {
-            dependencies.at(obj).push_back(extra_dependency);
-        }
         write_dependency_hashes(dependencies, out_dir, obj, hash_file);
+        if (!extra_dependency.empty() && hash_file) {
+            write_dependency_hashes(ParsedDependencies{{obj, {extra_dependency}}}, out_dir, obj, hash_file);
+        }
     }
     hash_file.close();
     if (hash_file.fail()) {
