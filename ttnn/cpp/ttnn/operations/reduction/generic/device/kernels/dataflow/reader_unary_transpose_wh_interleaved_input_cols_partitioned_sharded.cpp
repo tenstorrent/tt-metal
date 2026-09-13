@@ -21,7 +21,7 @@ void kernel_main() {
     uint32_t batch_size_bytes = get_arg(args::batch_size_bytes);
 
 #ifdef REDUCE_SCALER
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
+    const uint32_t scaler_bits = get_arg(args::scaler_bits);
     float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
 #endif

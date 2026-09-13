@@ -35,6 +35,31 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         "Operands to reduce need to be on device! Got storage type: {}",
         tensor_args.storage_type());
     TT_FATAL(tensor_args.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
+    // A non-unity scaler must not ride the scaler CB on a path derive_scaler_mode() marks PostMul,
+    // because the CB cannot apply it exactly there.
+    //
+    // This runs on every dispatch, not just the first: `scaler_mode` is hashed, so a cache hit
+    // always sees the mode the miss validated, but `scaler` is not, and the adapter routes hits to
+    // this function when an op defines no validate_on_program_cache_hit.
+    //
+    // Checked one way only. PostMul where ScalerTile would also work is numerically safe, and a
+    // decomposed reduce's later stage sees the intermediate's dtype rather than the one its mode
+    // was derived from, so requiring exact equality here would reject valid calls.
+    const bool scaler_cb_is_inexact = derive_scaler_mode(
+                                          operation_attributes.math_op,
+                                          tensor_args.dtype(),
+                                          operation_attributes.dim,
+                                          operation_attributes.use_sfpu_reduce) == ScalerMode::PostMul;
+    const bool scaler_tile_would_be_wrong = operation_attributes.scaler_mode == ScalerMode::ScalerTile &&
+                                            operation_attributes.scaler != 1.0f && scaler_cb_is_inexact;
+    TT_FATAL(
+        !scaler_tile_would_be_wrong,
+        "Non-unity scaler {} routed through the scaler CB, which cannot apply it exactly here "
+        "(math_op {}, dtype {}, dim {})",
+        operation_attributes.scaler,
+        operation_attributes.math_op,
+        tensor_args.dtype(),
+        operation_attributes.dim);
     // Dense RM path is only selected on the host for ttnn.mean-style dispatch (AVG over W/H on 4D BF16/FLOAT32,
     // interleaved I/O). It is lowered to PoolType::SUM + scaler before launch; see reduce_op.cpp.
     TT_FATAL(
@@ -199,6 +224,32 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a ReduceParams field must be a deliberate choice — hash it below, or
+    // exclude it like the two scalars, which the kernels read as runtime args.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 15,
+        "ReduceParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<ReduceDeviceOperation>,
+        operation_attributes.math_op,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.output_dtype,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.negate,
+        operation_attributes.scaler_mode,
+        operation_attributes.row_major_w_dense_path,
+        operation_attributes.row_major_h_dense_path,
+        operation_attributes.use_sfpu_reduce,
+        operation_attributes.num_h_slices,
+        operation_attributes.output_layout,
+        tensor_args);
+}
+
 ReduceDeviceOperation::spec_return_value_t ReduceDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_shape = tensor_args.logical_shape();
@@ -237,6 +288,7 @@ ttnn::Tensor reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool negate,
     float post_mul_scaler,
+    ScalerMode scaler_mode,
     bool row_major_w_dense_path,
     bool row_major_h_dense_path,
     bool use_sfpu_reduce,
@@ -253,6 +305,7 @@ ttnn::Tensor reduce(
             sub_core_grids,
             negate,
             post_mul_scaler,
+            scaler_mode,
             row_major_w_dense_path,
             row_major_h_dense_path,
             use_sfpu_reduce,

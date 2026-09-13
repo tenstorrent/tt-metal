@@ -70,6 +70,14 @@ constexpr bool is_sfpu_reduce_path() {
 }
 
 /**
+ * @brief Bit pattern of 1.0f, the reduction scalar that is a no-op.
+ *
+ * A post-multiply by this value must be skipped, not executed: reduce_post_mul_tile brackets
+ * Int32 with fp32 typecasts, which truncate results above 2^24.
+ */
+inline constexpr uint32_t k_identity_scaler_bits = 0x3F800000u;
+
+/**
  * @brief Whether the FPU reduce path swaps SrcA/SrcB operands.
  *
  * REDUCE_ROW SUM/AVG uses matmul with scaler in SrcA and data in SrcB (the opposite of the
