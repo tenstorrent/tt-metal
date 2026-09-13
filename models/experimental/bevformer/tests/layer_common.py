@@ -162,7 +162,10 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
 
     tt_inputs = {
         "bev_query": ttnn.from_torch(bev_query, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
-        "key": ttnn.from_torch(camera_features, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        # The layer takes camera features batch-first; the encoder owns the permute.
+        "value": ttnn.from_torch(
+            camera_features.permute(2, 0, 1, 3), device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT
+        ),
         "bev_pos": ttnn.from_torch(bev_pos, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
         "level_start_index": ttnn.from_torch(level_start_index, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT),
         "prev_bev": None,
@@ -171,8 +174,6 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
         "bev_reference_points": bev_reference_points,
         "rebatch_plan": build_rebatch_plan(tt_points_cam, tt_bev_mask, embed_dims, device),
     }
-    tt_inputs["value"] = tt_inputs["key"]
-
     return LayerFixture(
         ref_model=ref_model,
         tt_model=tt_model,

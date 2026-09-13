@@ -258,10 +258,11 @@ class TTSpatialCrossAttention:
             query: Bfloat16 BEV queries [B, num_queries, embed_dims].
             reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2].
             bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
-            value: Multi-camera features [num_cams, H*W, B, embed_dims]. Attention here takes
-                no key: deformable attention never scores query against one. Two Linears on
-                query predict where to sample and with what weight, replacing Q*K^T, so
-                ``value`` is the only feature tensor the device path needs.
+            value: Multi-camera features [B, num_cams, H*W, embed_dims], batch-first; the
+                encoder permutes once per forward. Attention here takes no key: deformable
+                attention never scores query against one. Two Linears on query predict where to
+                sample and with what weight, replacing Q*K^T, so ``value`` is the only feature
+                tensor the device path needs.
             residual: Residual connection input.
             query_pos: Query positional encoding.
             key_padding_mask: Key padding mask.
@@ -331,11 +332,13 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Rebatching Complete")
 
-        _, L, _, _ = value.shape
-
-        # [num_cams, L, bs, embed_dims] -> [bs * num_cams, L, embed_dims]
-        value_reshaped = ttnn.permute(value, (2, 0, 1, 3))  # [bs, num_cams, L, embed_dims]
-        value_reshaped = ttnn.reshape(value_reshaped, (bs * self.num_cams, L, self.embed_dims))
+        # A camera-first tensor has the same volume, so the reshape folds it into the wrong
+        # rows instead of failing. We need to prevent this by asserting the shape is correct.
+        assert value.shape[0] == bs and value.shape[1] == self.num_cams, (
+            f"value {list(value.shape)} is not batch-first " f"[{bs}, {self.num_cams}, L, {self.embed_dims}]"
+        )
+        L = value.shape[2]
+        value_reshaped = ttnn.reshape(value, (bs * self.num_cams, L, self.embed_dims))
 
         if ENABLE_LOGGING:
             logger.info("SCA Calling Deformable Attention")
