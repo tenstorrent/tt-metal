@@ -1061,7 +1061,7 @@ class Qwen36Model:
         for t in (tok_tt, cos, sin, pt_full, pt_chunk, out):
             ttnn.deallocate(t)
 
-    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0):
+    def prefill_for_spec(self, token_ids, page_table, actual_len, on_chunk, slot=0, device_copy=None):
         """Chunked prompt prefill for speculative decode; hands each chunk's hidden to ``on_chunk``.
 
         Uses the same 2048-token chunking as the demo. Prefilling the whole prompt as one masked
@@ -1074,25 +1074,68 @@ class Qwen36Model:
         ``slot``: which GDN decode row this user's state must end up in (multi-user spec; ``page_table``
         is that user's [1, nb] row either way, so attention needs nothing extra). The prefill itself is
         always B=1, so slot > 0 (or any batched GDN binding) runs it on the persistent B=1 scratch and
-        writes the result into row ``slot`` with TPGatedDeltaNet.write_slot, preserving the other users'
+        writes the result into row ``slot`` of the batched decode buffers, preserving the other users'
         live rows — the same machinery prefill_paged_slots uses for vLLM continuous batching. A B=1
         model (max_batch_size == 1, slot 0) keeps the original in-place path, byte for byte.
+
+        ``device_copy``: how that row write happens. True: ON DEVICE while the scratch is still bound
+        (ttnn.fill_cache on the recurrent state + a masked ttnn.where per conv tap — the
+        QWEN36_GDN_SLOT_DEVICE_COPY=2 mechanism of prefill_paged_slots; ~6 ms). False: the original
+        host round trip (ttnn.to_torch of every GDN layer's scratch, ~144 MB down, then
+        _write_gdn_slot's from_torch + write_slot, ~144 MB up; ~94 ms). None (default): the
+        QWEN36_SPEC_GDN_SLOT_DEVICE_COPY / QWEN36_GDN_SLOT_DEVICE_COPY knobs (_spec_slot_device_copy).
+        Both leave a bit-identical slot row (tests/test_spec_join_exact.py). Neither rebuilds the fused
+        PLAIN decode conv's packed history (conv_hist_packed): the spec loop never reads it and the
+        rebuild is ~3000 blocking device reads per join; it stays INVALID so a later plain use rebuilds.
         """
         assert self.num_devices > 1, "prefill_for_spec is the TP path"
         assert 0 <= slot < self.args.max_batch_size, f"slot {slot} out of range [0,{self.args.max_batch_size})"
         if self.args.max_batch_size > 1:
-            # B=1 scratch -> per-layer host snapshot -> write_slot into row `slot` (prefill_paged_slots).
+            dev_copy = self._spec_slot_device_copy() if device_copy is None else bool(device_copy)
+            _timing = os.environ.get("QWEN36_PREFILL_TIMING", "0") == "1"
             dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
-            comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            # The row write below is a read-modify-write of the batched conv taps, so they must be current
+            # first (write_slot's own protocol line). The staleness flag lives on the layer object and the
+            # B=1 scratch prefill overwrites it (reset_state_inplace / capture_state), so sync BEFORE
+            # binding the scratch. Zero device ops unless a verify left the taps behind their window
+            # (the serving loop's ring verify never does: it leaves both mirrors' flags alone).
+            for dn in dn_layers:
+                dn.sync_conv_taps()
+            _t0 = time.perf_counter() if _timing else 0.0
             prev = self._bind_gdn_prefill_scratch()
             try:
                 logits = self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
-                ttnn.synchronize_device(self.device)
-                rec_snap = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers]
-                conv_snap = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
+                if _timing:
+                    ttnn.synchronize_device(self.device)
+                _t1 = time.perf_counter() if _timing else 0.0
+                if dev_copy:
+                    # Row `slot` of the saved batched buffers <- the still-bound B=1 scratch, on device.
+                    self._write_gdn_slot_from_scratch(slot, prev)
+                else:
+                    # Host round trip: per-layer snapshot of the scratch, uploaded + written after unbind.
+                    ttnn.synchronize_device(self.device)
+                    comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+                    rec_snap = [ttnn.to_torch(dn.rec_state, mesh_composer=comp) for dn in dn_layers]
+                    conv_snap = [[ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states] for dn in dn_layers]
             finally:
                 self._unbind_gdn_prefill_scratch(prev)
-            self._write_gdn_slot(slot, rec_snap, conv_snap)
+            if dev_copy:
+                for dn in dn_layers:
+                    # Row `slot` of the taps is fresh and the other rows were current before the bind, so the taps
+                    # are the truth; the [B, K, C] window mirror is behind them; the packed plain-decode history
+                    # stays invalid (the scratch prefill cleared it) so any later plain use rebuilds it.
+                    dn._conv_taps_stale = False
+                    dn._conv_win_stale = True
+                    dn._hist_packed_valid = False
+            else:
+                self._write_gdn_slot(slot, rec_snap, conv_snap, sync_hist=False)
+            if _timing:
+                ttnn.synchronize_device(self.device)
+                _t2 = time.perf_counter()
+                logger.info(
+                    f"[SPEC_PREFILL_TIMING] slot={slot} T={int(actual_len)} dev_copy={int(dev_copy)} "
+                    f"total={1e3 * (_t2 - _t0):.1f} ms prefill={1e3 * (_t1 - _t0):.1f} slot_write={1e3 * (_t2 - _t1):.1f}"
+                )
             return logits
         return self._prefill_for_spec_b1(token_ids, page_table, actual_len, on_chunk)
 
@@ -2974,12 +3017,56 @@ class Qwen36Model:
             cache[key] = m
         return m
 
-    def _write_gdn_slot(self, slot, rec_snap, conv_snap):
+    def _spec_slot_device_copy(self):
+        """Whether prefill_for_spec writes the joining user's GDN state into its decode row ON DEVICE (the
+        QWEN36_GDN_SLOT_DEVICE_COPY=2 mechanism) or through the host round trip. QWEN36_SPEC_GDN_SLOT_DEVICE_COPY=1/0
+        decides for the spec path alone (A/B); unset, it follows QWEN36_GDN_SLOT_DEVICE_COPY (2 = device, the
+        served default from model_config; 0/1 = host)."""
+        v = os.environ.get("QWEN36_SPEC_GDN_SLOT_DEVICE_COPY")
+        if v is None:
+            v = "1" if (os.environ.get("QWEN36_GDN_SLOT_DEVICE_COPY", "0") or "0").strip() == "2" else "0"
+        return v.strip() not in ("", "0")
+
+    def _write_gdn_slot_from_scratch(self, slot, prev):
+        """Spec join (prefill_for_spec): copy every GDN layer's still-bound B=1 prefill scratch state into row `slot`
+        of the batched decode buffers saved in ``prev`` (from _bind_gdn_prefill_scratch), ON DEVICE, preserving the
+        other rows — the QWEN36_GDN_SLOT_DEVICE_COPY=2 branch of prefill_paged_slots, sourced from the bound scratch:
+        ttnn.fill_cache(rec_b, scratch.rec_state, slot) in place, and for each of the K conv taps a masked ttnn.where
+        (one-hot [1, B, 1] row mask, cached per slot by _gdn_slot_row_mask) copied back into the tap buffer. The
+        scratch is only READ (never handed to write_slot, which would free it: its addresses are baked into the
+        chunk-prefill trace). Programs: fill_cache hashes without batch_idx and the where/copy shapes are the same for
+        every slot, so the first call compiles them for all B slots; the serving warm-up runs prefill_for_spec into
+        slot 0 for every bucket and once per other slot before any trace is parked, so nothing compiles or allocates
+        at request time (all B row masks are created on the first call too). Flags are the caller's business."""
+        for dn, _B, rec_b, conv_b, *_rest in prev:
+            B = rec_b.shape[0]
+            for s in range(B):  # cached after the first call; guarantees no request-time mask upload
+                self._gdn_slot_row_mask(conv_b[0], s)
+            rec_src = dn.rec_state  # the bound scratch [1, Nv, Dk, Dv]
+            if rec_src.dtype != rec_b.dtype:
+                rec_src = ttnn.typecast(rec_src, rec_b.dtype)
+            ttnn.fill_cache(rec_b, rec_src, int(slot))  # in place: rec_b[slot] = scratch state
+            if rec_src is not dn.rec_state:
+                ttnn.deallocate(rec_src)
+            mask = self._gdn_slot_row_mask(conv_b[0], int(slot))  # [1, B, 1] one-hot row
+            for m in range(dn.K):
+                src = dn.conv_states[m]  # the bound scratch tap [1, 1, D]
+                if src.dtype != conv_b[m].dtype:
+                    src = ttnn.typecast(src, conv_b[m].dtype)
+                new = ttnn.where(mask, src, conv_b[m])  # row `slot` <- src, other rows kept
+                ttnn.copy(new, conv_b[m])
+                ttnn.deallocate(new)
+                if src is not dn.conv_states[m]:
+                    ttnn.deallocate(src)
+
+    def _write_gdn_slot(self, slot, rec_snap, conv_snap, sync_hist=True):
         """Upload one request's B=1 GDN state snapshot (host torch, per GDN layer) and write it
         into decode `slot` of the batched buffers via TPGatedDeltaNet.write_slot (preserving the
         other live rows). Shapes/mappers mirror _assemble_per_user_gdn (mesh dim 0 = devices).
 
         rec_snap[li]:  host [num_devices, Nv, Dk, Dv]; conv_snap[li]: list of K host [num_devices, 1, D].
+        sync_hist:     passed to write_slot (False = the spec join: leave the plain decode conv's packed
+                       history invalid instead of rebuilding it).
         """
         mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
         dn_layers = [layer.attention for layer in self.layers if not layer.is_full_attention]
@@ -3001,7 +3088,7 @@ class Qwen36Model:
                 )
                 for m in range(dn.K)
             ]
-            dn.write_slot(slot, rec, convs)
+            dn.write_slot(slot, rec, convs, sync_hist=sync_hist)
 
     def _remap_gdn_slots(self, remap):
         """Apply a vLLM batch-condense slot_remap to every GDN layer's batched decode state

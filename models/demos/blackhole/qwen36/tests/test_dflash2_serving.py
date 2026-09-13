@@ -123,16 +123,26 @@ def test_dflash2_serving_slots_are_lossless(mesh_device):
             kc = ttnn.to_torch(ttnn.get_device_tensors(att0.paged_k)[0])[blocks].clone()
             return ring, win, kc
 
+        def _assert_hold_noop(before, after, what):
+            for name, x, y in zip(("GDN ring slot", "conv window row", "attention K blocks"), before, after):
+                assert torch.equal(
+                    x, y
+                ), f"{what}: HOLD is not a no-op for slot 0's {name} (max |delta| {float((x.float() - y.float()).abs().max()):.3e})"
+            logger.info(f"[serving] {what} left slot 0's ring slot, conv window and KV blocks bit-identical")
+
         before = _snap()
         firstB = _prefill(model, dec, 1, prompts[1], page_tables)
         dec.begin(1, firstB, len(prompts[1]), page_tables[1])
-        after = _snap()
-        for name, x, y in zip(("GDN ring slot", "conv window row", "attention K blocks"), before, after):
-            assert torch.equal(
-                x, y
-            ), f"HOLD is not a no-op for slot 0's {name} (max |delta| {float((x.float() - y.float()).abs().max()):.3e})"
-        logger.info("[serving] HOLD replay left slot 0's ring slot, conv window and KV blocks bit-identical")
+        _assert_hold_noop(before, _snap(), "seed of slot 1 (begin)")
         outB = [firstB]
+        # ...and a speculative step in which slot 1 steps while slot 0 HOLDS (step(only=)): the hold the
+        # serving loop relies on every time slots run at different cadences. With QWEN36_DFLASH_FOLD_SEED=1
+        # begin() replays nothing, so this is also where slot 1's folded seed row runs next to A's hold.
+        before = _snap()
+        com = dec.step(only=[1])
+        assert set(com) == {1}, f"step(only=[1]) committed for slots {sorted(com)}"
+        outB.extend(com[1])
+        _assert_hold_noop(before, _snap(), "step(only=[1]) with slot 0 held")
         outC = None
         while dec.active[0] or dec.active[1]:
             com = dec.step()

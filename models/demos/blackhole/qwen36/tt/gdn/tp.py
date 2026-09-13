@@ -402,6 +402,9 @@ class TPGatedDeltaNet:
         # Persistent zero rows [B, T-1, C] used once by seed_spec_state to fill _verify_win_buf's
         # tail (never read: the first replay runs with mi = 0).
         self._spec_win_pad = None
+        # seed_spec_state_user's per-user one-hot selectors [B, R, 2R] (R = K-1+T), built once per spec shape
+        # and kept on device (freed with the spec buffers) instead of one blocking from_torch per layer per join.
+        self._spec_seed_sel = {}
         # The DURABLE shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
@@ -443,6 +446,9 @@ class TPGatedDeltaNet:
             if buf is not None:
                 ttnn.deallocate(buf)
             setattr(self, name, None)
+        for sel in (getattr(self, "_spec_seed_sel", None) or {}).values():
+            ttnn.deallocate(sel)
+        self._spec_seed_sel = {}
         self._spec_shape = None
 
     def reset_state(self):
@@ -1301,7 +1307,7 @@ class TPGatedDeltaNet:
         for p in parts:
             ttnn.deallocate(p)
 
-    def write_slot(self, slot, rec, convs):
+    def write_slot(self, slot, rec, convs, sync_hist=True):
         """Write one user's B=1 prefill state into decode `slot`, preserving every other (live)
         row. The per-slot analogue of assemble_batched_state for vLLM continuous batching.
 
@@ -1309,6 +1315,10 @@ class TPGatedDeltaNet:
         convs: list of K [1, 1, qkv_dim_tp] the user's conv taps (conv_states[m] column). Unlike
                assemble_batched_state (which zeroes tap 0), every tap is written straight from the
                user's B=1 prefill state, so decode continues from exactly the produced shift register.
+        sync_hist: bring conv_hist_packed (the fused PLAIN decode conv's packed history) in line with the new taps
+               (the plain serving path, default). False (the spec join, prefill_for_spec) skips it and leaves the
+               history INVALID: nothing on the spec path reads it, and the rebuild it would trigger (the B=1 scratch
+               prefill cleared _hist_packed_valid, so it is the FULL one) is B x K x n_dev blocking reads per layer.
         Consumes rec and convs. Requires the batched buffers (allocate_kv_caches(batch_size=B))."""
         assert self.rec_state is not None and self.conv_states is not None, "batched GDN state not allocated"
         assert 0 <= slot < self.B, f"slot {slot} out of range [0,{self.B})"
@@ -1325,10 +1335,15 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(c)
             convs_dev.append(c_src)
             self._write_index(self.conv_states[m], c_src, slot, dim=1)
-        if self.conv_hist_packed is not None and self._hist_packed_valid:
-            self._sync_conv_hist_packed(slot=slot)  # per-slot repack, no full rebuild
+        if sync_hist:
+            if self.conv_hist_packed is not None and self._hist_packed_valid:
+                self._sync_conv_hist_packed(slot=slot)  # per-slot repack, no full rebuild
+            else:
+                self._sync_conv_hist_packed()
         else:
-            self._sync_conv_hist_packed()
+            # The taps changed under the packed history: keep it marked invalid so any LATER plain use rebuilds
+            # (sync_gdn_decode_state / _ensure_conv_hist_packed) rather than reading a stale row.
+            self._hist_packed_valid = False
         self._conv_win_stale = True
 
     def remap_slots(self, remap):
@@ -2049,6 +2064,9 @@ class TPGatedDeltaNet:
             else ttnn.zeros([B, T - 1, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
         )
         self._spec_shape = (n_users, T)
+        # The B per-user seed selectors, built here (eagerly, before any capture) so a join never uploads one.
+        for u in range(B):
+            self._spec_seed_selector(u)
         self._ensure_conv_win()
 
     def seed_spec_state(self):
@@ -2090,6 +2108,32 @@ class TPGatedDeltaNet:
         # Both mirrors now hold the same (live) shift register.
         self._conv_taps_stale, self._conv_win_stale = False, False
 
+    def _spec_seed_selector(self, u):
+        """The [B, R, 2R] bf16 one-hot that seed_spec_state_user(u) multiplies cat([E_prev, conv_win_padded], dim=1)
+        by (R = K-1+T): row r of every other user v picks row r (E_prev itself, the identity); row r of user u picks
+        row R+r (its freshly mirrored shift register). Fixed for a given spec shape, so it is built and
+        uploaded ONCE per (layer, u) -- eagerly by prepare_spec_verify -- and reused by every join; freed with the
+        spec buffers (_release_spec_bufs)."""
+        assert self._spec_shape is not None, "_spec_seed_selector before prepare_spec_verify"
+        sel_tt = self._spec_seed_sel.get(u)
+        if sel_tt is None:
+            B, T = self.B, self._spec_shape[1]
+            R = self.K - 1 + T
+            sel = torch.zeros(B, R, 2 * R, dtype=torch.bfloat16)
+            for v in range(B):
+                for r in range(R):
+                    sel[v, r, (R + r) if v == u else r] = 1.0
+            sel_tt = ttnn.from_torch(
+                sel,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._spec_seed_sel[u] = sel_tt
+        return sel_tt
+
     def seed_spec_state_user(self, u):
         """``seed_spec_state`` for ONE user of a live batch (serving: a request joining slot ``u``).
 
@@ -2125,27 +2169,14 @@ class TPGatedDeltaNet:
             if self._spec_win_pad is None
             else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         )
-        R = K - 1 + T
         cat = ttnn.concat([self._verify_win_buf, full], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, 2R, C]
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
-        sel = torch.zeros(B, R, 2 * R, dtype=torch.bfloat16)
-        for v in range(B):
-            for r in range(R):
-                sel[v, r, (R + r) if v == u else r] = 1.0
-        sel_tt = ttnn.from_torch(
-            sel,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        sel_tt = self._spec_seed_selector(u)  # cached [B, R, 2R] one-hot (persistent: do not free)
         new_win = ttnn.matmul(
             sel_tt, cat, compute_kernel_config=self._cfg_onehot, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(cat)
-        ttnn.deallocate(sel_tt)
         ttnn.copy(new_win, self._verify_win_buf)  # full-shape, in place
         ttnn.deallocate(new_win)
 

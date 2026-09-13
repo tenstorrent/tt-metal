@@ -20,8 +20,12 @@ request as a slot of the batched substrate:
               (HOLD sentinel index), identity conv selector, position -1 rows (no KV write), so its
               durable spec state is bit-identical afterwards. Row 0 of slot u gives its pending
               token and its tap row extends the drafter context by slot T.
+              QWEN36_DFLASH_FOLD_SEED=1: no replay in begin(); the slot is marked FRESH with
+              pending = first, p = T-1, and its first step() performs that very row-0 computation
+              as part of a real speculative iteration (see _FOLD_SEED).
   step()      ONE draft (all slots) + verify replay (live slots speculate, idle slots hold) + greedy
-              accept + extend; returns {slot: committed ids} for the live slots.
+              accept + extend; returns {slot: committed ids} for the live slots (a FRESH slot's list
+              omits com[0] == first, which the caller already holds from its prefill).
   end(u)      slot u leaves (its rows keep holding until another request joins it).
   release()   shutdown.
 
@@ -40,6 +44,19 @@ from loguru import logger
 import ttnn
 from models.demos.blackhole.qwen36.tt.dflash2_decode import _DRAFT_TRACED, DFlash2Decoder, _dbg, get_drafter
 from models.tt_transformers.tt.common import get_block_size
+
+# QWEN36_DFLASH_FOLD_SEED=1: fold the seed replay into the slot's first speculative step. begin() then
+# only seeds the GDN spec state (ring block 0 + window row u) and marks the slot FRESH with pending =
+# first, p = T-1, ctx_len = T. Its first step() drafts from ``first`` at position T over context 0..T-1
+# (exactly the prompt taps the drafter holds), verifies [first, drafts] at positions T.. with mi_prev =
+# 0 and, for row 0, performs the seed replay's row-0 computation to the bit: the recurrence, the conv
+# and the attention are causal per row, so row 0 reads only the seeded ring block / window row / prompt
+# KV and the other rows and slots cannot reach it. That step emits com[1:] (com[0] == first was emitted
+# by the caller at prefill) while mi / next pending / the extend (row 0's tap -> ring slot T) use the
+# full com, so every later invariant (ctx_len == p+1, draft at p+1, verify at p+1, ring block mi) is
+# unchanged. Saves one verify replay + extend per join. Default OFF until validated on device
+# (tests/test_dflash2_serving.py with the knob set).
+_FOLD_SEED = os.environ.get("QWEN36_DFLASH_FOLD_SEED", "0") == "1"
 
 
 class DFlash2ServingDecoder(DFlash2Decoder):
@@ -68,12 +85,14 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         # Per-slot session state.
         self.active = [False] * B
         self.joined = [False] * B  # ever seeded: its hold inputs are real
+        self.fresh = [False] * B  # folded seed: the slot's next step consumes ``first`` (emits com[1:])
         self.p = [0] * B
         self.pending = [0] * B
         self.mi = [0] * B  # accepted-prefix index the slot's NEXT replay commits
         self.iters = [0] * B
         self.accepted = [0] * B
         self.drafted = [0] * B
+        self.committed = [0] * B  # tokens step() returned for the slot (excludes the caller-held ``first``)
         self.hist = [[0] * (self.K + 1) for _ in range(B)]
         self._t_begin = [0.0] * B
         self.total_steps = 0
@@ -203,28 +222,37 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         # slot's ring blocks / window rows are untouched.
         for dn in self._gdn:
             dn.seed_spec_state_user(u)
-        tokens, positions, mi_prev = self._hold_inputs()
-        tokens[u] = [int(first)] * (self.K + 1)  # row 0 = the seed; rows 1..K are junk the next verify overwrites
-        positions[u] = int(T)
-        mi_prev[u] = 0
-        hold = [v for v in range(self.B) if v != u]
-        _dbg(f"seed slot={u} T={T} hold={hold}")
-        ids, _feed, _ = self.model.verify_traced(tokens, positions, mi_prev, read_logits=False, hold=hold)
-        Tt = self.K + 1
-        self.pending[u] = int(ids[u * Tt])
-        # The verify trace copied its taps: slot u's row 0 (position T) -> its drafter ring slot T.
-        self.drafter.extend_context(
-            [int(T) if v == u else 0 for v in range(self.B)],
-            [1 if v == u else 0 for v in range(self.B)],
-            traced=_DRAFT_TRACED,
-        )
-        self.ctx_len[u] = int(T) + 1
-        self.p[u] = int(T)
+        if _FOLD_SEED:
+            # No replay: the slot's first step() consumes ``first`` at position T as row 0 of a real
+            # iteration (see _FOLD_SEED). p = T-1 keeps ctx_len == p+1 (the drafter holds 0..T-1).
+            self.pending[u] = int(first)
+            self.p[u] = int(T) - 1
+            self.fresh[u] = True
+            _dbg(f"seed slot={u} T={T} folded into its first step (pending {self.pending[u]})")
+        else:
+            tokens, positions, mi_prev = self._hold_inputs()
+            tokens[u] = [int(first)] * (self.K + 1)  # row 0 = the seed; rows 1..K are junk the next verify overwrites
+            positions[u] = int(T)
+            mi_prev[u] = 0
+            hold = [v for v in range(self.B) if v != u]
+            _dbg(f"seed slot={u} T={T} hold={hold}")
+            ids, _feed, _ = self.model.verify_traced(tokens, positions, mi_prev, read_logits=False, hold=hold)
+            Tt = self.K + 1
+            self.pending[u] = int(ids[u * Tt])
+            # The verify trace copied its taps: slot u's row 0 (position T) -> its drafter ring slot T.
+            self.drafter.extend_context(
+                [int(T) if v == u else 0 for v in range(self.B)],
+                [1 if v == u else 0 for v in range(self.B)],
+                traced=_DRAFT_TRACED,
+            )
+            self.ctx_len[u] = int(T) + 1
+            self.p[u] = int(T)
+            self.fresh[u] = False
+            _dbg(f"seed slot={u} -> pending {self.pending[u]}")
         self.mi[u] = 0
         self.active[u] = self.joined[u] = True
-        self.iters[u] = self.accepted[u] = self.drafted[u] = 0
+        self.iters[u] = self.accepted[u] = self.drafted[u] = self.committed[u] = 0
         self.hist[u] = [0] * (self.K + 1)
-        _dbg(f"seed slot={u} -> pending {self.pending[u]}")
 
     # ------------------------------------------------------------------ the loop
     def step(self, only=None):
@@ -237,8 +265,15 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         live = [u for u in range(B) if self.active[u] and (only is None or u in only)]
         if not live:
             return {}
-        anchors = [self.pending[u] if u in live else 0 for u in range(B)]
-        Cs = [self.p[u] + 1 if u in live else 1 for u in range(B)]  # held/idle slots draft junk into their own ring
+        # The draft is one R-row forward over every slot. A live slot drafts for real. An ACTIVE slot that
+        # only HOLDS this step drafts at its real next position too (anchor = its pending token, C = p+1):
+        # _write_rows lands the block's K/V in that slot's ring at p+1..p+K+1, the very rows its next real
+        # draft rewrites before reading them, so nothing it holds is disturbed. (A C=1 dummy would put
+        # them at ring positions 1..K+1 -- real prompt context inside the window -- and degrade that
+        # slot's later drafts; the verify is exact, so only acceptance suffers, never the output.) An IDLE
+        # slot keeps the cheap dummy: its ring is refilled whole-block by the next request's ingest.
+        anchors = [self.pending[u] if self.active[u] else 0 for u in range(B)]
+        Cs = [self.p[u] + 1 if self.active[u] else 1 for u in range(B)]
         for u in live:
             assert self.ctx_len[u] >= self.p[u] + 1, f"slot {u}: context {self.ctx_len[u]} < p+1 {self.p[u] + 1}"
         if not self._armed and _DRAFT_TRACED:
@@ -264,7 +299,11 @@ class DFlash2ServingDecoder(DFlash2Decoder):
             if stop_i is not None:
                 com = com[: stop_i + 1]
             mi_u = len(com) - 1
-            committed[u] = com
+            # A FRESH slot's com[0] is its seed token ``first`` (folded seed): the caller emitted it at
+            # prefill, so it is not returned again; mi / next pending / the extend still use the full com.
+            committed[u] = com[1:] if self.fresh[u] else com
+            self.fresh[u] = False
+            self.committed[u] += len(committed[u])
             next_pending[u] = int(row_ids[mi_u])
             self.mi[u] = mi_u
             slot0[u], nrows[u] = self.p[u] + 1, len(com)
@@ -289,7 +328,7 @@ class DFlash2ServingDecoder(DFlash2Decoder):
         self.set_table(u, torch.zeros(self.nb_v, dtype=torch.int32))
         if self.iters[u]:
             dt = time.perf_counter() - self._t_begin[u]
-            n_tok = self.iters[u] + self.accepted[u]
+            n_tok = self.committed[u]  # == iters + accepted, minus the folded seed's ``first`` if any
             logger.info(
                 f"[dflash2-serve] slot {u} session: {self.iters[u]} iters, {n_tok} committed tokens, "
                 f"accept {self.accepted[u] / self.iters[u]:.2f}/{self.K} -> {n_tok / self.iters[u]:.2f} tok/iter, "

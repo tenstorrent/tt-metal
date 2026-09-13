@@ -16,6 +16,13 @@ through the plugin's ADAPTIVE BLOCK-OUTPUT contract, extended by ``tt_adaptive_b
     parked (a spec replay after them hangs the device -- see DFlash2ServingDecoder);
   * the scheduler reserves W placeholders + KV lookahead for every request of a decode step.
 
+RAGGED widths (QWEN36_DFLASH_RAGGED=1, capability ``tt_adaptive_block_ragged``): a decode step runs
+exactly ONE multi-user speculative iteration and returns a rectangular [B, W] int32 block in which row i
+carries n_i = min(len(carry_i), W) >= 1 real ids followed by -1 padding (never EOS fill). The plugin
+keeps reserving W placeholders per step and decrementing by W; it counts a row's tokens as its
+non-negative ids. A row whose carry already holds >= W tokens (or a stop, under QWEN36_DFLASH_STOP_FILL)
+holds this step and emits from its carry. Default off: the fixed-width contract above stays.
+
 Greedy: each request's tokens are the target's greedy trajectory from its sampled anchor (lossless,
 tested per request in tests/test_dflash2_serving.py). max_num_seqs may be 1..4 (B_max x (K+1) verify
 rows must fit one 32-row decode tile; K = 7 for DFlash2). QWEN36_DRAFTER=mtp (or
@@ -67,6 +74,14 @@ _W = serve_block_size() if _SPEC_ON else 1
 # still ends a normal request at its first stop, and an ignore_eos client is charged the real decode
 # cost of every token it counts, exactly like the plain server. Never coast on free fills either way.
 _STOP_FILL = os.environ.get("QWEN36_DFLASH_STOP_FILL", "1") != "0"
+# Ragged block widths (see module doc): ONE dec.step() per decode step, rows padded with _PAD. Needs the
+# plugin side of the contract (tt_adaptive_block_ragged); default off so the fixed-width plugin keeps working.
+_RAGGED = os.environ.get("QWEN36_DFLASH_RAGGED", "0") == "1"
+_PAD = -1  # ragged rows: padding id past a row's real tokens (the plugin counts non-negative ids)
+# Prefill logits readout: the eager prefill returns a tile-padded [32, vocab] bf16 tensor replicated on
+# every device; "1" (default) untilizes it ON DEVICE (drops the 31 padding rows) and reads one replica
+# (~0.5 MB), "0" pulls every replica through ConcatMeshToTensor (~64 MB) as before. Same row either way.
+_FAST_LOGITS = os.environ.get("QWEN36_DFLASH_LOGITS_FAST", "1") != "0"
 # Prompts up to one chunk minus one token take the single eager MASKED-BUCKET prefill; longer prompts
 # the eager CHUNKED spec prefill. Both go through prefill_for_spec and both capture the drafter taps.
 _PREFILL_CHUNK = 2048
@@ -90,6 +105,9 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         "tt_adaptive_block_output": _W > 1,
         # ...for EVERY request of the step (one multi-user speculative step), not only when solo.
         "tt_adaptive_block_batched": _W > 1,
+        # Ragged rows: one speculative iteration per step, each row 1..W real ids then -1 padding
+        # (QWEN36_DFLASH_RAGGED=1; the plugin must implement the same contract).
+        "tt_adaptive_block_ragged": _W > 1 and _RAGGED,
         # EVERY text prompt speculates (0 = no prompt-length frontier): the plain decode / chunk-prefill
         # traces never run on the request path (a spec replay after them hangs the device).
         "tt_adaptive_block_max_prompt_tokens": 0,
@@ -127,8 +145,8 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                     f"32-row decode tile; launch with --max-num-seqs <= {32 // (K + 1)} (or QWEN36_DRAFTER=mtp)"
                 )
             logger.info(
-                f"Qwen36DFlash serving: slots={B} block W={_W} tokens/step, K={K}, eos={sorted(self._eos)}, "
-                f"drafter={os.environ.get('DFLASH_WEIGHTS')}"
+                f"Qwen36DFlash serving: slots={B} block W={_W} tokens/step{' (ragged: one iteration/step)' if _RAGGED else ''}, "
+                f"K={K}, eos={sorted(self._eos)}, drafter={os.environ.get('DFLASH_WEIGHTS')}"
             )
         else:
             logger.info("Qwen36DFlash serving: speculation OFF (plain Qwen36ForCausalLM behaviour)")
@@ -157,10 +175,10 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             raise RuntimeError("no eos_token_id found for the served checkpoint")
         return ids
 
-    def _fill_block(self, block):
-        """Exactly _W ids: a short block happens only at a genuine stop -> EOS-fill (the scheduler trims at
-        the first stop token)."""
-        block = list(block)[:_W]
+    def _clean_ids(self, block):
+        """At most _W committed ids, every out-of-vocab id replaced by EOS (never happens on the exact path;
+        a corrupted id must not reach the detokenizer)."""
+        block = [int(t) for t in block][:_W]
         vocab = self.model[0].vocab_size
         oov = [t for t in block if not 0 <= t < vocab]
         if oov:
@@ -170,6 +188,12 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                     f"Qwen36DFlash: {len(oov)} out-of-vocab committed id(s) (first={oov[0]}); substituting EOS"
                 )
             block = [t if 0 <= t < vocab else self._eos_fill for t in block]
+        return block
+
+    def _fill_block(self, block):
+        """Exactly _W ids: a short block happens only at a genuine stop -> EOS-fill (the scheduler trims at
+        the first stop token)."""
+        block = self._clean_ids(block)
         out = torch.full((_W,), self._eos_fill, dtype=torch.int32)
         if block:
             out[: len(block)] = torch.tensor(block, dtype=torch.int32)
@@ -205,7 +229,16 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             logits_dev = model.prefill_for_spec(prompt, self._spec_pref_pt(model, pt_row), T, on_chunk, slot=phys)
         finally:
             model._dflash_tap = False
-        lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
+        if _FAST_LOGITS:
+            # Replicated, tile-padded to 32 rows: untilize on device (31 padding rows dropped, 16 MB -> 0.5 MB per
+            # device) and read device 0 only -- the QWEN36_PREFILL_LOGITS_FAST path of prefill_paged_slots. The
+            # untilize program compiles here during phase-1 warm-up (every _spec_prepare prefill takes this path),
+            # i.e. before any trace is parked.
+            lg_rm = ttnn.to_layout(logits_dev, ttnn.ROW_MAJOR_LAYOUT)
+            lt = ttnn.to_torch(ttnn.get_device_tensors(lg_rm)[0])
+            ttnn.deallocate(lg_rm)
+        else:
+            lt = ttnn.to_torch(logits_dev, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
         ttnn.deallocate(logits_dev)
         if dec.ctx_len[phys] != T:
             raise RuntimeError(f"Qwen36DFlash: spec prefill covered {dec.ctx_len[phys]} of {T} positions (slot {phys})")
@@ -388,6 +421,7 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         poss = torch.as_tensor(start_pos).reshape(-1).tolist() if start_pos is not None else [0] * Bp
         pts = torch.as_tensor(page_table) if page_table is not None else None
         live_rows = []
+        nosession_rows = []  # live rows without a session: EOS so the request ends (ragged: [EOS, -1, ...])
         for i in range(Bp):
             if int(poss[i]) < 0:
                 continue  # padding row
@@ -415,12 +449,18 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                 if not self._nosession_warned:
                     self._nosession_warned = True
                     logger.warning(f"Qwen36DFlash: live row {i} (slot {phys}) has no speculative session; EOS-filling")
+                nosession_rows.append(i)
                 continue
             live_rows.append((i, phys))
+        t0 = time.perf_counter() if _DEBUG else 0.0
+        if _RAGGED:
+            out = self._decode_ragged(dec, live_rows, Bp, t0)
+            for i in nosession_rows:
+                out[i, 0] = self._eos_fill
+            return out
         # Step until every live row can fill its block. A row whose carry already holds a stop token
         # needs nothing: it emits through the stop this step (latency for a normal request); the
         # session itself is NOT stopped, so an ignore_eos client keeps getting real tokens after it.
-        t0 = time.perf_counter() if _DEBUG else 0.0
         iters = 0
 
         def _needs(phys):
@@ -464,6 +504,71 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
             logger.info(
                 f"[dflash2-serve] step: rows={[i for i, _ in live_rows]} iters={iters} "
                 f"{(time.perf_counter() - t0) * 1e3:.1f} ms carry={[len(self._carry[p]) for _, p in live_rows]}"
+            )
+        return out
+
+    def _absorb(self, com):
+        """Committed ids of one dec.step() -> the slots' carries (+ stop bookkeeping)."""
+        for phys, ids in com.items():
+            self._carry[phys].extend(int(t) for t in ids)
+            if any(t in self._eos for t in ids):
+                self._stopped[phys] = True
+
+    def _decode_ragged(self, dec, live_rows, Bp, t0):
+        """RAGGED contract (tt_adaptive_block_ragged): ONE speculative iteration over the live rows, then a
+        [Bp, W] int32 block whose row i holds n_i = min(len(carry_i), W) real ids followed by _PAD (-1).
+
+          * rows that step: every live row whose carry holds < W tokens (and, under _STOP_FILL, no stop
+            token yet); a row whose carry already holds >= W tokens HOLDS (its KV write reach stays inside
+            the declared lookahead) and emits W ids from the carry;
+          * n_i >= 1 for every live row: a step commits >= 1 token (its pending token) per stepping slot. The
+            single exception is a request whose folded seed token is itself a stop token (com == [first],
+            nothing new -- only reachable under ignore_eos, since vLLM ends a request whose first token is a
+            stop before it ever decodes): that row is stepped once more, which commits >= 1;
+          * _STOP_FILL semantics: with "1" a row that reaches a stop emits through the FIRST stop token and
+            pads the rest with -1 (the session stays live; tokens committed past the stop stay in the carry
+            for an ignore_eos client); with "0" stops are ordinary tokens and n_i = min(len(carry), W);
+          * padding rows (start_pos < 0) are all -1 (0 tokens; the plugin never reads them); a live row
+            WITHOUT a speculative session gets [EOS, -1, ...] so the request ends (unchanged in spirit
+            from the fixed-width path's EOS fill).
+        """
+        iters = 0
+
+        def _needs(phys):
+            return dec.active[phys] and not (_STOP_FILL and self._stopped[phys]) and len(self._carry[phys]) < _W
+
+        need = [phys for _, phys in live_rows if _needs(phys)]
+        if need:
+            self._absorb(dec.step(only=need))
+            iters += 1
+        # Folded-seed-is-a-stop corner (see docstring): an active row with nothing to emit steps again.
+        empty = [phys for _, phys in live_rows if dec.active[phys] and not self._carry[phys]]
+        if empty:
+            self._absorb(dec.step(only=empty))
+            iters += 1
+        out = torch.full((Bp, _W), _PAD, dtype=torch.int32)
+        for i, phys in live_rows:
+            carry = self._carry[phys]
+            if not carry:
+                if dec.active[phys]:
+                    raise RuntimeError(f"Qwen36DFlash: live slot {phys} committed no token in a ragged step")
+                block = [self._eos_fill]  # no session (unreachable: such rows are not live_rows)
+            else:
+                stop_i = next((k for k, t in enumerate(carry) if t in self._eos), None) if self._stopped[phys] else None
+                if _STOP_FILL and stop_i is not None and stop_i < _W:
+                    block, self._carry[phys] = carry[: stop_i + 1], carry[stop_i + 1 :]
+                    self._stopped[phys] = any(t in self._eos for t in self._carry[phys])
+                else:
+                    block, self._carry[phys] = carry[:_W], carry[_W:]
+                    self._stopped[phys] = stop_i is not None
+            block = self._clean_ids(block)
+            out[i, : len(block)] = torch.tensor(block, dtype=torch.int32)
+            self._prev_tail[phys] = int(block[-1])
+        if _DEBUG:
+            logger.info(
+                f"[dflash2-serve] ragged step: rows={[i for i, _ in live_rows]} iters={iters} "
+                f"{(time.perf_counter() - t0) * 1e3:.1f} ms widths={[int((out[i] >= 0).sum()) for i, _ in live_rows]} "
+                f"carry={[len(self._carry[p]) for _, p in live_rows]}"
             )
         return out
 
