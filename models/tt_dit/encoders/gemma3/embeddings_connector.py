@@ -6,7 +6,7 @@
 per-modality GemmaFeatureExtractor features into the dims the DiT cross-attention
 consumes.
 
-Reference: ltx_core.text_encoders.gemma.embeddings_connector
+Reference: ltx_core.text_encoders.gemma3.embeddings_connector
 """
 
 from __future__ import annotations

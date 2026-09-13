@@ -15,6 +15,7 @@ import hashlib
 import math
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import torch
 from huggingface_hub import hf_hub_download
@@ -22,7 +23,7 @@ from loguru import logger
 
 import ttnn
 
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...experimental.lora.ltx_adapter_loader import LTXAdapterHandle, iter_lora_modules, load_ltx_adapter_into
 from ...models.audio_vae.audio_decoder_ltx import LTXAudioDecoderAdapter
 from ...models.transformers.ltx.rope_ltx import prepare_audio_rope, prepare_av_cross_pe, prepare_video_rope
@@ -113,7 +114,7 @@ class LTXTransformerState:
         self._tt_video_padding_mask = StateTensor()
 
     def __getattr__(self, name: str) -> ttnn.Tensor | None:
-        return object.__getattribute__(self, f"_{name}")._value
+        return object.__getattribute__(self, f"_{name}").value
 
 
 # =============================================================================
@@ -293,15 +294,7 @@ class LTXPipeline:
         self.checkpoint_name: str | None = (
             LTXPipeline._resolve_checkpoint_file(checkpoint_name) if checkpoint_name else None
         )
-        self.gemma_encoder_pair = GemmaTokenizerEncoderPair(
-            gemma_path,
-            mesh_device=self.mesh_device,
-            ccl_manager=self.vae_ccl_manager,
-            parallel_config=self.encoder_parallel_config,
-            checkpoint_name=self.checkpoint_name,
-            mode=self.mode,
-            dynamic_load=self.dynamic_load,
-        )
+        self.gemma_encoder_pair = self._make_gemma_encoder_pair(gemma_path)
         if self._traced and not self.dynamic_load and self.DEFERS_ENCODE_TRACE:
             self.gemma_encoder_pair.defer_trace_capture()
         self.gemma_path: str | None = self.gemma_encoder_pair.gemma_path
@@ -377,6 +370,18 @@ class LTXPipeline:
         """Underlying vocoder+BWE ``Module`` (or ``None``) — used by ``release_traces`` and
         ``decode_audio``."""
         return self._audio_adapter.vocoder_with_bwe if self._audio_adapter is not None else None
+
+    def _make_gemma_encoder_pair(self, gemma_path: str | None):
+        """Build the text encoder pair. 2.3 uses Gemma-3; LTX-2.5 overrides for Gemma-4."""
+        return GemmaTokenizerEncoderPair(
+            gemma_path,
+            mesh_device=self.mesh_device,
+            ccl_manager=self.vae_ccl_manager,
+            parallel_config=self.encoder_parallel_config,
+            checkpoint_name=self.checkpoint_name,
+            mode=self.mode,
+            dynamic_load=self.dynamic_load,
+        )
 
     @staticmethod
     def _resolve_checkpoint_file(checkpoint: str, default_filename: str = "ltx-2.3-22b-dev.safetensors") -> str:
@@ -602,9 +607,23 @@ class LTXPipeline:
         """All transformer variants exclude each other AND the VAE. LTX-22B +
         LTX-VAE don't both fit on BH LB; VAE must evict the active transformer
         before decode. LTX needs the eviction on both WH and BH."""
-        if not self.dynamic_load:
-            return
         models = [s.model for s in self.transformer_states]
+        if not self.dynamic_load:
+            # Static loading deliberately keeps everything resident, but a decoder that cannot fit
+            # beside the transformer has to evict it regardless of the request's load policy.
+            # ``_prepare_transformer`` reloads from the disk cache before the next stage 1.
+            # Static loading registers nothing: a decoder that needs the mesh to itself is served by
+            # ``_prepare_vae``, which evicts at decode time. Registration cannot do it — this runs
+            # before ``_prime_caches``, so the lazily built peers (Gemma encoder, connectors) do not
+            # exist yet, and the exclusion set is only consulted when a module loads anyway.
+            decoder = self.vae_decoder
+            if decoder is not None and getattr(decoder, "requires_exclusive_residency", False) and self._traced:
+                raise RuntimeError(
+                    f"{type(decoder).__name__} must evict its peers to decode, which invalidates "
+                    "their captured traces under static loading. Run with LTX_TRACED=0, or use a "
+                    "dynamic_load config, which pages weights per request."
+                )
+            return
 
         for i, m in enumerate(models):
             m._coresident_peers = [*models[:i], *models[i + 1 :], self.vae_decoder, self.vae_encoder]
@@ -623,6 +642,33 @@ class LTXPipeline:
 
         encoder_peers = [*models] + ([self.vae_decoder] if self.vae_decoder is not None else [])
         self.gemma_encoder_pair.register_coresident_peers(encoder_peers)
+
+    def _video_decode_evictable(self) -> list:
+        """Every module whose weights are dead space while the video decoder runs.
+
+        For a decoder that needs the mesh to itself, "not the transformer" is not enough: with the
+        DiT evicted, the text encoder, its projection and connectors, the upsampler and the audio
+        decoder still held ~8 GB, which is most of what DiffVAE needs for its activations. Each of
+        these is reloaded from the disk cache by its own ``_prepare_*`` before next use, and audio
+        decode runs *after* video decode so it can page back in then.
+
+        The Gemma encoder and its connectors go together on purpose: ``ensure_loaded`` decides
+        whether to reload from the encoder's state alone, so evicting the connectors without it
+        would leave them deallocated and never restored.
+        """
+        pair = self.gemma_encoder_pair
+        candidates = [
+            *(state.model for state in self.transformer_states),
+            self.upsampler,
+            self.vae_encoder,
+            self.tt_mel_decoder,
+            self.tt_vocoder_with_bwe,
+            getattr(pair, "gemma_encoder", None),
+            getattr(pair, "feature_extractor", None),
+            getattr(pair, "video_connector", None),
+            getattr(pair, "audio_connector", None),
+        ]
+        return [module for module in candidates if module is not None]
 
     def _prime_caches(self) -> None:
         """Load every module in reverse use order so variant 0 is resident in
@@ -777,9 +823,20 @@ class LTXPipeline:
         return results
 
     def _prepare_vae(self) -> None:
-        """Delegate: push VAE decoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""
-        if self.vae is not None:
-            self.vae.reload_decoder()
+        """Delegate: push VAE decoder weights onto the mesh (see ``LTXVideoVAEAdapter``).
+
+        Eviction is asked for here rather than left to the weight load. The exclusion set is only
+        walked when a module *loads*, so an already-resident decoder would go on to decode beside
+        the transformer — which is fine for the conv decoder and fatal for DiffVAE.
+        """
+        if self.vae is None:
+            return
+        if (decoder := self.vae_decoder) is not None:
+            decoder.evict_coresident_exclusions()
+            if getattr(decoder, "requires_exclusive_residency", False):
+                for module in self._video_decode_evictable():
+                    module.deallocate_weights()
+        self.vae.reload_decoder()
 
     def _prepare_vae_encoder(self) -> None:
         """Delegate: push VAE encoder weights onto the mesh (see ``LTXVideoVAEAdapter``)."""
@@ -820,6 +877,9 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
+        if dump_dir := os.environ.get("LTX_DUMP_LATENT"):
+            self._dump_decode_input(latent_spatial, dump_dir)
+
         with Watchdog("vae decode"):
             video = self.vae_decoder(latent_spatial, output_type=output_type)
         if output_type == "yuv":
@@ -827,6 +887,21 @@ class LTXPipeline:
         if output_type != "float":
             return video.numpy()
         return video
+
+    def _dump_decode_input(self, latent_spatial: torch.Tensor, dump_dir: str) -> None:
+        """Save the BCTHW latent handed to the VAE decoder, for host-side decoder work.
+
+        Written in normalized latent space, which is what both decoders expect: the conv
+        decoder denormalizes in ``decode_device`` and DiffVAE in ``forward_stages_1_to_3``.
+        Numbered per call so a two-stage run yields stage 1 and stage 2 separately.
+        """
+        path = Path(dump_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        index = getattr(self, "_latent_dump_index", 0)
+        self._latent_dump_index = index + 1
+        out = path / f"latent_{index}_{'x'.join(str(d) for d in latent_spatial.shape)}.pt"
+        torch.save(latent_spatial.to(torch.float32).cpu(), out)
+        logger.info(f"dumped decode-input latent to {out}")
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Delegate: cached ``(mean-of-means, std-of-means)`` from the VAE adapter."""

@@ -615,6 +615,13 @@ from ttnn.operations.transformer import SDPAProgramConfig, PagedCacheGeometryOve
 
 transformer.SparseKVFormat = SparseKVFormat
 
+# 3D neighborhood attention. Plain nanobind defs rather than registered operations, so they
+# need surfacing here the same way SparseKVFormat does.
+transformer.neighborhood_choose_brick = ttnn._ttnn.operations.transformer.neighborhood_choose_brick
+transformer.neighborhood_plan = ttnn._ttnn.operations.transformer.neighborhood_plan
+transformer.neighborhood_scaled_dot_product_attention = (
+    ttnn._ttnn.operations.transformer.neighborhood_scaled_dot_product_attention
+)
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig

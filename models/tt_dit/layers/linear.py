@@ -86,11 +86,16 @@ class Linear(Module):
         activation_fn=None,
         dtype=ttnn.bfloat16,
         mesh_device=None,
+        weight_mesh_axes=None,
+        bias_mesh_axes=None,
         # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
         # the sites that need more precision than the shared default.
         compute_kernel_config=None,
     ):
         super().__init__()
+        # weight_mesh_axes/bias_mesh_axes shard the (replicated-by-default) weight over the mesh, per
+        # tensor dim. For column-parallel (shard the output/heads over a TP axis) pass [None, tp_axis];
+        # the input stays replicated so the matmul is local (no comms) and the output comes out sharded.
 
         self.in_features = in_features
         self.out_features = out_features
@@ -119,8 +124,17 @@ class Linear(Module):
             packer_l1_acc=True,
         )
 
-        self.weight = Parameter(total_shape=[self.in_features, self.out_features], device=mesh_device, dtype=dtype)
-        self.bias = Parameter(total_shape=[1, self.out_features], device=mesh_device, dtype=dtype) if bias else None
+        self.weight = Parameter(
+            total_shape=[self.in_features, self.out_features],
+            mesh_axes=weight_mesh_axes,
+            device=mesh_device,
+            dtype=dtype,
+        )
+        self.bias = (
+            Parameter(total_shape=[1, self.out_features], mesh_axes=bias_mesh_axes, device=mesh_device, dtype=dtype)
+            if bias
+            else None
+        )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
@@ -609,6 +623,11 @@ class RowParallelLinear(Module):
         Expects x to be column fractured.
         x may be a 2-element list [prefix, suffix] for fused concat over K (concat-free).
         Return output fractured on columns.
+
+        Under ``use_persistent_buffer`` the result aliases the CCL manager's cached reduce-scatter
+        buffer for this (shape, dim, mesh_axis). Deallocating it leaves that cache entry pointing at
+        freed memory; because the cache alternates two buffers, the corruption surfaces two calls
+        later rather than on the next one. Pass False when the caller owns the result's lifetime.
         """
         if self.fsdp_mesh_axis is not None and self.mesh_device.shape[self.fsdp_mesh_axis] > 1:
             unsqueezed_weight = ttnn.unsqueeze_to_4D(self.weight.data)
@@ -641,7 +660,10 @@ class RowParallelLinear(Module):
         )
 
         if self._mesh_axis_size > 1:
-            # Reduce over rows when replicating: N may be too narrow to scatter over the mesh axis.
+            # reduce_scatter pads rank<4 itself and restores the input rank on the way out, and it
+            # shifts the scatter axis by the same padding, so hand it the axis relatively (every rank
+            # from 2 up lands on the right dim). Reduce over rows when replicating: N may be too
+            # narrow to scatter over the mesh axis.
             dim = -2 if gather_output else -1
             output = self.ccl_manager.reduce_scatter(
                 output, dim=dim, mesh_axis=self.mesh_axis, use_persistent_buffer=use_persistent_buffer
@@ -695,11 +717,13 @@ class RowParallelLinear(Module):
         M, N = x.padded_shape[-2], weight.padded_shape[-1]
         core_grid = self.mesh_device.compute_with_storage_grid_size()
 
-        needs_reshape = len(x.shape) <= 3
-        if needs_reshape:
-            x = ttnn.unsqueeze(x, 0)
-            if x_second is not None:
-                x_second = ttnn.unsqueeze(x_second, 0)
+        # The fused op scatters on dim 3, so it needs a genuinely 4D input: one unsqueeze only gets
+        # a rank-3 activation there, and leaves rank 2 a dim short. Pad to 4D whatever the rank and
+        # peel the same number of leading dims back off the result.
+        input_rank = len(x.shape)
+        x = ttnn.unsqueeze_to_4D(x)
+        if x_second is not None:
+            x_second = ttnn.unsqueeze_to_4D(x_second)
         pre_rs_shape = tuple(list(x.shape)[:-1] + [N])
         _, rs_output_buffer = self.ccl_manager.get_rs_ping_pong_buffer(
             pre_rs_shape, 3, self.mesh_axis, return_intermediate=False
@@ -736,8 +760,8 @@ class RowParallelLinear(Module):
             mm_progress_counters=self.ccl_manager.get_mm_progress_counters_buffer(),
             mm_credit_counters=self.ccl_manager.get_mm_credit_counters_buffer() if use_l1_handoff else None,
         )
-        if needs_reshape:
-            output = ttnn.squeeze(output, 0)
+        if input_rank < 4:
+            output = ttnn.reshape(output, list(output.shape)[4 - input_rank :])
         return output
 
 

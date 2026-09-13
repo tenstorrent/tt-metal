@@ -1,0 +1,281 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""TEMP end-to-end DiffVAE decode timing (uncommitted): full replicated decode on shipped weights,
+timing the whole pipeline per NA3D backend so we can see where the fused kernel places us e2e."""
+
+from __future__ import annotations
+
+import os
+import time
+from pathlib import Path
+
+import pytest
+import torch
+
+import ttnn
+from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, decoder_config, stages_backend_from_env
+
+CHECKPOINT = Path(
+    os.environ.get(
+        "DIFFVAE_CHECKPOINT",
+        os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.5/vae/ltx-2.5-video-vae-bf16.safetensors"),
+    )
+)
+
+
+# These tests run the RING fabric config, but the collectives have always been handed
+# Topology.Linear -- the wraparound link is enabled and unused. Selectable so the two can be
+# measured against each other; default stays Linear.
+def _topology():
+    if os.environ.get("DIFFVAE_TOPOLOGY", "linear").lower() == "ring":
+        return ttnn.Topology.Ring
+    return ttnn.Topology.Linear
+
+
+# (deterministic-stages backend, stage-5 backend), single chip, replicated. "linear_order+bricked5" runs
+# the linear-order executor where it fits (the smaller early stages) and the unsharded bricked executor for
+# stage 5. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "backends",
+    [("linear_order", "linear_order"), ("linear_order", "bricked")],
+    ids=["linear_order", "linear_order+bricked5"],
+)
+@pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
+def test_decode_timing(*, mesh_device, backends, latent_hw):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    stages_b, stage5_b = backends
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 4, lh, lw)
+
+    dec = DiffVAEDecoder(config, mesh_device=mesh_device, stages_na3d_backend=stages_b, stage5_na3d_backend=stage5_b)
+    dec.load_checkpoint(CHECKPOINT)
+
+    px = dec.decode(latent, seed=0)  # warmup (also builds fused mask cache)
+    ttnn.synchronize_device(mesh_device)
+    px_shape = tuple(px.shape)
+
+    t0 = time.perf_counter()
+    px = dec.decode(latent, seed=0)
+    ttnn.synchronize_device(mesh_device)
+    dt = time.perf_counter() - t0
+    tag = f"stages={stages_b},stage5={stage5_b}"
+    print(f"\n[decode {tag}] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n")
+
+
+# Stage-5 spatial-W SP across the mesh: shards Q/output over W (sp-way) on the bricked executor.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
+def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    # 145-frame (6s) is the target resolution -- default here so the timing test exercises the real
+    # workload. output_frames = 8 * latent_T - 7, so latent_T=19 -> 145 frames; override with
+    # DIFFVAE_LATENT_T (e.g. 4 -> 25 frames) for a quick smaller run.
+    t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 19))
+    latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
+    ccl = CCLManager(
+        mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology()
+    )  # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the orthogonal (rows, size-4) mesh axis: stage-5
+    # attention runs on heads/4 of the 4 heads per chip, gathered back before the output proj.
+    tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
+    # DIFFVAE_STAGES_WSP=1 also W-shards the deterministic stages (stage 0 stays replicated), so the
+    # whole decode runs 1/sp instead of only stage 5 -- reclaiming the replicated det-stage time.
+    stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
+    # DIFFVAE_STAGE5_BACKEND selects the stage-5 executor. "bricked" does not W-shard (its op takes
+    # the shard origin at compile time, so it is uniform across the mesh), which means stage 5 runs
+    # the FULL volume on every chip rather than 1/sp of it -- the comparison is honest about speed
+    # but not about memory.
+    stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "bricked_sp_w_sharded")
+    # DIFFVAE_STAGES_SP_AXIS / DIFFVAE_STAGES_TP_AXIS move the deterministic stages' W-shard and
+    # head-TP onto the other mesh axes (0 = the size-4 rows, 1 = the size-8 cols) without touching
+    # stage 5. Prices PLAN_retire_block_permute.md D1 option 1: W over the size-4 axis gives a local
+    # width of 30 at 1080p stages 2-3 (brick-alignable) but breaks the same-axis W-sharded
+    # deterministic->stage-5 handoff, so the context is gathered and re-sharded instead.
+    stages_sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
+    stages_tp_axis = int(os.environ["DIFFVAE_STAGES_TP_AXIS"]) if "DIFFVAE_STAGES_TP_AXIS" in os.environ else tp_axis
+    dec = DiffVAEDecoder(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        stage5_na3d_backend=stage5_b,
+        stage5_sp_axis=1,
+        stage5_tp_axis=tp_axis,
+        # DIFFVAE_STAGES_BACKEND picks the deterministic stages' W-sharded executor.
+        stages_na3d_backend=stages_backend_from_env() if stages_wsp else None,
+        stages_sp_axis=stages_sp_axis if stages_wsp else None,
+        stages_tp_axis=stages_tp_axis if stages_wsp else None,  # 2-D SP x TP for the det stages too
+    )
+    dec.load_checkpoint(CHECKPOINT)
+
+    px = dec.decode(latent, seed=0)  # warmup
+    ttnn.synchronize_device(mesh_device)
+    px_shape = tuple(px.shape)
+    t0 = time.perf_counter()
+    px = dec.decode(latent, seed=0)
+    ttnn.synchronize_device(mesh_device)
+    dt = time.perf_counter() - t0
+    backend = stage5_b
+    tp = "+TP4" if tp_axis is not None else ""
+    det = f"+detSP({stages_backend_from_env()},sp_axis={stages_sp_axis},tp_axis={stages_tp_axis})" if stages_wsp else ""
+    print(
+        f"\n[decode W-SP({backend}){tp}{det} 4x8] latent(1,{config['in_channels']},{t_lat},{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
+    )
+
+
+# Stage-5 with the "linear_order" backend on the mesh: its native NA3DShard splits QUERY tiles across all
+# 32 chips (K/V stay replicated per chip), so the per-call gather -- the wall that OOMs replicated on
+# ONE chip -- shrinks 32x and should fit at 25-frame 1080p, while using the faster gather executor.
+# The activation stays replicated (full memory), so this is the 25-frame path, not the 6s path.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
+def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 4, lh, lw)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
+    dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="linear_order")
+    dec.load_checkpoint(CHECKPOINT)
+
+    px = dec.decode(latent, seed=0)  # warmup
+    ttnn.synchronize_device(mesh_device)
+    px_shape = tuple(px.shape)
+    t0 = time.perf_counter()
+    px = dec.decode(latent, seed=0)
+    ttnn.synchronize_device(mesh_device)
+    dt = time.perf_counter() - t0
+    print(
+        f"\n[decode gather-mesh 4x8] latent(1,{config['in_channels']},4,{lh},{lw}) -> {px_shape}: {dt * 1000:8.0f} ms\n"
+    )
+
+
+def _pcc(a, b):
+    a, b = a.flatten().double(), b.flatten().double()
+    return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
+
+
+# Individual PCC + runtime at 1080p 25-frame, for the no-TP sharded path and the TP+col-qkv sharded path,
+# each measured against the GATHER-mesh decode as the reference (the dense-masked-attention NA3D backend --
+# the highest-fidelity path that fits at 1080p; single-chip replicated OOMs at the tail). All three run on
+# the same 4x8 mesh. The two sharded configs share the bricked W-SP stack and differ only in TP
+# (stage-5 heads + column-parallel qkv, and TP-heads on the det stages).
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+def test_decode_1080p_tp_pcc(*, mesh_device):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from loguru import logger
+
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    torch.manual_seed(0)
+    latent = torch.randn(1, config["in_channels"], 4, 34, 60)  # 1080p, 25 frames
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
+
+    def timed(dec):
+        dec.decode(latent, seed=0)  # warmup
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        px = dec.decode(latent, seed=0)
+        ttnn.synchronize_device(mesh_device)
+        return px.float(), (time.perf_counter() - t0) * 1000.0
+
+    def sharded(tp_axis, tp_proj):
+        os.environ["DIFFVAE_TP_PROJ"] = "1" if tp_proj else "0"
+        dec = DiffVAEDecoder(
+            config,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            stage5_na3d_backend="bricked_sp_w_sharded",
+            stage5_sp_axis=1,
+            stage5_tp_axis=tp_axis,
+            stages_na3d_backend="bricked_sp_w_sharded",
+            stages_sp_axis=1,
+            stages_tp_axis=tp_axis,
+        )
+        dec.load_checkpoint(CHECKPOINT)
+        return timed(dec)
+
+    # Reference: gather-mesh decode (dense masked attention, query-sharded across the mesh).
+    ref_dec = DiffVAEDecoder(
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        stages_na3d_backend="linear_order",
+        stage5_na3d_backend="linear_order",
+    )
+    ref_dec.load_checkpoint(CHECKPOINT)
+    ref, t_ref = timed(ref_dec)
+
+    no_tp, t_no = sharded(None, False)
+    tp_full, t_tp = sharded(0, True)
+
+    logger.info(f"[1080p-pcc] gather-mesh reference:          runtime {t_ref:8.0f} ms")
+    logger.info(f"[1080p-pcc] no-TP sharded:  PCC {_pcc(no_tp, ref) * 100:.4f} %   runtime {t_no:8.0f} ms")
+    logger.info(f"[1080p-pcc] TP + col-qkv:   PCC {_pcc(tp_full, ref) * 100:.4f} %   runtime {t_tp:8.0f} ms")
+
+
+# Does W-sharding stage 5 change what it computes? Window placement must stay GLOBAL: a query
+# within half a context window of a shard seam still needs a full window, clamped only at the
+# true volume boundary. Getting that wrong truncates the receptive field along every internal
+# edge and still returns plausible video, so this compares pixels rather than trusting it.
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True, ids=["ring"]
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("latent_hw", [(16, 16)], ids=["s16"])
+def test_decode_wsp_shard_equivalence(*, mesh_device, latent_hw):
+    if not CHECKPOINT.exists():
+        pytest.skip(f"missing {CHECKPOINT}")
+    from models.tt_dit.parallel.manager import CCLManager
+
+    config = decoder_config(CHECKPOINT)
+    lh, lw = latent_hw
+    torch.manual_seed(0)
+    t_lat = int(os.environ.get("DIFFVAE_LATENT_T", 8))
+    latent = torch.randn(1, config["in_channels"], t_lat, lh, lw)
+    ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 2)), topology=_topology())
+
+    pixels = {}
+    for backend in ("bricked", "bricked_sp_w_sharded"):
+        decoder = DiffVAEDecoder(
+            config,
+            mesh_device=mesh_device,
+            ccl_manager=ccl,
+            stages_na3d_backend="linear_order",
+            stage5_na3d_backend=backend,
+            stage5_sp_axis=1,
+        )
+        decoder.load_checkpoint(CHECKPOINT)
+        pixels[backend] = decoder.decode(latent, seed=0).float()
+        ttnn.synchronize_device(mesh_device)
+
+    replicated, sharded = pixels["bricked"], pixels["bricked_sp_w_sharded"]
+    flat = torch.stack([replicated.flatten(), sharded.flatten()])
+    correlation = torch.corrcoef(flat)[0, 1].item()
+    spread = (replicated.max() - replicated.min()).item()
+    drift = ((replicated - sharded).abs().mean() / spread * 100).item()
+    print(f"\n[shard equivalence] PCC {correlation:.6f}   mean |difference| {drift:.4f}% of range\n")
+    assert correlation > 0.999, f"W-sharded stage 5 disagrees with replicated: PCC {correlation:.6f}"

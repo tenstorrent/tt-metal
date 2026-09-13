@@ -1,0 +1,10 @@
+{
+  "models/tt_dit/tests/models/vae/test_diffvae_decoder.py::test_context_matches_upstream (call)": 0.9994528586592427,
+  "models/tt_dit/tests/models/vae/test_diffvae_decoder.py::test_decode_matches_upstream (call)": 0.9988174385547648,
+  "models/tt_dit/tests/models/vae/test_diffvae_det.py::test_det_stages_match_upstream (call)": 0.9995428482473154,
+  "models/tt_dit/tests/models/vae/test_diffvae_det.py::test_na_block_matches_upstream[0] (call)": 0.9998348086566535,
+  "models/tt_dit/tests/models/vae/test_diffvae_det.py::test_na_block_matches_upstream[1] (call)": 0.9998801825123848,
+  "models/tt_dit/tests/models/vae/test_diffvae_stage5.py::test_rope_matches_upstream[blackhole-1x1] (call)": 0.9999999871648884,
+  "models/tt_dit/tests/models/vae/test_diffvae_stage5.py::test_stage5_parity[blackhole-pcc999-bf16-1x1] (call)": 0.9999344774729101,
+  "models/tt_dit/tests/models/vae/test_diffvae_stage5.py::test_stage5_parity_sharded[blackhole-pcc999-2x4-4x8-device_params0] (call)": 0.9999344774729101
+}

@@ -139,12 +139,11 @@ def test_pipeline_distilled(
     )
 
     prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
-    # Gen #1 is the steady-state measurement, and on console every request encodes a prompt the
-    # cache has never seen — so it gets its own prompt to keep the encoder in the measured path.
-    # Under dynamic_load the encoder is coresident-excluded with the DiT: a second encode would
-    # evict the DiT and clobber the captured traces, so that path reuses the cached embedding.
+    # Gen #1/#2 use distinct prompts so the encoder stays in the measured path (main #52968).
+    # Under dynamic_load reuse the same prompt — a second encode would reload the encoder and
+    # clobber captured DiT traces.
     steady_state_prompt = prompt if dynamic_load else os.environ.get("PROMPT_STEADY_STATE", STEADY_STATE_LTX_PROMPT)
-    replay_prompt = prompt if dynamic_load else STEADY_STATE_REPLAY_LTX_PROMPT
+    replay_prompt = prompt if dynamic_load else os.environ.get("PROMPT_REPLAY", STEADY_STATE_REPLAY_LTX_PROMPT)
 
     def run(*, prompt, number, seed):
         output_filename = os.environ.get("OUTPUT_PATH", f"ltx_av_fast_{width}x{height}_{number}.mp4")
@@ -299,7 +298,7 @@ def test_pipeline_distilled(
         if traced:
             # Gen #1 captures the encode trace (the pipeline opens that gate once its own captures
             # are done), so gen #2 is the first pass where every trace replays — the one whose
-            # timings are the steady state.
+            # Stage times are the steady-state measurement (includes Encoder).
             logger.info("=== gen #1: encode trace capture ===")
             run(prompt=steady_state_prompt, number=1, seed=seed)
             logger.info("=== traced steady-state pass (gen #2, pure replay) ===")

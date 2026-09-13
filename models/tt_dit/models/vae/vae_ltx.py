@@ -39,6 +39,8 @@ from ...utils.ltx import pad_hw_replicate
 from ...utils.tensor import fast_device_to_host, float_to_uint8, typed_tensor, typed_tensor_2dshard
 from ...utils.tracing import traced_function
 from ...utils.yuv_d2h import fast_device_to_host_yuv
+from .diffvae_ltx import DiffVAEDecoder
+from .diffvae_ltx import decoder_config as diffvae_config
 
 if TYPE_CHECKING:
     from ..upsampler.latent_upsampler_ltx import LTXLatentUpsampler
@@ -761,6 +763,10 @@ def _compute_ltx_decoder_dims(
 
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
+
+    #: This decoder can convert and gather YUV 4:2:0 on device (``output_type="yuv"``), which the
+    #: mp4 export path prefers. DiffVAE cannot, so the pipeline checks before asking.
+    supports_yuv = True
 
     def __init__(
         self,
@@ -1523,11 +1529,33 @@ class LTXVideoEncoder(Module):
 
 def read_vae_per_channel_stats(checkpoint_path: str) -> tuple[torch.Tensor, torch.Tensor]:
     """Read ``(mean-of-means, std-of-means)`` from a checkpoint and reshape for ``(B, C, F, H, W)``
-    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``."""
+    broadcast — the un_normalize/normalize bookends matching ``ltx_core.upsample_video``.
+
+    Accepts monolith ``vae.per_channel_statistics.*`` and split-file bare ``per_channel_statistics.*``.
+    """
     with safe_open(checkpoint_path, framework="pt") as f:
-        mean = f.get_tensor("vae.per_channel_statistics.mean-of-means").float()
-        std = f.get_tensor("vae.per_channel_statistics.std-of-means").float()
+        keys = set(f.keys())
+        mean_key = (
+            "vae.per_channel_statistics.mean-of-means"
+            if "vae.per_channel_statistics.mean-of-means" in keys
+            else "per_channel_statistics.mean-of-means"
+        )
+        std_key = (
+            "vae.per_channel_statistics.std-of-means"
+            if "vae.per_channel_statistics.std-of-means" in keys
+            else "per_channel_statistics.std-of-means"
+        )
+        mean = f.get_tensor(mean_key).float()
+        std = f.get_tensor(std_key).float()
     return mean.view(1, -1, 1, 1, 1), std.view(1, -1, 1, 1, 1)
+
+
+def _strip_vae_prefix(key: str, *prefixes: str) -> str | None:
+    """Return ``key`` with the first matching prefix removed, else ``None``."""
+    for prefix in prefixes:
+        if key.startswith(prefix):
+            return key[len(prefix) :]
+    return None
 
 
 class LTXVideoVAEAdapter:
@@ -1553,6 +1581,7 @@ class LTXVideoVAEAdapter:
         num_frames: int,
         height: int,
         width: int,
+        diffusion_decoder: bool = False,
     ) -> None:
         self._checkpoint_path = checkpoint_path
         self._mesh_device = mesh_device
@@ -1576,8 +1605,48 @@ class LTXVideoVAEAdapter:
         if self.encoder_blocks:
             logger.info(f"VAE encoder config: {len(self.encoder_blocks)} blocks")
 
-        self._decoder: LTXVideoDecoder | None = None
-        if self.decoder_blocks:
+        # LTX-2.5's own video-VAE file ships the diffusion decoder in place of conv
+        # ``decoder_blocks``, so which decoder is built is a property of the request, not of the
+        # file: a 2.3 monolith has only the conv one, and 2.5 can be decoded either way.
+        self._decoder: LTXVideoDecoder | DiffVAEDecoder | None = None
+        if diffusion_decoder:
+            # The timing harness builds this decoder W-SHARDED over the mesh (and optionally with
+            # TP-over-heads on the orthogonal axis); the pipeline built it replicated on the
+            # linear-order executor, so none of the sharded fast path could be exercised end to end.
+            # These read the same environment the harness does and fall back to the previous
+            # replicated construction when nothing is set, so an existing pipeline run is
+            # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor ("bricked_sp_w_sharded",
+            # the default, or the replicated "linear_order"); DIFFVAE_STAGES_WSP=1 W-shards the
+            # deterministic stages too, on the executor DIFFVAE_STAGES_BACKEND names;
+            # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the rows axis.
+            from .diffvae_ltx import stages_backend_from_env
+
+            stage5_backend = os.environ.get("DIFFVAE_STAGE5_BACKEND")
+            stages_wsp = os.environ.get("DIFFVAE_STAGES_WSP") == "1"
+            stages_backend = stages_backend_from_env() if stages_wsp else None
+            sharded = stage5_backend is not None or stages_wsp
+            tp_axis = 0 if os.environ.get("DIFFVAE_TP_HEADS") == "1" else None
+            self._decoder = DiffVAEDecoder(
+                diffvae_config(checkpoint_path),
+                mesh_device=mesh_device,
+                ccl_manager=vae_ccl_manager,
+                stage5_na3d_backend=(stage5_backend or "bricked_sp_w_sharded") if sharded else None,
+                stage5_sp_axis=1 if sharded else None,
+                stage5_tp_axis=tp_axis if sharded else None,
+                stages_na3d_backend=stages_backend,
+                stages_sp_axis=1 if stages_wsp else None,
+                stages_tp_axis=tp_axis if stages_wsp else None,
+            )
+            if sharded:
+                logger.info(
+                    f"VAE config: DiffVAE diffusion decoder, W-sharded "
+                    f"stage5={stage5_backend or 'bricked_sp_w_sharded'} "
+                    f"det_stages={f'W-sharded on {stages_backend}' if stages_wsp else 'replicated'} "
+                    f"tp_heads={'on' if tp_axis is not None else 'off'}"
+                )
+            else:
+                logger.info("VAE config: DiffVAE diffusion decoder (replicated)")
+        elif self.decoder_blocks:
             self._decoder = LTXVideoDecoder(
                 decoder_blocks=self.decoder_blocks,
                 causal=self._causal,
@@ -1605,7 +1674,7 @@ class LTXVideoVAEAdapter:
             )
 
     @property
-    def decoder(self) -> "LTXVideoDecoder | None":
+    def decoder(self) -> "LTXVideoDecoder | DiffVAEDecoder | None":
         return self._decoder
 
     @property
@@ -1626,17 +1695,35 @@ class LTXVideoVAEAdapter:
         if self._decoder is None or self._decoder.is_loaded():
             return
 
+        if isinstance(self._decoder, DiffVAEDecoder):
+            # No conv3d blocking to key on, and the remapping (folded statistics, permuted
+            # upsample projections) lives on the decoder itself.
+            decoder = self._decoder
+            cache_module.load_model(
+                decoder,
+                model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+                subfolder="diffvae",
+                parallel_config=self._dit_parallel_config,
+                mesh_shape=tuple(self._mesh_device.shape),
+                mesh_device=self._mesh_device,
+                get_torch_state_dict=lambda: decoder.torch_state_from_checkpoint(self._checkpoint_path),
+            )
+            logger.info("Loaded TTNN DiffVAE decoder")
+            return
+
         def _state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"VAE cache miss — loading safetensors: {self._checkpoint_path}")
             raw = load_file(self._checkpoint_path)
             vae_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.decoder."):
-                    vae_state[k.removeprefix("vae.decoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        vae_state[short_key] = v
+                # Monolith ``vae.decoder.*`` and split-file bare ``decoder.*``.
+                short = _strip_vae_prefix(k, "vae.decoder.", "decoder.")
+                if short is not None:
+                    vae_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    vae_state[f"per_channel_statistics.{pcs}"] = v
             return vae_state
 
         blocking_key = conv3d_blocking_hash(self._decoder)
@@ -1663,12 +1750,13 @@ class LTXVideoVAEAdapter:
             raw = load_file(self._checkpoint_path)
             enc_state = {}
             for k, v in raw.items():
-                if k.startswith("vae.encoder."):
-                    enc_state[k.removeprefix("vae.encoder.")] = v
-                elif k.startswith("vae.per_channel_statistics."):
-                    short_key = k.removeprefix("vae.")
-                    if short_key in ("per_channel_statistics.mean-of-means", "per_channel_statistics.std-of-means"):
-                        enc_state[short_key] = v
+                short = _strip_vae_prefix(k, "vae.encoder.", "encoder.")
+                if short is not None:
+                    enc_state[short] = v
+                    continue
+                pcs = _strip_vae_prefix(k, "vae.per_channel_statistics.", "per_channel_statistics.")
+                if pcs in ("mean-of-means", "std-of-means"):
+                    enc_state[f"per_channel_statistics.{pcs}"] = v
             return enc_state
 
         blocking_key = conv3d_blocking_hash(self._encoder)
