@@ -2484,12 +2484,15 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // rotated_groups_needed == rotated_groups.size() ownership never actually moves.
     const uint32_t rotated_groups_needed =
         rotated_group_size ? tt::div_up(rotated_float_chunks, rotated_group_size) : 0;
-    // Active-iteration indexing handles partial masks and KV padding. No remainder
-    // or no change in ownership needs no special exclusion.
+    // Keep non-moving schedules on the static path, including its single-Q L1 persistence.
+    // Do not gate on the current active mask: cached KV-padding programs can execute more
+    // iterations on a later call without rebuilding this compile-time schedule.
+    const bool remainder_changes_owner =
+        ring_size > 1 && rotated_groups_needed > 0 && rotated_groups_needed < rotated_groups.size();
     const bool use_rotated_q_split =
         // Valid groups are full multicast rows with Q work.
         // build_kv_chains requires B == 1 so a row cannot mix batches' K/V data.
-        !rotated_groups.empty() && build_kv_chains &&
+        remainder_changes_owner && build_kv_chains &&
         // Separate-V head chains use static forwarding counts and cannot follow migrated chunks.
         !use_head_chain &&
         // Only streaming compute consumes rotated IDs. Sink paths remain excluded;
@@ -2519,11 +2522,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Put the first remainder on the injector so it never runs padded slots.
         // Rotate groups each iteration; each core owns at most one remainder.
         auto float_owner = [&](uint32_t ring_iter, uint32_t float_idx) {
-            const uint32_t group_idx = ((ring_iter * groups_needed) + (float_idx / rotated_group_size)) % num_groups;
+            const uint32_t first_group = ring_iter * groups_needed;
+            const uint32_t float_group_offset = float_idx / rotated_group_size;
+            const uint32_t group_idx = (first_group + float_group_offset) % num_groups;
             const auto& group = rotated_groups[group_idx];
-            const uint32_t pos = float_idx % rotated_group_size;
-            const uint32_t inj = group.injector_pos;
-            return group.members[pos == 0 ? inj : (pos <= inj ? pos - 1 : pos)];
+            const uint32_t pos_in_group = float_idx % rotated_group_size;
+            const uint32_t injector_pos = group.injector_pos;
+            const bool is_injector_slot = pos_in_group == 0;
+            const uint32_t member_idx =
+                is_injector_slot ? injector_pos : (pos_in_group <= injector_pos ? pos_in_group - 1 : pos_in_group);
+            return group.members[member_idx];
         };
         rotated_sched.assign(num_cores, std::vector<RotatedIterSched>(ring_size));
         for (uint32_t core_idx = 0; core_idx < num_cores; ++core_idx) {

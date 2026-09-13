@@ -2962,6 +2962,7 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     pcc_threshold=CHUNKED_PREFILL_PCC_THRESHOLD,
     rmse_threshold=DEFAULT_RMSE_THRESHOLD,
     full_mesh=False,
+    local_heads=4,
 ):
     sp_size = mesh_config.num_devices if full_mesh else mesh_config.sp_size
     if sp_size < 2:
@@ -2975,7 +2976,6 @@ def run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
     ), f"kv_cache_batch_idx {kv_cache_batch_idx} must be in [0, {cache_batch})"
 
     b = BATCH_SIZE
-    local_heads = 4
     nhq = local_heads if full_mesh else local_heads * mesh_config.tp_size
     nhk = 1
     d_q = 64
@@ -6007,6 +6007,7 @@ def test_ring_joint_attention_minimax3_gqa_chunked_accuracy():
     )
 
 
+@pytest.mark.timeout(600)
 def test_ring_joint_attention_minimax3_gqa_rotated_q_accuracy():
     """Validate rotated Q scheduling for GQA against the CPU reference."""
     # q32 gives 16 heads * (640 / 32) = 320 work units, leaving remainder chunks
@@ -6019,6 +6020,68 @@ def test_ring_joint_attention_minimax3_gqa_rotated_q_accuracy():
         total_seq=MINIMAX3_GQA_CHUNKED_ACCURACY_TOTAL_SEQ,
         qk_configs=[(32, 512)],
         persistent_buffer_mode="reuse_max",
+    )
+
+
+@pytest.mark.timeout(1200)
+@pytest.mark.parametrize("q_chunk_size,k_chunk_size", [(32, 640), (64, 448)], ids=["q32", "q64_pack_unpack"])
+def test_ring_mla_rotated_q_accuracy_and_determinism(q_chunk_size, k_chunk_size):
+    """Exercise shared-K rotation, accumulator handoffs, and cached replay against a CPU reference.
+
+    q64/k448 pins the PACK-to-UNPACK race: QK uses one tile row per subblock while
+    the V matmul reads two. On Galaxy, eight active ring iterations reuse all three
+    handoff semaphore slots; QuietBox covers the same path with four iterations.
+    """
+    chunk_size = 640 * MESH_CONFIG.sp_size
+    model = RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"]
+    runtime = open_ring_joint_sdpa_runtime(MESH_CONFIG, reserve_llk_kernel_config=False)
+    runtime.mesh_device.enable_program_cache()
+    try:
+        for num_iterations in (1, 3):
+            run_ring_joint_sdpa_chunked(
+                MESH_CONFIG,
+                model,
+                chunk_size=chunk_size,
+                total_seq=3 * chunk_size,
+                qk_configs=[(q_chunk_size, k_chunk_size)],
+                persistent_buffer_mode="reuse_max",
+                use_ring_mla=True,
+                num_iterations=num_iterations,
+                runtime=runtime,
+                reserve_llk_kernel_config=False,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize("all_rows_have_remainder", [False, True], ids=["even", "all_rows_have_remainder"])
+def test_ring_mla_nonmoving_q_split_accuracy(all_rows_have_remainder):
+    """Non-moving schedules retain static allocation, including single-Q L1 persistence."""
+    chunk_size = 64 * MESH_CONFIG.sp_size
+    local_heads = 2 * MESH_CONFIG.sdpa_cores - 1 if all_rows_have_remainder else MESH_CONFIG.sdpa_cores
+    model = replace(RING_MLA_CHUNKED_MODEL_CONFIGS["kimi_k3"], nhq=local_heads)
+    run_ring_joint_sdpa_chunked(
+        MESH_CONFIG,
+        model,
+        chunk_size=chunk_size,
+        total_seq=3 * chunk_size,
+        qk_configs=[(64, 448)],
+        persistent_buffer_mode="reuse_max",
+        use_ring_mla=True,
+        reserve_llk_kernel_config=False,
+    )
+
+
+@pytest.mark.timeout(600)
+def test_ring_mla_rotated_q_partial_mask_cache_reuse():
+    """Rotate 128 Q chunks over 100/110 cores while KV padding changes the active mask.
+
+    The helper checks numerical output, bit-exact replay, and an unchanged program-cache
+    entry count as the prefix grows from a partial ring to all active iterations.
+    """
+    run_ring_mla_sdpa_chunked_kv_actual_isl_reuse_max_case(
+        MESH_CONFIG, chunk_size_local=256, local_heads=16, num_chunks=5, num_iterations=3
     )
 
 
