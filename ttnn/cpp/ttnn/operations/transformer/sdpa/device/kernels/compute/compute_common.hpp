@@ -265,7 +265,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     reconfig_data_format_srca(in_cb);
     copy_init(in_cb);
-    recip_tile_init();
+    // The first-column helper uses SFPI, not full-tile LOADMACRO/replay state.
+    MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::sfpu_reciprocal_init, (APPROX)));
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);

@@ -92,6 +92,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_lib_math_wrappers.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_eltwise_unary_sfpu_params.h"
+#include "llk_sfpu/llk_math_eltwise_unary_sfpu_init.h"
 
 // ckernel_sfpu_sampling.h reads bare APPROX / DST_ACCUM_MODE (it is written
 // against the metal SFPU macro environment), so define them before including it.
@@ -160,7 +161,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
 #if !defined(SAMPLING_SKIP_RECIP_INIT)
-    ckernel::sfpu::sampling_recip_init();
+    // Match the production scalar wrapper: generic SFPU state plus scalar constants only.
+    ckernel::llk_math_eltwise_unary_sfpu_init<SfpuType::reciprocal>(ckernel::sfpu::sampling_recip_init);
 #endif
 
     _llk_math_wait_for_dest_available_<DST_SYNC>();
