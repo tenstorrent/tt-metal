@@ -77,24 +77,6 @@ inline bool use_sfpu_reduce_path(
            (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN);
 }
 
-// True when a non-unity scalar must be a post-reduce multiply instead of via the scaler CB: MAX/MIN,
-// the Int32 SFPU path, and the accurate fp32 SFPU path all ignore the scaler CB.
-inline bool requires_post_mul(
-    tt::tt_metal::ReduceOpMath math_op, tt::tt_metal::DataType dtype, float scaler, bool use_sfpu_reduce = false) {
-    using tt::tt_metal::ReduceOpMath;
-    if (scaler == 1.0f) {
-        return false;
-    }
-    if (math_op == ReduceOpMath::MAX || math_op == ReduceOpMath::MIN) {
-        return true;
-    }
-    if (math_op == ReduceOpMath::SUM && dtype == tt::tt_metal::DataType::INT32) {
-        return true;
-    }
-    return use_sfpu_reduce && dtype == tt::tt_metal::DataType::FLOAT32 &&
-           (math_op == ReduceOpMath::SUM || math_op == ReduceOpMath::AVG);
-}
-
 // Which slot carries the scalar. This is structural, so it is hashed; the value itself is not.
 enum class ScalerMode : uint8_t { None, ScalerTile, PostMul };
 

@@ -236,13 +236,7 @@ Tensor reduce(
           (reduce_math == tt::tt_metal::ReduceOpMath::MAX || reduce_math == tt::tt_metal::ReduceOpMath::SUM ||
            reduce_math == tt::tt_metal::ReduceOpMath::MIN)) ||
          use_sfpu_fp32_reduce);
-    // The single-core HW path still compensates for REDUCE_SCALAR applying the scaler once per
-    // dimension by taking sqrt(scaler), and sqrt of a negative value is NaN -- so a negative scaler
-    // must take the two-step W-then-H path. Phase 2 removes the sqrt trick and this fork together.
-    const bool legacy_post_mul =
-        ttnn::prim::requires_post_mul(reduce_math, prepared_input.dtype(), scaler, use_sfpu_fp32_reduce);
-    const bool decomposes_hw = is_multicore_hw || use_two_step_hw_sfpu_reduce ||
-                               (reduce_dim == tt::tt_metal::ReduceOpDim::HW && !legacy_post_mul && scaler < 0);
+    const bool decomposes_hw = is_multicore_hw || use_two_step_hw_sfpu_reduce;
 
     // A decomposed HW reduce applies the scalar on its H half, so the mode follows that dim.
     // Int32 post-mul rounds through fp32 and is lossy for |result| > 2^24; mean applies its 1/N
