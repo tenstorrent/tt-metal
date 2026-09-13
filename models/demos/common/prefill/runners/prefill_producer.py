@@ -761,6 +761,21 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
         device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
 
+        # A single PCC scalar per half per layer cannot separate a static per-column error from one
+        # that accumulates per token, which is the question the depth curve actually poses. The
+        # tensor is already in host memory here, so dumping it costs no device time. bfloat16 is
+        # lossless for a bfp8_b-sourced value (7 mantissa bits into 8) and halves the file.
+        dump_dir = os.environ.get("PREFILL_DUMP_KV_DIR")
+        if dump_dir:
+            try:
+                os.makedirs(dump_dir, exist_ok=True)
+                torch.save(
+                    device_kv.to(torch.bfloat16),
+                    os.path.join(dump_dir, f"device_kv_layer{layer}_slot{slot_id}.pt"),
+                )
+            except OSError as exc:  # diagnostics must never fail the gate
+                logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
+
         golden = _load_golden_kv_post(trace_dir, layer, real_len)
         # Re-base the pe half only if the model rotates it. Kimi-K3 is NoPE (`mla_use_nope`): its 64
         # rope dims pass through unrotated, so applying the half-split re-interleave scores the

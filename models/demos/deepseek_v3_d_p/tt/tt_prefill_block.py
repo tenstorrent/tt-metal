@@ -697,6 +697,7 @@ class TtPrefillBlock(LightweightModule):
                 padding_side=padding_side,
                 actual_start=actual_start,
                 metadata=metadata,
+                cache_user_id=cache_user_id,
             )
         else:
             ffn_out = self._dense_ffn_path(ffn_norm_out)
@@ -735,6 +736,7 @@ class TtPrefillBlock(LightweightModule):
         padding_side: str = "right",
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
+        cache_user_id: int = 0,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D ROW_MAJOR → MoE → 3D TILE → 4D TILE.
 
@@ -749,6 +751,8 @@ class TtPrefillBlock(LightweightModule):
             padding_side=padding_side,
             actual_start=actual_start,
             metadata=metadata,
+            # Only consumed by the env-gated routing dump, which names its files by KV slot.
+            cache_user_id=cache_user_id,
         )
 
         moe_out = ttnn.unsqueeze(moe_out, dim=0)
