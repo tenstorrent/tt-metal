@@ -1163,9 +1163,10 @@ def test_gcd_lcm_output_dtype(device, output_dtype):
 @pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
 def test_bias_gelu_output_dtype(device, input_dtype, output_dtype):
-    # bias_gelu fuses its gelu as a binary_ng post-activation, which is a coarser approximation than
-    # standalone ttnn.gelu, so torch is not a usable reference for the value. What the op owes the
-    # caller is that the dtype is honoured and that both overloads answer identically -- the
+    # bias_gelu fuses its gelu as a binary_ng post-activation, and the two overloads compute in
+    # different orders (the fused one accumulates at the output dtype), so torch is not a usable
+    # bit-exact reference for the value. What the op owes the caller is that the dtype is honoured
+    # and that both overloads answer identically -- the
     # tensor-tensor one used to honour it while the tensor-scalar one dropped it.
     #
     # The sums below are deliberately not representable in bfloat16, so converting them either side

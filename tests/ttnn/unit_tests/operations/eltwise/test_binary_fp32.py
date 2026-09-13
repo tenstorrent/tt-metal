@@ -327,6 +327,71 @@ def test_bias_gelu_fp32(device, ttnn_function):
     assert status
 
 
+@pytest.mark.parametrize("bias_value", [0.0, 0.5])
+def test_bias_gelu_exact_by_default(device, bias_value):
+    # Regression test for https://github.com/tenstorrent/tt-metal/issues/55130.
+    # bias_gelu silently used the fast approximate GELU kernel and exposed no way to opt out,
+    # so it disagreed with ttnn.gelu's default (erf-based) by up to ~2.3e-2 in fp32 and
+    # returned exact 0 in the negative tail (e.g. x = -3.0059 -> -0.00398).
+    torch_x = torch.linspace(-5, 5, 1024, dtype=torch.float32).repeat(32, 1).reshape(1, 1, 32, 1024)
+    torch_b = torch.full_like(torch_x, bias_value)
+    x_tt = ttnn.from_torch(torch_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(torch_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    fused = ttnn.to_torch(ttnn.bias_gelu(x_tt, b_tt)).double()
+    separated = ttnn.to_torch(ttnn.gelu(ttnn.add(x_tt, b_tt))).double()
+    gold = torch.nn.functional.gelu((torch_x + torch_b).double())
+
+    # Fused and separated must now run the same accurate GELU kernel.
+    assert (fused - separated).abs().max().item() <= 2e-6
+    # The exact path tracks the float64 reference far below the old ~2.34e-02 error.
+    assert (fused - gold).abs().max().item() <= 1e-5
+    # Negative inputs must keep their sign: the approximate kernel returned exact 0 there.
+    assert fused.min().item() < -1e-3
+
+
+def test_bias_gelu_scalar_bias_exact_by_default(device):
+    # The tensor-scalar overload composes gelu(add(x, bias)) and previously hardcoded the
+    # fast approximate GELU regardless of what the caller wanted.
+    torch_x = torch.linspace(-5, 5, 1024, dtype=torch.float32).repeat(32, 1).reshape(1, 1, 32, 1024)
+    x_tt = ttnn.from_torch(torch_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    fused = ttnn.to_torch(ttnn.bias_gelu(x_tt, 0.5)).double()
+    gold = torch.nn.functional.gelu((torch_x + 0.5).double())
+
+    assert (fused - gold).abs().max().item() <= 1e-5
+
+
+def test_bias_gelu_fast_and_approximate_mode_switches_kernels(device):
+    # fast_and_approximate_mode=True opts back into the tanh approximation, matching
+    # gelu(add(...), fast_and_approximate_mode=True); the default output must differ from it.
+    torch_x = torch.linspace(-5, 5, 1024, dtype=torch.float32).repeat(32, 1).reshape(1, 1, 32, 1024)
+    torch_b = torch.full_like(torch_x, 0.5)
+    x_tt = ttnn.from_torch(torch_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    b_tt = ttnn.from_torch(torch_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    fused_fast = ttnn.to_torch(ttnn.bias_gelu(x_tt, b_tt, fast_and_approximate_mode=True)).double()
+    approx = ttnn.to_torch(ttnn.gelu(ttnn.add(x_tt, b_tt), fast_and_approximate_mode=True)).double()
+    fused_default = ttnn.to_torch(ttnn.bias_gelu(x_tt, b_tt)).double()
+
+    assert (fused_fast - approx).abs().max().item() <= 2e-6
+    # The gap comes from the fast approximate (LUT-based) kernel; keep a wide margin so a future
+    # tightening of that LLK cannot invert this assertion.
+    assert (fused_fast - fused_default).abs().max().item() > 1e-3
+
+
+def test_bias_gelu_inplace_exact_by_default(device):
+    # bias_gelu_ shares BIAS_GELU's decomposition and flips to the accurate kernel together with
+    # the out-of-place overload.
+    torch_x = torch.linspace(-5, 5, 1024, dtype=torch.float32).repeat(32, 1).reshape(1, 1, 32, 1024)
+    x_tt = ttnn.from_torch(torch_x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.bias_gelu_(x_tt, 0.5)).double()
+    gold = torch.nn.functional.gelu((torch_x + 0.5).double())
+
+    assert (result - gold).abs().max().item() <= 1e-5
+
+
 @pytest.mark.parametrize(
     "ttnn_function",
     [

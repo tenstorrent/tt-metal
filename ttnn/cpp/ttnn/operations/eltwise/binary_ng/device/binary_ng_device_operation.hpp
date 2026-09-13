@@ -64,6 +64,10 @@ struct BinaryNgDeviceOperation {
         // Sharded output's shape in pages on the accessor path. The inputs' equivalent rides in
         // tensor_args_t::to_hash(); the output has no Tensor at hash time, so it is carried here.
         std::optional<tt::tt_metal::Shape> c_tensor_shape_in_pages;
+        // Only consumed by ops whose decomposition includes a parametrized SFPU post-activation
+        // (currently BIAS_GELU's GELU); selecting between its accurate and approximate kernel
+        // changes the compiled compute, so it must participate in the program-cache key.
+        bool fast_and_approximate_mode = false;
 
         DataType get_dtype() const;
 
@@ -92,7 +96,8 @@ struct BinaryNgDeviceOperation {
             "a_shard_volume",
             "b_shard_volume",
             "c_shard_volume",
-            "c_tensor_shape_in_pages");
+            "c_tensor_shape_in_pages",
+            "fast_and_approximate_mode");
 
         auto attribute_values() const {
             return std::make_tuple(
@@ -116,7 +121,8 @@ struct BinaryNgDeviceOperation {
                 a_shard_volume,
                 b_shard_volume,
                 c_shard_volume,
-                c_tensor_shape_in_pages);
+                c_tensor_shape_in_pages,
+                fast_and_approximate_mode);
         }
     };
 

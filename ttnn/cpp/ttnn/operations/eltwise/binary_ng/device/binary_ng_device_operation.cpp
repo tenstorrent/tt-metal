@@ -733,7 +733,12 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         output_layout,
         std::nullopt,
         std::nullopt,
-        std::nullopt};
+        std::nullopt,
+        // c_tensor_shape_in_pages is assigned from the output spec below.
+        std::nullopt,
+        // Accuracy-first: BIAS_GELU passes the flag explicitly; an unset flag resolves to the
+        // exact (erf-based) GELU post-activation.
+        fast_and_approximate_mode.value_or(false)};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b, output_tensor};
     const auto output_spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
@@ -830,7 +835,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
         output_layout,
         std::nullopt,
         std::nullopt,
-        std::nullopt};
+        std::nullopt,
+        std::nullopt,
+        fast_and_approximate_mode.value_or(false)};
 
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, std::nullopt, output_tensor};
     // Skip the output-spec computation on the interleaved fast path. output_tensor is tested separately:

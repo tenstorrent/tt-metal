@@ -273,6 +273,13 @@ tensor and a scalar never subtile-broadcasts (`SubtileBroadcastType::NONE` alway
    `invoke_binary_ng(BinaryOpType::MAXIMUM/MINIMUM)`.
 4. **Gate hygiene** (§2, §6) — optionally reject Quasar-unsupported formats/ops with a clear message;
    applies under broadcast too, not just the no-broadcast slice.
+5. **Mirror the BIAS_GELU accurate-default** — the Wormhole-side fix for issue #55130 parametrizes the
+   `UnaryOpType::GELU` post-activation with `fast_and_approximate_mode` (erf-based by default) in the
+   descriptor factory (`eltwise/binary_ng/device/binary_ng_program_factory.cpp`) and carries the flag in
+   `operation_attributes_t`. This Quasar mirror's factory still inserts the bare GELU post-activation
+   (fast approximate kernel) and its `operation_attributes_t` copy has no flag member, so
+   `ttnn.experimental.quasar` bias_gelu stays approximate-by-default until the same two changes are
+   mirrored here.
 
 ## Systemic lesson
 

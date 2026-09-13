@@ -970,7 +970,19 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         }
 
         if (op_config.postprocess.has_value()) {
-            post_activations.insert(post_activations.begin(), *op_config.postprocess);
+            if (*op_config.postprocess == unary::UnaryOpType::GELU) {
+                // BIAS_GELU's GELU post-activation is parametrized: the LLK gelu_tile<approx> template
+                // selects between the accurate erf-based kernel (approx=0) and the fast approximate
+                // kernel (approx=1), matching ttnn.gelu's fast_and_approximate_mode semantics. A bare
+                // UnaryOpType::GELU carries no parameter, which falls back to the approximate kernel.
+                post_activations.insert(
+                    post_activations.begin(),
+                    unary::EltwiseUnaryWithParam{
+                        unary::UnaryOpType::GELU,
+                        static_cast<float>(operation_attributes.fast_and_approximate_mode)});
+            } else {
+                post_activations.insert(post_activations.begin(), *op_config.postprocess);
+            }
         }
 
         bool is_integer_division =
