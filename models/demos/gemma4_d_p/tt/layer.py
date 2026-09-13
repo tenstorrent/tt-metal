@@ -130,7 +130,6 @@ class Gemma4DecoderLayer:
 
         hidden_states = combined
 
-        if self.layer_scalar != 1.0:
-            hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
+        hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
         return hidden_states
