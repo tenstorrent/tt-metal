@@ -55,31 +55,6 @@ def _mesh_config(mesh_device):
 # ── Prefill inputs ────────────────────────────────────────────────────────────
 
 
-def _host_tensor(mesh_config, torch_tensor, dtype, layout, seq_dim=-2):
-    """Host-resident ttnn tensor, replicated across the mesh.
-
-    Kept on host (``device=None``) so it can be pushed into the same device buffer
-    before every trace replay, matching ``Generator._capture_trace_prefill``.
-
-    With a context-parallel ``mesh_config``, the sequence dimension is sharded
-    across the CP axis instead of replicated, so each rank receives only the tokens
-    it owns. The scatter is free here — it is just a different mesh mapper at
-    staging time, with no collective involved.
-
-    ``seq_dim`` is which axis of ``torch_tensor`` holds the sequence: -2 for 4D
-    hidden states ``[1, 1, S, H]``, but **-1** for a 2D token-id tensor ``[1, S]``,
-    where -2 is the size-1 batch dim and sharding it would be wrong.
-    """
-    mesh_device = mesh_config.device
-    return ttnn.from_torch(
-        torch_tensor,
-        device=None,
-        dtype=dtype,
-        layout=layout,
-        mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=seq_dim),
-    )
-
-
 def _cp_or_replicate_mapper(mesh_config, seq_dim=-2):
     """Create a CP sharding mapper for ``seq_dim``, or a replication mapper."""
     mesh_device = mesh_config.device
@@ -239,17 +214,21 @@ def test_prefill_long_context_traced(
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
     rope_local_seq = chunk_size // cp
-    host_input = _host_tensor(
-        mesh_config, tokens_all[:, :chunk_size].contiguous(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, seq_dim=-1
+    host_input = ttnn.from_torch(
+        tokens_all[:, :chunk_size].contiguous(),
+        device=None,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
     device_input = ttnn.to_device(host_input, device=mesh_device)
     device_positions = ttnn.to_device(
-        _host_tensor(
-            mesh_config,
+        ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         ),
         device=mesh_device,
     )
@@ -262,12 +241,12 @@ def test_prefill_long_context_traced(
         """Host-side refresh of everything that varies per chunk. Never inside a trace."""
         chunk_start = chunk_idx * chunk_size
         _t = time.time()
-        staged = _host_tensor(
-            mesh_config,
+        staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input)
         stage_breakdown["tokens"] += time.time() - _t
@@ -289,12 +268,12 @@ def test_prefill_long_context_traced(
         # Absolute global positions for this chunk, CP-sharded the same way tokens are.
         # Contiguous sharding of [chunk_start, chunk_start+chunk) hands rank r exactly the
         # rows chunk-major CP assigns it, so the gather inside the trace lands correctly.
-        pos_host = _host_tensor(
-            mesh_config,
+        pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         stage_breakdown["rope"] += time.time() - _t
@@ -449,17 +428,21 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         f"types=({type_desc})"
     )
 
-    host_input = _host_tensor(
-        mesh_config, tokens_all[:, :chunk_size].contiguous(), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, seq_dim=-1
+    host_input = ttnn.from_torch(
+        tokens_all[:, :chunk_size].contiguous(),
+        device=None,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
     )
     device_input = ttnn.to_device(host_input, device=mesh_device)
     device_positions = ttnn.to_device(
-        _host_tensor(
-            mesh_config,
+        ttnn.from_torch(
             torch.arange(0, chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         ),
         device=mesh_device,
     )
@@ -469,24 +452,24 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
         chunk_start = idx * chunk_size
-        staged = _host_tensor(
-            mesh_config,
+        staged = ttnn.from_torch(
             tokens_all[:, chunk_start : chunk_start + chunk_size].contiguous(),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input)
         model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
         # Reset persistent semaphores before each replay.
         for semaphore in model.ccl_manager.ring_attention_ccl_semaphore_handles:
             ttnn.reset_global_semaphore_value(semaphore, 0)
-        pos_host = _host_tensor(
-            mesh_config,
+        pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
-            ttnn.uint32,
-            ttnn.ROW_MAJOR_LAYOUT,
-            seq_dim=-1,
+            device=None,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(pos_host, device_positions)
         return chunk_start
