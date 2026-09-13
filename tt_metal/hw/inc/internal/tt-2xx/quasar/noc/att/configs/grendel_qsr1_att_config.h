@@ -127,6 +127,12 @@ static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 // The declarative map: everything the shared resolver needs, as data.
 // Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile). No logical DRAM or dispatch binding
 // exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
+// DRAM_WINDOW selector per logical DRAM channel. The qsr1_boot tile endpoint table rows 96..99
+// (0x02012180..0x0201218c) hold the four Mimir D2D ingress node ids 0x246, 0x24a, 0x089, 0x085 =
+// live (6,9), (10,9), (9,2), (5,2) = descriptor channels 0..3 ([4-7,5-7], [8-7,9-7], [7-0,6-0],
+// [3-0,2-0]) in that order, so channel N maps to selector N.
+constexpr std::uint8_t QSR1_DRAM_SELECTORS[] = {0, 1, 2, 3};
+
 inline constexpr noc_att::MapData MAP{
     .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW}},
     .local_window_class = noc_att::WindowClass::FullTile,  // boot-patched ep256 = self at selector 0
@@ -137,7 +143,7 @@ inline constexpr noc_att::MapData MAP{
     .worker_selectors = {ATT_WORKER_SELECTORS},
     .worker_endpoint_words = {ATT_WORKER_ENDPOINT_WORDS},
     .full_tile_endpoint_words = {ATT_FULL_TILE_ENDPOINT_WORDS},
-    .dram_selectors = {},
+    .dram_selectors = {QSR1_DRAM_SELECTORS},
     .dispatch_entries = {},
 };
 
