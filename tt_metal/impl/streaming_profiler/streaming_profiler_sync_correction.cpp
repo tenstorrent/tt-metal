@@ -170,7 +170,7 @@ uint32_t locate(const Log<Key>& log, uint32_t n, uint32_t hint, Key t) noexcept 
 }
 
 template <typename Key>
-bool refill(Log<Key>& log, Cursor<Key>& c, Key t, Key hold, double& value) noexcept {
+bool refill(Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     using Node = PlacementNode<Key>;
     const uint32_t gen = log.gen.load(std::memory_order_acquire);
     const Key cover = log.cover.load(std::memory_order_acquire);
@@ -207,26 +207,26 @@ bool refill(Log<Key>& log, Cursor<Key>& c, Key t, Key hold, double& value) noexc
         value = on_line(c, t);
         return true;
     }
-    // Past the cover (a consumer that does not wait for the sync): the tangent, then a hold. Not cached, the cover
-    // moves.
+    // Past the cover: a batch the service released before the sync covered it (counted and reported as a fault).
+    // The newest tangent carries on; holding still here would collapse every such record onto one instant. Not
+    // cached, the cover moves.
     c = Cursor<Key>{.gen = gen, .i = i, .sigma = a.sigma_ns + kOpenMarginNs};
-    const Key tt = std::min(t, static_cast<Key>(cover + hold));
-    value = a.value + a.tangent * static_cast<double>(tt - a.at);
+    value = a.value + a.tangent * static_cast<double>(t - a.at);
     return true;
 }
 
 // Places t on the series through the cursor (refilled when it is not there); false when the series has no node.
 template <typename Key>
-inline bool place(Log<Key>& log, Cursor<Key>& c, Key t, Key hold, double& value) noexcept {
+inline bool place(Log<Key>& log, Cursor<Key>& c, Key t, double& value) noexcept {
     if (c.gen == log.gen.load(std::memory_order_relaxed) && t >= c.a && t <= c.b) {
         value = on_line(c, t);
         return true;
     }
-    return refill(log, c, t, hold, value);
+    return refill(log, c, t, value);
 }
 
 inline bool place_root(uint32_t chip_id, int64_t wall, double& root) noexcept {
-    return place(logs()[chip_id], t_cursors[chip_id], wall, SyncCorrections::kHoldTicks, root);
+    return place(logs()[chip_id], t_cursors[chip_id], wall, root);
 }
 
 }  // namespace
@@ -315,8 +315,7 @@ double SyncCorrections::lookup_root(uint32_t chip_id, int64_t wall) noexcept {
 
 int64_t SyncCorrections::lookup_tsc(uint32_t chip_id, int64_t wall) noexcept {
     double root = 0.0, tsc = 0.0;
-    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root) ||
-        !place(host_log(), t_host_cursor, root, kHoldRootTicks, tsc)) {
+    if (chip_id >= kMaxChips || !place_root(chip_id, wall, root) || !place(host_log(), t_host_cursor, root, tsc)) {
         return 0;
     }
     return std::llrint(tsc);

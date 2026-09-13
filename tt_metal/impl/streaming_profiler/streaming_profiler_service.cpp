@@ -282,7 +282,8 @@ void Service::warn_missed(const Consumer& c) {
     if (const uint64_t unplaced = c.unplaced.load(std::memory_order_relaxed); unplaced != 0) {
         log_warning(
             tt::LogMetal,
-            "[streaming profiler] consumer \"{}\" received {} batches before the d2d sync covered their records",
+            "[streaming profiler] consumer \"{}\" received {} batches before the d2d sync covered their records: the "
+            "sync engine ran behind them (a fault); those records were placed on its last tangent",
             c.name,
             unplaced);
     }

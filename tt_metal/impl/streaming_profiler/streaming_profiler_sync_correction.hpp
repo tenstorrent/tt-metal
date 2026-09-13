@@ -52,11 +52,6 @@ struct SteadySegment {
 class SyncCorrections {
 public:
     static constexpr uint32_t kMaxChips = 256;
-    // Beyond the cover the newest tangent is extended, but only this far; further out the placement holds still
-    // rather than extrapolating a slope. ~50 ms of wall ticks for a chip, 1 s of refclk for the host series (its
-    // nodes come every 100 ms while the probe runs).
-    static constexpr int64_t kHoldTicks = 67'500'000;
-    static constexpr double kHoldRootTicks = 50'000'000.0;
     // Appends a node past every earlier one (a node at the last node's key is dropped) and moves the cover to it.
     static void append(uint32_t chip_id, SyncNode node);
     // The newest node's tangent holds up to cover_ticks; the cover never moves back.
