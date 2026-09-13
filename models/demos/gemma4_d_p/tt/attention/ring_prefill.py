@@ -123,7 +123,7 @@ def init_global_ring_kv_cache(
     return GlobalRingKVCache(cache)
 
 
-def write_chunk_to_packed_ring_cache(
+def write_chunk_to_global_ring_cache(
     cache,
     chunk,
     mesh_config,
@@ -231,7 +231,7 @@ def ring_prefill_program_config(mesh_device, ccl_manager, head_dim, q_chunk_size
     )
 
 
-def write_chunk_to_ring_cache(
+def write_chunk_to_sliding_ring_cache(
     cache_k,
     cache_v,
     tt_k,
@@ -252,6 +252,7 @@ def write_chunk_to_ring_cache(
     chunk-aligned boundary that reduces to ``chunk_index * slab``.
     """
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
+        original_chunk = chunk
         # The writer requires cache.dtype == input.dtype, and the cache is BFP8_B
         # because that is what ring_joint requires of K/V (with BF16 Q). The model
         # carries K/V in bf16, so cast on the way in.
@@ -282,6 +283,8 @@ def write_chunk_to_ring_cache(
                 kv_actual_global=kv_actual_global,
                 cluster_axis=mesh_config.cp_axis,
             )
+        if chunk is not original_chunk:
+            chunk.deallocate(True)
 
 
 def sliding_ring_prefill_attention(
