@@ -85,11 +85,6 @@ def apply_per_head_norm(tensor, eps, weight=None, memory_config=None):
     return ttnn.reshape(normed, orig_shape)
 
 
-def concat_heads(tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG):
-    """Concatenate prefill attention heads into the local hidden dimension."""
-    return ttnn.experimental.nlp_concat_heads(tensor, memory_config=memory_config)
-
-
 def apply_output_projection(tensor, weights: AttentionWeights):
     """Apply output projection (no bias for Gemma4)."""
     out = ttnn.linear(tensor, weights.o_proj)
