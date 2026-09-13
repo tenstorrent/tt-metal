@@ -364,15 +364,12 @@ def ccl_allgather(tensor, mesh_config, ccl_manager, dim=3, memory_config=None):
             num_buffers_per_channel=nbuf,
         )
         tensor.deallocate(True)
-        return gathered
-
-    # Sync all_gather: do not pass deprecated num_links/topology/chunks_* —
-    # Fabric config supplies those; passing them only emits Sep-2026 warnings.
-    gathered = ttnn.all_gather(
-        tensor,
-        dim=dim,
-        cluster_axis=tp_axis,
-        memory_config=memory_config,
-    )
-    tensor.deallocate(True)
+    else:
+        gathered = ttnn.all_gather(
+            tensor,
+            dim=dim,
+            cluster_axis=tp_axis,
+            memory_config=memory_config,
+        )
+        tensor.deallocate(True)
     return gathered
