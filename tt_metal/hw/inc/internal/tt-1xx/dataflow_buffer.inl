@@ -19,12 +19,6 @@
 #endif
 #endif  // COMPILE_FOR_TRISC
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH)
-#define DFB_IS_COMPUTE_MATH 1
-#else
-#define DFB_IS_COMPUTE_MATH 0
-#endif
-
 #if DFB_IS_COMPUTE_MATH
 inline DataflowBuffer::DataflowBuffer(uint16_t logical_dfb_id) : logical_dfb_id_(logical_dfb_id) {}
 #else

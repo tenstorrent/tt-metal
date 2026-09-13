@@ -19,10 +19,23 @@
  */
 inline void llk_wait_tiles(const std::int32_t dfb_id, const std::uint32_t num_tiles) {
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
-    std::uint32_t tc_id =
-        dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
-
-    TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+    LLK_ASSERT(
+        dfb_op_is_whole_share(local_dfb_interface, num_tiles),
+        "llk_wait_tiles: an op on a BLOCKED ring must move this hart's whole share");
+    if (local_dfb_interface.split_tc) {
+        // Split: the block belongs to every counter -- wait for each one's share.
+        const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
+        for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
+            TT_WAIT_TILES(
+                ckernel::p_stall::STALL_UNPACK,
+                per_tc,
+                dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
+        }
+    } else {
+        std::uint32_t tc_id =
+            dfb::get_counter_id(local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].packed_tile_counter);
+        TT_WAIT_TILES(ckernel::p_stall::STALL_UNPACK, num_tiles, tc_id);
+    }
     // TEN-4746: arm this dfb; a real unpack (UNPACR) on it must clear this before the matching pop.
     LLK_TDMA_GUARD_NOTE_WAIT(dfb_id);
 
@@ -45,6 +58,18 @@ inline void llk_pop_tiles(const std::int32_t dfb_id, const std::int32_t num_tile
     LLK_TDMA_GUARD_ASSERT_DISARMED(
         dfb_id, "TEN-4746: llk_pop_tiles on a dfb with no unpack (UNPACR) since llk_wait_tiles");
     LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(dfb_id);
+    LLK_ASSERT(
+        dfb_op_is_whole_share(local_dfb_interface, num_tiles),
+        "llk_pop_tiles: an op on a BLOCKED ring must move this hart's whole share");
+    if (local_dfb_interface.split_tc) {
+        // Split: ack each counter its share of the block and step every bookmark past it.
+        const std::uint32_t per_tc = num_tiles / local_dfb_interface.num_tcs_to_rr;
+        for (std::uint8_t i = 0; i < local_dfb_interface.num_tcs_to_rr; i++) {
+            TT_POP_TILES(UNPACK_SEL, per_tc, dfb::get_counter_id(local_dfb_interface.tc_slots[i].packed_tile_counter));
+        }
+        dfb_advance_all_slots(local_dfb_interface, per_tc);
+        return;
+    }
     auto& slot = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx];
     std::uint32_t tc_id = dfb::get_counter_id(slot.packed_tile_counter);
 

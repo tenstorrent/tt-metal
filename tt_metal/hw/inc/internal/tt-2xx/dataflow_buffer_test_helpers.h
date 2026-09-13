@@ -30,7 +30,11 @@
 
 #include "api/dataflow/dataflow_buffer.h"
 
-inline void preload_posted_counter(DataflowBuffer& dfb, uint16_t value) {
+template <DFBAccess Pap, DFBAccess Cap>
+inline void preload_posted_counter(DataflowBuffer<Pap, Cap>& dfb, uint16_t value) {
+    // The seeded software cursor below (value * N) only matches the whole-share round-robin
+    // formula when value is a multiple of the share.
+    ASSERT(value % dfb.get_produce_share() == 0);
     for (uint8_t i = 0; i < dfb.local_dfb_interface_.num_tcs_to_rr; i++) {
         dfb::PackedTileCounter ptc = dfb.local_dfb_interface_.tc_slots[i].packed_tile_counter;
         overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), value);
@@ -48,7 +52,10 @@ inline void preload_posted_counter(DataflowBuffer& dfb, uint16_t value) {
                            : static_cast<uint32_t>(value) * dfb.local_dfb_interface_.num_tcs_to_rr;
 }
 
-inline void preload_acked_counter(DataflowBuffer& dfb, uint16_t value) {
+template <DFBAccess Pap, DFBAccess Cap>
+inline void preload_acked_counter(DataflowBuffer<Pap, Cap>& dfb, uint16_t value) {
+    // Same rule as preload_posted_counter: value must be a multiple of the consume share.
+    ASSERT(value % dfb.get_consume_share() == 0);
     for (uint8_t i = 0; i < dfb.local_dfb_interface_.num_tcs_to_rr; i++) {
         dfb::PackedTileCounter ptc = dfb.local_dfb_interface_.tc_slots[i].packed_tile_counter;
         overlay::llk_intf_inc_acked(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), value);

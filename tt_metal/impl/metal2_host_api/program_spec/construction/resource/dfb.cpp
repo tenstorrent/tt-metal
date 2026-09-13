@@ -52,6 +52,34 @@ std::optional<LLKMetadata> LLKMetadataFromDfb(const DataflowBufferSpec& spec) {
     return LLKMetadata{.format = *spec.data_format_metadata, .tile = tile};
 }
 
+uint8_t DFBAccessPatternCode(DFBAccessPattern pattern) {
+    switch (pattern) {
+        case DFBAccessPattern::STRIDED: return 0;
+        case DFBAccessPattern::ALL: return 1;
+        case DFBAccessPattern::BLOCKED: return 2;
+    }
+    TT_THROW("Unknown DFBAccessPattern {}", static_cast<int>(pattern));
+}
+
+// One entry per DFB: the pattern of its producer bindings and of its consumer bindings. Role
+// uniformity (all producers alike, all consumers alike) is enforced by ValidateProgramSpec, so
+// the first record of each role speaks for the side.
+DFBNameToPatternsMap MakeDFBNameToPatterns(const CollectedSpecData& collected) {
+    DFBNameToPatternsMap out;
+    out.reserve(collected.dfb_endpoints.size());
+    for (const auto& [dfb_name, endpoints] : collected.dfb_endpoints) {
+        DFBSidePatterns patterns;
+        if (!endpoints.producers.empty()) {
+            patterns.pap = DFBAccessPatternCode(endpoints.producers.front().binding->access_pattern);
+        }
+        if (!endpoints.consumers.empty()) {
+            patterns.cap = DFBAccessPatternCode(endpoints.consumers.front().binding->access_pattern);
+        }
+        out.emplace(dfb_name, patterns);
+    }
+    return out;
+}
+
 }  // namespace
 
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
@@ -66,7 +94,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id) {
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -81,6 +110,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         handle.logical_dfb_id = static_cast<uint16_t>(slot);
         handle.is_relay = dfb_name_to_is_relay.at(dfb_binding.dfb_spec_name);
         handle.prefetcher_pipe_id = dfb_name_to_prefetcher_pipe_id.at(dfb_binding.dfb_spec_name);
+        const DFBSidePatterns& patterns = dfb_name_to_patterns.at(dfb_binding.dfb_spec_name);
+        handle.pap = patterns.pap;
+        handle.cap = patterns.cap;
         if (!handle.is_relay) {
             handle.llk_metadata = LLKMetadataFromDfb(*dfb_by_name.at(dfb_binding.dfb_spec_name));
         }
@@ -128,7 +160,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
@@ -178,15 +210,27 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
+    // A PrefetcherPipe relay DFB aliases the pipe's ring and follows the pipe's lane-interleaved
+    // layout, which the BLOCKED access pattern was not designed against; keep relays on STRIDED /
+    // ALL until BLOCKED relays are done as their own effort.
+    TT_FATAL(
+        dfb_spec->advanced_options.prefetcher_pipe_relays.empty() ||
+            (producer_access_pattern != experimental::dfb::AccessPattern::BLOCKED &&
+             consumer_access_pattern != experimental::dfb::AccessPattern::BLOCKED),
+        "DFB '{}': a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet; bind "
+        "the relay's producer and consumer as STRIDED or ALL.",
+        dfb_spec->unique_id);
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
+        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
+        .consumer_block_size = consumer_binding->block_size,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
@@ -242,7 +286,8 @@ DataflowBufferHandles RegisterDataflowBuffers(
         .id = std::move(dfb_name_to_id),
         .slot = std::move(dfb_name_to_slot),
         .is_relay = std::move(dfb_name_to_is_relay),
-        .relay_pipe_id = {}};
+        .relay_pipe_id = {},
+        .patterns = MakeDFBNameToPatterns(collected)};
 }
 
 void WireDFBAliases(const ProgramSpec& spec, const DFBNameToIdMap& dfb_name_to_id, detail::ProgramImpl& program_impl) {
