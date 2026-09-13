@@ -265,7 +265,7 @@ def test_distributed_fused_rmsnorm_sweep_shapes(
 @pytest.mark.parametrize("hidden_dim", [320, 2432], ids=["hidden_dim320", "hidden_dim2432"])
 @pytest.mark.parametrize("num_heads_per_device", [1], ids=["num_heads1"])
 @pytest.mark.parametrize("use_weight", [True], ids=["has_weight"])
-@pytest.mark.parametrize("use_rope", [False], ids=["no_rope"])
+@pytest.mark.parametrize("use_rope", [True, False], ids=["has_rope", "no_rope"])
 @pytest.mark.parametrize("num_simulated_devices", [2], ids=["num_simulated_devices2"])
 def test_distributed_fused_rmsnorm_odd_hidden_dim(
     device,
