@@ -46,6 +46,11 @@ enum class SparseKVFormat : uint8_t {
 //   block_cyclic_cache_tp_sharded : true = the cache is striped across ALL sp*tp devices (linear chip = sp_coord*tp
 //                             + tp_coord), so stripes = sp*tp and per-stripe chunk = chunk_local/tp.
 //
+// attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
+// Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.
+// DeepSeek-V4 stores sinks in the already-scaled logit domain: pass model_sink / scale (scale != 0),
+// reshaped to [1,1,1,H], so the denominator receives exp(model_sink), not exp(scale * model_sink).
+//
 // Producer preconditions (NOT validated per-element): sentinels are a contiguous tail, every row has >= 1
 // valid key, and all non-sentinel indices are < T.
 //
@@ -65,6 +70,7 @@ ttnn::Tensor sparse_sdpa(
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false);
+    bool block_cyclic_cache_tp_sharded = false,
+    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt);
 
 }  // namespace ttnn::transformer
