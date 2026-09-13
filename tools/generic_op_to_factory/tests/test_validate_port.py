@@ -25,7 +25,29 @@ def port(configured, tmp_path):
         {
             "tools/generic_op_to_factory/native_adapter.py": b"# synthetic adapter; fake runner does not import it\n",
             "tests/test_cache.py": b"# fake runner emits a passing cache test\n",
+            "ttnn/cpp/ttnn/operations/sample/device/sample.hpp": b"// synthetic operation header\n",
+            "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp": b"// synthetic factory\n",
+            "fake_contract_compiler.py": b"print('synthetic compile; type rules are tested with a real host compiler separately')\n",
         },
+    )
+    factory_source = baseline.runtime / "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp"
+    (baseline.runtime / "build_Release/compile_commands.json").write_text(
+        json.dumps(
+            [
+                {
+                    "directory": str(baseline.runtime / "build_Release"),
+                    "file": str(factory_source),
+                    "arguments": [
+                        "python3",
+                        str(baseline.runtime / "fake_contract_compiler.py"),
+                        "-c",
+                        str(factory_source),
+                        "-o",
+                        "ignored.o",
+                    ],
+                }
+            ]
+        )
     )
     return {
         "runtime": str(baseline.runtime),
@@ -41,6 +63,11 @@ def port(configured, tmp_path):
         "build_argv": ["./build_metal.sh"],
         "precompile": False,
         "allow_recorded_failures": False,
+        "factory_contract": {
+            "operation_header": "ttnn/cpp/ttnn/operations/sample/device/sample.hpp",
+            "operation_type": "sample::DeviceOperation",
+            "factory_source": str(factory_source.relative_to(baseline.runtime)),
+        },
     }
 
 
@@ -48,6 +75,71 @@ def test_port_plan_read_only(port):
     planned = validate_port.plan(port)
     assert planned["recorded_case_count"] == 1
     assert not Path(port["workspace"]).exists()
+
+
+def test_factory_contract_is_required(port):
+    del port["factory_contract"]
+    with pytest.raises(ExportError, match="config keys"):  # allow-pytest.raises: host-only config validation
+        validate_port.plan(port)
+
+
+@pytest.mark.parametrize("aliases", ["ttnn:alias", [None], ["bad-symbol"], ["ttnn:alias", "ttnn:alias"]])
+def test_source_alias_configuration_is_validated(port, aliases):
+    port["source_aliases"] = aliases
+    with pytest.raises(ExportError):  # allow-pytest.raises: host-only alias config
+        validate_port.plan(port)
+
+
+def test_source_aliases_are_preserved_in_route_evidence(port):
+    port["source_aliases"] = ["ttnn:sample_alias"]
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("source_smoke")
+    route = validation.workspace / "attempts/source_smoke/001/route.json"
+    assert json.loads(route.read_text())["aliases"] == port["source_aliases"]
+
+
+def test_native_entry_cannot_be_a_source_alias(port):
+    port["source_aliases"] = [port["native_entry"]]
+    with pytest.raises(ExportError, match="must differ"):  # allow-pytest.raises: host-only alias config
+        validate_port.plan(port)
+
+
+def test_alias_config_drift_invalidates_resume(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.config["source_aliases"] = ["ttnn:added_alias"]
+    with pytest.raises(ExportError, match="identity changed"):  # allow-pytest.raises: host-only evidence guard
+        validation.validate()
+
+
+def test_failed_factory_contract_blocks_device_stages(port):
+    runtime = Path(port["runtime"])
+    (runtime / "fake_contract_compiler.py").write_text("raise SystemExit(1)\n")
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    with pytest.raises(  # allow-pytest.raises: synthetic compiler failure
+        ExportError, match="factory-contract exited 1"
+    ):
+        validation.run()
+    assert validation.state["stages"]["factory_contract"]["status"] == "blocked"
+    assert validation.state["stages"]["source_smoke"]["status"] == "pending"
+
+
+def test_factory_contract_evidence_is_preserved(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("factory_contract")
+    attempt = validation.workspace / "attempts/factory_contract/001"
+    assert json.loads((attempt / "contract.json").read_text())["kind"] == "ProgramDescriptor"
+    assert "ProgramDescriptorFactoryConcept" in (attempt / "factory_contract.cpp").read_text()
+    assert (attempt / "factory-contract.command.json").is_file()
+    command = json.loads((attempt / "factory-contract.command.json").read_text())
+    assert command["cwd"] == str(Path(port["runtime"]) / "build_Release")
+    database = Path(port["runtime"]) / "build_Release/compile_commands.json"
+    database.write_text("[]")
+    with pytest.raises(ExportError, match="evidence/runtime changed"):  # allow-pytest.raises: evidence drift validation
+        validation.run()
 
 
 def test_complete_synthetic_port_and_resume(port):

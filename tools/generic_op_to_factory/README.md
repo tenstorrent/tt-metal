@@ -1,4 +1,4 @@
-# Generic operation → C++ program-factory migration
+# Generic operation → C++ ProgramDescriptor-factory migration
 
 This tt-metal-owned tool freezes a recorded eval run, reproduces its original
 baseline, and validates an authored native port. All orchestration, mapping,
@@ -9,7 +9,8 @@ Start with [PORT_FLOW.md](PORT_FLOW.md) for the complete flow:
 
 1. [Export exact source and evidence](EXPORT_RUN.md) from a read-only DB snapshot.
 2. [Reproduce the recorded baseline](MIGRATION_WORKFLOW.md) in an isolated checkout.
-3. [Map the operation](MAPPING.md) and author its native factory and cache tests.
+3. [Map the operation](MAPPING.md) and author its native
+   [ProgramDescriptor factory](FACTORY_CONTRACT.md) and cache tests.
 4. [Validate source/native parity and cache behavior](PORT_FLOW.md), then complete
    the [independent review gate](REVIEW.md).
 
@@ -44,6 +45,11 @@ PYTHONPATH="$PWD" ./scripts/run_safe_pytest.sh --run-all --no-precompile \
   tools/generic_op_to_factory/tests -q -o addopts=--import-mode=importlib
 ```
 
-These tests use synthetic IDs, temporary Git repositories and fake build/test
-runners. They do not measure native-operation performance or replace real
+These tests use synthetic IDs, temporary Git repositories, fake build/test
+runners and small C++20 contract fixtures compiled when a host compiler is
+available. They do not measure native-operation performance or replace real
 build, golden, cache and review evidence for each port.
+
+Missing shared headers require deterministic recovery or an explicitly approved
+[dependency substitution](DEPENDENCY_SUBSTITUTIONS.md). The latter is recorded
+as a changed baseline, never as exact historical runtime reproduction.

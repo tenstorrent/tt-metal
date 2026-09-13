@@ -17,7 +17,9 @@ from pathlib import Path
 from tools.generic_op_to_factory import (
     classify_failures,
     compare_baseline,
+    dependency_substitutions,
     export_run,
+    factory_contract,
     migration_workflow,
     prepare_baseline,
     prepare_target,
@@ -38,6 +40,7 @@ from tools.generic_op_to_factory.prepare_baseline import GitTree, verify_prepara
 
 STAGES = (
     "build",
+    "factory_contract",
     "source_smoke",
     "source",
     "source_compare",
@@ -50,6 +53,7 @@ STAGES = (
 )
 
 REVIEW_TOPICS = (
+    "descriptor_factory",
     "cb_kernel_semaphore_ids",
     "argument_wiring",
     "cache_hit_overhead",
@@ -133,11 +137,14 @@ def plan(config):
         "build_argv",
         "precompile",
         "allow_recorded_failures",
+        "factory_contract",
     }
     if required - config.keys() or config.keys() - required - {
         "environment",
         "precompile_workers",
         "command_timeout_seconds",
+        "dependency_substitutions",
+        "source_aliases",
     }:
         raise ExportError("Missing or unknown port validation config keys")
     config = dict(config)
@@ -149,6 +156,13 @@ def plan(config):
     config.setdefault("environment", {})
     config.setdefault("precompile_workers", 6)
     config.setdefault("command_timeout_seconds", None)
+    config.setdefault("dependency_substitutions", [])
+    config.setdefault("source_aliases", [])
+    aliases = config["source_aliases"]
+    if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
+        raise ExportError("source_aliases must be a list of entry-point strings")
+    if len(set(aliases)) != len(aliases):
+        raise ExportError("source_aliases must be unique")
     if config["environment"].keys() - ENV_KEYS:
         raise ExportError("Unsupported environment override")
     if not all(isinstance(v, str) for v in config["environment"].values()):
@@ -194,6 +208,7 @@ def plan(config):
         config["runtime"],
         config["target_revision"],
         allow_installed=True,
+        substitutions=config["dependency_substitutions"],
     )
     suite = f"eval/golden_tests/{run['golden_name']}"
     if not config["smoke_nodeid"].startswith(suite + "/") or "::" not in config["smoke_nodeid"]:
@@ -204,11 +219,11 @@ def plan(config):
         raise ExportError("cache_test must identify a checked-in-style Python test path")
     if not config["source_entry"].startswith("ttnn.operations." + manifest["operation"] + ":"):
         raise ExportError("Source entry must select the frozen operation package")
-    for entry in (config["source_entry"], config["native_entry"]):
+    for entry in (config["source_entry"], config["native_entry"], *aliases):
         module, sep, symbol = entry.partition(":")
         if not sep or not symbol.isidentifier() or not all(p.isidentifier() for p in module.split(".")):
             raise ExportError("Entries must use module.path:symbol")
-    if config["source_entry"] == config["native_entry"]:
+    if config["source_entry"] == config["native_entry"] or config["native_entry"] in aliases:
         raise ExportError("Source and native entries must differ")
     rows = [
         json.loads(line) for line in (Path(config["export"]) / "records/test_results.jsonl").read_text().splitlines()
@@ -218,6 +233,7 @@ def plan(config):
     if historical["observed_failures"] and not config["allow_recorded_failures"]:
         raise ExportError("Recorded baseline has failures; explicit acceptance is required")
     runtime = Path(config["runtime"])
+    config["factory_contract"] = factory_contract.validate(config["factory_contract"], runtime)
     for path in (
         runtime / config["cache_test"],
         runtime / "tools/generic_op_to_factory/native_adapter.py",
@@ -251,6 +267,8 @@ def plan(config):
                 Path(prepare_baseline.__file__),
                 Path(export_run.__file__),
                 Path(classify_failures.__file__),
+                Path(dependency_substitutions.__file__),
+                Path(factory_contract.__file__),
             )
         },
         "recorded_case_count": len(rows),
@@ -289,12 +307,20 @@ class PortValidation:
             probe = Workflow.parse_probe((attempt / "runtime-probe.log").read_text())
             write_json(attempt / "runtime.json", probe)
             return {str(p): file_hash(p) for p in (self.runtime / "build_Release/lib").glob("*.so*") if p.is_file()}
+        if stage == "factory_contract":
+            probe = attempt / "factory_contract.cpp"
+            probe.write_text(factory_contract.render(c["factory_contract"]))
+            argv, cwd, evidence = factory_contract.compile_invocation(c["factory_contract"], self.runtime, probe)
+            self.runner.command(argv, attempt, "factory-contract", cwd=cwd)
+            write_json(attempt / "contract.json", {"kind": "ProgramDescriptor", **c["factory_contract"]})
+            return evidence
         if stage in ("source_smoke", "source", "native_smoke", "native", "cache"):
             mode = "source" if stage.startswith("source") else "native"
             route = {
                 "source": c["source_entry"],
                 "native": c["native_entry"],
                 "mode": mode,
+                "aliases": c["source_aliases"],
             }
             write_json(attempt / "route.json", route)
             test = (
@@ -377,6 +403,10 @@ class PortValidation:
                     "historical_failures": self.planned["historical_failures"],
                     "production_ready": False,
                     "independent_review_recorded": True,
+                    "factory_kind": "ProgramDescriptor",
+                    "factory_contract": c["factory_contract"],
+                    "baseline_scope": self.planned["target_inputs"]["baseline_scope"],
+                    "dependency_substitutions": self.planned["target_inputs"]["dependency_substitutions"],
                     "scope": "Recorded golden outcomes/tolerances and explicitly supplied cache regression tests; no performance or trace claim",
                 },
             )

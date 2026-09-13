@@ -13,16 +13,20 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from tools.generic_op_to_factory import dependency_substitutions
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path, json_bytes
 from tools.generic_op_to_factory.prepare_baseline import GitTree, verify_preparation
 
 
-def inspect(package, runtime, revision, *, allow_installed=False):
+def inspect(package, runtime, revision, *, allow_installed=False, substitutions=None):
     package, runtime = Path(package), Path(runtime).resolve()
     manifest = verify_preparation(package)
     metal = GitTree(runtime, revision)
     if metal.git("rev-parse", "HEAD").decode().strip() != revision:
         raise ExportError("Target HEAD differs from explicit target revision")
+    resolved = dependency_substitutions.resolve([] if substitutions is None else substitutions, metal)
+    dependency_substitutions.check_declared_headers(resolved, runtime, metal)
+    dependency_substitutions.check_runtime(resolved, runtime, installed=allow_installed)
     evaluator = GitTree(runtime / "eval", manifest["eval_commit"])
     if evaluator.git("rev-parse", "HEAD").decode().strip() != manifest["eval_commit"]:
         raise ExportError("Target evaluator differs from recorded eval revision")
@@ -79,13 +83,15 @@ def inspect(package, runtime, revision, *, allow_installed=False):
         "target_revision": revision,
         "eval_revision": manifest["eval_commit"],
         "dependencies": dependencies,
+        "dependency_substitutions": resolved,
+        "baseline_scope": dependency_substitutions.scope(resolved),
         "target_baseline_reproduced": False,
         "migration_ready": False,
     }
 
 
-def install(package, runtime, revision, output):
-    report = inspect(package, runtime, revision)
+def install(package, runtime, revision, output, *, substitutions=None):
+    report = inspect(package, runtime, revision, substitutions=substitutions)
     output = Path(output)
     if output.exists() or output.is_symlink():
         raise ExportError("Report destination exists")
@@ -95,6 +101,7 @@ def install(package, runtime, revision, output):
     # Reserve evidence first; retain the directory on failure rather than hide an attempt.
     output.mkdir(parents=True)
     (output / "target-inputs.json").write_bytes(json_bytes(report))
+    dependency_substitutions.install(report["dependency_substitutions"], runtime)
     with tempfile.TemporaryDirectory(prefix=".target-install-", dir=destination.parent) as temporary:
         staged = Path(temporary) / "operation"
         shutil.copytree(source, staged)
@@ -111,16 +118,22 @@ def main():
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--target-revision", required=True)
     parser.add_argument(
+        "--dependency-substitutions", type=Path, help="JSON list of explicitly approved DB-backed missing headers"
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         help="Install and write new evidence directory; omit for read-only inspection",
     )
     args = parser.parse_args()
     try:
+        substitutions = json.loads(args.dependency_substitutions.read_bytes()) if args.dependency_substitutions else []
         if args.output:
-            result = install(args.preparation, args.runtime, args.target_revision, args.output)
+            result = install(
+                args.preparation, args.runtime, args.target_revision, args.output, substitutions=substitutions
+            )
         else:
-            result = inspect(args.preparation, args.runtime, args.target_revision)
+            result = inspect(args.preparation, args.runtime, args.target_revision, substitutions=substitutions)
         print(json.dumps(result, indent=2, sort_keys=True))
     except (ExportError, OSError, ValueError) as error:
         parser.exit(2, f"Target preparation blocked: {error}\n")

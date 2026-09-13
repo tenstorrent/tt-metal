@@ -27,9 +27,18 @@ def resolve(spec):
 
 class Route:
     def __init__(self, specification):
-        if set(specification) != {"source", "native", "mode"} or specification["mode"] not in ("source", "native"):
+        if (
+            {"source", "native", "mode"} - set(specification)
+            or set(specification) - {"source", "native", "mode", "aliases"}
+            or specification["mode"] not in ("source", "native")
+        ):
             raise ValueError("Route requires source, native and mode (source/native)")
-        self.specification = specification
+        aliases = specification.get("aliases", [])
+        if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
+            raise ValueError("Route aliases must be a list of entry-point strings")
+        if len(set(aliases)) != len(aliases):
+            raise ValueError("Route aliases must be unique")
+        self.specification = {**specification, "aliases": list(aliases)}
         self.calls = 0
         self.restores = []
 
@@ -51,6 +60,14 @@ class Route:
         defining = importlib.import_module(source.__module__)
         if defining is not module and getattr(defining, name, None) is source:
             targets.append((defining, name))
+        # Resolve and identity-check every explicit alias before changing any symbol.
+        # Never discover aliases by scanning modules or overwrite an unrelated API.
+        for alias in self.specification["aliases"]:
+            owner, symbol, value = resolve(alias)
+            if value is not source:
+                raise ValueError(f"Route alias does not identify the frozen source callable: {alias}")
+            if (owner, symbol) not in targets:
+                targets.append((owner, symbol))
         for owner, symbol in targets:
             self.restores.append((owner, symbol, getattr(owner, symbol)))
             setattr(owner, symbol, dispatch)

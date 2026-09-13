@@ -8,6 +8,11 @@ Reusable agent task (replace paths, not with production run IDs):
 
 > Independently review the native operation, exact production host factory,
 > every constructed kernel, frozen source planner, bindings and cache tests.
+> Trace the configured native entry through its binding and launch to the exact
+> device operation checked by `factory_contract.cpp`. Check every selected factory
+> returns ProgramDescriptor, owns the adapter-compatible per-Program refresh
+> hook, uses typed address bindings, and does not rebuild descriptors on hits.
+> The compile-time gate proves type shape, not this dispatch or hook-body behavior.
 > Trace CB formats/sizes/conditional presence, kernel handles, semaphore IDs,
 > compile/runtime argument positions and accessor tails to actual consumers.
 > Prefer canonical geometry/format APIs, allocation-returned resource IDs, and
@@ -37,6 +42,7 @@ After `run --through cache`, supply `WORKSPACE/review.json`:
   "author": "author-agent-identity",
   "reviewer": "different-independent-agent-identity",
   "topics": {
+    "descriptor_factory": "Binding-to-checked-operation trace, selected factories, typed bindings and refresh-hook evidence",
     "cb_kernel_semaphore_ids": "Evidence and conclusion, with file/line references",
     "argument_wiring": "Evidence and conclusion",
     "cache_hit_overhead": "Evidence and conclusion",

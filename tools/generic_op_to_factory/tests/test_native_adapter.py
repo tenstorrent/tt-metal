@@ -91,3 +91,60 @@ def test_python_callable_cannot_be_certified_as_native(modules):
     with pytest.raises(ValueError, match="registered C\\+\\+ operation"):  # allow-pytest.raises: host-only route guard
         route.install()
     assert source.operation is original
+
+
+@pytest.mark.parametrize("mode,expected", [("source", 4), ("native", 6)])
+def test_explicit_top_level_alias_routes_and_restores(modules, mode, expected):
+    source, _, runtime = modules
+    original = source.operation
+    runtime.public_alias = original
+    route = Route(
+        {
+            "source": "synthetic_source:operation",
+            "native": "synthetic_native:operation",
+            "mode": mode,
+            "aliases": ["ttnn:public_alias", "synthetic_source:operation"],
+        }
+    )
+    route.install()
+    try:
+        assert runtime.public_alias is source.operation
+        assert runtime.public_alias(3) == expected
+        assert route.calls == 1
+    finally:
+        route.restore()
+    assert runtime.public_alias is source.operation is original
+
+
+def test_unrelated_alias_refused_before_any_route_mutation(modules):
+    source, native, runtime = modules
+    original, generic = source.operation, runtime.generic_op
+    runtime.good_alias = original
+    runtime.unrelated = native.operation
+    route = Route(
+        {
+            "source": "synthetic_source:operation",
+            "native": "synthetic_native:operation",
+            "mode": "native",
+            "aliases": ["ttnn:good_alias", "ttnn:unrelated"],
+        }
+    )
+    with pytest.raises(ValueError, match="frozen source"):  # allow-pytest.raises: host-only alias guard
+        route.install()
+    assert runtime.good_alias is source.operation is original
+    assert runtime.unrelated is native.operation
+    assert runtime.generic_op is generic
+    assert not route.restores
+
+
+@pytest.mark.parametrize("aliases", ["not-a-list", [None], ["ttnn:alias", "ttnn:alias"]])
+def test_invalid_alias_lists_rejected(aliases):
+    with pytest.raises(ValueError, match="aliases"):  # allow-pytest.raises: host-only route config
+        Route(
+            {
+                "source": "synthetic_source:operation",
+                "native": "synthetic_native:operation",
+                "mode": "native",
+                "aliases": aliases,
+            }
+        )

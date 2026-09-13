@@ -9,6 +9,13 @@ This document covers ordinary single-device planners, including file-backed and
 inline kernels. `ProgramSpec` and coordinate-dependent/workload-scoped mesh
 factories need separate mappings.
 
+**Flow output policy:** new ports must use a C++ `ProgramDescriptor` factory
+with typed buffer bindings and an explicit factory-owned per-Program
+`override_runtime_arguments` hook. Regular `CachedProgram` factories are not an
+alternative output. [FACTORY_CONTRACT.md](FACTORY_CONTRACT.md) defines the
+compile-time validation gate and the additional dispatch/wiring review. This
+policy does not retroactively change previously authored operations.
+
 Implementation facts below are checked against `dfc0dae18e45`. Requirements
 labelled **migration policy** are choices for this migration, not capabilities
 or guarantees enforced by the descriptor API. Planner arithmetic is interpreted
@@ -123,7 +130,9 @@ hook on the device operation or combining it with `get_dynamic_runtime_args`.
 It must patch every varying runtime value, including per-core/common buffer
 addresses and tensor-backed CB addresses. Use `GetRuntimeArgs`, `GetCommonRuntimeArgs`, and
 the appropriate CB address update. **Migration policy:** do not rebuild the
-full descriptor in this hook.
+full descriptor in this hook. The flow requires this explicit hook even when
+the automatic resolver would suffice for the initial non-aliased case; it must
+cover every supported alias transition and every dynamic field.
 
 Without an override, the adapter takes its binding fast path only if resolved
 runtime-arg bindings are nonempty, or both dynamic scalar args and resolved

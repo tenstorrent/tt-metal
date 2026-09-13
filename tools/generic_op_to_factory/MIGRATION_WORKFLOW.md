@@ -31,6 +31,11 @@ future-gate flags remain unchanged: they do not certify those separate runs.
 
 ## Configuration
 
+An optional `dependency_substitutions` list supports user-approved, DB-backed
+additions of missing canonical headers. See
+[the substitution contract](DEPENDENCY_SUBSTITUTIONS.md). The default is empty;
+using it changes the recorded baseline scope and does not relax outcome gates.
+
 Run these commands from the tt-metal repository root containing this tool.
 `eval_repository` supplies recorded Git objects only; it needs no migration-tool changes.
 Supply absolute paths and full, locally available Git commit IDs. The workspace

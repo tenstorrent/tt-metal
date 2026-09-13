@@ -20,7 +20,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-from tools.generic_op_to_factory import classify_failures, compare_baseline, export_run, prepare_baseline
+from tools.generic_op_to_factory import (
+    classify_failures,
+    compare_baseline,
+    dependency_substitutions,
+    export_run,
+    prepare_baseline,
+)
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path, json_bytes
 
 STAGES = (
@@ -81,7 +87,7 @@ def write_json(path, value):
 
 
 def implementation():
-    modules = (export_run, prepare_baseline, compare_baseline, classify_failures)
+    modules = (export_run, prepare_baseline, compare_baseline, classify_failures, dependency_substitutions)
     paths = [Path(__file__), *(Path(module.__file__) for module in modules)]
     return {path.name: _hash_file(path)[0] for path in paths}
 
@@ -114,6 +120,7 @@ def plan(raw):
         "precompile_workers",
         "command_timeout_seconds",
         "evaluator_path",
+        "dependency_substitutions",
     }
     if not isinstance(raw, dict) or required - raw.keys() or raw.keys() - required - optional:
         raise ExportError("Config has missing or unknown keys; see MIGRATION_WORKFLOW.md")
@@ -171,7 +178,8 @@ def plan(raw):
         raise ExportError("evaluator_path must be below tt_metal/third_party")
     frozen = export_run.verify_export(config["export"])
     run = json.loads((Path(config["export"]) / "records/run.json").read_bytes())
-    prepare_baseline.GitTree(config["metal_repository"], run.get("starting_commit"))
+    source_tree = prepare_baseline.GitTree(config["metal_repository"], run.get("starting_commit"))
+    substitutions = dependency_substitutions.resolve(config.setdefault("dependency_substitutions", []), source_tree)
     prepare_baseline.GitTree(config["eval_repository"], run.get("eval_commit"))
     prepare_baseline.GitTree(config["metal_repository"], config["target_revision"])
     suite = run.get("golden_name")
@@ -202,6 +210,8 @@ def plan(raw):
         "implementation": implementation(),
         "input_snapshot_sha256": frozen["snapshot_sha256"],
         "external_inputs": external,
+        "dependency_substitutions": substitutions,
+        "baseline_scope": dependency_substitutions.scope(substitutions),
         "metal_revision": run["starting_commit"],
         "eval_revision": run["eval_commit"],
         "operation": operation,
@@ -223,6 +233,7 @@ def initialize(raw):
         "format_version": 1,
         "plan_sha256": digest(planned),
         "created_at": now(),
+        "baseline_scope": planned["baseline_scope"],
         "stages": {name: {"status": "pending", "attempts": []} for name in STAGES},
         "future_gates": {name: "not_implemented" for name in FUTURE_GATES},
         "migration_ready": False,
@@ -371,6 +382,12 @@ class Workflow:
     def source_audit(self):
         self.head(self.runtime, self.planned["metal_revision"])
         self.head(self.runtime / self.config["evaluator_path"], self.planned["eval_revision"])
+        dependency_substitutions.check_runtime(self.planned["dependency_substitutions"], self.runtime, installed=True)
+        dependency_substitutions.check_declared_headers(
+            self.planned["dependency_substitutions"],
+            self.runtime,
+            prepare_baseline.GitTree(self.runtime, self.planned["metal_revision"]),
+        )
         manifest = prepare_baseline.verify_preparation(self.prepared)
         for entry in manifest["files"]:
             path = entry["path"]
@@ -594,7 +611,15 @@ class Workflow:
             self.head(evaluator, planned["eval_revision"])
             return {"submodules": self.git(self.runtime, "submodule", "status", "--recursive")}, []
         if stage == "install":
+            substitutions = planned["dependency_substitutions"]
+            dependency_substitutions.check_declared_headers(
+                substitutions, self.runtime, prepare_baseline.GitTree(self.runtime, planned["metal_revision"])
+            )
+            dependency_substitutions.check_runtime(substitutions, self.runtime, installed=False)
             result = prepare_baseline.install(self.prepared, self.runtime)
+            dependency_substitutions.install(substitutions, self.runtime)
+            result["dependency_substitutions"] = substitutions
+            result["baseline_scope"] = planned["baseline_scope"]
             self.source_audit()
             return result, []
         if stage == "environment":
@@ -682,6 +707,8 @@ class Workflow:
         if stage == "compare":
             junit = self.workspace / self.receipt("baseline")["result"]["junit"]
             result = compare_baseline.compare(config["export"], junit, config["phase"])
+            result["baseline_scope"] = planned["baseline_scope"]
+            result["dependency_substitutions"] = planned["dependency_substitutions"]
             write_json(attempt / "comparison.json", result)
             if not result["outcomes_match"]:
                 raise ExportError(
@@ -690,6 +717,7 @@ class Workflow:
             return {
                 "outcomes_match": True,
                 "observed_failures": result["observed_failures"],
+                "baseline_scope": planned["baseline_scope"],
                 "migration_ready": False,
             }, []
         raise ExportError(f"Stage is not implemented: {stage}")
