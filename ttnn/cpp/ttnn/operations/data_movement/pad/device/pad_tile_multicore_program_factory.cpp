@@ -2,6 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
+
+#include <tt-metalium/math.hpp>
 #include "pad_tile_multicore_program_factory.hpp"
 
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
@@ -90,7 +93,9 @@ ttnn::device_operation::ProgramArtifacts PadTileMulticoreProgramFactory::create_
     bfloat16 bfloat_pad_value = bfloat16(pad_value);
     switch (a.dtype()) {
         case DataType::INT32:
-        case DataType::UINT32: packed_pad_value = pad_value; break;
+        packed_pad_value = std::bit_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
+        break;
+        case DataType::UINT32: packed_pad_value = tt::saturating_cast<uint32_t>(pad_value); break;
         case DataType::BFLOAT16:
             packed_pad_value = pack_two_bfloat16_into_uint32({bfloat_pad_value, bfloat_pad_value});
             break;
