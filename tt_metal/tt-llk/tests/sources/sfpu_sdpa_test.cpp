@@ -112,7 +112,7 @@ inline void sdpa_op_init()
 {
     if constexpr (SDPA_OP == OP_RECIP_LEGACY || SDPA_OP == OP_RECIP_ITER)
     {
-        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en, SDPA_OP == OP_RECIP_LEGACY /* legacy_compat */>();
+        sfpu::recip_init<APPROX_MODE, is_fp32_dest_acc_en>();
     }
     else if constexpr (SDPA_OP_IS_EXP || SDPA_OP == OP_CORRECTION)
     {
@@ -127,17 +127,10 @@ inline void sdpa_op_init()
 
 inline void sdpa_op(const std::uint32_t dst_index)
 {
-    if constexpr (SDPA_OP == OP_RECIP_LEGACY)
+    if constexpr (SDPA_OP == OP_RECIP_LEGACY || SDPA_OP == OP_RECIP_ITER)
     {
         _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_recip_first_column<true /* legacy_compat */, is_fp32_dest_acc_en>,
-            dst_index,
-            VectorMode::C);
-    }
-    else if constexpr (SDPA_OP == OP_RECIP_ITER)
-    {
-        _llk_math_eltwise_unary_sfpu_params_(
-            sfpu::calculate_recip_first_column<false /* legacy_compat */, is_fp32_dest_acc_en>,
+            sfpu::calculate_recip_first_column<is_fp32_dest_acc_en>,
             dst_index,
             VectorMode::C);
     }

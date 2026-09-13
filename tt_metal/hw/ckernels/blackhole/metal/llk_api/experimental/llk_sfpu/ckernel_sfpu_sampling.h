@@ -46,11 +46,9 @@ enum class SamplingBinaryOp { add, sub, mul };
  * @note Call @ref sampling_recip_init with the matching legacy_compat before this function; the
  *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en = false>
 sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
-    if constexpr (legacy_compat) {
-        return ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-    } else if constexpr (APPROX) {
+    if constexpr (APPROX) {
         return ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
     } else if constexpr (is_fp32_dest_acc_en) {
         return ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
@@ -61,21 +59,9 @@ sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
 
 /**
  * @brief Program the SFPU constants the sampling reciprocal needs.
- *
- * @tparam legacy_compat: Must match the calculate_sampling_recip_scalar call it precedes.
- * @note Call before @ref calculate_sampling_recip_scalar. The legacy_compat = false path calls
- *       sfpu_reciprocal_iter, which reads sfpi::vConstFloatPrgm0 (LREG12) as its Newton-Raphson
- *       constant; only sfpu_reciprocal_init<false> writes the 2.0f it expects. recip_init /
- *       recip_tile_init do not. Without this, a kernel that ran e.g. exp_tile_init earlier leaves
- *       1.442695f there and every Newton step is silently wrong -- no assert, no build error.
- *       The legacy_compat = true path carries its own constants and needs no setup, so this is a
- *       no-op there.
  */
-template <bool legacy_compat = true>
 inline void sampling_recip_init() {
-    if constexpr (!legacy_compat) {
-        sfpu_reciprocal_init<APPROX>();
-    }
+    sfpu_reciprocal_init<APPROX>();
 }
 
 /**
@@ -84,17 +70,11 @@ inline void sampling_recip_init() {
  * The public entry point for the sampling reciprocal; @ref sampling_recip_value is the leaf that
  * picks the variant. On a 16-bit DEST outside APPROX it converts to bf16 with round-to-nearest
  * first, so the store does not truncate.
- *
- * @tparam legacy_compat: Use blaze's bit-identical reciprocal, values = <true/false>
- * @note Callers must pass values > 0: with legacy_compat = true the result is the magnitude
- *       |1/in| rather than 1/in -- see @ref sampling_recip_value for why that divergence stands.
- * @note Call @ref sampling_recip_init with the same legacy_compat before this function; the
- *       legacy_compat = false path reads vConstFloatPrgm0 as its Newton-Raphson constant.
  */
-template <bool legacy_compat, bool is_fp32_dest_acc_en>
+template <bool is_fp32_dest_acc_en = false>
 inline void calculate_sampling_recip_scalar() {
     sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat out = sampling_recip_value<legacy_compat, is_fp32_dest_acc_en>(in);
+    sfpi::vFloat out = sampling_recip_value<is_fp32_dest_acc_en>(in);
     if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
         out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
     }
