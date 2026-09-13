@@ -8,7 +8,7 @@ excludeAgent: "cloud-agent"
 
 The public API surface lives in `tt_metal/api/tt-metalium/`. Everything here is consumed by downstream users (ttnn, tt-train, external customers). Changes require extreme care. This review also covers placement into `tt-metalium/experimental/` and `api/internal/`.
 
-Read `tt_metal/api/README.md` for the shared hygiene policy, current automated
+Read `scripts/validate_api/README.md` for the shared hygiene policy, current automated
 coverage, and tracked exceptions. Use checker diagnostics as evidence; focus
 review comments on unresolved violations and decisions rather than repeating
 checks that CI already performed.
@@ -22,7 +22,7 @@ All new experimental ("FAFO") work must reside in the `tt::tt_metal::experimenta
 - **Experimental methods on stable classes**: do not add experimental methods directly to an existing stable class. Implement them as free functions in the `tt::tt_metal::experimental::<stable_class_name>` namespace, with headers under `experimental/`.
 - **Friend access**: `friend` functions that access private members of stable classes are permitted solely for this segregation purpose.
 - **Clarity**: the file must include comments explicitly stating that it is experimental and subject to change. Individual functions do not need their own experimental warning.
-- **Stability boundary**: stable headers must not include experimental or internal headers, and experimental headers must not include internal headers. This also applies to transitive includes and types exposed through public interfaces. Consult the exact migration exceptions and coverage limits in `tt_metal/api/README.md`.
+- **Stability boundary**: stable headers must not include experimental or internal headers, and experimental headers must not include internal headers. This also applies to transitive includes and types exposed through public interfaces. Consult the exact migration exceptions and coverage limits in `scripts/validate_api/README.md`.
 
 ### Modifying or Deleting Stable APIs
 
@@ -57,7 +57,7 @@ Promoting experimental functionality to the stable API requires consultation wit
 - [ ] Experimental methods on stable classes are free functions in `experimental::<stable_class_name>`, not members of the stable class
 - [ ] Experimental files include a comment stating they are experimental and subject to change (per-function warnings not required)
 - [ ] Stable headers do not depend on experimental/internal APIs; experimental headers do not depend on internal APIs
-- [ ] Header guards, namespace discipline, and implementation placement follow `tt_metal/api/README.md`
+- [ ] Header guards, namespace discipline, and implementation placement follow `scripts/validate_api/README.md`
 - [ ] Significant stable API changes have a design doc and documented pre-alignment
 - [ ] Stable API removals/changes follow the two-step deprecation process
 - [ ] The deprecation PR migrates all in-repository production callers; no new deprecated API usages are introduced

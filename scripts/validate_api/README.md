@@ -7,15 +7,18 @@ TTNN or device kernel APIs.
 
 ## Stability boundaries
 
+Header locations below are relative to `tt_metal/api/`.
+
 | Header location | Audience | Allowed API dependencies |
 | --- | --- | --- |
 | `tt-metalium/`, excluding `experimental/` | Stable public API | Stable |
 | `tt-metalium/experimental/` | External users accepting change | Stable, experimental |
 | `internal/` | Tenstorrent components only | Stable, experimental, internal |
 
-Internal headers belong in `api/internal/`, never `api/tt-metalium/internal/`.
-See [internal/README.md](internal/README.md) for the difference between internal
-infrastructure and experimental functionality intended for productization.
+Internal headers belong in `tt_metal/api/internal/`, never `tt_metal/api/tt-metalium/internal/`.
+See the [internal API README](../../tt_metal/api/internal/README.md) for the
+difference between internal infrastructure and experimental functionality
+intended for productization.
 
 The boundary applies to transitive dependencies and exposed types as well as
 direct includes. Moving an include into a helper header or replacing it with a

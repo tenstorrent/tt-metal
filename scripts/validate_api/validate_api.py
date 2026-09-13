@@ -4,7 +4,7 @@
 """Validate API includes, header guards, and direct stability boundaries.
 
 This is a lexical check, not a C++ dependency resolver.
-See tt_metal/api/README.md for its scope and the compiler-based follow-up.
+See scripts/validate_api/README.md for its scope and the compiler-based follow-up.
 """
 
 import argparse
