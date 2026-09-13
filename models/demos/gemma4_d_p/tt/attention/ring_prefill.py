@@ -413,15 +413,7 @@ def _ring_prefill_attention(
         ccl_core_grid_offset=ttnn.CoreCoord(*ccl_manager.ring_attention_ccl_core_grid_offset),
         use_column_major_ccl=True,
         is_causal=True,
-        # Chunked prefill does not zigzag-balance the causal work.
         is_balanced=False,
-        # Per-chunk scalars as metadata tensors rather than Python ints. The readers load
-        # them on-device, so they stay out of the program's runtime args and a captured
-        # trace replays across chunks; the scalar form would freeze the capturing chunk's
-        # prefix length into every replay. The layer packing that kv_cache_batch_idx used
-        # to carry moves to kv_cache_num_layers/kv_cache_layer_idx, which the readers
-        # combine as slot_id[0]*num_layers + layer_idx — those are constant per layer, so
-        # they are safe to keep as host scalars.
         slot_id=prefill_metadata.slot_idx,
         kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
         kv_cache_num_layers=num_layers,
