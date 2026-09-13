@@ -2382,22 +2382,17 @@ def _adaptive_run(cmd, cwd, env, label="device run", stall_s=None, backstop=None
     from agent.probes import (
         LOW_MEM_REFERENCE_ENV,
         memory_cap_preexec_fn,
-        should_use_low_mem_reference,
         wait_for_memory_headroom_before_device_work,
     )
 
-    # THE SIXTH LAUNCH POINT, FOUND LATE. This drives _run_full_pipeline_ms's BEFORE/AFTER bookend,
-    # which explicitly builds the model at FULL uncapped depth (_set_depth(env, None)) -- the exact
-    # operation that OOM-killed every OTHER full-depth launch point in this tool -- and until now had
-    # neither the pre-launch wait nor the hard cap either one of them already carries. Same shape as
-    # cc_optimize.run's _run_device_proc: a live, streamed subprocess through a stall/backstop
-    # watchdog, not a single completed result, so the auto-retry-with-fallback stays out of scope
-    # here for the same reason it does there -- retrofitting a retry into a streaming launcher is a
-    # separate, larger change than this one. The PROACTIVE low-mem-reference decision has no such
-    # shape dependency (a plain bool check), so it applies here same as everywhere else.
+    # THE SIXTH LAUNCH POINT, FOUND LATE. This drives _run_full_pipeline_ms's BEFORE/AFTER bookend --
+    # a TIMING measurement, never a PCC/correctness check -- at FULL uncapped depth. The reference
+    # build_pipeline(model=None) loads here is read only for its SHAPES, never its values, so the
+    # fp32 precision it defaults to is pure waste, unconditionally, not just when memory happens to
+    # look low: nvidia_nemotron_3_5_lightning_30b_a3b_bf16's reference build OOM'd the whole session
+    # on 2026-09-12/13 even when available memory measured healthy beforehand.
     wait_for_memory_headroom_before_device_work(label)
-    if LOW_MEM_REFERENCE_ENV not in env and should_use_low_mem_reference():
-        env[LOW_MEM_REFERENCE_ENV] = "1"
+    env.setdefault(LOW_MEM_REFERENCE_ENV, "1")
     proc = _sp.Popen(
         list(cmd),
         cwd=str(cwd),

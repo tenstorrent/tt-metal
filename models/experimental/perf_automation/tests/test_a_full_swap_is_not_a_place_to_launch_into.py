@@ -377,6 +377,56 @@ def test_adaptive_run_calls_it_too():
     assert "preexec_fn=memory_cap_preexec_fn()" in src[k : k + 400], "the launch carries no hard cap"
 
 
+# --------------------------------- perf-only launch points never need fp32 in the FIRST place
+#
+# 2026-09-13. A memory-conditional low-mem-reference decision (should_use_low_mem_reference) is
+# the right call for the PCC gate, which genuinely needs fp32 accuracy and should only give it up
+# under real pressure. But _run_perf_node and _adaptive_run validate/measure PERF-ONLY generated
+# tests (by contract: "NO PCC / correctness assertions ... just assert the pipeline produced
+# output") -- the reference build's precision is read for its SHAPES only, never its VALUES, so
+# paying for fp32 there is pure waste regardless of what available memory looks like at launch.
+# nvidia_nemotron_3_5_lightning_30b_a3b_bf16's reference build OOM'd the session even when memory
+# measured healthy beforehand, which is exactly the case a memory-conditional check cannot catch.
+
+
+def test_run_perf_node_requests_low_mem_unconditionally():
+    """_run_perf_node must set the signal regardless of should_use_low_mem_reference() -- a
+    memory-conditional gate here would be able to leave a perf-only build back at fp32 for no
+    reason, exactly the case that OOM'd on 2026-09-13."""
+    import models.experimental.perf_automation.agent.perf_test_gen as PTG
+
+    src = inspect.getsource(PTG._run_perf_node)
+    assert "should_use_low_mem_reference()" not in src, (
+        "a perf-only build's reference precision must not depend on a memory check -- it never "
+        "needed fp32 in the first place"
+    )
+    assert 'env.setdefault(_pr.LOW_MEM_REFERENCE_ENV, "1")' in src, "the signal is not set unconditionally"
+
+
+def test_adaptive_run_requests_low_mem_unconditionally():
+    """Same rule for _adaptive_run's full-pipeline BEFORE/AFTER bookend -- a TIMING measurement,
+    never a PCC check, so its reference build has the same "shapes only" contract."""
+    import models.experimental.perf_automation.cc_optimize.perf_mcp as M
+
+    src = inspect.getsource(M._adaptive_run)
+    assert "should_use_low_mem_reference()" not in src, (
+        "a perf-only build's reference precision must not depend on a memory check -- it never "
+        "needed fp32 in the first place"
+    )
+    assert 'env.setdefault(LOW_MEM_REFERENCE_ENV, "1")' in src, "the signal is not set unconditionally"
+
+
+def test_the_pcc_gate_keeps_its_memory_conditional_decision():
+    """The one launch point that DOES need real fp32 accuracy (pcc_gate_gen -> the PCC/correctness
+    gate) must still decide based on should_use_low_mem_reference(), not go unconditional --
+    accuracy is real there, so giving it up is only acceptable under genuine memory pressure."""
+    import models.experimental.perf_automation.agent.pcc_gate_gen as PGG
+
+    src = inspect.getsource(PGG._run_gate)
+    assert "should_use_low_mem_reference" not in src, "not this file's own job -- see run_with_low_memory_fallback"
+    assert "run_with_low_memory_fallback(" in src, "the PCC gate must keep the memory-conditional retry path"
+
+
 def test_stack_survey_calls_it_at_both_build_sites():
     """stack_survey builds the model via TWO separate functions (survey_model + survey), each with
     its OWN subprocess.run, independent of _run_device_proc -- the incident this test file is named
