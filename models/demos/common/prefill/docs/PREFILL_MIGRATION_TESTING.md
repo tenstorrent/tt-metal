@@ -616,17 +616,23 @@ Permission problems fail on the first attempt rather than looping, so a heartbea
 queues are genuinely absent: the worker for this host never came up, or the queue names do not match the
 endpoint's.
 
-## Troubleshooting: the runner times out in `wait_ready`
+## Troubleshooting: the runner does not see `WORKER_READY`
 
 ```
-RuntimeError: MigrationLayerClient::wait_ready: timeout after 120000ms
+[migration] WORKER_READY not observed within 120000 ms (MigrationLayerClient::wait_ready: timeout after 120000ms); entering the request loop anyway.
 ```
 
 This is the phase **after** attach: the queues were found and opened, and the workers are not answering on
 them. If instead there is no error at all and the log just repeats `still waiting for ...`, that is the
 attach wait above and `PREFILL_MIGRATION_WAIT_READY_MS` will not change it.
 
-Almost always: the two workers were never started, so nothing can answer. Confirm in the endpoint log
+The runner logs this as a warning and keeps serving (earlier versions raised and exited). Two causes:
+
+1. Another client of the same endpoint drained the ack. The resp queue is SPMC with competing consumers, so a
+   dgen prefill worker attached to `/mig_ep0_resp` can take the one-shot `WORKER_READY` before the runner
+   polls it. Readiness is then confirmed by the migration worker log (`[ctrl 0] WORKER_READY`) and the dgen
+   worker (`migration kv client: ready`); the runner needs nothing from the ack itself.
+2. The two workers were never started, so nothing can answer. Confirm in the endpoint log
 (`/tmp/launch_mig_ep_<id>_*.log`; it holds binary bytes, so `grep` needs `-a`):
 
 ```bash
