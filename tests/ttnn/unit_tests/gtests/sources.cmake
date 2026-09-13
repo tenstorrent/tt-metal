@@ -35,6 +35,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
     test_reduction.cpp
     test_relational_int.cpp
     test_rsub_int.cpp
+    test_sort_prim_validation.cpp
     test_sub_int.cpp
     test_gelu_fw_ulp.cpp
     test_tanh_bw_ulp.cpp

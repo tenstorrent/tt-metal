@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -186,7 +185,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const Loopba
 }  // namespace unit_tests::dm::core_loopback
 
 /* ========== Test case for loopback data movement; ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackPacketSizes) {
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
@@ -233,7 +232,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes) {
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
@@ -264,7 +263,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal) {
 }
 
 /* ========== Metal 2.0 variants ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
@@ -308,7 +307,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackPacketSizes_2_0) {
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementLoopbackDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementLoopbackDirectedIdeal_2_0) {
     auto mesh_device = get_mesh_device();
     auto arch_ = mesh_device->impl().get_device(0)->arch();
 
