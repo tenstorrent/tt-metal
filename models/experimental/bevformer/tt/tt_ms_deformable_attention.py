@@ -60,8 +60,12 @@ def multi_scale_deformable_attn_ttnn(
     Returns:
         ttnn.Tensor: Attended features with shape (bs, num_queries, embed_dims)
     """
-    bs, _, num_heads, head_dim = value.shape
+
+    bs, num_keys, num_heads, head_dim = value.shape
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_grids.shape
+
+    if use_signpost:
+        signpost(header=f"multi_scale_deformable_attn_ttnn Start, q:{num_queries}, k:{num_keys}")
 
     if ENABLE_LOGGING:
         logger.info("MSDA Start")
@@ -119,6 +123,9 @@ def multi_scale_deformable_attn_ttnn(
 
     if ENABLE_LOGGING:
         logger.info("MSDA End")
+
+    if use_signpost:
+        signpost(header="multi_scale_deformable_attn_ttnn End")
 
     return output
 
