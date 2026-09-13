@@ -66,7 +66,8 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
     orig_shape = tensor.shape
     _, num_heads, seq_len, head_dim = orig_shape
     flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_len, head_dim))
-    # Match Hugging Face's FP32 per-head Q/K/V RMSNorm computation.
+
+    # Use HiFi4 and fp32 acc for greater accuracy
     compute_kernel_config = ttnn.init_device_compute_kernel_config(
         tensor.device().arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
