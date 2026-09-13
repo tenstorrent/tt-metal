@@ -85,6 +85,104 @@ class ApiValidationTests(unittest.TestCase):
         )
         self.assertEqual(self.errors(), [])
 
+    def test_utf8_bom_before_guard_or_license(self):
+        for prefix in ("\ufeff", "\ufeff// License\n"):
+            with self.subTest(prefix=prefix):
+                self.header("tt-metalium/a.hpp", prefix + "#pragma once\n#include <vector>\n")
+                self.assertEqual(self.errors(), [])
+
+    def test_non_newline_separators_do_not_end_comments(self):
+        for separator in ("\v", "\f", "\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=separator):
+                self.header(
+                    "tt-metalium/a.hpp",
+                    "#pragma once\n// example" + separator + "#include <internal/a.hpp>\n"
+                    "#include <internal/b.hpp>\n",
+                )
+                errors = self.errors()
+                self.assertEqual(len(errors), 1)
+                self.assertIn("a.hpp:3:", errors[0])
+                self.assertIn("<internal/b.hpp>", errors[0])
+
+    def test_horizontal_preprocessor_whitespace(self):
+        for whitespace in ("\t", "\v", "\f"):
+            with self.subTest(whitespace=whitespace):
+                self.header("tt-metalium/a.hpp", f"#pragma{whitespace}once\n#include{whitespace}<vector>\n")
+                self.assertEqual(self.errors(), [])
+
+    def test_physical_line_endings_and_final_newline(self):
+        for newline in ("\n", "\r\n", "\r"):
+            for trailing in ("", newline):
+                with self.subTest(newline=newline, trailing=trailing):
+                    text = newline.join(("// License", "#pragma once", "#include <internal/a.hpp>")) + trailing
+                    self.assertIn((3, "#include <internal/a.hpp>"), source_lines(text))
+                    self.header("tt-metalium/a.hpp", text)
+                    errors = self.errors()
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("a.hpp:3:", errors[0])
+
+    def test_raw_string_splices_do_not_create_closing_delimiters(self):
+        for prefix in ("", "u8", "u", "U", "L"):
+            for delimiter in ("", "tag"):
+                with self.subTest(prefix=prefix, delimiter=delimiter):
+                    self.header(
+                        "tt-metalium/a.hpp",
+                        f'#pragma once\nconstexpr auto example = {prefix}R"{delimiter}(\n'
+                        f'){delimiter}\\\n"\n#include <internal/a.hpp>\n){delimiter}";\n'
+                        "#include <internal/b.hpp>\n",
+                    )
+                    errors = self.errors()
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn("a.hpp:7:", errors[0])
+                    self.assertIn("<internal/b.hpp>", errors[0])
+
+    def test_raw_string_splices_do_not_hide_real_includes(self):
+        self.header(
+            "tt-metalium/a.hpp",
+            '#pragma once\nconstexpr auto example = R"tag(\n)ta\\\ng"\n/*\n'
+            ')tag";\n#include <internal/a.hpp>\n// */\n',
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("a.hpp:7:", errors[0])
+        self.assertIn("must not include internal", errors[0])
+
+    def test_raw_string_openers_can_span_splices(self):
+        for opener in ('R\\\n"', 'u8\\\nR"', 'u8R\\\n"'):
+            with self.subTest(opener=opener):
+                self.header(
+                    "tt-metalium/a.hpp",
+                    f"#pragma once\nconstexpr auto example = {opener}tag(\n"
+                    '#include <internal/a.hpp>\n)tag";\n#include <internal/b.hpp>\n',
+                )
+                errors = self.errors()
+                self.assertEqual(len(errors), 1)
+                self.assertIn("a.hpp:6:", errors[0])
+                self.assertIn("<internal/b.hpp>", errors[0])
+
+    def test_raw_openers_inside_comments_and_strings_are_ignored(self):
+        self.header(
+            "tt-metalium/a.hpp",
+            '#pragma once\n// R"tag(\n/* R"tag( */\n'
+            'constexpr auto example = "R\\"tag(";\n#include <internal/a.hpp>\n',
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("a.hpp:5:", errors[0])
+        self.assertIn("must not include internal", errors[0])
+
+    def test_raw_strings_preserve_locations_after_comments_and_splices(self):
+        self.header(
+            "tt-metalium/a.hpp",
+            "/* License\ncontinued */\n#pragma once\nconstexpr auto example = \\\n"
+            'R"tag(\n)ta\\\ng"\n#include <internal/a.hpp>\n)tag"\n'
+            'R"(\n#include <internal/b.hpp>\n)";\n/* trailing\ncomment */ #include <internal/c.hpp>\n',
+        )
+        errors = self.errors()
+        self.assertEqual(len(errors), 1)
+        self.assertIn("a.hpp:14:", errors[0])
+        self.assertIn("<internal/c.hpp>", errors[0])
+
     def test_comments_continuations_and_original_line_number(self):
         self.header(
             "tt-metalium/a.hpp",

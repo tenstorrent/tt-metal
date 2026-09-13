@@ -10,7 +10,7 @@ See tt_metal/api/README.md for its scope and the compiler-based follow-up.
 import argparse
 import json
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from pathlib import Path
 from typing import NamedTuple, Optional
@@ -197,31 +197,47 @@ ALLOWED_DEPENDENCIES = {
     "internal": {"stable", "experimental", "internal"},
 }
 # Preserve ordinary string/character literals so comment markers in them are not
-# interpreted as comments. Mask raw strings too: they can contain fake directives.
+# interpreted as comments. Recognize raw-string openers here, but find their
+# delimiters in the original text: line splicing is reverted inside raw strings.
 # Match preprocessing numbers before their digit separators can start a character
 # literal, including separators after exponent signs and in hexadecimal values.
 COMMENTS_AND_LITERALS = re.compile(
-    r'R"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"'
+    r'R"'
     r"|(?<!\w)(?:\d|\.\d)(?:[eEpP][+-]|[\w.]|'\w)*"
     r'|"(?:\\.|[^"\\\n])*"'
     r"|'(?:\\.|[^'\\\n])*'"
     r"|//[^\n]*|/\*.*?\*/",
     re.DOTALL,
 )
+RAW_STRING = re.compile(r'"(?P<delimiter>[^\s()\\]{0,16})\(.*?\)(?P=delimiter)"', re.DOTALL)
 INCLUDE = re.compile(r'^\s*#\s*include\s*(?:<([^>]+)>|"([^"]+)")\s*$')
 PRAGMA_ONCE = re.compile(r"^\s*#\s*pragma\s+once\s*$")
 
 
 def source_lines(text: str) -> list[tuple[int, str]]:
-    """Splice continued lines, then mask comments while retaining source locations."""
+    """Mask comments and raw strings, retaining physical directive locations."""
+    text = text.removeprefix("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    # str.splitlines() would also turn Unicode characters inside comments and
+    # literals into newlines that the C++ preprocessor does not see.
+    physical_lines = text.split("\n")
+    if physical_lines[-1] == "":
+        physical_lines.pop()
     lines = []
     pending = []
     start = 1
-    for number, line in enumerate(text.splitlines(), 1):
+    original_offsets = []
+    original_offset = 0
+    for number, line in enumerate(physical_lines, 1):
         if not pending:
             start = number
-        if line.endswith("\\"):
-            pending.append(line[:-1])
+        continued = line.endswith("\\")
+        content = line[:-1] if continued else line
+        original_offsets.extend(range(original_offset, original_offset + len(content)))
+        if not continued:
+            original_offsets.append(original_offset + len(line))
+        original_offset += len(line) + 1
+        if continued:
+            pending.append(content)
             continue
         lines.append((start, "".join(pending) + line))
         pending = []
@@ -230,8 +246,7 @@ def source_lines(text: str) -> list[tuple[int, str]]:
     if not lines:
         return []
 
-    def mask(match: re.Match) -> str:
-        value = match.group()
+    def mask(value: str) -> str:
         if value.startswith("/*"):
             # A block comment is whitespace even when it spans physical lines;
             # its internal newlines do not terminate a preprocessing directive.
@@ -241,8 +256,23 @@ def source_lines(text: str) -> list[tuple[int, str]]:
         return value
 
     spliced = "\n".join(line for _, line in lines)
+    original_offsets = original_offsets[: len(spliced)]
     line_starts = [0] + [match.end() for match in re.finditer("\n", spliced)]
-    cleaned = COMMENTS_AND_LITERALS.sub(mask, spliced)
+    chunks = []
+    position = 0
+    while match := COMMENTS_AND_LITERALS.search(spliced, position):
+        chunks.append(spliced[position : match.start()])
+        end = match.end()
+        if match.group() == 'R"':
+            # The opener itself may span a splice. Only the text starting at
+            # its quote is restored, including the delimiter and closing quote.
+            raw = RAW_STRING.match(text, original_offsets[match.end() - 1])
+            if raw is not None:
+                end = bisect_left(original_offsets, raw.end())
+        chunks.append(mask(spliced[match.start() : end]))
+        position = end
+    chunks.append(spliced[position:])
+    cleaned = "".join(chunks)
     # Masks preserve character offsets, so map the first substantive character
     # back to its physical line even after a leading multiline comment.
     result = []
