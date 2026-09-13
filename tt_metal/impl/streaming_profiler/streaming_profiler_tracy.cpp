@@ -399,9 +399,11 @@ void TracySink::emit_plots() {
         if (s.pts.empty() || s.dev >= chips_.size() || root_dev >= chips_.size()) {
             continue;
         }
-        const bool link = s.kind == PP_CLOCK_LINK_REFCLK || s.kind == PP_CLOCK_LINK_PTP;
         const char* name = intern_name(fmt::format(
-            "d2d freq scale chip{}/chip{} {}", chips_[s.dev], chips_[root_dev], link ? "link 1ms" : "local 1ms"));
+            "d2d freq scale chip{}/chip{} {}",
+            chips_[s.dev],
+            chips_[root_dev],
+            s.kind == PP_CLOCK_LINK_REFCLK ? "link 1ms" : "local 1ms"));
         if (s.dev == root_dev) {
             for (const FreqPoint& p : s.pts) {
                 plot_point(name, 1.0, p.tsc);
@@ -470,8 +472,9 @@ std::vector<TracySink::FreqPoint> TracySink::compute_frequency(size_t begin, siz
     if (s0.dev >= chips_.size()) {
         return out;
     }
-    const bool link = s0.kind == PP_CLOCK_LINK_REFCLK || s0.kind == PP_CLOCK_LINK_PTP;
-    if (!link && s0.kind != PP_CLOCK_LOCAL_REFCLK) {
+    // A hardware link stamp's value is the frame event's time in quarter-ns, recorded at a later wall instant; it is
+    // not a clock reading paired with its own wall tick, so only the refclk kinds carry a rate.
+    if (s0.kind != PP_CLOCK_LOCAL_REFCLK && s0.kind != PP_CLOCK_LINK_REFCLK) {
         return out;
     }
     constexpr double kRefclkHz = 50.0e6;
