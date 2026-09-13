@@ -391,7 +391,7 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">The dimension along which to sort. Defaults to <cite>-1</cite> (last dimension).</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>descending</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If <cite>True</cite>, sorts in descending order. Defaults to <cite>False</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If <cite>True</cite>, ensures the original order of equal elements is preserved. Defaults to <cite>False</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>stable</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">If <cite>True</cite>, ensures the original order of equal elements is preserved. Defaults to <cite>False</cite>. With <cite>stable=False</cite> the returned indices are a valid permutation (no duplicates inside tie groups, no out-of-range indices), but which of several equal elements comes first is unspecified. Known exception: on the MultiCore DRAM factory, wide <cite>float32</cite> descending sorts can still emit padding indices past the logical row (issue #53326). <cite>float32</cite> inputs have <cite>-0.0</cite> canonicalized to <cite>+0.0</cite> in the returned values with <cite>stable=True</cite> on every factory (the two zeros form one tie class, ordered by index as in PyTorch), and on the multi-core cross-core path with <cite>stable=False</cite> as well; bit-exact consumers of signed zeros (<cite>copysign</cite>, <cite>1/x</cite>, <cite>signbit</cite>) see <cite>+0.0</cite> there.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Specifies the memory configuration for the output tensor. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>out</strong> (<em>tuple</em><em> of </em><em>ttnn.Tensor</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Preallocated output tensors for the sorted values and indices. Defaults to <cite>None</cite>. The index tensor must be of type uint16 or uint32.</span></p></li>
 </ul>
@@ -400,14 +400,6 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 </dt>
 <dd class="field-odd">
 <p><span class="tt-api-param-name"><em>List of ttnn.Tensor</em></span><span class="tt-api-param-desc">A list containing two tensors: The first tensor contains the sorted values, the second tensor contains the indices of the original elements in the sorted order.</span></p>
-</dd>
-</dl>
-<dl class="simple">
-<dt>Additional info:</dt>
-<dd>
-<ul class="simple">
-<li><p>For now the <cite>stable</cite> argument is not supported.</p></li>
-</ul>
 </dd>
 </dl>
 <div class="admonition note">
@@ -450,6 +442,9 @@ If no dimension is specified, the last dimension of the input tensor is used.</p
 </tr>
 </tbody>
 </table>
+<p>NaN input is unsupported (undefined ordering) for BFLOAT16: the bfloat16 datapath
+canonicalizes NaN to same-sign infinity before comparing, so NaN placement deviates
+from torch.sort’s NaN-last ordering. Mask or replace NaNs before sorting.</p>
 </div>
 <dl class="simple">
 <dt>Memory Support:</dt>
