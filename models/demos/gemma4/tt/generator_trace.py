@@ -92,6 +92,46 @@ def _resolve_max_trace_batched_prefill_tokens() -> int:
 GEMMA4_MAX_TRACE_BATCHED_PREFILL_TOKENS = _resolve_max_trace_batched_prefill_tokens()
 
 
+def maybe_auto_enable_chunked_prefill_trace(
+    *,
+    batch_size: int,
+    max_seq_len: int,
+    prefill_chunk: int,
+    bounded_sliding: bool,
+) -> bool:
+    """Auto-enable multi-chunk trace replay for unbounded batch-1 demos.
+
+    Without this, a run whose ``max_seq_len`` equals GEMMA4_PREFILL_TRACE_MAX_SEQ
+    (4096 by default) prefills UNTRACED, because the demo gate reads
+    ``max_seq_len < prefill_trace_max`` and 4096 < 4096 is False. Short prompts
+    sit below the ceiling and are traced, so the 4k bucket was the one case
+    getting no prefill-trace benefit at all.
+
+    Measured on a real T3K, warm, 2 reps per arm (4k TTFT is stable to <1%):
+
+        12B long-context-4k  1235.5 -> 1128.0 ms  (-8.7%)
+        31B long-context-4k  2179.8 -> 2081.6 ms  (-4.5%)
+
+    Decode throughput is unchanged (<0.4%) and 12B output is byte-comparable
+    clean on both arms.
+
+    An explicit GEMMA4_CHUNKED_PREFILL_TRACE always wins, so this only fills in
+    a default. Restricted to unbounded batch-1: bounded sliding caps the prefix
+    at the window (the replayed buckets stop matching), and batch>1 scales the
+    trace buffers by batch.
+    """
+    if "GEMMA4_CHUNKED_PREFILL_TRACE" in os.environ:
+        return chunked_prefill_trace_enabled()
+    if batch_size == 1 and not bounded_sliding and max_seq_len > int(prefill_chunk):
+        os.environ["GEMMA4_CHUNKED_PREFILL_TRACE"] = "1"
+        logger.info(
+            "Auto-enabled GEMMA4_CHUNKED_PREFILL_TRACE "
+            f"(max_seq_len={max_seq_len} > chunk={prefill_chunk}, unbounded batch-1)"
+        )
+        return True
+    return False
+
+
 def chunked_prefill_trace_enabled() -> bool:
     """True when long-ISL *generator* multi-chunk should replay 4k prefill traces.
 
