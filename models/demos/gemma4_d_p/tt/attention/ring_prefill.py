@@ -138,18 +138,18 @@ def write_chunk_to_packed_ring_cache(
     if prefill_metadata is not None:
         slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
-            chunk,
-            slot_idx_t,
-            kv_actual_global_t,
+            cache=cache,
+            input=chunk,
+            slot_idx=slot_idx_t,
             layer_idx=layer_idx,
             num_layers=num_layers,
+            kv_actual_global=kv_actual_global_t,
             cluster_axis=mesh_config.cp_axis,
         )
     else:
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache,
-            chunk,
+            cache=cache,
+            input=chunk,
             slot_idx=slot_idx,
             layer_idx=layer_idx,
             num_layers=num_layers,
