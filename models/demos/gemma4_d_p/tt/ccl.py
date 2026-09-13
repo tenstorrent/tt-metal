@@ -274,8 +274,6 @@ def ccl_allreduce(tensor, mesh_config, ccl_manager, memory_config=None):
             scattered.deallocate(True)
         return gathered
 
-    # Sync all_reduce: omit deprecated num_links/topology (Sep-2026 removal);
-    # Fabric / cluster_axis supply those defaults (same as sync all_gather).
     result = ttnn.all_reduce(
         tensor,
         cluster_axis=tp_axis,
