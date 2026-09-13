@@ -96,15 +96,19 @@ KernelHandle CreateKernelFromString(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
 
-// Metal 2.0: DFB accessor names -> device-slot binding. Normal DFBs may carry LLK metadata; relays do not.
-// prefetcher_pipe_id is 0xFF (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for
-// PrefetcherPipe relays, where it names the persistent slot baked into the token so
-// the TRISC constructor can O(1)-align the borrowed iface to the durable checkpoint.
+// Metal 2.0: DFB accessor names -> device-slot binding, plus what the generated token must carry.
+// Normal DFBs may carry LLK metadata; relays do not. prefetcher_pipe_id is 0xFF
+// (RelayDFBBindingToken::NO_PREFETCHER_PIPE) except for PrefetcherPipe relays, where it names the
+// persistent slot baked into the token so the TRISC constructor can O(1)-align the borrowed iface
+// to the durable checkpoint. pap / cap are both sides' access patterns (dfb::AccessPattern
+// numbering) so DFBBindingToken<Pap, Cap> can specialize the device DataflowBuffer at compile time.
 struct DataflowBufferBindingHandle {
     uint16_t logical_dfb_id = 0;
     bool is_relay = false;
     uint8_t prefetcher_pipe_id = 0xFF;
     std::optional<LLKMetadata> llk_metadata;
+    uint8_t pap = 0;
+    uint8_t cap = 0;
 };
 using DataflowBufferBindingHandleMap = std::unordered_map<std::string, DataflowBufferBindingHandle>;
 
@@ -263,7 +267,9 @@ public:
                                                      uint16_t logical_dfb_id,
                                                      bool is_relay,
                                                      uint8_t prefetcher_pipe_id,
-                                                     const std::optional<LLKMetadata>&)>&) const override;
+                                                     const std::optional<LLKMetadata>&,
+                                                     uint8_t pap,
+                                                     uint8_t cap)>&) const override;
     void process_semaphore_binding_handles(
         std::function<
             void(const std::string& accessor_name, uint16_t semaphore_id, SemScope scope, uint32_t total_binder_harts)>)

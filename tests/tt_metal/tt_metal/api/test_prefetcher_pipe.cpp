@@ -1739,7 +1739,9 @@ TEST_F(PrefetcherPipeFixture, PrefetcherPipe_RelayDFB_HostRelationshipValidation
                     uint16_t logical_id,
                     bool is_relay,
                     uint8_t prefetcher_pipe_id,
-                    const std::optional<LLKMetadata>& llk_metadata) {
+                    const std::optional<LLKMetadata>& llk_metadata,
+                    uint8_t /*pap*/,
+                    uint8_t /*cap*/) {
                     EXPECT_EQ(name, "relay_dfb");
                     EXPECT_EQ(logical_id, expected_slot);
                     EXPECT_TRUE(is_relay);

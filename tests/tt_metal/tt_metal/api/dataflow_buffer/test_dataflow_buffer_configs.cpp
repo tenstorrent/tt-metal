@@ -347,7 +347,7 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     EXPECT_NE(entry0->flags & DFB_HART_FLAG_IS_PRODUCER, 0);
     EXPECT_EQ(entry0->entry_size, 1024u);
     EXPECT_EQ(entry0->capacity, 16u);  // STRIDED 1P1C: capacity == num_entries; stored as u16 at bytes 26-27
-    EXPECT_EQ(entry0->_reserved0, 0u);
+    EXPECT_EQ(entry0->split_tc, 0u);   // STRIDED producer: nothing to split
     EXPECT_EQ(entry0->producer_signal_bit, 0u);  // first producer, bit 0
 
     // DFB 0 init entry for hart 4 (consumer): no IS_PRODUCER flag.
@@ -370,6 +370,92 @@ TEST_F(UnitMeshFixture, DfbSerializeGlobalHeader1Sx1S) {
     experimental::dfb::detail::verify_dfb_hart_blobs(
         std::span<const uint8_t>(buf.data(), nbytes), dfbs);
     EXPECT_EQ(nbytes, experimental::dfb::detail::compute_dfb_config_serialized_size(dfbs));
+}
+
+// The BLOCKED fields of every hart's 32-byte init entry: block_size is the ring's block size on every
+// hart, split_tc marks the side whose one whole-block op is shared by all of its counters, and
+// entries_to_jump is the serializer's cursor hop. With stride = stride_in_entries (the peer count), a
+// DM BLOCKED hart facing STRIDED peers stretches its stride to (own-side count) * stride, and a STRIDED
+// hart hops over the other peers' blocks to its next entry: (peers - 1) * block_size + stride. The two
+// hops differ below (4 vs 6), so a swapped or off-by-block formula fails the test.
+struct DfbBlockedInitEntryCase {
+    const char* name;
+    experimental::dfb::DataflowBufferConfig config;
+    uint32_t producer_jump;
+    uint32_t consumer_jump;
+    uint8_t producer_split_tc;
+    uint8_t consumer_split_tc;
+};
+
+TEST_F(UnitMeshFixture, DfbSerializeBlockedInitEntries) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Skipping DFB test for WH/BH until DFB is backported";
+    }
+    constexpr uint32_t bs = 4;
+    const DfbBlockedInitEntryCase cases[] = {
+        // DM 2B -> 2S: stride = C = 2. Producer hop = P * stride = 4; consumer hop = (P - 1) * bs + stride = 6.
+        {.name = "2B->2S",
+         .config =
+             {.entry_size = 1024,
+              .num_entries = 16,
+              .producer_risc_mask = 0x3,
+              .num_producers = 2,
+              .pap = dfb::AccessPattern::BLOCKED,
+              .producer_block_size = bs,
+              .consumer_risc_mask = 0x30,
+              .num_consumers = 2,
+              .cap = dfb::AccessPattern::STRIDED},
+         .producer_jump = 2 * 2,
+         .consumer_jump = (2 - 1) * bs + 2,
+         .producer_split_tc = 1,
+         .consumer_split_tc = 0},
+        // DM 2S -> 2B: stride = P = 2. Consumer hop = C * stride = 4; producer hop = (C - 1) * bs + stride = 6.
+        {.name = "2S->2B",
+         .config =
+             {.entry_size = 1024,
+              .num_entries = 16,
+              .producer_risc_mask = 0x3,
+              .num_producers = 2,
+              .pap = dfb::AccessPattern::STRIDED,
+              .consumer_risc_mask = 0x30,
+              .num_consumers = 2,
+              .cap = dfb::AccessPattern::BLOCKED,
+              .consumer_block_size = bs},
+         .producer_jump = (2 - 1) * bs + 2,
+         .consumer_jump = 2 * 2,
+         .producer_split_tc = 0,
+         .consumer_split_tc = 1},
+    };
+    for (const auto& c : cases) {
+        SCOPED_TRACE(c.name);
+        Program program = CreateProgram();
+        const CoreCoord logical_core(0, 0);
+        experimental::dfb::CreateDataflowBuffer(program, logical_core, c.config);
+        program.impl().finalize_dataflow_buffer_configs();
+        program.impl().allocate_dataflow_buffers(this->device().get_devices()[0]);
+
+        const auto& dfbs = program.impl().dataflow_buffers_on_core(logical_core);
+        ASSERT_EQ(dfbs.size(), 1u);
+        std::vector<uint8_t> buf(8192, 0);
+        const size_t nbytes = experimental::dfb::detail::serialize_dfb_config_for_core(logical_core, dfbs, buf);
+        ASSERT_GT(nbytes, 0u);
+        const auto* ghdr = reinterpret_cast<const dfb_global_header_t*>(buf.data());
+
+        // One DFB, so each participating hart's blob starts with this DFB's entry.
+        for (uint8_t h = 0; h < ::dfb::NUM_PARTICIPATING_HARTIDS; ++h) {
+            const bool is_producer = (c.config.producer_risc_mask >> h) & 1u;
+            const bool is_consumer = (c.config.consumer_risc_mask >> h) & 1u;
+            if (!is_producer && !is_consumer) {
+                continue;
+            }
+            SCOPED_TRACE("hart " + std::to_string(h));
+            const auto* entry = reinterpret_cast<const dfb_hart_init_entry_t*>(buf.data() + ghdr->hart_blob_offset[h]);
+            EXPECT_EQ((entry->flags & DFB_HART_FLAG_IS_PRODUCER) != 0, is_producer);
+            EXPECT_EQ(entry->block_size, bs);
+            EXPECT_EQ(entry->split_tc, is_producer ? c.producer_split_tc : c.consumer_split_tc);
+            EXPECT_EQ(entry->entries_to_jump, is_producer ? c.producer_jump : c.consumer_jump);
+        }
+    }
 }
 
 TEST_F(UnitMeshFixture, DfbSerializeTxnCentricImplicitSync1Sx1S) {
@@ -1364,6 +1450,7 @@ struct M2ConfigDFBParams {
     m2::DFBAccessPattern pap = m2::DFBAccessPattern::STRIDED;
     m2::DFBAccessPattern cap = m2::DFBAccessPattern::STRIDED;
     bool implicit_sync = false;
+    uint32_t block_size = 0;                                   // BLOCKED sides only: tiles per block
     std::optional<m2::NodeRange> target_nodes = std::nullopt;  // override single-core default
 };
 
@@ -1396,7 +1483,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
                 {.dfb_spec_name = DFB,
                  .accessor_name = "out",
                  .endpoint_type = m2::DFBEndpointType::PRODUCER,
-                 .access_pattern = p.pap}};
+                 .access_pattern = p.pap,
+                 .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
             k.tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}};
             k.compile_time_args = {
                 {"num_entries_per_producer", per_producer}, {"implicit_sync", p.implicit_sync ? 1u : 0u}};
@@ -1411,7 +1499,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
             {.dfb_spec_name = DFB,
              .accessor_name = "out",
              .endpoint_type = m2::DFBEndpointType::PRODUCER,
-             .access_pattern = p.pap}};
+             .access_pattern = p.pap,
+             .block_size = p.pap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
         k.compile_time_args = {{"num_entries_per_producer", per_producer}};
         return k;
     };
@@ -1424,7 +1513,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
                 {.dfb_spec_name = DFB,
                  .accessor_name = "in",
                  .endpoint_type = m2::DFBEndpointType::CONSUMER,
-                 .access_pattern = p.cap}};
+                 .access_pattern = p.cap,
+                 .block_size = p.cap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
             k.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
             k.compile_time_args = {
                 {"num_entries_per_consumer", per_consumer},
@@ -1441,7 +1531,8 @@ static inline Program build_single_dfb_program_2_0(distributed::MeshDevice& mesh
             {.dfb_spec_name = DFB,
              .accessor_name = "in",
              .endpoint_type = m2::DFBEndpointType::CONSUMER,
-             .access_pattern = p.cap}};
+             .access_pattern = p.cap,
+             .block_size = p.cap == m2::DFBAccessPattern::BLOCKED ? p.block_size : 0u}};
         k.compile_time_args = {{"num_entries_per_consumer", per_consumer}};
         // Declared so the kernel source stays compilable; these probes never launch, and the
         // kernel's digest reporting is only consumed by run_single_dfb_program_2_0.
@@ -2351,6 +2442,194 @@ TEST_F(UnitMeshFixture, DFBDeviceSlotLimitIsPerCoreNotPerProgram) {
         EXPECT_EQ(program.impl().get_dataflow_buffer(id)->device_slot, 0u)
             << "DFB " << i << " is alone on core (" << core.x << "," << core.y << ")";
     }
+}
+
+// =====================================================================================
+// BLOCKED access-pattern config-rejection tests
+// =====================================================================================
+// --- REJECTED CONFIG: Tensix BLOCKED producer + implicit DM consumer ---
+// A Tensix producer can only post explicit credits -- the ISR poster is #ifndef COMPILE_FOR_TRISC, so it
+// is compiled out on Tensix. A STRIDED DM consumer takes those per-tile posts fine, but a BLOCKED one
+// spin-waits forever, since the per-block posts never reach its implicit drain's txn signal.
+// finalize_single_dfb_config rejects the combination, turning a device hang into a host error.
+// Use an explicit DM consumer, or a DM producer if the consumer must be implicit.
+static void expect_tensix_blocked_implicit_consumer_rejected(
+    distributed::MeshDevice& mesh_device, uint32_t num_threads, uint32_t num_entries) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    // Build only: the rejection is a host TT_FATAL in finalize_single_dfb_config, raised inside
+    // MakeProgramFromSpec. Launching would deadlock the device if the guard ever regressed.
+    m2_config_test_helpers::M2ConfigDFBParams params{
+        .producer_type = M2PorCType::TENSIX,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = num_threads,
+        .num_consumers = num_threads,
+        .num_entries = num_entries,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .block_size = 4,
+    };
+    EXPECT_THAT(
+        [&]() { Program program = m2_config_test_helpers::build_single_dfb_program_2_0(mesh_device, params); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("cannot feed an IMPLICIT-sync DM consumer")));
+}
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB2Bx2B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/2, /*num_entries=*/16);
+}
+TEST_F(UnitMeshFixture, TensixDMTest1xDFB4Bx4B_blk4_impl_rejected_2_0) {
+    expect_tensix_blocked_implicit_consumer_rejected(this->device(), /*num_threads=*/4, /*num_entries=*/32);
+}
+
+// --- ACCEPTED CONFIG: implicit BLOCKED whose single txn window is the whole ring ---
+// The ISR credits all of a RISC's tile counters equally when a txn ID retires, while a BLOCKED
+// endpoint moves a whole block per counter, so a txn window must cover a whole number of blocks on
+// every counter. At P=1, C=4, block_size=4 and 16 entries only one txn id satisfies that: its window
+// is the whole ring, so all four blocks are written before any counter is credited. The txn-id picker
+// falls back to that count, which is why this config runs rather than being rejected.
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx4B_blk4_impl_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    // Host-side check of the property the run relies on: one txn id whose window is the whole ring.
+    {
+        Program probe = m2_config_test_helpers::build_single_dfb_program_2_0(
+            mesh_device,
+            m2_config_test_helpers::M2ConfigDFBParams{
+                .producer_type = M2PorCType::DM,
+                .consumer_type = M2PorCType::DM,
+                .num_producers = 1,
+                .num_consumers = 4,
+                .num_entries = 16,
+                .pap = m2::DFBAccessPattern::BLOCKED,
+                .cap = m2::DFBAccessPattern::BLOCKED,
+                .implicit_sync = true,
+                .block_size = 4,
+            });
+        probe.impl().finalize_dataflow_buffer_configs();
+        auto dfb = probe.impl().get_dataflow_buffer(probe.impl().get_dfb_handle("dfb"));
+        ASSERT_TRUE(dfb->configs_finalized);
+        EXPECT_EQ(dfb->producer_txn_descriptor.num_txn_ids, 1u);
+        EXPECT_EQ(dfb->producer_txn_descriptor.num_entries_per_txn_id, 16u);
+    }
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 4,
+        .pap = m2::DFBAccessPattern::BLOCKED,
+        .cap = m2::DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(mesh_device, params);
+}
+
+// --- REJECTED CONFIG: BLOCKED->BLOCKED with mismatched block sizes (direct API) ---
+// The ring is one global block grid, which cannot serve two block sizes. The M2 spec layer
+// already rejects this; the direct CreateDataflowBuffer path must too.
+TEST_F(UnitMeshFixture, DirectApi_BlockSizeMismatch_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 4,
+        .consumer_risc_mask = 0x10,
+        .num_consumers = 1,
+        .cap = dfb::AccessPattern::BLOCKED,
+        .consumer_block_size = 2};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must equal consumer_block_size")));
+}
+
+// --- REJECTED CONFIG: BLOCKED->STRIDED where the consumers cannot split a block (direct API) ---
+TEST_F(UnitMeshFixture, DirectApi_BlockedStrided_ConsumersDontDivideBlock_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 24,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 3,
+        .consumer_risc_mask = 0x30,
+        .num_consumers = 2,
+        .cap = dfb::AccessPattern::STRIDED};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("must be divisible by num_consumers")));
+}
+
+// --- REJECTED CONFIG: implicit-sync broadcast BLOCKED producer (DM<->DM ALL) ---
+// The ISR credits each counter an equal split of a txn window, but a broadcasting producer must
+// post the full count to every counter, the consumers would starve at 1/C of their credits.
+TEST_F(UnitMeshFixture, DirectApi_BlockedAll_ImplicitBroadcastProducer_rejected) {
+    if (this->device().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "M2 path is Quasar-only";
+    }
+    experimental::dfb::DataflowBufferConfig config{
+        .entry_size = 1024,
+        .num_entries = 16,
+        .producer_risc_mask = 0x1,
+        .num_producers = 1,
+        .pap = dfb::AccessPattern::BLOCKED,
+        .producer_block_size = 4,
+        .consumer_risc_mask = 0x30,
+        .num_consumers = 2,
+        .cap = dfb::AccessPattern::ALL,
+        .enable_producer_implicit_sync = true,
+        .enable_consumer_implicit_sync = false};
+    Program program = CreateProgram();
+    EXPECT_THAT(
+        [&] {
+            experimental::dfb::CreateDataflowBuffer(program, CoreCoord(0, 0), config);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("broadcasts its credits")));
+}
+
+// B10 — a BLOCKED binding needs block_size > 0 (check_block_size_validity in program_spec.cpp).
+// This config leaves it unset on a BLOCKED consumer, so it must throw.
+TEST_F(UnitMeshFixture, B10_Blocked_Rejected_2_0) {
+    auto& mesh_device = this->device();
+    if (mesh_device.arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "DFB validation tested on Quasar";
+    }
+    using namespace m2_config_test_helpers;
+    M2ConfigDFBParams p{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = m2::DFBAccessPattern::STRIDED,
+        .cap = m2::DFBAccessPattern::BLOCKED,  // <-- BLOCKED consumer but block_size left 0 (the offense)
+        .implicit_sync = false,
+    };
+    EXPECT_THROW(
+        {
+            Program program = build_single_dfb_program_2_0(mesh_device, p);
+            program.impl().finalize_dataflow_buffer_configs();
+        },
+        std::exception);
 }
 
 }  // end namespace tt::tt_metal

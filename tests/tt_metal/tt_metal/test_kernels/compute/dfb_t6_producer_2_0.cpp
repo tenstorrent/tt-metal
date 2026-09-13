@@ -36,13 +36,23 @@ void kernel_main() {
     // never unpacks.
     compute_kernel_hw_startup(dfb::out, dfb::out);
 
-    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; ++tile_id) {
-        dfb.reserve_back(1);
+    // One op is this hart's whole share: 1 on a plain ring, the block when this producer is
+    // BLOCKED, its part of each block when only the consumers are. Credit-only: nothing is packed,
+    // the host prefills the ring.
+#ifdef ARCH_QUASAR
+    const uint32_t share = dfb.get_produce_share();
+#else
+    const uint32_t share = 1;
+#endif
+    for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id += share) {
+        dfb.reserve_back(share);
         // TEN-4746: a real packer op must sit between reserve_back's WAIT_FREE and push_back's
         // PUSH_TILES. The host pre-fills the ring, so a no-write dummy pack supplies that op
-        // without modifying the payload.
+        // without modifying the payload. One per reserve/push pair is enough whatever the share
+        // size: the guard is a per-DFB armed bit (WAIT arms, any TDMA on that DFB disarms), and
+        // llk_pack_dummy touches neither the write cursor nor the DFB.
         ckernel::dummy_pack(dfb::out);
-        dfb.push_back(1);
+        dfb.push_back(share);
     }
     dfb.finish();
 }

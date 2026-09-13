@@ -26,12 +26,17 @@
 #include "api/dataflow/noc.h"
 #include "tools/profiler/noc_debugging_profiler.hpp"
 
-class DataflowBuffer;
+#ifdef ARCH_QUASAR
+template <DFBAccess Pap, DFBAccess Cap>
+struct noc_traits_t<DataflowBuffer<Pap, Cap>>;
+#else
 template <>
 struct noc_traits_t<DataflowBuffer>;
 #endif
+#endif
 
 #include "api/dataflow/dfb_binding_token.h"
+#include "api/dataflow/dfb_access.h"
 #include "api/debug/assert.h"
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
@@ -79,7 +84,35 @@ template <bool IsWrite, typename ReleaseFunc>
     return DfbScopedLock<IsWrite, ReleaseFunc>(pointer, release);
 }
 
+// Only the UNPACK and PACK TRISCs own a DFB interface (g_dfb_interface, see trisc.cc). True on
+// MATH and on any other TRISC: such a DataflowBuffer carries logical_dfb_id_ alone and no-ops the
+// sync / runtime-interface accessors.
+#if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_PACK) && !defined(UCK_CHLKC_UNPACK)
+#define DFB_IS_COMPUTE_MATH 1
+#else
+#define DFB_IS_COMPUTE_MATH 0
+#endif
+
+DFB_TEMPLATE_DECL
 class DataflowBuffer {
+#ifdef ARCH_QUASAR
+    // The pattern pair is a template parameter, so these fold to constants and every pattern
+    // branch compiles to straight-line code. UNKNOWN (a DataflowBuffer built from a raw id or by
+    // DataflowBuffer<>) is the one shape that still reads the wire bits at runtime -- and it only
+    // supports rings where nothing is BLOCKED (asserted at construction).
+    static constexpr bool kKnown = Pap != DFBAccess::UNKNOWN && Cap != DFBAccess::UNKNOWN;
+    static constexpr bool kProducerBlocked = Pap == DFBAccess::BLOCKED;
+    static constexpr bool kConsumerBlocked = Cap == DFBAccess::BLOCKED;
+    // One producer op (a whole block) belongs to every one of its counters: BLOCKED -> STRIDED.
+    static constexpr bool kProducerSplit = kProducerBlocked && Cap == DFBAccess::STRIDED;
+    // One consumer op (a whole block) belongs to every one of its counters: STRIDED -> BLOCKED.
+    static constexpr bool kConsumerSplit = Pap == DFBAccess::STRIDED && kConsumerBlocked;
+    // Ops must move exactly the share once a side is BLOCKED (the cursor and credit math count on
+    // it). On a plain ring the share is 1 and larger counts are still fine: n tiles are n
+    // consecutive entries of this counter's stream.
+    static constexpr bool kShareStrict = kProducerBlocked || kConsumerBlocked;
+#endif
+
 public:
 #ifdef ARCH_QUASAR
     using DFBInterface = LocalDFBInterface;
@@ -90,7 +123,28 @@ public:
     // Preferred constructor for Metal 2.0 / ProgramSpec kernels.
     // Pass the named binding constant from kernel_bindings_generated.h:
     //   DataflowBuffer dfb(my_dfb_name);
-    DataflowBuffer(DFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+#ifdef ARCH_QUASAR
+    // Deduces the class's pattern pair from the token: DataflowBuffer dfb(dfb::out).
+    DataflowBuffer(DFBBindingToken<Pap, Cap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    // The pattern-agnostic DataflowBuffer<> also takes a token of any pattern pair and reads the
+    // wire bits at runtime, so a kernel that may or may not have a binding can write
+    //   std::optional<DataflowBuffer<>> dfb;  dfb.emplace(*dfb::get_token_if_present<"x">());
+    // (Agnostic is a parameter of this template so the condition is a substitution failure, not an
+    // error, when the class is instantiated.)
+    template <DFBAccess TokPap, DFBAccess TokCap, bool Agnostic = !kKnown, std::enable_if_t<Agnostic, int> = 0>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+    // A known pair takes only its own token: every other pair's token is rejected outright. Without
+    // this the token would decay to its id (operator uint32_t) and silently build the wrong shape.
+    template <
+        DFBAccess TokPap,
+        DFBAccess TokCap,
+        bool Known = kKnown,
+        std::enable_if_t<Known && !(TokPap == Pap && TokCap == Cap), int> = 0>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap>) = delete;
+#else
+    template <DFBAccess TokPap, DFBAccess TokCap>
+    DataflowBuffer(DFBBindingToken<TokPap, TokCap> token) : DataflowBuffer(static_cast<uint16_t>(token)) {}
+#endif
 
     // Relay local DFB (CrossNode / PrefetcherPipe bridge to compute). Same runtime object;
     // the token type is how the host marks the binding as a relay at compile time.
@@ -171,6 +225,30 @@ public:
     uint32_t get_ring_span_bytes() const;
     uint32_t get_ring_span_num_entries() const;
 
+#ifdef ARCH_QUASAR
+    // The share: how many tiles one op on this hart handles per counter visit -- a whole block
+    // when this side is BLOCKED, this side's part of a block (block_size / stride) when only the
+    // other side is BLOCKED, otherwise 1. On a ring with a BLOCKED side every reserve_back /
+    // push_back (producer) and wait_front / pop_front (consumer) must pass exactly this count
+    // (asserted); on a plain ring larger counts are still allowed (n consecutive entries of this
+    // counter's stream). Kernels read it here instead of guessing.
+    //
+    // MATH TRISC caveat: only the UNPACK and PACK TRISCs own a DFB interface, so on MATH both
+    // getters return 1 (and the stride getters below return 1). A compute kernel must therefore
+    // keep its dest handshake (acquire/release, tile_regs_*) per tile, not per share, or MATH and
+    // PACK run different trip counts and the core deadlocks; drive only the DFB ops themselves
+    // (reserve/push/wait/pop) by the share. See dfb_eltwise_copy_2_0.cpp for the pattern.
+    uint16_t get_produce_share() const;
+    uint16_t get_consume_share() const;
+    // Spacing, in entries, between two consecutive entries of one op's share (1 = contiguous). A
+    // BLOCKED side's share is a whole block, so it is always contiguous; only a STRIDED side of a
+    // mixed ring walks a share whose entries sit `stride` apart: entry i is at bookmark + i * stride
+    // (the implicit-sync NoC path and the in-order pack_tile path apply it by themselves; copy_tile
+    // takes it as its tile index).
+    uint16_t get_produce_stride_tiles() const;
+    uint16_t get_consume_stride_tiles() const;
+#endif
+
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) { reserve_back_impl(num_entries); }
     void push_back(uint16_t num_entries) { push_back_impl(num_entries); }
@@ -183,8 +261,10 @@ public:
     // NOT part of the public DFB API). Granted friend access to advance the
     // implicit-sync shadow state alongside the HW counter. See that header for
     // semantics + usage rules.
-    friend void preload_posted_counter(DataflowBuffer&, uint16_t);
-    friend void preload_acked_counter(DataflowBuffer&, uint16_t);
+    template <DFBAccess P, DFBAccess C>
+    friend void preload_posted_counter(DataflowBuffer<P, C>&, uint16_t);
+    template <DFBAccess P, DFBAccess C>
+    friend void preload_acked_counter(DataflowBuffer<P, C>&, uint16_t);
 #endif
 
 #ifndef COMPILE_FOR_TRISC
@@ -405,7 +485,7 @@ private:
     uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
 
 #ifndef COMPILE_FOR_TRISC
-    friend struct noc_traits_t<DataflowBuffer>;
+    friend struct noc_traits_t<DFB_CLASS>;
 
     void write_barrier_impl(const Noc &noc) const;
 #endif
@@ -422,18 +502,18 @@ private:
 
 #ifdef ARCH_QUASAR
     template <bool is_producer>
-    void handle_final_credits(uint32_t transactions_issued, uint8_t txn_id_index);
+    void handle_final_credits(uint32_t tiles_issued, uint8_t txn_id_index);
 
 #ifndef COMPILE_FOR_TRISC
     friend class Noc;  // grants Noc::async_read/write access to prepare_*/commit_*
     // PrefetcherPipe::pop_front waits on relay consumer acks by calling wait_relay_consumer_caught_up
     friend class experimental::PrefetcherPipe;
 
-    uint32_t prepare_implicit_read();
-    void commit_implicit_read();
+    uint32_t prepare_implicit_read(uint32_t num_tiles);
+    void commit_implicit_read(uint32_t num_tiles);
 
-    uint32_t prepare_implicit_write();
-    void commit_implicit_write();
+    uint32_t prepare_implicit_write(uint32_t num_tiles);
+    void commit_implicit_write(uint32_t num_tiles);
 
     // Relay handoff (pipe-private): spin until consumer acked has caught producer posted
     // on every RR TC this object owns. After push_back(N) in the relay loop, the
@@ -448,10 +528,22 @@ private:
 
     uint16_t logical_dfb_id_;
 
-    // MATH TRISC does not own fifo state (see trisc firmware: cb_interface / g_dfb_interface
-    // exist only on UNPACK/PACK). Compute kernels still construct DataflowBuffer on all TRISC
-    // threads; MATH carries logical_dfb_id_ only and no-ops sync / runtime-interface accessors.
-#if !(defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_MATH))
+#ifdef ARCH_QUASAR
+    // The stride field as serialized for this hart, in entries (see dataflow_buffer.inl).
+    uint16_t wire_stride_tiles() const;
+    // A split op is a whole block, so the UNKNOWN shape (block_size <= 1, asserted at
+    // construction) is never split and both predicates are compile-time for every shape.
+    static constexpr bool producer_split() { return kProducerSplit; }
+    static constexpr bool consumer_split() { return kConsumerSplit; }
+#if !defined(COMPILE_FOR_TRISC)
+    // ALL consumers read every entry, so a DM producer's op goes to every one of its counters
+    // (BROADCAST): compile-time from the consumer pattern; only the UNKNOWN shape reads the wire
+    // flag (see dataflow_buffer.inl).
+    bool producer_broadcast() const;
+#endif
+#endif
+
+#if !DFB_IS_COMPUTE_MATH
     DFBInterface& local_dfb_interface_;
 #endif
 
@@ -459,18 +551,32 @@ private:
     // Metadata for implicit sync
     uint16_t ptxn_id_loop_cnt_ = 0;
     uint8_t ptxn_id_index_ = 0;
-    uint32_t ptiles_read_ = 0;  // not the same as tile counter: HW has no way to track pending posts
+    uint32_t ptiles_read_ = 0;  // running total of tiles read (32-bit so it never wraps in a launch)
 
     uint16_t ctxn_id_loop_cnt_ = 0;
     uint8_t ctxn_id_index_ = 0;
-    uint32_t ctiles_written_ = 0;  // not the same as tile counter: HW has no way to track pending acks
+    uint32_t ctiles_written_ = 0;  // running total of tiles written (32-bit so it never wraps in a launch)
+
+    // Implicit sync on a STRIDED side: one Noc::async_read / async_write<TXN_ID> call moves one
+    // entry and the DFB completes the share itself. Position inside the current share (0 = at a
+    // share boundary) and the txn id fixed for it. A BLOCKED side moves its whole block per call
+    // and never leaves 0.
+    uint16_t pshare_pos_ = 0;
+    uint32_t pshare_txn_id_ = 0;
+    uint16_t cshare_pos_ = 0;
+    uint32_t cshare_txn_id_ = 0;
 #endif
 };
 
 #ifndef COMPILE_FOR_TRISC
 
+#ifdef ARCH_QUASAR
+template <DFBAccess Pap, DFBAccess Cap>
+struct noc_traits_t<DataflowBuffer<Pap, Cap>> {
+#else
 template <>
 struct noc_traits_t<DataflowBuffer> {
+#endif
 
     // Alias the struct defined in noc.h so that noc_traits_t<DataflowBuffer>::src/dst_args_type
     // stays consistent with the DFB-specific Noc overload signatures.
@@ -485,7 +591,7 @@ struct noc_traits_t<DataflowBuffer> {
         uint32_t offset_bytes{};
     };
     template <Noc::AddressType address_type>
-    static auto src_addr(const DataflowBuffer& src, const Noc&, const src_args_type& args) {
+    static auto src_addr(const DFB_CLASS& src, const Noc&, const src_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
@@ -493,7 +599,7 @@ struct noc_traits_t<DataflowBuffer> {
         return src.get_noc_read_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr(const DataflowBuffer& dst, const Noc& noc, const dst_args_type& args) {
+    static auto dst_addr(const DFB_CLASS& dst, const Noc& noc, const dst_args_type& args) {
         static_assert(
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
@@ -501,7 +607,7 @@ struct noc_traits_t<DataflowBuffer> {
         return dst.get_noc_write_addr() + args.offset_bytes;
     }
     template <Noc::AddressType address_type>
-    static auto dst_addr_mcast(const DataflowBuffer& dst, const Noc& noc, const dst_args_mcast_type& args) {
+    static auto dst_addr_mcast(const DFB_CLASS& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
         // Use cached addresses for NOC APIs
@@ -511,8 +617,13 @@ struct noc_traits_t<DataflowBuffer> {
     }
 };
 
+#ifdef ARCH_QUASAR
+template <DFBAccess Pap, DFBAccess Cap>
+inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer<Pap, Cap>> = true;
+#else
 template <>
 inline constexpr bool noc_zero_l1_endpoint_v<DataflowBuffer> = true;
+#endif
 
 #endif
 

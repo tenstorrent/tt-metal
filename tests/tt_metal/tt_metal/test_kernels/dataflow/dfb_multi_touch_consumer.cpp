@@ -37,9 +37,9 @@ inline uint32_t l1_ptr_addr(uint32_t byte_addr) {
 
 }  // namespace
 
-template <bool ImplicitSync>
+template <bool ImplicitSync, DFBAccess Pap, DFBAccess Cap>
 static inline void touch_one(
-    DFBBindingToken token, uint32_t index, volatile tt_l1_ptr uint32_t* results, uint32_t touched_magic) {
+    DFBBindingToken<Pap, Cap> token, uint32_t index, volatile tt_l1_ptr uint32_t* results, uint32_t touched_magic) {
     DPRINT("touch[{}] enter implicit={}\n", index, ImplicitSync ? 1u : 0u);
     DPRINT("touch[{}] before DataflowBuffer ctor\n", index);
     DataflowBuffer dfb(token);

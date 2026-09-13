@@ -314,9 +314,18 @@ void Kernel::process_dataflow_buffer_binding_handles(const std::function<void(
                                                          uint16_t logical_dfb_id,
                                                          bool is_relay,
                                                          uint8_t prefetcher_pipe_id,
-                                                         const std::optional<LLKMetadata>&)>& callback) const {
+                                                         const std::optional<LLKMetadata>&,
+                                                         uint8_t pap,
+                                                         uint8_t cap)>& callback) const {
     for (const auto& [accessor_name, handle] : this->dataflow_buffer_binding_handles_) {
-        callback(accessor_name, handle.logical_dfb_id, handle.is_relay, handle.prefetcher_pipe_id, handle.llk_metadata);
+        callback(
+            accessor_name,
+            handle.logical_dfb_id,
+            handle.is_relay,
+            handle.prefetcher_pipe_id,
+            handle.llk_metadata,
+            handle.pap,
+            handle.cap);
     }
 }
 
@@ -606,6 +615,8 @@ uint64_t Kernel::compute_hash() const {
         if (!it->second.is_relay) {
             hash_llk_metadata(it->second.llk_metadata);
         }
+        hasher.update(static_cast<uint64_t>(it->second.pap));
+        hasher.update(static_cast<uint64_t>(it->second.cap));
     }
     for (const auto& it : sorted_iters(this->semaphore_binding_handles_)) {
         hasher.update(it->first);
