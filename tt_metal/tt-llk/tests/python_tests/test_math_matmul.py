@@ -144,7 +144,10 @@ ALL_TEST_PARAMS = list(
         ),
         # Tiny tiles above level 3, LoFi only: the one case where the fallback depends on
         # fidelity as well as geometry. HiFi is deliberately absent -- there the LLK keeps the
-        # throttled path, which asserts on a tiny tile.
+        # throttled path, which the geometry cannot serve. Measured on Blackhole: HiFi4 at
+        # throttle 5 on a tiny tile wedges the math thread, with asserts on (some geometries hit
+        # the LLK assert, others time out first) and with asserts off. Adding it here would wedge
+        # the board rather than fail the case.
         (
             (MathFidelity.LoFi, combinations, TINY_TILE_HIGH_THROTTLE)
             for combinations in TINY_TILES_THROTTLE_COMBINATIONS
