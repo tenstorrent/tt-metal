@@ -780,6 +780,25 @@ def decode_in0_l1_enabled() -> bool:
     return os.environ.get("GEMMA4_DECODE_IN0_L1", "1").lower() not in ("0", "false", "no")
 
 
+def decode_out_l1_enabled() -> bool:
+    """Land the SharedMLP decode matmul *output* in L1 rather than DRAM. Default ON.
+
+    Counterpart to ``decode_in0_l1_enabled`` for the other side of the same
+    matmuls: ``SharedMLP._gate_up_linear`` / ``_down_proj_linear`` place their
+    output in L1 whenever the activation is a single tile row (decode). That
+    placement arrived ungated, so the only way to price it was to edit the
+    source; this knob makes it an A/B.
+
+    Priced and it is a wash. 31B / T3K long-context-4k, two reps per arm:
+    ON 53.87 / 53.79 (mean 53.83), OFF 53.54 / 53.69 (mean 53.62) ms/tok, and
+    TTFT flat at ~2005 ms either way. The 0.21 ms gap is the size of the
+    baseline's own rep-to-rep spread (53.92 / 53.74), so this is not where the
+    SharedMLP port's -1.5/-1.7% decode cost lives. Left ON; the knob stays so
+    the question does not get re-opened by reading the source.
+    """
+    return os.environ.get("GEMMA4_DECODE_OUT_L1", "1").lower() not in ("0", "false", "no")
+
+
 def width_shard_core_count(memcfg):
     if memcfg is None or not memcfg.is_sharded() or memcfg.shard_spec is None:
         return None
