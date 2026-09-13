@@ -134,11 +134,16 @@ def write_chunk_to_global_ring_cache(
     prefill_metadata=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
+
     original_chunk = chunk
+
     if chunk.dtype != cache.dtype:
         chunk = ttnn.typecast(chunk, cache.dtype)
+
     if prefill_metadata is not None:
-        slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+        slot_idx_t = prefill_metadata.slot_idx
+        kv_actual_global_t = prefill_metadata.kv_actual_global
+
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache=cache,
             input=chunk,
@@ -158,6 +163,7 @@ def write_chunk_to_global_ring_cache(
             kv_actual_global=kv_actual_global,
             cluster_axis=mesh_config.cp_axis,
         )
+
     if chunk is not original_chunk:
         chunk.deallocate(True)
 
@@ -243,20 +249,18 @@ def write_chunk_to_sliding_ring_cache(
     slot_idx=0,
     prefill_metadata=None,
 ):
-    """Write this chunk's per-rank K/V into the CP-sharded cache.
+    """Append one sliding-attention chunk (K and V) to its CP-local history."""
 
-    ``kv_actual_global`` is the *global* prefix length already in the cache before
-    this chunk. The writer derives each rank's local row offset from it and from the
-    rank's own coordinate along ``cluster_axis``, injected as a runtime arg — which
-    is how one mesh-wide program writes a different offset per device. At a
-    chunk-aligned boundary that reduces to ``chunk_index * slab``.
-    """
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
         original_chunk = chunk
+
         if chunk.dtype != cache.dtype:
             chunk = ttnn.typecast(chunk, cache.dtype)
+
         if prefill_metadata is not None:
-            slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+            slot_idx_t = prefill_metadata.slot_idx
+            kv_actual_global_t = prefill_metadata.kv_actual_global
+
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
                 input=chunk,
@@ -276,6 +280,7 @@ def write_chunk_to_sliding_ring_cache(
                 kv_actual_global=kv_actual_global,
                 cluster_axis=mesh_config.cp_axis,
             )
+
         if chunk is not original_chunk:
             chunk.deallocate(True)
 
