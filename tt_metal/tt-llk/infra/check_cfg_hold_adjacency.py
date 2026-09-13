@@ -17,11 +17,38 @@ Block bit B7 holds Configuration-Unit instructions until the math pipe drains (c
 Padding with NOPs is NOT a valid guard: it works only while the pad exceeds the hold, and the hold
 length is a hardware property the code does not control.
 
-WORMHOLE ONLY, by design. Blackhole and Quasar capture math config into the instruction as it is
-accepted, so a held instruction keeps the values it was accepted with and this shape is not a
-hazard there. Quasar has a DIFFERENT, inverted hazard (a following instruction reading a stale
-write, closed by one slot of separation) which this check does not model. Pointing this check at
-another architecture produces false positives and hides the real rule.
+WORMHOLE ONLY, by design, and the exclusion is PER FIELD rather than per architecture.
+On Blackhole, ALU_FORMAT_SPEC_REG* and ALU_ACC_CTRL_* are captured into the instruction as it is
+accepted, so a held instruction keeps the values it was accepted with. Measured on silicon at nine
+sites with a proven-live detector: seven immune outright, and the two that went red were shown to be
+the prober's own side effect by a control that swapped the injected inducer and passed with its
+detector still live. Those two field groups cover essentially every call site, so a Blackhole copy of
+this check could never fire. That does not carry to the rest of the list.
+
+FP16A_FORCE_Enable is unestablished there -- its one Blackhole writer sits on the integer reduce
+path, whose detector was dead, so that site measured nothing. Blackhole also has math config read
+when the instruction is RELEASED from the hold rather than when it is accepted, which is exposed the
+same way with the opposite verdict; no Blackhole source writes any of those fields today.
+
+A Blackhole arm would therefore need a different PREDICATE, not just a different field list, and in
+particular NO hold-inducer term. This check keys on a named inducer because on Wormhole the hold is
+imposed by a specific instruction on the one presented next, and is short enough to measure -- which
+is what makes an adjacency test and a 3-instruction window sound here. The Blackhole exposure has
+neither property: the parking that creates it follows essentially every arithmetic operation, and
+the dependency, port and operand-readiness holds are longer than the post-operation one and have no
+fixed length. The Blackhole predicate is "a write to one of those fields inside a stretch of math
+work with no intervening math drain" -- no inducer, no adjacency, no window.
+
+LIMITATION, and it bounds what a clean run means. A fixed post-instruction stall is not the only
+way an instruction is held at issue on Wormhole: an ALU instruction is also held while the Dest
+dependency scoreboard matches an in-flight overlapping write, and that match does not compare thread
+ids. Such a hold has no adjacent inducer to key on, and the write it waits for may be another
+thread's, so it is not decidable from the text of one file. This check therefore covers the
+adjacency-decidable shape only; a clean run is not a proof that no config write can land in a hold.
+
+Quasar has a DIFFERENT, inverted hazard (a following instruction reading a stale write, closed by
+one slot of separation) which this check does not model. Pointing this check at another
+architecture produces false positives and hides the real rule.
 """
 import argparse
 import hashlib
