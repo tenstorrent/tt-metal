@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/topk.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rand.h"
@@ -260,7 +261,15 @@ void top_k() {
             // llk_topk_sort -> inplace
             // stable_sort: equal values keep their original (lowest) position, so the candidate the
             // top-k keeps for a tie does not depend on how the bitonic network happens to swap.
-            ckernel::topk_local_sort<stable_sort>(0, static_cast<int>(ascending), logk - 1);
+            if constexpr (stable_sort) {
+                ckernel::topk_canonicalize_negzero_values(0);
+            }
+            ckernel::topk_local_sort<
+                stable_sort,
+                DST_ACCUM_MODE,
+                /*fused=*/false,
+                /*rank_stamped=*/false,
+                ckernel::TopkTieOrder::Descending>(0, (int)ascending, logk - 1);
 
             tile_regs_commit();
 
@@ -308,10 +317,20 @@ void top_k() {
                 copy_tile(index_transposed_dfb_index, right_ind, index_dest_end);
 
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-                ckernel::topk_merge<false, stable_sort>(0, static_cast<int>(m_iter), K);
+                ckernel::topk_merge<
+                    /*idir=*/false,
+                    stable_sort,
+                    DST_ACCUM_MODE,
+                    /*fused=*/false,
+                    /*rank_stamped=*/false,
+                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild<stable_sort>(
-                    0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
+                ckernel::topk_rebuild<
+                    stable_sort,
+                    DST_ACCUM_MODE,
+                    /*fused=*/false,
+                    /*rank_stamped=*/false,
+                    ckernel::TopkTieOrder::Descending>(0, (uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
