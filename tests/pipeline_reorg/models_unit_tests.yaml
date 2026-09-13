@@ -322,8 +322,12 @@
 
 - name: ModernBERT-base unit tests
   cmd: |
-    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=0
-    pytest --timeout 480 models/experimental/modernbert/tests/test_ttnn_layer.py
+    unset HF_HUB_CACHE  # the shared cache is read-only and does not hold this model
+    export HF_HUB_OFFLINE=0
+    pytest --timeout 300 models/experimental/modernbert/tests \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_perf.py \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_profile.py \
+      --ignore=models/experimental/modernbert/tests/test_modernbert_device_perf.py
   model: modernbert-base
   model_family: ModernBERT
   skus:
@@ -332,6 +336,7 @@
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: unit
 
 - name: ResNet-50 unit tests
   cmd: |

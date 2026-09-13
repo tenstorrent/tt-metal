@@ -4,13 +4,10 @@
 
 """Shared config / weight / input helpers for the ModernBERT demo.
 
-Verified against transformers 5.10.2 (the version pinned in
-tt_metal/python_env/requirements-dev.txt). Field names differ in other releases:
+Written against transformers 5.10.2. Field names differ in other releases:
 `global_rope_theta` / `local_rope_theta` do NOT exist here, the thetas live in
 the nested `config.rope_parameters` dict.
 """
-
-import os
 
 import torch
 from transformers import AutoConfig, AutoModel, AutoModelForMaskedLM, AutoTokenizer
@@ -27,7 +24,7 @@ def load_config():
     return AutoConfig.from_pretrained(MODEL_ID, revision=MODEL_REVISION)
 
 
-def load_torch_model(model_location_generator=None, dtype=torch.float32, attn_implementation=None):
+def load_torch_model(dtype=torch.float32, attn_implementation=None):
     """HuggingFace reference model (ModernBertModel -> last_hidden_state).
 
     Pass attn_implementation="eager" when comparing in bf16. HF defaults to
@@ -38,11 +35,7 @@ def load_torch_model(model_location_generator=None, dtype=torch.float32, attn_im
     kwargs = {"dtype": dtype}
     if attn_implementation is not None:
         kwargs["attn_implementation"] = attn_implementation
-    if model_location_generator is None or "TT_GH_CI_INFRA" not in os.environ:
-        model = AutoModel.from_pretrained(MODEL_ID, revision=MODEL_REVISION, **kwargs)
-    else:
-        weights_dir = model_location_generator("modernbert", model_subdir="", download_if_ci_v2=True)
-        model = AutoModel.from_pretrained(weights_dir, **kwargs)
+    model = AutoModel.from_pretrained(MODEL_ID, revision=MODEL_REVISION, **kwargs)
     model.eval()
     return model
 
