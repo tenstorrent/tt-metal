@@ -24,7 +24,7 @@ MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/misc_elements
 UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/unary_bcast.cpp"
 
 
-@pytest.mark.parametrize("mode", [3, 4, 5], ids=["recip", "rsqrt", "rsqrt_fast"])
+@pytest.mark.parametrize("mode", [3, 4, 5, 6], ids=["recip", "rsqrt", "rsqrt_fast", "recip_precise_override"])
 @pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 @pytest.mark.parametrize("math_approx_mode", [False, True])
 def test_reciprocal_math_elements(device, mode, fp32_dest_acc_en, math_approx_mode):
@@ -32,10 +32,13 @@ def test_reciprocal_math_elements(device, mode, fp32_dest_acc_en, math_approx_mo
     n = 4
     shape = [1, 1, 32, 32 * n]
     dt = ttnn.bfloat16
+    out_dt = ttnn.float32 if mode == 6 else dt
     core_grid = lib.single_core_grid()
     host = torch.logspace(-4, 4, 1024 * n).reshape(shape).to(torch.bfloat16)
     tt_in = ttnn.from_torch(host, device=device, layout=ttnn.TILE_LAYOUT)
-    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    tt_out = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(shape), out_dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     program = ttnn.ProgramDescriptor(
         kernels=[
             lib.build_reader_kernel([tt_in], n, core_grid),
@@ -49,14 +52,14 @@ def test_reciprocal_math_elements(device, mode, fp32_dest_acc_en, math_approx_mo
             ),
         ],
         semaphores=[],
-        cbs=[lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)],
+        cbs=[lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, out_dt, 2, core_grid)],
     )
     actual = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).float()
-    expected = host.float().reciprocal() if mode == 3 else host.float().rsqrt()
+    expected = host.float().reciprocal() if mode in (3, 6) else host.float().rsqrt()
     assert torch.isfinite(actual).all()
-    lib.assert_close(
-        expected, actual, f"reciprocal math mode={mode}", rtol=0.02 if math_approx_mode else 0.01, atol=0.0
-    )
+    # A Float32 output exposes reciprocal precision independently of BF16 packing.
+    rtol = (2e-6 if fp32_dest_acc_en else 0.01) if mode == 6 else (0.02 if math_approx_mode else 0.01)
+    lib.assert_close(expected, actual, f"reciprocal math mode={mode}", rtol=rtol, atol=0.0)
 
 
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
