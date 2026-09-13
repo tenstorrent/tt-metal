@@ -41,13 +41,13 @@ class Gemma4AttentionConfig:
         if self.is_sliding:
             self.num_key_value_heads = hf_config.num_key_value_heads
             self.head_dim = hf_config.head_dim
-            self.sliding_window = hf_config.sliding_window
+            self.sliding_window_size = hf_config.sliding_window
             self.rope_theta = hf_config.rope_theta
             self.partial_rotary_factor = 1.0
         else:
             self.num_key_value_heads = hf_config.num_global_key_value_heads
             self.head_dim = hf_config.global_head_dim
-            self.sliding_window = None
+            self.sliding_window_size = None
             self.rope_theta = hf_config.global_rope_theta
             self.partial_rotary_factor = hf_config.partial_rotary_factor
 
@@ -203,7 +203,7 @@ class Gemma4Attention:
                 k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
             )
             k_unrotated.deallocate(True)
-        sliding_window = self.config.sliding_window
+        sliding_window_size = self.config.sliding_window_size
         if is_global:
             packed_q = tt_q
             packed_kv = pack_global_kv_device(
@@ -275,7 +275,7 @@ class Gemma4Attention:
                 max_seq_len=self.ring_max_seq_len,
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
-                sliding_window=sliding_window,
+                sliding_window=sliding_window_size,
                 scale=1.0,
                 compute_kernel_config=cp_ring_ckc,
                 layer_idx=self.ring_layer_idx,
