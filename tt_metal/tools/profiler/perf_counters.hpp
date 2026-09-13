@@ -5,226 +5,16 @@
 #pragma once
 
 #include <cstdint>
+
+#include "perf_counters/types.h"
+
+// Global so the host profiler can keep reflecting the enumerator names unqualified.
+using llk::perf::PerfCounterType;
+
 constexpr std::uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
+// Profiler groups: the index of every *_for_group table and the bit order of PROFILE_PERF_COUNTERS_*.
 enum PerfCounterGroup : std::uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN, L1_2, L1_3, L1_4, L1_5 };
-enum PerfCounterType : std::uint16_t {
-    UNDEF = 0,
-    // FPU Group
-    FPU_COUNTER,
-    SFPU_COUNTER,
-    MATH_COUNTER,
-    // TDMA_UNPACK Group
-    MATH_SRC_DATA_READY,
-    MATH_NOT_D2S_STALLED,
-    MATH_FIDELITY_STALL,  // tied off in hardware, kept so the ordinals below do not shift
-    MATH_INSTRN_STARTED,
-    MATH_INSTRN_AVAILABLE,
-    SRCB_WRITE_REQ,
-    SRCA_WRITE_REQ,
-    UNPACK0_BUSY_THREAD0,
-    UNPACK1_BUSY_THREAD0,
-    UNPACK0_BUSY_THREAD1,
-    UNPACK1_BUSY_THREAD1,
-    MATH_INSTRN_HF_1_CYCLE,  // fidelity selector is tied off, so this duplicated MATH_INSTRN_STARTED; kept so the
-                             // ordinals below do not shift
-    MATH_INSTRN_HF_2_CYCLE,  // constant zero, fidelity selector is tied off
-    MATH_INSTRN_HF_4_CYCLE,  // constant zero, fidelity selector is tied off
-    // TDMA_PACK Group
-    PACKER0_DEST_READ_REQ,
-    PACKER_BUSY,
-    MATH_NOT_SCOREBOARD_STALLED,
-    // INSTRN_THREAD Group
-    CFG_INSTRN_AVAILABLE_0,
-    CFG_INSTRN_AVAILABLE_1,
-    CFG_INSTRN_AVAILABLE_2,
-    SYNC_INSTRN_AVAILABLE_0,
-    SYNC_INSTRN_AVAILABLE_1,
-    SYNC_INSTRN_AVAILABLE_2,
-    THCON_INSTRN_AVAILABLE_0,
-    THCON_INSTRN_AVAILABLE_1,
-    THCON_INSTRN_AVAILABLE_2,
-    MOVE_INSTRN_AVAILABLE_0,
-    MOVE_INSTRN_AVAILABLE_1,
-    MOVE_INSTRN_AVAILABLE_2,
-    MATH_INSTRN_AVAILABLE_0,
-    MATH_INSTRN_AVAILABLE_1,
-    MATH_INSTRN_AVAILABLE_2,
-    UNPACK_INSTRN_AVAILABLE_0,
-    UNPACK_INSTRN_AVAILABLE_1,
-    UNPACK_INSTRN_AVAILABLE_2,
-    PACK_INSTRN_AVAILABLE_0,
-    PACK_INSTRN_AVAILABLE_1,
-    PACK_INSTRN_AVAILABLE_2,
-    THREAD_STALLS_0,
-    THREAD_STALLS_1,
-    THREAD_STALLS_2,
-    WAITING_FOR_SRCA_CLEAR,
-    WAITING_FOR_SRCB_CLEAR,
-    WAITING_FOR_SRCA_VALID,
-    WAITING_FOR_SRCB_VALID,
-    WAITING_FOR_THCON_IDLE_0,
-    WAITING_FOR_THCON_IDLE_1,
-    WAITING_FOR_THCON_IDLE_2,
-    WAITING_FOR_UNPACK_IDLE_0,
-    WAITING_FOR_UNPACK_IDLE_1,
-    WAITING_FOR_UNPACK_IDLE_2,
-    WAITING_FOR_PACK_IDLE_0,
-    WAITING_FOR_PACK_IDLE_1,
-    WAITING_FOR_PACK_IDLE_2,
-    WAITING_FOR_MATH_IDLE_0,
-    WAITING_FOR_MATH_IDLE_1,
-    WAITING_FOR_MATH_IDLE_2,
-    WAITING_FOR_NONZERO_SEM_0,
-    WAITING_FOR_NONZERO_SEM_1,
-    WAITING_FOR_NONZERO_SEM_2,
-    WAITING_FOR_NONFULL_SEM_0,
-    WAITING_FOR_NONFULL_SEM_1,
-    WAITING_FOR_NONFULL_SEM_2,
-    WAITING_FOR_MOVE_IDLE_0,
-    WAITING_FOR_MOVE_IDLE_1,
-    WAITING_FOR_MOVE_IDLE_2,
-    WAITING_FOR_CFG_IDLE_0,
-    WAITING_FOR_CFG_IDLE_1,
-    WAITING_FOR_CFG_IDLE_2,
-    WAITING_FOR_SFPU_IDLE_0,
-    WAITING_FOR_SFPU_IDLE_1,
-    WAITING_FOR_SFPU_IDLE_2,
-    // L1 Bank 0 (mux=0, ports 0-7)
-    L1_0_UNPACKER_0,
-    L1_0_UNPACKER_1_ECC_PACK1,  // Wormhole port 1; Blackhole uses L1_0_UNPACKER_1_ECC
-    L1_0_TDMA_BUNDLE_0_RISC,
-    L1_0_TDMA_BUNDLE_1_TRISC,
-    L1_0_NOC_RING0_OUTGOING_0,
-    L1_0_NOC_RING0_OUTGOING_1,
-    L1_0_NOC_RING0_INCOMING_0,
-    L1_0_NOC_RING0_INCOMING_1,
-    // L1 Bank 1 (mux=1, ports 8-15)
-    L1_1_TDMA_PACKER_2,   // Wormhole port 8; Blackhole uses L1_1_PACKER_IF_0
-    L1_1_EXT_UNPACKER_1,  // Wormhole ports 9-11; Blackhole uses L1_1_UNPACKER1_EXT_IF_1-3
-    L1_1_EXT_UNPACKER_2,
-    L1_1_EXT_UNPACKER_3,
-    L1_1_NOC_RING1_OUTGOING_0,
-    L1_1_NOC_RING1_OUTGOING_1,
-    L1_1_NOC_RING1_INCOMING_0,
-    L1_1_NOC_RING1_INCOMING_1,
-    L1_0_UNIFIED_PACKER,  // retired, kept so the ordinals below do not shift
-    L1_1_RISC_CORE,       // retired, kept so the ordinals below do not shift
-    // L1 grant counters (reqif_ready)
-    L1_0_UNPACKER_0_GRANT,
-    L1_0_PORT1_GRANT,
-    L1_0_TDMA_BUNDLE_0_GRANT,
-    L1_0_TDMA_BUNDLE_1_GRANT,
-    L1_0_NOC_RING0_OUTGOING_0_GRANT,
-    L1_0_NOC_RING0_OUTGOING_1_GRANT,
-    L1_0_NOC_RING0_INCOMING_0_GRANT,
-    L1_0_NOC_RING0_INCOMING_1_GRANT,
-    L1_1_PORT8_GRANT,
-    L1_1_EXT_UNPACKER_1_GRANT,
-    L1_1_EXT_UNPACKER_2_GRANT,
-    L1_1_EXT_UNPACKER_3_GRANT,
-    L1_1_NOC_RING1_OUTGOING_0_GRANT,
-    L1_1_NOC_RING1_OUTGOING_1_GRANT,
-    L1_1_NOC_RING1_INCOMING_0_GRANT,
-    L1_1_NOC_RING1_INCOMING_1_GRANT,
-    // === Grant-side counters (accessed via out_fmt bit 16 = 1) ===
-    THREAD_INSTRUCTIONS_0,
-    THREAD_INSTRUCTIONS_1,
-    THREAD_INSTRUCTIONS_2,
-    SRCB_WRITE_NOT_BLOCKED_OVR,
-    SRCA_WRITE_NOT_BLOCKED_OVR,
-    SRCA_WRITE_NOT_BLOCKED_PORT,
-    SRCB_WRITE_NOT_BLOCKED_PORT,
-    SRCA_WRITE_TID_EVEN,
-    SRCB_WRITE_TID_EVEN,
-    SRCA_WRITE_TID_ODD,
-    SRCB_WRITE_TID_ODD,
-    // TDMA_PACK additional req counters (WH only)
-    PACKER_DEST_READ_1,
-    PACKER_DEST_READ_2,
-    PACKER_DEST_READ_3,
-    PACKER_BUSY_0,
-    PACKER_BUSY_1,
-    PACKER_BUSY_2,
-    DEST_READ_GRANTED_0,
-    DEST_READ_GRANTED_1,
-    DEST_READ_GRANTED_2,
-    DEST_READ_GRANTED_3,
-    MATH_NOT_STALLED_DEST_WR_PORT,
-    // L1 Bank 4 (BH only, mux=4, ports 32-39): extended packers 6-7, packer L1 interface 1 (port 34, shared with the
-    // tag-search accelerator, debug L1 RAM and timestamp), unpacker 0's extended read interfaces 1-5 (ports 35-39).
-    L1_4_EXT_PACKER_6,
-    L1_4_EXT_PACKER_7,
-    L1_4_PACKER_IF_1_TAG_SEARCH,
-    L1_4_UNPACKER0_EXT_IF_1,
-    L1_4_UNPACKER0_EXT_IF_2,
-    L1_4_UNPACKER0_EXT_IF_3,
-    L1_4_UNPACKER0_EXT_IF_4,
-    L1_4_UNPACKER0_EXT_IF_5,
-    L1_4_EXT_PACKER_6_GRANT,
-    L1_4_EXT_PACKER_7_GRANT,
-    L1_4_PACKER_IF_1_TAG_SEARCH_GRANT,
-    L1_4_UNPACKER0_EXT_IF_1_GRANT,
-    L1_4_UNPACKER0_EXT_IF_2_GRANT,
-    L1_4_UNPACKER0_EXT_IF_3_GRANT,
-    L1_4_UNPACKER0_EXT_IF_4_GRANT,
-    L1_4_UNPACKER0_EXT_IF_5_GRANT,
-    // L1 Bank 2 (BH only, mux=2, ports 16-23): unpacker 1's extended read interfaces 4-7 (also used by the
-    // packer L1-to-L1 read) and NOC ring 0 ports 2-3.
-    L1_2_UNPACKER1_EXT_IF_4,
-    L1_2_UNPACKER1_EXT_IF_5,
-    L1_2_UNPACKER1_EXT_IF_6,
-    L1_2_UNPACKER1_EXT_IF_7,
-    L1_2_NOC_RING0_OUTGOING_2,
-    L1_2_NOC_RING0_OUTGOING_3,
-    L1_2_NOC_RING0_INCOMING_2,
-    L1_2_NOC_RING0_INCOMING_3,
-    L1_2_UNPACKER1_EXT_IF_4_GRANT,
-    L1_2_UNPACKER1_EXT_IF_5_GRANT,
-    L1_2_UNPACKER1_EXT_IF_6_GRANT,
-    L1_2_UNPACKER1_EXT_IF_7_GRANT,
-    L1_2_NOC_RING0_OUTGOING_2_GRANT,
-    L1_2_NOC_RING0_OUTGOING_3_GRANT,
-    L1_2_NOC_RING0_INCOMING_2_GRANT,
-    L1_2_NOC_RING0_INCOMING_3_GRANT,
-    // L1 Bank 3 (BH only, mux=3, ports 24-31: NOC ring 1 ports 2-3 and extended packers 2-5)
-    L1_3_NOC_RING1_OUTGOING_2,
-    L1_3_NOC_RING1_OUTGOING_3,
-    L1_3_NOC_RING1_INCOMING_2,
-    L1_3_NOC_RING1_INCOMING_3,
-    L1_3_EXT_PACKER_2,
-    L1_3_EXT_PACKER_3,
-    L1_3_EXT_PACKER_4,
-    L1_3_EXT_PACKER_5,
-    L1_3_NOC_RING1_OUTGOING_2_GRANT,
-    L1_3_NOC_RING1_OUTGOING_3_GRANT,
-    L1_3_NOC_RING1_INCOMING_2_GRANT,
-    L1_3_NOC_RING1_INCOMING_3_GRANT,
-    L1_3_EXT_PACKER_2_GRANT,
-    L1_3_EXT_PACKER_3_GRANT,
-    L1_3_EXT_PACKER_4_GRANT,
-    L1_3_EXT_PACKER_5_GRANT,
-    ANY_THREAD_STALL,
-    // L1 Bank 5 (BH only, mux=5, ports 40-41): unpacker 0's extended read interfaces 6-7; slots 2-7 read 0.
-    L1_5_UNPACKER0_EXT_IF_6,
-    L1_5_UNPACKER0_EXT_IF_7,
-    L1_5_UNPACKER0_EXT_IF_6_GRANT,
-    L1_5_UNPACKER0_EXT_IF_7_GRANT,
-    // Blackhole ports whose client differs from Wormhole (tapeout RTL): port 1 has no packer, port 8 is the
-    // packer's L1 interface 0, ports 9-11 are unpacker 1's extended read interfaces (also the packer L1-to-L1 read).
-    L1_0_UNPACKER_1_ECC,
-    L1_1_PACKER_IF_0,
-    L1_1_UNPACKER1_EXT_IF_1,
-    L1_1_UNPACKER1_EXT_IF_2,
-    L1_1_UNPACKER1_EXT_IF_3,
-    L1_0_UNPACKER_1_ECC_GRANT,
-    L1_1_PACKER_IF_0_GRANT,
-    L1_1_UNPACKER1_EXT_IF_1_GRANT,
-    L1_1_UNPACKER1_EXT_IF_2_GRANT,
-    L1_1_UNPACKER1_EXT_IF_3_GRANT,
-    // counter_type is an 8-bit field on tt-1xx; keep every value below 256.
-};
-static_assert(L1_1_UNPACKER1_EXT_IF_3_GRANT <= 255, "PerfCounterType enum exceeds 8-bit counter_type field");
 
 union PerfCounter {
     struct {
@@ -250,17 +40,15 @@ static_assert(sizeof(PerfCounter) == sizeof(std::uint64_t) * 2, "PerfCounter mus
 // Counter readout and DRAM push runs on BRISC (has NOC access for DRAM writes).
 #if defined(PROFILE_PERF_COUNTERS) && (COMPILE_FOR_TRISC == 1 || defined(COMPILE_FOR_BRISC))
 
+#include <array>
+#include <utility>
+
 #include "kernel_profiler.hpp"
-#include "api/debug/assert.h"
+#include "perf_counters/inventory.h"
+#include "perf_counters/registers.h"
+#include "perf_counters/hw.h"
 
 namespace kernel_profiler {
-
-// Architecture-specific counter arrays (fpu, unpack, pack, l1_0-l1_5, instrn)
-#if defined(ARCH_BLACKHOLE)
-#include "tt_metal/hw/inc/internal/tt-1xx/blackhole/hw_counters.h"
-#else
-#include "tt_metal/hw/inc/internal/tt-1xx/wormhole/hw_counters.h"
-#endif
 
 // bit masks for the different counter groups
 #define PROFILE_PERF_COUNTERS_FPU (1 << 0)
@@ -273,11 +61,6 @@ namespace kernel_profiler {
 #define PROFILE_PERF_COUNTERS_L1_3 (1 << 7)
 #define PROFILE_PERF_COUNTERS_L1_4 (1 << 8)
 #define PROFILE_PERF_COUNTERS_L1_5 (1 << 9)
-
-#define PERF_CNT_CONTINUOUS_MODE 0
-#define PERF_CNT_BANK_SELECT_SHIFT 8
-#define PERF_CNT_START_VALUE 1
-#define PERF_CNT_STOP_VALUE 2
 
 // Counter groups and their corresponding enable bitmask bits. Shared; used on both
 // TRISC1 (start/stop loop) and BRISC (read loop).
@@ -295,68 +78,57 @@ constexpr std::pair<PerfCounterGroup, std::uint32_t> counter_group_flags[] = {
 };
 constexpr std::uint32_t NUM_COUNTER_GROUPS = sizeof(counter_group_flags) / sizeof(counter_group_flags[0]);
 
-// All six L1 groups count through the one L1 counter block; the group only picks the mux setting.
-constexpr std::uint32_t PERF_CNT_L1_ANY_GROUP = RISCV_DEBUG_REG_PERF_CNT_L1_0;
-
-// Indexed by PerfCounterGroup; keep the enum order.
-constexpr std::uint32_t cntl_reg_for_group[10] = {
-    RISCV_DEBUG_REG_PERF_CNT_FPU0,            // FPU
-    RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0,      // PACK
-    RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0,    // UNPACK
-    PERF_CNT_L1_ANY_GROUP,                    // L1_0
-    PERF_CNT_L1_ANY_GROUP,                    // L1_1
-    RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0,  // INSTRN
-    PERF_CNT_L1_ANY_GROUP,                    // L1_2
-    PERF_CNT_L1_ANY_GROUP,                    // L1_3
-    PERF_CNT_L1_ANY_GROUP,                    // L1_4
-    PERF_CNT_L1_ANY_GROUP,                    // L1_5
+// Indexed by PerfCounterGroup; keep the enum order. The six L1 groups are the one L1 bank at different
+// mux positions.
+constexpr llk::perf::Bank bank_for_group[10] = {
+    llk::perf::Bank::FPU,            // FPU
+    llk::perf::Bank::TDMA_PACK,      // PACK
+    llk::perf::Bank::TDMA_UNPACK,    // UNPACK
+    llk::perf::Bank::L1,             // L1_0
+    llk::perf::Bank::L1,             // L1_1
+    llk::perf::Bank::INSTRN_THREAD,  // INSTRN
+    llk::perf::Bank::L1,             // L1_2
+    llk::perf::Bank::L1,             // L1_3
+    llk::perf::Bank::L1,             // L1_4
+    llk::perf::Bank::L1,             // L1_5
 };
 
-FORCE_INLINE std::uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
-    return cntl_reg_for_group[static_cast<std::uint32_t>(counter_group)];
-}
-
-// Shared: sets the L1 mux select (bank 0..5) for the given group. 0 for non-L1 groups (unused).
-constexpr std::uint32_t mux_sel_for_group[10] = {
+constexpr std::uint8_t l1_mux_for_group[10] = {
     0,  // FPU (unused)
     0,  // PACK (unused)
     0,  // UNPACK (unused)
-    0,  // L1_0 → bank 0
-    1,  // L1_1 → bank 1
+    0,  // L1_0
+    1,  // L1_1
     0,  // INSTRN (unused)
-    2,  // L1_2 → bank 2
-    3,  // L1_3 → bank 3
-    4,  // L1_4 → bank 4
-    5,  // L1_5 → bank 5
+    2,  // L1_2
+    3,  // L1_3
+    4,  // L1_4
+    5,  // L1_5
 };
 
-FORCE_INLINE void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
-    volatile tt_reg_ptr std::uint32_t* mux_reg =
-        reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
-    std::uint32_t mux_sel = mux_sel_for_group[static_cast<std::uint32_t>(counter_group)];
-    *mux_reg = (*mux_reg & ~L1_MUX_MASK) | (mux_sel << 4);
-}
+// Register block per group, resolved at compile time so the runtime path is one indexed load.
+constexpr std::array<const llk::perf::BankRegs*, 10> regs_for_group = [] {
+    std::array<const llk::perf::BankRegs*, 10> regs{};
+    for (std::uint32_t g = 0; g < 10; g++) {
+        regs[g] = &llk::perf::bank_regs(bank_for_group[g]);
+    }
+    return regs;
+}();
 
 #if COMPILE_FOR_TRISC == 1
 // --- TRISC1-only: start/stop counters around the compute kernel ------------
 
 __attribute__((noinline)) void start_single_group(PerfCounterGroup counter_group) {
-    if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
-        set_l1_mux_ctrl(counter_group);
+    if (bank_for_group[counter_group] == llk::perf::Bank::L1) {
+        llk::perf::set_l1_mux(l1_mux_for_group[counter_group]);
     }
-    volatile tt_reg_ptr std::uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-    cntl_reg[0] = 0xFFFFFFFF;
-    cntl_reg[1] = PERF_CNT_CONTINUOUS_MODE;
-    cntl_reg[2] = 0;
-    cntl_reg[2] = PERF_CNT_START_VALUE;
+    const llk::perf::BankRegs& regs = *regs_for_group[counter_group];
+    llk::perf::configure(regs);
+    llk::perf::start(regs);
 }
 
 __attribute__((noinline)) void stop_single_group(PerfCounterGroup counter_group) {
-    volatile tt_reg_ptr std::uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-    cntl_reg[2] = 0;
-    cntl_reg[2] = PERF_CNT_STOP_VALUE;
+    llk::perf::stop(*regs_for_group[counter_group]);
 }
 
 void start_perf_counter() {
@@ -385,89 +157,34 @@ struct PerfCounterWrapper {
 #if defined(COMPILE_FOR_BRISC)
 // --- BRISC-only: counter readout and DRAM push -----------------------------
 
-// Lookup tables indexed by PerfCounterGroup (same ordering as cntl_reg_for_group).
-constexpr std::uint32_t read_reg_for_group[10] = {
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU,            // FPU
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK,      // PACK
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK,    // UNPACK
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_0
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_1
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD,  // INSTRN
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_2
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_3
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_4
-    RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1,         // L1_5
-};
+// Select table per group (same ordering as bank_for_group).
+constexpr std::array<llk::perf::Table, 10> table_for_group = [] {
+    std::array<llk::perf::Table, 10> tables{};
+    for (std::uint32_t g = 0; g < 10; g++) {
+        tables[g] = llk::perf::table_for(bank_for_group[g], l1_mux_for_group[g]);
+    }
+    return tables;
+}();
 
-constexpr std::uint32_t num_counters_for_group[10] = {
-    NUM_FPU_COUNTERS,     // FPU
-    NUM_PACK_COUNTERS,    // PACK
-    NUM_UNPACK_COUNTERS,  // UNPACK
-    NUM_L1_0_COUNTERS,    // L1_0
-    NUM_L1_1_COUNTERS,    // L1_1
-    NUM_INSTRN_COUNTERS,  // INSTRN
-    NUM_L1_2_COUNTERS,    // L1_2
-    NUM_L1_3_COUNTERS,    // L1_3
-    NUM_L1_4_COUNTERS,    // L1_4
-    NUM_L1_5_COUNTERS,    // L1_5
-};
-
-constexpr const std::pair<PerfCounterType, std::uint16_t>* counters_for_group[10] = {
-    fpu_counters.data(),     // FPU
-    pack_counters.data(),    // PACK
-    unpack_counters.data(),  // UNPACK
-    l1_0_counters.data(),    // L1_0
-    l1_1_counters.data(),    // L1_1
-    instrn_counters.data(),  // INSTRN
-    l1_2_counters.data(),    // L1_2
-    l1_3_counters.data(),    // L1_3
-    l1_4_counters.data(),    // L1_4
-    l1_5_counters.data(),    // L1_5
-};
-
-FORCE_INLINE std::uint32_t get_read_register_for_counter_group(PerfCounterGroup g) {
-    return read_reg_for_group[static_cast<std::uint32_t>(g)];
-}
-
-FORCE_INLINE std::uint32_t get_num_counters_for_counter_group(PerfCounterGroup g) {
-    return num_counters_for_group[static_cast<std::uint32_t>(g)];
-}
-
-FORCE_INLINE const std::pair<PerfCounterType, std::uint16_t>* get_counters_for_counter_group(PerfCounterGroup g) {
-    return counters_for_group[static_cast<std::uint32_t>(g)];
-}
-
+// The mode readback poll is unbounded here (PollLimit 0): BRISC firmware is within a few bytes of its
+// size limit, and the poll never fails on hardware.
 __attribute__((noinline)) void read_single_group(PerfCounterGroup counter_group) {
-    if (counter_group >= PerfCounterGroup::L1_0 && counter_group != PerfCounterGroup::INSTRN) {
-        set_l1_mux_ctrl(counter_group);
-    }
-    volatile tt_reg_ptr std::uint32_t* cntl_reg =
-        reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(get_cntl_register_for_counter_group(counter_group));
-    volatile tt_reg_ptr std::uint32_t* read_reg =
-        reinterpret_cast<volatile tt_reg_ptr std::uint32_t*>(get_read_register_for_counter_group(counter_group));
-    const auto* counters = get_counters_for_counter_group(counter_group);
-    const std::uint32_t counters_size = get_num_counters_for_counter_group(counter_group);
-    for (unsigned int i = 0; i < counters_size; i++) {
-        std::uint32_t counter_sel = counters[i].second;
-        std::uint32_t expected_mode = counter_sel << PERF_CNT_BANK_SELECT_SHIFT | PERF_CNT_CONTINUOUS_MODE;
-        cntl_reg[1] = expected_mode;
-        // Readback poll: MMIO fence for the mux select.
-        while (cntl_reg[1] != expected_mode);
-        std::uint32_t ref_cnt_val = read_reg[0];
-        std::uint32_t counter_val = read_reg[1];
-        PerfCounter counter(counter_val, ref_cnt_val, counters[i].first);
-        kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
-            kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
-        kernel_profiler::timeStampedData<
-            PERF_COUNTER_PROFILER_ID,
-            kernel_profiler::DoingDispatch::DISPATCH,
-            kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
-    }
+    const llk::perf::BankRegs& regs = *regs_for_group[counter_group];
+    llk::perf::read_table<0>(
+        regs, table_for_group[counter_group], [](PerfCounterType type, std::uint32_t ref_cnt, std::uint32_t value) {
+            PerfCounter counter(value, ref_cnt, type);
+            kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>(
+                kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE * 2);
+            kernel_profiler::timeStampedData<
+                PERF_COUNTER_PROFILER_ID,
+                kernel_profiler::DoingDispatch::DISPATCH,
+                kernel_profiler::PacketTypes::TS_DATA_16B>(counter.raw_data_1, counter.raw_data_2);
+        });
     // Toggle start bit to clear the counters for this group
-    cntl_reg[2] = 0;
-    cntl_reg[2] = PERF_CNT_START_VALUE;
+    llk::perf::start(regs);
 }
 
+// One L1 group per pass at most; its mux position is routed here so passes without L1 carry no mux code.
 void read_perf_counters() {
     if (kernel_profiler::get_profiler_zone_invalid()) {
         return;
@@ -482,24 +199,30 @@ void read_perf_counters() {
     read_single_group(PerfCounterGroup::UNPACK);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_0
+    llk::perf::set_l1_mux(0);
     read_single_group(PerfCounterGroup::L1_0);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_1
+    llk::perf::set_l1_mux(1);
     read_single_group(PerfCounterGroup::L1_1);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_INSTRN
     read_single_group(PerfCounterGroup::INSTRN);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_2
+    llk::perf::set_l1_mux(2);
     read_single_group(PerfCounterGroup::L1_2);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_3
+    llk::perf::set_l1_mux(3);
     read_single_group(PerfCounterGroup::L1_3);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_4
+    llk::perf::set_l1_mux(4);
     read_single_group(PerfCounterGroup::L1_4);
 #endif
 #if (PROFILE_PERF_COUNTERS) & PROFILE_PERF_COUNTERS_L1_5
+    llk::perf::set_l1_mux(5);
     read_single_group(PerfCounterGroup::L1_5);
 #endif
 }

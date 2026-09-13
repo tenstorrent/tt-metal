@@ -7,13 +7,15 @@ from pathlib import Path
 
 import pandas as pd
 from loguru import logger
+from tt_llk_perf.headers import bank_tables
 
-from .chip_architecture import ChipArchitecture, get_chip_architecture
+from .chip_architecture import get_chip_architecture
 from .device_io import read_words_from_device
 from .test_config import TestConfig
 
 COUNTER_SLOT_COUNT = TestConfig._PERF_COUNTERS_CONFIG_WORDS
 
+# Order matches llk::perf::Bank (perf_counters/types.h) and the config-word bank field.
 COUNTER_BANK_NAMES = {
     0: "INSTRN_THREAD",
     1: "FPU",
@@ -22,30 +24,19 @@ COUNTER_BANK_NAMES = {
     4: "TDMA_PACK",
 }
 
-
-# --- Counter id -> name tables, parsed live from the canonical metal hw_counters.h ---
-
-_ARRAY_TO_BANK = {
-    "instrn_counters": "INSTRN_THREAD",
-    "fpu_counters": "FPU",
-    "unpack_counters": "TDMA_UNPACK",
-    "pack_counters": "TDMA_PACK",
-}
-_ARCH_DIR = {
-    ChipArchitecture.WORMHOLE: "wormhole",
-    ChipArchitecture.BLACKHOLE: "blackhole",
+# tt_llk_perf table keys -> harness bank names (only INSTRN is spelled differently).
+_TABLE_BANK_TO_HARNESS = {
+    "INSTRN": "INSTRN_THREAD",
+    "FPU": "FPU",
+    "TDMA_UNPACK": "TDMA_UNPACK",
+    "TDMA_PACK": "TDMA_PACK",
+    "L1": "L1",
 }
 
-
-def _metal_root() -> Path:
-    """Walk up from this file until the metal hw_counters.h tree is found."""
-    for parent in Path(__file__).resolve().parents:
-        if (parent / "tt_metal/hw/inc/internal/tt-1xx").is_dir():
-            return parent
-    raise RuntimeError(
-        "Could not locate tt_metal/hw/inc/internal/tt-1xx above this file"
-    )
-
+# The device-side harness header this module mirrors; this file lives at tests/python_tests/helpers/.
+LLK_COUNTERS_HEADER = (
+    Path(__file__).resolve().parents[2] / "helpers" / "include" / "counters.h"
+)
 
 _C_LITERAL = r"0[xX][0-9a-fA-F]+|\d+"
 
@@ -65,9 +56,7 @@ def _parse_perf_cfg(text: str) -> dict:
 
 
 # Config word layout, parsed from the device-side header so the two cannot drift apart.
-_PERF_CFG = _parse_perf_cfg(
-    (_metal_root() / "tt_metal/tt-llk/tests/helpers/include/counters.h").read_text()
-)
+_PERF_CFG = _parse_perf_cfg(LLK_COUNTERS_HEADER.read_text())
 PERF_CFG_VALID_BIT = _PERF_CFG["VALID_BIT"]
 PERF_CFG_L1_MUX_SHIFT = _PERF_CFG["L1_MUX_SHIFT"]
 PERF_CFG_L1_MUX_MASK = _PERF_CFG["L1_MUX_MASK"]
@@ -76,56 +65,14 @@ PERF_CFG_COUNTER_MASK = _PERF_CFG["COUNTER_MASK"]
 PERF_CFG_BANK_MASK = _PERF_CFG["BANK_MASK"]
 
 
-def _parse_hw_counters(text: str) -> dict:
-    """Parse one hw_counters.h into {bank: {id: name}}; L1 is keyed by (id, mux)."""
+def _load_counter_names(arch) -> dict:
+    """{bank: {select: name}} from the tt-llk tables; L1 is keyed by (select, mux). Quasar: empty."""
     banks = {bank: {} for bank in COUNTER_BANK_NAMES.values()}
-
-    decls = list(re.finditer(r"(\w+_counters)\s*=", text))
-    for i, decl in enumerate(decls):
-        name = decl.group(1)
-        start = decl.end()
-        end = decls[i + 1].start() if i + 1 < len(decls) else len(text)
-        chunk = text[start:end]
-        term = chunk.find("};")
-        if term != -1:
-            chunk = chunk[:term]
-
-        pairs = [
-            (cname, int(cid))
-            for cname, cid in re.findall(r"PerfCounterType::(\w+)\s*,\s*(\d+)", chunk)
-        ]
-        if not pairs:
-            continue
-
-        if name.startswith("l1_"):
-            mux = int(name.split("_")[1])
-            for cname, cid in pairs:
-                banks["L1"][(cid, mux)] = cname
-        elif name in _ARRAY_TO_BANK:
-            bank = _ARRAY_TO_BANK[name]
-            for cname, cid in pairs:
-                banks[bank][cid] = cname
-
-    return banks
-
-
-def _load_counter_names(arch: ChipArchitecture) -> dict:
-    arch_dir = _ARCH_DIR.get(arch)
-    if arch_dir is None:  # Quasar / unsupported: no hw_counters.h yet.
-        return {bank: {} for bank in COUNTER_BANK_NAMES.values()}
-    header = _metal_root() / f"tt_metal/hw/inc/internal/tt-1xx/{arch_dir}/hw_counters.h"
-    banks = _parse_hw_counters(header.read_text())
-    # Silently, every column becomes UNKNOWN and metrics.py turns the misses into a page of zeros.
-    missing = [
-        b
-        for b in ("INSTRN_THREAD", "FPU", "TDMA_UNPACK", "TDMA_PACK", "L1")
-        if not banks.get(b)
-    ]
-    if missing:
-        raise RuntimeError(
-            f"Could not parse counter names from {header}: empty banks {missing}. "
-            "The pair syntax in hw_counters.h probably changed; update _parse_hw_counters."
-        )
+    for table_bank, entries in bank_tables(arch).items():
+        bank = _TABLE_BANK_TO_HARNESS[table_bank]
+        for entry in entries:
+            key = (entry.select, entry.l1_mux) if bank == "L1" else entry.select
+            banks[bank][key] = entry.name
     return banks
 
 
@@ -185,7 +132,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         )
         return []
 
-    # Shared config (same for all zones) — read once metadata layout.
+    # Shared config (same for all zones): read the metadata layout once.
     config_addr = _zone_config_addr(zone)
     metadata = read_words_from_device(
         location=location, addr=config_addr, word_count=COUNTER_SLOT_COUNT
@@ -207,7 +154,7 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         return []
 
     # Bank cycles are the first 5 words: indexed by bank_id (0..4).
-    # Order matches counter_bank enum (see counters.h): INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
+    # Order matches llk::perf::Bank: INSTRN, FPU, TDMA_UNPACK, L1, TDMA_PACK
     bank_cycles = data[:bank_cycles_words]
     counter_counts = data[bank_cycles_words:]
 
