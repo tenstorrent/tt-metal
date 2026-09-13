@@ -1,7 +1,7 @@
 {
   "last_run": {
-    "run_id": "34757305667",
-    "timestamp": "2026-09-13T12:34:00Z"
+    "run_id": "34774628700",
+    "timestamp": "2026-09-13T18:29:00Z"
   },
   "run_id": "34757305667",
   "open_prs": {
@@ -125,7 +125,12 @@
       "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally",
       "note_correction": "PR that fixes issue 56194 is actually numbered 56195, not 56194; corrected 2026-09-13"
     },
-    "56383": "fix for issue #56383 (pow_bw ltz vs lez mismatch), opened 2026-09-13"
+    "56383": "fix for issue #56383 (pow_bw ltz vs lez mismatch), opened 2026-09-13",
+    "56424": {
+      "issue": 56424,
+      "branch": "repo-assist/fix-issue-56424-quantize-per-tensor-scale-dtype",
+      "status": "opened this run; fixes reshape_per_channel_arg to cast per-tensor Tensor scale/zero-point to out_dtype (was only done for per-channel/axis path); verified root cause against current quantization.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
+    }
   },
   "issues_labeled": [
     "52178:bug",
@@ -344,7 +349,9 @@
     "56324": "already fixed via open PR #55589 (tt_transformers prefill page table fix included), no dup needed",
     "56290": "bounty issue, multiple community PRs already open (56296/56301/56309/56325/56326/56327), no repo-assist action",
     "56281": "already labeled bug, tracking issue referencing 54630, no action",
-    "56277": "bounty feature request, already labeled, no action"
+    "56277": "bounty feature request, already labeled, no action",
+    "56385": "bitwise_right_shift UINT32 sign-propagation, external fix PR #56394 already open, confirmed no dup needed 2026-09-13 (re-confirmed from prior run)",
+    "56371": "moreh_softmin all-zero rows on +-inf, external fix PR #56386 already open, confirmed no dup needed 2026-09-13 (re-confirmed from prior run)"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -453,7 +460,8 @@
     "55920": "eltwise perf-test alignment BH/QSR, already assigned ndivnicTT, tracking issue",
     "55913": "LLK Sanitizer epic/tracker, assigned sstanisicTT, no action needed",
     "56056": "ttnn.softmax NaN/inf handling - confirmed all-(-inf)-row mechanism (exp SFPU CLAMP_NEGATIVE sanitize) against current source; labeled bug + commented; no fix attempted, shared hand-tuned HW kernel needs careful review beyond repo-assist scope",
-    "55988": "2026-09-12: investigated BH tilize tall-narrow cliff-row assert (tilize_multi_core_block_program_factory.cpp:295); traced split_blocks_for_tilize_wh/compute_ncores_wh_sb path in work_split_tilize.hpp and buffer_set_for_core in common.cpp but could not conclusively identify the exact core/width mismatch for the specific (1,1,4096,32) uint8 shape on Blackhole's grid without hardware/sim access; left unlabeled/uncommented, revisit with more time budget"
+    "55988": "2026-09-12: investigated BH tilize tall-narrow cliff-row assert (tilize_multi_core_block_program_factory.cpp:295); traced split_blocks_for_tilize_wh/compute_ncores_wh_sb path in work_split_tilize.hpp and buffer_set_for_core in common.cpp but could not conclusively identify the exact core/width mismatch for the specific (1,1,4096,32) uint8 shape on Blackhole's grid without hardware/sim access; left unlabeled/uncommented, revisit with more time budget",
+    "56414": "BF16 trunc/floor/ceil/frac return +-inf instead of NaN (_trunc_body_ in ckernel_sfpu_rounding_ops.h has no NaN/inf guard before bit-mask path); confirmed root cause against current source, labeled bug + commented, but explicitly deferred fix to maintainer - raw SFPU intrinsic kernel (SFPEXEXP/SFPIADD/SFPSHFT2/SFPAND) shared by 3+ other LLKs, no sfpi.h vendored in this checkout to safely verify a bit-level change; 2026-09-13"
   },
   "stale_pr_nudges": {
     "34933": {
@@ -858,6 +866,21 @@
       "last_ping": "2026-09-13",
       "type": "author_checkin",
       "note": "dirty mergeable_state, quiet since 2026-08-27, codegen-port pad DeviceOperation+ProgramFactory"
+    },
+    "49170": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "MOP/replay optimizer tech report, approved by amahmudTT but 7 requested reviewers still pending, never previously pinged"
+    },
+    "52145": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "tril/triu NaN fix, dirty->behind mergeable_state, no codeowners bot comment posted before this ping"
+    },
+    "52149": {
+      "date": "2026-09-13",
+      "type": "codeowners_ping",
+      "note": "xlogy fix, 9 requested reviewers pending, zero reviews, never previously pinged"
     }
   },
   "backlog_cursor": {
@@ -880,7 +903,8 @@
     "task1_task2_2026_09_12b": "reviewed previously-flagged gap 55944-56119 for coverage: confirmed 56068 covered by open PR #56198, 55996 covered by open PR #55997, 55744 already fixed+merged via #55938 (moved to covered_no_duplicate); investigated 55988 (BH tilize tall-narrow assert) but could not conclusively pin the defect in the work-split/buffer-set interaction (traced split_blocks_for_tilize_wh / buffer_set_for_core / make_block_plan across work_split_tilize.hpp and common.cpp), left unlabeled/uncommented rather than guess; other gap issues (56100/56096/56090/55957/55953) already correctly labeled, no dup PR found, no new action. Next run continue below 55944 or re-attempt 55988 root cause with more budget.",
     "task1_task2_2026_09_12c": "reviewed pages 2-4 of newest-created issue list (56133 down through 55587); all already covered/labeled from prior runs except 55664 (confirmed covered by open PR #55807, no dup) and 55749/55705/55672 (KV-cache TP sharding proposal, Quasar re-init guard proposal, semaphore-alignment infra proposal - all design/feature proposals, no confirmed defect, correctly left unlabeled). Next run continue scanning below #55587 (page5+).",
     "task1_task2_2026_09_13": "reviewed newest issues 56390 down to 55929 (page1) + 55928 down to 55443 (page2, continuing from prior cursor #55587); confirmed #56348 already covered by open PR #56375 (opened last run); investigated and fixed #56383 (ttnn.pow_bw lez vs ltz mismatch, confirmed against golden in unary_backward.py, opened fix PR); labeled #55541 infra-ci (/codeowners mixed team+individual handling, confirmed as real defect); reviewed #56385 (bitwise_right_shift sign-propagation, plausible but not yet verified against kernel source - candidate for next run), #56371 (moreh_softmin all-zero on inf, candidate for next run - needs kernel investigation), #55571/#55539 (test-coverage tracking issues, no defect, left unlabeled). Next run continue below #55443 or investigate #56385/#56371 root causes.",
-    "task1_task2_2026_09_13b": "labeled 55378/56385/56371; scanned unlabeled-issue list 55539 down to 55022 - all tracking/design/productization issues (Voxtral, Whisper, Qwen3-TTS/ASR, DS Prefill, allocator design decisions), no confirmed defects; 55429 is a design follow-up (dispatch telemetry ACTIVE_ETH accounting), not a quick fix; next run continue below #55022 or re-scan newest issues for anything created since this run"
+    "task1_task2_2026_09_13b": "labeled 55378/56385/56371; scanned unlabeled-issue list 55539 down to 55022 - all tracking/design/productization issues (Voxtral, Whisper, Qwen3-TTS/ASR, DS Prefill, allocator design decisions), no confirmed defects; 55429 is a design follow-up (dispatch telemetry ACTIVE_ETH accounting), not a quick fix; next run continue below #55022 or re-scan newest issues for anything created since this run",
+    "task1_task2_2026_09_13c": "reviewed fresh issues #56424/#56414 (appeared since prior run's newest-scan of #56390); both investigated (56424 fixed via PR, 56414 confirmed+labeled+commented no fix); next run resume newest-issue scan from #56424 downward or continue prior gap below #55443"
   },
   "labeled_issues": {
     "53866": {
@@ -1184,6 +1208,11 @@
     "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened"
   },
   "run_history": [
+    {
+      "run_id": "34774628700",
+      "date": "2026-09-13T18:29:00Z",
+      "summary": "Task3: opened fix PR #56424 (branch repo-assist/fix-issue-56424-quantize-per-tensor-scale-dtype) for issue #56424 (quantize/dequantize accept bf16 per-tensor scale then abort in binary_ng); root cause verified against current quantization.cpp (reshape_per_channel_arg only casts to out_dtype when axis.has_value()); fix makes per-tensor Tensor scale/zero-point cast to out_dtype same as per-channel path; commented on issue linking fix. Task1/2: reviewed newest issues 56424/56414 (fresh since last run); investigated #56414 (BF16 trunc/floor/ceil/frac -> +-inf instead of NaN) - confirmed root cause against current _trunc_body_ in ckernel_sfpu_rounding_ops.h (no NaN/inf guard before bit-mask path), labeled bug and commented, but did NOT attempt a fix - this is raw SFPU intrinsic kernel code shared by 3+ other LLKs (binary_fmod/rdiv/binary_remainder) and sfpi.h is not vendored in this checkout so bit-level semantics can't be safely verified/compiled here; confirmed #56385/#56371 (candidates flagged last run) already have external fix PRs #56394/#56386, no duplicate needed. Task5: posted CI-green confirmation comments on PR #56396 (pow_bw fix, 5/5 checks) and PR #56375 (dispatch log fix, 5/5 checks) since both had 'unverified' Test Status and CI has since completed successfully; spot-checked #56195 (still RTL Sim failing) and #55847 (still CodeOwners-pending) - unchanged. Task6: 3 /codeowners ping actions on never-before-pinged reviewer-blocked stale PRs from oldest-updated-first non-draft PR search: #49170 (MOP/replay optimizer tech report, approved by amahmudTT but 7 reviewers pending), #52145 (tril/triu NaN fix, no codeowners bot comment yet despite dirty->behind state and quiet reviewer thread), #52149 (xlogy fix, 9 reviewers requested, zero reviews). Task8: rewrote monthly summary #55015 (had regrown to ~82KB) to canonical trimmed format with refreshed suggested actions including new PR #56424 and #56414 comment."
+    },
     {
       "run_id": "34757305667",
       "date": "2026-09-13T12:34:00Z",
