@@ -160,7 +160,7 @@ def write_chunk_to_packed_ring_cache(
         chunk.deallocate(True)
 
 
-def ring_packed_prefill_attention(
+def global_ring_prefill_attention(
     tt_q,
     cache_kv,
     mesh_config,
@@ -187,7 +187,7 @@ def ring_packed_prefill_attention(
         cache_shape[:-1] + (GLOBAL_PACKED_DIM,),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    out = ring_prefill_attention(
+    out = _ring_prefill_attention(
         tt_q,
         cache_k,
         cache_v,
@@ -282,7 +282,50 @@ def write_chunk_to_ring_cache(
             )
 
 
-def ring_prefill_attention(
+def sliding_ring_prefill_attention(
+    tt_q,
+    cache_k,
+    cache_v,
+    mesh_config,
+    ccl_manager,
+    prefill_metadata,
+    num_local_kv_heads,
+    head_dim,
+    max_seq_len,
+    logical_n,
+    kv_actual_global,
+    sliding_window=None,
+    scale=1.0,
+    compute_kernel_config=None,
+    program_config=None,
+    layer_idx=0,
+    num_layers=1,
+    slot_idx=0,
+):
+    """Attend sliding layers using separate K and V ring caches."""
+    return _ring_prefill_attention(
+        tt_q=tt_q,
+        cache_k=cache_k,
+        cache_v=cache_v,
+        mesh_config=mesh_config,
+        ccl_manager=ccl_manager,
+        prefill_metadata=prefill_metadata,
+        num_local_kv_heads=num_local_kv_heads,
+        head_dim=head_dim,
+        max_seq_len=max_seq_len,
+        logical_n=logical_n,
+        kv_actual_global=kv_actual_global,
+        sliding_window=sliding_window,
+        scale=scale,
+        compute_kernel_config=compute_kernel_config,
+        program_config=program_config,
+        layer_idx=layer_idx,
+        num_layers=num_layers,
+        slot_idx=slot_idx,
+    )
+
+
+def _ring_prefill_attention(
     tt_q,
     cache_k,
     cache_v,
