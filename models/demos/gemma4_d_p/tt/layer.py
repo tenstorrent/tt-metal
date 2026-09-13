@@ -123,12 +123,10 @@ class Gemma4DecoderLayer:
         hidden_states = mlp_output
 
         # post_feedforward_layernorm -> residual add
-        hidden_states = self.post_feedforward_layernorm.forward(hidden_states)
-        combined = ttnn.add(residual, hidden_states)
+        normed = self.post_feedforward_layernorm.forward(hidden_states)
+        hidden_states = ttnn.add(residual, normed)
         residual.deallocate(True)
-        hidden_states.deallocate(True)
-
-        hidden_states = combined
+        normed.deallocate(True)
 
         hidden_states = ttnn.mul(hidden_states, self.layer_scalar)
 
