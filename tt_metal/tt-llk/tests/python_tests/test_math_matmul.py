@@ -89,11 +89,14 @@ ALL_TEST_PARAMS = list(
                 MATH_FIDELITIES, MATMUL_COMBINATIONS, [1, 2, 3, 4, 5]
             )
         ),
-        # Tiny tiles matmul with throttle level 0 only
+        # Tiny tiles: throttle 0 everywhere, plus one throttled level where a non-full tile
+        # falls back to the unthrottled MOP.
         (
-            (fidelity, combinations, 0)
-            for fidelity, combinations in product(
-                MATH_FIDELITIES, TINY_TILES_MATMUL_COMBINATIONS
+            (fidelity, combinations, throttle)
+            for fidelity, combinations, throttle in product(
+                MATH_FIDELITIES,
+                TINY_TILES_MATMUL_COMBINATIONS,
+                [0, 1],
             )
         ),
     )
