@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Deterministic surround-view camera rigs and their lidar-to-image matrices.
+"""Test-only surround-view camera rigs and their lidar-to-image matrices.
 
 ``lidar2img`` decides which BEV queries project into which camera, so it decides
 ``bev_mask``, the spatial-cross-attention rebatch length ``max_len``, and therefore
 every spatial-path tensor shape. Random matrices make those shapes an artifact of
-the RNG draw order rather than a property of the model, so both correctness and
-performance runs build their matrices here instead.
+the RNG draw order rather than a property of the model, so tests that care about
+those shapes build their matrices here instead.
 
 Frames follow the reference implementation: lidar x forward, y left, z up; camera
 x right, y down, z forward. ``point_sampling_3d_to_2d`` treats row 2 of the
