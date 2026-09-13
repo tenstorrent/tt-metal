@@ -1627,6 +1627,7 @@ class DiffVAEStage5(Module):
             ttnn.deallocate(uploaded)
         return out
 
+    @timing_tree.timed("stage5 diff-blocks (attn+MLP)")
     def forward_diff_step(
         self,
         context: ttnn.Tensor,
@@ -1693,6 +1694,7 @@ class DiffVAEStage5(Module):
         flat = ttnn.reshape(band, (1, grid.batch, grid.t * grid.h * w_local, dim))
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
 
+    @timing_tree.timed("stage5 TOTAL (forward)")
     def forward(
         self,
         context: ttnn.Tensor,
@@ -1741,9 +1743,7 @@ class DiffVAEStage5(Module):
                     for band_x, band in zip(x_bands, bands)
                 ]
 
-        with timing_tree.span(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
-            out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
-
+        out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
         return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)
 
     def _to_pixels(self, out, grid, *, device_out: bool = False, output_type: str = "float"):

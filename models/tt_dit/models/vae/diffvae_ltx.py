@@ -650,27 +650,24 @@ class NABlock(Module):
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
     ) -> ttnn.Tensor:
-        # TT_DIT_BLOCK_PROF=1 only. Each span costs two device syncs, and there are 16 det blocks,
-        # so leaving these on by default would inflate the very stage totals they explain. The norms
-        # sit inside their span (stage 5 keeps its modulate outside) rather than paying two more.
-        if timing_tree.DEEP:
-            with timing_tree.span(self.mesh_device, "attention", category=timing_tree.ATTENTION):
-                attended = self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
-            x = ttnn.add(x, attended)
-            ttnn.deallocate(attended)
-            with timing_tree.span(self.mesh_device, "mlp", category=timing_tree.MLP):
-                projected = self.mlp(self.norm2(x))
-            x = ttnn.add(x, projected)
-            ttnn.deallocate(projected)
-            return x
-
-        attended = self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
+        attended = self._attention(x, dims=dims, cos=cos, sin=sin, device_plan=device_plan)
         x = ttnn.add(x, attended)
         ttnn.deallocate(attended)
-        projected = self.mlp(self.norm2(x))
+        projected = self._mlp(x)
         x = ttnn.add(x, projected)
         ttnn.deallocate(projected)
         return x
+
+    # Spans are deep: each costs two device syncs, and there are 16 deterministic blocks, so under a
+    # plain timing run they stay inert rather than inflate the very stage totals they explain. The
+    # norms sit inside their span (stage 5 keeps its modulate outside) rather than paying two more.
+    @timing_tree.timed("attention", category=timing_tree.ATTENTION, deep=True)
+    def _attention(self, x, *, dims, cos, sin, device_plan) -> ttnn.Tensor:
+        return self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
+
+    @timing_tree.timed("mlp", category=timing_tree.MLP, deep=True)
+    def _mlp(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.mlp(self.norm2(x))
 
 
 class LinearPixelShuffleUpsample(Module):
@@ -1174,6 +1171,7 @@ class DiffVAEDecoder(Module):
         grown = self.time_scale * (padded - 1) + 1
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
+    @timing_tree.timed("det stages TOTAL (forward_context)")
     def forward_context(
         self, latent: torch.Tensor, *, gather_output: bool = True, latent_tt: ttnn.Tensor | None = None
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
@@ -1249,6 +1247,7 @@ class DiffVAEDecoder(Module):
                 dims = (keep, dims[1], dims[2])
         return x, dims
 
+    @timing_tree.timed("decode TOTAL", root=True)  # the tree hangs off this node
     def decode(
         self,
         latent: torch.Tensor,
@@ -1267,57 +1266,52 @@ class DiffVAEDecoder(Module):
         ``latent_tt`` and ``device_out`` move the two host boundaries out of the way so the whole
         decode can be captured as one trace: the upload happens before the region and the PCIe pull
         after it. See :meth:`forward_context` and :meth:`DiffVAEStage5.forward`.
+
+        The whole decode is one root span: the tree hangs off it, and its total is an honesty check
+        against the caller's own wall-clock measurement of the same call.
         """
         from .diffvae_ltx_stage5 import Grid
 
-        # The whole decode under one node: the tree hangs off this, and its total is an honesty
-        # check against the caller's own wall-clock measurement of the same call.
-        with timing_tree.span(self.mesh_device, "decode TOTAL", root=True):
-            with timing_tree.span(self.mesh_device, "det stages TOTAL (forward_context)"):
-                context, dims = self.forward_context(
-                    latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt
-                )
-            grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
-            channels_out = self.config["stage_channels"][-1]
-            # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
-            # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
-            with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
-                if self._wsharded_handoff:
-                    w_local = grid.w // self.stages.sp
-                    context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
-                else:
-                    context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
+        context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
+        grid = Grid(batch=1, t=dims[0], h=dims[1], w=dims[2])
+        channels_out = self.config["stage_channels"][-1]
+        # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
+        # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
+        with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
+            if self._wsharded_handoff:
+                w_local = grid.w // self.stages.sp
+                context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
+            else:
+                context = ttnn.reshape(context, (1, 1, grid.sites, channels_out))
 
-            # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device in the patchified
-            # layout. Host generation is proportional to the OUTPUT volume, not the latent -- 908M floats at
-            # 1080p 6s -- and a caller supplying its own noise pays neither path.
-            if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
-                shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
-                with timing_tree.span(
-                    self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
-                ):
-                    noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
+        # DIFFVAE_DEVICE_NOISE=1 leaves noise as None so stage 5 draws it on device in the patchified
+        # layout. Host generation is proportional to the OUTPUT volume, not the latent -- 908M floats at
+        # 1080p 6s -- and a caller supplying its own noise pays neither path.
+        if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
+            shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
+            with timing_tree.span(
+                self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
+            ):
+                noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
 
-            # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0]. Uploaded
-            # once and kept: a constant on the per-decode path is still a host-to-device write, which a
-            # trace refuses during capture.
-            if self._timestep is None:
-                self._timestep = ttnn.from_torch(
-                    torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
-                )
-            timestep = self._timestep
-            with timing_tree.span(self.mesh_device, "stage5 TOTAL (forward)"):
-                pixels = self.stage5.forward(
-                    context,
-                    noise,
-                    timestep,
-                    grid,
-                    context_sharded=self._wsharded_handoff,
-                    seed=seed,
-                    device_out=device_out,
-                    output_type=output_type,
-                )
-            return pixels
+        # default_num_inference_steps is 1 on this checkpoint, so linspace(1, 1, 1) = [1.0]. Uploaded
+        # once and kept: a constant on the per-decode path is still a host-to-device write, which a
+        # trace refuses during capture.
+        if self._timestep is None:
+            self._timestep = ttnn.from_torch(
+                torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
+            )
+        timestep = self._timestep
+        return self.stage5.forward(
+            context,
+            noise,
+            timestep,
+            grid,
+            context_sharded=self._wsharded_handoff,
+            seed=seed,
+            device_out=device_out,
+            output_type=output_type,
+        )
 
     def forward(
         self,

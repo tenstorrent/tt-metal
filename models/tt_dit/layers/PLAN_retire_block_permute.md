@@ -45,9 +45,12 @@ with NO aliases (`TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG`,
 - Found on the way (job 459): `time_diff_block.py` had been broken since the stage-5 brick hoist (791d033abfd): it took
   bands aligned to the brick's T extent but handed the block un-bricked activations, so `_padded_rows` sliced past the
   tensor. It now bricks x and context the way `DiffVAEStage5.forward` does and passes `brick=` to the block.
-- Follow-up (not done): the decorator conversion of the DiffVAE classes -- `decode`/`forward_context`/`DiffVAEStage5.forward`/
-  `forward_diff_step`, the block-level attention/mlp spans (collapses `NABlock.forward`'s duplicated `if DEEP` body), the
-  per-stage body of `DeterministicStages.forward` once it is a method. In-body regions stay `with`.
+- Decorator conversion, step 1+2 (2026-09-13, next commit): `@timing_tree.timed` on `DiffVAEDecoder.decode` (`decode TOTAL`,
+  root), `forward_context`, `DiffVAEStage5.forward`, `forward_diff_step`; `NABlock.forward` has one body and two deep-decorated
+  helpers `_attention` / `_mlp`. Same labels, same nesting, verified by diffing the rendered tree rows against job 458 (job 466).
+  Left for later (proposals 3-5 in the conversation of 2026-09-13): phase methods in `NeighborhoodAttention.forward`,
+  `_run_stage` in `DeterministicStages.forward`, and the per-band helpers in `DiffusionNABlock.forward` (memory-lifetime care).
+  `_to_pixels` and the stage-5 lane closure stay `with`.
 
 ## Planners split from executors; na3d.py gone (2026-09-13 01:45, DONE, device-verified; read this first)
 
