@@ -233,6 +233,30 @@ def _patch_model_args(
     model_args.encode_prompt = _encode_prompt
 
 
+def _gemma4_stop_tokens(tokenizer, model_path):
+    """Every id in the checkpoint's ``generation_config.eos_token_id``.
+
+    Gemma-4 lists three (``[1, 106, 50]`` on 12B-it): ``<eos>`` plus the turn
+    terminators an instruct checkpoint actually emits. ``tokenizer.eos_token_id``
+    is only the first, so stopping on it alone never fires -- the demo runs to
+    max_generated_tokens and the tail fills with ``<end_of_turn>`` and the start
+    of a fresh turn, which reads as garbage at the end of an otherwise correct
+    long-context answer.
+    """
+    stop = []
+    try:
+        from transformers import GenerationConfig
+
+        eos = GenerationConfig.from_pretrained(model_path).eos_token_id
+        stop = [eos] if isinstance(eos, int) else list(eos or [])
+    except Exception as e:  # offline / no generation_config.json / unreadable
+        logger.warning("Gemma4 could not read generation_config eos_token_id ({}); using tokenizer eos", e)
+    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
+        stop.append(tokenizer.eos_token_id)
+    logger.info("Gemma4 stop tokens: {}", stop)
+    return stop
+
+
 class ChunkedPrefillPageTableGuardMixin:
     """Gemma4 prefill guards + async decode continuity (no ``tt_transformers`` edits).
 
@@ -1835,7 +1859,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
     ):
         tokenizer = _load_text_tokenizer(model_path)
         if not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            tokenizer.stop_tokens = _gemma4_stop_tokens(tokenizer, model_path)
 
         model_args, model, tt_kv_cache, _ = create_tt_model(
             mesh_device=mesh_device,
