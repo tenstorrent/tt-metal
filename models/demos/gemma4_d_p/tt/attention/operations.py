@@ -83,10 +83,3 @@ def apply_per_head_norm(tensor, eps, weight=None, memory_config=None):
     )
 
     return ttnn.reshape(normed, orig_shape)
-
-
-def apply_output_projection(tensor, weights: AttentionWeights):
-    """Apply output projection (no bias for Gemma4)."""
-    out = ttnn.linear(tensor, weights.o_proj)
-    tensor.deallocate(True)
-    return out

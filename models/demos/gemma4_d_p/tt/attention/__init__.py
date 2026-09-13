@@ -12,7 +12,6 @@ from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 
 from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
 from .operations import (
-    apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
     prefill_short_lived_memcfg,
@@ -290,6 +289,8 @@ class Gemma4Attention:
             tt_k.deallocate(True)
         tt_v.deallocate(True)
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_out = apply_output_projection(tt_out, self.weights)
+        projected = ttnn.linear(tt_out, self.weights.o_proj)
+        tt_out.deallocate(True)
+        tt_out = projected
         tt_out = ccl_allreduce(tt_out, self.mesh_config, self.ccl_manager)
         return tt_out
