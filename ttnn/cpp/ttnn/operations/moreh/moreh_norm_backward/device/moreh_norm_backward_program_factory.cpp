@@ -250,6 +250,15 @@ ProgramArtifacts MorehNormBackwardOperation::MorehNormBackwardProgramFactory::cr
     if (fp32_dest_acc_en) {
         compute_defines.emplace("FP32_DEST_ACC_EN", "1");
     }
+    // p = ±inf: the power-ladder gradient formula degenerates (floor(inf) overflows the
+    // uint32 exponent path in the kernel). Switch the compute kernel to the exact sub-gradient
+    // dx = sign(x) * dy * eq(|x|, y), mirroring the forward op's IS_ZERO / MINUS_INF special-casing
+    // (see moreh_norm_program_factory_{nc,h,w}_other.cpp). One define covers both signs: y equals
+    // max|x| for p=+inf and min|x| for p=-inf, so the mask eq(|x| - y, 0) selects the argmax(|x|)
+    // set for +inf and the argmin(|x|) set for -inf without a separate branch.
+    if (std::isinf(p)) {
+        compute_defines.emplace("NORM_INF", "1");
+    }
 
     // Style B: the legacy factory builds a Metal ComputeConfigDescriptor directly, setting only
     // math_fidelity / fp32_dest_acc_en / math_approx_mode; dst_full_sync_en is left at the Metal
