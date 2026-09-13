@@ -31,7 +31,7 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  *      those writes have retired, and only then releases UNPACK/PACK. The release is a RISC store,
  *      so the drain -- not a stall mask -- is what orders it behind the writes.
  *   3. UNPACK/PACK STALLWAIT on CFGEXU, holding unpacker / packer / FPU / SFPU behind any
- *      Configuration Unit work still in flight.
+ *      Configuration Unit work still in flight. A backstop only -- step 2 is the guarantee.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
@@ -51,8 +51,9 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::UNPACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        // Dest-acc CFG is MATH-owned, so this waits on the global Configuration Unit condition,
-        // which covers writes issued by any thread.
+        // Backstop behind the drain in step 2. CFGEXU is Configuration-Unit-idle and core-wide, so
+        // unlike the per-thread TRISC_CFG it can observe MATH's writes; being core-wide it is also
+        // satisfied by unrelated traffic draining, which over-waits but never under-waits.
         TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else if constexpr (thread_id == ThreadId::PackThreadId)
@@ -60,8 +61,9 @@ inline void _llk_set_fp32_dest_acc_(bool enable = false)
         mailbox_write(ThreadId::MathThreadId, fp32_dest_acc::PACK_READY);
         const std::uint32_t math_done = mailbox_read(ThreadId::MathThreadId);
         LLK_ASSERT(math_done == fp32_dest_acc::MATH_DONE, "Unexpected dest-acc message from math thread.");
-        // Dest-acc CFG is MATH-owned, so this waits on the global Configuration Unit condition,
-        // which covers writes issued by any thread.
+        // Backstop behind the drain in step 2. CFGEXU is Configuration-Unit-idle and core-wide, so
+        // unlike the per-thread TRISC_CFG it can observe MATH's writes; being core-wide it is also
+        // satisfied by unrelated traffic draining, which over-waits but never under-waits.
         TTI_STALLWAIT(dest_acc_stall, p_stall::CFGEXU);
     }
     else

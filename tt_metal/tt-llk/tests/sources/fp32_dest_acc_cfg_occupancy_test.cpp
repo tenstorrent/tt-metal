@@ -76,13 +76,23 @@ constexpr std::uint32_t REPLICA_STALL = p_stall::STALL_UNPACK | p_stall::STALL_P
 
 constexpr std::uint32_t PACK_READY = 0x52444902;
 constexpr std::uint32_t MATH_DONE  = 0x444F4E02;
+// Released in place of MATH_DONE when MATH saw an unexpected value. Keeps one write per trial in
+// each direction so both loops still terminate, and lands in PACK's desync count.
+constexpr std::uint32_t MATH_DESYNC = 0x44455302;
 
-constexpr std::uint32_t NUM_OCC      = 4;
-constexpr std::uint32_t OCC_DEPTH[4] = {0, 8, 32, 128};
+// Sizes are derived from the arrays, so a depth added to either sweep cannot desync from the count
+// PACK uses to lay out the result buffer.
+constexpr std::uint32_t OCC_DEPTH[] = {0, 8, 32, 128};
+constexpr std::uint32_t NUM_OCC     = sizeof(OCC_DEPTH) / sizeof(OCC_DEPTH[0]);
 
-constexpr std::uint32_t NUM_DIR     = 4;
-constexpr std::uint32_t DIR_NOPS[4] = {0, 8, 64, 512};
-constexpr std::uint32_t DIR_OCC     = 32; // a depth measured as saturated
+constexpr std::uint32_t DIR_NOPS[] = {0, 8, 64, 512};
+constexpr std::uint32_t NUM_DIR    = sizeof(DIR_NOPS) / sizeof(DIR_NOPS[0]);
+constexpr std::uint32_t DIR_OCC    = 32; // a depth measured as saturated
+
+// MATH's arm list is hand-unrolled because the depths are template arguments. Widening a sweep
+// must fail to compile here rather than leave PACK blocked in mailbox_read on a missing arm.
+static_assert(NUM_OCC == 4, "replica_arm<> list in MATH's run_kernel is unrolled for 4 occupancy depths");
+static_assert(NUM_DIR == 4, "replica_arm<> list in MATH's run_kernel is unrolled for 4 direction points");
 
 // Unrolled at compile time so the zero point interposes nothing of its own. A runtime loop here
 // would measure its own overhead instead of the gap.
@@ -122,7 +132,7 @@ static void replica_arm()
     {
         // Programmed once, outside the measured loop, so none of its own config writes land in the
         // window. Each inner iteration issues loop_op0 and loop_op1.
-        ckernel_template tmpl(1, OCC, TT_OP_NOP);
+        ckernel_template tmpl(1 /*outer_loop_len*/, OCC /*inner_loop_len*/, TT_OP_NOP);
         tmpl.program();
     }
 
@@ -130,22 +140,24 @@ static void replica_arm()
     {
         // Arm the field to its old value and confirm it landed, so a later stale reading can only
         // mean this trial's write has not been processed.
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0 /*val*/);
         tensix_sync();
 
-        if (mailbox_read(ThreadId::PackThreadId) != PACK_READY)
-        {
-            return; // desync; the host sees a zeroed result and fails
-        }
+        // Release unconditionally below, so the two mailbox FIFOs stay balanced whatever is read
+        // here and the arm still terminates. Select the value HERE, ahead of the config writes:
+        // RISC work placed between the writes and the release narrows the window under test -- the
+        // Direction arm below measures exactly that, and a select left at the release site costs
+        // the sweep its depth-8 sensitivity.
+        const std::uint32_t release = (mailbox_read(ThreadId::PackThreadId) == PACK_READY) ? MATH_DONE : MATH_DESYNC;
 
         if constexpr (OCC > 0)
         {
             ckernel_template::run(); // one push, many issued slots
         }
 
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(1);
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(1);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1 /*val*/);
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(1 /*val*/);
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(1 /*val*/);
         TTI_STALLWAIT(REPLICA_STALL, p_stall::TRISC_CFG);
 
         if constexpr (MODE == Mode::DrainBefore)
@@ -155,7 +167,7 @@ static void replica_arm()
 
         risc_nops<RISC_NOPS>();
 
-        mailbox_write(ThreadId::PackThreadId, MATH_DONE);
+        mailbox_write(ThreadId::PackThreadId, release);
 
         if constexpr (MODE == Mode::DrainAfter)
         {
@@ -168,13 +180,10 @@ static void plumbing_arm()
 {
     for (std::uint32_t trial = 0; trial < TRIALS; trial++)
     {
-        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0);
+        cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(0 /*val*/);
         tensix_sync();
-        if (mailbox_read(ThreadId::PackThreadId) != PACK_READY)
-        {
-            return;
-        }
-        mailbox_write(ThreadId::PackThreadId, MATH_DONE);
+        const std::uint32_t release = (mailbox_read(ThreadId::PackThreadId) == PACK_READY) ? MATH_DONE : MATH_DESYNC;
+        mailbox_write(ThreadId::PackThreadId, release);
     }
 }
 
@@ -183,8 +192,8 @@ void run_kernel(RUNTIME_PARAMETERS)
     // ---- SECTION 1: the real function ------------------------------------------------------
     for (std::uint32_t i = 0; i < REAL_TRIALS; i++)
     {
-        _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(true);
-        _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(false);
+        _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(true /*enable*/);
+        _llk_set_fp32_dest_acc_<ThreadId::MathThreadId>(false /*enable*/);
     }
 
     // ---- SECTION 2: the ordering mechanism -------------------------------------------------
@@ -204,14 +213,22 @@ void run_kernel(RUNTIME_PARAMETERS)
     replica_arm<OCC_DEPTH[3], Mode::DrainAfter>();
 
     // Direction: RISC work between the writes and the release, clean then occupied.
-    replica_arm<0, Mode::Shipped, DIR_NOPS[0]>();
-    replica_arm<0, Mode::Shipped, DIR_NOPS[1]>();
-    replica_arm<0, Mode::Shipped, DIR_NOPS[2]>();
-    replica_arm<0, Mode::Shipped, DIR_NOPS[3]>();
+    replica_arm<0 /*OCC*/, Mode::Shipped, DIR_NOPS[0]>();
+    replica_arm<0 /*OCC*/, Mode::Shipped, DIR_NOPS[1]>();
+    replica_arm<0 /*OCC*/, Mode::Shipped, DIR_NOPS[2]>();
+    replica_arm<0 /*OCC*/, Mode::Shipped, DIR_NOPS[3]>();
     replica_arm<DIR_OCC, Mode::Shipped, DIR_NOPS[0]>();
     replica_arm<DIR_OCC, Mode::Shipped, DIR_NOPS[1]>();
     replica_arm<DIR_OCC, Mode::Shipped, DIR_NOPS[2]>();
     replica_arm<DIR_OCC, Mode::Shipped, DIR_NOPS[3]>();
+
+    // Leave the three dest-acc fields as the variant was built. Every replica trial sets them and
+    // only PCK_DEST_RD_CTRL is cleared, by the following trial -- so the last one leaves all three
+    // set, and a later test on a path that skips _llk_math_hw_configure_ would inherit them.
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
+    cfg_reg_rmw_tensix<PCK_DEST_RD_CTRL_Read_32b_data_RMW>(is_fp32_dest_acc_en);
+    tensix_sync();
 }
 
 #endif

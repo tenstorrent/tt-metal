@@ -32,7 +32,11 @@ constexpr std::uint32_t MATH_DONE    = 0x46504110; // 'FPA' | 0x10
  *      so the drain -- not a stall mask -- is what orders it behind the writes, and it is what makes
  *      the writes visible to the released threads.
  *   3. UNPACK/PACK STALLWAIT on TRISC_CFG, holding unpacker / packer / FPU / SFPU behind their own
- *      pending RISC MMIO config writes.
+ *      pending RISC MMIO config writes. Inert on this path -- the condition is per-thread and
+ *      neither thread issues a config write here, so it is already met on arrival. Wormhole has no
+ *      core-wide Configuration-Unit-idle condition to widen it to (Blackhole uses CFGEXU), so the
+ *      drain in step 2 is the whole guarantee. A MATH-owned field added here needs that drain, not
+ *      this stall.
  *
  * @tparam thread_id: TRISC thread compiling this specialization, values = <UnpackThreadId/MathThreadId/PackThreadId>
  * @param enable: MATH only. True to enable FP32 dest accumulation, false to disable.
