@@ -1049,7 +1049,9 @@ class TtIndexer:
         """Select local top-k indices, optionally confined to one loaded subdevice/core grid."""
         metadata_kwargs = {}
         if state.valid_length_tensor is not None:
-            metadata_kwargs.update(valid_length_tensor=state.valid_length_tensor, valid_length_offset=state.valid_length_offset)
+            metadata_kwargs.update(
+                valid_length_tensor=state.valid_length_tensor, valid_length_offset=state.valid_length_offset
+            )
         return ttnn.experimental.topk_large_indices(
             state.logits,
             k=self.index_topk_capacity,
@@ -1093,6 +1095,7 @@ class TtIndexer:
         cache_layer_idx: int = 0,
         index_kv_cache: ttnn.Tensor = None,
         actual_end: int = None,
+        metadata=None,
     ) -> ttnn.Tensor:
         """Sequential compatibility wrapper for direct callers and non-overlapped sparse MLA."""
         state = self.score(
@@ -1105,6 +1108,7 @@ class TtIndexer:
             cache_layer_idx=cache_layer_idx,
             index_kv_cache=index_kv_cache,
             actual_end=actual_end,
+            metadata=metadata,
         )
         local_indices = self.select_local(state)
         return self.finalize_distribution(local_indices, state)

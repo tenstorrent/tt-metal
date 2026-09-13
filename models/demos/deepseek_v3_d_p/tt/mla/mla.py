@@ -1550,6 +1550,7 @@ class ttMLA:
                 cache_layer_idx=cache_layer_idx,
                 index_kv_cache=index_kv_cache,
                 actual_end=actual_end,
+                metadata=metadata,
             )
             indices = None
         else:
@@ -1798,6 +1799,7 @@ class ttMLA:
         cache_batch_idx,
         populated_global,
         seq_len_local,
+        metadata=None,
     ):
         """Run the closed two-program overlap region and return joined branch outputs.
 
@@ -1825,6 +1827,7 @@ class ttMLA:
                 populated_global,
                 block_cyclic_chunk_local=seq_len_local,
                 overlap_resources=resources,
+                metadata=metadata,
             )
         except Exception:
             failed = True
@@ -1852,6 +1855,7 @@ class ttMLA:
         seq_len_local,
         kv_actual_isl,
         actual_end=None,
+        metadata=None,
         **_,
     ):
         """Full-indexer sparse attention with local top-k || SP KV-prefix gather."""
@@ -1863,6 +1867,7 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             seq_len_local=seq_len_local,
             actual_end=actual_end,
+            metadata=metadata,
         )
         indices, kvpe_dev = self._select_and_gather_overlapped(
             selection_state=selection_state,
@@ -1870,6 +1875,7 @@ class ttMLA:
             cache_batch_idx=cache_batch_idx,
             populated_global=populated_global,
             seq_len_local=seq_len_local,
+            metadata=metadata,
         )
         output = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
@@ -2135,20 +2141,18 @@ class ttMLA:
         )
         if self.sp_factor == 1:
             # The native high-bandwidth gather requires multiple devices. Preserve the single-device
-            # behavior, where sparse_sdpa still needs a batch-1 cache. A single-slot cache already has
-            # the required logical shape and can remain in its persistent ND-sharded storage; avoiding
-            # a no-op slice also avoids trying to reinterpret mesh shard coordinates as a per-device
-            # DRAM shard grid. A real multi-slot selection uses the established all-device conversion.
+            # behavior, where sparse_sdpa still needs a batch-1 cache. For a multi-slot cache this
+            # slice creates owned transient storage that the caller releases; for a single-slot cache
+            # it is a no-op alias of the persistent cache and must not be released by the caller.
             if storage.shape[0] == 1:
                 gathered = storage
             else:
-                interleaved = ttnn.to_memory_config(storage, ttnn.DRAM_MEMORY_CONFIG)
                 gathered = ttnn.slice(
-                    interleaved,
+                    storage,
                     [slot_lo, 0, 0, 0],
                     [slot_lo + 1, 1, storage.shape[2], storage.shape[3]],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
-                ttnn.deallocate(interleaved)
         else:
             # Block-cyclic storage is meaningful only in complete SP slabs. The new AG writes each
             # rank's active local prefix into its fixed worst-case slot, retaining the allocation and

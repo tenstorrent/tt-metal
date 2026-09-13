@@ -226,7 +226,8 @@ TopkLargeIndicesDeviceOperation::invoke(
             .sub_core_grid = sub_core_grid,
             .subdevice_manager_id = subdevice_manager_id,
             .resolved_worker_core_grid = resolved_worker_core_grid,
-            .valid_length = valid_length, .valid_length_offset = valid_length_offset},
+            .valid_length = valid_length,
+            .valid_length_offset = valid_length_offset},
         tensor_args_t{.input_tensor = input_tensor, .valid_length_tensor = valid_length_tensor}};
 }
 
