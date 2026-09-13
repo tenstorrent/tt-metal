@@ -131,12 +131,12 @@ def write_chunk_to_packed_ring_cache(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
-    ccl_manager=None,
+    prefill_metadata=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
     chunk = packed_kv if packed_kv.dtype == cache.dtype else ttnn.typecast(packed_kv, cache.dtype)
-    if ccl_manager is not None:
-        slot_t, kv_t = ccl_manager.get_ring_metadata()
+    if prefill_metadata is not None:
+        slot_t, kv_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
             chunk,
@@ -165,6 +165,7 @@ def ring_packed_prefill_attention(
     cache_kv,
     mesh_config,
     ccl_manager,
+    prefill_metadata,
     num_local_kv_heads,
     max_seq_len,
     logical_n,
@@ -192,6 +193,7 @@ def ring_packed_prefill_attention(
         cache_v,
         mesh_config,
         ccl_manager,
+        prefill_metadata,
         num_local_kv_heads,
         GLOBAL_HEAD_DIM,
         max_seq_len,
@@ -237,7 +239,7 @@ def write_chunk_to_ring_cache(
     layer_idx=0,
     num_layers=1,
     slot_idx=0,
-    ccl_manager=None,
+    prefill_metadata=None,
 ):
     """Write this chunk's per-rank K/V into the CP-sharded cache.
 
@@ -253,12 +255,12 @@ def write_chunk_to_ring_cache(
         # carries K/V in bf16, so cast on the way in.
         if chunk.dtype != cache.dtype:
             chunk = ttnn.typecast(chunk, cache.dtype)
-        if ccl_manager is not None:
+        if prefill_metadata is not None:
             # Tensor form: the writer reads slot and prefix length on-device, so the write
             # offset is not baked into runtime args and one captured trace serves every
             # chunk. Same two tensors the ring read uses — they describe the chunk, not
             # the layer, and the host refreshes them once per chunk.
-            slot_t, kv_t = ccl_manager.get_ring_metadata()
+            slot_t, kv_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
                 input=chunk,
@@ -286,6 +288,7 @@ def ring_prefill_attention(
     cache_v,
     mesh_config,
     ccl_manager,
+    prefill_metadata,
     num_local_kv_heads,
     head_dim,
     max_seq_len,
@@ -318,8 +321,6 @@ def ring_prefill_attention(
         # 221.7 at q=128), and q>=256 overflows L1.
         _k_chunk = 128 if sliding_window else 256
         program_config = ring_prefill_program_config(mesh_device, ccl_manager, head_dim, k_chunk_size=_k_chunk)
-    # Shared by every layer; the caller sets them once per chunk via set_ring_metadata.
-    metadata = ccl_manager.get_ring_metadata()
     cp = mesh_config.cp_degree
     cache_seq = ring_cache_seq_len(max_seq_len, cp)
 
@@ -378,8 +379,8 @@ def ring_prefill_attention(
         # to carry moves to kv_cache_num_layers/kv_cache_layer_idx, which the readers
         # combine as slot_id[0]*num_layers + layer_idx — those are constant per layer, so
         # they are safe to keep as host scalars.
-        slot_id=metadata[0],
-        kv_actual_isl_tensor=metadata[1],
+        slot_id=prefill_metadata.slot_idx,
+        kv_actual_isl_tensor=prefill_metadata.kv_actual_global,
         kv_cache_num_layers=num_layers,
         kv_cache_layer_idx=layer_idx,
         sliding_window_size=sliding_window,

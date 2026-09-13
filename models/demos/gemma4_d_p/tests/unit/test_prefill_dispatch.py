@@ -22,7 +22,8 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model.tt_kv_cache = [None, None]
     model._rope_prefill_positions = None
     model.rope_caches_2d = {}
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
+    model.prefill_metadata = object()
     model._packed_global_rope_trans_mat = None
     model._prefill_trace_mode = True
     model._prefill_trace_controller = (
@@ -33,6 +34,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
 
     def layer(idx):
         def forward(x, **kwargs):
+            assert kwargs["prefill_metadata"] is model.prefill_metadata
             assert kwargs["chunk_start_idx"] == 8192
             assert kwargs["rope_mats"] == (idx, idx)
             events.append(("write", idx))
