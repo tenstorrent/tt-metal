@@ -239,7 +239,8 @@ class Gemma4Attention:
                 num_layers=self.ring_num_layers,
                 prefill_metadata=prefill_metadata,
             )
-        cp_ring_ckc = ttnn.init_device_compute_kernel_config(
+
+        sdpa_compute_config = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -260,7 +261,7 @@ class Gemma4Attention:
                 logical_n=ring_logical_n,
                 kv_actual_global=chunk_offset,
                 scale=1.0,
-                compute_kernel_config=cp_ring_ckc,
+                compute_kernel_config=sdpa_compute_config,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )
@@ -280,7 +281,7 @@ class Gemma4Attention:
                 kv_actual_global=chunk_offset,
                 sliding_window=sliding_window_size,
                 scale=1.0,
-                compute_kernel_config=cp_ring_ckc,
+                compute_kernel_config=sdpa_compute_config,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
             )
