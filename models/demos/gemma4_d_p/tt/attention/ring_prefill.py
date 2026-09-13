@@ -260,18 +260,18 @@ def write_chunk_to_ring_cache(
             # the layer, and the host refreshes them once per chunk.
             slot_t, kv_t = ccl_manager.get_ring_metadata()
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache,
-                chunk,
-                slot_t,
-                kv_t,
+                cache=cache,
+                input=chunk,
+                slot_idx=slot_t,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
+                kv_actual_global=kv_t,
                 cluster_axis=mesh_config.cp_axis,
             )
         else:
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-                cache,
-                chunk,
+                cache=cache,
+                input=chunk,
                 slot_idx=slot_idx,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
