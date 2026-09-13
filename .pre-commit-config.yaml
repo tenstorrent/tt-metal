@@ -154,8 +154,8 @@ repos:
       entry: python3 tt_metal/tt-llk/infra/check_cfg_hold_adjacency.py
       language: system
       args: ["--baseline", "tt_metal/tt-llk/infra/cfg_hold_adjacency_baseline.txt"]
-      # Wormhole only: Blackhole and Quasar capture math config into the instruction as it is
-      # accepted, so this shape is not a hazard there. See the script docstring.
+      # Wormhole only. Blackhole captures the fields this check covers in practice at accept,
+      # measured on silicon; the exclusion is per field, not per architecture. See the docstring.
       files: ^tt_metal/tt-llk/tt_llk_wormhole_b0/.*\.(h|hpp)$
 - repo: https://github.com/PyCQA/autoflake
   rev: v2.3.1
