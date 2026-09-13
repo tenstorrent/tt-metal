@@ -77,11 +77,10 @@ TEST(FileRenamerForkSafety, ForkedChildDoesNotReuseParentTempPath) {
         << "); two processes would then contend for, and remove, the same temp object";
 }
 
-TEST(FileRenamerForkSafety, TempPathIsStableWithinAProcess) {
-    // Same process must keep deriving the same temp path, otherwise the
-    // write-temp-then-rename pattern in JitBuildState::compile() breaks.
+TEST(FileRenamerForkSafety, RepeatedTargetsGetDistinctTempPaths) {
+    // JitBuildState retains each invocation's temp paths through compilation and linking.
     const std::filesystem::path target = "trisck.o";
-    EXPECT_EQ(FileRenamer::generate_temp_path(target), FileRenamer::generate_temp_path(target));
+    EXPECT_NE(FileRenamer::generate_temp_path(target), FileRenamer::generate_temp_path(target));
 }
 
 TEST(FileRenamerForkSafety, TempPathKeepsExtensionAndDiffersFromTarget) {

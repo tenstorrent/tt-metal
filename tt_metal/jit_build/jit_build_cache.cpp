@@ -7,42 +7,52 @@
 namespace tt::tt_metal {
 
 bool JitBuildCache::build_once(size_t hash, const std::function<void()>& build_fn) {
-    std::unique_lock<std::mutex> lock(mutex_);
-
     while (true) {
-        auto it = entries_.find(hash);
-        if (it != entries_.end()) {
-            if (it->second == State::Built) {
-                return false;
+        switch (build_once_no_wait(hash, build_fn)) {
+            case BuildOnceStatus::BuiltByCaller: return true;
+            case BuildOnceStatus::AlreadyBuilt: return false;
+            case BuildOnceStatus::InProgress: {
+                std::unique_lock<std::mutex> lock(mutex_);
+                cv_.wait(lock, [&] {
+                    auto it = entries_.find(hash);
+                    return it == entries_.end() || it->second == State::Built;
+                });
+                break;
             }
-            // Another thread is building this hash. Wait and re-check.
-            cv_.wait(lock);
-            continue;
+        }
+    }
+}
+
+JitBuildCache::BuildOnceStatus JitBuildCache::build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = entries_.find(hash); it != entries_.end()) {
+            if (it->second == State::Built) {
+                return BuildOnceStatus::AlreadyBuilt;
+            }
+            return BuildOnceStatus::InProgress;
         }
 
-        // Hash not present -- we are the builder.
         entries_.emplace(hash, State::Building);
-        break;
     }
-
-    lock.unlock();
 
     try {
         build_fn();
     } catch (...) {
-        // Build failed -- remove the entry so subsequent callers can retry.
-        std::lock_guard<std::mutex> guard(mutex_);
-        entries_.erase(hash);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            entries_.erase(hash);
+        }
         cv_.notify_all();
         throw;
     }
 
     {
-        std::lock_guard<std::mutex> guard(mutex_);
+        std::lock_guard<std::mutex> lock(mutex_);
         entries_[hash] = State::Built;
     }
     cv_.notify_all();
-    return true;
+    return BuildOnceStatus::BuiltByCaller;
 }
 
 void JitBuildCache::clear() {

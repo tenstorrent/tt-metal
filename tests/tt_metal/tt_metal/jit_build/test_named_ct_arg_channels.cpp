@@ -15,9 +15,11 @@
 #include <tt-metalium/program_descriptors.hpp>
 
 #include "impl/kernels/kernel.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/build_env_manager.hpp"
 #include "jit_build/jit_build_utils.hpp"
+#include "llrt/rtoptions.hpp"
 #include "mock_blackhole_fixture.hpp"
 
 namespace tt::tt_metal {
@@ -199,6 +201,59 @@ TEST_F(NamedCtArgChannelsMockBlackholeFixture, CrossFieldDuplicateFails) {
         .config = DataMovementConfigDescriptor{},
     };
     EXPECT_THROW(Program program(ProgramDescriptor{.kernels = {kernel}}), std::runtime_error);
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, GeneratedDescriptorsCompileWithDuplicateBuilds) {
+    for (const bool runtime_only : {false, true}) {
+        KernelDescriptor kernel = {
+            .kernel_source = "void kernel_main() {}",
+            .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+            .core_ranges = CoreRange(CoreCoord{0, 0}),
+            .defines = {{"BLAZE_GENERATED_KERNEL", "1"}},
+            .config = DataMovementConfigDescriptor{},
+        };
+        if (runtime_only) {
+            kernel.blaze_named_args.named_common_runtime_args = {{"typed.value", 7}};
+        } else {
+            kernel.blaze_named_args.named_compile_time_args = {{"typed.value", 7}};
+        }
+        ProgramDescriptor descriptor{.kernels = {kernel}};
+        kernel.core_ranges = CoreRange(CoreCoord{1, 0});
+        descriptor.kernels.push_back(kernel);
+        Program program(descriptor);
+        EXPECT_NO_THROW(program.impl().compile(devices_.at(0).get(), false));
+    }
+}
+
+TEST_F(NamedCtArgChannelsMockBlackholeFixture, PlacementFailureDoesNotStartLocalBuilds) {
+    auto* device = devices_.at(0).get();
+    auto& context = MetalContext::instance(extract_context_id(device));
+    if (!context.rtoptions().get_fast_dispatch() ||
+        context.get_dispatch_core_manager().get_dispatch_core_type() != CoreType::WORKER) {
+        GTEST_SKIP() << "Requires a fast-dispatch mock with worker dispatch cores";
+    }
+    const auto& dispatch_cores = context.get_dispatch_query_manager().get_logical_dispatch_cores_on_user_chips();
+    ASSERT_FALSE(dispatch_cores.empty());
+    const auto invalid_core = dispatch_cores.front();
+    const CoreCoord valid_core = invalid_core == CoreCoord{0, 0} ? CoreCoord{1, 0} : CoreCoord{0, 0};
+    for (const bool invalid_first : {false, true}) {
+        KernelDescriptor descriptor{
+            .kernel_source = "void kernel_main() {}",
+            .source_type = KernelDescriptor::SourceType::SOURCE_CODE,
+            .core_ranges = CoreRange(invalid_first ? invalid_core : valid_core),
+            .defines = {{"BLAZE_GENERATED_KERNEL", "1"}},
+            .blaze_named_args = {.named_compile_time_args = {{"typed.value", 8}}},
+            .config = DataMovementConfigDescriptor{},
+        };
+        ProgramDescriptor descriptors{.kernels = {descriptor}};
+        descriptor.core_ranges = CoreRange(invalid_first ? valid_core : invalid_core);
+        descriptors.kernels.push_back(descriptor);
+        Program program(descriptors);
+        EXPECT_THROW(program.impl().compile(device, false), std::runtime_error);
+        EXPECT_TRUE(program.impl().get_kernel(0)->get_full_kernel_name().empty());
+        EXPECT_TRUE(program.impl().get_kernel(1)->get_full_kernel_name().empty());
+        EXPECT_NO_THROW(program.impl().compile(device, true));
+    }
 }
 
 }  // namespace tt::tt_metal

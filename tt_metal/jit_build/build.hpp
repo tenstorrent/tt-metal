@@ -126,7 +126,6 @@ protected:
 
     vector_cache_aligned<std::string> srcs_;
     vector_cache_aligned<std::string> objs_;
-    vector_cache_aligned<std::string> temp_objs_;
 
     std::string extra_link_objs_;
     std::string weakened_firmware_name_;
@@ -160,8 +159,15 @@ protected:
 
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     std::bitset<kMaxBuildBitset> compile(
-        const std::string& out_dir, const JitBuildSettings* settings, bool state_changed) const;
-    void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
+        const std::string& out_dir,
+        const JitBuildSettings* settings,
+        bool state_changed,
+        std::span<const std::string> temp_objs) const;
+    void compile_one(
+        const std::string& out_dir,
+        const JitBuildSettings* settings,
+        size_t src_index,
+        const std::string& temp_obj) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;
@@ -225,6 +231,10 @@ void sync_build_steps(std::vector<std::shared_future<void>>& events);
 // Returns immediately if hash was already built.
 // If build_fn throws, subsequent callers will retry.
 void jit_build_once(size_t hash, const std::function<void()>& build_fn);
+
+// Like jit_build_once(), but returns false instead of occupying the caller while
+// another thread builds the same hash.
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();

@@ -477,7 +477,6 @@ void JitBuildEnv::init(
     hasher.update(cflags_);
     hasher.update(lflags_);
     hasher.update(defines_);
-
     if (get_rtoptions().get_build_map_enabled()) {
         // Do not hash compiler version when generating compiler logs
         // so that we may compare them between different compilers
@@ -583,7 +582,6 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     for (const string& src : srcs_) {
         fs::path obj_path = fs::path(src).filename().replace_extension(".o");
         this->objs_.push_back(obj_path.string());
-        this->temp_objs_.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj_path));
     }
 
     // Prepend root path to srcs, but not to outputs (objs) due to device dependency.
@@ -749,7 +747,8 @@ void JitBuildState::write_reuse_cache(std::string_view kernel_name) const {
     write_build_state_hash(out_dir);
 }
 
-void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
+void JitBuildState::compile_one(
+    const string& out_dir, const JitBuildSettings* settings, size_t src_index, const string& temp_obj) const {
     TTZoneScopedD(JIT);
 
     // Use the shared recipe and argv builder to pass defines verbatim without shell escaping.
@@ -796,7 +795,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];
-    const std::string obj_temp_path = out_dir + this->temp_objs_[src_index];
+    const std::string obj_temp_path = out_dir + temp_obj;
     const std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
 
     std::vector<std::string> args = tt::jit_build::utils::build_gpp_argv(
@@ -835,7 +834,10 @@ bool JitBuildState::need_compile(const string& out_dir, const string& obj) const
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
+    const string& out_dir,
+    const JitBuildSettings* settings,
+    bool state_changed,
+    std::span<const string> temp_objs) const {
     TTZoneScopedD(JIT);
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
@@ -848,7 +850,9 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (state_changed || need_compile(out_dir, this->objs_[i])) {
             compiled.set(i);
-            launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
+            launch_build_step(
+                [this, &out_dir, settings, i, temp_objs] { this->compile_one(out_dir, settings, i, temp_objs[i]); },
+                events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
             BuildCacheTelemetry::inst().record_cache_hit();
@@ -1005,8 +1009,14 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     }
 
+    vector_cache_aligned<string> temp_objs;
+    temp_objs.reserve(this->objs_.size());
+    for (const string& obj : this->objs_) {
+        temp_objs.push_back(jit_build::utils::FileRenamer::generate_temp_path(obj));
+    }
+
     static auto& tok_compile = BuildCacheTelemetry::inst().get_or_register_metric("JitBuildState::compile");
-    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed); });
+    auto compiled = record_elapsed(tok_compile, [&] { return compile(out_dir, settings, state_changed, temp_objs); });
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -1016,7 +1026,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
         uint32_t reused_objs = 0;
         for (size_t i = 0; i < num_objs; ++i) {
-            auto temp_obj = out_dir + this->temp_objs_[i];
+            auto temp_obj = out_dir + temp_objs[i];
             if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
                 // 1. There is no guarantee that another process will not rename its compiled object to this .o during
@@ -1077,7 +1087,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         fs::path src_path = out_dir;
         fs::path dst_path = out_dir;
         for (size_t i = 0; i < num_objs; ++i) {
-            src_path.replace_filename(this->temp_objs_[i]);
+            src_path.replace_filename(temp_objs[i]);
             dst_path.replace_filename(this->objs_[i]);
             if (compiled.test(i)) {
                 fs::rename(src_path, dst_path);
@@ -1247,6 +1257,16 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
     if (!JitBuildCache::inst().build_once(hash, build_fn)) {
         BuildCacheTelemetry::inst().record_jit_once_dedup();
     }
+}
+
+bool jit_build_once_no_wait(size_t hash, const std::function<void()>& build_fn) {
+    const auto status = JitBuildCache::inst().build_once_no_wait(hash, build_fn);
+    // In-progress callers join through jit_build_once() after their Program's
+    // worker tasks drain, so that blocking join records the dedup exactly once.
+    if (status == JitBuildCache::BuildOnceStatus::AlreadyBuilt) {
+        BuildCacheTelemetry::inst().record_jit_once_dedup();
+    }
+    return status != JitBuildCache::BuildOnceStatus::InProgress;
 }
 
 void jit_build_cache_clear() {

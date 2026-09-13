@@ -309,6 +309,19 @@ KernelCompileDescriptor build_kernel_descriptor(
     return desc;
 }
 
+void generate_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env) {
+    try {
+        jit_build_genfiles_descriptors(build_env.build_env, build_options);
+        kernel->generate_binaries(device, build_options);
+    } catch (std::runtime_error& ex) {
+        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+    }
+}
+
 std::string ensure_kernel_binaries(
     const std::shared_ptr<Kernel>& kernel,
     IDevice* device,
@@ -332,16 +345,10 @@ std::string ensure_kernel_binaries(
         }
     }
 
-    jit_build_once(kernel_hash, [&] {
-        try {
-            jit_build_genfiles_descriptors(build_env.build_env, build_options);
-            kernel->generate_binaries(device, build_options);
-        } catch (std::runtime_error& ex) {
-            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-        }
-    });
+    jit_build_once(kernel_hash, [&] { generate_kernel_binaries(kernel, device, build_options, build_env); });
     return build_env.build_env.get_out_kernel_root_path();
 }
+
 }  // namespace
 
 namespace experimental {
@@ -2964,14 +2971,37 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         }
     } else {
         // Local path: parallel build via thread pool.
+        // Reject invalid placements before workers can capture this call's build state.
+        for (const auto& kernels : kernels_) {
+            for (const auto& [id, kernel] : kernels) {
+                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
+            }
+        }
+        std::mutex deferred_mutex;
+        std::vector<std::tuple<std::shared_ptr<Kernel>, JitBuildOptions, size_t>> deferred;
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                validate_kernel_placement(force_slow_dispatch, kernel, device->build_id());
                 launch_build_step(
                     [&, kernel] {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
+                        const auto generated = kernel->defines().find("BLAZE_GENERATED_KERNEL");
+                        const bool defer_duplicate =
+                            generated != kernel->defines().end() && generated->second == "1" &&
+                            (!kernel->named_ct_arg_namespaces().empty() ||
+                             !kernel->named_runtime_arg_namespaces().empty()) &&
+                            kernel->get_kernel_programmable_core_type() == HalProgrammableCoreType::TENSIX &&
+                            !kernel->precompiled_config().has_value();
+                        if (defer_duplicate && !jit_build_once_no_wait(kernel_hash, [&] {
+                                generate_kernel_binaries(kernel, device, build_options, build_env);
+                            })) {
+                            std::lock_guard<std::mutex> lock(deferred_mutex);
+                            deferred.emplace_back(kernel, std::move(build_options), kernel_hash);
+                            return;
+                        }
                         const std::string binary_root =
-                            ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                            defer_duplicate
+                                ? build_env.build_env.get_out_kernel_root_path()
+                                : ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
@@ -2980,6 +3010,14 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             }
         }
         sync_build_steps(events);
+        // Join duplicate owners only after this Program's productive tasks release their executor slots.
+        for (auto& [kernel, build_options, kernel_hash] : deferred) {
+            const std::string binary_root =
+                ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+            kernel->read_binaries(device, binary_root);
+            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
+        }
     }
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);

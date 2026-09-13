@@ -21,6 +21,8 @@ namespace tt::tt_metal {
 // Used to deduplicate both kernel and firmware JIT builds across threads.
 class JitBuildCache {
 public:
+    enum class BuildOnceStatus { BuiltByCaller, AlreadyBuilt, InProgress };
+
     static JitBuildCache& inst() {
         static JitBuildCache instance;
         return instance;
@@ -32,6 +34,9 @@ public:
     // Returns false (without calling build_fn) if hash was already built.
     // If build_fn throws, the entry is removed so subsequent callers can retry.
     bool build_once(size_t hash, const std::function<void()>& build_fn);
+
+    // Start the build when unowned, but never wait for another caller's build.
+    BuildOnceStatus build_once_no_wait(size_t hash, const std::function<void()>& build_fn);
 
     // Clear completed entries. After clear(), the next build_once() for any hash
     // will re-execute the build function.

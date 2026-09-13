@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <filesystem>
 #include <span>
@@ -106,7 +107,7 @@ public:
 private:
     std::string temp_path_;
     std::string target_path_;
-    static uint64_t unique_id_;
+    static std::atomic<uint64_t> unique_id_;
 };
 
 }  // namespace tt::jit_build::utils
