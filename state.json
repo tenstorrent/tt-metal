@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": 34729562028,
-    "timestamp": "2026-09-13T01:06:00Z"
+    "run_id": 34743275704,
+    "timestamp": "2026-09-13T06:42:00Z"
   },
-  "run_id": 34729562028,
+  "run_id": 34743275704,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -124,7 +124,8 @@
       "title": "fix(llk): scale strided-pack per-tile index by stride_size_tiles on Quasar",
       "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally",
       "note_correction": "PR that fixes issue 56194 is actually numbered 56195, not 56194; corrected 2026-09-13"
-    }
+    },
+    "56383": "fix for issue #56383 (pow_bw ltz vs lez mismatch), opened 2026-09-13"
   },
   "issues_labeled": [
     "52178:bug",
@@ -360,7 +361,8 @@
     "54690": "Now has 4 approvals (bbradelTT, wenbinlyuTT, mcw-anasuya, vtsilytskyiTT). CI green (217 checks). Need to confirm 4th approval covers previously-missing metalium-developers-ttnn-core CodeOwners group. Checked 2026-08-31.",
     "54932": "replied to contributor naufalfx805-source's test-coverage follow-up analysis; endorsed separate follow-up PR",
     "55435": "RTL Sim CI still failure but parent workflow run 33846253050 conclusion is action_required (not failure) - likely gating/approval issue not code issue; job logs still 404; mergeable_state now behind; needs maintainer, no fix pushed",
-    "55933": "confirmed bug, awaiting fix PR (community reporter has branch)"
+    "55933": "confirmed bug, awaiting fix PR (community reporter has branch)",
+    "56195": "RTL Sim CI test failing since 2026-09-11 (job log retrieval 404s in this sandbox via get_job_logs/actions_get - endpoints return 404 for both run_id and job_id); needs maintainer to inspect directly. Other checks (Cycode x4) green."
   },
   "sfpu_clamp_family": {
     "note": "Family in #52178 (kinginu). Still open no-PR: erfc #51137, digamma #51128, snake_beta #51116. sin/cos #51845 blocked. softplus #51866 has PR #51868 pending gate. lgamma z=0.75 boundary #53046 has PR #53047 pending, overlaps #51991.",
@@ -823,6 +825,21 @@
       "last_ping": "2026-09-13",
       "type": "author_checkin",
       "note": "[Quasar] migrate fill into unified unary test, mergeable_state=dirty, never previously nudged"
+    },
+    "49104": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "blocked mergeable_state, pending pre-commit review feedback since early Sept, never previously nudged"
+    },
+    "49724": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, needs rebase, never previously nudged"
+    },
+    "49827": {
+      "date": "2026-09-13",
+      "type": "author_checkin",
+      "note": "dirty mergeable_state, needs rebase, never previously nudged"
     }
   },
   "backlog_cursor": {
@@ -843,7 +860,8 @@
     "task6_2026_09_11b": "nudged 3 never-pinged non-draft stale PRs (23234 codeowners, 44787/44765 author) from oldest-updated search; next run continue scanning further down the non-draft list (page2+)",
     "task1_task2_2026_09_12": "reviewed newest issues 56312 down to 56120; labeled+commented 56120 (bug) and 56239 (performance monitoring); confirmed 56295/56233/56304/56275/56298/56231/56230 covered or no-action; next run continue below 56120 (56167/56122 area onward, previously scanned range starts ~55971 so gap 56120-55971 still needs a look)",
     "task1_task2_2026_09_12b": "reviewed previously-flagged gap 55944-56119 for coverage: confirmed 56068 covered by open PR #56198, 55996 covered by open PR #55997, 55744 already fixed+merged via #55938 (moved to covered_no_duplicate); investigated 55988 (BH tilize tall-narrow assert) but could not conclusively pin the defect in the work-split/buffer-set interaction (traced split_blocks_for_tilize_wh / buffer_set_for_core / make_block_plan across work_split_tilize.hpp and common.cpp), left unlabeled/uncommented rather than guess; other gap issues (56100/56096/56090/55957/55953) already correctly labeled, no dup PR found, no new action. Next run continue below 55944 or re-attempt 55988 root cause with more budget.",
-    "task1_task2_2026_09_12c": "reviewed pages 2-4 of newest-created issue list (56133 down through 55587); all already covered/labeled from prior runs except 55664 (confirmed covered by open PR #55807, no dup) and 55749/55705/55672 (KV-cache TP sharding proposal, Quasar re-init guard proposal, semaphore-alignment infra proposal - all design/feature proposals, no confirmed defect, correctly left unlabeled). Next run continue scanning below #55587 (page5+)."
+    "task1_task2_2026_09_12c": "reviewed pages 2-4 of newest-created issue list (56133 down through 55587); all already covered/labeled from prior runs except 55664 (confirmed covered by open PR #55807, no dup) and 55749/55705/55672 (KV-cache TP sharding proposal, Quasar re-init guard proposal, semaphore-alignment infra proposal - all design/feature proposals, no confirmed defect, correctly left unlabeled). Next run continue scanning below #55587 (page5+).",
+    "task1_task2_2026_09_13": "reviewed newest issues 56390 down to 55929 (page1) + 55928 down to 55443 (page2, continuing from prior cursor #55587); confirmed #56348 already covered by open PR #56375 (opened last run); investigated and fixed #56383 (ttnn.pow_bw lez vs ltz mismatch, confirmed against golden in unary_backward.py, opened fix PR); labeled #55541 infra-ci (/codeowners mixed team+individual handling, confirmed as real defect); reviewed #56385 (bitwise_right_shift sign-propagation, plausible but not yet verified against kernel source - candidate for next run), #56371 (moreh_softmin all-zero on inf, candidate for next run - needs kernel investigation), #55571/#55539 (test-coverage tracking issues, no defect, left unlabeled). Next run continue below #55443 or investigate #56385/#56371 root causes."
   },
   "labeled_issues": {
     "53866": {
@@ -1104,7 +1122,8 @@
       "date": "2026-09-11",
       "note": "moreh_norm_backward p=+/-inf UB, root cause confirmed against current source"
     },
-    "56323": "bug (front-padding silently ignored in single-core row-major pad factory, confirmed against pad_rm_reader_writer_program_factory.cpp)"
+    "56323": "bug (front-padding silently ignored in single-core row-major pad factory, confirmed against pad_rm_reader_writer_program_factory.cpp)",
+    "55541": "infra-ci"
   },
   "issues_commented": {
     "53922": {
@@ -1146,6 +1165,11 @@
     "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened"
   },
   "run_history": [
+    {
+      "run_id": "34743275704",
+      "date": "2026-09-13T06:42:00Z",
+      "summary": "Task3: investigated candidate issue #56383 (ttnn.pow_bw returns +inf at input==0, disagreeing with its own registered golden); confirmed root cause against current unary_backward.cpp (ttnn::lez) vs unary_backward.py golden (input < 0, strict); opened fix PR changing lez->ltz; commented on issue with root cause + fix summary. Task1/2: reviewed newest issues 56390 down through 55443 (pages 1-2, continuing from prior cursor #55587); confirmed #56348 already covered by PR #56375 (opened previous run); labeled #55541 infra-ci (/codeowners command mishandles mixed team+individual CODEOWNERS entries, confirmed real defect); reviewed #56385 (bitwise_right_shift) and #56371 (moreh_softmin) as plausible-looking bug reports but did not commit to labeling without deeper kernel verification - deferred to next run; #55571/#55539 are test-coverage tracking issues, no defect. Task5: checked CI on 14 tracked repo-assist PRs via get_check_runs - all green except #56195 (RTL Sim CI test failing since 09-11, could not retrieve job logs via get_job_logs/actions_get in this sandbox - both 404, flagged for maintainer) and #55435 (pre-existing RTL Sim failure, already known). Task6: nudged 3 never-pinged stale non-repo-assist PRs: #49104 (blocked, pending pre-commit feedback), #49724 (dirty), #49827 (dirty). Task8: rewrote monthly summary #55015 (had regrown to ~68KB with duplicated Run History sections) to trimmed canonical format with refreshed suggested actions including new PR #56375 and #56195's new CI failure."
+    },
     {
       "run_id": "34729562028",
       "date": "2026-09-13T01:06:00Z",
