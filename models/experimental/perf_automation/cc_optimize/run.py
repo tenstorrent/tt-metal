@@ -3694,7 +3694,6 @@ def _run_device_proc(
     _lm = _pr.LOW_MEM_REFERENCE_ENV
     if _lm not in env and _pr.should_use_low_mem_reference():
         env[_lm] = "1"
-
     _obs_t0 = time.monotonic()
     _therm = _thermal_watch_new()
     _piped = bool(capture or stall_s)
@@ -3708,6 +3707,7 @@ def _run_device_proc(
         start_new_session=True,
         preexec_fn=memory_cap_preexec_fn(),
     )
+    _mp = _pr.memory_pressure_watch_new()
     rc, out = None, ""
     try:
         if stall_s:
@@ -3778,6 +3778,7 @@ def _run_device_proc(
             while proc.poll() is None:
                 time.sleep(5)
                 _thermal_watch_sample(_therm, label)
+                _pr.memory_pressure_watch_sample(_mp, label)
                 # ABOVE THE ABORT LINE, END THE CHILD RATHER THAN WATCH IT COOK. The ceiling holds
                 # work at a boundary; inside one long job there is no boundary to hold at, and the
                 # board did 75C -> 95C with none available on 2026-08-29. Raising the same exception

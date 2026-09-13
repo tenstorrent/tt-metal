@@ -1365,6 +1365,7 @@ def _execute(
         _over_budget = [False]
         poll = 5.0
         _therm = _thermal_watch_new()
+        _mempress = memory_pressure_watch_new()
         while True:
             try:
                 rc = proc.wait(timeout=poll)
@@ -1383,6 +1384,7 @@ def _execute(
             except subprocess.TimeoutExpired:
                 pass
             _thermal_watch_sample(_therm, _therm_label)
+            memory_pressure_watch_sample(_mempress, _therm_label)
             now = time.monotonic()
             try:
                 size = log_path.stat().st_size
@@ -2149,6 +2151,58 @@ def available_memory_gb():
     return None
 
 
+def _own_pressure_cgroup_path():
+    """The cgroup directory whose memory.pressure best represents what systemd-oomd would act on
+    for this process, found by walking /proc/self/cgroup -- never a hardcoded UID/session name, so
+    this resolves correctly under whatever account and login mechanism this tool happens to run
+    under. Prefers `user@<uid>.service`: measured on this box, that is the exact unit systemd-oomd
+    killed on 2026-09-12 ("memory pressure for .../user@1000.service being 52.33% > 50.00%"). Not
+    every login nests there, though -- some sessions here sit in a sibling `session-N.scope`
+    instead with no `user@.service` ancestor at all -- so this falls back to the process's own
+    immediate cgroup rather than reporting nothing: a leaf cgroup's own pressure still reflects
+    reclaim activity THIS process is causing, even when it is not the exact unit some other kill
+    policy is watching."""
+    try:
+        raw = Path("/proc/self/cgroup").read_text().strip()
+        path = raw.split("::", 1)[-1] if "::" in raw else raw
+        parts = [p for p in path.split("/") if p]
+        if not parts:
+            return None
+        for i, p in enumerate(parts):
+            if re.fullmatch(r"user@\d+\.service", p):
+                return Path("/sys/fs/cgroup").joinpath(*parts[: i + 1])
+        return Path("/sys/fs/cgroup").joinpath(*parts)  # fallback: this process's own leaf cgroup
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def memory_pressure_percent():
+    """This process's user-session memory pressure ('some avg10', as a percentage), read from the
+    SAME cgroup systemd-oomd itself polices -- or None if it cannot be read (no PSI, not cgroup v2,
+    no systemd user session).
+
+    THE KILL THIS SIGNAL EXPLAINS. 2026-09-12: systemd-oomd -- a separate watchdog from the kernel's
+    own OOM-killer, and invisible to a dmesg-only check -- killed an ENTIRE optimize run's tmux
+    session (10 processes, including the orchestrator) because /user.slice/.../user@1000.service's
+    memory pressure held above 50% for over 20s with reclaim activity. available_memory_gb() cannot
+    see this coming: the box can show plenty of MemAvailable at LAUNCH and still build sustained
+    pressure minutes into a run, which is exactly what a pre-launch check cannot catch.
+    """
+    d = _own_pressure_cgroup_path()
+    if d is None:
+        return None
+    try:
+        for line in (d / "memory.pressure").read_text().splitlines():
+            if line.startswith("some "):
+                for tok in line.split():
+                    if tok.startswith("avg10="):
+                        return float(tok.split("=", 1)[1])
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def memory_cap_preexec_fn(margin_gb: float = None):
     """Historically returned a `preexec_fn` that capped the CHILD's own virtual address space via
     RLIMIT_AS, sized off available memory at launch. Retired on 2026-09-11: RLIMIT_AS limits total
@@ -2162,6 +2216,45 @@ def memory_cap_preexec_fn(margin_gb: float = None):
     (post-failure retry) -- neither one touches the process's address space.
     """
     return None
+
+
+_MEM_PRESSURE_WATCH_REPORT_S = 60.0
+_MEM_PRESSURE_WARN_PCT = float(os.environ.get("PERF_MCP_MEM_PRESSURE_WARN_PCT", "35") or "35")
+
+
+def memory_pressure_watch_new() -> dict:
+    """Fresh state for memory_pressure_watch_sample: when it last reported a crossing. Same shape
+    as cc_optimize.run's _thermal_watch_new -- one state dict, sampled from a caller's own poll loop."""
+    return {"last_report": 0.0}
+
+
+def memory_pressure_watch_sample(state: dict, label: str = "") -> None:
+    """Record sustained memory pressure WHILE a device subprocess is in flight -- the same gap
+    cc_optimize.run's _thermal_watch_sample closes for heat, for the resource that killed an entire
+    optimize run's session (not just one process) on 2026-09-12: systemd-oomd, invisible to a
+    dmesg-only check, kills the WHOLE user-session cgroup once memory_pressure_percent() holds
+    above 50% for over 20s -- a threshold available_memory_gb() cannot see coming, because it
+    depends on what the process does AFTER it launches, not on conditions at launch.
+
+    This cannot stop that kill -- freezing a process that holds the device risks a wedge, the same
+    reasoning _thermal_watch_sample already documents for heat -- so, like that function, it only
+    makes the risk visible in this tool's OWN log before it happens, rather than the run vanishing
+    with systemd's kill as the only record.
+    """
+    now = time.monotonic()
+    if now - float(state.get("last_report") or 0.0) < _MEM_PRESSURE_WATCH_REPORT_S:
+        return
+    pct = memory_pressure_percent()
+    if pct is None or pct < _MEM_PRESSURE_WARN_PCT:
+        return
+    print(
+        "  [memory-pressure-watch] %s: sustained memory pressure at %.1f%% (systemd-oomd can kill "
+        "this whole session's cgroup above 50%% for >20s) -- device work in flight, cannot safely "
+        "stop it" % (label or "device work", pct),
+        file=sys.stderr,
+        flush=True,
+    )
+    state["last_report"] = now
 
 
 # THE STANDARD SIGNAL a model is expected to respect when its reference/golden build must shrink its

@@ -236,6 +236,78 @@ def test_should_use_low_mem_reference_respects_the_escape_hatch(monkeypatch, pro
     assert probes.should_use_low_mem_reference() is False
 
 
+# ---------------------------------------------- sustained memory PRESSURE, a separate kill path
+#
+# RUN, 2026-09-12. systemd-oomd -- a userspace watchdog separate from the kernel's own OOM-killer,
+# and invisible to a dmesg-only check -- killed an entire optimize run's session (10 processes,
+# including the orchestrator) because /user.slice/.../user@1000.service's memory pressure held
+# above 50% for over 20s. available_memory_gb() cannot see this coming: the box can show plenty
+# free at LAUNCH and still build pressure minutes into a run.
+
+
+def test_memory_pressure_percent_reads_a_real_value_or_none(probes):
+    val = probes.memory_pressure_percent()
+    assert val is None or val >= 0.0
+
+
+def test_pressure_cgroup_path_falls_back_to_the_process_own_leaf(probes):
+    """Not every login nests under user@<uid>.service (some sessions on this box sit in a sibling
+    session-N.scope with no such ancestor, confirmed live) -- the walk must not just give up in
+    that case. Exercised against the REAL /proc/self/cgroup rather than a mock: this process's own
+    cgroup on this box IS one of the no-user@.service logins, so this is the real fallback path,
+    not a simulated one."""
+    path = probes._own_pressure_cgroup_path()
+    assert path is not None, "must fall back to this process's own leaf cgroup, not give up"
+
+
+def test_a_healthy_pressure_reading_does_not_warn(monkeypatch, probes, capsys):
+    monkeypatch.setattr(probes, "memory_pressure_percent", lambda: 2.0)
+    state = probes.memory_pressure_watch_new()
+    probes.memory_pressure_watch_sample(state, "device work")
+    assert state["last_report"] == 0.0
+    assert "memory-pressure-watch" not in capsys.readouterr().err
+
+
+def test_sustained_pressure_warns_once_per_report_window(monkeypatch, probes, capsys):
+    monkeypatch.setattr(probes, "memory_pressure_percent", lambda: 45.0)
+    state = probes.memory_pressure_watch_new()
+    probes.memory_pressure_watch_sample(state, "device work")
+    err = capsys.readouterr().err
+    assert "memory-pressure-watch" in err and "45.0%" in err
+    assert state["last_report"] != 0.0
+    # a second sample inside the report window must not re-print
+    probes.memory_pressure_watch_sample(state, "device work")
+    assert capsys.readouterr().err == ""
+
+
+def test_unreadable_pressure_is_not_a_reason_to_warn(monkeypatch, probes, capsys):
+    monkeypatch.setattr(probes, "memory_pressure_percent", lambda: None)
+    state = probes.memory_pressure_watch_new()
+    probes.memory_pressure_watch_sample(state, "device work")
+    assert state["last_report"] == 0.0
+    assert capsys.readouterr().err == ""
+
+
+def test_run_device_proc_samples_pressure_too():
+    """Same funnel as the thermal/low-mem-reference gates: one call site, so this covers every
+    device-touching subprocess run.py launches."""
+    import inspect
+
+    import models.experimental.perf_automation.cc_optimize.run as R
+
+    src = inspect.getsource(R._run_device_proc)
+    assert "memory_pressure_watch_new" in src and "memory_pressure_watch_sample" in src
+
+
+def test_execute_samples_pressure_too(probes):
+    """The OTHER streaming launcher (agent.probes._execute, used by perf_test_gen's generated-test
+    validation) needs the same watch -- it is the exact path that had NEITHER gate before today."""
+    import inspect
+
+    src = inspect.getsource(probes._execute)
+    assert "memory_pressure_watch_new" in src and "memory_pressure_watch_sample" in src
+
+
 def test_a_loaded_box_sets_the_signal_before_the_first_attempt(monkeypatch, probes):
     """THE ACTUAL GAP: on a box already below the margin, the FIRST call must already see the
     signal -- not just a retry after it fails once for nothing."""
