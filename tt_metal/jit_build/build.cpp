@@ -187,6 +187,163 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
     }
 }
 
+// Opt-in: each distinct operation prefix adds a large PCH to the cache.
+bool operation_pch_enabled() { return tt::parse_env<bool>("TT_METAL_BLAZE_OPERATION_PCH", false); }
+
+std::string read_text(const fs::path& path) {
+    auto bytes = jit_build::utils::read_file_bytes(path.string());
+    return {bytes.begin(), bytes.end()};
+}
+
+void write_text_atomic(const fs::path& path, std::string_view text) {
+    auto temp = jit_build::utils::FileRenamer::generate_temp_path(path);
+    std::ofstream file(temp);
+    file << text;
+    file.close();
+    TT_FATAL(!file.fail(), "Failed to write {}", temp);
+    fs::rename(temp, path);
+}
+
+// Precompile the Blackhole firmware prefix and the operation source up to `// BLAZE_OPERATION_PCH_END`.
+// Kernels that share both reuse one PCH; their argument values, kernel name and constexpr CB
+// definitions are force-included after it.
+// Returns the PCH's dependency-hash file, or empty when this compile does not use a prefix PCH.
+std::string prepare_prefix_pch(
+    const JitBuildEnv& env,
+    const std::string& source,
+    const std::string& target,
+    const std::string& out_dir,
+    const std::string& operation_source,
+    std::vector<std::string>& args) {
+    if (env.get_arch() != tt::ARCH::BLACKHOLE || env.get_rtoptions().get_build_map_enabled() ||
+        env.get_rtoptions().get_jit_analytics_enabled() || env.get_rtoptions().get_watcher_enabled() ||
+        env.get_rtoptions().get_sanitizer_settings().enabled) {
+        return {};
+    }
+    const auto filename = fs::path(source).filename();
+    const bool compute = filename == "trisck.cc";
+    if (!compute && filename != "brisck.cc" && filename != "ncrisck.cc") {
+        return {};
+    }
+    // GCC only loads a PCH as the first include, so skip compiles that already force-include a
+    // header (the legacy argument map) or run through a compiler launcher.
+    if (fs::path(args.front()).filename() != "riscv-tt-elf-g++" ||
+        std::find(args.begin(), args.end(), "-include") != args.end()) {
+        return {};
+    }
+    // Drop build_gpp_argv's compile tail: -c -o <obj> <src> -MF <dep>.
+    auto prefix_args = std::vector<std::string>(args.begin(), args.end() - 6);
+    // The kernel name differs per kernel, so define it after the PCH instead.
+    constexpr std::string_view name_flag = "-DFULL_KERNEL_NAME=";
+    auto name = std::find_if(
+        prefix_args.begin(), prefix_args.end(), [&](const auto& arg) { return arg.starts_with(name_flag); });
+    TT_FATAL(name != prefix_args.end(), "Missing generated kernel name");
+    const std::string name_definition = "#define FULL_KERNEL_NAME " + name->substr(name_flag.size()) + "\n";
+    prefix_args.erase(name);
+
+    auto operation_prefix = read_text(operation_source);
+    const auto end = operation_prefix.find("// BLAZE_OPERATION_PCH_END");
+    TT_FATAL(end != std::string::npos, "Missing operation PCH boundary in {}", operation_source);
+    operation_prefix.resize(end);
+    // Normalized: the boundary check below compares it with normalized dependency paths.
+    const auto generated_dir = fs::path(out_dir).lexically_normal().parent_path().parent_path();
+    std::string compute_body;
+    std::string compute_body_name;
+    std::string prefix = read_text(source);
+    const auto boundary = prefix.find(
+        compute                   ? "#include \"chlkc_list.h\""
+        : filename == "brisck.cc" ? "#include <kernel_includes.hpp>"
+                                  : "#include \"kernel_includes.hpp\"");
+    TT_FATAL(boundary != std::string::npos, "Missing firmware prefix boundary in {}", source);
+    prefix.resize(boundary);
+    // Keep __FILE__/__LINE__ (profiler zones, DPRINT, diagnostics) pointing at the original sources.
+    prefix = fmt::format("#line 1 \"{}\"\n", source) + prefix;
+    operation_prefix = fmt::format("#line 1 \"{}\"\n", operation_source) + operation_prefix;
+    if (compute) {
+        const std::string part = target == "trisc0" ? "unpack" : target == "trisc1" ? "math" : "pack";
+        const std::string define = target == "trisc0"   ? "TRISC_UNPACK"
+                                   : target == "trisc1" ? "TRISC_MATH"
+                                                        : "TRISC_PACK";
+        compute_body_name = "chlkc_" + part + ".cpp";
+        compute_body = "#define " + define + "\n" + read_text(generated_dir / "defines_generated.h") + operation_prefix;
+        // Keep chlkc_list's original nesting: compute/common includes it recursively.
+        // Its cached body stops before per-kernel aliases; the real body follows the PCH.
+        prefix += "void kernel_main();\n#include \"chlkc_list.h\"\n";
+    } else {
+        prefix += operation_prefix;
+    }
+    const auto cb = read_text(generated_dir / "chlkc_descriptors_declarations.h");
+    tt::StableHasher hasher;
+    hasher.update("blaze-operation-pch-v1");
+    hasher.update(prefix.size());
+    hasher.update(prefix);
+    hasher.update(cb.size());
+    hasher.update(cb);
+    hasher.update(compute_body.size());
+    hasher.update(compute_body);
+    for (const auto& arg : prefix_args) {
+        hasher.update(arg.size());
+        hasher.update(arg);
+    }
+    const fs::path directory = fs::path(env.get_out_kernel_root_path()).parent_path().parent_path() / "prefix-pch" /
+                               std::to_string(hasher.digest());
+    const auto header = directory / "prefix.hpp";
+    const auto pch = directory / "prefix.hpp.gch";
+    const auto dephash = directory / "prefix.hpp.gch.dephash";
+    // Include the cache root in build ownership: independent cold roots cannot share completion.
+    tt::StableHasher owner;
+    owner.update("blaze-operation-pch-owner-v1");
+    owner.update(directory.string());
+    JitBuildCache::inst().build_once(owner.digest(), [&] {
+        if (!env.get_rtoptions().get_force_jit_compile() && fs::exists(pch) &&
+            jit_build::dependencies_up_to_date_file(dephash.string()) &&
+            (!env.get_rtoptions().get_profiler_enabled() || fs::exists(directory / "build.log"))) {
+            return;
+        }
+        fs::create_directories(directory);
+        write_text_atomic(header, prefix);
+        write_text_atomic(directory / "chlkc_descriptors.h", cb);
+        if (compute) {
+            write_text_atomic(directory / compute_body_name, compute_body);
+        }
+        const auto temp = jit_build::utils::FileRenamer::generate_temp_path(pch);
+        const auto dep = fs::path(temp).replace_extension(".d").string();
+        const auto log = temp + ".log";
+        auto build_args = prefix_args;
+        build_args.insert(build_args.begin() + 1, "-I" + directory.string());
+        build_args.insert(build_args.end(), {"-x", "c++-header", "-c", "-o", temp, header.string(), "-MF", dep});
+        fs::remove(log);  // A failed earlier attempt in this process left its log.
+        const bool ok = jit_build::utils::exec_command(build_args, out_dir, log);
+        report_result(filename.string(), "prefix PCH", fmt::format("{}", fmt::join(build_args, " ")), log, ok);
+        std::ifstream dependency_file(dep);
+        const auto dependencies = jit_build::parse_dependency_file(dependency_file);
+        for (const auto& dependency : dependencies.at(temp)) {
+            const auto path = fs::absolute(fs::path(out_dir) / dependency).lexically_normal();
+            if (path.string().starts_with(generated_dir.string() + "/")) {
+                fs::remove(temp);  // Do not leave a rejected PCH (tens of MB) in the cache.
+                TT_THROW("Kernel-specific file {} is included before the PCH boundary", path.string());
+            }
+        }
+        jit_build::write_dependency_hashes(out_dir, temp, temp + ".dephash");
+        TT_FATAL(fs::exists(temp + ".dephash"), "Cannot validate PCH dependencies for {}", temp);
+        fs::rename(temp, pch);
+        fs::rename(temp + ".dephash", dephash);
+        fs::remove(dep);
+        fs::rename(log, directory / "build.log");
+    });
+    const auto kernel_name_header = fs::path(out_dir) / "prefix-kernel-name.hpp";
+    write_text_atomic(kernel_name_header, name_definition);
+    std::erase_if(args, [&](const auto& arg) { return arg.starts_with(name_flag); });
+    args.insert(args.begin() + 1, "-I" + directory.string());
+    args.insert(
+        args.end(), {"-Werror=invalid-pch", "-include", header.string(), "-include", kernel_name_header.string()});
+    args.insert(args.end(), {"-include", (generated_dir / "chlkc_descriptors_values.h").string()});
+    if (compute) {
+        args.insert(args.end(), {"-include", (generated_dir / compute_body_name).string()});
+    }
+    return dephash.string();
+}
+
 }  // namespace
 
 std::string get_default_root_path() {
@@ -783,12 +940,6 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;
-    if (!pch.empty()) {
-        // Load the PCH before any other force-included header emits C++ tokens.
-        defines.insert(defines.begin(), {"-include", pch});
-        // Warn if GCC rejects the PCH, while allowing textual fallback.
-        cflags += " -Winvalid-pch -Wno-error=invalid-pch";
-    }
 
     // Per-TU half of the structural device zone id (STREAMING profiler only; the DRAM profiler's 16-bit
     // hash ids need no registry). Kept out of `defines_`/`build_key_` on purpose: a tu_id is a property of
@@ -822,6 +973,29 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         obj_temp_path,
         temp_d_path);
 
+    std::string prefix_dependencies;
+    if (operation_pch_enabled() && !is_fw_ && settings) {
+        std::string operation_source;
+        settings->process_defines([&](const auto& key, const auto& value) {
+            if (key == "BLAZE_OPERATION_PCH_SOURCE") {
+                operation_source = value;
+            }
+        });
+        if (!operation_source.empty()) {
+            prefix_dependencies =
+                prepare_prefix_pch(env_, this->srcs_[src_index], target_name_, out_dir, operation_source, args);
+        }
+    }
+
+    // GCC loads only the first PCH; the Blaze prefix already covers the standard library.
+    if (prefix_dependencies.empty() && !pch.empty()) {
+        // Load the PCH before any other force-included header emits C++ tokens.
+        // Warn if GCC rejects the PCH, while allowing textual fallback.
+        args.insert(
+            args.begin() + tt::jit_build::utils::tokenize_flags(env_.gpp_).size(),
+            {"-include", pch, "-Winvalid-pch", "-Wno-error=invalid-pch"});
+    }
+
     if (env_.get_rtoptions().get_log_kernels_compilation_commands()) {
         log_info(tt::LogBuildKernels, "    g++ compile cmd: {}", fmt::join(args, " "));
     }
@@ -837,7 +1011,30 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
+    // Profiler zones in the prefix are reported when the PCH is built; the profiler reads them per kernel log.
+    if (env_.get_rtoptions().get_profiler_enabled() && !prefix_dependencies.empty()) {
+        std::ifstream prefix_log(fs::path(prefix_dependencies).parent_path() / "build.log");
+        std::ofstream kernel_log(log_file.path(), std::ios::app);
+        for (std::string line; std::getline(prefix_log, line);) {
+            if (line.find("KERNEL_PROFILER") != std::string::npos) {
+                kernel_log << line << '\n';
+            }
+        }
+    }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", recipe.pch_umbrella);
+    // GCC's depfile omits headers read through the PCH, so the object also carries the PCH's dependencies.
+    if (!prefix_dependencies.empty() && fs::exists(obj_temp_path + ".dephash")) {
+        std::ofstream dependencies(obj_temp_path + ".dephash", std::ios::app);
+        // The PCH's canonical copy must not hide changes to this kernel's generated CB declarations.
+        const auto cb_declarations = fs::path(out_dir).parent_path().parent_path() / "chlkc_descriptors_declarations.h";
+        jit_build::write_dependency_hashes(
+            {{obj_temp_path, {cb_declarations.string()}}}, out_dir, obj_temp_path, dependencies);
+        dependencies << read_text(prefix_dependencies);
+        dependencies.close();
+        if (dependencies.fail()) {
+            fs::remove(obj_temp_path + ".dephash");
+        }
+    }
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
