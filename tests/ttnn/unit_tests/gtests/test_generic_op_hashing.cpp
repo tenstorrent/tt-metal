@@ -119,3 +119,27 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
     EXPECT_EQ(program_hash(a), program_hash(b))
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
 }
+
+TEST(GenericOpHash, ComputeProcessorChangesHash) {
+    using namespace tt::tt_metal;
+    KernelDescriptor all{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp",
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .config = ComputeConfigDescriptor{},
+    };
+    auto trisc0 = all;
+    std::get<ComputeConfigDescriptor>(trisc0.config).processor = 0;
+    auto trisc1 = all;
+    std::get<ComputeConfigDescriptor>(trisc1.config).processor = 1;
+
+    const auto all_hash =
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {all}});
+    EXPECT_NE(
+        all_hash, ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {trisc0}}));
+    EXPECT_NE(
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {trisc0}}),
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {trisc1}}));
+    EXPECT_NE(
+        std::hash<ProgramDescriptor>{}(ProgramDescriptor{.kernels = {trisc0}}),
+        std::hash<ProgramDescriptor>{}(ProgramDescriptor{.kernels = {trisc1}}));
+}

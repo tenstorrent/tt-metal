@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <stdexcept>
 #include <variant>
@@ -250,6 +251,37 @@ TEST_F(OfflineKernelCompileMockFixture, CPU_CompileKernelOfflineEmitsExpectedSub
     EXPECT_GT(hash_subdir_count, 1u) << "Expected >1 compile-hash buckets under " << kernel_subdir;
 
     EXPECT_TRUE(contains_nonempty_elf(kernel_subdir)) << "Expected at least one non-empty .elf under " << kernel_subdir;
+}
+
+TEST_F(OfflineKernelCompileMockFixture, CPU_ComputeProcessorEmitsOnlySelectedOfflineImages) {
+    if (offline_compile_unsupported_under_simulator()) {
+        GTEST_SKIP() << "Requires offline firmware for the selected build keys";
+    }
+    for (uint8_t selection = 0; selection < 4; ++selection) {
+        const auto processor = selection < 3 ? std::optional<uint8_t>{selection} : std::nullopt;
+        SCOPED_TRACE(selection);
+        ScopedTempDir output_dir("tt_metal_offline_selected_trisc");
+        experimental::OfflineKernelCompileParams params{.output_dir = output_dir.path_};
+        ASSERT_NO_THROW(experimental::CompileKernelOffline(
+            "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp", ComputeConfig{.processor = processor}, params));
+        const auto kernel_root = output_dir.path_ / "blank";
+        ASSERT_TRUE(fs::exists(kernel_root));
+        ASSERT_GT(count_compile_hash_subdirs(kernel_root), 1u);
+        for (const auto& bucket : fs::directory_iterator(kernel_root)) {
+            if (!bucket.is_directory()) {
+                continue;
+            }
+            for (uint8_t risc = 0; risc < 3; ++risc) {
+                const std::string target = "trisc" + std::to_string(risc);
+                const auto elf = bucket.path() / target / (target + ".elf");
+                const bool expected = !processor || *processor == risc;
+                EXPECT_EQ(fs::exists(elf), expected) << elf;
+                if (expected && fs::exists(elf)) {
+                    EXPECT_GT(fs::file_size(elf), 0u) << elf;
+                }
+            }
+        }
+    }
 }
 
 }  // namespace

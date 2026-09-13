@@ -484,6 +484,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                         .compiler_include_paths = std::move(compiler_include_paths),
+                        .processor = compute_descriptor.processor,
                     };
                 },
             },

@@ -715,6 +715,7 @@ void py_module_types(nb::module_& mod) {
         .def(nb::init<>(), R"pbdoc(
             Default constructor for KernelDescriptor.
         )pbdoc")
+        .def(nb::init<const tt::tt_metal::KernelDescriptor&>(), nb::arg("other"))
         .def(
             "__init__",
             [](tt::tt_metal::KernelDescriptor* self,
@@ -990,6 +991,18 @@ void py_module_types(nb::module_& mod) {
             "compiler_include_paths",
             &tt::tt_metal::KernelDescriptor::compiler_include_paths,
             "Additional include paths passed to the kernel compiler as -I flags")
+        .def_prop_rw(
+            "compute_processor",
+            [](const tt::tt_metal::KernelDescriptor& self) -> std::optional<uint8_t> {
+                if (const auto* config = std::get_if<tt::tt_metal::ComputeConfigDescriptor>(&self.config)) {
+                    return config->processor;
+                }
+                return std::nullopt;
+            },
+            [](tt::tt_metal::KernelDescriptor& self, std::optional<uint8_t> processor) {
+                std::get<tt::tt_metal::ComputeConfigDescriptor>(self.config).processor = processor;
+            },
+            "Optional physical TRISC for a compute descriptor")
         .def(
             "clear_runtime_args",
             [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },

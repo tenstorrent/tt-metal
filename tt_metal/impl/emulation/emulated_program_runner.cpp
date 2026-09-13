@@ -1855,6 +1855,9 @@ static void collect_kernels(
             // all three so the kernel's `#ifdef TRISC_*` blocks execute exactly
             // once on the unified thread.
             if (is_tensix && !is_quasar_compute) {
+                TT_FATAL(
+                    kernel->expected_num_binaries() == 3,
+                    "Physical TRISC selection is not supported by Emule; use an unsplit compute kernel");
                 defines["TRISC_UNPACK"] = "1";
                 defines["TRISC_MATH"] = "1";
                 defines["TRISC_PACK"] = "1";

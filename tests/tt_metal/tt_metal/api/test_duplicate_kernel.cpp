@@ -96,6 +96,18 @@ TEST_F(MeshDispatchFixture, TensixFailOnDuplicateKernelCreationCompute) {
     }
 }
 
+TEST_F(MeshDispatchFixture, TensixComputeKernelPlacementUsesPhysicalProcessor) {
+    const CoreCoord core(0, 0);
+    const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp";
+    auto program = CreateProgram();
+
+    for (uint8_t processor = 0; processor < 3; ++processor) {
+        EXPECT_NO_THROW(CreateKernel(program, kernel, core, ComputeConfig{.processor = processor}));
+    }
+    EXPECT_THROW(CreateKernel(program, kernel, core, ComputeConfig{.processor = 3}), std::exception);
+    EXPECT_THROW(CreateKernel(program, kernel, core, ComputeConfig{.processor = 1}), std::exception);
+}
+
 TEST_F(MeshDispatchFixture, TensixPassOnNormalKernelCreation) {
     for ([[maybe_unused]] const auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;

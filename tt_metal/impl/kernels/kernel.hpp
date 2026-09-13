@@ -655,6 +655,7 @@ public:
         TT_FATAL(
             MetalContext::instance(context_id_).get_cluster().arch() != ARCH::QUASAR,
             "ComputeKernel is not supported on Quasar. Use QuasarComputeKernel instead.");
+        TT_FATAL(!config_.processor || *config_.processor < 3, "Compute processor must be in [0, 2]");
         this->set_compiler_include_paths(config_.compiler_include_paths);
     }
 

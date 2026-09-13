@@ -132,6 +132,8 @@ struct ComputeConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Provide include paths for the kernel compiler (-I)
     std::vector<std::filesystem::path> compiler_include_paths;
+    // Build and configure only this physical TRISC. Absent means all three.
+    std::optional<uint8_t> processor;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

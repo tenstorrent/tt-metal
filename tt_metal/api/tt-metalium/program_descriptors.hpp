@@ -108,6 +108,7 @@ struct ComputeConfigDescriptor {
     bool math_approx_mode = false;
     // See ComputeConfig::enable_trisc2_rvv.
     bool enable_trisc2_rvv = false;
+    std::optional<uint8_t> processor;
 };
 
 // Declares that a specific per-core runtime arg position holds a buffer base address

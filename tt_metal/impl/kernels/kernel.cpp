@@ -468,10 +468,7 @@ uint8_t EthernetKernel::expected_num_binaries() const { return 1; }
 
 uint8_t DramKernel::expected_num_binaries() const { return 1; }
 
-uint8_t ComputeKernel::expected_num_binaries() const {
-    // Compute kernels generate binaries for all three TRISC processors
-    return 3;
-}
+uint8_t ComputeKernel::expected_num_binaries() const { return this->config_.processor ? 1 : 3; }
 
 const std::vector<const ll_api::memory*>& Kernel::binaries(uint64_t build_key) const {
     auto iter = binaries_.find(build_key);
@@ -504,7 +501,7 @@ uint32_t DramKernel::get_kernel_processor_type(int index) const {
 
 uint32_t ComputeKernel::get_kernel_processor_type(int index) const {
     TT_ASSERT(0 <= index && index < expected_num_binaries(), "index out of bounds");
-    return index;
+    return this->config_.processor.value_or(index);
 }
 
 std::string DataMovementKernel::config_hash() const {
@@ -549,6 +546,9 @@ std::string ComputeKernel::config_hash() const {
     // the RVV knob are unchanged.
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
+    }
+    if (this->config_.processor) {
+        hash += fmt::format("_trisc{}", *this->config_.processor);
     }
     return hash;
 }
@@ -994,7 +994,11 @@ void ComputeKernel::generate_binaries(IDevice* device, JitBuildOptions& /*build_
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
     auto build_states = BuildEnvManager::get_instance(extract_context_id(device))
                             .get_kernel_build_states(device->build_id(), tensix_core_type, compute_class_idx);
-    jit_build_subset(build_states, this);
+    if (this->config_.processor) {
+        jit_build(build_states[*this->config_.processor], this);
+    } else {
+        jit_build_subset(build_states, this);
+    }
 }
 
 void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries) {
@@ -1105,14 +1109,14 @@ void EthernetKernel::read_binaries(IDevice* device, const std::string& binary_ro
 
 void ComputeKernel::read_binaries(IDevice* device, const std::string& binary_root) {
     TT_ASSERT(this->binaries_exist_on_disk(device, binary_root));
-    constexpr int num_trisc_binaries = 3;
     std::vector<const ll_api::memory*> binaries;
-    binaries.reserve(num_trisc_binaries);
+    binaries.reserve(this->expected_num_binaries());
     uint32_t tensix_core_type = MetalContext::instance(this->get_context_id())
                                     .hal()
                                     .get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     uint32_t compute_class_idx = enchantum::to_underlying(HalProcessorClassType::COMPUTE);
-    for (int trisc_id = 0; trisc_id < num_trisc_binaries; trisc_id++) {
+    for (int binary_index = 0; binary_index < this->expected_num_binaries(); binary_index++) {
+        const int trisc_id = this->get_kernel_processor_type(binary_index);
         auto load_type = MetalContext::instance(this->get_context_id())
                              .hal()
                              .get_jit_build_config(tensix_core_type, compute_class_idx, trisc_id)
@@ -1299,9 +1303,10 @@ bool ComputeKernel::configure(
     const std::vector<const ll_api::memory*>& binaries = this->binaries(
         BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key());
     int32_t dm_count = context.hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
-    for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
+    for (int binary_index = 0; binary_index < this->expected_num_binaries(); binary_index++) {
+        const int trisc_id = this->get_kernel_processor_type(binary_index);
         llrt::write_binary_to_address(
-            env, *binaries[trisc_id], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
+            env, *binaries[binary_index], device_id, worker_core, base_address + offsets[dm_count + trisc_id]);
     }
 
     return pass;

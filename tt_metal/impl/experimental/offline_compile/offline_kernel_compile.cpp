@@ -118,7 +118,11 @@ void generate_kernel_binaries_offline(
         jit_build_genfiles_triscs_src(device_build_env.build_env, *kernel, kernel->kernel_source());
         const auto build_states =
             build_env_manager.get_kernel_build_states(0, programmable_core_type_idx, processor_class_idx);
-        jit_build_subset(build_states, kernel.get());
+        if (kernel->expected_num_binaries() == 1) {
+            jit_build(build_states[kernel->get_kernel_processor_type(0)], kernel.get());
+        } else {
+            jit_build_subset(build_states, kernel.get());
+        }
     } else {
         jit_build_genfiles_kernel_include(device_build_env.build_env, *kernel, kernel->kernel_source());
         const uint32_t riscv_id = kernel->get_kernel_processor_type(0);

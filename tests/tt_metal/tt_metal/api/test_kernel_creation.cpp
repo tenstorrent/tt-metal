@@ -184,4 +184,24 @@ TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixTestDifferentUnpackToDes
         << "unpack_to_dest_mode is not accounted for in computing ComputeKernel::config_hash()";
 }
 
+TEST_F(CompileProgramWithKernelPathEnvVarFixture, TensixComputeProcessorChangesOnlySelectedKernelHash) {
+    const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/compute/blank.cpp";
+    auto all_program = CreateProgram();
+    auto all_copy_program = CreateProgram();
+    auto trisc0_program = CreateProgram();
+    auto trisc1_program = CreateProgram();
+
+    auto all = all_program.impl().get_kernel(CreateKernel(all_program, kernel_file, CoreCoord(0, 0), ComputeConfig{}));
+    auto all_copy = all_copy_program.impl().get_kernel(
+        CreateKernel(all_copy_program, kernel_file, CoreCoord(0, 0), ComputeConfig{}));
+    auto trisc0 = trisc0_program.impl().get_kernel(
+        CreateKernel(trisc0_program, kernel_file, CoreCoord(0, 0), ComputeConfig{.processor = 0}));
+    auto trisc1 = trisc1_program.impl().get_kernel(
+        CreateKernel(trisc1_program, kernel_file, CoreCoord(0, 0), ComputeConfig{.processor = 1}));
+
+    EXPECT_EQ(all->compute_hash(), all_copy->compute_hash());
+    EXPECT_NE(all->compute_hash(), trisc0->compute_hash());
+    EXPECT_NE(trisc0->compute_hash(), trisc1->compute_hash());
+}
+
 }  // namespace tt::tt_metal
