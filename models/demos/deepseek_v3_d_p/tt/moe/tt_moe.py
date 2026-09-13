@@ -585,6 +585,8 @@ class TtMoe(LightweightModule):
             self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
             self.sd_manager_id = None
 
+    _dump_traced_warned = False  # see the traced-path branch below; warn once per process
+
     def _dump_routing(
         self,
         indices: ttnn.Tensor,
@@ -612,15 +614,19 @@ class TtMoe(LightweightModule):
         # writes ~700 MB. PREFILL_DUMP_ROUTING_LAYERS narrows it to the layers actually being chased
         # (e.g. the ones that already have a KV dump). Unset = every MoE layer.
         wanted = os.environ.get("PREFILL_DUMP_ROUTING_LAYERS")
-        if wanted and str(self.layer_idx) not in wanted.split(","):
+        if wanted and str(self.layer_idx) not in {s.strip() for s in wanted.split(",") if s.strip()}:
             return
         if traced:
             # A device->host readback is illegal inside a trace capture, and a capture recorded with
             # one would be wrong for every replay. Stay off and say so rather than corrupt the run.
-            logger.warning(
-                "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
-                "routing dump skipped (run with use_trace=False to collect it)"
-            )
+            # Once per process, not once per MoE layer per chunk -- that would be ~69 x N identical
+            # lines on Kimi-K3 and would bury everything else in the log.
+            if not TtMoe._dump_traced_warned:
+                TtMoe._dump_traced_warned = True
+                logger.warning(
+                    "[TtMoe] PREFILL_DUMP_ROUTING_DIR is set but this is the traced path; "
+                    "routing dump skipped for all layers (run with use_trace=False to collect it)"
+                )
             return
         try:
             # SP is mesh axis 0 and the gate output is TP-replicated (the logits all-reduce), so concat

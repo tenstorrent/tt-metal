@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -453,15 +452,6 @@ class ttMLA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-
-        # PREFILL_MLA_HIFI4=1 promotes every MLA matmul from HiFi2/bf16-accumulate to
-        # HiFi4/fp32-accumulate. Diagnostic only, default off. It separates "the depth drift is bf16
-        # rounding accumulating, which more precision buys down" from "the drift is structural":
-        # if the per-layer KV error curve flattens, it is numerics; if it is unchanged, the error is
-        # inherited from upstream of MLA and raising MLA precision cannot help. No weight rebuild --
-        # compute configs are not part of the tensorbin cache key.
-        if os.environ.get("PREFILL_MLA_HIFI4") == "1":
-            self.default_compute_kernel_config = self.hifi4_fp32_compute_kernel_config
 
         self.ring_sdpa_compute_grid = (
             mesh_device.compute_with_storage_grid_size().x - 1,

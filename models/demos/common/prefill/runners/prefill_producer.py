@@ -773,7 +773,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                     device_kv.to(torch.bfloat16),
                     os.path.join(dump_dir, f"device_kv_layer{layer}_slot{slot_id}.pt"),
                 )
-            except OSError as exc:  # diagnostics must never fail the gate
+            except Exception as exc:  # diagnostics must never fail the gate
                 logger.warning(f"[producer] KV dump for layer {layer} failed: {exc}")
 
         golden = _load_golden_kv_post(trace_dir, layer, real_len)

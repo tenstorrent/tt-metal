@@ -261,6 +261,10 @@ class TtKimiK3Block(LightweightModule):
                 padding_side=padding_side,
                 actual_start=ctx.actual_start,
                 metadata=ctx.metadata,
+                # Kimi-K3 is the model the routing dump exists for, so this must not default to 0:
+                # with two KV slots in flight both would be written under slot0 at the same
+                # layer/start key and one would silently overwrite the other.
+                cache_user_id=ctx.cache_user_id,
             )
             return ttnn.unsqueeze(moe_out, dim=0)
 
