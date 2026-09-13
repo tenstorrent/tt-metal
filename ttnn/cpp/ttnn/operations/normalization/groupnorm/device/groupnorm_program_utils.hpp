@@ -74,6 +74,17 @@ uint32_t groupnorm_tilized_group_tiles(uint32_t block_ht, uint32_t num_out_block
 // `volume` is H * W * C (padded), `num_virtual_cores` is num_virtual_cols * num_virtual_rows.
 uint32_t groupnorm_heuristic_num_out_blocks(uint32_t volume, uint32_t num_virtual_cores);
 
+// The memory heuristic can leave a long BF16 mean/variance reduction in a single DEST
+// accumulator. Split that case into two partials to reduce repeated BF16 truncation.
+// Existing chunking is retained to avoid increasing global-reduction traffic on large tensors.
+// Call only for auto-selected, non-Welford BF16 accumulation; explicit configs are unchanged.
+inline uint32_t groupnorm_bf16_num_out_blocks(uint32_t memory_blocks, uint32_t block_ht, uint32_t block_wt) {
+    constexpr uint32_t max_unchunked_tiles = 8;
+    return memory_blocks == 1 && block_ht > 1 && static_cast<uint64_t>(block_ht) * block_wt > max_unchunked_tiles
+               ? 2
+               : memory_blocks;
+}
+
 // Percent of usable L1 we allow the estimate to reach; the margin covers the approximated small CBs.
 inline constexpr uint64_t kGroupnormTilizedL1UsagePercent = 95;
 
