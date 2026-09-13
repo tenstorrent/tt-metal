@@ -57,6 +57,12 @@ def test_sigmoid_accurate(device, h, w):
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
+def test_log_sigmoid(device, h, w):
+    run_activation_unary_test(device, h, w, ttnn.log_sigmoid)
+
+
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
 def test_mish(device, h, w):
     run_activation_unary_test(device, h, w, ttnn.mish, ulp=3)
 

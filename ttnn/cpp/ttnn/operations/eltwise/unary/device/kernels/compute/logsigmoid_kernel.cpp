@@ -5,8 +5,6 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/math.hpp"         // Exp
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/misc.hpp"         // Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"  // Logsigmoid
 
 namespace ckl = compute_kernel_lib;
@@ -19,16 +17,13 @@ void kernel_main() {
 
     compute_kernel_hw_startup(dfb_input_id, dfb_output_id);
 
+    // The logsigmoid LLK computes the internal exponential itself, so a single copy of the
+    // input tile into D0 is enough. Dst::D1 in the Logsigmoid slot list is accepted but ignored.
     ckl::eltwise_chain(
         ckl::IterationShape::tiles(num_tiles),
         ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::None, ckl::DataFormatReconfig::Disabled),
+            ckl::input(dfb_input_id, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
             ckl::Dst::D0>{},
-        ckl::CopyTile<
-            ckl::input(dfb_input_id, ckl::WaitPolicy::None, ckl::PopPolicy::PerTile, ckl::DataFormatReconfig::Disabled),
-            ckl::Dst::D1>{},
-        ckl::Negative<ckl::Dst::D1>{},
-        ckl::Exp<ckl::Approx::Fast, ckl::Dst::D1>{},
         ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
         ckl::PackTile<ckl::output(
             dfb_output_id,

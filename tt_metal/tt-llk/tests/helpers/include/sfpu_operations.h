@@ -1769,12 +1769,17 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
+    {
+        // logsigmoid's LLK computes its internal exponential and log1p; the init programs the
+        // SFPU constants the embedded log1p evaluation reads (same convention as atan2).
+        SFPU_BINARY_INIT_FN(add1, sfpu::logsigmoid_init, (APPROXIMATION_MODE, DST_ACCUM_MODE));
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
-        // kernels need no per-op init beyond the standard binary addrmod configuration
-        // (logsigmoid_init is a no-op).
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK and ISCLOSE land here: those kernels need no
+        // per-op init beyond the standard binary addrmod configuration.
         SFPU_BINARY_INIT(add1);
     }
 }
@@ -2142,14 +2147,14 @@ void call_binary_sfpu_operation(
     }
     else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
     {
-        // logsigmoid(x) = -softplus(-x), with x = in0 and exp(-x) = in1 (the compute
-        // kernel is expected to supply exp(-x) as the second operand; the test bakes
-        // it into the paired stimuli). No dedicated init (baseline add1 addrmod).
+        // logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)), computed internally from x = in0;
+        // in1 is accepted but ignored (binary-SFPU call-site arity). The init dispatch
+        // programs the log1p constants this kernel reads.
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_logsigmoid,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, DST_ACCUM_MODE),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,

@@ -157,6 +157,16 @@ def test_acos_fp32(device):
     run_unary_fp32_test_with_ulp(device, ttnn.acos, torch.acos, max_ulp=2, preserve_nan_values=True)
 
 
+def test_logsigmoid_fp32(device):
+    # logsigmoid(x) = min(x, 0) - log1p(exp(-|x|)). A torch fp32 model of the kernel composition
+    # (accurate exp + log1p) stays within ~2 ULP of the fp64-computed golden across the dense
+    # bf16-bitpattern input sweep, including the former failure regions x <= -4 and the
+    # positive tail.
+    run_unary_fp32_test_with_ulp(
+        device, ttnn.log_sigmoid, torch.nn.functional.logsigmoid, max_ulp=3, preserve_nan_values=True
+    )
+
+
 def test_sinh_fp32_all_bfloat16_bitpatterns(device):
     # Full-tensor torch.sinh overflows at +/-89.0 even though the rounded fp32 result is finite.
     # Use a float64 golden rounded back to fp32 to test the kernel against the representable result.

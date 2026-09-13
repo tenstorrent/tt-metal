@@ -422,8 +422,8 @@ def _comparison_stimuli_specs():
 
 
 def _logsigmoid_stimuli_spec():
-    # logsigmoid(x) = -softplus(-x). in1 is only read in the x > 4 branch, so x is restricted
-    # to [-8, 3.9], which sweeps the passthrough and polynomial branches without it.
+    # logsigmoid(x) = -softplus(-x), computed internally from x = tile0; the current LLK
+    # ignores in1. linspace(-8.0, 3.9) sweeps the old kernel's branch boundaries.
     def dist(size, dtype, generator):
         return torch.linspace(-8.0, 3.9, size).to(dtype)
 
@@ -875,9 +875,8 @@ def test_eltwise_binary_sfpu_isclose(formats, dest_acc, mathop):
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop):
-    # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation matched under
-    # PCC; x swept over [-8, 3.9]. The x > 4 (-exp(-x)) branch needs a device-computed
-    # exp(-x) operand the shared harness can't provide, left to a future driver.
+    # logsigmoid(x) with x = tile0. The LLK computes the internal exponential and log1p
+    # itself, so the golden is matched for accuracy (not just PCC); x swept over [-8, 3.9].
     _skip_fp32_no_dest_acc(formats, dest_acc)
 
     sfpu_binary(
