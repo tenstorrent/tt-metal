@@ -313,7 +313,6 @@ class Gemma4Model:
     def __call__(
         self,
         hidden_states,
-        rope_mats=None,
         user_id=0,
         chunk_start_idx=0,
         on_layer_complete=None,
@@ -334,7 +333,7 @@ class Gemma4Model:
             self.ccl_manager.set_ring_metadata(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         gathered_rope = {}
-        if rope_mats is None and self._rope_prefill_positions is not None:
+        if self._rope_prefill_positions is not None:
             for layer_type in set(self.hf_config.layer_types[: len(self.layers)]):
                 cos, sin = self.rope_caches_2d[layer_type]
                 gathered_rope[layer_type] = (
@@ -345,9 +344,7 @@ class Gemma4Model:
         packed_rope_by_type = {}
         for i, layer in enumerate(self.layers):
             layer_type = self.hf_config.layer_types[i]
-            if rope_mats is not None:
-                layer_rope = rope_mats[layer_type] if isinstance(rope_mats, dict) else rope_mats
-            elif gathered_rope:
+            if gathered_rope:
                 layer_rope = gathered_rope[layer_type]
             else:
                 layer_rope = self._get_rope_mats(
