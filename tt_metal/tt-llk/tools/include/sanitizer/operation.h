@@ -280,6 +280,25 @@ struct OperationUnpackTilize : Operation<Exu::Unpack, Hoistable::No>
         NarrowTile>;
 };
 
+// ---------------------------------
+// OPERATION - UNPACK FAST TILIZE WH
+// ---------------------------------
+
+struct OperationUnpackFastTilizeWh : Operation<Exu::Unpack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationUnpackFastTilizeWh, T>;
+
+    struct FullDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationUnpackFastTilizeWh,
+        /* Fields */
+        FullDim>;
+};
+
 // -------------------------
 // OPERATION - FPU MATMUL
 // -------------------------
@@ -343,6 +362,25 @@ struct OperationFpuEltwiseUnaryDatacopy : Operation<Exu::Fpu, Hoistable::Yes>
         NumFaces>;
 };
 
+// ---------------------------------
+// OPERATION - FPU FAST TILIZE WH
+// ---------------------------------
+
+struct OperationFpuFastTilizeWh : Operation<Exu::Fpu, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationFpuFastTilizeWh, T>;
+
+    struct UnitDim : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationFpuFastTilizeWh,
+        /* Fields */
+        UnitDim>;
+};
+
 // ------------------
 // OPERATION - PACK
 // ------------------
@@ -384,13 +422,39 @@ struct OperationPackUntilize : Operation<Exu::Pack, Hoistable::No>
         FullCtDim>;
 };
 
-using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize>;
+// ---------------------------------
+// OPERATION - PACK FAST TILIZE WH
+// ---------------------------------
 
-using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy>;
+struct OperationPackFastTilizeWh : Operation<Exu::Pack, Hoistable::No>
+{
+    template <typename T>
+    using Field = StateField<OperationPackFastTilizeWh, T>;
+
+    struct UnitDim : Field<std::uint32_t>
+    {
+    };
+
+    // Derived from the input CB's pack_src_format at init and not recomputed by the block, so it is
+    // seated once and left standing.
+    struct Use32BitDest : Field<std::uint32_t>
+    {
+    };
+
+    using Struct = StateStruct<
+        OperationPackFastTilizeWh,
+        /* Fields */
+        UnitDim,
+        Use32BitDest>;
+};
+
+using UnpackOperations = OperationList<OperationUnpackUnary, OperationUnpackMatmul, OperationUnpackTilize, OperationUnpackFastTilizeWh>;
+
+using FpuOperations = OperationList<OperationFpuMatmul, OperationFpuEltwiseUnaryDatacopy, OperationFpuFastTilizeWh>;
 
 using SfpuOperations = OperationList<>;
 
-using PackOperations = OperationList<OperationPack, OperationPackUntilize>;
+using PackOperations = OperationList<OperationPack, OperationPackUntilize, OperationPackFastTilizeWh>;
 
 template <>
 struct ExuOperations<Exu::Unpack>
