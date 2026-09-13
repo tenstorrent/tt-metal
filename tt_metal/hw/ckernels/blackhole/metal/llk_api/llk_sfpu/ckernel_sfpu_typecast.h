@@ -190,8 +190,9 @@ inline void calculate_typecast_fp32_to_int32() {
         // exp = in.Exp (LaneEnabled = exp >= 0)
         TTI_SFPEXEXP(
             0, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPEXEXP_MOD1_SET_CC_SGN_EXP | sfpi::SFPEXEXP_MOD1_SET_CC_COMP_EXP);
-        // result = INT_MIN
-        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x8000);
+        // result = INT_MAX
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_LOWER, 0xFFFF);
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_UPPER, 0x7FFF);
         // exp -= 31 (LaneEnabled = exp < 31)
         TTI_SFPIADD(-31 & 0xfff, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_LT0);
         // exp += 8
