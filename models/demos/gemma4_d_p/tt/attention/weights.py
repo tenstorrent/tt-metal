@@ -36,7 +36,7 @@ class AttentionWeights:
     k_norm_weight: ttnn.Tensor  # Replicated across devices
     # Only the rotary quarter needs a separate K gamma in packed global prefill.
     k_norm_rotary_weight: ttnn.Tensor | None
-    is_global: bool  # Controls K=V tying and partial RoPE
+    is_global: bool  # Global attention layer
     kv_replicated: bool = False  # True when KV heads are replicated (not split) across TP devices
     # Fused Q+K only, no duplicate V columns -- global (K=V tied) layers only, prefill only.
     # Sliding layers use wqkv instead.
@@ -52,8 +52,8 @@ def load_attention_weights(
 ) -> AttentionWeights:
     """Load TP-sharded QKV or tied QK weights with the packed-cache permutations."""
     mesh_device = mesh_config.device
-    is_global = config.use_kv_tying
-    tied_qkv = is_global
+    is_global = not config.is_sliding
+    tied_qkv = config.use_kv_tying
     q_size = config.num_attention_heads * config.head_dim
     kv_size = config.num_key_value_heads * config.head_dim
     tp = mesh_config.tp_degree
@@ -85,7 +85,7 @@ def load_attention_weights(
         k_w = k_w.reshape(config.num_key_value_heads, config.head_dim, -1).index_select(1, adjacent_order)
         k_w = k_w.reshape(kv_size, -1)
 
-    if is_global:
+    if tied_qkv:
         projection_weights = (q_w, k_w)
     else:
         projection_weights = (q_w, k_w, state_dict["v_proj.weight"])
@@ -114,8 +114,8 @@ def load_attention_weights(
         projection = torch.cat([weight.transpose(-2, -1) for weight in projection_weights], dim=-1)
         projection = projection.unsqueeze(0).unsqueeze(0)
 
-    qk = projection if is_global else None
-    qkv = None if is_global else projection
+    qk = projection if tied_qkv else None
+    qkv = None if tied_qkv else projection
 
     # Output projection
     o_w = state_dict["o_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
