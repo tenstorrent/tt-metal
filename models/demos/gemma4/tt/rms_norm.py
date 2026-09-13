@@ -27,10 +27,28 @@ def norm_keep_sharded_enabled() -> bool:
 
 
 def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
-    """Width-sharded AR→LN island for short prefill (M<=128). Disabled for MoE and batched prefill."""
+    """Width-sharded AR→LN island for short prefill (M<=128).
+
+    Default OFF: it costs more accuracy than it buys. Measured on a real T3K,
+    12B, bit-reproducible (paired runs agreed to every decimal, and survived a
+    board reset), island ON -> OFF:
+
+        full_model        1x8  0.8953 -> 0.9507   (bare main 0.9505)
+        full_model_decode 1x8  0.9459 -> 0.9647   (base 0.9735)
+        full_model        1x2  0.9188 -> 0.9780
+
+    What it buys is short-prefill TTFT only: 12B batch-1 66.8 -> 75.4 ms
+    (+13%), 31B batch-1 104.9 -> 121.9 ms (+16%), both means of 2 reps. It is
+    inert at 4k (byte-identical output, TTFT within 0.3%) and costs nothing in
+    decode throughput (<0.5% across 8 runs). Trading 0.056 of 1x8 PCC for 9 ms
+    of TTFT is the wrong side of "max perf without degrading accuracy", so it
+    is opt-in via GEMMA4_PREFILL_ISLAND=1 for anyone who wants that trade.
+
+    Disabled for MoE and batched prefill regardless.
+    """
     if enable_moe or batch_size > 1:
         return False
-    if os.environ.get("GEMMA4_PREFILL_ISLAND", "1").lower() in ("0", "false", "no"):
+    if os.environ.get("GEMMA4_PREFILL_ISLAND", "0").lower() in ("0", "false", "no"):
         return False
     if not sharded_norm_enabled() or not norm_keep_sharded_enabled():
         return False
