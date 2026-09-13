@@ -61,7 +61,7 @@ def split_qkv_heads_prefill(
     )
 
 
-def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None):
+def apply_per_head_norm(tensor, eps, weight=None, memory_config=None):
     """Normalize each token and head independently along head_dim."""
     orig_shape = tensor.shape
     _, num_heads, seq_len, head_dim = orig_shape
@@ -75,21 +75,13 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
-    if with_scale and weight is not None:
-        normed = ttnn.rms_norm(
-            flat,
-            weight=weight,
-            epsilon=eps,
-            memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
-        )
-    else:
-        normed = ttnn.rms_norm(
-            flat,
-            epsilon=eps,
-            memory_config=memory_config,
-            compute_kernel_config=compute_kernel_config,
-        )
+    normed = ttnn.rms_norm(
+        flat,
+        weight=weight,
+        epsilon=eps,
+        memory_config=memory_config,
+        compute_kernel_config=compute_kernel_config,
+    )
 
     return ttnn.reshape(normed, orig_shape)
 

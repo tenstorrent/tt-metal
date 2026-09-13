@@ -147,7 +147,7 @@ class Gemma4Attention:
         )
 
         tt_q = apply_per_head_norm(
-            tt_q, self.weights.q_norm_weight, self.config.rms_norm_eps, with_scale=True, memory_config=act_mc
+            tt_q, self.config.rms_norm_eps, weight=self.weights.q_norm_weight, memory_config=act_mc
         )
 
         is_global = not self.config.is_sliding
@@ -157,13 +157,13 @@ class Gemma4Attention:
             # gamma: this entire 512-wide result is V. K branches from this value;
             # packed-only serving transforms just its active rotary quarter below.
             tt_k.deallocate(True)
-            tt_v = apply_per_head_norm(tt_v, None, self.config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+            tt_v = apply_per_head_norm(tt_v, self.config.rms_norm_eps, memory_config=act_mc)
             tt_k = None
         else:
             tt_k = apply_per_head_norm(
-                tt_k, self.weights.k_norm_weight, self.config.rms_norm_eps, with_scale=True, memory_config=act_mc
+                tt_k, self.config.rms_norm_eps, weight=self.weights.k_norm_weight, memory_config=act_mc
             )
-            tt_v = apply_per_head_norm(tt_v, None, self.config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+            tt_v = apply_per_head_norm(tt_v, self.config.rms_norm_eps, memory_config=act_mc)
 
         # Apply RoPE to Q and the rotary part of K.
         if is_global:
