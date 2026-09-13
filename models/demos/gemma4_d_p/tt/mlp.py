@@ -20,7 +20,7 @@ class MLP:
         self.hidden_size = hf_config.hidden_size
         self.intermediate_size = hf_config.intermediate_size
 
-        tp = mesh_config.tp_degree if mesh_config else 1
+        tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
         # Tag the cache filenames with the weight dtype so that flipping a
