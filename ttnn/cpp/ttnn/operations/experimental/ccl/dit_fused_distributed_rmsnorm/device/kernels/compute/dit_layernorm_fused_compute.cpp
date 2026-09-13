@@ -253,6 +253,8 @@ void kernel_main() {
         }
 
         // -------- Produce per-token mean (col 0) + 1/std (col 0) into mean_cb / invstd_cb --------
+        // Nonlegacy rsqrt remeasured on BH TP2, BF16 x=1+0.01*randn, eps=1e-6:
+        // FP32 output vs torch LayerNorm PCC=0.99966093, maxabs=0.06909 (2026-09-13, PR #56292).
         if constexpr (is_tp_1 != 0) {
             // Transpose row 0 -> col 0; 1/std = rsqrt(var + eps).
             cb_mean.wait_front(1);
