@@ -98,6 +98,7 @@ class TtRoutedExpert(LightweightModule):
         cache_name_prefix: str,
         experts_per_chip: int,
         weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        dram_sharded: bool = False,
     ) -> bool:
         """True iff every routed-expert tensorbin exists AT `weights_dtype`.
 
@@ -118,9 +119,18 @@ class TtRoutedExpert(LightweightModule):
         for local_expert_idx in range(experts_per_chip):
             for proj in ["gate", "up", "down"]:
                 stem = f"{cache_name_prefix}.local_{local_expert_idx}_{proj}"
-                if not pattern_exists(f"{stem}_dtype_{dtype_name}_*.tensorbin", "RoutedExpert"):
+                # `_layout_` is as_tensor's own suffix. A dtype-only glob also matches the ND files
+                # written beside these, which would report the interleaved cache complete when only
+                # the ND one exists.
+                if not pattern_exists(f"{stem}_dtype_{dtype_name}_layout_*.tensorbin", "RoutedExpert"):
                     logger.debug(f"TTNN cache missing: {stem} ({dtype_name})")
                     return False
+                if dram_sharded:
+                    k_rows = 1 if proj == "down" else GU_SHARD_KROWS
+                    nd = f"{stem}_dtype_{dtype_name}_ndshard_k{k_rows}.tensorbin"
+                    if not pattern_exists(nd, "RoutedExpert"):
+                        logger.debug(f"ND-sharded TTNN cache missing: {nd}")
+                        return False
         return True
 
     @staticmethod
@@ -195,6 +205,37 @@ class TtRoutedExpert(LightweightModule):
                 return None
             return str(cache_path / f"{cache_name_prefix}.{name}")
 
+        # ND-sharded weights are cached in their FINAL placement, under a key of their own so the
+        # interleaved cache stays valid beside them and neither invalidates the other. What is
+        # dumped IS the resharded tensor, so a hit and a miss produce bit-identical weights -- the
+        # hit just skips the interleaved build and the reshard that a miss pays once.
+        def _nd_cache_name(name, k_rows):
+            stem = _cache_name(name)
+            return None if stem is None else f"{stem}_dtype_{weights_dtype.name}_ndshard_k{k_rows}.tensorbin"
+
+        def _load_nd(name, k_rows):
+            path = _nd_cache_name(name, k_rows)
+            if path is None or not Path(path).is_file():
+                return None
+            try:
+                return ttnn._ttnn.tensor.load_tensor_flatbuffer(path, device=device)
+            except RuntimeError as exc:
+                # A stale or truncated file must not be fatal: fall through and rebuild it.
+                logger.warning(f"Failed to load ND-sharded weight cache {path}: {exc}")
+                return None
+
+        def _store_nd(tensor, name, k_rows):
+            path = _nd_cache_name(name, k_rows)
+            if path is None:
+                return
+            try:
+                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                ttnn._ttnn.tensor.dump_tensor_flatbuffer(path, tensor)
+            except (OSError, RuntimeError) as exc:
+                # A read-only or full cache directory costs the reshard on every run, which is slow
+                # rather than wrong; the weights in hand are already correct.
+                logger.warning(f"Failed to write ND-sharded weight cache {path}: {exc}")
+
         mesh_rows, mesh_cols = mesh_device.shape
         gate_tensors, up_tensors, down_tensors = [], [], []
 
@@ -225,74 +266,48 @@ class TtRoutedExpert(LightweightModule):
             mem = ttnn.DRAM_MEMORY_CONFIG if device else None
             mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
-            gate_tt = ttnn.as_tensor(
-                stacked_gate,
-                mesh_mapper=mapper,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                dtype=weights_dtype,
-                memory_config=mem,
-                cache_file_name=_cache_name(f"local_{local_expert_idx}_gate"),
-            )
-            up_tt = ttnn.as_tensor(
-                stacked_up,
-                mesh_mapper=mapper,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                dtype=weights_dtype,
-                memory_config=mem,
-                cache_file_name=_cache_name(f"local_{local_expert_idx}_up"),
-            )
-            down_tt = ttnn.as_tensor(
-                stacked_down,
-                mesh_mapper=mapper,
-                layout=ttnn.TILE_LAYOUT,
-                device=device,
-                dtype=weights_dtype,
-                memory_config=mem,
-                cache_file_name=_cache_name(f"local_{local_expert_idx}_down"),
-            )
+            # The height knob is gate/up-only: down is left at one tile-row because nothing has been
+            # measured for it, not because a taller shard would be wrong.
+            def _projection(name, stacked, k_rows):
+                if dram_sharded and device is not None:
+                    cached = _load_nd(name, k_rows)
+                    if cached is not None:
+                        return cached
 
-            if device is None:
-                del gate_tt, up_tt, down_tt
-            else:
-                gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
-                up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
-                down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
+                tensor = ttnn.as_tensor(
+                    stacked,
+                    mesh_mapper=mapper,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=device,
+                    dtype=weights_dtype,
+                    memory_config=mem,
+                    cache_file_name=_cache_name(name),
+                )
+                if device is None:
+                    return None
 
-                # Done as a device-side reshard after the interleaved build and the squeeze to 2D,
-                # rather than by handing as_tensor an ND memory config: the mesh-mapper path
-                # rank-squeezes the 4D weight and ND-sharded tensors reject that view. It also keeps
-                # the on-disk cache layout-independent, so switching layouts needs no cache rebuild.
-                # The height knob is gate/up-only: down is left at one tile-row because nothing has
-                # been measured for it, not because a taller shard would be wrong.
-                if dram_sharded:
-                    gate_tt = ttnn.to_memory_config(
-                        gate_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
-                                mesh_device, gate_tt.shape[-1], k_rows=GU_SHARD_KROWS
-                            ),
-                        ),
-                    )
-                    up_tt = ttnn.to_memory_config(
-                        up_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(
-                                mesh_device, up_tt.shape[-1], k_rows=GU_SHARD_KROWS
-                            ),
-                        ),
-                    )
-                    down_tt = ttnn.to_memory_config(
-                        down_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, down_tt.shape[-1]),
-                        ),
-                    )
+                tensor = ttnn.squeeze(ttnn.squeeze(tensor, dim=0), dim=0)
+                if not dram_sharded:
+                    return tensor
 
+                # Resharded on device rather than handed to as_tensor as an ND memory config: the
+                # mesh-mapper path rank-squeezes the 4D weight and ND-sharded tensors reject that
+                # view, and quantizing under an ND config moves bfloat4_b values by up to one step.
+                tensor = ttnn.to_memory_config(
+                    tensor,
+                    ttnn.MemoryConfig(
+                        buffer_type=ttnn.BufferType.DRAM,
+                        nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, tensor.shape[-1], k_rows=k_rows),
+                    ),
+                )
+                _store_nd(tensor, name, k_rows)
+                return tensor
+
+            gate_tt = _projection(f"local_{local_expert_idx}_gate", stacked_gate, GU_SHARD_KROWS)
+            up_tt = _projection(f"local_{local_expert_idx}_up", stacked_up, GU_SHARD_KROWS)
+            down_tt = _projection(f"local_{local_expert_idx}_down", stacked_down, 1)
+
+            if device is not None:
                 gate_tensors.append(gate_tt)
                 up_tensors.append(up_tt)
                 down_tensors.append(down_tt)
@@ -358,11 +373,29 @@ class TtRoutedExpert(LightweightModule):
         weights_dtype: ttnn.DataType,
         cache_path: Path,
         cache_name_prefix: str,
+        dram_sharded: bool = False,
     ):
-        """Build TTNN cache for routed experts without device copy."""
-        TtRoutedExpert._convert_and_cache_expert_weights(
-            torch_weights, experts_per_chip, mesh_device, weights_dtype, cache_path, cache_name_prefix, device=None
+        """Build TTNN cache for routed experts without device copy.
+
+        ``dram_sharded`` additionally writes the ND-sharded cache. That pass is the exception to
+        "without device copy": the ND placement is produced by a device-side reshard, so the weights
+        have to land on the mesh before they can be written. They are released as soon as the files
+        are on disk, so the peak is the same as constructing the module normally.
+        """
+        result = TtRoutedExpert._convert_and_cache_expert_weights(
+            torch_weights,
+            experts_per_chip,
+            mesh_device,
+            weights_dtype,
+            cache_path,
+            cache_name_prefix,
+            device=mesh_device if dram_sharded else None,
+            dram_sharded=dram_sharded,
         )
+        if result is not None:
+            for tensors in result:
+                for tensor in tensors:
+                    ttnn.deallocate(tensor)
 
     """
     TTNN implementation of Routed Expert module.
