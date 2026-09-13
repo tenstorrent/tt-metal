@@ -2083,11 +2083,26 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # step, so on a reset keep it: permute per slot_remap (condense moves),
         # only taking host tokens for slots freshly prefilled since the last
         # decode submit (their last token came from prefill, not decode).
+        # Models that re-stage every decode input from host each step
+        # (_tt_vllm_always_refresh_decode_trace_inputs, see
+        # _decode_token_feedback_buffer) never feed the sampled token back into
+        # the device token buffer: that buffer holds the PREVIOUS step's host
+        # inputs, so there is nothing to keep and the host is authoritative. Skip
+        # the keep for them. It is a no-op at best and, when such a model runs
+        # decode-width buckets (tt_supported_decode_batch_sizes), the buffer is
+        # only the current bucket wide while slot_remap holds full-slot-space
+        # indices from the previous (wider) step -> IndexError kills the engine
+        # the first time the live batch shrinks past a bucket boundary.
+        host_inputs_authoritative = any(
+            getattr(self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False)
+            for i in range(self.data_parallel)
+        )
         if (
             on_device_sampling
             and (reset_batch or mode_switched)
             and enable_trace
             and self.trace_inputs_decode[on_device_sampling]
+            and not host_inputs_authoritative
         ):
             new_tokens = []
             new_start_pos = []
