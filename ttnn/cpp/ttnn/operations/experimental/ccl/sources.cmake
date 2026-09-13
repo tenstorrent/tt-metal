@@ -142,6 +142,7 @@ set(TTNN_OP_EXPERIMENTAL_CCL_API_HEADERS
 # metalium-developers-infra as a required co-owner.
 set(TTNN_OP_EXPERIMENTAL_CCL_NANOBIND_SRCS
     ccl_experimental_nanobind.cpp
+    fabric_mux/fabric_mux_nanobind.cpp
     llama_all_gather_matmul_async/llama_all_gather_matmul_async_nanobind.cpp
     all_gather_async/all_gather_async_nanobind.cpp
     strided_all_gather_async/strided_all_gather_async_nanobind.cpp

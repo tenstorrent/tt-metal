@@ -2050,8 +2050,10 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));  // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(
-        CreateSemaphore(program, {worker_logical_core}, 0)));                      // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id = termination_master_semaphore_id.has_value()
+                                                       ? *termination_master_semaphore_id
+                                                       : CreateSemaphore(program, {worker_logical_core}, 0);
+    worker_rt_args.push_back(termination_sync_semaphore_id);                       // termination_sync_address 10
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address 11
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address 12
     worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address 13
@@ -2060,11 +2062,8 @@ void fabric_mux_connection_rt_args(
     worker_rt_args.push_back(termination_master_virtual_core.y);                   // termination_master_noc_y 16
 }
 
-// ProgramDescriptor (Contract-2) variant — mirrors the legacy Program& helper above.
-// Allocates the same five mux-side semaphores by pushing SemaphoreDescriptors into
-// desc.semaphores and recording their IDs into worker_rt_args. The arg-vector
-// layout (positions 0..16) is identical to the legacy helper so worker kernels
-// are byte-compatible across the two variants.
+// Preserve the Program& helper's 17-word client ABI while recording semaphore
+// allocation in the descriptor for later program construction.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
     const bool is_termination_master,
@@ -2113,7 +2112,9 @@ void fabric_mux_connection_rt_args(
         mux_kernel_config.get_buffer_index_address(channel_type, worker_id));  // fabric_mux_buffer_index_address 8
     worker_rt_args.push_back(
         mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_id));    // fabric_mux_channel_id 9
-    worker_rt_args.push_back(termination_master_semaphore_id.value_or(alloc_sem()));  // termination_sync_address 10
+    const uint32_t termination_sync_semaphore_id =
+        termination_master_semaphore_id.has_value() ? *termination_master_semaphore_id : alloc_sem();
+    worker_rt_args.push_back(termination_sync_semaphore_id);      // termination_sync_address 10
     worker_rt_args.push_back(alloc_sem());                        // local_fabric_mux_status_address 11
     worker_rt_args.push_back(alloc_sem());                        // local_flow_control_address 12
     worker_rt_args.push_back(alloc_sem());                        // local_teardown_address 13
