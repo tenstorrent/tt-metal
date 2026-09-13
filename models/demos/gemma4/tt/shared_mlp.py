@@ -26,6 +26,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     DramShardedLinear,
     can_dram_shard,
     decode_in0_l1_enabled,
+    decode_out_l1_enabled,
     interleaved_down_proj_prefill_config,
     interleaved_gate_up_prefill_config,
     linear_l1_safe,
@@ -236,7 +237,7 @@ class SharedMLP:
 
     def _gate_up_linear(self, hidden_states):
         rows = matmul_rows(hidden_states)
-        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE else None
+        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE and decode_out_l1_enabled() else None
         if isinstance(self.gate_up_proj, DramShardedLinear):
             return self.gate_up_proj(hidden_states, out_memory_config=decode_memory_config)
 
@@ -289,7 +290,7 @@ class SharedMLP:
 
     def _down_proj_linear(self, hidden):
         rows = matmul_rows(hidden)
-        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE else None
+        decode_memory_config = ttnn.L1_MEMORY_CONFIG if rows <= TILE_SIZE and decode_out_l1_enabled() else None
         if isinstance(self.down_proj, DramShardedLinear):
             return self.down_proj(hidden, out_memory_config=decode_memory_config)
 
