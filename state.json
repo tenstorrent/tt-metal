@@ -1,9 +1,9 @@
 {
   "last_run": {
-    "run_id": 34711135180,
-    "timestamp": "2026-09-12T18:28:00Z"
+    "run_id": 34729562028,
+    "timestamp": "2026-09-13T01:06:00Z"
   },
-  "run_id": 34711135180,
+  "run_id": 34729562028,
   "open_prs": {
     "52106": {
       "issue": 51660,
@@ -112,11 +112,18 @@
       "issue": 55434,
       "status": "Open, mergeable_state=behind, labeled bug/p1/high-risk/medium-complexity. No update since 2026-09-07, 1 comment. Monitor."
     },
-    "56194_quasar_stride_pack": {
+    "56348_dispatch_log_fix": {
+      "issue": 56348,
+      "branch": "repo-assist/fix-issue-56348-dispatch-log-alignment-mem-type",
+      "title": "fix(dispatch): log correct L1 alignment in pinned-memory alignment check",
+      "status": "opened this run; single-line log_info format-arg fix (HalMemType::HOST -> HalMemType::L1); verified root cause against current source tt_metal/impl/buffers/dispatch.cpp; CI triggered via pr-gate.yaml, outcome unknown yet, check next run"
+    },
+    "56195_quasar_stride_pack": {
       "issue": 56194,
       "branch": "repo-assist/fix-issue-56194-quasar-strided-pack-tile-index",
       "title": "fix(llk): scale strided-pack per-tile index by stride_size_tiles on Quasar",
-      "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally"
+      "status": "opened this run; verified root cause against current source (llk_pack_tile_api.h, dataflow_buffer_interface.h, llk_io.h, cb_api.h all match issue's citations exactly); scaled per-tile step by stride_size_tiles in both out-of-order and in-order branches of get_output_tile_index(); CI triggered via pr-gate.yaml, outcome unknown yet, check next run; docker unavailable in sandbox so unverified locally",
+      "note_correction": "PR that fixes issue 56194 is actually numbered 56195, not 56194; corrected 2026-09-13"
     }
   },
   "issues_labeled": [
@@ -801,6 +808,21 @@
       "date": "2026-09-12",
       "type": "author_checkin",
       "note": "approved by mstaletovicTT (Jul 29) but dirty mergeable_state, needs rebase"
+    },
+    "35483": {
+      "last_ping": "2026-09-13",
+      "type": "codeowners",
+      "note": "ASan wheel PR-gate consolidation, 1 approval (ruizhangTT) but 4 more requested reviewers pending, never previously pinged"
+    },
+    "36485": {
+      "last_ping": "2026-09-13",
+      "type": "codeowners",
+      "note": "DeepSeek V3 synthetic weights PR, approved by yieldthought 'to unblock' but flagged pending codex review comments, never previously pinged"
+    },
+    "49194": {
+      "last_ping": "2026-09-13",
+      "type": "author_checkin",
+      "note": "[Quasar] migrate fill into unified unary test, mergeable_state=dirty, never previously nudged"
     }
   },
   "backlog_cursor": {
@@ -1124,6 +1146,11 @@
     "56323": "2026-09-12: confirmed root cause, noted contributor Kaustubh1235 already volunteered to fix, no dup PR opened"
   },
   "run_history": [
+    {
+      "run_id": "34729562028",
+      "date": "2026-09-13T01:06:00Z",
+      "summary": "Task3: opened fix PR for #56348 (dispatch.cpp log_info printed HalMemType::HOST alignment while checking HalMemType::L1 alignment; single-line fix, verified against current source, no existing PR found via search). Task1/2: reviewed newest ~40 open issues (56371 down to 56167); most architectural/tracking/already-assigned/already-covered (56295->PR#56296 confirmed no dup); none met bar for confident quick fix beyond 56348. Task5: re-verified all 14 tracked repo-assist PRs via get_check_runs - no CI regressions; PR-Gate-validated PRs (52106/53690/54666/54246) all green; RTL-Sim-only PRs mostly green except 55435 (pre-existing failure) and 56195 (new RTL Sim CI failure, needs follow-up); corrected memory bookkeeping error - fix PR for issue #56194 is actually #56195 not #56194. Task6: nudged 3 never-pinged stale PRs - codeowners ping on #35483 and #36485 (reviewer-blocked), author check-in on #49194 (dirty). Task8: rewrote monthly summary #55015 (had bloated to ~60KB from repeated duplicated footer sections) to canonical trimmed format with refreshed suggested actions."
+    },
     {
       "run_id": "34711135180",
       "date": "2026-09-12T18:28:00Z",
