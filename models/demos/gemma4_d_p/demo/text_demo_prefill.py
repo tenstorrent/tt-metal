@@ -213,7 +213,6 @@ def test_prefill_long_context_traced(
     )
     tokens_all = _get_prefill_tokens(model_path, context_len, model_args.vocab_size, token_source)
 
-    rope_local_seq = chunk_size // cp
     host_input = ttnn.from_torch(
         tokens_all[:, :chunk_size].contiguous(),
         device=None,
