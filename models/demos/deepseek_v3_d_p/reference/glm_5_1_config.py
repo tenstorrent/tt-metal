@@ -20,13 +20,17 @@ class GLM51Config:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross twice on the
-    # 6144x2048 routed-expert shape: the composite's cost is flat inside an M chunk while the
-    # fused op's rises with the count, so the composite wins 352-512, loses 576-768 where the
-    # tail per_core_M rounds 18 tile-rows up to 32, and wins outright from 896. 320 is the
-    # aggregate-optimal cut over that sawtooth (+0.15% against a per-count oracle, worst cell
-    # +17% at 576).
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross once on the
+    # 6144x2048 routed-expert shape, between 320 and 384: the composite's cost is flat inside an M
+    # chunk while the fused op's rises with the count. 320 matches a per-count oracle exactly, and
+    # is the same cut for DRAM-interleaved and ND-sharded weights.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD = 320
+
+    # DRAM ND-sharded routed-expert weights: a core's whole K-row weight slice arrives in one
+    # NoC request instead of one per tile. Worth 1.17x at 64 active tokens and 1.15x at 128 on this
+    # 6144x2048 shape, flat from 1024 up. The fused half of the hybrid split does better and
+    # holds it longer: 1.14x at 64-128, still 1.04x at 1024.
+    ROUTED_EXPERT_WEIGHTS_DRAM_SHARDED = True
     INTERMEDIATE_SIZE = 12288  # Dense FFN hidden dimension
 
     # MoE configuration

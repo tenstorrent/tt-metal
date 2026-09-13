@@ -33,6 +33,13 @@ class GptOss120BConfig:
     # Kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD once that path forwards one.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 384
+
+    # DRAM ND-sharded routed-expert weights: a core's whole K-row weight slice arrives in one
+    # NoC request instead of one per tile. Worth 1.13x at 64 active tokens and 1.12x at 128 on this
+    # 2880x2880 shape -- the weakest of the shipped shapes, because hidden 2880 is 90 tiles and
+    # splitting that over 11 columns is ragged, so the fused op's chunk walk crosses a shard edge
+    # on 5 of 33 reads per K-row (the op warns when it does). Still a win, and flat above 512.
+    ROUTED_EXPERT_WEIGHTS_DRAM_SHARDED = True
     INTERMEDIATE_SIZE = 2880  # Dense FFN hidden dimension (same as MoE)
     HEAD_DIM = 64
 

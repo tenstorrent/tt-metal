@@ -18,14 +18,19 @@ class DeepSeekV4ProConfig:
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     MOE_INTERMEDIATE_SIZE = 3072  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
-    # moe_fused_swiglu, the rest to unified_routed_expert_moe. On the 7168x3072 routed-expert
-    # shape the composite already wins from 256 and gives the band back only at 576, where its
-    # tail per_core_M rounds 18 tile-rows up to 32. 128 is the aggregate-optimal cut over that
-    # sawtooth (+0.02% against a per-count oracle, worst cell +3.8% at 576).
+    # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross once on the
+    # 7168x3072 routed-expert shape, between 128 and 160. 128 matches a per-count oracle exactly
+    # for DRAM-interleaved and ND-sharded weights alike.
     # Not enabled: only Kimi K2.6/K2.7 and GLM 5.1/5.2 dispatch both routed-expert ops today.
     # The measured crossover is kept under _MEASURED so it is not re-derived; rename it back to
     # ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD to turn the split on, which is all the readers look for.
     ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD_MEASURED = 128
+
+    # DRAM ND-sharded routed-expert weights: a core's whole K-row weight slice arrives in one
+    # NoC request instead of one per tile. Worth 1.21x at 64 active tokens and 1.19x at 128 on this
+    # 7168x3072 shape. The best of the shipped shapes for the fused op, which holds 1.06x from
+    # 512 all the way to 5120 -- the only shape where ND sharding still pays at full length.
+    ROUTED_EXPERT_WEIGHTS_DRAM_SHARDED = True
     HEAD_DIM = 512
 
     # MoE configuration
