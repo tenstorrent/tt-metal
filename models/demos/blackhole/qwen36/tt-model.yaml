@@ -1,8 +1,9 @@
 # tt-model.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM,
 # serving WITH the DFlash2 block-diffusion speculative-decode drafter (models/demos/blackhole/qwen36/tt/dflash2*.py,
-# qwen36_vllm_dflash.py) through the Tenstorrent vLLM plugin's adaptive block-output contract. Two serve
-# profiles: `single-user-dflash2` (default: one request at a time, lossless speculative decoding) and `batch32`
-# (plain decode, up to 32 concurrent users).
+# qwen36_vllm_dflash.py) through the Tenstorrent vLLM plugin's block-output contracts. Built for small batches
+# (1-8 users): profiles `batch4-dflash2` (default: four speculative slots, ragged widths), `single-user-dflash2`
+# (one slot, fastest for one request) and `batch32` (plain decode fallback). For 8+ users with full sampling use
+# changh95/qwen3.8-27b-p300x2.
 #
 #   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
 #   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json
@@ -17,7 +18,7 @@ kind: vllm-plugin
 arch: blackhole
 
 source:
-  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal      # branch qwen36-prefill-opt-dflash
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal      # branch qwen36-dflash-batch
   code:                                                        # import closure of qwen36_vllm.py + the demo/spec-decode path
     - models/common
     - models/tt_transformers
@@ -35,9 +36,10 @@ source:
 runtime:
   vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
   # plugin main bef89e4 + arg/gemma4_spec_serving (adaptive block-output, TT_MODEL_CLASS_OVERRIDES) + the
-  # block-output KV-lookahead capability the DFlash2 serving class needs, plus keeping the request's sampling
-  # controls / rejecting multimodal prompts on the adaptive profile (branch dflash2-spec-decode).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 751ec33573aa30be03f8a9bda8d36a3cd3259158}
+  # block-output KV-lookahead capability the DFlash2 serving class needs, the request's sampling controls /
+  # multimodal rejection on the adaptive profiles, and the batched + ragged block-output contracts the batch4 profile
+  # uses (tt_adaptive_block_batched / tt_adaptive_block_ragged; branch dflash2-spec-decode).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 7ddf2c8476304ca6be24a77e239e0b3c5af7cf82}
   extra_models_dir: models/demos/blackhole/qwen36/vllm_bundle  # same adapter the plugin registers built-in
 
 serve:
@@ -101,14 +103,15 @@ serve_profiles:
     max_num_seqs: 32
     env:
       QWEN36_DRAFTER: mtp
-default_profile: single-user-dflash2
+default_profile: batch4-dflash2
 
 verify:
   - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
   - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_output'] and C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['output_tokens_per_step'] == 32, C.model_capabilities"
   - "from models.demos.blackhole.qwen36.tt.dflash2_serving import DFlash2ServingDecoder; assert DFlash2ServingDecoder"
   - "import json; m=json.load(open('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json')); assert m['main_class'].endswith(':Qwen36DFlashForCausalLM'), m"
-  - "from vllm_tt_plugin.config import get_tt_block_output_kv_lookahead_tokens, is_tt_adaptive_block_output_model"
+  - "from vllm_tt_plugin.config import get_tt_block_output_kv_lookahead_tokens, is_tt_adaptive_block_output_model, is_tt_adaptive_block_batched, is_tt_adaptive_block_ragged"
+  - "import os; os.environ['QWEN36_DRAFTER']='dflash2'; os.environ['QWEN36_DFLASH_RAGGED']='1'; from models.demos.blackhole.qwen36.tt.qwen36_vllm_dflash import Qwen36DFlashForCausalLM as C; assert C.model_capabilities['tt_adaptive_block_batched'] and C.model_capabilities['tt_adaptive_block_ragged']"
   - "from models.demos.blackhole.qwen36.tt.dflash2_decode import DFlash2Decoder; from models.demos.blackhole.qwen36.tt.dflash2_tp import DFlash2DrafterTP; assert DFlash2Decoder and DFlash2DrafterTP"
   - "import vllm.model_executor.models.qwen3_5"
   - "import transformers.models.qwen3_5"
@@ -117,32 +120,28 @@ verify:
   - "from pathlib import Path; assert Path('/opt/tt-metal/models/demos/blackhole/qwen36/vllm_bundle/qwen36/vllm_metadata.json').is_file()"
 
 card:
-  description: >
-    Qwen3.8-27B (hybrid Gated-DeltaNet + gated-attention dense 27B, reasoning model, 256K context) served on
-    two Tenstorrent P300 boards (4 Blackhole chips, 4-way tensor parallel) through vLLM. The default profile
-    serves one request at a time WITH DFlash2 block-diffusion speculative decoding (drafter
-    incoai/Qwen3.8-27B-DFlash2, 7 drafts verified per step, greedy, model-internal through the Tenstorrent
-    vLLM plugin's block-output contract): 41-84 tok/s on chat requests (mean 56 over 7 prompts; prose ~45,
-    code ~80) vs 32.6 tok/s for plain decode on the same box, TTFT 0.18 s vs 0.11 s at ~75-token prompts.
-    The `batch32` profile is the plain-decode server for up to 32 concurrent users.
+  description: |
+    Qwen3.8-27B (hybrid Gated-DeltaNet + gated-attention dense 27B, reasoning model, 256K context) served on two Tenstorrent P300 boards (4 Blackhole chips, 4-way tensor parallel) through vLLM WITH lossless DFlash2 block-diffusion speculative decoding (drafter incoai/Qwen3.8-27B-DFlash2, 7 drafts verified per step, greedy). Built for small batches (1 to 8 concurrent users, fastest at 1 to 4): one user gets 45 tok/s vs 32 for plain decode (1.4x; ~90 tok/s on code), two users 69 vs 54 aggregate, four users 122 vs 103 (1.2x); eight users share the four speculative slots. For more users, or for full sampling support, use changh95/qwen3.8-27b-p300x2 (plain decode, up to 32 users).
   quickstart: |
     ### Profiles
 
-    * `single-user-dflash2` (default): `--max-num-seqs 1`, speculative decoding on EVERY text request (the
-      drafter only sees a 2048-token window, so long prompts accept fewer drafts per step but still beat
-      plain decode: 58 tok/s at 4k, 43 at 16k in the demo). Output is greedy: the speculative loop
-      reproduces the target model's own greedy trajectory (verified token-for-token against plain greedy
-      decode on-device; against a plain vLLM server it can diverge where the target's top-2 logits are
-      nearly tied, exactly like the demo's spec loop), so `temperature` and friends only affect the first
-      token of a response. `logprobs`, structured outputs, `min_p`/`logit_bias` and multimodal prompts are
-      rejected or neutralised by the plugin for this profile; long prompts pay an eager (untraced) prefill.
-    * `batch32`: `tt-model serve --profile batch32 changh95/qwen3.8-27b-dflash2-p300x2` — plain decode, up to
-      32 users, full sampling support.
+    * `batch4-dflash2` (default): four speculative slots (`--max-num-seqs 4`); every request decodes with DFlash2 speculation
+      (one multi-user verify per step, ragged per-request output widths). Best at 1 to 4 concurrent users. At 8 concurrent users the four slots are shared (requests queue for a slot): 0.43x to 0.77x of plain's 8-user throughput on random prompts, so 8 is the practical upper bound of this package; above that use the plain package.
+    * `single-user-dflash2`: one slot; the fastest choice when exactly one request is in flight (45 to 47 tok/s at 128-token
+      prompts vs 38 on the four-slot profile).
+    * `batch32`: plain decode, up to 32 users, full sampling support — the same server as
+      [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2), kept here for convenience.
+
+    Output on the speculative profiles is greedy: the speculative loop reproduces the target model's own greedy trajectory
+    (verified token-for-token against plain greedy decode on-device; against a plain vLLM server it can differ where the
+    top-2 logits are nearly tied), so `temperature` and friends only affect the first token of a response. `logprobs`,
+    structured outputs, `min_p`/`logit_bias` and multimodal prompts are rejected or neutralised by the plugin on these
+    profiles; prompts longer than 2,048 tokens pay an eager (untraced) prefill.
 
     ### DFlash2 drafter weights (one extra download)
 
-    This package pins two checkpoints but tt-model downloads only the target. Fetch the drafter into the
-    same HF cache before `tt-model serve` (the container mounts it at `/hf`):
+    This package pins two checkpoints but tt-model downloads only the target. Fetch the drafter into the same HF cache
+    before `tt-model serve` (the container mounts it at `/hf`):
 
     ```bash
     hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
@@ -150,9 +149,74 @@ card:
 
     ### Tuning knobs (container env)
 
-    `QWEN36_DFLASH_SERVE_BLOCK` (default 32) = tokens committed per vLLM step (streaming granularity);
-    `QWEN36_DFLASH_MAX_PROMPT` (default 2048) = longest prompt that takes the one-shot masked prefill
-    (longer prompts take the chunked one; both speculate);
-    `QWEN36_DRAFTER=mtp` = speculation off. The same image also contains the single-user demo/benchmark
-    (`models/demos/blackhole/qwen36/demo/text_demo.py`, `-k "traced_128 and not traced_128k and not g8"`),
-    where DFlash2 reaches 103.7 tok/s on a document continuation vs 94.2 for the built-in MTP drafter.
+    `QWEN36_DFLASH_SERVE_BLOCK` (default 32) = tokens the plugin reserves per vLLM step; `QWEN36_DFLASH_RAGGED=1`
+    (default on the batch4 profile) returns tokens as they are produced; `QWEN36_DFLASH_MAX_PROMPT` (default 2048) =
+    longest prompt that takes the one-shot masked prefill; `QWEN36_DRAFTER=mtp` = speculation off.
+
+    ## Benchmarks (P300x2, DFlash2 speculative decoding, 1 to 8 concurrent users)
+
+    Measured 2026-09-13/14 with the tt-inference-server client (`vllm bench serve`, random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming). Aggregate output tok/s with tok/s per user in parentheses; the plain-decode figures are the same box with speculation off (see [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) for plain decode up to 32 users). Random-token prompts are the hardest case for a drafter (2 to 2.5 of 7 drafts accepted per step); on real chat and code the speculative profiles gain more (prose ~45 tok/s, code ~90 tok/s at one user vs 33 plain).
+
+    `batch4-dflash2` profile (default: four speculative slots; more than four concurrent requests queue for a slot):
+
+    | ISL / OSL | 1 user | 2 | 4 | 8 | plain 1 / 4 / 8 users |
+    |---|---|---|---|---|---|
+    | 128 / 128 | 38 (37.8) | 69 (36.6) | 122 (32.2) | 129 (17.7) | 32 / 103 / 188 |
+    | 2,048 / 128 | 34 (33.7) | 62 (31.4) | 102 (26.4) | 104 (14.2) | 31 / 90 / 151 |
+    | 8,192 / 128 | 25 (25.5) | 44 (22.1) | 60 (15.1) | 61 (8.1) | 26 / 58 / 79 |
+    | 128 / 1,024 | 45 (45.1) | 73 (44.0) | 99 (30.1) | 120 (20.2) | 33 / 119 / 230 |
+    | 2,048 / 1,024 | 34 (34.0) | 63 (33.3) | 113 (29.4) | 94 (15.8) | 32 / 116 / 219 |
+    | 8,192 / 1,024 | 22 (22.4) | 42 (21.5) | 87 (25.7) | 102 (16.0) | 31 / 104 / 183 |
+
+    `single-user-dflash2` profile (one slot, fastest for exactly one user) vs plain, one user, tok/s (mean TTFT ms in brackets):
+
+    | ISL / OSL | single-user-dflash2 | plain |
+    |---|---|---|
+    | 128 / 128 | 44.7 [151] | 32.3 [95] |
+    | 1,024 / 128 | 45.4 [197] | 31.0 [182] |
+    | 2,048 / 128 | 41.0 [319] | 30.8 [256] |
+    | 4,096 / 128 | 37.8 [611] | 28.8 [511] |
+    | 8,192 / 128 | 32.6 [1,209] | 25.8 [1,017] |
+    | 16,384 / 128 | 24.3 [2,457] | 21.1 [2,095] |
+    | 128 / 1,024 | 44.8 [148] | 32.6 [97] |
+    | 1,024 / 1,024 | 37.2 [198] | 32.3 [185] |
+    | 2,048 / 1,024 | 41.7 [315] | 32.3 [271] |
+    | 4,096 / 1,024 | 45.8 [606] | 31.9 [514] |
+    | 8,192 / 1,024 | 33.6 [1,215] | 31.2 [1,013] |
+    | 16,384 / 1,024 | 36.4 [2,461] | 30.1 [2,073] |
+
+    ### tt-inference-server `--workflow benchmarks`
+
+    `single-user-dflash2` at one user (per-user e2e tok/s; plain in the last column):
+
+    | ISL | OSL | TTFT ms | TPOT ms | tok/s per user | plain tok/s per user |
+    |---|---|---|---|---|---|
+    | 128 | 128 | 146 | 20.6 | 46.4 | 32.3 |
+    | 1,024 | 128 | 196 | 20.5 | 45.7 | 31.3 |
+    | 2,048 | 128 | 315 | 19.6 | 45.7 | 30.7 |
+    | 4,096 | 128 | 608 | 21.7 | 38.1 | 28.8 |
+    | 8,192 | 128 | 1,211 | 20.2 | 33.8 | 25.9 |
+    | 16,384 | 128 | 2,449 | 20.5 | 25.4 | 21.2 |
+    | 32,768 | 128 | 5,128 | 21.7 | 16.2 | 15.1 |
+    | 65,536 | 128 | 11,181 | 21.1 | 9.2 | 9.2 |
+    | 131,072 | 128 | 26,163 | 16.9 | 4.5 | 4.6 |
+    | 128 | 1024 | 146 | 22.2 | 44.8 | 32.6 |
+    | 8,192 | 1024 | 1,202 | 22.3 | 42.6 | 31.1 |
+    | 10,000 | 1024 | 1,514 | 20.0 | 46.5 | 30.9 |
+
+    `batch4-dflash2` at 1 and 4 users (aggregate output tok/s; tok/s per user in parentheses):
+
+    | ISL | OSL | 1 user | 4 users | plain 1 user |
+    |---|---|---|---|---|
+    | 128 | 128 | 39.3 (39.3) | 127.8 (32.8) | 32.3 |
+    | 1,024 | 128 | 37.8 (37.8) | 113.9 (30.6) | 31.3 |
+    | 2,048 | 128 | 33.5 (33.5) | 102.3 (26.5) | 30.7 |
+    | 4,096 | 128 | 32.1 (32.1) | 81.8 (20.8) | 28.8 |
+    | 8,192 | 128 | 25.7 (25.7) | 60.4 (15.5) | 25.9 |
+    | 16,384 | 128 | 20.0 (20.0) | 37.2 (9.4) | 21.2 |
+    | 32,768 | 128 | 14.4 (14.4) | 20.9 (5.3) | 15.1 |
+    | 65,536 | 128 | 9.0 (9.0) | 10.2 (2.6) | 9.2 |
+    | 131,072 | 128 | 4.4 (4.4) | 4.7 (1.2) | 4.6 |
+    | 128 | 1024 | 45.0 (45.0) | 123.3 (36.1) | 32.6 |
+    | 8,192 | 1024 | 23.9 (23.9) | 86.8 (25.7) | 31.1 |
+    | 10,000 | 1024 | 39.9 (39.9) | 101.9 (27.2) | 30.9 |
