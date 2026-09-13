@@ -27,6 +27,12 @@ constexpr int FIRST_COLUMN_SLOT_STRIDE = 2;
 // binary helpers dispatch on this local tag instead.
 enum class SamplingBinaryOp { add, sub, mul };
 
+/**
+ * @brief Compute a scalar sampling reciprocal with the configured approximation and DEST precision.
+ *
+ * @note Call @ref sampling_recip_init first. The Newton-Raphson iterations read the shared
+ * vConstFloatPrgm0 register; reinitialize it if another SFPU operation has overwritten it.
+ */
 template <bool is_fp32_dest_acc_en>
 sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
     if constexpr (APPROX) {
@@ -38,6 +44,13 @@ sfpi_inline sfpi::vFloat sampling_recip_value(sfpi::vFloat in) {
     }
 }
 
+/**
+ * @brief Initialize the constants used by the scalar sampling reciprocal.
+ *
+ * @note Establishes vConstFloatPrgm0 for the Newton-Raphson iterations. This is shared SFPU
+ * state, so call again after an intervening operation that changes the reciprocal constants.
+ * Unlike the full-tile reciprocal initializer, this does not program LOADMACRO or replay state.
+ */
 inline void sampling_recip_init() { sfpu_reciprocal_init<APPROX>(); }
 
 /**
