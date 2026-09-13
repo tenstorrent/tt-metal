@@ -33,7 +33,6 @@ prefill shapes, the per-slot seed, the B*block-row draft and extend), then the v
 captured ONCE and a dummy session per slot captures the drafter's draft/extend traces.
 """
 import json
-import math
 import os
 import time
 
@@ -62,6 +61,12 @@ from models.demos.blackhole.qwen36.tt.dflash2_serving import (  # noqa: E402
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, TT_Qwen3_5ProcessingInfo  # noqa: E402
 
 _W = serve_block_size() if _SPEC_ON else 1
+# Stop handling inside a block. "1" (default, serving): a block that reaches a stop token is emitted at
+# once, EOS-filled past the stop (the request ends here in normal use, so no time is spent decoding
+# beyond it). "0" (benchmarks): stops are ordinary tokens, every block is W real committed tokens; vLLM
+# still ends a normal request at its first stop, and an ignore_eos client is charged the real decode
+# cost of every token it counts, exactly like the plain server. Never coast on free fills either way.
+_STOP_FILL = os.environ.get("QWEN36_DFLASH_STOP_FILL", "1") != "0"
 # Prompts up to one chunk minus one token take the single eager MASKED-BUCKET prefill; longer prompts
 # the eager CHUNKED spec prefill. Both go through prefill_for_spec and both capture the drafter taps.
 _PREFILL_CHUNK = 2048
@@ -412,12 +417,14 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
                     logger.warning(f"Qwen36DFlash: live row {i} (slot {phys}) has no speculative session; EOS-filling")
                 continue
             live_rows.append((i, phys))
-        # Step until every live row can fill its block (a stopped row is EOS-filled and needs nothing).
+        # Step until every live row can fill its block. A row whose carry already holds a stop token
+        # needs nothing: it emits through the stop this step (latency for a normal request); the
+        # session itself is NOT stopped, so an ignore_eos client keeps getting real tokens after it.
         t0 = time.perf_counter() if _DEBUG else 0.0
         iters = 0
 
         def _needs(phys):
-            return dec.active[phys] and not self._stopped[phys] and len(self._carry[phys]) < _W
+            return dec.active[phys] and not (_STOP_FILL and self._stopped[phys]) and len(self._carry[phys]) < _W
 
         while True:
             need = [phys for _, phys in live_rows if _needs(phys)]
@@ -438,11 +445,15 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         for i, phys in live_rows:
             carry = self._carry[phys]
             stop_i = next((k for k, t in enumerate(carry) if t in self._eos), None) if self._stopped[phys] else None
-            if stop_i is not None and stop_i < _W:
-                # Emit through the first stop token and EOS-fill the rest; tokens speculated past the stop
-                # are dropped (the scheduler normally releases the request next; an ignore_eos client
-                # continues from a fresh block).
-                block, self._carry[phys], self._stopped[phys] = carry[: stop_i + 1], [], False
+            if _STOP_FILL and stop_i is not None and stop_i < _W:
+                # Emit through the first stop token and EOS-fill the rest of the block. The scheduler
+                # normally releases the request next. An ignore_eos client (benchmarks) does not: the
+                # session stays live and the tokens it already committed past the stop stay in the carry,
+                # so the following blocks carry the model's real continuation at the real decode cost
+                # (the runner's anchor then differs from the session's tail once: the session owns the
+                # trajectory). Never leave a request coasting on free EOS fills.
+                block, self._carry[phys] = carry[: stop_i + 1], carry[stop_i + 1 :]
+                self._stopped[phys] = any(t in self._eos for t in self._carry[phys])
             else:
                 block, self._carry[phys] = carry[:_W], carry[_W:]
                 # A stop still sitting in the carry keeps the row marked; it is emitted next step.
