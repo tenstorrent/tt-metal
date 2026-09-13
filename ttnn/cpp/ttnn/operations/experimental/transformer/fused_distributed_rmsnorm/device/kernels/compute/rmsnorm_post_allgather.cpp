@@ -60,8 +60,10 @@ void kernel_main() {
     CircularBuffer cb_rope_cos(rope_cos_cb);
     CircularBuffer cb_rope_sin(rope_sin_cb);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
-    matmul_init(intermediate_cb, transformation_mat_cb);
+    if constexpr (fuse_rope) {
+        compute_kernel_hw_startup<SrcOrder::Reverse>(intermediate_cb, transformation_mat_cb, rotated_input_cb);
+        matmul_init(intermediate_cb, transformation_mat_cb);
+    }
 
     compute_kernel_hw_startup(input_cb, input_cb, input_cb);
 

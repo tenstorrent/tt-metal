@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // Dropout (owns dropout_kernel_init via init_runtime)
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/scalar.hpp"  // Dropout owns PRNG initialization.
 
 namespace ckl = compute_kernel_lib;
 
