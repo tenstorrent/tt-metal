@@ -1,0 +1,162 @@
+# tt-model.yaml — Qwen/Qwen3.8-27B on a P300x2 (2x P300 boards = 4 Blackhole chips, (1,4) mesh) via vLLM,
+# PLAIN batched decode (the qwen36-prefill-opt serving branch: prefill optimizations, no speculative decoding),
+# up to 32 concurrent users with full sampling support. For faster single/low-batch decode see
+# changh95/qwen3.8-27b-dflash2-p300x2 (DFlash2 speculative decoding).
+#
+#   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
+#   tt-model serve   <builds>/qwen3.8-27b-p300x2/tt_kernel_manifest.json
+#   tt-model push    <builds>/qwen3.8-27b-p300x2 --private
+schema: "5.1"
+repo: changh95/qwen3.8-27b-p300x2
+name: qwen3.8-27b-p300x2
+weights:
+  repo: Qwen/Qwen3.8-27B
+  revision: 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0   # refs/main as validated, 2026-09-12
+kind: vllm-plugin
+arch: blackhole
+
+source:
+  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-plain  # branch qwen36-prefill-opt-package (= qwen36-prefill-opt + this manifest)
+  code:                                                        # import closure of qwen36_vllm.py + the demo/spec-decode path
+    - models/common
+    - models/tt_transformers
+    - models/demos/blackhole/qwen36                            # model, demo, tests
+    - models/demos/qwen3_vl/tt/common.py
+    - models/demos/utils
+    - models/experimental/gated_attention_gated_deltanet
+    - models/perf
+    - models/tt_dit/utils/tensor.py
+    - models/model_trace_region_sizes.yaml
+    - models/model_targets.yaml
+  ubuntu: "22.04"
+  python: "3.12"
+
+runtime:
+  vllm: {version: "0.26.0"}                                    # the validated serving venv: vllm 0.26.0 (empty target)
+  # the same plugin build the DFlash2 package validated (fork of tenstorrent/vllm-tt-plugin; the adaptive block-output
+  # features it adds are inert for this plain model class)
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: 751ec33573aa30be03f8a9bda8d36a3cd3259158}
+
+serve:
+  hardware: p300x2
+  mesh_device: P150x4          # tt-metal's name for the (1,4) Blackhole mesh a P300x2 opens
+  port: 8000
+  max_model_len: 262144
+  max_num_seqs: 32             # overridden per profile below (1 = speculative, 32 = batched plain decode)
+  block_size: 64
+  capabilities:
+    tool_parser: qwen3_coder
+    reasoning_parser: qwen3
+  additional_config:
+    tt:
+      fabric_config: FABRIC_1D
+      trace_region_size: 1073741824
+      l1_small_size: 24576
+      sample_on_device_mode: decode_only
+  env:
+    ARCH_NAME: blackhole
+    TT_QWEN35_TEXT_VER: qwen36_blackhole
+    TT_MESH_GRAPH_DESC_PATH: /opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto
+    QWEN36_MAX_TOKENS_ALL_USERS: "525312"
+    VLLM_RPC_TIMEOUT: "900000"
+    VLLM_CONFIGURE_LOGGING: "1"
+    TORCHDYNAMO_DISABLE: "1"
+    HF_HUB_OFFLINE: "1"
+    QWEN36_DRAFTER: mtp                 # demo drafter switch only; the served class never speculates
+  args:
+    - [--max-num-batched-tokens, "262144"]
+
+serve_profiles:
+  - name: batch32
+    description: Plain batched decode, up to 32 concurrent users, full sampling support.
+    max_num_seqs: 32
+    args:
+      - [--max-num-batched-tokens, "262144"]
+default_profile: batch32
+
+verify:
+  - "from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM; assert Qwen36ForCausalLM"
+  - "import vllm.model_executor.models.qwen3_5"
+  - "import transformers.models.qwen3_5"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/tt_metal/fabric/mesh_graph_descriptors/p300_x2_mesh_graph_descriptor.textproto').is_file()"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/model_trace_region_sizes.yaml').is_file()"
+
+card:
+  description: |
+    Qwen3.8-27B (hybrid Gated-DeltaNet + gated-attention dense 27B, reasoning model, 256K context) served on two Tenstorrent P300 boards (4 Blackhole chips, 4-way tensor parallel) through vLLM with plain batched decode: full sampling support, up to 32 concurrent users, ~32 tok/s per user at one user scaling to ~490-740 tok/s aggregate at 32 (128-token prompts). This is the qwen36-prefill-opt serving branch (prefill optimizations, no speculative decoding). If you want a faster decode speed for batch=8 or less, refer to changh95/qwen3.8-27b-dflash2-p300x2.
+  quickstart: |
+    ### Profile
+
+    * `batch32` (default): `--max-num-seqs 32`, plain decode, full vLLM sampling support (temperature, top-p, penalties,
+      structured outputs), 262,144-token context, chunked prefill. One P300x2 serves everything from a single user to 32.
+
+    **If you want a faster decode speed for batch=8 or less, refer to
+    [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2)** (the same model with
+    DFlash2 speculative decoding: 1.2 to 1.5x the per-user speed at 1 to 4 users, greedy output).
+
+    ## Benchmarks (P300x2, plain decode, `batch32` profile)
+
+    Measured 2026-09-13 with the tt-inference-server client (`vllm bench serve`, random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming; each point is 4×users requests, 2×users for 1,024-token outputs). Aggregate output tok/s, with tok/s per user (= OSL / mean end-to-end latency) in parentheses. Decode is weight-bandwidth-bound, so a single user sees ~32 tok/s and the aggregate scales almost linearly to 32 users.
+
+    | ISL / OSL | 1 user | 2 | 4 | 8 | 16 | 32 |
+    |---|---|---|---|---|---|---|
+    | 128 / 128 | 32 (32.3) | 54 (26.8) | 103 (25.6) | 188 (23.5) | 324 (20.2) | 491 (15.3) |
+    | 1,024 / 128 | 31 (31.0) | 51 (25.7) | 95 (23.9) | 165 (20.7) | 264 (16.5) | 366 (11.4) |
+    | 2,048 / 128 | 31 (30.8) | 50 (25.0) | 90 (22.6) | 151 (18.9) | 227 (14.2) | 299 (9.3) |
+    | 4,096 / 128 | 29 (28.8) | 45 (22.6) | 76 (19.1) | 116 (14.5) | 157 (9.8) | 188 (5.9) |
+    | 8,192 / 128 | 26 (25.8) | 38 (19.1) | 58 (14.6) | 79 (9.9) | 96 (6.0) | 107 (3.3) |
+    | 16,384 / 128 | 21 (21.1) | 29 (14.4) | 39 (9.8) | 47 (5.9) | 52 (3.3) | 51 (1.6) |
+    | 128 / 1,024 | 33 (32.6) | 60 (30.2) | 119 (29.7) | 230 (28.7) | 434 (27.1) | 739 (23.1) |
+    | 1,024 / 1,024 | 32 (32.3) | 60 (29.9) | 117 (29.3) | 224 (28.0) | 413 (25.8) | 685 (21.4) |
+    | 2,048 / 1,024 | 32 (32.3) | 59 (29.7) | 116 (28.9) | 219 (27.3) | 396 (24.7) | 641 (20.0) |
+    | 4,096 / 1,024 | 32 (31.9) | 58 (29.1) | 111 (27.8) | 204 (25.5) | 356 (22.3) | 542 (16.9) |
+    | 8,192 / 1,024 | 31 (31.2) | 56 (28.2) | 104 (25.9) | 183 (22.9) | 295 (18.5) | 412 (12.9) |
+    | 16,384 / 1,024 | 30 (30.1) | 53 (26.3) | 93 (23.2) | 150 (18.7) | 218 (13.6) | 226 (8.1) |
+
+    Mean TTFT (ms) / TPOT (ms) at 1, 4 and 32 users:
+
+    | ISL / OSL | 1 user | 4 users | 32 users |
+    |---|---|---|---|
+    | 128 / 128 | 95 / 30.5 | 298 / 37.0 | 2,742 / 44.1 |
+    | 1,024 / 128 | 182 / 31.1 | 581 / 37.7 | 5,420 / 45.4 |
+    | 2,048 / 128 | 256 / 30.7 | 818 / 38.2 | 7,775 / 46.7 |
+    | 4,096 / 128 | 511 / 31.0 | 1,622 / 40.0 | 15,409 / 50.0 |
+    | 8,192 / 128 | 1,017 / 31.1 | 3,254 / 43.3 | 31,096 / 57.1 |
+    | 16,384 / 128 | 2,095 / 31.2 | 6,703 / 50.5 | 47,418 / 253.0 |
+    | 128 / 1,024 | 97 / 30.6 | 297 / 33.4 | 2,736 / 40.7 |
+    | 1,024 / 1,024 | 185 / 30.8 | 583 / 33.6 | 5,446 / 41.5 |
+    | 2,048 / 1,024 | 271 / 30.8 | 831 / 33.8 | 7,839 / 42.3 |
+    | 4,096 / 1,024 | 514 / 30.9 | 1,618 / 34.5 | 15,423 / 44.0 |
+    | 8,192 / 1,024 | 1,013 / 31.1 | 3,252 / 35.4 | 30,941 / 47.5 |
+    | 16,384 / 1,024 | 2,073 / 31.2 | 6,632 / 36.7 | 48,441 / 75.6 |
+
+    The two 16k rows at 32 users are limited by the 525k-token KV pool (32 × 16.5k tokens fills it), not by decode.
+
+    ### tt-inference-server `--workflow benchmarks` (standard P300X2 grid)
+
+    | users | ISL | OSL | TTFT ms | TPOT ms | E2EL ms | output tok/s | tok/s per user |
+    |---|---|---|---|---|---|---|---|
+    | 1 | 128 | 128 | 94 | 30.5 | 3,964 | 32.3 | 32.3 |
+    | 32 | 128 | 128 | 2,735 | 44.0 | 8,320 | 492.2 | 15.4 |
+    | 1 | 128 | 1024 | 97 | 30.7 | 31,456 | 32.6 | 32.6 |
+    | 32 | 128 | 1024 | 2,743 | 40.7 | 44,344 | 738.9 | 23.1 |
+    | 1 | 1,024 | 128 | 185 | 30.8 | 4,093 | 31.3 | 31.3 |
+    | 32 | 1,024 | 128 | 5,454 | 45.6 | 11,250 | 364.0 | 11.4 |
+    | 1 | 2,048 | 128 | 259 | 30.8 | 4,166 | 30.7 | 30.7 |
+    | 32 | 2,048 | 128 | 7,805 | 46.7 | 13,739 | 298.1 | 9.3 |
+    | 1 | 4,096 | 128 | 507 | 31.0 | 4,439 | 28.8 | 28.8 |
+    | 32 | 4,096 | 128 | 15,432 | 50.1 | 21,790 | 188.0 | 5.9 |
+    | 1 | 8,192 | 128 | 1,016 | 30.9 | 4,936 | 25.9 | 25.9 |
+    | 32 | 8,192 | 128 | 30,980 | 56.6 | 38,172 | 107.3 | 3.4 |
+    | 1 | 8,192 | 1024 | 1,024 | 31.2 | 32,933 | 31.1 | 31.1 |
+    | 32 | 8,192 | 1024 | 30,857 | 47.4 | 79,396 | 412.7 | 12.9 |
+    | 1 | 10,000 | 1024 | 1,319 | 31.1 | 33,089 | 30.9 | 30.9 |
+    | 32 | 10,000 | 1024 | 35,031 | 54.4 | 90,693 | 361.3 | 11.3 |
+    | 1 | 16,384 | 128 | 2,087 | 31.2 | 6,049 | 21.2 | 21.2 |
+    | 31 | 16,384 | 128 | 46,747 | 191.7 | 71,088 | 55.8 | 1.8 |
+    | 1 | 32,768 | 128 | 4,457 | 31.7 | 8,484 | 15.1 | 15.1 |
+    | 15 | 32,768 | 128 | 47,209 | 194.1 | 71,857 | 26.7 | 1.8 |
+    | 1 | 65,536 | 128 | 9,727 | 32.6 | 13,870 | 9.2 | 9.2 |
+    | 8 | 65,536 | 128 | 54,412 | 236.1 | 84,396 | 12.1 | 1.5 |
+    | 1 | 131,072 | 128 | 23,463 | 34.3 | 27,813 | 4.6 | 4.6 |
+    | 4 | 131,072 | 128 | 64,170 | 292.4 | 101,305 | 5.1 | 1.3 |
