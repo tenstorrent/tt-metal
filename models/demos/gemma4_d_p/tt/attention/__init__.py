@@ -6,8 +6,24 @@
 import ttnn
 
 from .weights import load_attention_weights
-from .prefill import prefill_forward
 from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
+
+from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_ROTARY_DIM, pack_global_kv_device
+from .operations import (
+    apply_allreduce,
+    apply_output_projection,
+    apply_per_head_norm,
+    apply_qkv_projection,
+    concat_heads,
+    prefill_short_lived_memcfg,
+    split_qkv_heads_prefill,
+)
+from .ring_prefill import (
+    ring_packed_prefill_attention,
+    ring_prefill_attention,
+    write_chunk_to_packed_ring_cache,
+    write_chunk_to_ring_cache,
+)
 
 
 class Gemma4AttentionConfig:
@@ -109,21 +125,167 @@ class Gemma4Attention:
         packed_global_rope=None,
         packed_sliding_rope=None,
     ):
-        """Run one chunk of ring attention."""
-        tt_out = prefill_forward(
-            hidden_states=hidden_states,
-            cos_cache=rope_mats[0],
-            sin_cache=rope_mats[1],
-            weights=self.weights,
-            config=self.config,
-            mesh_config=self.mesh_config,
-            ccl_manager=self.ccl_manager,
-            chunk_start_idx=chunk_start_idx,
-            ring_kv_cache=self.ring_kv_cache,
-            ring_max_seq_len=self.ring_max_seq_len,
-            ring_layer_idx=self.ring_layer_idx,
-            ring_num_layers=self.ring_num_layers,
-            packed_global_rope=packed_global_rope,
-            packed_sliding_rope=packed_sliding_rope,
+        """Write a user's chunk and attend its cached prefix."""
+        if self.ring_kv_cache is None:
+            raise ValueError("Galaxy prefill requires a ring KV cache")
+        tp = self.mesh_config.tp_degree
+        chunk_offset = int(chunk_start_idx)
+        kv_tied = self.config.is_kv_tied
+        xqkv = apply_qkv_projection(hidden_states, self.weights, kv_tied=kv_tied)
+
+        # Short-lived prefill activations in L1 when GEMMA4_PREFILL_L1_ACT=1 (Qwen36
+        # #48861). o_proj / allreduce stay DRAM (CB clash with CCL).
+        act_mc = prefill_short_lived_memcfg()
+        tt_q, tt_k, tt_v = split_qkv_heads_prefill(
+            xqkv,
+            self.config,
+            self.weights.is_global,
+            tp=tp,
+            kv_replicated=self.weights.kv_replicated,
+            memory_config=act_mc,
+            kv_tied=kv_tied,
         )
+
+        tt_q = apply_per_head_norm(
+            tt_q, self.weights.q_norm_weight, self.config.rms_norm_eps, with_scale=True, memory_config=act_mc
+        )
+
+        is_global = not self.config.is_sliding
+        is_sliding = self.config.is_sliding
+        if self.weights.is_global:
+            # The tied projection is one semantic KV value. Normalize it once without
+            # gamma: this entire 512-wide result is V. K branches from this value;
+            # packed-only serving transforms just its active rotary quarter below.
+            tt_k.deallocate(True)
+            tt_v = apply_per_head_norm(tt_v, None, self.config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+            tt_k = None
+        else:
+            tt_k = apply_per_head_norm(
+                tt_k, self.weights.k_norm_weight, self.config.rms_norm_eps, with_scale=True, memory_config=act_mc
+            )
+            tt_v = apply_per_head_norm(tt_v, None, self.config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+
+        # Apply RoPE to Q and the rotary part of K.
+        if is_global:
+            if packed_global_rope is None:
+                raise RuntimeError("packed global ring attention requires pre-gathered packed RoPE tensors")
+            q_cos, q_sin, _, _, trans_mat = packed_global_rope
+            q_full = tt_q
+            q_rotary = ttnn.slice(
+                q_full,
+                (0, 0, 0, 0),
+                tuple(q_full.shape)[:-1] + (GLOBAL_ROTARY_DIM,),
+                memory_config=act_mc,
+            )
+            q_nonrotary = ttnn.slice(
+                q_full,
+                (0, 0, 0, GLOBAL_ROTARY_DIM),
+                tuple(q_full.shape)[:-1] + (GLOBAL_HEAD_DIM,),
+                memory_config=act_mc,
+            )
+            q_rotated = ttnn.experimental.rotary_embedding_llama(
+                q_rotary, q_cos, q_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+            )
+            tt_q = ttnn.concat((q_rotated, q_nonrotary), dim=-1, memory_config=act_mc)
+            for tensor in (q_full, q_rotary, q_nonrotary, q_rotated):
+                tensor.deallocate(True)
+        elif is_sliding:
+            if packed_sliding_rope is None:
+                raise RuntimeError("packed sliding ring attention requires pre-gathered adjacent RoPE tensors")
+            sliding_cos, sliding_sin, trans_mat = packed_sliding_rope
+            q_unrotated = tt_q
+            tt_q = ttnn.experimental.rotary_embedding_llama(
+                q_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+            )
+            q_unrotated.deallocate(True)
+            k_unrotated = tt_k
+            tt_k = ttnn.experimental.rotary_embedding_llama(
+                k_unrotated, sliding_cos, sliding_sin, trans_mat, is_decode_mode=False, memory_config=act_mc
+            )
+            k_unrotated.deallocate(True)
+        sliding_window = self.config.sliding_window
+        if is_global:
+            packed_q = tt_q
+            packed_kv = pack_global_kv_device(
+                tt_v,
+                self.weights.k_norm_rotary_weight,
+                rope_mats[0],
+                rope_mats[1],
+                canonical_k=tt_k,
+                packed_rope_mats=packed_global_rope,
+                value_is_packed=True,
+                memory_config=act_mc,
+            )
+            write_chunk_to_packed_ring_cache(
+                self.ring_kv_cache.kv,
+                packed_kv,
+                self.mesh_config,
+                kv_actual_global=chunk_offset,
+                layer_idx=self.ring_layer_idx,
+                num_layers=self.ring_num_layers,
+                ccl_manager=self.ccl_manager,
+            )
+        else:
+            packed_q = None
+            write_chunk_to_ring_cache(
+                self.ring_kv_cache.k,
+                self.ring_kv_cache.v,
+                tt_k,
+                tt_v,
+                self.mesh_config,
+                kv_actual_global=chunk_offset,
+                layer_idx=self.ring_layer_idx,
+                num_layers=self.ring_num_layers,
+                ccl_manager=self.ccl_manager,
+            )
+        cp_ring_ckc = ttnn.init_device_compute_kernel_config(
+            tt_q.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        num_local_kv_heads_ring = tt_v.shape[1]
+        ring_logical_n = self.ring_max_seq_len
+        if is_global:
+            tt_sdpa = ring_packed_prefill_attention(
+                packed_q,
+                self.ring_kv_cache.kv,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
+                num_local_kv_heads=num_local_kv_heads_ring,
+                max_seq_len=self.ring_max_seq_len,
+                logical_n=ring_logical_n,
+                kv_actual_global=chunk_offset,
+                scale=1.0,
+                compute_kernel_config=cp_ring_ckc,
+                layer_idx=self.ring_layer_idx,
+                num_layers=self.ring_num_layers,
+            )
+            packed_kv.deallocate(True)
+        else:
+            tt_sdpa = ring_prefill_attention(
+                tt_q,
+                self.ring_kv_cache.k,
+                self.ring_kv_cache.v,
+                mesh_config=self.mesh_config,
+                ccl_manager=self.ccl_manager,
+                num_local_kv_heads=num_local_kv_heads_ring,
+                head_dim=self.config.head_dim,
+                max_seq_len=self.ring_max_seq_len,
+                logical_n=ring_logical_n,
+                kv_actual_global=chunk_offset,
+                sliding_window=sliding_window,
+                scale=1.0,
+                compute_kernel_config=cp_ring_ckc,
+                layer_idx=self.ring_layer_idx,
+                num_layers=self.ring_num_layers,
+            )
+        tt_q.deallocate(True)
+        if tt_k is not None:
+            tt_k.deallocate(True)
+        tt_v.deallocate(True)
+        tt_out = concat_heads(tt_sdpa)
+        tt_out = apply_output_projection(tt_out, self.weights)
+        tt_out = apply_allreduce(tt_out, self.mesh_config, self.ccl_manager, self.config.hidden_size)
         return tt_out
