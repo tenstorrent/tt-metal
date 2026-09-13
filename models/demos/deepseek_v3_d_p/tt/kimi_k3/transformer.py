@@ -462,19 +462,6 @@ class TtKimiK3Transformer(LightweightModule):
         )
 
         for local_idx, layer in enumerate(self.layers):
-            # Per-layer L1 map, for #54876. The clash reports only an address ("L1 buffer allocated
-            # at 1563072 and static circular buffer region ends at 1563264"), and which buffer that
-            # is cannot be deduced from the model code — AttnRes's own L1 tenancy is flat across
-            # sealed depths 1..8, so the tenant is something else. `detailed_memory_usage.csv`
-            # carries a block's address, size and allocation status, so dumping before each layer
-            # leaves the last report standing as the state the failing layer inherited.
-            if os.environ.get("PREFILL_DUMP_L1_PER_LAYER") == "1":
-                try:
-                    ttnn.device.dump_device_memory_state(
-                        self.mesh_device, prefix=f"k3_L{self.first_layer_idx + local_idx}_"
-                    )
-                except Exception as exc:  # diagnostics must never change what the model does
-                    logger.warning(f"L1 dump at layer {self.first_layer_idx + local_idx} failed: {exc}")
             ctx = K3AttnContext(
                 rope_tensors=rope_tensors,
                 kvpe_cache=kvpe_cache,
