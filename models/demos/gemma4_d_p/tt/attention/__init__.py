@@ -121,6 +121,7 @@ class Gemma4Attention:
         self,
         hidden_states,
         rope_mats,
+        prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
@@ -223,7 +224,7 @@ class Gemma4Attention:
                 kv_actual_global=chunk_offset,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
-                ccl_manager=self.ccl_manager,
+                prefill_metadata=prefill_metadata,
             )
         else:
             packed_q = None
@@ -236,7 +237,7 @@ class Gemma4Attention:
                 kv_actual_global=chunk_offset,
                 layer_idx=self.ring_layer_idx,
                 num_layers=self.ring_num_layers,
-                ccl_manager=self.ccl_manager,
+                prefill_metadata=prefill_metadata,
             )
         cp_ring_ckc = ttnn.init_device_compute_kernel_config(
             tt_q.device().arch(),
@@ -252,6 +253,7 @@ class Gemma4Attention:
                 packed_q,
                 self.ring_kv_cache.kv,
                 mesh_config=self.mesh_config,
+                prefill_metadata=prefill_metadata,
                 ccl_manager=self.ccl_manager,
                 num_local_kv_heads=num_local_kv_heads_ring,
                 max_seq_len=self.ring_max_seq_len,
@@ -269,6 +271,7 @@ class Gemma4Attention:
                 self.ring_kv_cache.k,
                 self.ring_kv_cache.v,
                 mesh_config=self.mesh_config,
+                prefill_metadata=prefill_metadata,
                 ccl_manager=self.ccl_manager,
                 num_local_kv_heads=num_local_kv_heads_ring,
                 head_dim=self.config.head_dim,

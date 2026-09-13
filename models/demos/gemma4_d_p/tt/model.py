@@ -11,6 +11,7 @@ from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rop
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import ring_cache_capacity
 from models.demos.gemma4_d_p.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4_d_p.tt.precision import dtype_to_str
+from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
@@ -215,7 +216,8 @@ class Gemma4Model:
             )
 
         # When True the caller refreshes the ring metadata itself, outside any trace.
-        self._ring_metadata_external = False
+        self.prefill_metadata = PrefillMetadata(mesh_config)
+        self._prefill_metadata_external = False
         self._prefill_trace_controller = None
         self.max_seq_len = max_seq_len
         n_layers = num_layers or hf_config.num_hidden_layers
@@ -329,8 +331,8 @@ class Gemma4Model:
             raise ValueError("Ring prefill processes one user per call")
         if d2h_service is not None and metadata_msg is None:
             raise ValueError("metadata_msg is required for D2H layer acknowledgements")
-        if not self._ring_metadata_external:
-            self.ccl_manager.set_ring_metadata(slot_idx=user_id, kv_actual_global=chunk_start_idx)
+        if not self._prefill_metadata_external:
+            self.prefill_metadata.update(slot_idx=user_id, kv_actual_global=chunk_start_idx)
 
         gathered_rope = {}
         if self._rope_prefill_positions is not None:
@@ -358,6 +360,7 @@ class Gemma4Model:
             hidden_states = layer(
                 hidden_states,
                 rope_mats=layer_rope,
+                prefill_metadata=self.prefill_metadata,
                 chunk_start_idx=chunk_start_idx,
                 packed_global_rope=packed_rope if layer_type == "full_attention" else None,
                 packed_sliding_rope=packed_rope if layer_type == "sliding_attention" else None,
@@ -423,9 +426,9 @@ class Gemma4Model:
 
     def transform_and_embed_prefill_inputs_device(self, tokens):
         """Embed CP-sharded tokens into tiled hidden states."""
-        assert len(tokens.shape) == 2 and tokens.shape[0] == 1, (
-            f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
-        )
+        assert (
+            len(tokens.shape) == 2 and tokens.shape[0] == 1
+        ), f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
         return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)
 
     def process_output_prefill(self, tt_out, last_token_idx):

@@ -234,7 +234,7 @@ def test_prefill_long_context_traced(
     )
 
     model.set_prefill_rope_positions(device_positions)
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
 
     stage_breakdown = {"tokens": 0.0, "metadata": 0.0, "rope": 0.0}
 
@@ -255,7 +255,7 @@ def test_prefill_long_context_traced(
         stage_breakdown["tokens"] += time.time() - _t
 
         _t = time.time()
-        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
         stage_breakdown["metadata"] += time.time() - _t
 
         # Update absolute token positions across CP ranks.
@@ -440,7 +440,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         device=mesh_device,
     )
     model.set_prefill_rope_positions(device_positions)
-    model._ring_metadata_external = True
+    model._prefill_metadata_external = True
 
     def _stage(idx):
         """Refresh tokens, ring metadata, semaphores, and RoPE positions before replay."""
@@ -453,7 +453,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             mesh_mapper=_cp_or_replicate_mapper(mesh_config, seq_dim=-1),
         )
         ttnn.copy_host_to_device_tensor(staged, device_input_tokens)
-        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=chunk_start)
+        model.prefill_metadata.update(slot_idx=0, kv_actual_global=chunk_start)
         pos_host = ttnn.from_torch(
             torch.arange(chunk_start, chunk_start + chunk_size, dtype=torch.int32).unsqueeze(0),
             device=None,
@@ -485,6 +485,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
             return layer(
                 hidden_states=embeds,
                 rope_mats=(cos, sin),
+                prefill_metadata=model.prefill_metadata,
                 chunk_start_idx=chunk_start,
                 packed_global_rope=packed_rope if lt == "global" else None,
                 packed_sliding_rope=packed_rope if lt == "local" else None,

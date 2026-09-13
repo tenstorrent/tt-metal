@@ -91,6 +91,7 @@ class Gemma4DecoderLayer:
         self,
         hidden_states,
         rope_mats,
+        prefill_metadata,
         chunk_start_idx=0,
         packed_global_rope=None,
         packed_sliding_rope=None,
@@ -102,6 +103,7 @@ class Gemma4DecoderLayer:
         attn_output = self.self_attn(
             normed,
             rope_mats=rope_mats,
+            prefill_metadata=prefill_metadata,
             chunk_start_idx=chunk_start_idx,
             packed_global_rope=packed_global_rope,
             packed_sliding_rope=packed_sliding_rope,
