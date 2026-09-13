@@ -120,6 +120,27 @@ TEST(GenericOpNamedArgsHash, ValueOnlyDifferenceKeepsHash) {
         << "Named-arg values (and per-core core count) must not change the generic-op program hash";
 }
 
+TEST(GenericOpHash, OptimizationLevelChangesHash) {
+    using namespace tt::tt_metal;
+    KernelDescriptor o2{
+        .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
+        .core_ranges = CoreRangeSet(CoreRange(CoreCoord{0, 0})),
+        .opt_level = KernelBuildOptLevel::O2,
+        .config = ComputeConfigDescriptor{},
+    };
+    auto o3 = o2;
+    o3.opt_level = KernelBuildOptLevel::O3;
+    auto default_opt = o2;
+    default_opt.opt_level.reset();
+
+    EXPECT_NE(
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {o2}}),
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {o3}}));
+    EXPECT_NE(
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {o2}}),
+        ttnn::operations::generic::compute_program_descriptor_hash(ProgramDescriptor{.kernels = {default_opt}}));
+}
+
 TEST(GenericOpHash, ComputeProcessorChangesHash) {
     using namespace tt::tt_metal;
     KernelDescriptor all{

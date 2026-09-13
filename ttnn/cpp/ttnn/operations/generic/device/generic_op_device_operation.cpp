@@ -58,6 +58,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             kernel.compile_time_args,
             kernel.named_compile_time_args,
             kernel.defines,
+            kernel.opt_level.has_value(),
+            kernel.opt_level.value_or(KernelBuildOptLevel{}),
             kernel.common_runtime_args.size(),
             // Blaze-only experimental named args (issue #50953): hash the FULL named-RT-arg schema
             // (names/lengths/dispatch across all 4 variants), NOT values. Replaces the previous
