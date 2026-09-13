@@ -3,7 +3,7 @@
 
 """Kimi-K3's first N layers against the model's own per-layer outputs.
 
-The depth ladder. `test_block_layer0*.py` gate one layer in isolation; this runs the stack the way
+The depth ladder. This runs the stack the way
 prefill does — embedding, then N layers threading one AttnRes walk — and scores **every** layer
 against `decoder_output_layer_i` from the vLLM trace. The per-layer curve is what says whether error
 accumulates or stays flat, which a single end-of-stack number cannot.
