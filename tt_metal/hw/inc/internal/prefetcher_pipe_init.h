@@ -237,6 +237,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_checkpoint(
     local.tc_idx = 0;
     if (local.num_tcs_to_rr == 1) {
         local.stride_size = relay_entry_size;  // 1-entry stride in bytes
+        local.jump = local.stride_size;        // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
         slot.base_addr = fifo_start_addr;
         slot.limit = fifo_limit_page_aligned;
@@ -338,6 +339,7 @@ FORCE_INLINE void align_local_dfb_to_prefetcher_pipe_receiver_iface(
     local.tc_idx = 0;
     if (local.num_tcs_to_rr == 1) {
         local.stride_size = relay_entry_size;
+        local.jump = local.stride_size;  // plain ring: the DM cursor jump equals the stride
         DFBTCSlot& slot = local.tc_slots[0];
         slot.base_addr = iface.fifo_start_addr;
         slot.limit = iface.fifo_limit_page_aligned;

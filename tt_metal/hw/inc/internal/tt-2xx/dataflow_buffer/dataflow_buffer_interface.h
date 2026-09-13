@@ -68,12 +68,16 @@ struct LocalDFBInterface {
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
+    uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;    // one op (a whole block) is split across all of this hart's TCs
+    uint16_t jump;        // cursor jump in entries, taken on each TC rotation
     DFBTCSlotSpan tc_slots;
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
 static_assert(sizeof(DFBTCSlotSpan) == 1, "DFBTCSlotSpan (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 12, "LocalDFBInterface (pack TRISC) size is incorrect");
+// 12B (main's shared-TC-pool layout) + 6B for block_size / split_tc / jump.
+static_assert(sizeof(LocalDFBInterface) == 18, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 
@@ -94,11 +98,14 @@ struct LocalDFBInterface {
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
     uint8_t tensix_trisc_mask;
+    uint16_t block_size;
+    uint16_t split_tc;
+    uint16_t jump;
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (unpack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 88, "LocalDFBInterface (unpack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 94, "LocalDFBInterface (unpack TRISC) size is incorrect");
 
 #else
 
@@ -131,12 +138,19 @@ struct LocalDFBInterface {
     uint8_t _tc_align_pad;  // pad bytes [8,20) → 20B so tc_slots[] stays 4B-aligned
 
     uint16_t num_entries;
+    uint16_t block_size;  // entries in one block; 1 unless the ring is BLOCKED
+    uint16_t split_tc;    // one op (a whole block) belongs to every one of this hart's TCs,
+                          // so each TC gets its share of the credits instead of one TC
+                          // everything: Blocked->Strided producers, Strided->Blocked consumers
+    uint32_t jump;        // cursor jump in bytes, taken on each TC rotation
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 };
 
 static_assert(sizeof(DFBTCSlot) == 20, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 144, "LocalDFBInterface size is incorrect");
+// 152, not 150: this struct is not packed, so the two bytes after split_tc are alignment padding
+// for the uint32_t jump (tc_slots[] must stay 4B-aligned).
+static_assert(sizeof(LocalDFBInterface) == 152, "LocalDFBInterface size is incorrect");
 
 #endif
 

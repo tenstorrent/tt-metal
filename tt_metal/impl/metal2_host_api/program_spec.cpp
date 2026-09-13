@@ -1878,6 +1878,16 @@ void ValidateProgramSpec(
                     first_kernel,
                     records[i].kernel->unique_id);
                 TT_FATAL(
+                    records[i].binding->block_size == records[0].binding->block_size,
+                    "DFB '{}' has multiple {} bindings with mismatched block_size (kernel '{}' = {} vs kernel '{}' = "
+                    "{})",
+                    dfb.unique_id,
+                    role,
+                    first_kernel,
+                    records[0].binding->block_size,
+                    records[i].kernel->unique_id,
+                    records[i].binding->block_size);
+                TT_FATAL(
                     records[i].kernel->num_threads == first_threads,
                     "DFB '{}' has multiple {} KernelSpecs with mismatched num_threads (kernel '{}' = {} vs kernel '{}' "
                     "= {})",
@@ -1904,6 +1914,113 @@ void ValidateProgramSpec(
         if (!allow_multi) {
             check_role_uniformity(endpoints.producers, "PRODUCER");
             check_role_uniformity(endpoints.consumers, "CONSUMER");
+        }
+
+        // block_size is meaningful only for the BLOCKED access pattern: it must be > 0 iff
+        // BLOCKED, and 0 for STRIDED/ALL.
+        auto check_block_size_validity = [&](const auto& records, std::string_view role) {
+            for (const auto& rec : records) {
+                const bool is_blocked = rec.binding->access_pattern == DFBAccessPattern::BLOCKED;
+                TT_FATAL(
+                    (rec.binding->block_size > 0) == is_blocked,
+                    "DFB '{}' {} binding (kernel '{}'): block_size must be > 0 iff access_pattern == BLOCKED "
+                    "(got block_size={}, access_pattern={})",
+                    dfb.unique_id,
+                    role,
+                    rec.kernel->unique_id,
+                    rec.binding->block_size,
+                    is_blocked ? "BLOCKED" : "STRIDED/ALL");
+            }
+        };
+        check_block_size_validity(endpoints.producers, "PRODUCER");
+        check_block_size_validity(endpoints.consumers, "CONSUMER");
+
+        // Cross-role BLOCKED legality:
+        //   - BLOCKED -> BLOCKED is allowed
+        //   - BLOCKED-producer -> ALL-consumer is allowed
+        //   - BLOCKED-producer -> STRIDED-consumer is allowed
+        //   - STRIDED-producer -> BLOCKED-consumer is allowed
+        //   - An ALL producer feeding a BLOCKED consumer is not allowed.
+        //
+        // BLOCKED -> BLOCKED also requires matching block_size and an integer
+        // producer/consumer thread-count ratio.
+        if (!endpoints.producers.empty() && !endpoints.consumers.empty()) {
+            const auto& prod = endpoints.producers.front();
+            const auto& cons = endpoints.consumers.front();
+            const bool prod_blocked = prod.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            const bool cons_blocked = cons.binding->access_pattern == DFBAccessPattern::BLOCKED;
+            if (prod_blocked || cons_blocked) {
+                // BLOCKED->ALL and BLOCKED->STRIDED are both allowed and reuse the existing
+                // ALL/STRIDED consumer paths.
+                const bool blocked_to_all = prod_blocked && cons.binding->access_pattern == DFBAccessPattern::ALL;
+                const bool blocked_to_strided =
+                    prod_blocked && cons.binding->access_pattern == DFBAccessPattern::STRIDED;
+                if (blocked_to_strided) {
+                    const uint32_t cons_threads = cons.kernel->num_threads;
+                    TT_FATAL(
+                        cons_threads > 0 && prod.binding->block_size % cons_threads == 0,
+                        "DFB '{}': BLOCKED-producer->STRIDED-consumer requires the consumer thread count "
+                        "to divide block_size (producer '{}' block_size = {}, consumer '{}' num_threads = "
+                        "{}); otherwise a block cannot be split evenly across the consumers.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod.binding->block_size,
+                        cons.kernel->unique_id,
+                        cons_threads);
+                }
+                const bool strided_to_blocked =
+                    cons_blocked && prod.binding->access_pattern == DFBAccessPattern::STRIDED;
+                if (strided_to_blocked) {
+                    const uint32_t prod_threads = prod.kernel->num_threads;
+                    TT_FATAL(
+                        prod_threads > 0 && cons.binding->block_size % prod_threads == 0,
+                        "DFB '{}': STRIDED-producer->BLOCKED-consumer requires the producer thread count "
+                        "to divide block_size (consumer '{}' block_size = {}, producer '{}' num_threads = "
+                        "{}); otherwise a block cannot be filled evenly by the producers.",
+                        dfb.unique_id,
+                        cons.kernel->unique_id,
+                        cons.binding->block_size,
+                        prod.kernel->unique_id,
+                        prod_threads);
+                }
+                if (!blocked_to_all && !blocked_to_strided && !strided_to_blocked) {
+                    TT_FATAL(
+                        prod_blocked && cons_blocked,
+                        "DFB '{}': a BLOCKED endpoint must pair as BLOCKED->BLOCKED, "
+                        "BLOCKED-producer->ALL-consumer, BLOCKED-producer->STRIDED-consumer, or "
+                        "STRIDED-producer->BLOCKED-consumer (producer '{}' is "
+                        "{}, consumer '{}' is {}); other mixed-BLOCKED combinations are not yet supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod_blocked ? "BLOCKED" : "non-BLOCKED",
+                        cons.kernel->unique_id,
+                        cons_blocked ? "BLOCKED" : "non-BLOCKED");
+                    TT_FATAL(
+                        prod.binding->block_size == cons.binding->block_size,
+                        "DFB '{}': BLOCKED producer and consumer must share the same block_size "
+                        "(producer '{}' = {}, consumer '{}' = {}).",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        prod.binding->block_size,
+                        cons.kernel->unique_id,
+                        cons.binding->block_size);
+                    // BLOCKED->BLOCKED supports asymmetric thread counts (fan-in/out via the tile-counter
+                    // round-robin), but only at an INTEGER ratio (matches calculate_num_tile_counters).
+                    const uint32_t pt = prod.kernel->num_threads;
+                    const uint32_t ct = cons.kernel->num_threads;
+                    const uint32_t hi = std::max(pt, ct);
+                    const uint32_t lo = std::min(pt, ct);
+                    TT_FATAL(
+                        lo > 0 && hi % lo == 0,
+                        "DFB '{}': BLOCKED producer/consumer thread counts must form an integer ratio "
+                        "(producer '{}' = {}, consumer '{}' = {}); non-integer ratios are not supported.",
+                        dfb.unique_id,
+                        prod.kernel->unique_id,
+                        pt,
+                        cons.kernel->unique_id,
+                        ct);
+                }
+            }
         }
 
         // (1)/(2) Placement — per-node census. A local DFB lives in shared SRAM on each node, so
@@ -3131,6 +3248,42 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     return out;
 }
 
+// Both sides' access patterns for one DFB, in the device's dfb::AccessPattern numbering
+// (STRIDED 0, ALL 1, BLOCKED 2). Baked into each binding's DFBBindingToken at compile time.
+struct DFBSidePatterns {
+    uint8_t pap = 0;
+    uint8_t cap = 0;
+};
+using DFBNameToPatternsMap = std::unordered_map<DFBSpecName, DFBSidePatterns>;
+
+static uint8_t DFBAccessPatternCode(DFBAccessPattern pattern) {
+    switch (pattern) {
+        case DFBAccessPattern::STRIDED: return 0;
+        case DFBAccessPattern::ALL: return 1;
+        case DFBAccessPattern::BLOCKED: return 2;
+    }
+    TT_THROW("Unknown DFBAccessPattern {}", static_cast<int>(pattern));
+}
+
+// One entry per DFB: the pattern of its producer bindings and of its consumer bindings. Role
+// uniformity (all producers alike, all consumers alike) is enforced by ValidateProgramSpec, so
+// the first record of each role speaks for the side.
+static DFBNameToPatternsMap MakeDFBNameToPatterns(const CollectedSpecData& collected) {
+    DFBNameToPatternsMap out;
+    out.reserve(collected.dfb_endpoints.size());
+    for (const auto& [dfb_name, endpoints] : collected.dfb_endpoints) {
+        DFBSidePatterns patterns;
+        if (!endpoints.producers.empty()) {
+            patterns.pap = DFBAccessPatternCode(endpoints.producers.front().binding->access_pattern);
+        }
+        if (!endpoints.consumers.empty()) {
+            patterns.cap = DFBAccessPatternCode(endpoints.consumers.front().binding->access_pattern);
+        }
+        out.emplace(dfb_name, patterns);
+    }
+    return out;
+}
+
 // Create map of local accessor name -> DFB device slot. This is the value baked into the kernel's
 // dfb::<name> accessor, so it must be the device slot rather than the program-wide id.
 // `dfb_name_to_is_relay` marks CrossNode/PrefetcherPipe relay locals so codegen emits
@@ -3143,7 +3296,8 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
     const std::unordered_map<DFBSpecName, bool>& dfb_name_to_is_relay,
     const std::unordered_map<DFBSpecName, uint8_t>& dfb_name_to_prefetcher_pipe_id,
     const std::unordered_map<DFBSpecName, const DataflowBufferSpec*>& dfb_by_name,
-    const DFBNameToIdMap& dfb_name_to_id) {
+    const DFBNameToIdMap& dfb_name_to_id,
+    const DFBNameToPatternsMap& dfb_name_to_patterns) {
     tt::tt_metal::DataflowBufferBindingHandleMap out;
     out.reserve(kernel_spec.dfb_bindings.size());
     for (const auto& dfb_binding : kernel_spec.dfb_bindings) {
@@ -3168,6 +3322,9 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
             handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
             handle.consumes = !handle.produces;
         }
+        const DFBSidePatterns& patterns = dfb_name_to_patterns.at(dfb_binding.dfb_spec_name);
+        handle.pap = patterns.pap;
+        handle.cap = patterns.cap;
         // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
         // handle, on both sides.
         auto [it, inserted] = out.try_emplace(dfb_binding.accessor_name, handle);
@@ -3237,7 +3394,7 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         switch (pattern) {
             case DFBAccessPattern::STRIDED: return experimental::dfb::AccessPattern::STRIDED;
             case DFBAccessPattern::ALL: return experimental::dfb::AccessPattern::ALL;
-            case DFBAccessPattern::BLOCKED: TT_FATAL(false, "BLOCKED access pattern is not yet supported");
+            case DFBAccessPattern::BLOCKED: return experimental::dfb::AccessPattern::BLOCKED;
         }
         TT_FATAL(false, "Unknown DFBAccessPattern");
     };
@@ -3287,15 +3444,27 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         }
         return any_dm && !disabled;
     };
+    // A PrefetcherPipe relay DFB aliases the pipe's ring and follows the pipe's lane-interleaved
+    // layout, which the BLOCKED access pattern was not designed against; keep relays on STRIDED /
+    // ALL until BLOCKED relays are done as their own effort.
+    TT_FATAL(
+        dfb_spec->advanced_options.prefetcher_pipe_relays.empty() ||
+            (producer_access_pattern != experimental::dfb::AccessPattern::BLOCKED &&
+             consumer_access_pattern != experimental::dfb::AccessPattern::BLOCKED),
+        "DFB '{}': a PrefetcherPipe relay DFB does not support the BLOCKED access pattern on either side yet; bind "
+        "the relay's producer and consumer as STRIDED or ALL.",
+        dfb_spec->unique_id);
     return experimental::dfb::DataflowBufferConfig{
         .entry_size = dfb_spec->entry_size,
         .num_entries = dfb_spec->num_entries,
         .producer_risc_mask = producer_risc_mask,
         .num_producers = static_cast<uint8_t>(producer->num_threads),
         .pap = producer_access_pattern,
+        .producer_block_size = producer_binding->block_size,
         .consumer_risc_mask = consumer_risc_mask,
         .num_consumers = static_cast<uint8_t>(consumer->num_threads),
         .cap = consumer_access_pattern,
+        .consumer_block_size = consumer_binding->block_size,
         .enable_producer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.producers),
         .enable_consumer_implicit_sync = side_implicit_sync_enabled(dfb_endpoint_info.consumers),
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
@@ -3871,18 +4040,20 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
         sem_solver::ResolveSemaphoreScopes(spec, semaphore_binders, hal);
 
     // Create Kernels (arch-specific)
+    const DFBNameToPatternsMap dfb_name_to_patterns = MakeDFBNameToPatterns(collected);
     for (const KernelSpec& kernel_spec : spec.kernels) {
         KernelSource kernel_src = MakeKernelSource(kernel_spec, program_impl->get_context_id());
         const NodeRangeSet& node_ranges = collected.kernel_node_set.at(kernel_spec.unique_id);
 
-        // Make the local accessor name -> DFB device slot map for this kernel
+        // Make the local accessor name -> (DFB device slot, relay typing, both sides' patterns) map for this kernel
         const tt::tt_metal::DataflowBufferBindingHandleMap dfb_handles = MakeDataflowBufferBindingHandles(
             kernel_spec,
             dfb_name_to_slot,
             dfb_name_to_is_relay,
             dfb_name_to_prefetcher_pipe_id,
             collected.dfb_by_name,
-            dfb_name_to_id);
+            dfb_name_to_id,
+            dfb_name_to_patterns);
         const tt::tt_metal::SemaphoreBindingHandleMap semaphore_handles =
             MakeSemaphoreBindingHandles(kernel_spec, semaphore_binders, semaphore_name_to_id, semaphore_name_to_scope);
 

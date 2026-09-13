@@ -11,8 +11,9 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
-    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
+    Noc& noc, DFB& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer, const uint32_t val) {
     volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dfb.get_write_ptr());
 
     for (uint32_t i = 0; i < num_bytes_risc / 2; ++i) {
@@ -37,8 +38,9 @@ inline __attribute__((always_inline)) void fill_pad_dfb_with_val(
     noc.async_read_barrier();
 }
 
+template <typename DFB>
 inline __attribute__((always_inline)) void fill_pad_dfb_with_zero(
-    Noc& noc, DataflowBuffer& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
+    Noc& noc, DFB& dfb, const uint32_t num_bytes_risc, uint32_t num_noc_transfer) {
     noc.async_write_zeros(dfb, num_bytes_risc * num_noc_transfer);
     noc.write_zeros_l1_barrier();
 }

@@ -21,7 +21,8 @@
 #include "internal/tt-2xx/quasar/overlay/llk_intf_api.hpp"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
 
-FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer& dfb) {
+template <DFBAccess Pap, DFBAccess Cap>
+FORCE_INLINE void dfb_finish_single_implicit_read_producer(DataflowBuffer<Pap, Cap>& dfb) {
     LocalDFBInterface& iface = get_local_dfb_interface(dfb.get_id());
 
     // State after exactly one commit_implicit_read() from a fresh DataflowBuffer.

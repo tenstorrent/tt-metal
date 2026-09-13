@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/dataflow/dfb_access.h"
 #include "internal/llk_metadata.h"
 
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
@@ -21,9 +22,9 @@
 //
 // Here my_dfb_name is a constexpr DFBBindingToken, auto-included in kernel_bindings_generated.h.
 //
-// This header holds only the tokens, with no dependency beyond <cstdint> minimal support headers,
-// so the generated bindings header (and anything else that just needs to name a binding)
-// does not have to pull in the whole DataflowBuffer implementation. See
+// This header holds only the tokens, with no dependency beyond <cstdint>, the small DFBAccess enum
+// header and the LLK metadata header, so the generated bindings header (and anything else that just
+// needs to name a binding) does not have to pull in the whole DataflowBuffer implementation. See
 // api/dataflow/dataflow_buffer.h for the DataflowBuffer class these tokens construct.
 //
 
@@ -33,6 +34,14 @@ template <const auto& Token>
 struct LLKOperandExtractor;
 }
 
+// The token carries both sides' access patterns (producer, consumer) as template arguments, so a
+// Quasar DataflowBuffer built from it is specialized on the pattern pair at compile time; the
+// kernel still writes `DataflowBuffer dfb(dfb::name)` (class template argument deduction).
+// The defaults match DataflowBuffer's (dfb_access.h): a declaration `DFBBindingToken t{id}` deduces
+// the pattern-agnostic <UNKNOWN, UNKNOWN> token. A function parameter cannot use the plain spelling
+// (nothing is deduced there): take `DFBBindingToken<P, C>` in a template, or the id as an integer.
+// This is the template's only declaration (nothing forward-declares it), so the defaults live here.
+template <DFBAccess Pap = DFBAccess::UNKNOWN, DFBAccess Cap = DFBAccess::UNKNOWN>
 struct DFBBindingToken {
     explicit constexpr DFBBindingToken(uint16_t id) noexcept : id_(id) {}
 

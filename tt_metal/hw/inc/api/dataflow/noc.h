@@ -14,7 +14,7 @@ class TensorAccessor;
 struct UnicastEndpoint;
 struct MulticastEndpoint;
 class CircularBuffer;
-class DataflowBuffer;
+#include "api/dataflow/dfb_access.h"  // DFBAccess + the (arch-conditional) DataflowBuffer forward decl
 
 // Concrete arg struct for the DFB-specific Noc overloads.
 // Defined here so noc.h can use it in async_read/async_write specializations defined in
@@ -836,13 +836,19 @@ public:
      * Selects this overload when NocOptions::TXN_ID is specified and the destination is a DataflowBuffer.
      * No trid is accepted here because the DataflowBuffer manages txn_ids internally
      * via its private prepare/commit helpers.
-     * Size of the read is not accepted here because the DataflowBuffer provides parameters for the read internally.
+     * Size of the read is not accepted here: a BLOCKED producer moves its whole block per call as
+     * ONE NoC transaction starting at the address of the block's first page, so the block's pages
+     * must be contiguous in the source (a single-bank or sharded layout whose shards hold whole
+     * blocks; an interleaved multi-bank tensor is not, it round-robins pages over banks); a STRIDED
+     * producer moves one entry per call and the
+     * DataflowBuffer completes the share itself (waits for room for the whole share on its first
+     * entry, lands entry i at bookmark + i * stride, moves the bookmark after the last one). So a
+     * kernel issues one call per block on a BLOCKED side and one call per tensor page otherwise.
      */
-    template <NocOptions opts, typename Src>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_read(
+    template <NocOptions opts, typename Src, DFBAccess Pap, DFBAccess Cap>
+    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_read(
         const Src& src,
-        DataflowBuffer& dst,
+        DataflowBuffer<Pap, Cap>& dst,
         const src_args_t<Src>& src_args,
         const DataflowBufferArgs& dst_args = {}) const;
 
@@ -852,12 +858,13 @@ public:
      * Selects this overload when NocOptions::TXN_ID is specified and the source is a DataflowBuffer.
      * No trid is accepted here because the DataflowBuffer manages txn_ids internally
      * via its private prepare/commit helpers.
-     * Size of the write is not accepted here because the DataflowBuffer provides parameters for the write internally.
+     * Size of the write is not accepted here: same contract as the implicit-sync async_read, from
+     * the consumer side (one call per block on a BLOCKED consumer, whose pages must be contiguous in
+     * the destination, one call per page otherwise).
      */
-    template <NocOptions opts, typename Dst>
-    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)>
-    async_write(
-        DataflowBuffer& src,
+    template <NocOptions opts, typename Dst, DFBAccess Pap, DFBAccess Cap>
+    std::enable_if_t<has_flag(opts, NocOptions::TXN_ID)> async_write(
+        DataflowBuffer<Pap, Cap>& src,
         const Dst& dst,
         const DataflowBufferArgs& src_args,
         const dst_args_t<Dst>& dst_args) const;

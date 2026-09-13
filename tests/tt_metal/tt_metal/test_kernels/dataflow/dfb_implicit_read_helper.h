@@ -25,7 +25,8 @@
 
 // Issues one implicit-sync NOC read for a DFB producer.
 // Call per_txn times per DFB to trigger the ISR threshold.
-FORCE_INLINE void dfb_issue_implicit_read(const Noc& noc, DataflowBuffer& dfb) {
+template <DFBAccess Pap, DFBAccess Cap>
+FORCE_INLINE void dfb_issue_implicit_read(const Noc& noc, DataflowBuffer<Pap, Cap>& dfb) {
     AllocatorBank<AllocatorBankType::DRAM> dram{};
     noc.async_read<NocOptions::TXN_ID>(dram, dfb, {.bank_id = 0, .addr = 0}, {});
 }
