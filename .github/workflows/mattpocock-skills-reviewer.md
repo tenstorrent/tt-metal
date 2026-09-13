@@ -153,6 +153,12 @@ A successful review:
 - states a clear "no actionable issues" verdict when nothing needs fixing, instead of manufacturing feedback
 - uses `noop` instead of generic praise when there is nothing useful to say
 
+### Tool discipline
+
+Treat the shell as a **minimal read-only helper** for this workflow. Use only the commands explicitly shown below or already allowed by the workflow for reading repo state; do **not** probe for extra tools or fall back to `python`, `python3`, `which`, `awk`, `sed`, `git`, or `bash -c`.
+
+If you need arithmetic, a heuristic, or a small simulation, reason from the diff and file contents directly instead of executing ad hoc scripts. If a shell command is denied, do **not** retry with another shell variant — continue the review with the data you already have and state any uncertainty in the final review.
+
 ### Step 1: Load Pre-fetched PR Data
 
 > **⚠️ Do NOT call any GitHub MCP tools for PR data.** All PR information is pre-fetched: use `/tmp/gh-aw/agent/pr-meta.json`, `/tmp/gh-aw/agent/pr-diff.patch`, and `/tmp/gh-aw/agent/pr-review-comments.json` exclusively.

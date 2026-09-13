@@ -301,6 +301,12 @@ A successful review:
 - states what it could **not** verify rather than guessing
 - uses `noop` instead of generic praise when there is nothing useful to say
 
+### Tool discipline
+
+Treat the shell as a **minimal helper**, not a general sandbox. Outside the explicit commands shown in this prompt (including the `python3` invocation in Step 4b), do **not** probe for extra tooling or fall back to `which`, `awk`, `sed`, `git`, or `bash -c`.
+
+If a command is denied, do **not** keep retrying with alternate shell forms. Continue with the pre-fetched patch, repo files, and skill references you already have, and call out any material uncertainty in the review instead of trying to script around the restriction.
+
 ### Step 1: Load pre-fetched PR data
 
 > **⚠️ Do NOT call any GitHub MCP tools for PR data.** Everything is pre-fetched.
