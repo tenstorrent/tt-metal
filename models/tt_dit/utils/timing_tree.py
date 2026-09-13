@@ -4,8 +4,8 @@
 """Device-synchronised timing spans and the call-stack-shaped tree they record into.
 
 ``span`` is the one timing primitive: synchronise the device, open a node, run the body, synchronise
-again, close the node with the elapsed milliseconds. ``timed`` is the same as a decorator, for a
-method whose whole body is one span. Spans nest by a thread-local stack, so attribution needs no
+again, close the node with the elapsed milliseconds. It doubles as a decorator for a method whose
+whole body is one span. Spans nest by a thread-local stack, so attribution needs no
 argument threaded down the call chain: a stage contains its blocks, a block its attention, an
 attention its collectives, and the tree is that stack remembered. A layer and a model both record
 into it by importing this module alone.
@@ -28,7 +28,6 @@ capture, not the execution.
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import os
 import sys
@@ -175,8 +174,7 @@ def _finish(root: Node, st: list) -> None:
 # ---------------------------------------------------------------------------------- timing spans
 
 
-@contextlib.contextmanager
-def span(device, label: str, *, category: str | None = None, root: bool = False, deep: bool = False):
+class span:
     """Time the body as one node of the tree.
 
     Synchronises ``device`` before the clock starts and again before it stops, so the measurement is
@@ -188,49 +186,45 @@ def span(device, label: str, *, category: str | None = None, root: bool = False,
     a span that never closes is then still identifiable, which is when the name matters most. On an
     exception the node is kept, marked ``aborted`` and popped, so no later span nests under a dead
     parent; the exception propagates.
-    """
-    if not ENABLED or (deep and not DEEP):
-        yield
-        return
-    ttnn.synchronize_device(device)
-    t0 = time.perf_counter()
-    node = open_span(label, category=category, root=root)
-    try:
-        yield
-    except BaseException:
-        abort_span(node)
-        raise
-    ttnn.synchronize_device(device)
-    close_span(node, (time.perf_counter() - t0) * 1000)
 
+    Also a decorator, for a function whose whole body is one span. Then ``device`` is the name of
+    the attribute of the first argument (``self``) holding the mesh device, or a callable of the
+    call's ``(*args, **kwargs)`` returning it, and ``label`` may likewise be a callable of them::
 
-def timed(label, *, category: str | None = None, root: bool = False, deep: bool = False, device="mesh_device"):
-    """:func:`span` as a decorator, for a function whose whole body is one span.
-
-    ``device`` is the name of the attribute of the first argument (``self``) that holds the mesh
-    device, or a callable of the call's ``(*args, **kwargs)`` returning it. ``label`` is a string, or
-    a callable of the same arguments returning one, for a label that depends on the call::
-
-        @timed(lambda self, stage, *a, **k: f"stage {stage}", category=SETUP)
+        @span("mesh_device", lambda self, stage, *a, **k: f"stage {stage}", category=SETUP)
         def _setup(self, stage, x): ...
-
-    When the gate is off the wrapper calls straight through without resolving either, so a
-    decorated method costs the same as an undecorated one in an untimed run.
     """
 
-    def decorate(fn):
+    def __init__(self, device, label, *, category: str | None = None, root: bool = False, deep: bool = False):
+        self.device, self.label, self.deep = device, label, deep
+        self.opts = dict(category=category, root=root)
+        self.active = ENABLED and (DEEP or not deep)
+
+    def __enter__(self):
+        if not self.active:
+            return
+        ttnn.synchronize_device(self.device)
+        self.t0 = time.perf_counter()
+        self.node = open_span(self.label, **self.opts)
+
+    def __exit__(self, exc_type, exc, tb):
+        if not self.active:
+            return
+        if exc_type is not None:
+            abort_span(self.node)
+            return
+        ttnn.synchronize_device(self.device)
+        close_span(self.node, (time.perf_counter() - self.t0) * 1000)
+
+    def __call__(self, fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            if not ENABLED or (deep and not DEEP):
-                return fn(*args, **kwargs)
-            dev = device(*args, **kwargs) if callable(device) else getattr(args[0], device)
-            name = label(*args, **kwargs) if callable(label) else label
-            with span(dev, name, category=category, root=root):
+            device = self.device(*args, **kwargs) if callable(self.device) else getattr(args[0], self.device)
+            label = self.label(*args, **kwargs) if callable(self.label) else self.label
+            with span(device, label, deep=self.deep, **self.opts):
                 return fn(*args, **kwargs)
 
         return wrapper
-
-    return decorate
 
 
 def root_count() -> int:

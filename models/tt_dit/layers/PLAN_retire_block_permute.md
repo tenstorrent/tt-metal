@@ -29,11 +29,11 @@ tree module and rename it (`utils/decode_tree.py` -> `utils/timing_tree.py`); re
 with NO aliases (`TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG`, `TT_DIT_TREE_DEPTH`, `TT_DIT_TREE_ALL`,
 `TT_DIT_TREE_OUT`); drop `_BLOCK_PROF` (`time_diff_block.py` reads the tree); add the decorator but convert no call site yet.
 - `timing_tree.span(device, label, *, category=None, root=False, deep=False)` is the one context manager
-  (`deep=True` = the old `deep_prof` gate); `timing_tree.timed(label, *, category, root, deep, device="mesh_device")` is
-  the decorator (label and device may be callables of the call's arguments). Executors call `span` directly, so the lazy
+  (`deep=True` = the old `deep_prof` gate) and doubles as the decorator, `@timing_tree.span("mesh_device", label, ...)`
+  (2026-09-13: the separate `timed` was folded into it; one class, one gate) (label and device may be callables of the call's arguments). Executors call `span` directly, so the lazy
   layer->model import `_deep_prof` is gone.
 - Renamed with it: fixture `decode_tree` -> `timing_tree` (vae conftest), plugin `decode_tree_plugin` -> `timing_tree_plugin`
-  (`-p` flag in `run_ltx25_pipeline.sh`), unit test `test_decode_tree.py` -> `test_timing_tree.py` (+7 tests for span/timed).
+  (`-p` flag in `run_ltx25_pipeline.sh`), unit test `test_decode_tree.py` -> `test_timing_tree.py` (+8 tests for span).
 - Verification: host 23 passed (`test_timing_tree.py`, `test_perf_table_breakdown.py`); device jobs 458 (decode timing,
   all three gates on), 463 (`time_diff_block.py` section table from the tree), 460 (`PROFILE=1` pipeline).
   Results: 458 **5 passed**, rendered trees carry the deep rows from both modules (`qkv-proj`, `attention linear_order`,
@@ -45,7 +45,7 @@ with NO aliases (`TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG`,
 - Found on the way (job 459): `time_diff_block.py` had been broken since the stage-5 brick hoist (791d033abfd): it took
   bands aligned to the brick's T extent but handed the block un-bricked activations, so `_padded_rows` sliced past the
   tensor. It now bricks x and context the way `DiffVAEStage5.forward` does and passes `brick=` to the block.
-- Decorator conversion, step 1+2 (2026-09-13, next commit): `@timing_tree.timed` on `DiffVAEDecoder.decode` (`decode TOTAL`,
+- Decorator conversion, step 1+2 (2026-09-13, commit 0013d5f7d25): `@timing_tree.span("mesh_device", ...)` on `DiffVAEDecoder.decode` (`decode TOTAL`,
   root), `forward_context`, `DiffVAEStage5.forward`, `forward_diff_step`; `NABlock.forward` has one body and two deep-decorated
   helpers `_attention` / `_mlp`. Same labels, same nesting, verified by diffing the rendered tree rows against job 458 (job 466).
   Left for later (proposals 3-5 in the conversation of 2026-09-13): phase methods in `NeighborhoodAttention.forward`,

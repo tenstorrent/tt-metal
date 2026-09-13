@@ -6,7 +6,7 @@
 The ledger's whole job is to survive call sites it does not control: spans that close out of order,
 spans that never close, a decode that raises mid-flight. Those paths are what these tests pin --
 plus the one invariant every reported number rests on, that self-times partition the root exactly.
-The ``span`` / ``timed`` helpers are tested against a stubbed ``synchronize_device``: what they must
+The ``span`` helper is tested against a stubbed ``synchronize_device``: what they must
 get right is the gate, the two syncs and the abort path, none of which needs hardware.
 """
 
@@ -281,17 +281,17 @@ class _Model:
     def __init__(self, device):
         self.mesh_device = device
 
-    @dt.timed("decode", root=True)
+    @dt.span("mesh_device", "decode", root=True)
     def decode(self, x):
         """the docstring"""
         return x + 1
 
-    @dt.timed(lambda self, stage, *a, **k: f"stage {stage}", category=dt.SETUP)
+    @dt.span("mesh_device", lambda self, stage, *a, **k: f"stage {stage}", category=dt.SETUP)
     def stage(self, stage):
         return stage
 
 
-def test_timed_resolves_device_and_label_from_the_call(syncs):
+def test_decorator_resolves_device_and_label_from_the_call(syncs):
     dev = _FakeDevice()
     model = _Model(dev)
     with dt.span(dev, "decode", root=True):
@@ -302,7 +302,7 @@ def test_timed_resolves_device_and_label_from_the_call(syncs):
     assert syncs == [dev] * 4
 
 
-def test_timed_root_and_wraps(syncs):
+def test_decorator_root_and_wraps(syncs):
     model = _Model(_FakeDevice())
     assert model.decode(1) == 2
     (root,) = dt.roots()
@@ -310,13 +310,23 @@ def test_timed_root_and_wraps(syncs):
     assert _Model.decode.__name__ == "decode" and _Model.decode.__doc__ == "the docstring"
 
 
-def test_timed_calls_through_when_disabled(monkeypatch, syncs):
+def test_decorator_is_inert_when_disabled(monkeypatch, syncs):
     monkeypatch.setattr(dt, "ENABLED", False)
-
-    class _NoDevice:
-        @dt.timed("decode", root=True)
-        def decode(self):
-            return "ran"
-
-    assert _NoDevice().decode() == "ran"  # no mesh_device attribute, and it is never looked up
+    model = _Model(_FakeDevice())
+    assert model.decode(1) == 2
     assert dt.roots() == [] and syncs == []
+
+
+def test_decorator_device_may_be_a_callable(syncs):
+    dev = _FakeDevice()
+
+    @dt.span(lambda q, *a, **k: q.device, "op", root=True)
+    def op(q):
+        return q
+
+    class _Q:
+        device = dev
+
+    op(_Q())
+    (root,) = dt.roots()
+    assert root.label == "op" and syncs == [dev, dev]

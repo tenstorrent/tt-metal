@@ -661,11 +661,11 @@ class NABlock(Module):
     # Spans are deep: each costs two device syncs, and there are 16 deterministic blocks, so under a
     # plain timing run they stay inert rather than inflate the very stage totals they explain. The
     # norms sit inside their span (stage 5 keeps its modulate outside) rather than paying two more.
-    @timing_tree.timed("attention", category=timing_tree.ATTENTION, deep=True)
+    @timing_tree.span("mesh_device", "attention", category=timing_tree.ATTENTION, deep=True)
     def _attention(self, x, *, dims, cos, sin, device_plan) -> ttnn.Tensor:
         return self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
 
-    @timing_tree.timed("mlp", category=timing_tree.MLP, deep=True)
+    @timing_tree.span("mesh_device", "mlp", category=timing_tree.MLP, deep=True)
     def _mlp(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.mlp(self.norm2(x))
 
@@ -1171,7 +1171,7 @@ class DiffVAEDecoder(Module):
         grown = self.time_scale * (padded - 1) + 1
         return max(grown - self.ghost_latent_frames * self.time_scale, self.stage5_kernel[0])
 
-    @timing_tree.timed("det stages TOTAL (forward_context)")
+    @timing_tree.span("mesh_device", "det stages TOTAL (forward_context)")
     def forward_context(
         self, latent: torch.Tensor, *, gather_output: bool = True, latent_tt: ttnn.Tensor | None = None
     ) -> tuple[ttnn.Tensor, tuple[int, int, int]]:
@@ -1247,7 +1247,7 @@ class DiffVAEDecoder(Module):
                 dims = (keep, dims[1], dims[2])
         return x, dims
 
-    @timing_tree.timed("decode TOTAL", root=True)  # the tree hangs off this node
+    @timing_tree.span("mesh_device", "decode TOTAL", root=True)  # the tree hangs off this node
     def decode(
         self,
         latent: torch.Tensor,

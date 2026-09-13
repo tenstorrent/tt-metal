@@ -1627,7 +1627,7 @@ class DiffVAEStage5(Module):
             ttnn.deallocate(uploaded)
         return out
 
-    @timing_tree.timed("stage5 diff-blocks (attn+MLP)")
+    @timing_tree.span("mesh_device", "stage5 diff-blocks (attn+MLP)")
     def forward_diff_step(
         self,
         context: ttnn.Tensor,
@@ -1694,7 +1694,7 @@ class DiffVAEStage5(Module):
         flat = ttnn.reshape(band, (1, grid.batch, grid.t * grid.h * w_local, dim))
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
 
-    @timing_tree.timed("stage5 TOTAL (forward)")
+    @timing_tree.span("mesh_device", "stage5 TOTAL (forward)")
     def forward(
         self,
         context: ttnn.Tensor,
