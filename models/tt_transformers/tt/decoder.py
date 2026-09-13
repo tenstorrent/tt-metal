@@ -147,6 +147,9 @@ class TransformerBlock(LightweightModule):
             TG=args.is_galaxy,
             ag_config_key="ATTN_LN_AG_CONFIG",
         )
+        weight_key = "attention_norm" if args.base_model_name in (
+            "c4ai-command-r7b",
+        ) else "ffn_norm"
         self.ff_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -156,7 +159,7 @@ class TransformerBlock(LightweightModule):
                 state_dict_prefix=args.get_state_dict_prefix("", layer_num),
                 weight_cache_path=None if args.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
-                weight_key="ffn_norm",
+                weight_key=weight_key,
                 is_distributed=self.args.is_distributed_norm,
                 add_unit_offset=self.args.rms_norm_add_unit_offset,
                 ccl_topology=self.args.ccl_topology(),
