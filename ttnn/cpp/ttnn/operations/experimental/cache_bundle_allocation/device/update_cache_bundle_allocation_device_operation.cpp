@@ -101,7 +101,17 @@ void UpdateCacheBundleAllocationDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(fl[0] > 0 && fl[1] > 0, "free_list dimensions must be positive");
     TT_FATAL(
         t.allocated_pages.logical_shape() == ttnn::Shape({1, pt[0]}), "allocated_pages must have shape [1, slots]");
-    TT_FATAL(t.free_count.logical_shape() == ttnn::Shape({1, fl[0]}), "free_count must have shape [1, SP]");
+    TT_FATAL(t.free_count.logical_shape() == ttnn::Shape({1, fl[0]}), "free_count must have shape [1, banks * SP]");
+    const uint32_t num_banks = t.page_table.device()->num_dram_channels();
+    TT_FATAL(
+        num_banks > 0 && fl[0] % num_banks == 0, "free_list rows must be a multiple of the device DRAM bank count");
+    TT_FATAL(
+        uint64_t(fl[1]) * num_banks <= uint64_t(std::numeric_limits<uint32_t>::max()) + 1,
+        "Bank-local bundle indices exceed the UINT32 bundle ID range");
+    const uint32_t sp_size = fl[0] / num_banks;
+    TT_FATAL(
+        a.page_size > 0 && a.chunk_size > 0 && uint64_t(a.chunk_size) % (uint64_t(a.page_size) * sp_size) == 0,
+        "chunk_size must be a positive multiple of page_size * SP");
     // One table row, two counter rows, and a bounded free-list window.
     uint64_t scratch_bytes = (t.slot_id || t.actual_start || t.actual_end) ? 32 : 0;
     for (const auto bytes : scratch_sizes(t)) {
@@ -134,7 +144,7 @@ Tensor UpdateCacheBundleAllocationDeviceOperation::create_output_tensors(
 ttsl::hash::hash_t UpdateCacheBundleAllocationDeviceOperation::compute_program_hash(
     const operation_attributes_t& a, const tensor_args_t& t) {
     // Slot and token positions are runtime arguments, including on program-cache hits.
-    return operation::hash_operation<UpdateCacheBundleAllocationDeviceOperation>(a.page_size, t);
+    return operation::hash_operation<UpdateCacheBundleAllocationDeviceOperation>(a.page_size, a.chunk_size, t);
 }
 
 ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
@@ -161,6 +171,8 @@ ProgramDescriptor CacheBundleAllocationProgramFactory::create_descriptor(
     ct.push_back(static_cast<uint32_t>(use_slot_tensor));
     ct.push_back(static_cast<uint32_t>(use_start_tensor));
     ct.push_back(static_cast<uint32_t>(use_end_tensor));
+    ct.push_back(t.page_table.device()->num_dram_channels());
+    ct.push_back(a.chunk_size / a.page_size);
     if (use_slot_tensor || use_start_tensor || use_end_tensor) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = 32,
@@ -222,10 +234,11 @@ Tensor update_cache_bundle_allocation(
     uint32_t slot_id,
     uint32_t actual_start,
     uint32_t actual_end,
+    uint32_t chunk_size,
     uint32_t page_size) {
     using Op = prim::UpdateCacheBundleAllocationDeviceOperation;
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{slot_id, actual_start, actual_end, page_size},
+        Op::operation_attributes_t{slot_id, actual_start, actual_end, page_size, chunk_size},
         Op::tensor_args_t{
             page_table, allocated_pages, free_list, free_count, std::nullopt, std::nullopt, std::nullopt});
 }
@@ -238,10 +251,11 @@ Tensor update_cache_bundle_allocation(
     const Tensor& slot_id,
     const Tensor& actual_start,
     const Tensor& actual_end,
+    uint32_t chunk_size,
     uint32_t page_size) {
     using Op = prim::UpdateCacheBundleAllocationDeviceOperation;
     return ttnn::device_operation::launch<Op>(
-        Op::operation_attributes_t{0, 0, 0, page_size},
+        Op::operation_attributes_t{0, 0, 0, page_size, chunk_size},
         Op::tensor_args_t{page_table, allocated_pages, free_list, free_count, slot_id, actual_start, actual_end});
 }
 }  // namespace ttnn::experimental

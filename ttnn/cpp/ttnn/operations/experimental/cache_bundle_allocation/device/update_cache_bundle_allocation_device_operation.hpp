@@ -14,6 +14,7 @@ struct CacheBundleAllocationParams {
     uint32_t actual_start;
     uint32_t actual_end;
     uint32_t page_size;
+    uint32_t chunk_size;
 };
 struct CacheBundleAllocationInputs {
     Tensor page_table;

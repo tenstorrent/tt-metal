@@ -10,7 +10,7 @@
 #include "api/tensor/noc_traits.h"
 
 namespace {
-constexpr uint32_t sp_size = get_compile_time_arg_val(0);
+constexpr uint32_t num_pools = get_compile_time_arg_val(0);
 constexpr uint32_t page_size = get_compile_time_arg_val(1);
 constexpr uint32_t table_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t allocated_bytes = get_compile_time_arg_val(3);
@@ -49,7 +49,6 @@ struct AllocationUpdate {
 struct MetadataRanges {
     ByteRange table;
     ByteRange counts;
-    ByteRange wrapped_counts;
 };
 
 uint32_t range_size(ByteRange range) { return range.end - range.begin; }
@@ -68,7 +67,11 @@ ByteRange aligned_range(uint32_t first, uint32_t end, uint32_t row_bytes) {
 constexpr bool use_slot_tensor = get_compile_time_arg_val(7);
 constexpr bool use_start_tensor = get_compile_time_arg_val(8);
 constexpr bool use_end_tensor = get_compile_time_arg_val(9);
-constexpr auto table_args = TensorAccessorArgs<10>();
+constexpr uint32_t num_banks = get_compile_time_arg_val(10);
+constexpr uint32_t sp_size = num_pools / num_banks;
+constexpr uint32_t chunk_pages = get_compile_time_arg_val(11);
+constexpr uint32_t local_chunk_pages = chunk_pages / sp_size;
+constexpr auto table_args = TensorAccessorArgs<12>();
 constexpr auto allocated_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
 constexpr auto free_args = TensorAccessorArgs<allocated_args.next_compile_time_args_offset()>();
 constexpr auto count_args = TensorAccessorArgs<free_args.next_compile_time_args_offset()>();
@@ -124,8 +127,27 @@ MetadataBuffers make_metadata_buffers(uint32_t& rt_args_idx) {
         cb_free.get_write_ptr()};
 }
 
-// Count this SP's pages in a slot's interleaved logical-page prefix.
-uint32_t pages_on_sp(uint32_t pages, uint32_t sp) { return pages / sp_size + (sp < pages % sp_size); }
+// Count a device's local prefix: complete chunks plus its contiguous part of the last chunk.
+uint32_t local_pages_on_sp(uint32_t pages, uint32_t sp) {
+    const uint32_t remainder = pages % chunk_pages;
+    const uint32_t first = sp * local_chunk_pages;
+    const uint32_t tail = remainder > first ? remainder - first : 0;
+    return (pages / chunk_pages) * local_chunk_pages + (tail < local_chunk_pages ? tail : local_chunk_pages);
+}
+
+uint32_t pages_in_pool(uint32_t pages, uint32_t pool) {
+    const uint32_t local_pages = local_pages_on_sp(pages, pool % sp_size);
+    const uint32_t bank = pool / sp_size;
+    return local_pages / num_banks + (bank < local_pages % num_banks);
+}
+
+// Invert the chunk distribution for a pool's i-th page. Bundle banks rotate over the
+// continuous local sequence, including when local_chunk_pages is not a multiple of banks.
+uint32_t logical_page_in_pool(uint32_t pool, uint32_t i) {
+    const uint32_t local_page = pool / sp_size + i * num_banks;
+    return (local_page / local_chunk_pages) * chunk_pages + (pool % sp_size) * local_chunk_pages +
+           local_page % local_chunk_pages;
+}
 
 // A no-growth call reads only the cache line containing this slot's counter.
 uint32_t read_allocated_pages(const Noc& noc, const MetadataBuffers& buffers, uint32_t slot, ByteRange range) {
@@ -152,27 +174,25 @@ AllocationUpdate read_allocation_update(const Noc& noc, const MetadataBuffers& b
     return {slot, reset, old_pages, next_pages, allocated_range};
 }
 
-// Plan only changed table entries and counter lines, splitting wrapped SP intervals.
+// Chunk placement can touch disjoint bank-major counter intervals. Preserve the
+// intervening counters in one aligned read/modify/write range.
 MetadataRanges plan_metadata_ranges(const AllocationUpdate& update) {
     const uint32_t first_page = update.reset ? 0 : update.old_pages;
     const uint32_t last_page =
         update.reset && update.old_pages > update.next_pages ? update.old_pages : update.next_pages;
-    MetadataRanges ranges{aligned_range(first_page, last_page, table_bytes), {0, 0}, {0, 0}};
-    const uint32_t first_sp = first_page % sp_size;
-    const uint32_t changed_pages = last_page - first_page;
-    if (changed_pages >= sp_size) {
-        ranges.counts = aligned_range(0, sp_size, counts_bytes);
-    } else if (changed_pages > sp_size - first_sp) {
-        ranges.counts = aligned_range(first_sp, sp_size, counts_bytes);
-        ranges.wrapped_counts = aligned_range(0, changed_pages - (sp_size - first_sp), counts_bytes);
-        if (ranges.wrapped_counts.end >= ranges.counts.begin) {
-            ranges.counts.begin = 0;
-            ranges.wrapped_counts = {0, 0};
+    uint32_t first_pool = num_pools;
+    uint32_t last_pool = 0;
+    for (uint32_t pool = 0; pool < num_pools; ++pool) {
+        const uint32_t old_count = pages_in_pool(update.old_pages, pool);
+        const uint32_t next_count = pages_in_pool(update.next_pages, pool);
+        if (update.reset ? old_count != 0 || next_count != 0 : old_count != next_count) {
+            if (pool < first_pool) {
+                first_pool = pool;
+            }
+            last_pool = pool + 1;
         }
-    } else {
-        ranges.counts = aligned_range(first_sp, first_sp + changed_pages, counts_bytes);
     }
-    return ranges;
+    return {aligned_range(first_page, last_page, table_bytes), aligned_range(first_pool, last_pool, counts_bytes)};
 }
 
 // Growth overwrites every new table entry. Read only partial boundary lines;
@@ -220,14 +240,6 @@ void read_slot_metadata(
         range_size(ranges.counts),
         {.page_id = 0, .offset_bytes = ranges.counts.begin},
         {.offset_bytes = ranges.counts.begin});
-    if (range_size(ranges.wrapped_counts) != 0) {
-        noc.async_read(
-            buffers.count_acc,
-            buffers.counts,
-            range_size(ranges.wrapped_counts),
-            {.page_id = 0, .offset_bytes = ranges.wrapped_counts.begin},
-            {.offset_bytes = ranges.wrapped_counts.begin});
-    }
     noc.async_read_barrier();
     invalidate_l1_cache();  // same fresh-metadata refetch as above
 }
@@ -254,21 +266,13 @@ void write_slot_metadata(
         range_size(ranges.counts),
         {.offset_bytes = ranges.counts.begin},
         {.page_id = 0, .offset_bytes = ranges.counts.begin});
-    if (range_size(ranges.wrapped_counts) != 0) {
-        noc.async_write(
-            buffers.counts,
-            buffers.count_acc,
-            range_size(ranges.wrapped_counts),
-            {.offset_bytes = ranges.wrapped_counts.begin},
-            {.page_id = 0, .offset_bytes = ranges.wrapped_counts.begin});
-    }
     noc.async_write_barrier();
 }
 
 struct FreeListWindow {
     CoreLocalMem<volatile uint32_t> data;
     ByteRange range;
-    uint32_t sp;
+    uint32_t pool;
     uint32_t offset = 0;
     uint32_t bytes = 0;
     bool dirty = false;
@@ -281,7 +285,7 @@ void flush_free_list_window(const Noc& noc, const MetadataBuffers& buffers, Free
     }
     if (window.dirty) {
         noc.async_write(
-            window.data, buffers.free_acc, window.bytes, {}, {.page_id = window.sp, .offset_bytes = window.offset});
+            window.data, buffers.free_acc, window.bytes, {}, {.page_id = window.pool, .offset_bytes = window.offset});
         noc.async_write_barrier();
     }
     window.bytes = 0;
@@ -300,7 +304,7 @@ volatile uint32_t& free_list_entry(
         const uint32_t window_size = remaining < free_window_bytes ? remaining : free_window_bytes;
         window.bytes = window_size - (offset - window_begin);
         noc.async_read(
-            buffers.free_acc, window.data, window.bytes, {.page_id = window.sp, .offset_bytes = window.offset}, {});
+            buffers.free_acc, window.data, window.bytes, {.page_id = window.pool, .offset_bytes = window.offset}, {});
         noc.async_read_barrier();
         invalidate_l1_cache();  // same fresh-metadata refetch as above
     }
@@ -313,38 +317,38 @@ void return_free_id(
     window.dirty = true;
 }
 
-// Return old IDs on reset, then allocate new IDs and update each SP's free count.
+// Each free stack stores bank-local indices. Encode the bank in page-table bundle IDs;
+// returning an ID to its original pool removes that bank encoding again.
 void update_free_lists(
     const Noc& noc, const MetadataBuffers& buffers, uint32_t old_pages, uint32_t next_pages, bool reset) {
-    const uint32_t changed_pages = reset ? (old_pages > next_pages ? old_pages : next_pages) : next_pages - old_pages;
-    const uint32_t affected_sps = changed_pages < sp_size ? changed_pages : sp_size;
-    uint32_t sp = reset ? 0 : old_pages % sp_size;
-    for (uint32_t n = 0; n < affected_sps; ++n, sp = sp + 1 == sp_size ? 0 : sp + 1) {
-        const uint32_t old_count = pages_on_sp(old_pages, sp);
-        const uint32_t next_count = pages_on_sp(next_pages, sp);
+    for (uint32_t pool = 0; pool < num_pools; ++pool) {
+        const uint32_t old_count = pages_in_pool(old_pages, pool);
+        const uint32_t next_count = pages_in_pool(next_pages, pool);
         if (reset ? old_count == 0 && next_count == 0 : old_count == next_count) {
             continue;
         }
-        uint32_t count = buffers.counts[sp];
+        const uint32_t bank = pool / sp_size;
+        uint32_t count = buffers.counts[pool];
         const uint32_t stack_end = reset ? count + old_count : count;
         const uint32_t stack_begin =
             reset ? (next_count > old_count ? stack_end - next_count : count) : count - (next_count - old_count);
         FreeListWindow window{
             CoreLocalMem<volatile uint32_t>(buffers.free_l1_address),
             aligned_range(stack_begin, stack_end, free_row_bytes),
-            sp};
+            pool};
         if (reset) {
             for (uint32_t i = 0; i < old_count; ++i) {
-                const uint32_t page = sp + i * sp_size;
-                return_free_id(noc, buffers, window, count++, buffers.table[page]);
+                const uint32_t page = logical_page_in_pool(pool, i);
+                return_free_id(noc, buffers, window, count++, buffers.table[page] / num_banks);
                 buffers.table[page] = 0;
             }
         }
         for (uint32_t i = reset ? 0 : old_count; i < next_count; ++i) {
-            buffers.table[sp + i * sp_size] = free_list_entry(noc, buffers, window, --count);
+            buffers.table[logical_page_in_pool(pool, i)] =
+                bank + num_banks * free_list_entry(noc, buffers, window, --count);
         }
         flush_free_list_window(noc, buffers, window);
-        buffers.counts[sp] = count;
+        buffers.counts[pool] = count;
     }
 }
 }  // namespace
