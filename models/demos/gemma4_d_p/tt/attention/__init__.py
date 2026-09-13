@@ -20,8 +20,8 @@ from .operations import (
 from .ring_prefill import (
     global_ring_prefill_attention,
     sliding_ring_prefill_attention,
-    write_chunk_to_packed_ring_cache,
-    write_chunk_to_ring_cache,
+    write_chunk_to_global_ring_cache,
+    write_chunk_to_sliding_ring_cache,
 )
 
 
@@ -216,7 +216,7 @@ class Gemma4Attention:
                 value_is_packed=True,
                 memory_config=act_mc,
             )
-            write_chunk_to_packed_ring_cache(
+            write_chunk_to_global_ring_cache(
                 self.ring_kv_cache.kv,
                 packed_kv,
                 self.mesh_config,
@@ -227,7 +227,7 @@ class Gemma4Attention:
             )
         else:
             packed_q = None
-            write_chunk_to_ring_cache(
+            write_chunk_to_sliding_ring_cache(
                 self.ring_kv_cache.k,
                 self.ring_kv_cache.v,
                 tt_k,
