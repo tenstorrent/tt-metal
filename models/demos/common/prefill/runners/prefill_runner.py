@@ -306,6 +306,10 @@ def _record_chunk_timing(rank: int, c: int, compute_start: float, compute_ms: fl
     if not TIMING_DIR:
         return
     try:
+        # O_CREAT makes the file, not the parent. Without this the open raises ENOENT, the except
+        # below swallows it, and the run silently records nothing -- which is how a 5-point sweep
+        # finished with five empty timing dirs and no Gantt input.
+        os.makedirs(TIMING_DIR, exist_ok=True)
         fd = os.open(os.path.join(TIMING_DIR, f"rank{rank}.csv"), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
         try:
             os.write(fd, f"{rank},{c},{compute_start:.6f},{compute_ms:.3f}\n".encode())
