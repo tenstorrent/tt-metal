@@ -11,11 +11,19 @@
 #endif
 
 namespace ckernel {
+
+// Strongly typed so removed legacy_compat Boolean arguments cannot silently select DEST precision.
+enum class ReciprocalDestAcc { BF16, FP32 };
+
 /**
  * Please refer to documentation for any_init.
+ * DEST precision defaults to DST_ACCUM_MODE. Explicit overrides must use ReciprocalDestAcc,
+ * e.g. recip_tile_init<ReciprocalDestAcc::FP32>(); use the same mode for recip_tile.
+ * The former legacy_compat Boolean template argument is no longer accepted.
  */
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16>
 ALWI void recip_tile_init() {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
     MATH(SFPU_UNARY_INIT_FN(reciprocal, sfpu::recip_init, (APPROX, is_fp32_dest_acc_en)));
 }
 // clang-format off
@@ -25,6 +33,8 @@ ALWI void recip_tile_init() {
  * acquired state via *acquire_dst* call. This call is blocking and is only
  * available on the compute engine.
  * Only works for Float32, Float16_b, Bfp8_b data formats for full accuracy.
+ * DEST precision defaults to DST_ACCUM_MODE; an explicit ReciprocalDestAcc override must match recip_tile_init.
+ * Legacy Boolean template arguments are no longer accepted.
  *
  * Return value: None
  *
@@ -34,8 +44,9 @@ ALWI void recip_tile_init() {
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | VectorMode | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
-template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+template <ReciprocalDestAcc dest_acc = DST_ACCUM_MODE ? ReciprocalDestAcc::FP32 : ReciprocalDestAcc::BF16>
 ALWI void recip_tile(uint32_t idst, VectorMode vector_mode = VectorMode::RC) {
+    [[maybe_unused]] constexpr bool is_fp32_dest_acc_en = dest_acc == ReciprocalDestAcc::FP32;
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,

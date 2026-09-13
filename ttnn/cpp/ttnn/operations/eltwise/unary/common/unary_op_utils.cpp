@@ -737,7 +737,9 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("mish_tile<{1}u>({0});", idst, (uint32_t)param0)};
         }
         case UnaryOpType::RSQRT: {
-            return {"rsqrt_tile_init();", fmt::format("rsqrt_tile<{1}>({0});", idst, param0_raw)};
+            return {
+                "rsqrt_tile_init();",
+                fmt::format("rsqrt_tile<RsqrtMode::{1}>({0});", idst, param0_raw ? "Fast" : "Default")};
         }
         case UnaryOpType::SQRT: {
             return {"sqrt_tile_init();", fmt::format("sqrt_tile<{1}>({0});", idst, param0_raw)};

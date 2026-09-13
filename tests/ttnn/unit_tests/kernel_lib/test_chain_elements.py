@@ -23,6 +23,42 @@ DEST_REUSE_PARAM = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/dest_reuse
 MISC_ELEMENTS = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/misc_elements.cpp"
 UNARY_BCAST = "ttnn/cpp/ttnn/kernel_lib/tests/eltwise/chain/axes/unary_bcast.cpp"
 
+
+@pytest.mark.parametrize("mode", [3, 4, 5], ids=["recip", "rsqrt", "rsqrt_fast"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
+@pytest.mark.parametrize("math_approx_mode", [False, True])
+def test_reciprocal_math_elements(device, mode, fp32_dest_acc_en, math_approx_mode):
+    """Exercise the math op definitions and their API dispatch on a positive logarithmic range."""
+    n = 4
+    shape = [1, 1, 32, 32 * n]
+    dt = ttnn.bfloat16
+    core_grid = lib.single_core_grid()
+    host = torch.logspace(-4, 4, 1024 * n).reshape(shape).to(torch.bfloat16)
+    tt_in = ttnn.from_torch(host, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_out = ttnn.allocate_tensor_on_device(ttnn.Shape(shape), dt, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    program = ttnn.ProgramDescriptor(
+        kernels=[
+            lib.build_reader_kernel([tt_in], n, core_grid),
+            lib.build_writer_1out_kernel(tt_out, n, core_grid),
+            lib.build_compute_kernel(
+                MISC_ELEMENTS,
+                [n, mode],
+                core_grid,
+                fp32_dest_acc_en=fp32_dest_acc_en,
+                math_approx_mode=math_approx_mode,
+            ),
+        ],
+        semaphores=[],
+        cbs=[lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)],
+    )
+    actual = ttnn.to_torch(ttnn.generic_op([tt_in, tt_out], program)).float()
+    expected = host.float().reciprocal() if mode == 3 else host.float().rsqrt()
+    assert torch.isfinite(actual).all()
+    lib.assert_close(
+        expected, actual, f"reciprocal math mode={mode}", rtol=0.02 if math_approx_mode else 0.01, atol=0.0
+    )
+
+
 # reuse selector -> name; op selector -> (name, torch fn applied as `lhs op rhs`)
 _REUSE = {0: "DEST_TO_SRCA", 1: "DEST_TO_SRCB"}
 _OP = {0: ("add", lambda x, y: x + y), 1: ("sub", lambda x, y: x - y), 2: ("mul", lambda x, y: x * y)}
