@@ -651,6 +651,46 @@ def test_requantize_uint8_upper_saturation(device):
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
 
+def test_quantize_uint8_lower_saturation(device):
+    """Test quantize uint8 lower saturation to 0 for negative input values"""
+    row = [-5.0, -2.0, -1.0, -0.5, -0.1, 0.0, 0.5, 1.0]
+    input_tr = torch.tensor([row], dtype=torch.float32)
+    scale, zero_point = 1.0 / 255.0, 0
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_uint8_lower_saturation(device):
+    """Test requantize uint8 lower saturation to 0 for negative values on the output side"""
+    q_in = torch.tensor([[-100, -50, -10, 0, 50, 100, 255]], dtype=torch.int32)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_uint8_lower_saturation_int8_input(device):
+    """Test requantize uint8 lower saturation to 0 with int8 input"""
+    q_in = torch.tensor([[-128, -100, -50, -1, 0, 50, 127]], dtype=torch.int8)
+    in_scale, in_zp, out_scale, out_zp = 1.0, 0, 1.0, 0
+    expected = torch.clamp(torch.round((q_in.to(torch.int32) - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int8, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
 @pytest.mark.parametrize("x0", [32, 128])
 @pytest.mark.parametrize("x1", [32, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
