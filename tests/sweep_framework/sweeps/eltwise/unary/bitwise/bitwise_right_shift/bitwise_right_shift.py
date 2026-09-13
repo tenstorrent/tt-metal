@@ -84,7 +84,12 @@ def run(
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.bitwise_right_shift)
-    torch_output_tensor = torch.bitwise_right_shift(torch_input_tensor_a, torch_input_tensor_b).to(torch.int32)
+    if input_a_dtype == ttnn.uint32:
+        # Enforce logical zero-fill shift for unsigned 32-bit integers (#56385)
+        torch_output_tensor = (torch_input_tensor_a.to(torch.int64) & 0xFFFFFFFF) >> torch_input_tensor_b
+        torch_output_tensor = torch_output_tensor.to(torch.int64)
+    else:
+        torch_output_tensor = torch.bitwise_right_shift(torch_input_tensor_a, torch_input_tensor_b).to(torch.int32)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
