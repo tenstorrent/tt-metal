@@ -12,59 +12,32 @@ from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
     generate_bfloat16_bits_in_range,
     to_tt_tensor,
     SMALLEST_NORMAL_BF16,
+    MAX_BF16,
 )
 
 pytestmark = pytest.mark.use_module_device
 
-MAX_BF16 = float(torch.finfo(torch.bfloat16).max)
-
 """
-Category 3: Ops with a fast_and_approximate_mode parameter
+Category 3: ops with a fast_and_approximate_mode parameter.
+sqrt, rsqrt, exp, erf, gelu, log, log10, log2, log1p, mish.
 
-1. ttnn.sqrt    - Square root                (domain: x >= 0)
-2. ttnn.rsqrt   - Reciprocal square root     (domain: x >  0)
-3. ttnn.exp     - Exponential                 (domain: all reals; overflow > ~88.5)
-4. ttnn.erf     - Gaussian error function     (domain: all reals)
-5. ttnn.gelu    - GELU                        (domain: all reals)
-6. ttnn.log     - Natural logarithm           (domain: x >  0)
-7. ttnn.log10   - Base-10 logarithm           (domain: x >  0)
-8. ttnn.log2    - Base-2 logarithm            (domain: x >  0)
-9. ttnn.log1p   - log(1 + x)                  (domain: x > -1)
-10. ttnn.mish    - Mish activation             (domain: all reals)
+Each op is swept in both modes (accurate=False, fast=True) over exhaustive
+normal-bfloat16 input, mirroring thresholds from the merged tests they
+consolidate (test_math, test_unary, test_activation, test_unary_ops_ttnn,
+test_unary_category1). Out-of-domain inputs (x<0 for sqrt, x<=0 for log, etc.)
+are checked separately and must be non-finite.
 
-Every op is exercised in BOTH modes on exhaustive normal-bfloat16 sweeps
-(same 65 536-bit-pattern helpers as category1/2/5):
+gelu's golden is computed in float64 (see test_gelu_accurate/test_gelu_fast):
+fp32's 1 + erf(x/sqrt(2)) suffers cancellation for |x| around 5-6. This
+initially produced a false ~171 ULP failure misattributed to a device kernel
+defect (issue #56616 should be revisited/closed as a misattribution). Even
+with float64, the far-negative tail's true result is so tiny that ULP stops
+being meaningful (per assert_with_ulp's own docstring) — those elements are
+checked via absolute tolerance instead (see GELU_TINY_GOLDEN_ABS).
 
-  · fast_and_approximate_mode = False  (accurate / default SFPU path)
-  · fast_and_approximate_mode = True   (fast approximate path)
-
-Accuracy criteria (inherited from the already-merged, hardware-verified tests
-these consolidate — see "supersedes" note at the bottom of each section):
-─────────────────────────────────────────────────────────────────────────────
-  sqrt   : accurate ULP ≤ 1 over x >= 0; fast ULP ≤ 2 over [1, 100];
-                     x < 0 → non-finite (NaN)               [test_math, test_unary]
-  rsqrt  : accurate ULP ≤ 2 over x > 0; fast ULP ≤ 2 over [1, 100];
-                     x <= 0 → non-finite (+inf / NaN)        [test_unary_fp32, test_unary]
-  exp    : accurate ULP ≤ 1 over [-87, 88.5]; fast PCC ≥ 0.999 same range
-                                                            [test_unary_category1, test_exp]
-  erf    : ULP ≤ 2 over [-10, 10] in both modes             [test_math, test_unary_ops_ttnn]
-  gelu   : accurate ULP ≤ 10 over all normals (exp-field=1 FTZ band excluded);
-                     fast PCC ≥ 0.999 over [-10, 10]         [test_activation, test_unary_ops_ttnn]
-  log/log2 : accurate ULP ≤ 1 over x > 0; log10 accurate ULP ≤ 2;
-  log1p    : accurate ULP ≤ 1 over x > -1;
-                     x out-of-domain → non-finite;
-                     fast allclose(atol=0.0625) over [1, 100]   [test_math, test_unary(_ops_ttnn)]
-  mish   : allclose(rtol=1e-5, atol=0.02) over all normals in both modes
-                     (the restricted-range merged tests use atol=0.008 over
-                     [-20, 100]; the full sweep hits mish's curvature trough
-                     near x ≈ -1.19 where the compound SFPU error reaches
-                     ~0.0156 = 2^-6, ~13 ULP — hardware-observed)
-                                                            [test_activation, test_unary, test_composite]
-
-NOTE: the concrete thresholds above are taken from the merged tests this file
-consolidates; the extension of each to the *full* exhaustive bf16 domain (and
-every fast-mode number) still needs a confirming on-device run — no accelerator
-is attached in the authoring environment (see AGENTS.md).
+assert_allclose's rtol is scaled by actual_result (device output), not
+expected_result (golden), despite its docstring's stated formula — a
+pre-existing quirk of the shared helper, not specific to this file.
 """
 
 
@@ -72,6 +45,15 @@ def _assert_all_nonfinite(result, desc):
     """Every element must be non-finite (device may pack NaN as ±inf in bf16)."""
     nonfinite = ~torch.isfinite(result)
     assert nonfinite.all(), f"expected all {desc} outputs to be non-finite; {int((~nonfinite).sum())} were finite"
+
+
+def _assert_finite_matches_golden(golden, result, desc):
+    """Finite-input elements must produce finite output (PCC alone can hide an
+    isolated NaN/Inf regression since comparison_funcs zeroes both sides)."""
+    unexpected_nonfinite = torch.isfinite(golden) & ~torch.isfinite(result)
+    assert (
+        not unexpected_nonfinite.any()
+    ), f"{desc}: {int(unexpected_nonfinite.sum())} finite-input elements produced a non-finite device output"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -88,12 +70,7 @@ def _assert_all_nonfinite(result, desc):
     ids=["sqrt", "rsqrt"],
 )
 def test_root_ops_accurate(device, ttnn_op, golden_fn, low, ulp_accurate):
-    """Accurate mode: exhaustive positive-normal bf16 domain.
-
-    sqrt is defined at 0 (sqrt(0)=0); rsqrt diverges at 0 (+inf), so its sweep
-    starts at the smallest normal. Reference is computed in float32 then rounded
-    to bf16, giving a reference strictly more accurate than a bf16-native one.
-    """
+    """Accurate mode over the positive-normal domain (rsqrt excludes 0)."""
     input_tensor = generate_bfloat16_bits_in_range(low, MAX_BF16)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -112,10 +89,7 @@ def test_root_ops_accurate(device, ttnn_op, golden_fn, low, ulp_accurate):
     ids=["sqrt", "rsqrt"],
 )
 def test_root_ops_fast(device, ttnn_op, golden_fn):
-    """Fast approximate mode: exhaustive bf16 values in [1, 100], ULP ≤ 2.
-
-    Matches the fast-mode range/tolerance of test_unary.py::test_unary_root_ops_ttnn.
-    """
+    """Fast mode over [1, 100], ULP <= 2 (matches test_unary_root_ops_ttnn)."""
     input_tensor = generate_bfloat16_bits_in_range(1.0, 100.0)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -125,14 +99,62 @@ def test_root_ops_fast(device, ttnn_op, golden_fn):
     assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=2)
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.sqrt, ttnn.rsqrt], ids=["sqrt", "rsqrt"])
-def test_root_ops_negative_domain(device, ttnn_op):
-    """Out-of-domain (x < 0): device must return a non-finite value (NaN)."""
-    input_tensor = generate_bfloat16_bits_in_range(-MAX_BF16, -SMALLEST_NORMAL_BF16)
+@pytest.mark.parametrize(
+    "ttnn_op, high",
+    [
+        (ttnn.sqrt, -SMALLEST_NORMAL_BF16),  # sqrt(0) = 0 is in-domain; keep 0 out of this sweep
+        (ttnn.rsqrt, 0.0),  # rsqrt(0) = +inf is out-of-domain; include 0 here
+    ],
+    ids=["sqrt", "rsqrt"],
+)
+def test_root_ops_negative_domain(device, ttnn_op, high):
+    """Out-of-domain must be non-finite (accurate mode only). Fast mode is
+    excluded: hardware showed it doesn't validate its domain and returns
+    finite garbage for negative inputs instead of NaN/inf."""
+    input_tensor = generate_bfloat16_bits_in_range(-MAX_BF16, high)
     tt_in = to_tt_tensor(input_tensor, device)
 
-    result = ttnn.to_torch(ttnn_op(tt_in))
-    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<0)")
+    result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=False))
+    _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)" if high == 0.0 else f"{ttnn_op.__name__}(x<0)")
+
+
+@pytest.mark.parametrize(
+    "ttnn_op, golden_fn, low, high, ulp",
+    [
+        (ttnn.sqrt, torch.sqrt, 0.0, 100.0, 1),
+        (ttnn.gelu, F.gelu, 1.0, 10.0, 10),
+        (ttnn.log, torch.log, 1.0, 100.0, 1),
+        (ttnn.log2, torch.log2, 1.0, 100.0, 1),
+        (ttnn.log10, torch.log10, 1.0, 100.0, 2),
+        (ttnn.log1p, torch.log1p, 1.0, 100.0, 1),
+    ],
+    ids=["sqrt", "gelu", "log", "log2", "log10", "log1p"],
+)
+def test_row_major_layout_smoke(device, ttnn_op, golden_fn, low, high, ulp):
+    """ROW_MAJOR_LAYOUT dispatch-path smoke check (accurate mode); exhaustive
+    sweeps above use TILE_LAYOUT. gelu's range stays positive to avoid the
+    exp-field=1 FTZ band (see test_gelu_accurate)."""
+    input_tensor = generate_bfloat16_bits_in_range(low, high)
+    tt_in = to_tt_tensor(input_tensor, device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    golden = golden_fn(input_tensor.float()).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=False)).to(torch.bfloat16)
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=ulp)
+
+
+def test_non_tile_aligned_shape_smoke(device):
+    """gelu smoke check on a non-tile-aligned width (120 isn't a multiple of
+    32), accurate mode, ULP <= 10 over [1, 10]."""
+    shape = (1, 2, 64, 120)
+    num_elements = torch.prod(torch.tensor(shape)).item()
+    input_tensor = torch.linspace(1.0, 10.0, num_elements, dtype=torch.bfloat16).reshape(shape)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    golden = F.gelu(input_tensor.float()).to(torch.bfloat16)
+    result = ttnn.to_torch(ttnn.gelu(tt_in, fast_and_approximate_mode=False)).to(torch.bfloat16)
+
+    assert_with_ulp(expected_result=golden, actual_result=result, ulp_threshold=10)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -141,9 +163,7 @@ def test_root_ops_negative_domain(device, ttnn_op):
 
 
 def test_exp_accurate(device):
-    """Accurate mode: ULP ≤ 1 over [-87, 88.5] (the finite range: exp underflows
-    to 0 below ~-87 and overflows to +inf above ~88.5). Mirrors the exhaustive
-    Category 1 coverage in test_unary_category1_bfloat16.py::test_exp_ops."""
+    """Accurate mode: ULP <= 1 over [-87, 88.5], the finite range."""
     input_tensor = generate_bfloat16_bits_in_range(-87.0, 88.5)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -154,14 +174,42 @@ def test_exp_accurate(device):
 
 
 def test_exp_fast(device):
-    """Fast approximate mode: PCC ≥ 0.999 over the same finite range."""
+    """Fast mode over the same finite range. PCC alone is near-vacuous here
+    (exp spans ~76 decades, so it's dominated by the largest values), so an
+    allclose bound is added as the real gate for the fast path. Below
+    x~-13.8 (golden < atol=1e-6), atol dominates rtol and this bound stops
+    being a meaningful gate — that tail's decay-to-zero behavior isn't
+    characterized here (only test_exp_underflow's x<-87 boundary is)."""
     input_tensor = generate_bfloat16_bits_in_range(-87.0, 88.5)
     tt_in = to_tt_tensor(input_tensor, device)
 
     golden = torch.exp(input_tensor.float()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=True)).to(torch.bfloat16)
 
+    _assert_finite_matches_golden(golden, result, "exp(fast)")
     assert_with_pcc(golden, result, pcc=0.999)
+    assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=1e-6)
+
+
+def test_exp_underflow(device):
+    """Underflow tail (x < -87), accurate mode only: exp(x) rounds to exactly
+    0. Fast mode is excluded — hardware showed it retains a slowly-decaying
+    non-zero tail instead of hard-flushing; see test_exp_fast."""
+    input_tensor = generate_bfloat16_bits_in_range(-MAX_BF16, -87.5)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=False))
+    assert torch.all(result == 0.0), "expected exp underflow region (x < -87) to be exactly 0 in accurate mode"
+
+
+@pytest.mark.parametrize("fast", [False, True], ids=["accurate", "fast"])
+def test_exp_overflow(device, fast):
+    """Overflow tail (x > 88.5): exp(x) saturates to +inf, in both modes."""
+    input_tensor = generate_bfloat16_bits_in_range(89.0, MAX_BF16)
+    tt_in = to_tt_tensor(input_tensor, device)
+
+    result = ttnn.to_torch(ttnn.exp(tt_in, fast_and_approximate_mode=fast))
+    assert torch.all(torch.isposinf(result)), "expected exp overflow region (x > 88.5) to be +inf"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -171,8 +219,7 @@ def test_exp_fast(device):
 
 @pytest.mark.parametrize("fast", [False, True], ids=["accurate", "fast"])
 def test_erf(device, fast):
-    """erf over [-10, 10] (beyond ±~4 it saturates to ±1, exactly representable).
-    ULP ≤ 2 in both modes, matching test_unary_ops_ttnn.py::test_unary_erf_ttnn."""
+    """erf over [-10, 10] (saturates to +-1 beyond ~+-4), ULP <= 2 both modes."""
     input_tensor = generate_bfloat16_bits_in_range(-10.0, 10.0)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -183,45 +230,72 @@ def test_erf(device, fast):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# gelu — accurate exhaustive (ULP ≤ 10, FTZ band excluded); fast PCC
+# gelu — accurate exhaustive (ULP ≤ 10, FTZ band excluded); fast PCC+allclose
 # ─────────────────────────────────────────────────────────────────────────────
+
+# Below this golden magnitude, ULP is not a meaningful metric (per
+# assert_with_ulp's own docstring): for x <~ -5, gelu(x) = x/2*(1+erf(x/sqrt2))
+# is a near-total cancellation between two O(1) terms, so both torch (even in
+# float64) and the device round the minuscule true result very differently at
+# the bit level, while the absolute error stays negligible. These elements are
+# checked against GELU_TINY_GOLDEN_ATOL instead.
+GELU_TINY_GOLDEN_ABS = 1e-6
+GELU_TINY_GOLDEN_ATOL = 1e-6
 
 
 def test_gelu_accurate(device):
-    """Accurate mode: all normal bf16 patterns, ULP ≤ 10.
-
-    The exp-field=1 band (|x| in [2^-126, 2^-125)) is excluded: there
-    gelu(x) ≈ x/2 lands in fp32-subnormal territory, so the device DAZ/FTZ
-    flushes it to 0 while torch (no FTZ) keeps a tiny value — up to 128 ULP,
-    a documented hardware artifact (see
-    test_activation.py::test_gelu_bfloat16_accuracy)."""
+    """Accurate mode: ULP <= 10 over all normal bf16 patterns, with two
+    exclusions:
+    - exp-field=1 (|x| in [2^-126, 2^-125)): x/2 underflows to an fp32
+      subnormal that hardware DAZ/FTZ flushes to 0.
+    - |golden| < GELU_TINY_GOLDEN_ABS (the far-negative cancellation tail,
+      e.g. x~=-6.6): checked via absolute tolerance instead of ULP (see
+      GELU_TINY_GOLDEN_ABS above). Originally misdiagnosed as a device kernel
+      defect at a specific element (issue #56616) — see PR #56338 review
+      discussion; golden is computed in float64 to rule out torch's own fp32
+      cancellation as a separate source of error."""
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)  # all normals; specials→0
     tt_in = to_tt_tensor(input_tensor, device)
 
-    golden = F.gelu(input_tensor.float()).to(torch.bfloat16)
+    golden = F.gelu(input_tensor.double()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.gelu(tt_in, fast_and_approximate_mode=False)).to(torch.bfloat16)
 
     abs_x = input_tensor.abs().float()
     exp1_ftz_band = (abs_x >= 2.0**-126) & (abs_x < 2.0**-125)
     assert exp1_ftz_band.any(), "expected exp-field=1 FTZ band to be non-empty for this exhaustive sweep"
 
-    keep = ~exp1_ftz_band & torch.isfinite(golden) & torch.isfinite(result)
-    assert_with_ulp(expected_result=golden[keep], actual_result=result[keep], ulp_threshold=10)
+    finite_golden = torch.isfinite(golden)
+    unexpected_nonfinite = finite_golden & ~exp1_ftz_band & ~torch.isfinite(result)
+    assert not unexpected_nonfinite.any(), (
+        f"gelu(accurate): {int(unexpected_nonfinite.sum())} finite-input elements outside the documented "
+        "FTZ band produced a non-finite device output"
+    )
+
+    tiny_golden = golden.abs() < GELU_TINY_GOLDEN_ABS
+    ulp_keep = ~exp1_ftz_band & finite_golden & ~tiny_golden
+    tiny_keep = ~exp1_ftz_band & finite_golden & tiny_golden
+    assert tiny_keep.any(), "expected the far-negative cancellation tail to be non-empty"
+
+    assert_with_ulp(expected_result=golden[ulp_keep], actual_result=result[ulp_keep], ulp_threshold=10)
+    assert_allclose(
+        expected_result=golden[tiny_keep], actual_result=result[tiny_keep], rtol=0, atol=GELU_TINY_GOLDEN_ATOL
+    )
 
 
 def test_gelu_fast(device):
-    """Fast approximate mode (FastLut): PCC ≥ 0.999 over [-10, 10].
-
-    The 6-segment FastLut collapses to ≈ x across the far-negative half, so its
-    golden intentionally skips generic comparison; a bounded active-band PCC is
-    the meaningful gate here (matches test_unary_ops_ttnn.py::test_unary_gelu_ttnn)."""
+    """Fast mode (FastLut): PCC >= 0.999 over [-10, 10]. PCC alone is weak here
+    (dominated by the large-|x| near-identity tail), so an allclose bound
+    backs it up, same rationale as test_exp_fast. Golden uses float64 for the
+    same cancellation reason as test_gelu_accurate."""
     input_tensor = generate_bfloat16_bits_in_range(-10.0, 10.0)
     tt_in = to_tt_tensor(input_tensor, device)
 
-    golden = F.gelu(input_tensor.float()).to(torch.bfloat16)
+    golden = F.gelu(input_tensor.double()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.gelu(tt_in, fast_and_approximate_mode=True)).to(torch.bfloat16)
 
+    _assert_finite_matches_golden(golden, result, "gelu(fast)")
     assert_with_pcc(golden, result, pcc=0.999)
+    assert_allclose(expected_result=golden, actual_result=result, rtol=0.05, atol=0.05)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -239,10 +313,8 @@ def test_gelu_fast(device):
     ids=["log", "log2", "log10"],
 )
 def test_log_family_accurate(device, ttnn_op, golden_fn, ulp):
-    """Accurate mode: exhaustive positive-normal bf16 domain.
-
-    log/log2 are ≤ 1 ULP; log10's extra base-change multiply costs a 2nd ULP
-    (see test_math.py). x <= 0 is out-of-domain and covered separately."""
+    """Accurate mode over the positive-normal domain; x <= 0 is covered
+    separately. log10 gets an extra ULP for its base-change multiply."""
     input_tensor = generate_bfloat16_bits_in_range(SMALLEST_NORMAL_BF16, MAX_BF16)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -253,20 +325,20 @@ def test_log_family_accurate(device, ttnn_op, golden_fn, ulp):
 
 
 @pytest.mark.parametrize("ttnn_op", [ttnn.log, ttnn.log2, ttnn.log10], ids=["log", "log2", "log10"])
-def test_log_family_nonpositive_domain(device, ttnn_op):
-    """Out-of-domain (x <= 0): log(0) = -inf and log(x<0) = NaN, so every
-    output must be non-finite."""
+@pytest.mark.parametrize("fast", [False, True], ids=["accurate", "fast"])
+def test_log_family_nonpositive_domain(device, ttnn_op, fast):
+    """Out-of-domain (x <= 0): log(0)=-inf, log(x<0)=NaN, so output must be
+    non-finite in both modes."""
     input_tensor = generate_bfloat16_bits_in_range(-MAX_BF16, 0.0)
     tt_in = to_tt_tensor(input_tensor, device)
 
-    result = ttnn.to_torch(ttnn_op(tt_in))
+    result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=fast))
     _assert_all_nonfinite(result, f"{ttnn_op.__name__}(x<=0)")
 
 
 def test_log1p_accurate(device):
-    """Accurate mode: ULP ≤ 1 over the in-domain half (x > -1); x <= -1 must be
-    non-finite (log1p(-1) = -inf, log1p(x<-1) = NaN). See
-    test_unary_ops_ttnn.py::test_unary_log1p_ttnn."""
+    """Accurate mode: ULP <= 1 for x > -1; x <= -1 must be non-finite
+    (log1p(-1)=-inf, log1p(x<-1)=NaN)."""
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)  # all normals; specials→0
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -288,8 +360,7 @@ def test_log1p_accurate(device):
     "ttnn_op", [ttnn.log, ttnn.log2, ttnn.log10, ttnn.log1p], ids=["log", "log2", "log10", "log1p"]
 )
 def test_log_family_fast(device, ttnn_op):
-    """Fast approximate mode: allclose(atol=0.0625) over [1, 100], matching
-    test_unary_ops_ttnn.py::test_unary_log_like_fast_approx_ttnn."""
+    """Fast mode: allclose(atol=0.0625) over [1, 100]."""
     input_tensor = generate_bfloat16_bits_in_range(1.0, 100.0)
     tt_in = to_tt_tensor(input_tensor, device)
 
@@ -297,7 +368,7 @@ def test_log_family_fast(device, ttnn_op):
     golden = golden_fn(input_tensor.float()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn_op(tt_in, fast_and_approximate_mode=True)).to(torch.bfloat16)
 
-    assert_allclose(result, golden, atol=0.0625)
+    assert_allclose(expected_result=golden, actual_result=result, atol=0.0625)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -308,20 +379,12 @@ def test_log_family_fast(device, ttnn_op):
 @pytest.mark.parametrize("fast", [False, True], ids=["accurate", "fast"])
 def test_mish(device, fast):
     """mish over all normal bf16 values, allclose(rtol=1e-5, atol=0.02) in both
-    modes. mish is a compound softplus/tanh chain (golden upcasts to float32,
-    matching ttnn's golden in unary.py); large negatives underflow toward 0 and
-    large positives approach identity — the atol/rtol pair covers both tails.
-
-    atol is 0.02 rather than the 0.008 used by the restricted-range merged
-    tests (test_unary.py::test_unary_mish over [-20, 100]): the exhaustive sweep
-    reaches mish's curvature trough near x ≈ -1.19 (minimum ≈ -0.31), where the
-    SFPU chain deviates by up to 0.0156 (= 2^-6, ~13 bf16 ULP) — hardware-
-    observed. It remains a meaningful gate: an identity (return-x) kernel would
-    deviate by ~0.88 in that trough, far above 0.02."""
+    modes. atol is looser than the merged tests' 0.008 because the exhaustive
+    sweep hits mish's curvature trough near x~-1.19."""
     input_tensor = generate_bfloat16_bits(dtype=torch.bfloat16)  # all normals; specials→0
     tt_in = to_tt_tensor(input_tensor, device)
 
     golden = F.mish(input_tensor.float()).to(torch.bfloat16)
     result = ttnn.to_torch(ttnn.mish(tt_in, fast_and_approximate_mode=fast)).to(torch.bfloat16)
 
-    assert_allclose(result, golden, rtol=1e-5, atol=0.02)
+    assert_allclose(expected_result=golden, actual_result=result, rtol=1e-5, atol=0.02)
