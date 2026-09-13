@@ -43,6 +43,7 @@ Fidelity caveats (deliberate, documented, all visible in the generated data)
   (page tables, cur_pos, update_idxs, embedding ids) would fault the device with
   random values, so they get semantic values from ``INDEX_VALUES`` below.
 * Program configs are rebuilt field-for-field from the repr (including
+  LayerNorm's ``legacy_reduction`` and ``use_welford``, and SDPA's
   ``max_cores_per_head_batch``). The only exceptions are the optional
   CoreRangeSet restrictions (``sub_core_grids``, ``allowed_worker_cores``): those
   print as ``std::nullopt`` in every capture so far, and a non-null value skips
