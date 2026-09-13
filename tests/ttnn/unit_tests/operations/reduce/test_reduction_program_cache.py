@@ -317,3 +317,29 @@ def test_reduce_cache_reuse_across_scalars(device, isolate_program_cache, op, di
         )
 
     assert device.cache_entries_counter.total == 1
+
+
+def test_reduce_cache_reuse_across_scalar_signs_hw(device, isolate_program_cache):
+    """Mixed-sign scalars on the HW factory -> 1 cache entry.
+
+    The host used to hand REDUCE_SCALAR sqrt(scaler), which is NaN for a negative value, so
+    `dim == HW && scaler < 0` was forced onto the two-step W-then-H path. The scalar is applied
+    after the reduction now, so both signs share the one HW program: this cost 3 entries before
+    (1 for the positive HW program, 2 for the forked W-then-H) and costs 1 now.
+    """
+    torch.manual_seed(0)
+    shape = [1, 1, 32, 32]
+
+    for scalar in [0.5, -0.5]:
+        torch_ref, tt_out = run_reduce_op(device, ttnn.sum, shape, dim=[-2, -1], scalar=scalar)
+        # test for equivalance
+        assert_numeric_metrics(
+            torch_ref,
+            tt_out,
+            pcc_threshold=0.9999,
+            rtol=0.007,
+            atol=0.25,
+            frobenius_threshold=0.008,
+        )
+
+    assert device.cache_entries_counter.total == 1
