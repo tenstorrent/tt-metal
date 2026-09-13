@@ -410,7 +410,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
     Inputs are token embeddings, so this is an isolated-layer benchmark.
     """
     from models.demos.gemma4_d_p.tt.attention.global_kv_cache import pack_global_rope_device, pack_sliding_rope_device
-    from models.demos.gemma4_d_p.tt.attention.ring_prefill import PackedRingKVCache
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 
     mesh_config = _mesh_config(mesh_device)
     cp = mesh_config.cp_degree
@@ -545,7 +545,7 @@ def test_prefill_layer_perf_chunk_n(mesh_device, chunk_idx, layer_type, chunk_si
         """Initialize the ring-cache tensors in place, preserving captured addresses."""
         for lt in layer_types:
             cache = model.layers[layer_idxs[lt]].self_attn.ring_kv_cache
-            tensors = (cache.kv,) if isinstance(cache, PackedRingKVCache) else cache
+            tensors = (cache.kv,) if isinstance(cache, GlobalRingKVCache) else (cache.k, cache.v)
             for tensor in tensors:
                 host = ttnn.from_torch(
                     0.1 * torch.randn(list(tensor.shape), dtype=torch.float32),

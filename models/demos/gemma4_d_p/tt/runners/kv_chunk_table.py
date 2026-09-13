@@ -12,7 +12,7 @@ import ttnn
 from models.demos.common.prefill.runners.migration import get_num_dram_banks, serialize_prebuilt_kv_chunk_table
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.attention.global_kv_cache import GLOBAL_PACKED_DIM, SLIDING_HEAD_DIM
-from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, PackedRingKVCache
+from models.demos.gemma4_d_p.tt.attention.ring_prefill import TILE_HEIGHT, GlobalRingKVCache
 from models.demos.gemma4_d_p.tt.runners.kv_caches import Gemma4KvCaches
 
 _BFP8_TILE_BYTES = 1088
@@ -137,8 +137,8 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
 
     for layer_idx in kv_caches.global_layers:
         cache = kv_caches[layer_idx]
-        if not isinstance(cache, PackedRingKVCache):
-            raise TypeError(f"global layer {layer_idx} does not own PackedRingKVCache")
+        if not isinstance(cache, GlobalRingKVCache):
+            raise TypeError(f"global layer {layer_idx} does not own GlobalRingKVCache")
         for head in range(4):
             populate(
                 config_id=head,
@@ -150,7 +150,8 @@ def build_kv_chunk_address_table(*, mesh_device, kv_caches: Gemma4KvCaches, chun
                 chunk_bytes=GLOBAL_CHUNK_BYTES,
             )
     for layer_idx in kv_caches.sliding_layers:
-        cache_k, cache_v = kv_caches[layer_idx]
+        cache = kv_caches[layer_idx]
+        cache_k, cache_v = cache.k, cache.v
         for head in range(16):
             common = dict(
                 semantic_layer=layer_idx,
