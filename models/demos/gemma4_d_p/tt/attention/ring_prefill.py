@@ -125,7 +125,7 @@ def init_global_ring_kv_cache(
 
 def write_chunk_to_packed_ring_cache(
     cache,
-    packed_kv,
+    chunk,
     mesh_config,
     kv_actual_global,
     layer_idx=0,
@@ -134,7 +134,9 @@ def write_chunk_to_packed_ring_cache(
     prefill_metadata=None,
 ):
     """Append one packed global-attention chunk to its CP-local history."""
-    chunk = packed_kv if packed_kv.dtype == cache.dtype else ttnn.typecast(packed_kv, cache.dtype)
+    original_chunk = chunk
+    if chunk.dtype != cache.dtype:
+        chunk = ttnn.typecast(chunk, cache.dtype)
     if prefill_metadata is not None:
         slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
@@ -156,7 +158,7 @@ def write_chunk_to_packed_ring_cache(
             kv_actual_global=kv_actual_global,
             cluster_axis=mesh_config.cp_axis,
         )
-    if chunk is not packed_kv:
+    if chunk is not original_chunk:
         chunk.deallocate(True)
 
 
