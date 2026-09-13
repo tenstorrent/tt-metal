@@ -1,0 +1,13 @@
+# Runtime (server) dependencies on top of tt-metal's python_env. torch comes from tt-metal's pin.
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+pydantic>=2.9,<3
+python-multipart>=0.0.9
+ormsgpack>=1.5
+soundfile>=0.12
+soxr>=0.5
+numpy>=1.24.4,<2
+einops
+safetensors
+tokenizers
+huggingface_hub

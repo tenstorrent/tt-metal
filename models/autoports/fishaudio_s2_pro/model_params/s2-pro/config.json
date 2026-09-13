@@ -1,0 +1,22 @@
+{
+  "_name_or_path": "s2-pro",
+  "architectures": ["Qwen3ForCausalLM"],
+  "model_type": "qwen3",
+  "hidden_size": 2560,
+  "num_attention_heads": 32,
+  "num_key_value_heads": 8,
+  "head_dim": 128,
+  "num_hidden_layers": 36,
+  "intermediate_size": 9728,
+  "rms_norm_eps": 1e-06,
+  "vocab_size": 155776,
+  "rope_theta": 1000000.0,
+  "max_position_embeddings": 32768,
+  "tie_word_embeddings": true,
+  "hidden_act": "silu",
+  "attention_bias": false,
+  "attention_dropout": 0.0,
+  "torch_dtype": "bfloat16",
+  "use_cache": true,
+  "_comment": "Synthesized Qwen3-style view of fishaudio/s2-pro text_config so tt_transformers.ModelArgs can read it (the real config.json is model_type fish_qwen3_omni, which transformers cannot parse). Weights are loaded by tt/weights.py, never by transformers."
+}
