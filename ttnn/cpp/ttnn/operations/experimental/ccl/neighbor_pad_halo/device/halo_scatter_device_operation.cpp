@@ -61,9 +61,17 @@ Tensor NpHaloScatterDeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t NpHaloScatterDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& compact = tensor_args.compact_buffer;
     const auto& x = tensor_args.interior_src;
     return operation::hash_operation<NpHaloScatterDeviceOperation>(
-        args, x.dtype(), x.memory_config(), x.logical_shape());
+        args,
+        args.output_mem_config,
+        compact.dtype(),
+        compact.memory_config(),
+        compact.padded_shape(),
+        x.dtype(),
+        x.memory_config(),
+        x.logical_shape());
 }
 
 }  // namespace ttnn::experimental::prim
