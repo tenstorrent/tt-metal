@@ -12,6 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 
@@ -131,7 +132,7 @@ prog_config_mm5_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [torus_xy_device_params()],
+    [torus_xy_device_params(model_config=DeepSeekV3Config)],
     ids=["torus-xy"],
     indirect=True,
 )

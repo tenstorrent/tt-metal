@@ -25,6 +25,7 @@ from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillModelAdapter, get_adapter
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.test_utils import load_state_dict
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 
 # The per-model registry now lives in models/demos/common/prefill/adapter.py and is shared by the
 # runner and the tests. These aliases keep the existing fixture/test references (TestVariant /
@@ -64,14 +65,18 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     pytest.param(
         (4, 2),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
         id="fabric2d-mesh-4x2",
     ),
     pytest.param(
         (2, 4),
-        fabric2d_device_params(),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
         id="fabric2d-mesh-2x4",
@@ -80,7 +85,9 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     # Ring-4). SP-axis MoE dispatch/combine ride #48225's ring-aware kernels; TP-axis collectives ring.
     pytest.param(
         (8, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="torus-xy-8x4",
@@ -89,21 +96,27 @@ FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS = [
     # they are a distinct workload and are not substitutes for production 8x4 TorusXY coverage.
     pytest.param(
         (4, 4),
-        torus_y_device_params(),
+        torus_y_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-y-4x4",
     ),
     pytest.param(
         (4, 4),
-        torus_x_device_params(),
+        torus_x_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-x-4x4",
     ),
     pytest.param(
         (4, 4),
-        torus_xy_device_params(),
+        torus_xy_device_params(
+            model_config=DeepSeekV3Config,
+        ),
         2,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="torus-xy-4x4",

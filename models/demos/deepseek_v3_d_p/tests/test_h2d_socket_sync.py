@@ -26,7 +26,9 @@ _METADATA_SIZE_BYTES = 12
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),

@@ -19,17 +19,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
-from models.common.utility_functions import is_blackhole
-
-# Fabric packet payload limits (conservative round values below hardware maximums).
-MAX_PAYLOAD_SIZE_BH = 14 * 1024  # Blackhole hardware max ~15232 B
-MAX_PAYLOAD_SIZE_WH = 7 * 1024  # Wormhole hardware max ~7616 B
-CMB_FABRIC2D_ROUTING_INFO_BYTES = 64
-
-
-def get_max_payload_size() -> int:
-    """Return the arch-appropriate fabric payload size. Deferred to avoid probing hardware at import time."""
-    return (MAX_PAYLOAD_SIZE_BH if is_blackhole() else MAX_PAYLOAD_SIZE_WH) + CMB_FABRIC2D_ROUTING_INFO_BYTES
+from models.demos.common.prefill.fabric import create_fabric_router_config as _create_fabric_router_config
 
 
 @dataclass
@@ -846,18 +836,8 @@ def load_captured_routing(
 
 
 def create_fabric_router_config(max_payload_size):
-    """
-    Helper to create FabricRouterConfig with custom max payload size.
-
-    Args:
-        max_payload_size: Maximum packet payload size in bytes
-
-    Returns:
-        FabricRouterConfig configured with the specified payload size
-    """
-    config = ttnn._ttnn.fabric.FabricRouterConfig()
-    config.max_packet_payload_size_bytes = max_payload_size
-    return config
+    """Compatibility entry point for the shared, architecture-aware router config."""
+    return _create_fabric_router_config(max_payload_size)
 
 
 def get_dispatch_input_mesh_mapper(mesh_device, sp_axis: int):

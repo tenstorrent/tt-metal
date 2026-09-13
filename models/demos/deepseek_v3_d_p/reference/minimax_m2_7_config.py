@@ -10,12 +10,15 @@ Values from HuggingFace config.json for MiniMax-M2.7.
 """
 
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
+
 class MiniMaxM27Config:
     """MiniMax M2.7 model dimensions."""
 
     # Core dimensions
     EMB_SIZE = 3072  # embedding dimension
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)
     MOE_INTERMEDIATE_SIZE = 1536  # MoE FFN hidden dimension
     INTERMEDIATE_SIZE = 1536  # Dense FFN hidden dimension (same as MoE)
 

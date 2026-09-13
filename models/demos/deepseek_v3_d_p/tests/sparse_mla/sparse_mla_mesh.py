@@ -30,6 +30,7 @@ import os
 import pytest
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
     torus_x_device_params,
@@ -114,19 +115,19 @@ def parametrize_mesh_and_device_params(*, worker_l1_size, torus_xy_certified=Fal
             marker = None
             profile = "disabled"
         elif shape[1] == 1 and shape[0] > 2:
-            device_params = torus_y_device_params(worker_l1_size=worker_l1_size)
+            device_params = torus_y_device_params(model_config=GLM51Config, worker_l1_size=worker_l1_size)
             marker = "ring"
             profile = "torus-y"
         elif shape[0] == 1 and shape[1] > 2:
-            device_params = torus_x_device_params(worker_l1_size=worker_l1_size)
+            device_params = torus_x_device_params(model_config=GLM51Config, worker_l1_size=worker_l1_size)
             marker = "ring"
             profile = "torus-x"
         elif shape == (8, 4) and torus_xy_certified:
-            device_params = torus_xy_device_params(worker_l1_size=worker_l1_size)
+            device_params = torus_xy_device_params(model_config=GLM51Config, worker_l1_size=worker_l1_size)
             marker = "mesh-8x4"
             profile = "torus-xy"
         else:
-            device_params = fabric2d_device_params(worker_l1_size=worker_l1_size)
+            device_params = fabric2d_device_params(model_config=GLM51Config, worker_l1_size=worker_l1_size)
             marker = f"mesh-{shape[0]}x{shape[1]}"
             profile = "fabric2d"
         marks = [] if marker is None else pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=marker)
@@ -142,7 +143,7 @@ def parametrize_mesh_and_device_params(*, worker_l1_size, torus_xy_certified=Fal
         params.append(
             pytest.param(
                 (2, 2),
-                fabric2d_device_params(worker_l1_size=worker_l1_size),
+                fabric2d_device_params(model_config=GLM51Config, worker_l1_size=worker_l1_size),
                 marks=pytest.mark.skip(reason=f"unsupported device count {detect_num_devices()}"),
                 id="unsupported",
             )

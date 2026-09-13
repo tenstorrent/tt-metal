@@ -9,6 +9,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     create_balanced_chunk_order,
@@ -505,7 +506,9 @@ def _ci_unsupported_param_combos_mla_sdpa_perf(**params):
 @pytest.mark.parametrize(
     "device_params",
     [
-        fabric2d_device_params(trace_region_size=1000000, worker_l1_size=_WORKER_L1_SIZE),
+        fabric2d_device_params(
+            model_config=DeepSeekV3Config, trace_region_size=1000000, worker_l1_size=_WORKER_L1_SIZE
+        ),
     ],
     indirect=["device_params"],
     ids=["fabric2d"],
@@ -874,19 +877,19 @@ def run_ring_joint_sdpa_perf(
     [
         pytest.param(
             (32, 4),
-            fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            fabric2d_device_params(model_config=DeepSeekV3Config, worker_l1_size=_WORKER_L1_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(32, 4), topology="mesh-32x4"),
             id="fabric2d-32x4",
         ),
         pytest.param(
             (2, 4),
-            fabric2d_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            fabric2d_device_params(model_config=DeepSeekV3Config, worker_l1_size=_WORKER_L1_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="fabric2d-2x4",
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(worker_l1_size=_WORKER_L1_SIZE),
+            torus_xy_device_params(model_config=DeepSeekV3Config, worker_l1_size=_WORKER_L1_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),

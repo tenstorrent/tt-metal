@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_xy_device_params
 
 _TOKENS_PER_ROW = 640  # tokens of the chunk carried per mesh row (the realistic knob)
@@ -62,7 +63,9 @@ def _to_device(torch_u32, mesh, mapper):
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            torus_xy_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
         ),
@@ -71,7 +74,9 @@ def _to_device(torch_u32, mesh, mapper):
         # small multi-card box (no 32-chip Galaxy needed).
         pytest.param(
             (2, 2),
-            fabric2d_device_params(),
+            fabric2d_device_params(
+                model_config=DeepSeekV3Config,
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
             id="fabric2d-2x2",
         ),

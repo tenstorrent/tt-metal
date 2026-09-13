@@ -10,6 +10,9 @@ Values from HuggingFace config.json for gpt-oss-20b.
 """
 
 
+from models.demos.common.prefill.fabric import moe_fabric_payload_size
+
+
 class GptOss20BConfig:
     """GPT-OSS 20B model configuration."""
 
@@ -90,4 +93,4 @@ class GptOss20BConfig:
     QUANT_METHOD = "mxfp4"
 
     # Implementation-specific, not from the HF model config
-    FABRIC_PAYLOAD_SIZE = EMB_SIZE
+    FABRIC_PAYLOAD_SIZE = moe_fabric_payload_size(EMB_SIZE)

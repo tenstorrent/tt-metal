@@ -16,7 +16,8 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams
-from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import glm_hf_config
+from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config, glm_hf_config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_1 import GLM51Adapter
 from models.demos.deepseek_v3_d_p.tt.runners.kv_chunk_table import (
     _dram_chunk_size_bytes,
@@ -28,7 +29,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import PREFILL_CHUNK_TOKE
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [fabric2d_device_params(model_config=GLM51Config)],
     indirect=True,
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["2x4"], indirect=True)

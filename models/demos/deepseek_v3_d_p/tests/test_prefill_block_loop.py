@@ -113,7 +113,7 @@ def _ci_unsupported_param_combos(**params):
             ),
             pytest.param(
                 (2, 4),
-                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                fabric2d_device_params(model_config=DeepSeekV3Config),
                 2,
                 marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
                 id="fabric2d-mesh-2x4-2link",
