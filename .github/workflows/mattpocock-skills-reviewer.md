@@ -70,6 +70,10 @@ pre-agent-steps:
         COMMENT_COUNT=$(jq 'length' /tmp/gh-aw/agent/pr-review-comments.json)
         echo "Pre-fetched PR diff (${LINES} lines), metadata, and ${COMMENT_COUNT} existing review comments for head ${CURRENT_HEAD_SHA:-unknown}"
       fi
+  - name: Set review investigation deadline
+    run: |
+      # Refresh on every run, including PR-data cache hits. Reserve time for safe outputs.
+      date -u -d '+10 minutes' +%s > /tmp/gh-aw/agent/review-investigation-deadline.txt
 max-daily-ai-credits: 10000
 if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
 "on":
@@ -88,7 +92,25 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc"]
+  bash:
+    - cat
+    - ls
+    - find
+    - grep
+    - head
+    - tail
+    - wc
+    - rg
+    - sed
+    - awk
+    - nl
+    - jq
+    - date
+    - python3
+    - git diff
+    - git show
+    - git log
+    - git status
   github:
     toolsets: [pull_requests, repos]
     lockdown: false
@@ -153,6 +175,23 @@ A successful review:
 - states a clear "no actionable issues" verdict when nothing needs fixing, instead of manufacturing feedback
 - uses `noop` instead of generic praise when there is nothing useful to say
 
+### Review Budget
+
+Use the available tools to verify findings: `rg`/`grep` for references, `sed`/`awk`/`nl` for source ranges and line numbers, `jq` for pre-fetched JSON, and `git diff`/`show`/`log`/`status` for local repository context. Small `python3` calculations or reproductions are allowed when they resolve a concrete question about the changed code. Keep command output focused. Apply the skills as review criteria; do not turn the review into an implementation task or a full project build.
+
+If a command is denied, stop retrying that operation with alternate interpreters or shell wrappers. Use the available inspection tools or state what you could not verify.
+
+Before starting, read the investigation deadline and current Unix time:
+
+```bash
+cat /tmp/gh-aw/agent/review-investigation-deadline.txt
+date -u +%s
+```
+
+Check the current time again after triage and before each further investigation tool call. At the deadline, stop gathering evidence and go directly to Steps 5–6 with the findings already supported. If the deadline is missing or unreadable, use the pre-fetched data for a brief review and proceed to output. The deadline allows at most 10 minutes for investigation within the 15-minute execution limit; the remaining time is for delivering the review.
+
+Review at most **five highest-impact changed files** in depth, using 1–2 skills. Read unchanged code only when needed to assess a specific changed line. When time or scope limits leave relevant changes unexamined, say so in the overall review; do not imply that the whole PR was verified. Once the overall review is submitted, finish without further investigation or optional summary comments.
+
 ### Step 1: Load Pre-fetched PR Data
 
 > **⚠️ Do NOT call any GitHub MCP tools for PR data.** All PR information is pre-fetched: use `/tmp/gh-aw/agent/pr-meta.json`, `/tmp/gh-aw/agent/pr-diff.patch`, and `/tmp/gh-aw/agent/pr-review-comments.json` exclusively.
@@ -161,7 +200,7 @@ PR data and the diff (excluding lock files and common generated/build artifacts)
 
 ```bash
 cat /tmp/gh-aw/agent/pr-meta.json             # fields: number, title, body, headRefName, additions, deletions, changedFiles, files
-cat /tmp/gh-aw/agent/pr-diff.patch            # full unified diff of all changed files
+cat /tmp/gh-aw/agent/pr-diff.patch            # unified diff capped at 2000 lines
 cat /tmp/gh-aw/agent/pr-review-comments.json  # existing review comments (each: id, path, line, body, user) — use to avoid duplication
 ```
 
@@ -189,7 +228,7 @@ Apply the recommended skills in Step 4, prioritising the listed `high_impact_fil
 
 ### Step 4: Review Using Selected Skills
 
-Focus your skill application on the `high_impact_files` from Step 3 (from `pr-triage`, or from the fallback heuristic when triage was unavailable).
+Focus your skill application on the first five `high_impact_files` from Step 3 (from `pr-triage`, or from the fallback heuristic when triage was unavailable), within the investigation deadline.
 
 Apply the skill(s) to review the changed lines. For each issue you find:
 
@@ -274,11 +313,6 @@ Applied **`/tdd`** and **`/codebase-design`** — requesting changes on test cov
 </details>
 ```
 
-### Step 7: Post a Summary Comment (optional)
-
-If the review is complex or the overall findings are significant, post a single `add-comment` with a concise summary for the author. Apply progressive disclosure: one-line outcome visible, details in `<details>` blocks.
-Use `###` or lower for any headers — never `#` or `##`.
-
 ### Scope Rules
 
 - **Review changed lines only** — do not critique unchanged code
@@ -322,7 +356,7 @@ Tasks:
    - `/codebase-design`
    - `/improve-codebase-architecture`
    - `/grill-with-docs`
-4. Rank changed files as `high_impact_files` (most important first), including enough files to cover the key risk areas.
+4. Rank at most five changed files as `high_impact_files` (most important first), covering the key risk areas. Use only the pre-fetched metadata and patch; do not explore the repository or execute scripts during triage.
 5. Provide concise `key_signals` that justify classification and ranking.
 
 Skill mapping:
