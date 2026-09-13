@@ -6,6 +6,7 @@
 #include "tensor/flatbuffer/tensor_spec_flatbuffer.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
@@ -166,7 +167,7 @@ tt::tt_metal::TensorTopology from_flatbuffer(const ttnn::flatbuffer::TensorTopol
 }  // namespace
 
 flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
-    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<tt::tt_metal::HostBuffer>& buffers) {
+    const Tensor& tensor, flatbuffers::FlatBufferBuilder& builder, std::vector<SerializedTensorBuffer>& buffers) {
     TT_FATAL(buffers.empty(), "Buffers vector must be empty");
     TT_FATAL(!is_device_tensor(tensor), "Device tensors are not supported in flatbuffer serialization");
 
@@ -209,7 +210,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
-            uint64_t shard_buffer_offset = next_buffer_offset;
+            uint64_t shard_buffer_offset = 0;
 
             size_t key = 0;
             for (size_t dim = 0; dim < placements.size(); ++dim) {
@@ -225,8 +226,11 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 // If two shards share the same buffer, they are identical.
                 shard_buffer_offset = it->second;
             } else {
-                next_buffer_offset += buffer_size;
-                buffers.push_back(*buffer);
+                // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
+                // file directly. The padded position is what gets recorded, so readers never see the gap.
+                shard_buffer_offset = tt::align(next_buffer_offset, kTensorDataAlignment);
+                next_buffer_offset = shard_buffer_offset + buffer_size;
+                buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = shard_buffer_offset});
             }
 
             buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
