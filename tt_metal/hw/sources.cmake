@@ -7,6 +7,7 @@ set(HW_JIT_API_HEADERS
     inc/api/remote_circular_buffer.h
     inc/api/socket_api.h
     inc/api/dataflow/dataflow_api.h
+    inc/api/dataflow/tile_metadata.h
     inc/api/debug/assert.h
     inc/api/debug/checkpoint.h
     inc/api/debug/dprint.h

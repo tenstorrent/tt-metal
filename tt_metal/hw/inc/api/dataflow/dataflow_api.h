@@ -274,29 +274,14 @@ void cb_pop_front(int32_t operand, int32_t num_pages) {
 
 // this API is used by both the reader and writer side of the CB
 // it uses unpack_src_format, but because unpack_src_format == pack_dst_format, we can use either
-constexpr inline std::int32_t get_tile_size(const std::int32_t operand) {
-    std::uint32_t input = operand;
-
-    // L1 16B words
-    std::uint32_t num_words = (uint)unpack_tile_size[input];
-
-    // return bytes
-    return num_words;
-}
-
-constexpr inline uint32_t get_tile_hw(const std::int32_t operand) {
-    std::uint32_t input = operand;
-    return (uint32_t)unpack_tile_r_dim[input] * (uint32_t)unpack_tile_c_dim[input];
-}
-
-constexpr inline uint32_t get_tile_num_faces(const std::int32_t operand) {
-    std::uint32_t input = operand;
-    return (uint32_t)unpack_tile_num_faces[input];
-}
-
-constexpr inline DataFormat get_dataformat(const std::int32_t operand) {
-    return static_cast<DataFormat>((uint)unpack_src_format[operand]);
-}
+#ifdef TT_METAL_DEFER_CB_DESCRIPTORS
+constexpr inline std::int32_t get_tile_size(std::int32_t);
+constexpr inline uint32_t get_tile_hw(std::int32_t);
+constexpr inline uint32_t get_tile_num_faces(std::int32_t);
+constexpr inline DataFormat get_dataformat(std::int32_t);
+#else
+#include "api/dataflow/tile_metadata.h"
+#endif
 
 #endif
 
