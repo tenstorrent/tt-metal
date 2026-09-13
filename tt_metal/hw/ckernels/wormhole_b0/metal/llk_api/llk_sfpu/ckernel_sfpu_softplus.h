@@ -63,6 +63,9 @@ sfpi_inline sfpi::vFloat softplus_exp_negative(sfpi::vFloat x) {
     constexpr float LN2_LO = -3.19461832987e-05f;
 
     // Range reduction: x = k*ln(2) + r
+    // Range reduction: x = k*ln(2) + r
+    // Guard against Hacker's Delight round-to-nearest binade overflow for beta*x < -8.72e6 (#55798)
+    x = sfpi::max(x, -88.0f);
     sfpi::vFloat z = x * INV_LN2;
     sfpi::vInt k_int;
     sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
