@@ -11,6 +11,7 @@ import os
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_decode_ttnn,
@@ -189,11 +190,12 @@ class TPGatedDeltaNet:
         self._fuse_ab = self._dram_sharded
         # Fuse prefill norm-allgather + qkvzab in-proj into all_gather_minimal_matmul_async.
         # Requires the folded qkvzab weight; norm's post-AG is disabled in layer.py (GDN, prefill).
-        self._fuse_agmm = self._fuse_ab
+        self._fuse_agmm = self._fuse_ab and tpc.prefill_agmm_supported()
         # PREFILL out-proj fusion (matmul_reduce_scatter, (8,8) grid). Slight TTFT cost at small ISL
         # (~13k crossover from a fixed warmup/compile overhead) but a large win at long ISL (e.g.
         # 128k ~-2s); overlaps the fp32 GDN-out reduce-scatter with the matmul.
-        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1
+        # Wormhole's 8x8 grid cannot fit the matmul and reduce-scatter workers.
+        self._fuse_out_mmrs_prefill = not self._out_sharded and args.num_devices > 1 and is_blackhole()
         # Pre-build chunk masks once (trace-safe; avoids from_torch inside captured trace)
         self.chunk_seq_masks = create_chunk_masks_seq(args.gdn_chunk_size, mesh)
         # Prefill fused-op constant tiles, owned by this layer (avoids process-lifetime C++ cache vs device lifetime).
@@ -361,7 +363,9 @@ class TPGatedDeltaNet:
             return_weights_and_bias=False,
         )
         ttnn.deallocate(xin)
-        out = ttnn.sharded_to_interleaved(out, _dram)
+        out_l1 = out
+        out = ttnn.sharded_to_interleaved(out_l1, _dram)
+        ttnn.deallocate(out_l1)
         out = ttnn.reshape(out, (1, T, C))
         out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=_dram)
         # SiLU stays separate (folding via conv_config.activation drops PCC to ~0.84 on this depthwise).
@@ -466,8 +470,9 @@ class TPGatedDeltaNet:
         assemble_batched_state(). Single-sequence behavior is unchanged when False.
         """
         tw, Nk, Nv, Dk, Dv = self.tw, self.Nk, self.Nv, self.Dk, self.Dv
+        _in_mc = None if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG
         if len(x.shape) == 4:
-            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]))
+            x = ttnn.reshape(x, (1, x.shape[-2], x.shape[-1]), memory_config=_in_mc)
         T = x.shape[1]
         # Pass the RAW valid_len (may be None) to the conv-FIR / seq kernels below — NOT a
         # `valid_len or T` coercion. A full chunk (valid_len is None) must take the kernels'
@@ -487,8 +492,9 @@ class TPGatedDeltaNet:
         if carry and self.conv_carry is None:
             self.reset_state()
 
-        # Prefill qkvzab in L1: keeps proj + q/k/v/z/a/b resident for conv+gate prep.
-        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=ttnn.L1_MEMORY_CONFIG)
+        # Leave L1 capacity for the chunk kernel on Wormhole.
+        _proj_mc = ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG
+        qkv, z, a, b = self._project_qkvzab(x, T, out_mc=_proj_mc)
 
         # FIR conv1d; conv_state = previous chunk's last K-1 inputs (None/zero from scratch)
         _cstate = self.conv_carry if carry else None
@@ -502,8 +508,7 @@ class TPGatedDeltaNet:
                 None,
                 self.K,
                 self.mesh,
-                # Conv in L1 (output freed before chunk kernel; new_state lands in DRAM internally)
-                memory_config=ttnn.L1_MEMORY_CONFIG,
+                memory_config=_proj_mc,
                 conv_state=_cstate,
                 weight_taps=tw["conv_taps"],
                 bias_dev=None,

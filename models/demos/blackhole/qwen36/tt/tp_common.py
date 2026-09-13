@@ -234,11 +234,15 @@ def create_prefill_matmul_program_config(m, k, n, grid_size=None, fused_activati
     else:
         in0_block_w = min(cap, max(1, k_tiles // grid_size[0]))
 
+    # A single subblock keeps the output and intermediate circular buffers within Wormhole's L1.
+    out_block_w = per_core_N if is_blackhole() else out_subblock_w
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
+        out_block_h=per_core_M,
+        out_block_w=out_block_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,
@@ -387,9 +391,13 @@ def all_gather_matmul_prefill(
     return out
 
 
+def prefill_agmm_supported():
+    return is_blackhole()
+
+
 def mlp_gateup_agmm_enabled(num_devices):
     """Fuse the ff_norm all-gather into the MLP gate/up matmul (prefill). TP-only (needs the gather)."""
-    return num_devices > 1
+    return num_devices > 1 and prefill_agmm_supported()
 
 
 def all_gather_swiglu_prefill(

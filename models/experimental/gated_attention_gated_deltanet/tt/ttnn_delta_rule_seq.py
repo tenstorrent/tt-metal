@@ -16,6 +16,7 @@ import os as _os
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 _DBG = _os.environ.get("QWEN9B_GDN_DBG")
 
@@ -522,7 +523,8 @@ def chunk_gated_delta_rule_seq(
         )
         lower_causal = _create_tril_ones(chunk_size, mesh_device, dtype=ttnn.float32)
 
-    _cmc = ttnn.DRAM_MEMORY_CONFIG if chunk_size > 64 else None
+    # Keep chunk intermediates out of Wormhole's smaller L1.
+    _cmc = ttnn.DRAM_MEMORY_CONFIG if (chunk_size > 64 or not is_blackhole()) else None
 
     # ---- Decay preprocessing ----
     # decay = g_c @ triu_ones (prefix-sum of g along the chunk). triu_ones is broadcast across

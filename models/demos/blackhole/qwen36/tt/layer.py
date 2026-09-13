@@ -8,6 +8,7 @@ based on the layer index. Both share the same RMSNorm + residual pattern and MLP
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.attention import AttentionConfig, Qwen36GatedAttention
 from models.demos.blackhole.qwen36.tt.gdn import GDNConfig, Qwen36GatedDeltaNet
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
@@ -45,9 +46,15 @@ class Qwen36DecoderLayer:
         # Prefill fuses the norm all-gather into the in-proj matmul (all_gather_minimal_matmul_async):
         # GDN qkvzab and full-attn QKV. attention_norm then skips its post-norm AG (prefill only;
         # decode gathers pre-norm). Gates must match the module-side _fuse_agmm gates.
-        self._fuse_norm_agmm = self.num_devices > 1 and (
-            (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
-            or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        self._fuse_norm_agmm = (
+            self.num_devices > 1
+            and tpc.prefill_agmm_supported()
+            and (
+                (not self.is_full_attention and getattr(args, "gdn_qkvz_weight_memcfg", None) is not None)
+                or (self.is_full_attention and getattr(args, "attn_qkv_fused_weight_memcfg", None) is not None)
+            )
         )
         self.attention_norm = self._make_norm(
             mesh_device,
@@ -61,8 +68,6 @@ class Qwen36DecoderLayer:
             enable_all_gather=not self._fuse_norm_agmm,
         )
         # Prefill: ff_norm skips AG (fused into gate/up AGMM); decode gathers pre-norm so this is a no-op there.
-        from models.demos.blackhole.qwen36.tt import tp_common as tpc
-
         self._fuse_ff_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
         self.ffn_norm = self._make_norm(
             mesh_device,
@@ -166,11 +171,12 @@ class Qwen36DecoderLayer:
         gdn_collect=False,
     ):
         _norm_mode = Mode.PREFILL if mode == "prefill" else Mode.DECODE
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
         if self.num_devices > 1:
             # TP: DistributedNorm uses the framework's per-norm memory configs.
             _attn_norm_config = self.args.get_norm_config("attn", _norm_mode)
-            # PREFILL: distributed rmsnorm outputs in L1 so the fused in-proj AGMM gathers from L1, not DRAM.
-            if _norm_mode == Mode.PREFILL:
+            if _norm_mode == Mode.PREFILL and tpc.prefill_agmm_supported():
                 _attn_norm_config = {**_attn_norm_config, "distributed_output_mem_config": ttnn.L1_MEMORY_CONFIG}
             # DECODE ff_norm uses the attn_norm layout (act_shard_hidden, 32-core) so Qwen36MLP's input reshard is a no-op and the norm runs on 32 cores not 8; PREFILL keeps the framework ff config.
             if _norm_mode == Mode.DECODE:
@@ -244,15 +250,16 @@ class Qwen36DecoderLayer:
             )
         ttnn.deallocate(attn_input)
 
-        h = ttnn.add(x, attn_output)
+        # Wormhole uses exact BF16 residual adds to avoid FPU sequencing stalls.
+        h = ttnn.add(x, attn_output, fast_and_approximate_mode=is_blackhole())
         ttnn.deallocate(attn_output)
 
         ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
-        ff_output = self.feed_forward.forward(ff_input)
+        ff_output = self.feed_forward.forward(ff_input, mode=_norm_mode)
         ttnn.deallocate(ff_input)
 
-        output = ttnn.add(h, ff_output)
+        output = ttnn.add(h, ff_output, fast_and_approximate_mode=is_blackhole())
         ttnn.deallocate(h)
         ttnn.deallocate(ff_output)
 

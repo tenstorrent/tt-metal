@@ -33,11 +33,12 @@ def test_mlp_pcc(device, setup, request):
 
     from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
     from models.demos.blackhole.qwen36.utils.substate import substate
+    from models.tt_transformers.tt.common import Mode
 
     mlp_state = substate(sd, "layers.0.mlp")
     mlp = Qwen36MLP(device, mlp_state)
     x_t = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    out = ttnn.to_torch(mlp.forward(x_t))
+    out = ttnn.to_torch(mlp.forward(x_t, mode=Mode.PREFILL))
 
     pcc = compute_pcc(ref, out)
     logger.info(f"MLP PCC: {pcc:.6f}")

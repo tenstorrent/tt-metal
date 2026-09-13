@@ -2087,6 +2087,10 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             on_device_sampling
             and (reset_batch or mode_switched)
             and enable_trace
+            and not any(
+                getattr(self.model[i], "_tt_vllm_always_refresh_decode_trace_inputs", False)
+                for i in range(self.data_parallel)
+            )
             and self.trace_inputs_decode[on_device_sampling]
         ):
             new_tokens = []

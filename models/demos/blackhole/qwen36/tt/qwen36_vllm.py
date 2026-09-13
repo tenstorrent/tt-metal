@@ -26,6 +26,7 @@ from vllm.multimodal import MULTIMODAL_REGISTRY
 import ttnn
 from models.demos.blackhole.qwen36.tt.common import create_tt_model
 from models.demos.blackhole.qwen36.tt.generator_interface import prefill_dispatch, warmup_decode_buckets
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.generator import Generator
 
 _PREFILL_WARMUP_CHUNK = 2048
@@ -202,6 +203,13 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
 
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
+        self.mode = Mode.PREFILL
+        if not hasattr(self, "_slots_prefilled_since_decode"):
+            self._slots_prefilled_since_decode = set()
+        empty_slots = kwargs.get("empty_slots")
+        self._slots_prefilled_since_decode.update(
+            range(tokens.shape[0]) if empty_slots is None else [int(s) for s in empty_slots]
+        )
         model = self.model[0]
         if model.num_devices > 1 and model.args.max_batch_size > 1:
             # Batched text prefill into decode slots (MM is B=1). Require real visual data, not a
@@ -365,8 +373,6 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
     def warmup_model_prefill(self, kv_cache, enable_trace, *args, **kwargs):
         # Capture the chunk-prefill trace + warm the masked-bucket set so requests only replay
         # pre-compiled programs (compile-clobbers-trace fix). Guard name must match the plugin's reset.
-        if not enable_trace:
-            return
         if getattr(self, "already_warmed_up_prefill", False):
             return
         self.already_warmed_up_prefill = True
@@ -392,7 +398,7 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         prev = model._bind_gdn_prefill_scratch() if batched else None
         try:
             model.capture_prefill_trace_chunked(
-                self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=True
+                self.mesh_device, page_table, chunk_size=_PREFILL_WARMUP_CHUNK, capture_chunk_trace=enable_trace
             )
         finally:
             if prev is not None:

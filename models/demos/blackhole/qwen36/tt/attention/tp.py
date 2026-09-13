@@ -143,7 +143,7 @@ class TPAttention:
         self._qg_deint = self._fused_qkv
         # Fuse prefill norm-allgather + fused-QKV in-proj (all_gather_minimal_matmul_async).
         # Norm's prefill post-AG disabled in layer.py; decode path unchanged.
-        self._fuse_agmm = self._fused_qkv
+        self._fuse_agmm = self._fused_qkv and tpc.prefill_agmm_supported()
         # Decode head split/merge via nlp_create/concat_heads_decode (the batched-decode idiom).
         self._use_nlp_decode_heads = True
         self.k_caches = None
@@ -550,6 +550,11 @@ class TPAttention:
 
         q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+
+        # Updating V from L1 corrupts the cache at B=32.
+        v_l1 = v
+        v = ttnn.to_memory_config(v_l1, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(v_l1)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
         # hardcoded 64. cores_per_head = grid_total/B (sdpa_decode_program_factory.cpp), so a

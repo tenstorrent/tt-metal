@@ -10,6 +10,8 @@ import os
 from dataclasses import dataclass
 
 import ttnn
+from models.common.utility_functions import is_blackhole
+from models.tt_transformers.tt.common import Mode
 
 
 @dataclass(frozen=True)
@@ -178,7 +180,7 @@ class Qwen36MLP:
         self._fuse_gateup_agmm = tpc.mlp_gateup_agmm_enabled(self.num_devices)
         self.weights = load_mlp_weights(mesh_device, state_dict, tensor_cache_path, args=args)
         self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=False
+            math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=is_blackhole(), packer_l1_acc=False
         )
         # fuse_swiglu AGMM: fp32 acc (subblock_w=4) to match GDN/attn in-proj.
         self.compute_kernel_config_agmm = ttnn.WormholeComputeKernelConfig(
@@ -188,13 +190,13 @@ class Qwen36MLP:
             math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, packer_l1_acc=True
         )
 
-    def forward(self, x):
+    def forward(self, x, mode: Mode):
         if self.num_devices > 1:
-            return self._forward_tp(x)
+            return self._forward_tp(x, mode)
         w = self.weights
-        T = x.shape[1] if len(x.shape) >= 3 else 1
-        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
-        mc = ttnn.L1_MEMORY_CONFIG if T <= 512 else ttnn.DRAM_MEMORY_CONFIG
+        seq_len = x.shape[-2]
+        ckc = self.compute_kernel_config_decode if mode == Mode.DECODE else self.compute_kernel_config
+        mc = ttnn.L1_MEMORY_CONFIG if seq_len <= 512 else ttnn.DRAM_MEMORY_CONFIG
         w1_out = ttnn.linear(x, w.w1, activation="silu", compute_kernel_config=ckc, memory_config=mc)
         w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, memory_config=mc)
         hidden = ttnn.mul(w1_out, w3_out, memory_config=mc)
@@ -202,24 +204,24 @@ class Qwen36MLP:
         ttnn.deallocate(w3_out)
         down_pc = None
         if (
-            T > 1
+            mode == Mode.PREFILL
+            and seq_len > 1
             and getattr(self.args, "prefill_progcfg", None) is not None
             and os.environ.get("QWEN9B_MLP_DOWN_AUTO") != "1"
         ):
-            down_pc = self.args.prefill_progcfg(T, hidden.shape[-1], w.w2.shape[-1])
+            down_pc = self.args.prefill_progcfg(seq_len, hidden.shape[-1], w.w2.shape[-1])
         output = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc, program_config=down_pc)
         ttnn.deallocate(hidden)
         return output
 
-    def _forward_tp(self, x):
+    def _forward_tp(self, x, mode: Mode):
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
         w = self.weights
         args = self.args
-        T = x.shape[1] if len(x.shape) >= 3 else 1
-        ckc = self.compute_kernel_config_decode if T <= 1 else self.compute_kernel_config
+        ckc = self.compute_kernel_config_decode if mode == Mode.DECODE else self.compute_kernel_config
 
         mc = ttnn.DRAM_MEMORY_CONFIG
         _silu_fused = False
@@ -285,14 +287,10 @@ class Qwen36MLP:
             pc_up = tpc.create_prefill_mlp_matmul_program_config(
                 seq, args.dim, w.w3.shape[-1], max_cols=_gw, tuning=_pt
             )
-            # L1 output (gate/up outputs; down output via mc_out below): +FPU, avoids the DRAM round-trip
-            # (test_mlp_matmul_sweep_prefill *_outL1). The [seq,N] tensors fit L1 at the prefill chunk.
-            w1_out = ttnn.linear(
-                x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            w3_out = ttnn.linear(
-                x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
+            # Leave L1 capacity for matmul circular buffers on Wormhole.
+            _out_mc = ttnn.L1_MEMORY_CONFIG if is_blackhole() else ttnn.DRAM_MEMORY_CONFIG
+            w1_out = ttnn.linear(x, w.w1, compute_kernel_config=ckc, program_config=pc_gate, memory_config=_out_mc)
+            w3_out = ttnn.linear(x, w.w3, compute_kernel_config=ckc, program_config=pc_up, memory_config=_out_mc)
             _silu_fused = True
         else:
             # Interleaved weights: auto matmul program for decode and prefill.
@@ -331,9 +329,8 @@ class Qwen36MLP:
                 max_cols=getattr(args, "decode_grid_w", 8),
                 tuning=getattr(args, "prefill_tuning", None),
             )
-        # down-proj OUTPUT in L1 for the tuned prefill path (DRAM input `hidden` + L1 output = the
-        # validated sweep outL1 config; tt_all_reduce already consumes an L1 partial).
-        mc_w2_out = ttnn.L1_MEMORY_CONFIG if (x.shape[-2] <= ttnn.TILE_SIZE or _prefill_tuned) else mc
+        _w2_out_l1 = x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and is_blackhole())
+        mc_w2_out = ttnn.L1_MEMORY_CONFIG if _w2_out_l1 else mc
         partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
         ttnn.deallocate(hidden)
 

@@ -15,6 +15,7 @@ from tqdm import tqdm
 
 import ttnn
 from models.common.rmsnorm import RMSNorm
+from models.common.utility_functions import is_blackhole
 from models.demos.blackhole.qwen36.tt.layer import Qwen36DecoderLayer
 from models.demos.blackhole.qwen36.tt.model_config import Qwen36ModelArgs
 from models.demos.blackhole.qwen36.tt.rope import Qwen36RoPESetup
@@ -1137,6 +1138,8 @@ class Qwen36Model:
 
         # Capture trace.
         self._reset_dn_state_inplace()
+        if not capture_chunk_trace:
+            return
         self._chunked_trace_id = ttnn.begin_trace_capture(device, cq_id=0)
         self._chunked_trace_output = self._forward_prefill_chunk(
             self._chunk_token_buf,
@@ -1224,12 +1227,10 @@ class Qwen36Model:
             self.warmup_prefill_masked_buckets(page_table)
 
         if not capture_chunk_trace:
-            # Batched (B>1) vLLM path: masked-bucket programs are warmed above; skip parking the
-            # chunk trace (it would bake the B=1 prefill scratch that is freed after warmup, and
-            # batched serving handles short prompts only). num_full==0 prompts never need it.
+            # Keep scratch allocated for later trace capture.
             self._chunked_trace_id = None
             self._reset_gdn_state_for_new_sequence()
-            logger.info("Masked-bucket prefill programs (TP) warmed; chunk trace skipped (batched path).")
+            logger.info("Masked-bucket prefill programs (TP) warmed; chunk trace skipped.")
             return
 
         # Capture trace.
@@ -2536,9 +2537,10 @@ class Qwen36Model:
         # DMAs aren't GC'd) and sync only every _SYNC_EVERY chunks — the host software-pipelines chunk
         # N+1's from_torch/tilize over chunk N's device exec. Periodic (not fully removed) sync bounds
         # in-flight queue depth so very long context (e.g. traced_128k = 64 chunks) can't overrun the
-        # command queue. QWEN36_PREFILL_OVERLAP=0 restores the per-chunk sync.
+        # command queue. Wormhole defaults to per-chunk sync to keep Ethernet remote I/O responsive.
+        # QWEN36_PREFILL_OVERLAP=0 restores the per-chunk sync.
         _log_every = max(1, num_full // 4)
-        _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1") != "0"
+        _overlap = os.environ.get("QWEN36_PREFILL_OVERLAP", "1" if is_blackhole() else "0") != "0"
         _SYNC_EVERY = 8 if _overlap else 1
         _host_refs = []  # keep host tensors alive until the next sync frees their DMAs
         for c in range(num_full):
@@ -3027,13 +3029,13 @@ class Qwen36Model:
                         )  # [1, Bg, bucket, d_out]
                         attn_out = ttnn.reshape(attn_out, (1, 1, Bg * bucket, attn_out.shape[-1]))
                     ttnn.deallocate(attn_in)
-                    h = ttnn.add(x, attn_out)  # both [1, 1, Bg*bucket, d]
+                    h = ttnn.add(x, attn_out, fast_and_approximate_mode=is_blackhole())  # both [1, 1, Bg*bucket, d]
                     ttnn.deallocate(x)
                     ttnn.deallocate(attn_out)
                     ff_in = layer.ffn_norm(h, mode=Mode.PREFILL)
-                    ff_out = layer.feed_forward.forward(ff_in)
+                    ff_out = layer.feed_forward.forward(ff_in, mode=Mode.PREFILL)
                     ttnn.deallocate(ff_in)
-                    x = ttnn.add(h, ff_out)
+                    x = ttnn.add(h, ff_out, fast_and_approximate_mode=is_blackhole())
                     ttnn.deallocate(h)
                     ttnn.deallocate(ff_out)
 
