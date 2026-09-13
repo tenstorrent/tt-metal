@@ -28,7 +28,8 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     model._prefill_trace_controller = (
         SimpleNamespace(layer_ack=lambda idx: events.append(("ack", idx))) if ack_mode == "segmented_trace" else None
     )
-    model.norm = SimpleNamespace(forward=lambda x: events.append(("norm", None)) or x)
+    model.mesh_config = SimpleNamespace(cp_degree=8)
+    model._get_rope_mats = lambda idx, **kwargs: (idx, idx)
 
     def layer(idx):
         def forward(x, **kwargs):
@@ -52,7 +53,6 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
     monkeypatch.setattr(ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", socket_ack)
     output = model(
         hidden,
-        rope_mats={"sliding_attention": (0, 0), "full_attention": (1, 1)},
         chunk_start_idx=8192,
         on_layer_complete=lambda idx: events.append(("ack", idx)),
         d2h_service=service if ack_mode == "socket" else None,
@@ -65,7 +65,7 @@ def test_migration_ack_follows_each_layer_write(monkeypatch, ack_mode):
         if ack_mode == "callback":
             expected.append(("sync", None))
         expected.append(("ack", idx))
-    assert events == expected + [("norm", None)]
+    assert events == expected
 
 
 @pytest.mark.parametrize("is_global", [False, True])
