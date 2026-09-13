@@ -83,7 +83,7 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     monkeypatch.setattr(attention, "init_global_ring_kv_cache", allocate)
     monkeypatch.setattr(ttnn, "zeros", allocate)
     result = attention.Gemma4Attention(
-        config=SimpleNamespace(is_sliding=not is_global, sliding_window=1024),
+        config=SimpleNamespace(is_sliding=not is_global, sliding_window_size=1024),
         state_dict={},
         ccl_manager=object(),
         mesh_config=MeshConfig(SimpleNamespace(shape=(8, 4))),
