@@ -417,13 +417,15 @@ class LogProbsCalculator:
         ttnn.deallocate(gathered_sum_exp_tensors)
 
     def _is_supported(self):
-        """Check if logprobs computation is supported on this device configuration."""
-        num_devices = self.mesh_device.get_num_devices()
-        if num_devices not in (8, 32):
-            return False
-        if self.num_devices_for_sharding < 2:
-            return False
-        return True
+        """Return whether distributed sampled-token logprobs are available.
+
+        The calculation is topology-generic: it reduces across the detected
+        vocabulary-sharding axis.  It therefore requires a genuinely sharded
+        vocabulary, not one of a fixed set of total mesh sizes.  In particular,
+        a four-device 1x4 mesh is the same distributed-log-softmax contract as
+        the already-supported 1x8 mesh.
+        """
+        return self.mesh_device.get_num_devices() > 1 and self.num_devices_for_sharding >= 2
 
     # -----------------------------------------------------------------------
     # Old path (backward compat for non-gpt-oss models)
@@ -538,7 +540,8 @@ class LogProbsCalculator:
     ):
         """
         Calculate log-probs for a given logits tensor and indices tensor.
-        Returns None if log-probs are not requested, not supported, or the device count is not 8 or 32.
+        Returns None if log-probs are not requested or the vocabulary is not
+        sharded across at least two devices.
         (Old path — backward compat for non-gpt-oss models)
         """
         if not self.enable_log_probs:

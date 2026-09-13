@@ -890,7 +890,7 @@ class TTSampling(LightweightModule):
             )
             # Argmax fast-path does not compute logprobs (it never runs a softmax over
             # the vocab). On single-chip, on-device logprobs are unsupported anyway
-            # (LogProbsCalculator._is_supported requires num_devices in (8, 32)).
+            # (LogProbsCalculator requires a vocabulary sharded over multiple devices).
             self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 

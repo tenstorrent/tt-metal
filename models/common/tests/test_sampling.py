@@ -58,6 +58,28 @@ def test_sampling_trace_bucket_isolation():
     assert len(sampling._trace_states) == 3
 
 
+@pytest.mark.parametrize(
+    ("num_devices", "num_devices_for_sharding", "expected"),
+    [
+        (1, 1, False),
+        (4, 1, False),
+        (4, 4, True),
+        (8, 8, True),
+        (32, 8, True),
+    ],
+)
+def test_sampled_logprobs_support_follows_vocab_sharding(
+    num_devices, num_devices_for_sharding, expected
+):
+    calculator = LogProbsCalculator.__new__(LogProbsCalculator)
+    calculator.mesh_device = SimpleNamespace(
+        get_num_devices=lambda: num_devices
+    )
+    calculator.num_devices_for_sharding = num_devices_for_sharding
+
+    assert calculator._is_supported() is expected
+
+
 # ---------------------------------------------------------------------------
 # Helper: simulate per-device top-k gather (mirrors TTSampling behaviour)
 # ---------------------------------------------------------------------------
