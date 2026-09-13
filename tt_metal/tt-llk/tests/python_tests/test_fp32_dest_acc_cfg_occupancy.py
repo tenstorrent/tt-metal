@@ -152,12 +152,16 @@ def test_fp32_dest_acc_cfg_occupancy():
     for nops, clean, occupied in direction:
         print(f"  {nops:>9}  {clean:>7}/{TRIALS}  {occupied:>7}/{TRIALS}")
 
-    created = [(n, c) for n, c, _ in direction if c > 0]
+    # The zero-nop point injects nothing, so it is not a measurement of what delay does: it is the
+    # un-drained replica's unaided rate, and an open window can close on its own trial to trial.
+    # Delay only counts as creating the race if it drives a point above that baseline.
+    unaided = next((c for n, c, _ in direction if n == 0), 0)
+    created = [(n, c) for n, c, _ in direction if n > 0 and c > unaided]
     assert not created, (
         "RISC delay between the config writes and the release CREATED the race at "
         + ", ".join(f"{n} nops -> {c}" for n, c in created)
-        + ". That contradicts the direction this hazard runs in; explain it before relying on any "
-        "of the above."
+        + f", above an unaided {unaided}/{TRIALS}. That contradicts the direction this hazard runs "
+        "in; explain it before relying on any of the above."
     )
     rescued = [n for n, _, o in direction if o == 0]
     note = (
@@ -165,4 +169,9 @@ def test_fp32_dest_acc_cfg_occupancy():
         if rescued
         else "and does not rescue the occupied case at any level measured"
     )
-    print(f"  -> never creates the race at any nop count, {note}.")
+    baseline_note = (
+        "never drives the race above its unaided rate"
+        if unaided
+        else "never creates the race at any nop count"
+    )
+    print(f"  -> {baseline_note}, {note}.")
