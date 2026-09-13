@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -1391,77 +1391,77 @@ static void sweep_column_to_column(const shared_ptr<distributed::MeshDevice>& me
 // ============ TEST CASES ============
 
 // ---- L1 tests (800-809) ----
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToOne) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToOne) {
     unit_tests::dm::noc_estimator::sweep_one_to_one(get_mesh_device(), 800);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneFromOne) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromOne) {
     unit_tests::dm::noc_estimator::sweep_one_from_one(get_mesh_device(), 801);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToAll) {
     unit_tests::dm::noc_estimator::sweep_one_to_all(get_mesh_device(), 802);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneFromAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneFromAll) {
     unit_tests::dm::noc_estimator::sweep_one_from_all(get_mesh_device(), 803);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1AllToAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllToAll) {
     unit_tests::dm::noc_estimator::sweep_all_to_all(get_mesh_device(), 804);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1AllFromAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1AllFromAll) {
     unit_tests::dm::noc_estimator::sweep_all_from_all(get_mesh_device(), 805);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToRow) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToRow) {
     unit_tests::dm::noc_estimator::sweep_one_to_row(get_mesh_device(), 806);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1RowToRow) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1RowToRow) {
     unit_tests::dm::noc_estimator::sweep_row_to_row(get_mesh_device(), 807);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1OneToColumn) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1OneToColumn) {
     unit_tests::dm::noc_estimator::sweep_one_to_column(get_mesh_device(), 808);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorL1ColumnToColumn) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorL1ColumnToColumn) {
     unit_tests::dm::noc_estimator::sweep_column_to_column(get_mesh_device(), 809);
 }
 
 // ---- DRAM Read tests (810-813) ----
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMShardedOneFromOne) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneFromOne) {
     unit_tests::dm::noc_estimator::sweep_dram_sharded_one_from_one(get_mesh_device(), 810);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMShardedAllFromAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllFromAll) {
     unit_tests::dm::noc_estimator::sweep_dram_sharded_all_from_all(get_mesh_device(), 811);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMInterleavedOneFromAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneFromAll) {
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_from_all(get_mesh_device(), 812);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMInterleavedAllFromAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllFromAll) {
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_from_all(get_mesh_device(), 813);
 }
 
 // ---- DRAM Write tests (814-817) ----
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMShardedOneToOne) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedOneToOne) {
     unit_tests::dm::noc_estimator::sweep_dram_sharded_one_to_one(get_mesh_device(), 814);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMShardedAllToAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMShardedAllToAll) {
     unit_tests::dm::noc_estimator::sweep_dram_sharded_all_to_all(get_mesh_device(), 815);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMInterleavedOneToAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedOneToAll) {
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_one_to_all(get_mesh_device(), 816);
 }
 
-TEST_F(GenericMeshDeviceFixture, NocEstimatorDRAMInterleavedAllToAll) {
+TEST_F(UnitMeshFastDispatchFixture, NocEstimatorDRAMInterleavedAllToAll) {
     unit_tests::dm::noc_estimator::sweep_dram_interleaved_all_to_all(get_mesh_device(), 817);
 }
 

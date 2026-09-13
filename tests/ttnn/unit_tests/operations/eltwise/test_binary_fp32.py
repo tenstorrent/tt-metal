@@ -185,6 +185,38 @@ def test_squared_sum_fp32_activ(device):
 
 
 @pytest.mark.parametrize(
+    "activation, standalone, torch_fn",
+    [
+        (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0),
+            lambda t: ttnn.softplus(t, beta=1.0, threshold=20.0),
+            lambda x: torch.nn.functional.softplus(x, beta=1.0, threshold=20.0),
+        ),
+        (
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.ERF, False),
+            lambda t: ttnn.erf(t, fast_and_approximate_mode=False),
+            torch.erf,
+        ),
+    ],
+    ids=["softplus", "erf"],
+)
+def test_add_fp32_activ_matches_standalone(device, activation, standalone, torch_fn):
+    # A fused activation on float32 must run the float32 SFPU variant, as the standalone op does: the bf16
+    # variant of softplus returns 0 below -5 and the bf16 variant of erf is about 1e4 times less accurate.
+    x_torch = torch.linspace(-16.0, 8.0, 1024, dtype=torch.float32).reshape(1, 1, 32, 32)
+    y_torch = torch.zeros_like(x_torch)
+    z_torch = torch_fn(x_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn.add(x_tt, y_tt, activations=[activation]))
+    tt_alone = ttnn.to_torch(standalone(x_tt))
+
+    assert not (tt_out == 0).any()
+    assert torch.allclose(z_torch, tt_out, atol=1e-4, rtol=0)
+    assert torch.allclose(tt_alone, tt_out, atol=1e-5, rtol=0)
+
+
+@pytest.mark.parametrize(
     "ttnn_function",
     [
         ttnn.add,
