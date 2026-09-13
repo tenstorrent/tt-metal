@@ -431,8 +431,21 @@ class TtPrefillRuntime:
         else:
             logger.info(f"TtPrefillRuntime.compile() — warming up one {chunk}-token chunk")
             tt_input = self.make_chunk_input([0] * chunk)
-            self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
-            ttnn.synchronize_device(self.mesh_device)
+            # Warm with a NO-OP completion sink rather than none at all. `zero_pad_and_ack`'s whole
+            # body is gated on an ack transport being wired (tt/kv_ack.py), and the real sink is only
+            # registered after compile(), so a warm pass with no sink silently skips it and leaves
+            # `zero_padded_kv_cache` to compile on the first REAL chunk -- measured at 5863 ms of an
+            # 8.1 s chunk 0, against 0.3 ms once built. The traced path already warms these programs
+            # for the same reason (see capture_trace). A no-op sink emits no records and needs no
+            # draining, and d2h_service stays None so the device-op ack is not fired here. Costs
+            # nothing: this is the warm pass that was already happening.
+            prev_sink = self._layer_completion_sink
+            self._layer_completion_sink = lambda *_args, **_kwargs: None
+            try:
+                self.prefill_chunk(tt_input, kv_caches, slot_id=0, actual_start=0, actual_end=chunk)
+                ttnn.synchronize_device(self.mesh_device)
+            finally:
+                self._layer_completion_sink = prev_sink
         warmup_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(
             f"[prefill timing] task_id={'PREPARE' if self.config.use_trace else 'WARMUP'} num_tokens={chunk} "
