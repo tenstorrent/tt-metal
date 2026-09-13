@@ -96,6 +96,7 @@ BcastOpMath = ttnn._ttnn.types.BcastOpMath
 BcastOpDim = ttnn._ttnn.types.BcastOpDim
 
 DataMovementProcessor = ttnn._ttnn.types.DataMovementProcessor
+ComputeProcessor = ttnn._ttnn.types.ComputeProcessor
 NOC = ttnn._ttnn.types.NOC
 NOC_MODE = ttnn._ttnn.types.NOC_MODE
 

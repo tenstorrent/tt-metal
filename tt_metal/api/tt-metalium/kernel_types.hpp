@@ -31,6 +31,12 @@ enum class DataMovementProcessor {
     RISCV_7 = 7,  // Core DM7 on Quasar
 };
 
+enum class ComputeProcessor : uint8_t {
+    UNPACK = 0,  // TRISC0
+    MATH = 1,    // TRISC1
+    PACK = 2,    // TRISC2
+};
+
 enum NOC : uint8_t {
     RISCV_0_default = 0,
     RISCV_1_default = 1,
@@ -133,6 +139,10 @@ struct ComputeConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
     // Provide include paths for the kernel compiler (-I)
     std::vector<std::filesystem::path> compiler_include_paths;
+    // Build and load only this TRISC. Unset builds all three. Kernels that set it must cover UNPACK,
+    // MATH and PACK on the same cores and agree on fp32_dest_acc_en, dst_full_sync_en and
+    // unpack_to_dest_mode. Not supported by light-metal capture, offline compile or Emule.
+    std::optional<ComputeProcessor> processor;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

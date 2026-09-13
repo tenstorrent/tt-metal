@@ -329,6 +329,7 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.dm_processor = static_cast<uint32_t>(dc->processor);
                 }
                 if (const auto* cc = std::get_if<ComputeConfig>(&cfg)) {
+                    TT_FATAL(!cc->processor, "ComputeConfig::processor is not supported by Emule");
                     kd.has_compute_config = true;
                     kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = cc->dst_full_sync_en;

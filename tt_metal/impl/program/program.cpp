@@ -485,6 +485,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                         .named_compile_args = std::move(named_compile_args),
                         .opt_level = kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O3),
                         .compiler_include_paths = std::move(compiler_include_paths),
+                        .processor = compute_descriptor.processor,
                     };
                 },
             },
@@ -521,6 +522,42 @@ std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& ke
         set.set(processor_id);
     }
     return set;
+}
+
+// BRISC starts TRISC0-2 together, and only when TRISC0 is enabled, so compute kernels that select a
+// processor must cover all three on their cores. They must also agree on the settings the TRISCs share.
+// Checked on the complete program, because kernel groups are also built while kernels are being added.
+void validate_selected_compute_processors(detail::ProgramImpl& program, const Hal& hal) {
+    using SharedSettings = std::tuple<bool, bool, std::vector<UnpackToDestMode>>;
+    for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
+        for (const auto& kg : program.get_kernel_groups(index)) {
+            uint32_t selected_triscs = 0;
+            std::optional<SharedSettings> first_settings;
+            for (auto kernel_id : kg->kernel_ids) {
+                const auto kernel = program.get_kernel(kernel_id);
+                const auto processor = kernel->compute_processor();
+                if (!processor) {
+                    continue;
+                }
+                selected_triscs |= 1u << enchantum::to_underlying(*processor);
+                const auto compute = std::get<ComputeConfig>(kernel->config());
+                const SharedSettings settings{
+                    compute.fp32_dest_acc_en, compute.dst_full_sync_en, compute.unpack_to_dest_mode};
+                if (!first_settings) {
+                    first_settings = settings;
+                }
+                TT_FATAL(
+                    settings == *first_settings,
+                    "Compute kernels with a selected processor on cores {} must have the same fp32_dest_acc_en, "
+                    "dst_full_sync_en and unpack_to_dest_mode",
+                    kg->core_ranges.str());
+            }
+            TT_FATAL(
+                selected_triscs == 0 || selected_triscs == 0b111,
+                "Compute kernels with a selected processor on cores {} must cover UNPACK, MATH and PACK",
+                kg->core_ranges.str());
+        }
+    }
 }
 
 }  // namespace
@@ -3143,6 +3180,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         Inspector::program_compile_finished(this, device, build_env.build_key());
         return;
     }
+
+    validate_selected_compute_processors(*this, MetalContext::instance(device_context_id).hal());
 
     TT_FATAL(
         device->is_initialized(),
