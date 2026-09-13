@@ -253,16 +253,9 @@ def write_chunk_to_sliding_ring_cache(
     """
     for cache, chunk in ((cache_k, tt_k), (cache_v, tt_v)):
         original_chunk = chunk
-        # The writer requires cache.dtype == input.dtype, and the cache is BFP8_B
-        # because that is what ring_joint requires of K/V (with BF16 Q). The model
-        # carries K/V in bf16, so cast on the way in.
         if chunk.dtype != cache.dtype:
             chunk = ttnn.typecast(chunk, cache.dtype)
         if prefill_metadata is not None:
-            # Tensor form: the writer reads slot and prefix length on-device, so the write
-            # offset is not baked into runtime args and one captured trace serves every
-            # chunk. Same two tensors the ring read uses — they describe the chunk, not
-            # the layer, and the host refreshes them once per chunk.
             slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
