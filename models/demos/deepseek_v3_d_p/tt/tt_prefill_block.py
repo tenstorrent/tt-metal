@@ -52,6 +52,15 @@ PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
 TopologyArg = Union[ttnn.Topology, PerAxisTopology]
 
 
+# ND-sharded routed-expert weights are a property of the model, so the config carries them and the
+# explicit argument is an override for callers that want to A/B one run against another. None means
+# "whatever the config says"; False means the caller turned them off on purpose.
+def _resolve_routed_expert_dram_sharded(model_cfg, override):
+    if override is not None:
+        return override
+    return getattr(model_cfg, "ROUTED_EXPERT_WEIGHTS_DRAM_SHARDED", False)
+
+
 class TtPrefillBlock(LightweightModule):
     """
     Single transformer block for DeepSeek V3 prefill.
@@ -139,6 +148,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         kv_only: bool = False,
+        routed_expert_weights_dram_sharded: Optional[bool] = None,
     ):
         """
         Build TTNN cache for this block (norms + MLA + FFN/MoE) without device copy.
@@ -222,6 +232,9 @@ class TtPrefillBlock(LightweightModule):
                 layer_idx=layer_idx,
                 # Must match _build_moe's reads: omitting them caches the shared expert at the wrong
                 # intermediate, which regenerates as a plausible-but-wrong cache rather than an error.
+                routed_expert_weights_dram_sharded=_resolve_routed_expert_dram_sharded(
+                    model_cfg, routed_expert_weights_dram_sharded
+                ),
                 shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
                 routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
                 latent_weights=state_dict.get("latent_weights"),
@@ -268,6 +281,7 @@ class TtPrefillBlock(LightweightModule):
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
         tp_shard_kv: bool = False,
+        routed_expert_weights_dram_sharded: Optional[bool] = None,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -383,6 +397,7 @@ class TtPrefillBlock(LightweightModule):
                 gate_fallback_mode=gate_fallback_mode,
                 routed_expert_activations_dtype=routed_expert_activations_dtype,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                routed_expert_weights_dram_sharded=routed_expert_weights_dram_sharded,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
@@ -433,6 +448,7 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype,
         shared_expert_weights_dtype,
         dispatch_buffer_capacity_factor,
+        routed_expert_weights_dram_sharded=None,
         weight_cache_path=None,
         layer_idx=0,
         routing_use_l1_small_for_semaphores=False,
@@ -487,6 +503,9 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            routed_expert_weights_dram_sharded=_resolve_routed_expert_dram_sharded(
+                model_cfg, routed_expert_weights_dram_sharded
+            ),
             # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
             routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
                 getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")

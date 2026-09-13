@@ -706,6 +706,7 @@ def load_and_compute_layer_by_layer(
     attention_mask: torch.Tensor | None = None,
     compute_reference: bool = True,
     build_ttnn_cache: bool = True,
+    routed_expert_weights_dram_sharded: bool | None = None,
     weight_cache_path: Path | None = None,
     mesh_device: ttnn.MeshDevice | None = None,
     seq_len: int = 1024,
@@ -952,6 +953,7 @@ def load_and_compute_layer_by_layer(
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
                 shared_expert_activations_dtype=shared_expert_activations_dtype,
                 shared_expert_weights_dtype=shared_expert_weights_dtype,
+                routed_expert_weights_dram_sharded=routed_expert_weights_dram_sharded,
             )
 
             # Free layer_dict immediately!

@@ -117,8 +117,13 @@ class TtMoe(LightweightModule):
         routed_emb_dim: int | None = None,
         latent_weights: dict | None = None,
         latent_use_norm: bool = True,
+        routed_expert_weights_dram_sharded: bool = False,
     ):
         """Build TTNN cache for MoE (gate + routed experts + shared expert) without device copy.
+
+        ``routed_expert_weights_dram_sharded`` additionally writes the routed experts' ND-sharded
+        cache, which is the one part of this that has to touch the device; see
+        TtRoutedExpert.build_ttnn_cache.
 
         ``shared_hidden_dim`` defaults to ``hidden_dim``; pass it separately when the shared expert's
         intermediate differs from the routed experts' (Kimi-K3: 6144 vs 3072). Note the routed-expert
@@ -155,6 +160,7 @@ class TtMoe(LightweightModule):
                 routed_expert_weights_dtype,
                 cache_path,
                 f"layer_{layer_idx}.routed_expert",
+                dram_sharded=routed_expert_weights_dram_sharded,
             )
 
         # Build shared expert cache
@@ -209,6 +215,7 @@ class TtMoe(LightweightModule):
         routed_expert_weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
+        routed_expert_weights_dram_sharded: bool = False,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -513,6 +520,7 @@ class TtMoe(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
+            weights_dram_sharded=routed_expert_weights_dram_sharded,
         )
 
         # Initialize shared expert (col axis: axis 1)
