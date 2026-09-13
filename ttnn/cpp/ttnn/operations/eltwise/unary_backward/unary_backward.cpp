@@ -276,7 +276,9 @@ std::vector<std::optional<Tensor>> pow_bw(
     Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
     result.deallocate();
     // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    // Handle strictly negative inputs by returning infinity. At input == 0, the gradient
+    // is finite for exponent >= 1, matching the registered golden.
+    where(ttnn::ltz(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
