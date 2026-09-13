@@ -1,6 +1,6 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 VERIFIED; TIER 3 DONE; planners split from executors, na3d.py deleted, 2026-09-13 01:45. Branch `na-integration`. Owner: James Lee.
+Status: PHASE 4 VERIFIED; TIER 3 DONE; planners split from executors, na3d.py deleted; timing helpers in utils/timing_tree.py, 2026-09-13 02:30. Branch `na-integration`. Owner: James Lee.
 Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
@@ -20,6 +20,34 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   `test_stage5_gna_parity_w_sharded[t12_stride111]` all PASSED; **`[t12_stride122]` FAILED** (traceback not
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
+
+## Timing helpers consolidated into `utils/timing_tree.py` (2026-09-13 02:30, DONE; read this first)
+
+James asked for `deep_prof` / `block_prof` / `stage_timer` pulled out of the DiffVAE modules into one tt_dit helper
+with a decorator form. Approved plan: `~/.claude/plans/okay-here-s-what-i-typed-crayon.md`. Decisions: fold into the
+tree module and rename it (`utils/decode_tree.py` -> `utils/timing_tree.py`); rename the knobs `DIFFVAE_*` -> `TT_DIT_*`
+with NO aliases (`TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG`, `TT_DIT_TREE_DEPTH`, `TT_DIT_TREE_ALL`,
+`TT_DIT_TREE_OUT`); drop `_BLOCK_PROF` (`time_diff_block.py` reads the tree); add the decorator but convert no call site yet.
+- `timing_tree.span(device, label, *, category=None, root=False, deep=False)` is the one context manager
+  (`deep=True` = the old `deep_prof` gate); `timing_tree.timed(label, *, category, root, deep, device="mesh_device")` is
+  the decorator (label and device may be callables of the call's arguments). Executors call `span` directly, so the lazy
+  layer->model import `_deep_prof` is gone.
+- Renamed with it: fixture `decode_tree` -> `timing_tree` (vae conftest), plugin `decode_tree_plugin` -> `timing_tree_plugin`
+  (`-p` flag in `run_ltx25_pipeline.sh`), unit test `test_decode_tree.py` -> `test_timing_tree.py` (+7 tests for span/timed).
+- Verification: host 23 passed (`test_timing_tree.py`, `test_perf_table_breakdown.py`); device jobs 458 (decode timing,
+  all three gates on), 463 (`time_diff_block.py` section table from the tree), 460 (`PROFILE=1` pipeline).
+  Results: 458 **5 passed**, rendered trees carry the deep rows from both modules (`qkv-proj`, `attention linear_order`,
+  `neighborhood-sdpa`), live `>`/`<` lines stream, no `never closed` marks; 463 prints the section table from the tree
+  (attention 69 %, mlp 20 %, context-inject 10 %, plus the deep rows); 460 PASSED, ANOMALIES none, VAE decode 14.03 s
+  under BLOCK_PROF (sync-inflated; the untimed figure stays 12.27 s), two trees in `generated/profile/<stamp>/decode_trees.txt`
+  via `TT_DIT_TREE_OUT`, perf table's category block present. Broker note: after `kill $HB` the job reports exit 143 and
+  trailing echoes may be lost -- read the pytest summary line.
+- Found on the way (job 459): `time_diff_block.py` had been broken since the stage-5 brick hoist (791d033abfd): it took
+  bands aligned to the brick's T extent but handed the block un-bricked activations, so `_padded_rows` sliced past the
+  tensor. It now bricks x and context the way `DiffVAEStage5.forward` does and passes `brick=` to the block.
+- Follow-up (not done): the decorator conversion of the DiffVAE classes -- `decode`/`forward_context`/`DiffVAEStage5.forward`/
+  `forward_diff_step`, the block-level attention/mlp spans (collapses `NABlock.forward`'s duplicated `if DEEP` body), the
+  per-stage body of `DeterministicStages.forward` once it is a method. In-body regions stay `with`.
 
 ## Planners split from executors; na3d.py gone (2026-09-13 01:45, DONE, device-verified; read this first)
 

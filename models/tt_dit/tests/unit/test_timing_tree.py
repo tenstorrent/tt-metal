@@ -1,18 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pure-Python tests for the decode timing ledger. No device, no ttnn.
+"""Pure-Python tests for the timing tree. No device: the sync is stubbed out.
 
 The ledger's whole job is to survive call sites it does not control: spans that close out of order,
 spans that never close, a decode that raises mid-flight. Those paths are what these tests pin --
 plus the one invariant every reported number rests on, that self-times partition the root exactly.
+The ``span`` / ``timed`` helpers are tested against a stubbed ``synchronize_device``: what they must
+get right is the gate, the two syncs and the abort path, none of which needs hardware.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from models.tt_dit.utils import decode_tree as dt
+from models.tt_dit.utils import timing_tree as dt
 
 
 @pytest.fixture(autouse=True)
@@ -193,7 +195,7 @@ def test_rows_carry_the_category_the_rollup_charges_them_to():
 
 
 def test_live_lines_stream_progress(monkeypatch, capsys):
-    """DIFFVAE_STAGE_LOG: one line per open and per close, depth as indent, and a hang -- a span
+    """TT_DIT_STAGE_LOG: one line per open and per close, depth as indent, and a hang -- a span
     that never closes -- leaves a ">" with no "<", which is the whole point."""
     monkeypatch.setattr(dt, "LIVE", True)
     root = dt.open_span("decode", root=True)
@@ -216,3 +218,105 @@ def test_live_off_prints_nothing(capsys):
     root = dt.open_span("decode", root=True)
     _close(root, 1.0)
     assert capsys.readouterr().out == ""
+
+
+# ------------------------------------------------------------------------------------ span / timed
+
+
+class _FakeDevice:
+    pass
+
+
+@pytest.fixture
+def syncs(monkeypatch):
+    """Record every synchronize_device call instead of touching a device."""
+    calls = []
+    monkeypatch.setattr(dt.ttnn, "synchronize_device", calls.append)
+    return calls
+
+
+def test_span_records_one_node_between_two_syncs(syncs):
+    dev = _FakeDevice()
+    with dt.span(dev, "decode", root=True):
+        pass
+    (node,) = dt.roots()
+    assert node.label == "decode" and node.incl_ms >= 0.0 and not node.flags
+    assert syncs == [dev, dev]
+
+
+def test_span_is_inert_when_disabled(monkeypatch, syncs):
+    monkeypatch.setattr(dt, "ENABLED", False)
+    with dt.span(_FakeDevice(), "decode", root=True):
+        pass
+    assert dt.roots() == [] and syncs == []
+
+
+def test_deep_span_needs_deep(monkeypatch, syncs):
+    monkeypatch.setattr(dt, "DEEP", False)
+    with dt.span(_FakeDevice(), "shallow", root=True):
+        with dt.span(_FakeDevice(), "deep", deep=True):
+            pass
+    (root,) = dt.roots()
+    assert root.children == [] and len(syncs) == 2
+
+    monkeypatch.setattr(dt, "DEEP", True)
+    with dt.span(_FakeDevice(), "shallow", root=True):
+        with dt.span(_FakeDevice(), "deep", deep=True):
+            pass
+    root = dt.roots()[-1]
+    assert [c.label for c in root.children] == ["deep"]
+
+
+def test_span_aborts_on_raise_and_propagates(syncs, expect_error):
+    with expect_error(RuntimeError, "boom"):
+        with dt.span(_FakeDevice(), "decode", root=True):
+            with dt.span(_FakeDevice(), "stage"):
+                raise RuntimeError("boom")
+    (root,) = dt.roots()
+    assert "aborted" in root.flags and "aborted" in root.children[0].flags
+    assert dt._stack() == []
+
+
+class _Model:
+    def __init__(self, device):
+        self.mesh_device = device
+
+    @dt.timed("decode", root=True)
+    def decode(self, x):
+        """the docstring"""
+        return x + 1
+
+    @dt.timed(lambda self, stage, *a, **k: f"stage {stage}", category=dt.SETUP)
+    def stage(self, stage):
+        return stage
+
+
+def test_timed_resolves_device_and_label_from_the_call(syncs):
+    dev = _FakeDevice()
+    model = _Model(dev)
+    with dt.span(dev, "decode", root=True):
+        assert model.stage(3) == 3
+    (root,) = dt.roots()
+    (child,) = root.children
+    assert child.label == "stage 3" and child.category == dt.SETUP
+    assert syncs == [dev] * 4
+
+
+def test_timed_root_and_wraps(syncs):
+    model = _Model(_FakeDevice())
+    assert model.decode(1) == 2
+    (root,) = dt.roots()
+    assert root.label == "decode" and root.parent is None
+    assert _Model.decode.__name__ == "decode" and _Model.decode.__doc__ == "the docstring"
+
+
+def test_timed_calls_through_when_disabled(monkeypatch, syncs):
+    monkeypatch.setattr(dt, "ENABLED", False)
+
+    class _NoDevice:
+        @dt.timed("decode", root=True)
+        def decode(self):
+            return "ran"
+
+    assert _NoDevice().decode() == "ran"  # no mesh_device attribute, and it is never looked up
+    assert dt.roots() == [] and syncs == []

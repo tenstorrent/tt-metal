@@ -17,10 +17,8 @@ here -- see :func:`neighborhood_attention_3d`.
 
 from __future__ import annotations
 
-import contextlib
 import math
 import os
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -28,81 +26,6 @@ import torch
 from loguru import logger
 
 import ttnn
-
-from ...utils import decode_tree
-
-#: Per-stage decode timing. Off unless DIFFVAE_STAGE_TIMING is set (a truthy value), since each
-#: probe forces a device sync that would otherwise serialize the async pipeline. The gate lives in
-#: decode_tree so this module, the executors and the tree cannot disagree about whether timing is on -- if
-#: they did, the tree would hold partial data and every "other" remainder would silently lie.
-_STAGE_TIMING = decode_tree.ENABLED
-
-
-@contextlib.contextmanager
-def stage_timer(mesh_device, label: str, *, category: str | None = None, root: bool = False):
-    """Sync the mesh and time a decode stage (or its host-side tail). Inert unless DIFFVAE_STAGE_TIMING.
-
-    The label is taken at open rather than on the way out because a tree node names itself from
-    birth: a span that never closes is then still identifiable, which is when the name matters most.
-    """
-    if not _STAGE_TIMING:
-        yield
-        return
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    span = decode_tree.open_span(label.strip(), category=category, root=root)
-    try:
-        yield
-    except BaseException:
-        # No finally: on the raising path this deliberately does not log, exactly as before. The
-        # span still has to leave the stack, or every later span nests under a dead parent.
-        decode_tree.abort_span(span)
-        raise
-    ttnn.synchronize_device(mesh_device)
-    ms = (time.perf_counter() - t0) * 1000
-    decode_tree.close_span(span, ms)
-
-
-def deep_prof(mesh_device, key: str, *, category: str | None = None):
-    """block_prof, but only under DIFFVAE_BLOCK_PROF.
-
-    These split regions inside one attention call, so they are numerous and individually small
-    against the two syncs each one costs. Off unless somebody is chasing exactly this.
-    """
-    if not decode_tree.DEEP:
-        return contextlib.nullcontext()
-    return block_prof(mesh_device, key, category=category)
-
-
-#: Accumulates within-block time by region (attn / mlp / ...) across every block+band, so a single
-#: diff-step run reports where the diff-block stack actually goes. Reset per step, reported at its end.
-_BLOCK_PROF: dict[str, float] = {}
-
-
-@contextlib.contextmanager
-def block_prof(mesh_device, key: str, *, category: str | None = None):
-    """Sync + accumulate a diff-block region's time into _BLOCK_PROF[key]. Inert unless timing is on.
-    The syncs serialize the region (so absolute totals inflate a little), but the split is what matters.
-
-    Also records the span in the decode tree. _BLOCK_PROF is still written exactly as before --
-    time_diff_block.py and ab_gna_stage5.py import that global directly.
-    """
-    if not _STAGE_TIMING:
-        yield
-        return
-    ttnn.synchronize_device(mesh_device)
-    t0 = time.perf_counter()
-    span = decode_tree.open_span(key, category=category)
-    try:
-        yield
-    except BaseException:
-        decode_tree.abort_span(span)
-        raise
-    ttnn.synchronize_device(mesh_device)
-    ms = (time.perf_counter() - t0) * 1000
-    decode_tree.close_span(span, ms)
-    _BLOCK_PROF[key] = _BLOCK_PROF.get(key, 0.0) + ms
-
 
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
@@ -118,6 +41,7 @@ from ...layers.neighborhood_permute import (
     to_bricked_grid,
 )
 from ...layers.normalization import RMSNorm
+from ...utils import timing_tree
 from ...utils.tensor import fast_device_to_host
 from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
@@ -1099,7 +1023,7 @@ class _NeighborhoodAttention3D(Module):
         # and RoPE temporaries is what exhausts DRAM at full resolution -- which is also why the
         # fused path slices its packed output a lane at a time rather than all three up front.
         if self.fused_qkv:
-            with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+            with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
                 packed = self.qkv(y)
             width = self.heads_local * cfg.head_dim
 
@@ -1110,7 +1034,9 @@ class _NeighborhoodAttention3D(Module):
                     ttnn.deallocate(part)
                 return out
 
-            with deep_prof(self.mesh_device, "qkv-lanes: slice+norm+rope", category=decode_tree.NORM_ROPE):
+            with timing_tree.span(
+                self.mesh_device, "qkv-lanes: slice+norm+rope", category=timing_tree.NORM_ROPE, deep=True
+            ):
                 q = prep(self._rope(self._normed(self.q_norm, lane(0), scale=self.scale), tables))
                 k = prep(self._rope(self._normed(self.k_norm, lane(1)), tables))
                 v = prep(lane(2))
@@ -1120,15 +1046,17 @@ class _NeighborhoodAttention3D(Module):
             # projection past the norm/rope that consumes it, so peak DRAM is unchanged. All three
             # lanes share a label, so the tree pools them into one row per step with n=3.
             def lane_unfused(projection, norm, *, scale=None, rope=True):
-                with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+                with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
                     part = self._projected(projection, y, heads_shape)
                 if norm is not None:
-                    with deep_prof(self.mesh_device, "qkv-norm", category=decode_tree.NORM_ROPE):
+                    with timing_tree.span(self.mesh_device, "qkv-norm", category=timing_tree.NORM_ROPE, deep=True):
                         part = self._normed(norm, part, scale=scale)
                     if rope:
-                        with deep_prof(self.mesh_device, "qkv-rope", category=decode_tree.NORM_ROPE):
+                        with timing_tree.span(self.mesh_device, "qkv-rope", category=timing_tree.NORM_ROPE, deep=True):
                             part = self._rope(part, tables)
-                with deep_prof(self.mesh_device, "qkv-prep (to seq/volume)", category=decode_tree.RESHAPE):
+                with timing_tree.span(
+                    self.mesh_device, "qkv-prep (to seq/volume)", category=timing_tree.RESHAPE, deep=True
+                ):
                     return prep(part)
 
             q = lane_unfused(self.to_q, self.q_norm, scale=self.scale)
@@ -1176,7 +1104,7 @@ class _NeighborhoodAttention3D(Module):
         for tensor in (q, k, v):
             ttnn.deallocate(tensor)
 
-        with deep_prof(self.mesh_device, "out-proj", category=decode_tree.PROJ):
+        with timing_tree.span(self.mesh_device, "out-proj", category=timing_tree.PROJ, deep=True):
             flat = _reshape_retiled(out, (1, grid.batch, sites_local, cfg.dim))
             if flat is not out:
                 ttnn.deallocate(out)
@@ -1301,14 +1229,16 @@ class DiffusionNABlock(Module):
         for index, band in enumerate(bands):
             # Bands own nothing they were handed: ``live`` is freed by this loop's own bookkeeping
             # below, so anything derived from it is released here the moment it stops being read.
-            with deep_prof(self.mesh_device, "halo assemble (padded rows)", category=decode_tree.RESHAPE):
+            with timing_tree.span(
+                self.mesh_device, "halo assemble (padded rows)", category=timing_tree.RESHAPE, deep=True
+            ):
                 padded = self._padded_rows(live, index, bands, rows, frame_step=frame_step)
             interior = (
                 (band.lo - band.pad_lo) // frame_step * rows,
                 (band.layout_hi - band.pad_lo) // frame_step * rows,
             )
 
-            with block_prof(self.mesh_device, "context-inject", category=decode_tree.CONTEXT_INJECT):
+            with timing_tree.span(self.mesh_device, "context-inject", category=timing_tree.CONTEXT_INJECT):
                 context_rows = _slice_rows(context, band.pad_lo // frame_step * rows, band.pad_hi // frame_step * rows)
                 injected = self.context_proj(context_rows)
                 if context_rows is not context:
@@ -1318,9 +1248,11 @@ class DiffusionNABlock(Module):
                 if padded is not live[index]:
                     ttnn.deallocate(padded)
 
-            with deep_prof(self.mesh_device, "norm+modulate (pre-attn)", category=decode_tree.NORM_ROPE):
+            with timing_tree.span(
+                self.mesh_device, "norm+modulate (pre-attn)", category=timing_tree.NORM_ROPE, deep=True
+            ):
                 modulated = _modulate_consuming(self.norm1(xs), scale_msa, shift_msa)
-            with block_prof(self.mesh_device, "attention", category=decode_tree.ATTENTION):
+            with timing_tree.span(self.mesh_device, "attention", category=timing_tree.ATTENTION):
                 attended = self.attn(
                     modulated,
                     Grid(grid.batch, min(band.pad_hi, grid.t) - band.pad_lo, grid.h, grid.w),
@@ -1329,7 +1261,9 @@ class DiffusionNABlock(Module):
                 )
             ttnn.deallocate(modulated)
 
-            with deep_prof(self.mesh_device, "residual crop+add (attn)", category=decode_tree.RESHAPE):
+            with timing_tree.span(
+                self.mesh_device, "residual crop+add (attn)", category=timing_tree.RESHAPE, deep=True
+            ):
                 residual = _slice_rows(xs, *interior)
                 if residual is not xs:
                     ttnn.deallocate(xs)
@@ -1338,9 +1272,11 @@ class DiffusionNABlock(Module):
                     ttnn.deallocate(attended)
                 y = _add_consuming(residual, cropped)
 
-            with deep_prof(self.mesh_device, "norm+modulate (pre-mlp)", category=decode_tree.NORM_ROPE):
+            with timing_tree.span(
+                self.mesh_device, "norm+modulate (pre-mlp)", category=timing_tree.NORM_ROPE, deep=True
+            ):
                 modulated = _modulate_consuming(self.norm2(y), scale_mlp, shift_mlp)
-            with block_prof(self.mesh_device, "mlp", category=decode_tree.MLP):
+            with timing_tree.span(self.mesh_device, "mlp", category=timing_tree.MLP):
                 hidden = self.mlp_gate_up(modulated)
                 ttnn.deallocate(modulated)
                 projected = self.mlp_down(hidden)
@@ -1709,15 +1645,14 @@ class DiffVAEStage5(Module):
         block writes the context half, so nothing depends on them being adjacent.
         """
         cfg = self.config
-        with stage_timer(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=decode_tree.SETUP):
+        with timing_tree.span(self.mesh_device, "stage5 setup: AdaLN + rope tables", category=timing_tree.SETUP):
             scaled_t = ttnn.multiply(timestep, cfg.timestep_scale_multiplier)
             modulation = self.shared_adaln(self.t_embedder(scaled_t), grid.batch)
             tables = self.rope_tables(grid)
             band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
         log_dram(self.mesh_device, f"stage5 entry ({len(bands)} band(s))")
-        _BLOCK_PROF.clear()
         for index, block in enumerate(self.diff_blocks):
-            with stage_timer(self.mesh_device, f"  stage5 block {index}"):
+            with timing_tree.span(self.mesh_device, f"stage5 block {index}"):
                 x = block(x, context, modulation, grid, bands, band_tables, brick=brick)
             log_dram(self.mesh_device, f"stage5 block {index}")
         # The tail runs per band too: its output is a quarter the width of the volume it comes
@@ -1783,7 +1718,7 @@ class DiffVAEStage5(Module):
         """
         cfg = self.config
         bands = self.bands(grid)
-        with stage_timer(self.mesh_device, "stage5: context reshard", category=decode_tree.RESHAPE):
+        with timing_tree.span(self.mesh_device, "stage5: context reshard", category=timing_tree.RESHAPE):
             if self._w_sharded and not context_sharded:
                 context = self._wshard_context(context, grid)
             elif self._w_sharded:
@@ -1794,19 +1729,19 @@ class DiffVAEStage5(Module):
         # Which of the two this is, is known before the clock starts, so the span can name itself at
         # open rather than picking a label on the way out.
         _label = "stage5: device randn + embed x_t" if x_t is None else "stage5: host patchify + embed x_t"
-        with stage_timer(self.mesh_device, _label, category=decode_tree.HOST_COMPUTE):
+        with timing_tree.span(self.mesh_device, _label, category=timing_tree.HOST_COMPUTE):
             x_bands = self.device_x_t(grid, bands, seed=seed) if x_t is None else self.embed_x_t(x_t, bands)
 
         brick = self._stage5_brick(grid) if self._keep_bricked else None
         if brick is not None:
-            with stage_timer(self.mesh_device, "stage5: brick x+context", category=decode_tree.RESHAPE):
+            with timing_tree.span(self.mesh_device, "stage5: brick x+context", category=timing_tree.RESHAPE):
                 context = self._brick_activation(context, self._local_volume(grid), brick)
                 x_bands = [
                     self._brick_activation(band_x, self._local_volume(grid, t=band.hi - band.lo), brick)
                     for band_x, band in zip(x_bands, bands)
                 ]
 
-        with stage_timer(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
+        with timing_tree.span(self.mesh_device, "stage5 diff-blocks (attn+MLP)"):
             out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
 
         return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)
@@ -1838,7 +1773,9 @@ class DiffVAEStage5(Module):
             # (correct but replica-pulling) composer path.
             can_fast = len(tuple(self.mesh_device.shape)) == 2 and (other == 1 or grid.h % other == 0)
             if can_fast:
-                with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
+                with timing_tree.span(
+                    self.mesh_device, "stage5 tail: device->host pull", category=timing_tree.HOST_XFER
+                ):
                     rm = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
                     ttnn.deallocate(out)
                     vol = ttnn.reshape(rm, (1, grid.t, grid.h, w_local, padded_pc))
@@ -1903,13 +1840,15 @@ class DiffVAEStage5(Module):
                     if shard_other:
                         ttnn.deallocate(rm)
                     ttnn.deallocate(vol)
-                with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
+                with timing_tree.span(
+                    self.mesh_device, "stage5 tail: host unpatchify", category=timing_tree.HOST_COMPUTE
+                ):
                     return unpatchify(gathered.permute(0, 4, 1, 2, 3), cfg.patch_size)
 
-            with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
+            with timing_tree.span(self.mesh_device, "stage5 tail: device->host pull", category=timing_tree.HOST_XFER):
                 gathered = gathered_to_torch(out, mesh_axes=[None, None, self.sp_axis, None])[..., : cfg.patch_channels]
                 ttnn.deallocate(out)
-            with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
+            with timing_tree.span(self.mesh_device, "stage5 tail: host unpatchify", category=timing_tree.HOST_COMPUTE):
                 packed = (
                     gathered.reshape(sp, grid.t, grid.h, w_local, cfg.patch_channels)
                     .permute(1, 2, 0, 3, 4)
@@ -1922,10 +1861,10 @@ class DiffVAEStage5(Module):
         # device and fails. Reading a single chip's copy is what that replication means; the
         # composing helper instead pulls all 32 copies to the host and indexes one out of them,
         # which for a 418 MB output is 13 GB over PCIe and was 100s of a 190s decode.
-        with stage_timer(self.mesh_device, "stage5 tail: device->host pull", category=decode_tree.HOST_XFER):
+        with timing_tree.span(self.mesh_device, "stage5 tail: device->host pull", category=timing_tree.HOST_XFER):
             packed = local_device_to_torch(out)[..., : cfg.patch_channels]
             ttnn.deallocate(out)
-        with stage_timer(self.mesh_device, "stage5 tail: host unpatchify", category=decode_tree.HOST_COMPUTE):
+        with timing_tree.span(self.mesh_device, "stage5 tail: host unpatchify", category=timing_tree.HOST_COMPUTE):
             packed = packed.reshape(grid.batch, grid.t, grid.h, grid.w, cfg.patch_channels)
             packed = packed.permute(0, 4, 1, 2, 3)
             return unpatchify(packed, cfg.patch_size)

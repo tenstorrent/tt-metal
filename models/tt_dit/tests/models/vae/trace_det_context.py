@@ -4,7 +4,7 @@ The upload stays outside the captured region (a trace bakes input addresses and 
 host-to-device writes during capture), so the raw latent is uploaded once into a buffer the
 capture reads and later replays read again.
 
-DIFFVAE_STAGE_TIMING is deliberately left unset: its per-stage timers sync the mesh, and a
+TT_DIT_STAGE_TIMING is deliberately left unset: its per-stage timers sync the mesh, and a
 synchronize inside a captured region is both untraceable and a distorted measurement.
 """
 

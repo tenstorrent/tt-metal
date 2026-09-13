@@ -320,13 +320,17 @@ argument: at the production shard widths no legal block ever existed, so the ref
 always ran its strided mode. See `PLAN_retire_block_permute.md`. The strided executor itself
 followed on 2026-09-11.
 
-### `models/tt_dit/utils/decode_tree.py` (~275 lines)
+### `models/tt_dit/utils/timing_tree.py` (~360 lines)
 
-The timing tree. `open_span` / `close_span`, `Node`, `roots()`, `render()`. Spans nest by a
-thread-local stack; siblings with the same label are pooled with an `n` count.
-`ENABLED` ← `DIFFVAE_STAGE_TIMING`, `DEEP` ← `DIFFVAE_BLOCK_PROF`, `LIVE` ← `DIFFVAE_STAGE_LOG`
-(one stdout line per span open/close while the decode runs, so a hang shows as the last `>`
-with no `<`; the tree itself is unchanged).
+The timing module. `span(device, label, category=, root=, deep=)` is the one primitive: sync,
+open a node, body, sync, close with the elapsed ms; `timed(...)` is the same as a decorator for a
+method whose whole body is one span. Spans nest by a thread-local stack; siblings with the same
+label are pooled with an `n` count. `open_span` / `close_span`, `Node`, `roots()`, `render()`.
+`ENABLED` ← `TT_DIT_STAGE_TIMING`, `DEEP` ← `TT_DIT_BLOCK_PROF` (the `deep=True` spans inside
+the blocks), `LIVE` ← `TT_DIT_STAGE_LOG` (one stdout line per span open/close while the decode
+runs, so a hang shows as the last `>` with no `<`; the tree itself is unchanged).
+`TT_DIT_TREE_DEPTH` caps the rendered depth. The DiffVAE modules and the executors call
+`timing_tree.span` directly; no timing helper lives in the models.
 **Not valid under trace capture**, and absolute totals are inflated by one
 `synchronize_device` per span open/close.
 
@@ -388,7 +392,7 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 | `DIFFVAE_TP_PROJ`, `DIFFVAE_TP_HEADS`        | tensor-parallel over heads                               |
 | `DIFFVAE_STAGES_WSP=1`                       | W-shard the deterministic stages too                     |
 | `DIFFVAE_SLAB_FRAMES`                        | frame banding. **Off by default**; required at 6 s 1080p |
-| `DIFFVAE_STAGE_TIMING`, `DIFFVAE_BLOCK_PROF`, `DIFFVAE_STAGE_LOG` | the decode tree, and its live progress lines |
+| `TT_DIT_STAGE_TIMING`, `TT_DIT_BLOCK_PROF`, `TT_DIT_STAGE_LOG` | the timing tree, and its live progress lines |
 | `DIFFVAE_NUM_LINKS`                          | CCL links                                                |
 
 

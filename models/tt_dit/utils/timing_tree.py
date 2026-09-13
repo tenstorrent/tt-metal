@@ -1,45 +1,56 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Call-stack-shaped ledger for DiffVAE decode timings.
+"""Device-synchronised timing spans and the call-stack-shaped tree they record into.
 
-The timing helpers (``stage_timer``, ``block_prof``, the executors' spans) are already nested the way
-a reader wants them: a stage contains its blocks, a
-block contains its attention, an attention contains its collectives. Each one just threw its
-measurement into a flat sink -- a log line or a module-global dict -- and forgot the stack it was on.
-This module is that stack, and the tree falls out of it.
+``span`` is the one timing primitive: synchronise the device, open a node, run the body, synchronise
+again, close the node with the elapsed milliseconds. ``timed`` is the same as a decorator, for a
+method whose whole body is one span. Spans nest by a thread-local stack, so attribution needs no
+argument threaded down the call chain: a stage contains its blocks, a block its attention, an
+attention its collectives, and the tree is that stack remembered. A layer and a model both record
+into it by importing this module alone.
 
-It measures nothing and syncs nothing: callers hand it durations they have already taken. That is
-what lets ``layers/neighborhood_attention.py`` import it without a layer importing a model -- attribution happens
-through a thread-local stack rather than an argument threaded down the call chain.
+Three gates, read once at import so one process holds one setting:
 
-Not valid under trace capture: there the spans time the capture, not the execution.
+* ``TT_DIT_STAGE_TIMING`` -- ``ENABLED``. Nothing here does anything without it; every span is
+  a pass-through, so instrumented code costs nothing in a normal run.
+* ``TT_DIT_BLOCK_PROF`` -- ``DEEP``. Spans opened with ``deep=True`` record only under this. They
+  sit inside per-block regions, so they are numerous and each costs two device syncs; a deep run's
+  totals are NOT comparable with a plain timing run.
+* ``TT_DIT_STAGE_LOG`` -- ``LIVE``. One stdout line as each span opens and one as it closes, so a
+  run reports its own progress and a device-side hang reads as the last ``>`` with no ``<``. Does
+  not touch the tree.
+
+Absolute totals are inflated by one ``synchronize_device`` per span open and close; the split
+between siblings is what the tree is for. Not valid under trace capture: there the spans time the
+capture, not the execution.
 """
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import os
 import sys
 import threading
 import time
 from collections import OrderedDict, deque
 
-#: One gate for the whole instrumentation. ``diffvae_ltx_stage5`` and the executors import THIS rather
-#: than reading the env themselves: three import-time constants that can disagree would give a tree
-#: with partial data, and every "other" remainder would then quietly lie about where time went.
-ENABLED = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")
+import ttnn
 
-#: Deep mode adds spans inside the 16 deterministic NABlocks -- 64 more device syncs per decode, so
-#: it is opt-in and its numbers are NOT comparable with a plain DIFFVAE_STAGE_TIMING run.
-DEEP = ENABLED and os.environ.get("DIFFVAE_BLOCK_PROF", "") not in ("", "0")
+#: One gate for the whole instrumentation, held here so no caller reads the environment itself:
+#: import-time constants that can disagree would give a tree with partial data, and every "other"
+#: remainder would then quietly lie about where time went.
+ENABLED = os.environ.get("TT_DIT_STAGE_TIMING", "") not in ("", "0")
 
-#: Live mode prints one line to stdout as each span opens and one as it closes, so a decode reports
-#: its own progress while it runs instead of only at teardown. Without it a run is silent from the
-#: stage-5 plan line to the tree, and a device-side hang looks exactly like work from outside; with
-#: it a hang reads as the last "> label" line with no matching "<" -- which names the culprit. The
-#: lines also keep the device broker's silence reaper fed. Costs nothing beyond the syncs the spans
-#: already pay, and does not touch the tree, so tree numbers stay comparable with LIVE off.
-LIVE = ENABLED and os.environ.get("DIFFVAE_STAGE_LOG", "") not in ("", "0")
+#: ``deep=True`` spans record only under this. They live inside per-block regions -- dozens more
+#: device syncs per decode -- so the mode is opt-in and its totals are not comparable with ENABLED alone.
+DEEP = ENABLED and os.environ.get("TT_DIT_BLOCK_PROF", "") not in ("", "0")
+
+#: One stdout line as each span opens and one as it closes. A device-side hang then reads as the last
+#: "> label" line with no matching "<", which names the culprit, and the lines keep a silence-reaping
+#: job runner fed. Costs nothing beyond the syncs the spans already pay and does not touch the tree.
+LIVE = ENABLED and os.environ.get("TT_DIT_STAGE_LOG", "") not in ("", "0")
 
 ATTENTION, SDPA, ALLGATHER, MLP = "attention", "sdpa", "allgather", "mlp"
 CONTEXT_INJECT, RESHAPE, UPSAMPLE = "context-inject", "reshape+permute", "upsample"
@@ -65,8 +76,7 @@ class Node:
     @property
     def self_ms(self) -> float:
         """Time here that is not in a child. kv-allgather runs inside attention, so charging both in
-        full would count those ms twice -- which is what the flat [block-prof] table this replaced
-        did, printing a span and the span inside it as peers."""
+        full would count those ms twice."""
         return max(self.incl_ms - sum(c.incl_ms for c in self.children), 0.0)
 
     def __repr__(self):  # debugging a live stack is the main use
@@ -162,6 +172,67 @@ def _finish(root: Node, st: list) -> None:
         _ROOTS.append(root)
 
 
+# ---------------------------------------------------------------------------------- timing spans
+
+
+@contextlib.contextmanager
+def span(device, label: str, *, category: str | None = None, root: bool = False, deep: bool = False):
+    """Time the body as one node of the tree.
+
+    Synchronises ``device`` before the clock starts and again before it stops, so the measurement is
+    the body's device work and not whatever was still queued from before it. ``root=True`` starts a
+    new tree; ``deep=True`` records only under ``DEEP``. Inert -- no sync, no node -- when its gate
+    is off, so a span costs nothing in an untimed run.
+
+    The label is fixed at open rather than on the way out because a node names itself from birth:
+    a span that never closes is then still identifiable, which is when the name matters most. On an
+    exception the node is kept, marked ``aborted`` and popped, so no later span nests under a dead
+    parent; the exception propagates.
+    """
+    if not ENABLED or (deep and not DEEP):
+        yield
+        return
+    ttnn.synchronize_device(device)
+    t0 = time.perf_counter()
+    node = open_span(label, category=category, root=root)
+    try:
+        yield
+    except BaseException:
+        abort_span(node)
+        raise
+    ttnn.synchronize_device(device)
+    close_span(node, (time.perf_counter() - t0) * 1000)
+
+
+def timed(label, *, category: str | None = None, root: bool = False, deep: bool = False, device="mesh_device"):
+    """:func:`span` as a decorator, for a function whose whole body is one span.
+
+    ``device`` is the name of the attribute of the first argument (``self``) that holds the mesh
+    device, or a callable of the call's ``(*args, **kwargs)`` returning it. ``label`` is a string, or
+    a callable of the same arguments returning one, for a label that depends on the call::
+
+        @timed(lambda self, stage, *a, **k: f"stage {stage}", category=SETUP)
+        def _setup(self, stage, x): ...
+
+    When the gate is off the wrapper calls straight through without resolving either, so a
+    decorated method costs the same as an undecorated one in an untimed run.
+    """
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            if not ENABLED or (deep and not DEEP):
+                return fn(*args, **kwargs)
+            dev = device(*args, **kwargs) if callable(device) else getattr(args[0], device)
+            name = label(*args, **kwargs) if callable(label) else label
+            with span(dev, name, category=category, root=root):
+                return fn(*args, **kwargs)
+
+        return wrapper
+
+    return decorate
+
+
 def root_count() -> int:
     with _LOCK:
         return len(_ROOTS)
@@ -251,7 +322,7 @@ def category_totals(root: Node):
 
 
 def render_tree(root: Node, *, title: str, measured_ms: float | None = None) -> str:
-    max_depth = int(os.environ.get("DIFFVAE_TREE_DEPTH", 8))
+    max_depth = int(os.environ.get("TT_DIT_TREE_DEPTH", 8))
     flags = f"  [{' '.join(sorted(root.flags))}]" if root.flags else ""
     head = f"root {root.incl_ms:.1f} ms{flags}"
     if measured_ms is not None:

@@ -30,8 +30,8 @@ from ...layers.neighborhood_attention import (
 )
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
-from ...utils import decode_tree
-from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_timer
+from ...utils import timing_tree
+from .diffvae_ltx_stage5 import TILE, log_dram
 
 #: The executors that take this chip's W-band and reassemble the window across the shard seam:
 #: the bricked executor stage 5 runs (halo exchange, 32-site bricks, the dedicated neighborhood op).
@@ -399,7 +399,7 @@ class NeighborhoodAttention(Module):
         t, h, w = dims
         tokens = t * h * w
         heads = self.heads_local
-        with deep_prof(self.mesh_device, "qkv-proj", category=decode_tree.PROJ):
+        with timing_tree.span(self.mesh_device, "qkv-proj", category=timing_tree.PROJ, deep=True):
             if self.fused_qkv:
                 flat = self.qkv(x)
                 ttnn.deallocate(x)
@@ -437,13 +437,13 @@ class NeighborhoodAttention(Module):
                 )
                 ttnn.deallocate(x)
 
-        with deep_prof(self.mesh_device, "qkv-norm", category=decode_tree.NORM_ROPE):
+        with timing_tree.span(self.mesh_device, "qkv-norm", category=timing_tree.NORM_ROPE, deep=True):
             q = self.q_norm(q)
             k = self.k_norm(k)
             q = ttnn.multiply(q, self.scale)
 
         if self.fused_rope:
-            with deep_prof(self.mesh_device, "qkv-rope (fused op)", category=decode_tree.NORM_ROPE):
+            with timing_tree.span(self.mesh_device, "qkv-rope (fused op)", category=timing_tree.NORM_ROPE, deep=True):
                 # Rotate here, before the volume reshape: the op wants TILE, and q/k are still in the
                 # (1, heads, tokens, head_dim) form create_heads emitted.
                 cos_full, sin_full = self._fused_rope_tables(cos, sin, tokens)
@@ -464,10 +464,10 @@ class NeighborhoodAttention(Module):
                 part = _consume(part, ttnn.permute, (0, 2, 1, 3))
             return ttnn.reshape(part, shape)
 
-        with deep_prof(self.mesh_device, "qkv-to-volume", category=decode_tree.RESHAPE):
+        with timing_tree.span(self.mesh_device, "qkv-to-volume", category=timing_tree.RESHAPE, deep=True):
             q, k, v = (to_volume(part) for part in (q, k, v))
         if not self.fused_rope:
-            with deep_prof(self.mesh_device, "qkv-rope (unfused)", category=decode_tree.NORM_ROPE):
+            with timing_tree.span(self.mesh_device, "qkv-rope (unfused)", category=timing_tree.NORM_ROPE, deep=True):
                 q = apply_rope(q, cos, sin)
                 k = apply_rope(k, cos, sin)
 
@@ -492,7 +492,9 @@ class NeighborhoodAttention(Module):
             )
         else:
             # Stage 0's path: the grouped-gather executor. Named so stage 0 stops being one opaque row.
-            with deep_prof(self.mesh_device, f"attention {self.na3d_backend}", category=decode_tree.SDPA):
+            with timing_tree.span(
+                self.mesh_device, f"attention {self.na3d_backend}", category=timing_tree.SDPA, deep=True
+            ):
                 attended = neighborhood_attention_3d_linear_order(
                     q,
                     k,
@@ -502,7 +504,7 @@ class NeighborhoodAttention(Module):
                     device_plan=device_plan,
                     ccl_manager=self.ccl_manager,
                 )
-        with deep_prof(self.mesh_device, "out-proj", category=decode_tree.PROJ):
+        with timing_tree.span(self.mesh_device, "out-proj", category=timing_tree.PROJ, deep=True):
             attended = ttnn.to_layout(ttnn.reshape(attended, (tokens, self.dim)), ttnn.TILE_LAYOUT)
             out = self.proj(attended)
             ttnn.deallocate(attended)
@@ -648,15 +650,15 @@ class NABlock(Module):
         sin: ttnn.Tensor,
         device_plan: NA3DDevicePlan,
     ) -> ttnn.Tensor:
-        # DIFFVAE_BLOCK_PROF=1 only. Each span costs two device syncs, and there are 16 det blocks,
+        # TT_DIT_BLOCK_PROF=1 only. Each span costs two device syncs, and there are 16 det blocks,
         # so leaving these on by default would inflate the very stage totals they explain. The norms
         # sit inside their span (stage 5 keeps its modulate outside) rather than paying two more.
-        if decode_tree.DEEP:
-            with block_prof(self.mesh_device, "attention", category=decode_tree.ATTENTION):
+        if timing_tree.DEEP:
+            with timing_tree.span(self.mesh_device, "attention", category=timing_tree.ATTENTION):
                 attended = self.attn(self.norm1(x), dims=dims, cos=cos, sin=sin, device_plan=device_plan)
             x = ttnn.add(x, attended)
             ttnn.deallocate(attended)
-            with block_prof(self.mesh_device, "mlp", category=decode_tree.MLP):
+            with timing_tree.span(self.mesh_device, "mlp", category=timing_tree.MLP):
                 projected = self.mlp(self.norm2(x))
             x = ttnn.add(x, projected)
             ttnn.deallocate(projected)
@@ -975,21 +977,21 @@ class DeterministicStages(Module):
         the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
         ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
         """
-        with stage_timer(self.mesh_device, "conv_in (denorm folded)", category=decode_tree.MLP):
+        with timing_tree.span(self.mesh_device, "conv_in (denorm folded)", category=timing_tree.MLP):
             x = self.conv_in(x)
         count = len(self.upsamples) if stages is None else stages
         sharded = False
         for stage in range(count):
             # Labelled with the dims going IN: the out-dims do not exist until the upsample below
             # runs, and a span names itself at open so a leaked one is still identifiable.
-            with stage_timer(self.mesh_device, f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"):
+            with timing_tree.span(self.mesh_device, f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"):
                 t, h, w = dims
                 stage_sharded = self._w_sharded and stage > 0
                 if stage_sharded:
                     assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
                     if not sharded:
-                        with stage_timer(
-                            self.mesh_device, "reshard: replicated -> W-sharded", category=decode_tree.RESHAPE
+                        with timing_tree.span(
+                            self.mesh_device, "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE
                         ):
                             x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
                         sharded = True
@@ -997,8 +999,8 @@ class DeterministicStages(Module):
 
                 # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is
                 # its blocks rather than its blocks plus whatever it had to build first.
-                with stage_timer(
-                    self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", category=decode_tree.SETUP
+                with timing_tree.span(
+                    self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", category=timing_tree.SETUP
                 ):
                     cos, sin = self._rope(dims)
                     if stage_sharded:
@@ -1008,7 +1010,7 @@ class DeterministicStages(Module):
 
                 # dim read here rather than after the loop: NABlock is residual, so its channel count
                 # is unchanged by the blocks.
-                with stage_timer(
+                with timing_tree.span(
                     self.mesh_device, f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}"
                 ):
                     for index, block in enumerate(self.det_stages[stage]):
@@ -1018,7 +1020,7 @@ class DeterministicStages(Module):
                             f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}",
                         )
 
-                with stage_timer(self.mesh_device, f"upsample {stage + 1}", category=decode_tree.UPSAMPLE):
+                with timing_tree.span(self.mesh_device, f"upsample {stage + 1}", category=timing_tree.UPSAMPLE):
                     x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
                 if stage_sharded:
                     out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
@@ -1026,7 +1028,7 @@ class DeterministicStages(Module):
                 log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
 
         if sharded and gather_output:
-            with stage_timer(self.mesh_device, "det -> replicated context gather", category=decode_tree.ALLGATHER):
+            with timing_tree.span(self.mesh_device, "det -> replicated context gather", category=timing_tree.ALLGATHER):
                 x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
@@ -1196,7 +1198,7 @@ class DiffVAEDecoder(Module):
             # Upload the latent as-is and do the ghost pad and channels-last flatten on device, so the
             # only host step left before the pipeline is the transfer itself. The pad replicates the
             # last frame, which is a slice plus a concat on the T axis.
-            with stage_timer(self.mesh_device, "host->mesh: upload latent (raw)", category=decode_tree.HOST_XFER):
+            with timing_tree.span(self.mesh_device, "host->mesh: upload latent (raw)", category=timing_tree.HOST_XFER):
                 raw = latent_tt
                 if raw is None:
                     raw = ttnn.from_torch(
@@ -1206,7 +1208,7 @@ class DiffVAEDecoder(Module):
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                     )
 
-            with stage_timer(self.mesh_device, "device: ghost pad + flatten", category=decode_tree.RESHAPE):
+            with timing_tree.span(self.mesh_device, "device: ghost pad + flatten", category=timing_tree.RESHAPE):
                 last = ttnn.slice(raw, [0, 0, t - 1, 0], [1, channels, t, h * w])
                 parts = [raw] + [last] * ghost
                 padded_tt = ttnn.concat(parts, dim=2)
@@ -1218,17 +1220,19 @@ class DiffVAEDecoder(Module):
                 x = ttnn.to_layout(ttnn.reshape(moved, ((t + ghost) * h * w, channels)), ttnn.TILE_LAYOUT)
                 ttnn.deallocate(moved)
         else:
-            with stage_timer(self.mesh_device, "host: ghost pad + permute/flatten", category=decode_tree.HOST_COMPUTE):
+            with timing_tree.span(
+                self.mesh_device, "host: ghost pad + permute/flatten", category=timing_tree.HOST_COMPUTE
+            ):
                 padded = torch.cat([latent, latent[:, :, -1:].expand(-1, -1, ghost, -1, -1)], dim=2)
                 tokens = padded.permute(0, 2, 3, 4, 1).reshape(-1, channels).contiguous()
-            with stage_timer(self.mesh_device, "host->mesh: upload TILE", category=decode_tree.HOST_XFER):
+            with timing_tree.span(self.mesh_device, "host->mesh: upload TILE", category=timing_tree.HOST_XFER):
                 x = ttnn.from_torch(tokens, device=self.mesh_device, dtype=self.dtype, layout=ttnn.TILE_LAYOUT)
 
         x, dims = self.stages(x, dims=(t + ghost, h, w), gather_output=gather_output)
         sharded_out = self.stages._w_sharded and not gather_output
         w_eff = dims[2] // self.stages.sp if sharded_out else dims[2]  # local W columns per chip
         keep = self.context_frames(t)
-        with stage_timer(self.mesh_device, "ghost crop on T", category=decode_tree.RESHAPE):
+        with timing_tree.span(self.mesh_device, "ghost crop on T", category=timing_tree.RESHAPE):
             if keep < dims[0]:
                 channels_out = self.config["stage_channels"][-1]
                 # Each step here allocates a full copy of the uncropped volume, which at 1920x1088 is
@@ -1268,8 +1272,8 @@ class DiffVAEDecoder(Module):
 
         # The whole decode under one node: the tree hangs off this, and its total is an honesty
         # check against the caller's own wall-clock measurement of the same call.
-        with stage_timer(self.mesh_device, "decode TOTAL", root=True):
-            with stage_timer(self.mesh_device, "det stages TOTAL (forward_context)"):
+        with timing_tree.span(self.mesh_device, "decode TOTAL", root=True):
+            with timing_tree.span(self.mesh_device, "det stages TOTAL (forward_context)"):
                 context, dims = self.forward_context(
                     latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt
                 )
@@ -1277,7 +1281,7 @@ class DiffVAEDecoder(Module):
             channels_out = self.config["stage_channels"][-1]
             # W-sharded handoff: context is this chip's band; reshape to the local site count stage 5's
             # W-sharded path expects and skip its re-shard (the det->stage-5 all-gather + re-shard both go).
-            with stage_timer(self.mesh_device, "context reshape for stage 5", category=decode_tree.RESHAPE):
+            with timing_tree.span(self.mesh_device, "context reshape for stage 5", category=timing_tree.RESHAPE):
                 if self._wsharded_handoff:
                     w_local = grid.w // self.stages.sp
                     context = ttnn.reshape(context, (1, 1, grid.t * grid.h * w_local, channels_out))
@@ -1289,8 +1293,8 @@ class DiffVAEDecoder(Module):
             # 1080p 6s -- and a caller supplying its own noise pays neither path.
             if noise is None and os.environ.get("DIFFVAE_DEVICE_NOISE") != "1":
                 shape = (1, self.out_channels, grid.t, grid.h * self.patch_size, grid.w * self.patch_size)
-                with stage_timer(
-                    self.mesh_device, f"host: noise randn {tuple(shape)}", category=decode_tree.HOST_COMPUTE
+                with timing_tree.span(
+                    self.mesh_device, f"host: noise randn {tuple(shape)}", category=timing_tree.HOST_COMPUTE
                 ):
                     noise = torch.randn(shape, generator=torch.Generator().manual_seed(seed))
 
@@ -1302,7 +1306,7 @@ class DiffVAEDecoder(Module):
                     torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
                 )
             timestep = self._timestep
-            with stage_timer(self.mesh_device, "stage5 TOTAL (forward)"):
+            with timing_tree.span(self.mesh_device, "stage5 TOTAL (forward)"):
                 pixels = self.stage5.forward(
                     context,
                     noise,

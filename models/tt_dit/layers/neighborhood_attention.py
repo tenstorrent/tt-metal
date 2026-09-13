@@ -45,7 +45,7 @@ import os
 
 import ttnn
 
-from ..utils import decode_tree
+from ..utils import timing_tree
 from .neighborhood_attention_plan import (
     NA3DDevicePlan,
     _choose_sharded_brick,
@@ -65,14 +65,6 @@ from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_b
 # The bound is per chip, so a sharded plan (see :class:`NA3DShard`) splits a group's tiles
 # before this applies and needs proportionally fewer chunks for the same grid.
 DEFAULT_CHUNK_BUDGET = 2**29
-
-
-def _deep_prof(device, key: str, *, category: str | None = None):
-    """The same span helper the reference executor uses, so both break down side by side in the
-    decode tree. Inert unless DIFFVAE_BLOCK_PROF is set: each span costs two device syncs."""
-    from ..models.vae.diffvae_ltx_stage5 import deep_prof
-
-    return deep_prof(device, key, category=category)
 
 
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
@@ -321,7 +313,7 @@ def neighborhood_attention_3d_bricked(
         site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
         return ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
 
-    with _deep_prof(device, "brick-permute (q,k,v)", category=decode_tree.RESHAPE):
+    with timing_tree.span(device, "brick-permute (q,k,v)", category=timing_tree.RESHAPE, deep=True):
         query_op = to_op_layout(query)
         key_op = to_op_layout(key)
         value_op = to_op_layout(value)
@@ -331,7 +323,7 @@ def neighborhood_attention_3d_bricked(
         f"about to call the op: chunk={plan['query_chunk_bricks']} "
         f"gather={plan['gather_brick_count']} kv_tiles={_tiles_per_kv_chunk(plan['gather_brick_count'])}",
     )
-    with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+    with timing_tree.span(device, "neighborhood-sdpa", category=timing_tree.SDPA, deep=True):
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
             query_op,
             key_op,
@@ -349,7 +341,7 @@ def neighborhood_attention_3d_bricked(
             compute_kernel_config=_compute_kernel_config(),
         )
 
-    with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
+    with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
         # Site-major on the way out too, so this is a reshape rather than a transpose.
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         merged = ttnn.reshape(rows, (batch, bricked_sites, channels))
@@ -569,10 +561,10 @@ def neighborhood_attention_3d_bricked_w_sharded(
         Until 2026-09-11 the flat form was reshaped straight into the volume, which is right only
         at one head per chip (stage 5 under TP4) and silently interleaves heads and sites otherwise.
         """
-        with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
+        with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
         if len(rows.shape) == 4 and head_count > 1:
-            with _deep_prof(device, f"{lane}: heads-to-sites", category=decode_tree.RESHAPE):
+            with timing_tree.span(device, f"{lane}: heads-to-sites", category=timing_tree.RESHAPE, deep=True):
                 moved = ttnn.permute(rows, (0, 2, 1, 3))
             if rows is not tensor:
                 ttnn.deallocate(rows)
@@ -595,7 +587,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             f"{lane}: about to neighbor_pad halo_br={halo_br} links={num_links} parts={parts} "
             f"stick={SITES_PER_BRICK * channels // parts * grid5.element_size()}B",
         )
-        with _deep_prof(device, f"{lane}: halo-exchange", category=decode_tree.ALLGATHER):
+        with timing_tree.span(device, f"{lane}: halo-exchange", category=timing_tree.ALLGATHER, deep=True):
             split = ttnn.reshape(grid5, (batch, t_br, h_br, w_br * parts, SITES_PER_BRICK * channels // parts))
             exchanged = _halo_exchange(
                 ccl_manager,
@@ -608,7 +600,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
                 num_links=[num_links],
             )
         _tp_trace(device, f"{lane}: neighbor_pad done -> {tuple(exchanged.shape)}")
-        with _deep_prof(device, f"{lane}: tilize", category=decode_tree.RESHAPE):
+        with timing_tree.span(device, f"{lane}: tilize", category=timing_tree.RESHAPE, deep=True):
             site_major = ttnn.reshape(exchanged, (batch, 1, bricked_sites, channels))
             out = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
         _tp_trace(device, f"{lane}: tilized -> {tuple(out.shape)}")
@@ -618,7 +610,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         """K/V halo for the hoisted path: the sites are already bricked, so this is a reshape into
         the brick grid and the exchange -- no 7-D permute."""
         _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
-        with _deep_prof(device, f"{lane}: untilize", category=decode_tree.RESHAPE):
+        with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
         grid5 = ttnn.reshape(rows, (batch, t_br, h_br, w_br, SITES_PER_BRICK * channels))
         return exchange(grid5, lane)
@@ -640,13 +632,13 @@ def neighborhood_attention_3d_bricked_w_sharded(
         the reorder can be read apart; they have different fixes.
         """
         volume_form = as_volume(tensor, lane)
-        with _deep_prof(device, f"{lane}: brick-permute", category=decode_tree.RESHAPE):
+        with timing_tree.span(device, f"{lane}: brick-permute", category=timing_tree.RESHAPE, deep=True):
             grid5 = to_bricked_grid(volume_form, volume=owned_volume, brick=brick)
         _tp_trace(device, f"{lane}: to_bricked_grid done -> {tuple(grid5.shape)}")
         return exchange(grid5, lane)
 
     widen = widened_bricked if already_bricked else widened
-    with _deep_prof(device, "halo+brick-permute (k,v)", category=decode_tree.RESHAPE):
+    with timing_tree.span(device, "halo+brick-permute (k,v)", category=timing_tree.RESHAPE, deep=True):
         key_op = widen(key, "k")
         value_op = widen(value, "v")
 
@@ -654,7 +646,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     # and the op is told so via query_extent/query_origin below. So this is the brick permute
     # alone -- no exchange, and over 60 columns rather than 76. Already-bricked Q skips the
     # permute: it is a layout/reshape into the op's (B, 1, sites, C) TILE.
-    with _deep_prof(device, "q-to-seq", category=decode_tree.RESHAPE):
+    with timing_tree.span(device, "q-to-seq", category=timing_tree.RESHAPE, deep=True):
         if already_bricked:
             rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT)
             site_major = ttnn.reshape(rows, (batch, 1, query_bricked_sites, channels))
@@ -667,7 +659,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             query_op = ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
             _tp_trace(device, f"q: bricked owned region -> {tuple(query_op.shape)}")
 
-    with _deep_prof(device, "neighborhood-sdpa", category=decode_tree.SDPA):
+    with timing_tree.span(device, "neighborhood-sdpa", category=timing_tree.SDPA, deep=True):
         attended = ttnn.transformer.neighborhood_scaled_dot_product_attention(
             query_op,
             key_op,
@@ -695,7 +687,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         )
 
     _tp_trace(device, f"op returned -> {tuple(attended.shape)}")
-    with _deep_prof(device, "unbrick-permute", category=decode_tree.RESHAPE):
+    with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         merged = ttnn.reshape(rows, (batch, query_bricked_sites, channels))
         # Already the owned region: the op wrote only the queries this shard owns, so there is no
@@ -707,7 +699,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         # Rebuild the full head width from the tp shards. Device order along tp_axis IS head
         # order, and heads are the channel axis here, so gathering the channels concatenates
         # [head0 | head1 | ...] -- the layout the replicated out-proj already expects.
-        with _deep_prof(device, "head-allgather", category=decode_tree.ALLGATHER):
+        with timing_tree.span(device, "head-allgather", category=timing_tree.ALLGATHER, deep=True):
             sites_local = query_bricked_sites if already_bricked else time_extent * height_extent * width_local
             _tp_trace(device, f"entering TP block (heads per chip={head_count})")
             # The buffer is site-major with this chip's heads inside each site: (sites, heads, hd).
@@ -748,7 +740,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         # rather than a reshape -- gathering on dim=1 is what buys the cheap collective, and this
         # is the move that pays for it. The reference executor does the same thing right after its
         # own head-allgather, under the name "attn-unflatten".
-        with _deep_prof(device, "head-unflatten", category=decode_tree.RESHAPE):
+        with timing_tree.span(device, "head-unflatten", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
             _tp_trace(device, "untilized for permute")
             if rows is not gathered:

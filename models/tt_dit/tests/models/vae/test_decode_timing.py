@@ -34,7 +34,7 @@ def _topology():
 
 # (deterministic-stages backend, stage-5 backend), single chip, replicated. "linear_order+bricked5" runs
 # the linear-order executor where it fits (the smaller early stages) and the unsharded bricked executor for
-# stage 5. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
+# stage 5. Set TT_DIT_STAGE_TIMING=1 for the per-stage breakdown.
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "backends",
@@ -72,7 +72,7 @@ def test_decode_timing(*, mesh_device, backends, latent_hw):
 )
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
-def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
+def test_decode_wsp_timing(*, mesh_device, latent_hw, timing_tree):
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
     from models.tt_dit.parallel.manager import CCLManager

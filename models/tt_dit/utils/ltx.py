@@ -190,9 +190,9 @@ def default_ltx25_video_vae(*, diffusion: bool = False) -> str | None:
 
 
 def decode_breakdown_rows(root, wall_s: float, *, depth: int, min_frac: float = 0.01):
-    """Indented (label, seconds) rows for the perf table, taken from a ``decode_tree`` root.
+    """Indented (label, seconds) rows for the perf table, taken from a ``timing_tree`` root.
 
-    Siblings pool by exact label the way ``decode_tree.render_tree`` does, so ``attention`` (one span per
+    Siblings pool by exact label the way ``timing_tree.render_tree`` does, so ``attention`` (one span per
     band) is one row while ``stage5 block 0..7`` stay distinct. Children under ``min_frac`` of the
     wall-clock decode are omitted, and each level's unattributed remainder is shown as ``other`` only
     when it clears the same bar, so a level may sum to slightly under its parent. Tree spans carry two
@@ -227,11 +227,11 @@ def decode_breakdown_rows(root, wall_s: float, *, depth: int, min_frac: float = 
 
 
 def decode_category_rows(root, *, min_frac: float = 0.01):
-    """(category, seconds, share) from ``decode_tree.category_totals``: exclusive self-time, so the
+    """(category, seconds, share) from ``timing_tree.category_totals``: exclusive self-time, so the
     rows partition the root and answer "where did the decode actually go" without double counting a
-    kv-allgather that runs inside an attention span. Only meaningful with DIFFVAE_BLOCK_PROF, since
+    kv-allgather that runs inside an attention span. Only meaningful with TT_DIT_BLOCK_PROF, since
     without the deep spans nearly everything is charged to a stage's own remainder."""
-    from .decode_tree import category_totals
+    from .timing_tree import category_totals
 
     totals, _ = category_totals(root)
     total_ms = root.incl_ms or 1.0
@@ -248,7 +248,7 @@ def print_ltx_timing_table(
     """Per-stage wall-clock table for one gen.
 
     With ``LTX_PERF_BREAKDOWN=N`` (N >= 1) and a decode tree recorded for this gen, the VAE decode row
-    expands into N levels of sub-rows from ``pipeline.last_decode_tree``; with DIFFVAE_BLOCK_PROF also
+    expands into N levels of sub-rows from ``pipeline.last_decode_tree``; with TT_DIT_BLOCK_PROF also
     on, a second block lists exclusive decode time by category. run_ltx25_pipeline.sh sets both under
     PROFILE=1. A traced decode records no tree, so the table then silently stays flat.
     """
@@ -256,7 +256,7 @@ def print_ltx_timing_table(
     if not timings:
         return
 
-    from . import decode_tree
+    from . import timing_tree
 
     depth = int(os.environ.get("LTX_PERF_BREAKDOWN", "0") or 0)
     root = getattr(pipeline, "last_decode_tree", None) if depth > 0 else None
@@ -278,7 +278,7 @@ def print_ltx_timing_table(
     total_row = ("Total", f"{sum(s for _, s in timings):.2f} s")
 
     cat_rows = []
-    if root is not None and decode_tree.DEEP:
+    if root is not None and timing_tree.DEEP:
         cat_rows = [(f"  decode · {cat}", f"{s:.2f} s  {pct:4.1f}%") for cat, s, pct in decode_category_rows(root)]
 
     all_rows = rows + [total_row] + cat_rows

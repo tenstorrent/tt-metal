@@ -27,6 +27,7 @@ import ttnn
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import DiffVAEStage5, DiffVAEStage5Config, Grid
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.tests.models.vae.time_det_nablock import fill
+from models.tt_dit.utils import timing_tree
 
 SP_AXIS, TP_AXIS = 1, 0
 ITERS = int(os.environ.get("ITERS", 10))
@@ -96,6 +97,15 @@ def main() -> None:
         )
         tables = model.rope_tables(GRID)
         band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
+        # The stage-5 hoist: bands are aligned to the brick's T extent, so the activations have to be
+        # in bricked order before the block sees them, exactly as forward converts them once at entry.
+        brick = model._stage5_brick(GRID) if model._keep_bricked else None
+        if brick is not None:
+            tt_context = model._brick_activation(tt_context, model._local_volume(GRID), brick)
+            x_bands = [
+                model._brick_activation(band_x, model._local_volume(GRID, t=band.hi - band.lo), brick)
+                for band_x, band in zip(x_bands, bands)
+            ]
 
         block = model.diff_blocks[0]
         sites_local = GRID.t * GRID.h * (GRID.w // sp)
@@ -103,7 +113,7 @@ def main() -> None:
             # The only correctness signal available without an LTX-2 checkout: run the arm against
             # the unflagged path in the same process. ``fill`` is seeded, so both models hold
             # identical weights and any divergence is the arm's.
-            out = block(list(x_bands), tt_context, modulation, GRID, bands, band_tables)
+            out = block(list(x_bands), tt_context, modulation, GRID, bands, band_tables, brick=brick)
             got = ttnn.to_torch(ttnn.get_device_tensors(out[0] if isinstance(out, list) else out)[0]).float()
             torch.save(got, os.environ.get("CHECK_OUT", "/tmp/s5_out.pt"))
             print(f"[check] wrote {tuple(got.shape)} to {os.environ.get('CHECK_OUT', '/tmp/s5_out.pt')}", flush=True)
@@ -114,15 +124,18 @@ def main() -> None:
             flush=True,
         )
 
-        for _ in range(2):  # warm the program cache
-            x_bands = block(x_bands, tt_context, modulation, GRID, bands, band_tables)
-        ttnn.synchronize_device(mesh)
+        # One root over every call, so the block's own spans -- which would otherwise each become a
+        # root of their own -- pool under it by label and can be read back per section below.
+        with timing_tree.span(mesh, "time_diff_block", root=True):
+            for _ in range(2):  # warm the program cache
+                x_bands = block(x_bands, tt_context, modulation, GRID, bands, band_tables, brick=brick)
+            ttnn.synchronize_device(mesh)
 
-        t0 = time.perf_counter()
-        for _ in range(ITERS):
-            x_bands = block(x_bands, tt_context, modulation, GRID, bands, band_tables)
-        ttnn.synchronize_device(mesh)
-        per_block = (time.perf_counter() - t0) / ITERS * 1000
+            t0 = time.perf_counter()
+            for _ in range(ITERS):
+                x_bands = block(x_bands, tt_context, modulation, GRID, bands, band_tables, brick=brick)
+            ttnn.synchronize_device(mesh)
+            per_block = (time.perf_counter() - t0) / ITERS * 1000
 
         print(
             f"[stage5 ] dim={cfg.dim} heads={cfg.dim // cfg.head_dim} sites/chip={sites_local} "
@@ -131,13 +144,14 @@ def main() -> None:
         )
         print(f"\n[TOTAL stage-5 blocks] {per_block * cfg.num_blocks:8.1f} ms\n", flush=True)
 
-        # The module's own section counters. forward_diff_step prints these; a single-block harness
-        # has to read them itself. Values accumulate over every call, so divide by the calls made.
-        if os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0"):
-            from models.tt_dit.models.vae.diffvae_ltx_stage5 import _BLOCK_PROF
-
+        # The block's sections, from the tree: its top-level spans are the root's direct children,
+        # pooled by label over every call made, so divide by the calls. TT_DIT_BLOCK_PROF adds the
+        # deep rows, which sit at the same level inside the block.
+        if timing_tree.ENABLED:
             calls = ITERS + 2
-            merged = dict(_BLOCK_PROF)
+            merged: dict[str, float] = {}
+            for child in timing_tree.roots()[-1].children:
+                merged[child.label] = merged.get(child.label, 0.0) + child.incl_ms
             total = sum(merged.values()) or 1.0
             print(f"{'section':44s} {'ms/block':>10} {'share':>7}")
             for key, ms in sorted(merged.items(), key=lambda kv: -kv[1]):

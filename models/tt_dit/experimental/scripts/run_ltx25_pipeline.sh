@@ -40,10 +40,10 @@ export DIFFVAE_TRIM_PAD_CHANNELS=1
 export DIFFVAE_DET_COLPAR_QKV=1
 export DIFFVAE_DET_FUSED_ROPE=1
 export DIFFVAE_DET_FUSED_SWIGLU=1
-export DIFFVAE_STAGE_TIMING=1
+export TT_DIT_STAGE_TIMING=1
 # Stream one "[stage HH:MM:SS] > label" / "< label  N ms" line per decode span so a hang is visible
 # while it happens (the last ">" with no "<" names it) instead of at the timeout. Tree unchanged.
-export DIFFVAE_STAGE_LOG=${DIFFVAE_STAGE_LOG:-1}
+export TT_DIT_STAGE_LOG=${TT_DIT_STAGE_LOG:-1}
 # Stage 5 and the W-sharded deterministic stages 1-3 run the bricked executor
 # (bricked_sp_w_sharded). The only other value either knob accepts is "linear_order" (replicated),
 # which does not fit the pipeline's memory.
@@ -66,23 +66,23 @@ PYTEST=(python_env/bin/python -u -m pytest
 # The PERFORMANCE table's VAE decode row expands into stage/block sub-rows (LTX_PERF_BREAKDOWN).
 # Untraced because the tree spans time trace capture, not execution, and BLOCK_PROF's syncs
 # cannot live inside a trace -- so totals here are slower than traced production numbers.
-# The tree is printed by decode_tree_plugin.py (the vae conftest fixture does not reach this test).
+# The tree is printed by timing_tree_plugin.py (the vae conftest fixture does not reach this test).
 if [ "${PROFILE:-0}" = 1 ]; then
   OUT_DIR="$PWD/generated/profile/$(date -u +%Y%m%d_%H%M%S)"
   mkdir -p "$OUT_DIR"
   export LTX_TRACED=0
   export LTX_VAE_TIME=${LTX_VAE_TIME:-1}
-  export DIFFVAE_BLOCK_PROF=${DIFFVAE_BLOCK_PROF:-1}
+  export TT_DIT_BLOCK_PROF=${TT_DIT_BLOCK_PROF:-1}
   export DIFFVAE_SLAB_FRAMES=73
   export OUTPUT_PATH="$OUT_DIR/ltx25_1080p.mp4"
-  export DIFFVAE_TREE_OUT="$OUT_DIR/decode_trees.txt"
+  export TT_DIT_TREE_OUT="$OUT_DIR/decode_trees.txt"
   # Expand the perf table's "VAE decode" row from the decode tree (levels deep), and with BLOCK_PROF
   # add the exclusive-by-category block. 0 keeps the flat table.
   export LTX_PERF_BREAKDOWN=${LTX_PERF_BREAKDOWN:-2}
   export PYTHONPATH="$PWD/models/tt_dit/experimental/scripts${PYTHONPATH:+:$PYTHONPATH}"
   echo "[profile] $(git rev-parse --short HEAD) -> $OUT_DIR"
   set +e
-  "${PYTEST[@]}" -p decode_tree_plugin "$@" 2>&1 | tee "$OUT_DIR/log.txt"
+  "${PYTEST[@]}" -p timing_tree_plugin "$@" 2>&1 | tee "$OUT_DIR/log.txt"
   status=${PIPESTATUS[0]}
   echo "PYTEST_EXIT=$status" | tee -a "$OUT_DIR/log.txt"
   exit "$status"

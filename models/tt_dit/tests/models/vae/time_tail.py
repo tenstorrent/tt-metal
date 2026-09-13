@@ -1,7 +1,7 @@
 """Time the decode tail: host unpatchify+pull (float) against on-device YUV 4:2:0 (yuv).
 
 Both paths run the identical device graph; only the tail differs, so the delta is the transfer.
-Run with DIFFVAE_STAGE_TIMING=1 to also get the tail timer isolated from the rest of the decode.
+Run with TT_DIT_STAGE_TIMING=1 to also get the tail timer isolated from the rest of the decode.
 """
 
 import os

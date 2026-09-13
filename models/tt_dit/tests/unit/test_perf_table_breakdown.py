@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import pytest
 
-from models.tt_dit.utils import decode_tree as dt
+from models.tt_dit.utils import timing_tree as dt
 from models.tt_dit.utils.ltx import decode_breakdown_rows, decode_category_rows, print_ltx_timing_table
 
 
