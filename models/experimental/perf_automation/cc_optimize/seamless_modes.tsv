@@ -1,0 +1,3 @@
+t2t	models/demos/hf_seamless_m4t_medium/tests/e2e/test_t2t_perf.py::test_t2t_perf	in0	tests/e2e/test_t2t.py::test_t2t_e2e
+t2s	models/demos/hf_seamless_m4t_medium/tests/e2e/test_t2s_perf.py::test_t2s_perf	in0	tests/e2e/test_t2s.py::test_t2s_e2e
+s2tt	models/demos/hf_seamless_m4t_medium/tests/e2e/test_s2tt_perf.py::test_s2tt_perf	in0	tests/e2e/test_s2tt.py::test_s2tt_e2e

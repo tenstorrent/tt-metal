@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""PERFORMANCE test for the `main` pipeline of `mistralai/Voxtral-Mini-3B-2507`.
+
+Same wiring as the PCC gate `tests/e2e/test_e2e_pipeline.py`: `tt.pipeline.build_pipeline(device)`
+plus `tt.inputs.build_{audio_chat,transcription}_inputs` -> the chained on-device TTNN forward over
+BOTH task heads.  Perf only: the torch/HF reference build (`tt.reference.hf_reference`), every
+PCC/comp_pcc comparison, the static/runtime nativeness gates and the `avg_pool1d` conformance hole
+are all DROPPED — what remains is the device forward.
+
+The source gate uses this repo's function-scoped `device` fixture with the demo's `device_params`
+(this model self-opens a SINGLE device — `ttnn.open_device(device_id=0, ...)`; there is no mesh and
+no MeshShape anywhere in it), so the same fixtures are reused here.
+"""
+
+from __future__ import annotations
+
+import os
+import time
+
+import pytest
+import torch
+
+import ttnn
+
+from models.tt_transformers.demo.voxtral_mini_3b_2507.tt.inputs import (
+    build_audio_chat_inputs,
+    build_transcription_inputs,
+    get_tokenizer,
+)
+from models.tt_transformers.demo.voxtral_mini_3b_2507.tt.pipeline import PIPELINE_STAGES, build_pipeline
+
+PERF_FLUSH_EVERY = int(os.environ.get("TT_PERF_FLUSH_EVERY", "32"))
+# ISL / OSL -- THE MEASUREMENT CONDITIONS.  OSL is the decode horizon actually executed AND the one
+# printed; there is exactly one variable for it.  The pinned KV capacity of this pipeline is
+# PREFILL_C + 128, which is what the 128 default is sized against.
+PERF_ISL_TOKENS = int(os.environ.get("TT_PERF_ISL_TOKENS", "128"))
+PERF_OSL_TOKENS = int(os.environ.get("TT_PERF_OSL_TOKENS", "128"))
+# BATCH BELONGS TO THE MODEL: 0 = ask the pipeline (it declares DECODE_BATCH via `self.B`).
+PERF_BATCH = int(os.environ.get("TT_PERF_BATCH", "0"))
+# DEPTH.  A POSITIVE cap bounds the profiled window so the device profiler's marker buffer does not
+# overflow; the variable being ABSENT means ALL LAYERS, so the value is None then and goes straight
+# to the builder, whose own all-layers value is None.  This model runs 2 repeating block stacks
+# across its declared stages (encode / prefill / decode), so depth is expressed PER STAGE as well.
+_pl = (os.environ.get("TT_PERF_LAYERS") or "").strip()
+PERF_LAYERS = int(_pl) if (_pl.isdigit() and int(_pl) > 0) else None
+_pl_encode = (os.environ.get("TT_PERF_ENCODE_LAYERS") or "").strip()
+PERF_ENCODE_LAYERS = int(_pl_encode) if (_pl_encode.isdigit() and int(_pl_encode) > 0) else None
+_pl_prefill = (os.environ.get("TT_PERF_PREFILL_LAYERS") or "").strip()
+PERF_PREFILL_LAYERS = int(_pl_prefill) if (_pl_prefill.isdigit() and int(_pl_prefill) > 0) else None
+_pl_decode = (os.environ.get("TT_PERF_DECODE_LAYERS") or "").strip()
+PERF_DECODE_LAYERS = int(_pl_decode) if (_pl_decode.isdigit() and int(_pl_decode) > 0) else None
+
+# TOPOLOGY. The source is single-chip (ttnn.open_device(device_id=0)); resolve_mesh_shape is still
+# what honours --devices/--mesh, and with the env unset it returns this source's own 1x1 shape.
+from models.experimental.perf_automation.agent.perf_adapter import resolve_batch, resolve_mesh_shape
+
+_MESH_SHAPE = resolve_mesh_shape(default_rows=1, default_cols=1)
+
+_PERF_TRACE = os.environ.get("TT_PERF_TRACE", "1") == "1"
+# test_e2e_pipeline.py / demo: l1_small_size=24576 (conv1d/halo scratch of the audio tower front-end).
+_DEV_PARAMS = {"l1_small_size": 24576}
+# The source never sets fabric_config (single chip), so nothing to gate here.
+if _PERF_TRACE:
+    # Sized from the LARGEST traced stage (prefill: pinned C=512 x 30 LM layers), which this model's
+    # own trace-contract gate measured at ~90 MB; the gate's 23 MB region only fits `encode`.
+    _DEV_PARAMS["trace_region_size"] = int(os.environ.get("TT_PERF_TRACE_REGION", str(90 * 1024 * 1024)))
+    _DEV_PARAMS["num_command_queues"] = 1
+
+HEADS = ("audio_chat", "transcription")
+_INPUT_BUILDERS = {
+    "audio_chat": build_audio_chat_inputs,
+    "transcription": build_transcription_inputs,
+}
+
+
+def _build_kwargs() -> dict:
+    """The emit-e2e build contract: a default depth plus the per-stage caps."""
+    return {
+        "layers": PERF_LAYERS,
+        "encode_layers": PERF_ENCODE_LAYERS,
+        "prefill_layers": PERF_PREFILL_LAYERS,
+        "decode_layers": PERF_DECODE_LAYERS,
+    }
+
+
+def prompt_ids_for_isl(tokenizer, n_tokens: int) -> torch.Tensor:
+    """EXACTLY `n_tokens` real token ids from this model's tekken tokenizer (cycled, then truncated).
+
+    The length is the tool's measurement condition, never an example prompt chosen here.
+    """
+    seed = tokenizer.encode("The quick brown fox jumps over the lazy dog and keeps on running. ")
+    seed = [int(t) for t in seed] or [1]
+    ids: list[int] = []
+    while len(ids) < n_tokens:
+        ids.extend(seed)
+    return torch.tensor(ids[:n_tokens], dtype=torch.long)
+
+
+@pytest.mark.parametrize("device_params", [_DEV_PARAMS], indirect=True)
+def test_main_perf(device_params, device):
+    def _eager_forward():
+        counter = [0]
+        _orig = []
+
+        def _draining(fn):
+            def inner(*a, **k):
+                r = fn(*a, **k)
+                counter[0] += 1
+                if PERF_FLUSH_EVERY and counter[0] % PERF_FLUSH_EVERY == 0:
+                    try:
+                        ttnn.ReadDeviceProfiler(device)
+                    except Exception:
+                        pass
+                return r
+
+            return inner
+
+        # Build + input encoding OUTSIDE the wrapped/timed region, exactly as the gate orders them.
+        pipe = build_pipeline(device, **_build_kwargs())
+        # WORKLOAD SIZE COMES FROM THE MODEL: the pipeline declares its own batch (self.B).
+        n_streams = resolve_batch(pipe, PERF_BATCH)
+        batches = {h: _INPUT_BUILDERS[h](n=n_streams) for h in HEADS}
+        print("PERF_ISL_TOKENS=%d" % int(batches[HEADS[0]].prompt_len), flush=True)
+        print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
+        print("PERF_BATCH_STREAMS=%d" % n_streams, flush=True)
+        print("PERF_HEADS=%s" % (",".join(HEADS),), flush=True)
+
+        _mods = [ttnn] + [getattr(ttnn, _m, None) for _m in ("transformer", "experimental")]
+        for _mod in [_m for _m in _mods if _m is not None]:
+            for _n in dir(_mod):
+                _op = getattr(_mod, _n, None)
+                if type(_op).__name__ == "FastOperation":
+                    _orig.append((_mod, _n, _op))
+                    setattr(_mod, _n, _draining(_op))
+        _fw0 = time.monotonic()
+        try:
+            out = None
+            for head in HEADS:
+                out = pipe.run_head(batches[head], max_new_tokens=PERF_OSL_TOKENS)
+            try:
+                ttnn.ReadDeviceProfiler(device)
+            except Exception:
+                pass
+        finally:
+            for _mod, _n, _f in _orig:
+                setattr(_mod, _n, _f)
+        print("FORWARD_WALL_MS=%.4f" % ((time.monotonic() - _fw0) * 1000.0))
+        assert out is not None  # perf only — NO PCC
+
+    def _traced_forward():
+        from models.experimental.perf_automation.agent.trace_replay import measure_adapter
+        from models.experimental.perf_automation.agent.perf_adapter import PipelineStageAdapter
+
+        def _build_for_perf(dev):
+            from models.tt_transformers.demo.voxtral_mini_3b_2507.tt.pipeline import build_pipeline
+
+            pipe = build_pipeline(dev, **_build_kwargs())
+            # THE RESIDENT, STAGE-EXPOSING OBJECT (PIPELINE_STAGES + <stage>_trace_setup/_step/_inputs).
+            #
+            # Its shipped *_trace_inputs() hooks torch.load `_captured/voxtral_encoder/{args,output}.pt`,
+            # and this tree keeps only the manifests — so every one of the three stages would raise
+            # FileNotFoundError, the adapter would drop all three, and the trace would silently fall
+            # back to FORWARD_WALL_MS.  Feed the same tensors from the REAL demo input builder instead:
+            # a real mel for `encode`, and real projected audio embeds (produced by the model's own
+            # encode stage) plus the real prompt for `prefill`/`decode`.  Host work only — it runs in
+            # setup, OUTSIDE every captured region, so the captured steps stay host-free.
+            n_streams = resolve_batch(pipe, PERF_BATCH)
+            batch = build_audio_chat_inputs(n=n_streams)
+            mel = batch.input_features[:1].float().contiguous()  # (1,128,3000): C pinned by the config
+
+            pipe.encode_trace_setup(mel)
+            ae = ttnn.to_torch(pipe.encode_trace_step()).float().reshape(1, -1, pipe.hidden)
+            ae = ae.expand(pipe.B, -1, -1).contiguous()
+            ref = {
+                "input_ids": batch.input_ids,
+                "audio_embeds": ae,
+                "audio_start": int(batch.audio_start),
+                "n_audio_tokens": int(batch.n_audio_tokens),
+                "prompt_len": int(batch.prompt_len),
+            }
+            pipe.encode_trace_inputs = lambda: mel
+            pipe.prefill_trace_inputs = lambda: dict(ref)
+            pipe.decode_trace_inputs = lambda: dict(ref)
+            return pipe
+
+        _prompt_ids = prompt_ids_for_isl(get_tokenizer(), PERF_ISL_TOKENS)
+        print("PERF_ISL_TOKENS=%d" % _prompt_ids.shape[-1], flush=True)
+        print("PERF_OSL_TOKENS=%d" % PERF_OSL_TOKENS, flush=True)
+        print("PERF_STAGES=%s" % (",".join(PIPELINE_STAGES),), flush=True)
+        measure_adapter(PipelineStageAdapter(_build_for_perf, _prompt_ids, batch=PERF_BATCH), device)
+
+    def _try_traced():
+        try:
+            _traced_forward()
+            return True
+        except Exception as _te:  # noqa: BLE001
+            print("TRACE_REPLAY_SKIPPED=%r" % (_te,), flush=True)
+            return False
+
+    _PROFILING = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    if _PERF_TRACE and not _PROFILING:
+        if not _try_traced():
+            print("TRACE_REPLAY_FALLBACK=eager  # trace_replay isn't working — timing eagerly", flush=True)
+            _eager_forward()
+    else:
+        _eager_forward()
+        if _PERF_TRACE:
+            _try_traced()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__, "-s"]))
