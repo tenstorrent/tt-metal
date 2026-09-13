@@ -660,6 +660,10 @@ void JitBuildEnv::init(
 
     this->lflags_ = common_flags;
     this->lflags_ += "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
+    if (this->arch_ == tt::ARCH::BLACKHOLE && operation_pch_enabled()) {
+        // Each JIT product is already small; optimize directly without LTRANS partitions.
+        this->lflags_ += "-flto-partition=none ";
+    }
 
     // Need to capture more info in build key to prevent stale binaries from being reused.
     tt::StableHasher hasher;
