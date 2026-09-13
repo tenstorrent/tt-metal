@@ -24,3 +24,32 @@ and resume point here before continuing the pipeline.
 - Validation: require the corrected dry-run manifest to map stages 7 through 11
   to `optimized-full-model` through `tti-release` before launching Astra.
 - Resume point: stage 7.
+
+## 2026-09-12: stage 7 hardware ownership prevents mesh initialization
+
+- Initial TP4 mesh open failed on device0 Ethernet heartbeat before model code.
+- Two bounded resets restored enumeration of all four Blackhole p300c devices.
+- Exact mesh smoke then failed at the UMD sysmem guard: expected NOC address
+  `0x1000000000000000`, received `0x1000000040000000`.
+- KMD owner records show four PID0 entries per device in this container;
+  recorded opener PIDs are outside its PID namespace. No visible owner can be
+  safely stopped here. AutoFix requires host operator owner cleanup or host recovery.
+- Evidence: `doc/optimized_full_model/AUTOFIX_startup.md`, recovery logs and
+  `work_log.md`. Prepared benchmark has syntax checks only; no stage7 device result.
+- Resume point: stage7 after successful ring1x4 mesh open/close. No model policy
+  change, stage completion, stage checkpoint commit, vLLM work or push performed.
+
+### 2026-09-13 host recovery
+
+- Host-namespace inspection resolved the container's PID0 records to PID 664795,
+  a Kubernetes `tt_telemetry_collector` that had held all four devices since
+  2026-09-12 18:45 UTC. Its parent telemetry server was left running.
+- Sent SIGTERM only to the stale collector. The KMD owner lists for devices 0-3
+  became empty immediately.
+- The rerun checkout's virtualenv does not contain `tt-smi`; device listing uses
+  the established `/home/mvasiljevic/tt-metal/python_env/bin/tt-smi` while mesh
+  execution uses this checkout's rebuilt `python_env` and TTNN libraries.
+- Bounded `tt-smi -ls --local` completed with all four Blackhole p300c devices.
+- The exact current-checkout `FABRIC_1D_RING`, `MeshShape(1, 4)`,
+  `trace_region_size=0` open/close smoke completed with `MESH_SMOKE_OK`.
+- Repair validated. Resume the preserved stage 7 thread with `--resume-stage 7`.
