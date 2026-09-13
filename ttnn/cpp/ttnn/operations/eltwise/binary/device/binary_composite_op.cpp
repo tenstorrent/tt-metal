@@ -1174,7 +1174,7 @@ Tensor bias_gelu(
             {},
             /*fast_and_approximate_mode*/ std::nullopt,
             resolved_sub_core_grids),
-        true,
+        false, // Fixed per #55130: default to exact erf-based GELU matching standard PyTorch gelu
         memory_config,
         gelu_output,
         resolved_sub_core_grids);
