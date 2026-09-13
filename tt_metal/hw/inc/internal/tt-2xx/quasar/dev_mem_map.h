@@ -53,7 +53,7 @@
 #define MEM_DM_FIRMWARE_SIZE (1024 * 12)
 #define MEM_TRISC_FIRMWARE_SIZE (1024 * 5)
 #define MEM_DM_KERNEL_SIZE (1024 * 48)
-#define MEM_DM_GLOBAL_SIZE (1024 * 2)
+#define MEM_DM_GLOBAL_SIZE (1024 * 4)  // ATT config tables need +0x180 B; DM data segment 0x808 > 0x800 without this (q23/q26). Costs 2 KiB of the 8 KiB DM local budget.
 #define MEM_TRISC_GLOBAL_SIZE (1024 * 2)
 #define MEM_DM_LOCAL_SIZE (1024 * 8)
 #define MEM_TRISC_LOCAL_SIZE (1024 * 4)
