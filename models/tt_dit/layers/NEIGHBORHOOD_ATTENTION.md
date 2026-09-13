@@ -3,8 +3,9 @@
 A map of every file involved in 3D neighborhood attention (NA) and its strided
 generalization (GNA), across **two independent implementations** that live side by side:
 
-- **the reference implementation** — `na3d.py` plus parameters on the shared SDPA op. Older,
-broader, feeds every stage of the decoder.
+- **the linear-order executor** — tokens in natural row-major order, a gather per query group and
+dense masked SDPA over it (`neighborhood_attention_3d_linear_order`, plan in
+`neighborhood_attention_plan.py`). Runs stage 1 and is the replicated oracle for the sharded tests.
 - **ours** — a self-contained `neighborhood_sdpa` op with all geometry in one host-testable
 file. Newer, stage-5 only, selected by backend name.
 
@@ -251,240 +252,6 @@ struct NeighborhoodExtents { AxisExtents brick_sites, context_window, stride, vo
 Small named helpers shared by reader and writer, so the two cannot decode a chunk differently:
 
 
-| helper                                                                     | does                                                |
-| -------------------------------------------------------------------------- | --------------------------------------------------- |
-| `linear_to_point3(index, grid)`                                            | linear index → `BrickCoordinate`                    |
-| `chunk_origin_brick(chunk_index, volume_chunks, chunk_bricks)`             | which brick a chunk starts at                       |
-| `brick_within_chunk(index_in_chunk, origin, chunk_bricks)`                 | the n-th brick of a chunk                           |
-| `brick_index(brick, volume_bricks)`                                        | `BrickCoordinate` → linear                          |
-| `brick_is_inside(brick, volume_bricks)`                                    | a chunk on the far edge can hang off the volume     |
-| `tile_offset(batch, brick, head, brick_count, head_count, head_dim_tiles)` | **the one place that knows tensors are site-major** |
-
-
-**Site-major** means `[batch, 1, bricked_sites, head_count * head_dim]`: sites are the tile
-**row** axis, heads are columns. Head-major would put a head's sites contiguously, but nothing
-here reads a head contiguously — every read is one brick of one head — and it would force the
-caller to transpose heads against sites on the way in and back on the way out. That transpose
-measured **24.6 ms per block** at stage-5 size for no arithmetic.
-
-Note ttnn tiles the **last two** dimensions, which is why the shape is `[b, 1, sites, channels]`
-and not `[b, sites, heads, head_dim]` — the latter would cut tiles across heads.
-
-### 2.3 The op — ttnn plumbing, no geometry
-
-
-| file                                           | lines | contains                                                                                                                                                                                                                    |
-| ---------------------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `neighborhood_sdpa_device_operation_types.hpp` | ~70   | `NeighborhoodSDPAParams` (config, `head_count`, scale, `tiles_per_kv_chunk`, kernel config, output memory config) and `NeighborhoodSDPAInputs` (q, k, v, `gather_origin_table`, optional `interior_mask`, optional output). |
-| `neighborhood_sdpa_device_operation.{hpp,cpp}` | ~260  | `validate` and `compute_output_specs`. Explicit `compute_program_hash` that **excludes** `shard_origin`, so one compiled program serves every shard.                                                                        |
-| `neighborhood_sdpa_program_factory.cpp`        | ~290  | CB allocation, core assignment, compile args.                                                                                                                                                                               |
-| `neighborhood_sdpa_nanobind.cpp`               | ~200  | Python bindings: `neighborhood_choose_brick`, `neighborhood_plan`, `neighborhood_scaled_dot_product_attention`.                                                                                                             |
-
-
-`head_count` is an explicit parameter because it **cannot be read off the shape** — the tensor
-is `[b, 1, sites, heads*head_dim]` and heads are folded into the column axis.
-
-Program factory, key locals:
-
-```cpp
-head_count      = attributes.head_count;
-head_dim_tiles  = query_shape[3] / head_count / TILE_WIDTH;
-query_tile_rows = config.bricks_per_query_chunk();       // M, in tile rows
-tiles_per_kv_chunk                                        // N per flash step, bounded by DST
-kv_chunk_count  = ceil_div(plan.gather_brick_count, tiles_per_kv_chunk);
-work_item_count = batch_count * head_count * plan.chunk_count;
-```
-
-**DST capacity** is the constraint that shapes everything: 8 tiles (4 with fp32 accumulate). A
-chunk wider than DST silently returns wrong numbers rather than faulting, so subblock widths are
-derived from it and `validate` enforces the bound.
-
-### 2.4 Kernels
-
-
-
-#### `kernels/dataflow/neighborhood_reader.cpp` (~370 lines)
-
-**The only kernel that knows what a context window is.** Feeds one query CHUNK at a time.
-
-Work item decomposition (must match the writer exactly):
-
-```cpp
-chunk_index = work_item % chunk_count;
-head_index  = (work_item / chunk_count) % head_count;
-batch_index =  work_item / (chunk_count * head_count);
-```
-
-Loops:
-
-```cpp
-for (work_item ...)                                     // one query chunk, one head
-  for (brick_in_chunk < bricks_per_query_chunk)         // Q: one tile row per brick
-  for (kv_chunk_index < kv_chunk_count)                 // flash steps
-    for (slot < tiles_per_kv_chunk)                     // classify + read K/V
-    for (slot < tiles_per_kv_chunk)                     // uniform bricks: constant fill
-    for (slot < tiles_per_kv_chunk)                     // Mixed bricks: fetch or generate
-```
-
-**Three separate passes over** `slot`**, deliberately.** Mixing the constant fills with
-`fill_mask_tile` in one loop body puts a large function (nested loops, divisions) next to a
-memset in the same instruction cache and measured **worse than either alone** — 7498 ms against
-2761 ms for generating everywhere.
-
-**How a mask tile reaches `cb_mask`.** There are four routes, and which one runs is decided per
-chunk, not per slot — resolving it per slot put a branch to `fill_mask_tile` next to a DRAM read in
-the same loop body, which is the instruction-cache mix the three-pass split above exists to avoid.
-
-1. **Nothing written.** At stride 1 with a canonical gather, `cb_mask` is sized to a whole work
-   item (`persistent_mask` in the program factory), so its pages cycle back to the same addresses
-   every item. Once those pages hold the relative table, the next unclamped brick needs no writes
-   at all — `mask_pages_hold_table` tracks this. Only an edge brick dirties them.
-2. **One DMA per slot from the relative table.** The tile for a (query brick, key brick) pair
-   depends only on their difference, so `relative_table_index()` indexes a table that is
-   independent of both the gather origin and the shard origin — one upload serves every shard.
-3. **One DMA per slot from the regime table.** The GNA path, keyed on the chunk's window clamping
-   class rather than on a relative offset.
-4. **Generated.** `fill_mask_tile` walks the window arithmetic per element. Reached when no table
-   describes the brick — at stride 1 that means its window clamps at a volume edge.
-
-Uniform slots — every pair visible, or none — skip all of the above and take a constant fill.
-
-The per-brick path (a query chunk wider than one brick) runs 2 or 4 for **every (query row, slot)
-pair** rather than every slot, because each brick centres its own window. That is the cost
-difference between a broadcast mask and a correct one at stride 1.
-
-##### To explore: `cb_resident_mask` looks write-only
-
-`cb_resident_mask` is allocated by the program factory on the regime path
-(`interior_mask.has_value() && !per_brick_mask && !relative_mask_table`) at `gather_brick_count`
-tiles. The reader takes its write pointer, fills every tile by DMA from DRAM, and blocks on an
-`async_read_barrier()` — and then `resident_mask_pointer` is **never read**. No copy out of it, no
-`push_back`, no `pop_front`. Route 3 above issues its own fresh DRAM read instead.
-
-If that reading is right it is vestigial: the pre-relative-table design copied *out* of this buffer
-into `cb_mask`, that copy was replaced by a direct DRAM read, and the population was left behind.
-The cost would be a redundant DMA of the whole regime set per regime change plus a blocking
-barrier, into L1 nothing consumes, on the GNA path — which is the path that ships for video.
-
-Not yet confirmed on device. Removing the fill and running a GNA decode would settle it.
-
-##### Unverified: why the per-slot fill could not be an L1 copy
-
-Recorded because it shaped the current design, and flagged because it has no source. The claim is
-that staging the table in L1 and copying a tile per slot forces a per-word loop rather than a
-NOC transfer, **because the NOC will not accept a local source and a local destination** — so the
-staging defeats itself and reading from DRAM each time is faster. Earlier notes attribute this to a
-comment in this file; no such comment exists anywhere in the dataflow kernels, and it has not been
-confirmed against the NOC API or a microbenchmark.
-
-It matters because it decides whether "keep the relative table resident in L1 and copy the right
-tile into place" is viable — the obvious way to make a wider query chunk affordable. If the claim
-is false that option is open; if true, a resident table has to be **indexed in place** by the
-compute kernel rather than copied from. Settle it before designing around either answer.
-
-**K and V are laid out differently in their CBs, and it matters.** `matmul_blocks` walks `in1` as
-`in1_index += N`, so `in1` is always a `[K, N]` grid of tiles — the `transpose` flag transposes
-each **tile**, not the grid. So:
-
-- **K** must be head-dim-major: `[head_dim_tiles][slots]`
-- **V** is `[slots][head_dim_tiles]`, which is what the gather naturally produces
-
-At `head_dim_tiles == 1` the two layouts are the same buffer. That is why a wrong K layout
-survived every test until one used a 64-wide head — and stage 5 *is* 64-wide.
-
-Other locals: `gather_origin_brick` (decoded from the table), `chunk_origin_site`,
-`coverage[]`, `key_origins[]`, `resident_regime` (which regime's set is currently in
-`cb_resident_mask`).
-
-#### `kernels/dataflow/neighborhood_mask_gen.hpp` (~250 lines)
-
-
-| function                              | does                                                                    |
-| ------------------------------------- | ----------------------------------------------------------------------- |
-| `to_global_site(local, shard_origin)` | the one named local→global conversion; clamps below-volume halo columns |
-| `key_is_visible(...)`                 | one key vs one query, via the shared window rule                        |
-| `classify_brick(...)`                 | → `AllVisible` / `NoneVisible` / `Mixed`                                |
-| `fill_mask_tile(...)`                 | the per-site path, for `Mixed` only                                     |
-
-
-`fill_mask_tile` is force-inlined and hoists window resolution out of the column loop; key
-column positions are precomputed once per tile. That hoist alone measured 1.35–1.83×.
-
-**Ghost handling:** ghost *keys* are always masked. Ghost *query rows* are left open — an
-all-`-inf` row softmaxes to NaN, which propagates through the flash rescale into real rows.
-
-#### `kernels/compute/neighborhood_sdpa.cpp` (~170 lines)
-
-Standard flash attention. **Contains no neighborhood concepts at all** — this was an explicit
-design invariant, and it held. If `context_window`, `stride`, `brick`, `Volume` or `Regime` ever
-appears here, the design has leaked.
-
-```
-QK^T (+mask) → running row max → exp → accumulate PV → running row sum → normalise
-```
-
-Ping-pong buffers rather than copies: `current_max`/`previous_max`, `current_sum`/`previous_sum`,
-`current_output`/`previous_output`, swapped each chunk.
-
-Two subtleties that cost real debugging:
-
-- `matmul_blocks` pops `in1` but leaves `in0` produced, so `cb_scores` must be retired
-explicitly or the next chunk deadlocks.
-- The running max is the one statistic nothing else retires. Leaking one tile per work item
-jams on the **third** item — invisible while every test had exactly one item per core.
-
-
-
-#### `kernels/dataflow/neighborhood_writer.cpp` (~120 lines)
-
-Writes output tiles in bricked order using the same chunk decomposition as the reader, skipping
-bricks that hang off the volume. Also generates the reduce scalar, the zero tile, and the column
-identity used by `matmul_reduce`.
-
-### 2.5 Python
-
-
-
-#### `models/tt_dit/layers/neighborhood_permute.py` (~175 lines)
-
-`to_bricked` / `to_natural` as reshape + permute in **ROW_MAJOR**. Measured: ROW_MAJOR permute
-0.48 ms per 50 MB against 7.35 ms in TILE — 15×. Padding uses `ttnn.concat` of zeros because
-`ttnn.pad` cannot pad dim 1 of a rank-5 tensor.
-
-#### `models/tt_dit/layers/neighborhood_reference.py` (~200 lines)
-
-The torch definition of correct. `context_window_origin`, `snap_extent`, `neighborhood_mask`,
-`neighborhood_attention_3d`. Transcribed from the C++ rule and checked against the same
-search-based oracle, which is what keeps them from drifting.
-
-#### `models/tt_dit/layers/neighborhood_attention.py` (~500 lines)
-
-The executor. Two entry points:
-
-
-| function                                      | for                        |
-| --------------------------------------------- | -------------------------- |
-| `neighborhood_attention_3d_bricked`           | single device / replicated |
-| `neighborhood_attention_3d_bricked_w_sharded` | W-sharded across the mesh  |
-
-
-Helpers worth knowing:
-
-
-| helper                                  | does                                                                                                                                                                                        |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `_query_chunk_bricks(stride, brick)`    | `stride // brick` per axis where it divides, else 1. **Derived, never tuned.**                                                                                                              |
-| `halo_sites(window, brick)`             | `ceil(window/2 / brick) * brick` — the halo, in whole bricks                                                                                                                                |
-| `_tiles_per_kv_chunk(gather)`           | largest chunk that fits DST and divides the gather                                                                                                                                          |
-| `_build_regime_masks(...)`              | the 27 uploaded mask sets, enumerated per **chunk**                                                                                                                                         |
-| `_cached_plan(...)`                     | plan + uploaded tables, cached per geometry; unsharded is the one-shard case                                                                                                                |
-
-
-The sharded path builds **one plan per shard** and stacks the tables, uploading with
-`mesh_axes=[sp_axis]` so each device reads its own origins. It asserts the plans agree on
-`chunk_count`, `gather_brick_count`, `gather_bricks`, `volume_chunks` — they must, because one
-program serves the mesh.
-
 ### 2.6 Tests
 
 
@@ -510,26 +277,39 @@ The op test's parametrisation is where the coverage lives:
 
 
 
-## 3. The reference implementation
+## 3. The plans
 
 
 
-### `models/tt_dit/layers/na3d.py` (~680 lines)
+### `models/tt_dit/layers/neighborhood_attention_plan.py` (~1060 lines)
 
-The tiled torch reference, the planner, the sharding descriptors, and the replicated `gather`
-executor that stage 1 runs. Since 2026-09-11 it serves nothing else: the six executors that drove the
-general SDPA op's neighborhood mode were deleted, and the `bricked` executors are dispatched to by
-their callers directly (`diffvae_ltx_stage5.py` for the replicated one, the decoder blocks for the
-W-sharded one), so this module no longer imports `neighborhood_attention.py`.
+Everything that depends on the geometry (volume, window, stride, brick, mesh) and on no weights, for
+both executors, built once per shape and cached. Nothing here imports `neighborhood_attention.py`.
 
+The linear-order plan:
 
 | symbol                                                          | is                                                            |
 | --------------------------------------------------------------- | ------------------------------------------------------------- |
 | `window_bounds(length, kernel, stride)` | per-site window `starts`/`ends`; a wrapper over `neighborhood_reference.context_window_origin`, so there is ONE window rule in Python |
-| `plan_na3d`, `NA3DPlan`, `TileGroup`                            | group queries into tiles, build masks                         |
+| `plan_na3d`, `NA3DPlan`, `TileGroup`                            | group query tiles by window geometry; `NA3DPlan.describe()` prints the plan as prose |
 | `na3d_torch` | the tiled torch reference: the same rule as `neighborhood_reference.py`, scaling to real volumes; the two are held equal in `test_neighborhood_reference.py` |
-| `NA3DShard`, `NA3DGroup`, `NA3DDevicePlan`, `build_device_plan` | multi-device query sharding                                   |
-| `neighborhood_attention_3d(...)` | the `gather` executor (grouped gather + dense masked attention); `backend=` accepts only `"gather"` |
+| `NA3DShard`, `NA3DGroup`, `NA3DDevicePlan`, `build_device_plan`, `cached_device_plan` | uploaded gather indices and masks, optionally split across the mesh |
+
+The bricked plan:
+
+| symbol                                  | does                                                                             |
+| --------------------------------------- | -------------------------------------------------------------------------------- |
+| `_choose_sharded_brick`, `brick_override` | the brick: exhaustive 32-site search minimising gathered bricks, or `DIFFVAE_NA_BRICK` |
+| `_query_chunk_bricks(stride, brick)`    | `stride // brick` per axis where it divides, else 1. **Derived, never tuned.**   |
+| `halo_sites(window, brick)`             | `ceil(window/2 / brick) * brick` — the halo, in whole bricks                     |
+| `_tiles_per_kv_chunk(gather)`           | largest chunk that fits DST and divides the gather                               |
+| `_build_relative_masks`, `_build_regime_masks` | the resident mask tables: relative at stride 1, per-regime under a GNA stride |
+| `cached_bricked_plan(...)`              | the C++ planner per shard + uploaded tables, cached per geometry; unsharded is the one-shard case |
+
+The sharded path builds **one plan per shard** and stacks the tables, uploading with
+`mesh_axes=[sp_axis]` so each device reads its own origins. It asserts the plans agree on
+`chunk_count`, `gather_brick_count`, `gather_bricks`, `volume_chunks` — they must, because one
+program serves the mesh.
 
 
 ### `models/tt_dit/layers/block_permute.py` -- RETIRED 2026-09-10
@@ -573,7 +353,7 @@ upstream behaviour) is what lets the per-brick mask advance down the query rows.
 
 | variable                    | does                                                                                          |
 | --------------------------- | --------------------------------------------------------------------------------------------- |
-| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor: `bricked_sp_w_sharded` (default) or the replicated `gather` |
+| `DIFFVAE_STAGE5_BACKEND`    | selects the stage-5 executor: `bricked_sp_w_sharded` (default), `bricked` (replicated) or `linear_order` (replicated) |
 | `DIFFVAE_DET_NA3D_BACKEND`  | same choice for the deterministic stages 1–4 only — **separate knob**, does not reach stage 5  |
 | `DIFFVAE_STAGES_BACKEND`    | the executor for the W-sharded deterministic stages 1–3 when `DIFFVAE_STAGES_WSP=1`; `bricked_sp_w_sharded` (default) is the only W-sharded one left. Read by the pipeline adapter and `test_decode_timing.py` |
 | `DIFFVAE_S5_GNA_STRIDE`     | stage-5 stride, physical `(t,h,w)`; read only by `DiffVAEStage5Config.resolved_gna_stride`, which feeds every stage-5 backend. An explicit `gna_stride=` on the config wins over it. |
@@ -633,7 +413,7 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 latent
   └─ conv_in (denormalisation folded into the weights)
   └─ DeterministicStages           stages 1-4, NABlocks + upsamples
-       └─ neighborhood_attention_3d(backend=...)     -> na3d.py
+       └─ neighborhood_attention_3d_linear_order  -> neighborhood_attention.py (plan: neighborhood_attention_plan.py)
   └─ DiffVAEStage5.forward
        ├─ bands = _bands(t, DIFFVAE_SLAB_FRAMES, kernel)
        ├─ rope tables (factored: frame piece + time piece)

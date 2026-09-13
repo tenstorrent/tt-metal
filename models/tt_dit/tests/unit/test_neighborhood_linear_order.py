@@ -1,15 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Device parity for 3D neighborhood attention.
+"""Device parity for the linear-order executor.
 
-The host executor in ``layers.na3d`` is already checked against upstream's own natten-free
-na3d, so this compares device against host: same plan, same masks, so any gap is ttnn
-execution (gather ordering, layout round trips, bf16 rounding) rather than window arithmetic.
-
-Shapes are the ones the DiffVAE decoder actually uses — kernels ``(3,7,7)``, ``(3,5,5)`` and
-``(11,11,11)`` — plus the boundary cases that a window rule can get wrong: an axis shorter
-than the kernel, and a grid large enough to force more than one tile per axis.
+``na3d_torch`` executes the same plan on the host, with the same tile groups and the same masks, so
+any gap here is ttnn execution rather than window arithmetic. The host plan itself is held to the
+dense reference in test_neighborhood_reference.py.
 """
 
 import pytest
@@ -17,14 +13,8 @@ import torch
 
 import ttnn
 
-from ...layers.na3d import (
-    DEFAULT_CHUNK_BUDGET,
-    NA3DShard,
-    build_device_plan,
-    na3d_torch,
-    neighborhood_attention_3d,
-    plan_na3d,
-)
+from ...layers.neighborhood_attention import DEFAULT_CHUNK_BUDGET, neighborhood_attention_3d_linear_order
+from ...layers.neighborhood_attention_plan import NA3DShard, build_device_plan, na3d_torch, plan_na3d
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.tensor import to_torch as to_torch_replicated
@@ -72,7 +62,7 @@ def test_na3d_matches_host(*, device, dims, kernel, heads, head_dim, chunk_budge
         ttnn.from_torch(x, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for x in (q, k, v)
     )
     device_plan = build_device_plan(plan, mesh_device=device, dtype=ttnn.bfloat16)
-    actual = neighborhood_attention_3d(
+    actual = neighborhood_attention_3d_linear_order(
         tt_q, tt_k, tt_v, kernel_size=kernel, scale=1.0, device_plan=device_plan, chunk_budget=chunk_budget
     )
 
@@ -130,7 +120,7 @@ def test_na3d_sharded_matches_host(*, mesh_device, dims, kernel, chunk_budget):
     shard = device_plan.shard
     assert shard == NA3DShard(tile_axis=1, tile_factor=8, row_axis=0, row_factor=4), f"unexpected split {shard}"
 
-    actual = neighborhood_attention_3d(
+    actual = neighborhood_attention_3d_linear_order(
         tt_q, tt_k, tt_v, kernel_size=kernel, scale=1.0, device_plan=device_plan, chunk_budget=chunk_budget
     )
 

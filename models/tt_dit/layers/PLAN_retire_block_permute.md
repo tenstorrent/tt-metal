@@ -1,6 +1,6 @@
 # Plan: retire `block_permute.py` by moving stages 2-5 onto the bricked neighborhood attention
 
-Status: PHASE 4 VERIFIED; TIER 3 DONE; one torch oracle; GNA even-stride leader aligned with NATTEN, 2026-09-12 00:30. PAUSED. Branch `na-integration`. Owner: James Lee.
+Status: PHASE 4 VERIFIED; TIER 3 DONE; planners split from executors, na3d.py deleted, 2026-09-13 01:45. Branch `na-integration`. Owner: James Lee.
 Phase 0 done; Phase 1 B2 done; D1 priced (axis swap rejected); Phase 4 (deletion) done; every gate green.
 Block order was found to be unused in production (Phase 1 notes). Remaining, optional: Phases 1 (B1),
 2, 3 and 5 = the "bricked deterministic stages" speed project; everything is uncommitted in the tree.
@@ -21,7 +21,46 @@ Block order was found to be unused in production (Phase 1 notes). Remaining, opt
   captured; single-case rerun is job 430).
 - Pre-commit on the deletion commit: isort/autoflake fixups committed as cb8e1ffb2dd.
 
-## GNA even-stride leader now matches NATTEN (2026-09-12 00:30, DONE, device-verified; read this first)
+## Planners split from executors; na3d.py gone (2026-09-13 01:45, DONE, device-verified; read this first)
+
+James asked for the code arranged by role. Approved plan: `~/.claude/plans/okay-here-s-what-i-typed-crayon.md`.
+- **`layers/neighborhood_attention_plan.py`** (new, ~1060 lines): both plans. The linear-order plan
+  (`plan_na3d` -> `NA3DPlan` -> `build_device_plan` -> `NA3DDevicePlan`, `NA3DShard`, `cached_device_plan`,
+  cache `_GATHER_DEVICE_PLAN_CACHE`) plus `window_bounds` and the tiled oracle `na3d_torch`; the bricked
+  plan (`cached_bricked_plan`, cache `_BRICKED_PLAN_CACHE`, `_choose_sharded_brick`, `brick_override`,
+  `_query_chunk_bricks`, `halo_sites`, `_tiles_per_kv_chunk`, the regime/relative mask builders). It
+  imports `neighborhood_reference`, `neighborhood_permute`, `utils.tensor`; never the executors.
+- **`layers/neighborhood_attention.py`** (~770 lines): the three executors only. The gather executor is
+  now **`neighborhood_attention_3d_linear_order`** (no `backend` parameter; `DEFAULT_CHUNK_BUDGET` and
+  `_gather_stack` came with it), beside `_bricked` and `_bricked_w_sharded`.
+- **Backend string `"gather"` -> `"linear_order"`** everywhere: `NAKernel`, kwarg defaults, the env-var
+  values (`DIFFVAE_DET_NA3D_BACKEND`, `DIFFVAE_STAGE5_BACKEND`, `DIFFVAE_STAGES_BACKEND`), tests, docs.
+  Decode-tree span is now `attention linear_order` (was the `na3d gather` row in saved trees).
+  `DiffVAEDecoder.__init__` asserts the name is one of `{"linear_order"} | W_SHARDED_BACKENDS` (the
+  validation the removed `backend` parameter used to provide).
+- `layers/na3d.py` deleted; 14 importers repointed; tests renamed `unit/test_na3d.py` ->
+  `test_neighborhood_linear_order.py`, `unit/test_na3d_bricked_w_sharded.py` ->
+  `test_neighborhood_bricked_w_sharded.py`; `models/vae/test_na3d.py` DELETED (approved: its correctness
+  half duplicated the unit test; its perf print is gone). Comments/docstrings describe the present state only.
+- Diff: 25 files, +1411/-1694 (Python only: 20 files, +1375/-1439, net -64; docs carry the rest).
+
+Verification (jobs 450-453, no rebuild needed -- Python only):
+- 450 units (`test_neighborhood_linear_order`, `_bricked_w_sharded`, `_sdpa`, `_permute`, `_reference`,
+  `test_halo_exchange_geometry`): **341 passed, 76 skipped, 2 xfailed**.
+- 451 decoder gates 6 passed at 99.9924-99.9958 %; stage-5 parity 99.9936 % + GNA parity, 6 passed (identical).
+- 452 `test_decode_timing -k s16` (both stage-5 dispatch paths, `linear_order` and `linear_order+bricked5`): 5 passed.
+- 453 production pipeline: PASSED, ANOMALIES none, **VAE decode 12.27 s**.
+Host: `test_neighborhood_reference.py` 234 + `describe` 3 passed; the two collection errors in
+`tests/unit` (`test_ring_joint_attention*.py`, device access at import) exist at HEAD too.
+
+Not in the commit: `experimental/scripts/na_sdpa_cost.py` is UNTRACKED -- edited in place (imports now
+from the plan module and `neighborhood_permute`) but James has to `git add` it; the untracked root
+script `neighborhood_relative_mask_examples.py` still imports from `neighborhood_attention` and is broken;
+`NEIGHBORHOOD_MASK_GENERATION.md` (untracked) got a one-line pointer to the plan module.
+Declined for this pass (still candidates): `tests/unit/test_neighborhood_sdpa_perf.py`, `_tp_trace` +
+`DIFFVAE_TP_TRACE`. `DIFFVAE_DET_NA3D_BACKEND=gather` now fails the new assert by design.
+
+## GNA even-stride leader now matches NATTEN (2026-09-12 00:30, DONE, device-verified)
 
 **Why.** Consolidating the two torch oracles (section below) exposed that they disagreed at even GNA strides,
 and James asked which one the reference implementation uses. Checked against the source of truth: NATTEN's

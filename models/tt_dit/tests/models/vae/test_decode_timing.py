@@ -32,14 +32,14 @@ def _topology():
     return ttnn.Topology.Linear
 
 
-# (deterministic-stages backend, stage-5 backend), single chip, replicated. "gather+bricked5" runs
-# the gather backend where it fits (the smaller early stages) and the unsharded bricked executor for
+# (deterministic-stages backend, stage-5 backend), single chip, replicated. "linear_order+bricked5" runs
+# the linear-order executor where it fits (the smaller early stages) and the unsharded bricked executor for
 # stage 5. Set DIFFVAE_STAGE_TIMING=1 for the per-stage breakdown.
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize(
     "backends",
-    [("gather", "gather"), ("gather", "bricked")],
-    ids=["gather", "gather+bricked5"],
+    [("linear_order", "linear_order"), ("linear_order", "bricked")],
+    ids=["linear_order", "linear_order+bricked5"],
 )
 @pytest.mark.parametrize("latent_hw", [(16, 16), (34, 60)], ids=["s16", "s34x60"])
 def test_decode_timing(*, mesh_device, backends, latent_hw):
@@ -134,7 +134,7 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, decode_tree):
     )
 
 
-# Stage-5 with the "gather" backend on the mesh: its native NA3DShard splits QUERY tiles across all
+# Stage-5 with the "linear_order" backend on the mesh: its native NA3DShard splits QUERY tiles across all
 # 32 chips (K/V stay replicated per chip), so the per-call gather -- the wall that OOMs replicated on
 # ONE chip -- shrinks 32x and should fit at 25-frame 1080p, while using the faster gather executor.
 # The activation stays replicated (full memory), so this is the 25-frame path, not the 6s path.
@@ -153,7 +153,7 @@ def test_decode_gather_mesh_timing(*, mesh_device, latent_hw):
     torch.manual_seed(0)
     latent = torch.randn(1, config["in_channels"], 4, lh, lw)
     ccl = CCLManager(mesh_device, num_links=int(os.environ.get("DIFFVAE_NUM_LINKS", 1)), topology=_topology())
-    dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="gather")
+    dec = DiffVAEDecoder(config, mesh_device=mesh_device, ccl_manager=ccl, stage5_na3d_backend="linear_order")
     dec.load_checkpoint(CHECKPOINT)
 
     px = dec.decode(latent, seed=0)  # warmup
@@ -220,7 +220,11 @@ def test_decode_1080p_tp_pcc(*, mesh_device):
 
     # Reference: gather-mesh decode (dense masked attention, query-sharded across the mesh).
     ref_dec = DiffVAEDecoder(
-        config, mesh_device=mesh_device, ccl_manager=ccl, stages_na3d_backend="gather", stage5_na3d_backend="gather"
+        config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl,
+        stages_na3d_backend="linear_order",
+        stage5_na3d_backend="linear_order",
     )
     ref_dec.load_checkpoint(CHECKPOINT)
     ref, t_ref = timed(ref_dec)
@@ -260,7 +264,7 @@ def test_decode_wsp_shard_equivalence(*, mesh_device, latent_hw):
             config,
             mesh_device=mesh_device,
             ccl_manager=ccl,
-            stages_na3d_backend="gather",
+            stages_na3d_backend="linear_order",
             stage5_na3d_backend=backend,
             stage5_sp_axis=1,
         )

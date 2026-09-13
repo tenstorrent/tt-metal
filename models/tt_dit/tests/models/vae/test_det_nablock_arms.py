@@ -9,7 +9,7 @@ in ``NeighborhoodAttention.__init__``/``SwiGLU.__init__``, so they are set befor
 The timing test is the instrument these paths were tuned with: the changes move ops inside one
 block, which is invisible against a whole decode. Geometry is the s34x60 decode's, stage by stage.
 Stage 1 is absent on purpose -- its W=60 does not divide the size-8 mesh axis, so it runs replicated
-on the gather backend and none of these flags reach it.
+on the linear-order executor and none of these flags reach it.
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.layers.na3d import build_device_plan, plan_na3d
+from models.tt_dit.layers.neighborhood_attention_plan import build_device_plan, plan_na3d
 from models.tt_dit.models.vae.diffvae_ltx import NABlock, default_rope_dim_split, rope_tables
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.check import assert_quality
@@ -194,7 +194,7 @@ def _seeded(name: str, shape: tuple[int, ...]) -> torch.Tensor:
 
 
 #: Stage 1 of the same decode: (dim, kernel, dims, blocks). Its W=60 does not divide the size-8 axis
-#: so it runs replicated on the gather backend, which is why it needs its own case -- and why only
+#: so it runs replicated on the linear-order executor, which is why it needs its own case -- and why only
 #: the arms that do not depend on a TP axis or on the W-sharded attention can reach it.
 STAGE1 = (2048, (3, 7, 7), (6, 34, 60), 4)
 
@@ -216,7 +216,7 @@ def _build_stage1(mesh, enabled: tuple[str, ...]):
         kernel,
         head_dim=HEAD_DIM,
         mesh_device=mesh,
-        na3d_backend="gather",
+        na3d_backend="linear_order",
         ccl_manager=None,
         sp_axis=None,
         tp_axis=None,

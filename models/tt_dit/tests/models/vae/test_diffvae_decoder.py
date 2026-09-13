@@ -25,7 +25,7 @@ import torch
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.layers.na3d import window_bounds
+from models.tt_dit.layers.neighborhood_attention_plan import window_bounds
 from models.tt_dit.models.vae.diffvae_ltx import DiffVAEDecoder, decoder_config
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import _bands
 from models.tt_dit.utils.check import assert_quality

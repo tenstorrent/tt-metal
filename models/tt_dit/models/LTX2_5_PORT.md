@@ -204,7 +204,8 @@ observation that the shipped config is *heavier* than the class defaults still s
 
 2.5's video decoder is not a convnet. Every one of its 24 blocks is 3D neighborhood attention
 over a local window, so the port hinges on one primitive rather than on conv3d halo tuning:
-`layers/na3d.py`. Files are `models/vae/diffvae_ltx.py` (deterministic stages 1-4, plus the
+the executors in `layers/neighborhood_attention.py` and their plans in
+`layers/neighborhood_attention_plan.py`. Files are `models/vae/diffvae_ltx.py` (deterministic stages 1-4, plus the
 composed `DiffVAEDecoder`) and `models/vae/diffvae_ltx_stage5.py` (the diffusion stage).
 
 Shape of the thing, read from the checkpoint's own metadata rather than hardcoded

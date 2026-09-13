@@ -29,7 +29,7 @@ ITERS = int(os.environ.get("ITERS", 10))
 
 # (label, dim, kernel, dims, blocks_in_stage) for the three W-sharded det stages of the
 # s34x60 decode. Stage 1 is excluded: W=60 does not divide the size-8 axis, so it runs
-# replicated on the gather backend and this change does not reach it.
+# replicated on the linear-order executor and this change does not reach it.
 STAGES = [
     ("stage2", 1024, (3, 7, 7), (6, 68, 120), 6),
     ("stage3", 512, (3, 5, 5), (11, 68, 120), 4),

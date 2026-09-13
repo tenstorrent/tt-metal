@@ -11,7 +11,7 @@ import torch
 
 import ttnn
 
-from ...layers.na3d import na3d_torch
+from ...layers.neighborhood_attention_plan import na3d_torch
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
 from ...utils.tensor import from_torch

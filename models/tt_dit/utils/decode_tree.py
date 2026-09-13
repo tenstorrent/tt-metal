@@ -3,14 +3,14 @@
 
 """Call-stack-shaped ledger for DiffVAE decode timings.
 
-The timing helpers (``stage_timer``, ``block_prof``, ``na3d._sp_w_prof``) are already nested the way
+The timing helpers (``stage_timer``, ``block_prof``, the executors' spans) are already nested the way
 a reader wants them: a stage contains its blocks, a
 block contains its attention, an attention contains its collectives. Each one just threw its
 measurement into a flat sink -- a log line or a module-global dict -- and forgot the stack it was on.
 This module is that stack, and the tree falls out of it.
 
 It measures nothing and syncs nothing: callers hand it durations they have already taken. That is
-what lets ``layers/na3d.py`` import it without a layer importing a model -- attribution happens
+what lets ``layers/neighborhood_attention.py`` import it without a layer importing a model -- attribution happens
 through a thread-local stack rather than an argument threaded down the call chain.
 
 Not valid under trace capture: there the spans time the capture, not the execution.
@@ -24,7 +24,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 
-#: One gate for the whole instrumentation. ``diffvae_ltx_stage5`` and ``na3d`` import THIS rather
+#: One gate for the whole instrumentation. ``diffvae_ltx_stage5`` and the executors import THIS rather
 #: than reading the env themselves: three import-time constants that can disagree would give a tree
 #: with partial data, and every "other" remainder would then quietly lie about where time went.
 ENABLED = os.environ.get("DIFFVAE_STAGE_TIMING", "") not in ("", "0")

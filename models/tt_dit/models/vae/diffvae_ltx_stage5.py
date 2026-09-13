@@ -33,7 +33,7 @@ from ...utils import decode_tree
 
 #: Per-stage decode timing. Off unless DIFFVAE_STAGE_TIMING is set (a truthy value), since each
 #: probe forces a device sync that would otherwise serialize the async pipeline. The gate lives in
-#: decode_tree so this module, na3d and the tree cannot disagree about whether timing is on -- if
+#: decode_tree so this module, the executors and the tree cannot disagree about whether timing is on -- if
 #: they did, the tree would hold partial data and every "other" remainder would silently lie.
 _STAGE_TIMING = decode_tree.ENABLED
 
@@ -107,9 +107,8 @@ def block_prof(mesh_device, key: str, *, category: str | None = None):
 from ...layers.embeddings import TimestepEmbedding, Timesteps
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
-from ...layers.na3d import neighborhood_attention_3d as na3d_on_device
-from ...layers.na3d import window_bounds
-from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked
+from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked, neighborhood_attention_3d_linear_order
+from ...layers.neighborhood_attention_plan import window_bounds
 from ...layers.neighborhood_permute import (
     SITES_PER_BRICK,
     brick_count,
@@ -263,10 +262,8 @@ class NAKernel:
 _NA_KERNELS: dict[str, NAKernel] = {
     kernel.name: kernel
     for kernel in (
-        NAKernel("gather"),
+        NAKernel("linear_order"),
         NAKernel("bricked", bricked=True),
-        # The executors that drove the general SDPA op's neighborhood mode ("op", "fused", "op_sp",
-        # "op_sp_w_sharded") were deleted on 2026-09-11; the bricked executor is the W-sharded path.
         NAKernel("bricked_sp_w_sharded", w_sharded=True, bricked=True, keep_bricked=True),
     )
 }
@@ -275,8 +272,8 @@ _NA_KERNELS: dict[str, NAKernel] = {
 def resolve_na_kernel(backend: str | NAKernel) -> NAKernel:
     """The kernel record for a backend name. Rejects an unknown one HERE, at construction.
 
-    Left to itself an unknown name survives the whole build -- weights included -- and surfaces as
-    a ValueError from inside na3d's own dispatcher on the first forward.
+    Left to itself an unknown name would survive the whole build -- weights included -- and only
+    surface on the first forward.
     """
     if isinstance(backend, NAKernel):
         return backend
@@ -295,7 +292,7 @@ def neighborhood_attention_3d(
     kernel_size: tuple[int, int, int],
     scale: float = 1.0,
     ccl_manager=None,
-    backend: str = "gather",
+    backend: str = "linear_order",
     gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
     """3D neighborhood attention over ``(B, T, H, W, num_heads, head_dim)`` tensors.
@@ -308,19 +305,15 @@ def neighborhood_attention_3d(
     evaluating the whole volume; without one it runs replicated. Either way the result is the
     full volume on every chip, so nothing downstream changes.
 
-    ``backend`` picks the executor: ``"gather"`` (default) is the grouped gather path that the
-    ``ccl_manager`` split rides on; ``"bricked"`` is our op run replicated over the whole volume
-    (it ignores ``ccl_manager``), the oracle the W-sharded bricked path is compared against.
-
-    This was a swap point for a host fallback while the device primitive was being written.
-    The dispatch is now direct and unconditional on purpose: a fallback selected by
-    ``except ImportError`` would move attention to the host silently, and every parity test
-    here would still pass — slower, and no longer measuring the device.
+    ``backend`` picks the executor: ``"linear_order"`` (default) keeps tokens in natural order and
+    is the path the ``ccl_manager`` split rides on; ``"bricked"`` is our op run replicated over the
+    whole volume (it ignores ``ccl_manager``), the oracle the W-sharded bricked path is compared
+    against.
     """
     if backend == "bricked":
         return neighborhood_attention_3d_bricked(q, k, v, kernel_size=kernel_size, scale=scale, stride=gna_stride)
-    return na3d_on_device(
-        q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, backend=backend, gna_stride=gna_stride
+    return neighborhood_attention_3d_linear_order(
+        q, k, v, kernel_size=kernel_size, scale=scale, ccl_manager=ccl_manager, gna_stride=gna_stride
     )
 
 
@@ -915,8 +908,8 @@ class _NeighborhoodAttention3D(Module):
         self.config = config
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
-        # Which NA3D executor runs: "gather"/"op" run the attention replicated (whole volume on
-        # every chip); "bricked_sp_w_sharded" keeps this chip's W-shard of the
+        # Which NA3D executor runs: "linear_order"/"bricked" run the attention replicated (whole volume
+        # on every chip); "bricked_sp_w_sharded" keeps this chip's W-shard of the
         # sequence through the whole attention (K/V reached internally), for full-stage spatial-W SP.
         # Resolved by the stage and handed down, so the three levels cannot pick different backends.
         self.kernel = resolve_na_kernel(na3d_backend)
@@ -1462,7 +1455,7 @@ class DiffVAEStage5(Module):
         # context and x_t are uploaded/resharded over W, the blocks run 1/sp, and the tail output is
         # gathered back over W in forward. This is the ONE place the backend is resolved; the blocks
         # and their attention are handed the record, so no level can pick a different one.
-        self.kernel = resolve_na_kernel(na3d_backend or "gather")
+        self.kernel = resolve_na_kernel(na3d_backend or "linear_order")
         self.sp_axis = sp_axis
         # TP-over-heads on a second mesh axis: only the per-head attention shards over it; every
         # other op (context, RoPE, MLP, tail) stays replicated across tp_axis. Composes with the
@@ -1530,7 +1523,7 @@ class DiffVAEStage5(Module):
         """The brick the whole stage converts with -- same choice the attention op would make."""
         if self._brick is not None:
             return self._brick
-        from ...layers.neighborhood_attention import _choose_sharded_brick, brick_override
+        from ...layers.neighborhood_attention_plan import _choose_sharded_brick, brick_override
 
         sp = int(list(self.mesh_device.shape)[self.sp_axis]) if self._w_sharded else 1
         w_local = grid.w // sp

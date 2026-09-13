@@ -1612,11 +1612,11 @@ class LTXVideoVAEAdapter:
         if diffusion_decoder:
             # The timing harness builds this decoder W-SHARDED over the mesh (and optionally with
             # TP-over-heads on the orthogonal axis); the pipeline built it replicated on the
-            # "gather" backend, so none of the sharded fast path could be exercised end to end.
+            # linear-order executor, so none of the sharded fast path could be exercised end to end.
             # These read the same environment the harness does and fall back to the previous
             # replicated construction when nothing is set, so an existing pipeline run is
             # unchanged. DIFFVAE_STAGE5_BACKEND selects the stage-5 executor ("bricked_sp_w_sharded",
-            # the default, or the replicated "gather"); DIFFVAE_STAGES_WSP=1 W-shards the
+            # the default, or the replicated "linear_order"); DIFFVAE_STAGES_WSP=1 W-shards the
             # deterministic stages too, on the executor DIFFVAE_STAGES_BACKEND names;
             # DIFFVAE_TP_HEADS=1 adds TP-over-heads on the rows axis.
             from .diffvae_ltx import stages_backend_from_env

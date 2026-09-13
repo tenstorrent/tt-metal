@@ -12,7 +12,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.layers.neighborhood_attention import _query_chunk_bricks
+from models.tt_dit.layers.neighborhood_attention_plan import _query_chunk_bricks
 from models.tt_dit.layers.neighborhood_reference import neighborhood_attention_3d
 
 SITES_PER_BRICK = 32
@@ -287,7 +287,7 @@ def test_symmetric_halo_shards_match_the_whole_volume(mesh_device, volume, conte
     no window reaches them -- which is why the origin has to be able to say "below zero" rather
     than being clamped to it. Clamping would silently renumber every column of that device.
     """
-    from models.tt_dit.layers.neighborhood_attention import halo_sites
+    from models.tt_dit.layers.neighborhood_attention_plan import halo_sites
 
     torch.manual_seed(0)
     stride = (1, 1, 1)
@@ -451,7 +451,7 @@ def test_interior_table_per_brick_persistence(mesh_device, owned_width, brick, v
 
 
 def _run_interior_table_case(mesh_device, owned_width, brick, volume):
-    from models.tt_dit.layers.neighborhood_attention import _build_relative_masks, halo_sites
+    from models.tt_dit.layers.neighborhood_attention_plan import _build_relative_masks, halo_sites
 
     torch.manual_seed(0)
     context_window, stride = (11, 11, 11), (1, 1, 1)
@@ -594,7 +594,7 @@ def test_choose_sharded_brick_regression(
     or the planner's alignment handling can silently shift the choice and the downstream gather
     size -- which changes kernel runtime without any code in the kernel itself changing.
     """
-    from models.tt_dit.layers.neighborhood_attention import (
+    from models.tt_dit.layers.neighborhood_attention_plan import (
         _BRICK_CHOICE_CACHE,
         _choose_sharded_brick,
         _query_chunk_bricks,
@@ -634,7 +634,7 @@ def test_choose_sharded_brick_regression(
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["1x1"], indirect=["mesh_device"])
 def test_choose_sharded_brick_delegates_at_stride_gt_one(mesh_device):
     """stride > (1,1,1) delegates to ``neighborhood_choose_brick`` unconditionally."""
-    from models.tt_dit.layers.neighborhood_attention import _choose_sharded_brick
+    from models.tt_dit.layers.neighborhood_attention_plan import _choose_sharded_brick
 
     brick = _choose_sharded_brick(
         volume=(8, 16, 16),
@@ -656,7 +656,7 @@ def test_choose_sharded_brick_rejects_oversized_bricks(mesh_device):
     brick needs) because the degenerate axis contributes a single slot to the gather, but the op
     wedges on the resulting ghost-heavy grid.
     """
-    from models.tt_dit.layers.neighborhood_attention import _BRICK_CHOICE_CACHE, _choose_sharded_brick
+    from models.tt_dit.layers.neighborhood_attention_plan import _BRICK_CHOICE_CACHE, _choose_sharded_brick
 
     _BRICK_CHOICE_CACHE.clear()
 

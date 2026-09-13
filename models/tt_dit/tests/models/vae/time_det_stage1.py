@@ -20,7 +20,7 @@ import time
 import torch
 
 import ttnn
-from models.tt_dit.layers.na3d import build_device_plan, plan_na3d
+from models.tt_dit.layers.neighborhood_attention_plan import build_device_plan, plan_na3d
 from models.tt_dit.models.vae.diffvae_ltx import NABlock, default_rope_dim_split, rope_tables
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.tests.models.vae.time_det_nablock import fill
@@ -36,7 +36,7 @@ def time_stage1(mesh) -> float:
     t, h, w = DIMS
     tokens = t * h * w  # replicated: every chip holds the whole volume
 
-    # The plan takes the ccl_manager even though the block does not -- the gather backend
+    # The plan takes the ccl_manager even though the block does not -- the linear-order executor
     # query-shards across the mesh, which is the only parallelism stage 1 gets.
     ccl = CCLManager(mesh, num_links=1, topology=ttnn.Topology.Linear)
     plan = build_device_plan(plan_na3d(DIMS, KERNEL), mesh_device=mesh, ccl_manager=ccl)
@@ -46,7 +46,7 @@ def time_stage1(mesh) -> float:
         KERNEL,
         head_dim=HEAD_DIM,
         mesh_device=mesh,
-        na3d_backend="gather",
+        na3d_backend="linear_order",
         ccl_manager=None,
         sp_axis=None,
         tp_axis=None,

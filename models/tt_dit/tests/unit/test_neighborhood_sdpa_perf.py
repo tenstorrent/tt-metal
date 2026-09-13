@@ -18,7 +18,7 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.layers.neighborhood_attention import _query_chunk_bricks
+from models.tt_dit.layers.neighborhood_attention_plan import _query_chunk_bricks
 
 SITES_PER_BRICK = 32
 

@@ -12,7 +12,7 @@ the SAME independent, search-derived oracle, which is what stops them drifting a
 import pytest
 import torch
 
-from models.tt_dit.layers.na3d import na3d_torch, window_bounds
+from models.tt_dit.layers.neighborhood_attention_plan import na3d_torch, window_bounds
 from models.tt_dit.layers.neighborhood_reference import (
     context_window_origin,
     neighborhood_attention_3d,
@@ -66,9 +66,8 @@ def test_window_origin_matches_natten_leader_at_every_stride(volume_extent, cont
     """Strided placement == the search oracle centred on NATTEN's group leader.
 
     Pins the even-group choice (a group of two at sites 2, 3 leads from site 3), which the stride-one
-    oracle above cannot see and which the op got wrong -- one site to the left -- until 2026-09-12.
-    Tail groups shorter than the stride are included (volumes the stride does not divide); NATTEN
-    caps the leader at the last site and so does the rule. No brick snapping here.
+    oracle above cannot see. Tail groups shorter than the stride are included (volumes the stride does
+    not divide); NATTEN caps the leader at the last site and so does the rule. No brick snapping here.
     """
     if stride_extent > min(context_window_extent, volume_extent):
         pytest.skip("a stride wider than the window is rejected by validate()")
@@ -152,21 +151,20 @@ def test_narrow_window_actually_restricts():
     assert mask[15].nonzero().flatten().tolist() == [13, 14, 15]
 
 
-# --- The tiled reference in na3d.py is the same rule ----------------------------------------------
+# --- The tiled reference is the same rule -----------------------------------------------------------
 #
-# ``na3d_torch`` executes the gather planner's tile groups on host, which is what lets it scale to
-# the decoder's real volumes; this dense reference cannot, but it IS the definition. The two used to
-# carry separate window rules (the tiled one matched a since-deleted kernel and placed even GNA
-# groups one site to the right); ``window_bounds`` now wraps ``context_window_origin``, and these
-# tests are what hold the two executors of that one rule together. Volumes are small enough for the
-# dense side; each stride divides its axis and is <= its kernel, which is what the op validates.
+# ``na3d_torch`` executes the linear-order plan's tile groups on host, which is what lets it scale to
+# the decoder's real volumes; this dense reference cannot, but it IS the definition. ``window_bounds``
+# wraps ``context_window_origin``, and these tests are what hold the two executors of that one rule
+# together. Volumes are small enough for the dense side; each stride divides its axis and is <= its
+# kernel, which is what the op validates.
 TILED_VS_DENSE_CASES = [
     ((5, 4, 4), (3, 3, 3), (1, 1, 1)),
     ((4, 3, 5), (3, 3, 3), (1, 1, 1)),
     ((7, 4, 4), (5, 3, 3), (1, 1, 1)),
     ((5, 5, 5), (5, 5, 5), (1, 1, 1)),
     ((3, 4, 4), (5, 3, 3), (1, 1, 1)),  # kernel deeper than the axis: whole-axis clamp
-    ((4, 4, 4), (3, 3, 3), (2, 2, 2)),  # even stride: the case the old rules disagreed on
+    ((4, 4, 4), (3, 3, 3), (2, 2, 2)),  # even stride: the leader is the right-hand member
     ((6, 4, 4), (3, 3, 3), (3, 1, 1)),
     ((4, 4, 4), (3, 3, 3), (1, 2, 1)),
     ((8, 4, 6), (5, 3, 3), (4, 2, 3)),

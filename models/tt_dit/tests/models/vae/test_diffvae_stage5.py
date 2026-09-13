@@ -466,7 +466,7 @@ def test_stage5_parity_sharded(mesh_device: ttnn.MeshDevice, device_params, subm
     Opens the full physical mesh and carves a contiguous ``submesh_shape`` block (its chips are
     fabric-connected), so this runs on a 32-chip box without owning the whole cluster.
     """
-    from models.tt_dit.layers.na3d import NA3DShard
+    from models.tt_dit.layers.neighborhood_attention_plan import NA3DShard
 
     mesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
     config = DiffVAEStage5Config()
@@ -519,7 +519,7 @@ def test_resolved_gna_stride(monkeypatch):
     monkeypatch.setenv("DIFFVAE_S5_GNA_STRIDE", "")
     assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)
 
-    # No other knob reaches this: the na3d-wide DIFFVAE_GNA_STRIDE went with the executors that read it.
+    # No other knob reaches this.
     monkeypatch.delenv("DIFFVAE_S5_GNA_STRIDE", raising=False)
     monkeypatch.setenv("DIFFVAE_GNA_STRIDE", "2,4,4")
     assert DiffVAEStage5Config().resolved_gna_stride == (1, 1, 1)

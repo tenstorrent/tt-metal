@@ -22,7 +22,7 @@ import torch
 from safetensors import safe_open
 
 import ttnn
-from models.tt_dit.layers.na3d import build_device_plan, plan_na3d
+from models.tt_dit.layers.neighborhood_attention_plan import build_device_plan, plan_na3d
 from models.tt_dit.models.vae import diffvae_ltx
 from models.tt_dit.models.vae.diffvae_ltx import (
     DeterministicStages,

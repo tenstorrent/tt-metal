@@ -23,7 +23,7 @@
 #    8543.3 ms   -2209.5 total (-20.5%)
 #
 # All four of those were measured with the deep-profile spans ABSENT. Those spans (qkv-proj,
-# qkv-norm, qkv-rope, norm+modulate, residual crop+add, na3d gather) landed afterwards and cost
+# qkv-norm, qkv-rope, norm+modulate, residual crop+add, attention linear_order) landed afterwards and cost
 # ~275 ms of syncs, which is the whole gap between 8543.3 and the 8817.6 above. They exist only
 # under BLOCK_PROF=1 -- which the baseline sets -- so 8543.3 is not reachable on this tree.
 # Compare new arms against 8817.6.
@@ -53,7 +53,7 @@
 # committed baseline exactly.
 #
 # DIFFVAE_BLOCK_PROF=1 is part of the baseline, not a decoration: without it the deterministic
-# stages show only their na3d collectives and the attention spans (kv-wrow, q-to-seq, the block
+# stages show only their attention collectives and the attention spans (kv-wrow, q-to-seq, the block
 # permutes, qkv-proj, out-proj) do not exist -- that run is NOT comparable.
 # --timeout=0 disables pytest.ini's 300 s per-test limit, which a real 145-frame decode exceeds.
 #

@@ -45,8 +45,8 @@ export DIFFVAE_STAGE_TIMING=1
 # while it happens (the last ">" with no "<" names it) instead of at the timeout. Tree unchanged.
 export DIFFVAE_STAGE_LOG=${DIFFVAE_STAGE_LOG:-1}
 # Stage 5 and the W-sharded deterministic stages 1-3 run the bricked executor
-# (bricked_sp_w_sharded). The general-SDPA executors were deleted on 2026-09-11; the only other
-# value either knob accepts is "gather" (replicated), which does not fit the pipeline's memory.
+# (bricked_sp_w_sharded). The only other value either knob accepts is "linear_order" (replicated),
+# which does not fit the pipeline's memory.
 export DIFFVAE_STAGE5_BACKEND=${DIFFVAE_STAGE5_BACKEND:-bricked_sp_w_sharded}
 export DIFFVAE_STAGES_BACKEND=${DIFFVAE_STAGES_BACKEND:-bricked_sp_w_sharded}
 export DIFFVAE_S5_GNA_STRIDE=${DIFFVAE_S5_GNA_STRIDE:-1,1,1}

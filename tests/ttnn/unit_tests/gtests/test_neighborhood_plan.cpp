@@ -287,8 +287,8 @@ uint32_t natten_group_leader(uint32_t site_index, uint32_t stride_extent_sites, 
 
 TEST(NeighborhoodContextWindow, MatchesNattenLeaderAtEveryStride) {
     // Pins the even-group choice the stride-one oracle cannot see: a group of two at sites 2, 3
-    // leads from site 3. The rule placed it one site to the left until 2026-09-12. Volumes the
-    // stride does not divide exercise NATTEN's cap on a truncated tail group. No brick snapping.
+    // leads from site 3. Volumes the stride does not divide exercise NATTEN's cap on a truncated
+    // tail group. No brick snapping.
     for (uint32_t volume_extent : {2u, 4u, 6u, 7u, 8u, 12u, 13u, 25u}) {
         for (uint32_t context_window_extent : {3u, 4u, 5u, 8u, 11u}) {
             const uint32_t window_extent = std::min(context_window_extent, volume_extent);

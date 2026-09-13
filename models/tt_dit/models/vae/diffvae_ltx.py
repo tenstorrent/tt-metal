@@ -4,7 +4,7 @@
 """LTX-2.5 DiffVAE video decoder: deterministic stages.
 
 The 2.5 video VAE replaces the convolutional decoder with a diffusion one, and it is not a
-convnet — every block is 3D neighborhood attention over a local window (:mod:`layers.na3d`).
+convnet — every block is 3D neighborhood attention over a local window (:mod:`layers.neighborhood_attention_plan`).
 Stages 1-4 here deterministically upsample the latent into a context volume; the diffusion
 stage that turns noise plus that context into pixels lives alongside.
 
@@ -24,8 +24,11 @@ import ttnn
 
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...layers.module import Module, ModuleList
-from ...layers.na3d import NA3DDevicePlan, build_device_plan, neighborhood_attention_3d, plan_na3d
-from ...layers.neighborhood_attention import neighborhood_attention_3d_bricked_w_sharded
+from ...layers.neighborhood_attention import (
+    neighborhood_attention_3d_bricked_w_sharded,
+    neighborhood_attention_3d_linear_order,
+)
+from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
 from ...utils import decode_tree
 from .diffvae_ltx_stage5 import TILE, block_prof, deep_prof, log_dram, stage_timer
@@ -242,7 +245,7 @@ class NeighborhoodAttention(Module):
         *,
         head_dim: int = 64,
         mesh_device=None,
-        na3d_backend: str = "gather",
+        na3d_backend: str = "linear_order",
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
@@ -258,7 +261,7 @@ class NeighborhoodAttention(Module):
         self.kernel_size = tuple(kernel_size)
         self.scale = head_dim**-0.5
         self.mesh_device = mesh_device  # only for the deep-profile spans; nothing else reads it here
-        # NA3D executor: "gather" (grouped gather + dense masked attention with the passed-in
+        # NA3D executor: "linear_order" (grouped gather + dense masked attention with the passed-in
         # device_plan) or "bricked_sp_w_sharded" (this chip's W-shard through the bricked executor:
         # halo exchange over sp_axis via ccl_manager, the dedicated neighborhood op).
         self.na3d_backend = na3d_backend
@@ -300,7 +303,7 @@ class NeighborhoodAttention(Module):
             assert self.num_heads % self.tp == 0, f"num_heads={self.num_heads} not divisible by tp={self.tp}"
         # The bricked executor never slices heads itself under TP (its ``heads_presharded`` is a
         # statement, not a request), so on that backend this block partitions the heads in every
-        # projection form, not only the fused one. The replicated gather backend has no TP axis and
+        # projection form, not only the fused one. The replicated linear-order executor has no TP axis and
         # keeps every head.
         self.bricked = self.na3d_backend == "bricked_sp_w_sharded"
         self.heads_local = self.num_heads // self.tp if (self.fused_qkv or self.bricked) else self.num_heads
@@ -489,15 +492,14 @@ class NeighborhoodAttention(Module):
             )
         else:
             # Stage 0's path: the grouped-gather executor. Named so stage 0 stops being one opaque row.
-            with deep_prof(self.mesh_device, f"na3d {self.na3d_backend}", category=decode_tree.SDPA):
-                attended = neighborhood_attention_3d(
+            with deep_prof(self.mesh_device, f"attention {self.na3d_backend}", category=decode_tree.SDPA):
+                attended = neighborhood_attention_3d_linear_order(
                     q,
                     k,
                     v,
                     kernel_size=self.kernel_size,
                     scale=1.0,
                     device_plan=device_plan,
-                    backend=self.na3d_backend,
                     ccl_manager=self.ccl_manager,
                 )
         with deep_prof(self.mesh_device, "out-proj", category=decode_tree.PROJ):
@@ -614,7 +616,7 @@ class NABlock(Module):
         *,
         head_dim: int = 64,
         mesh_device=None,
-        na3d_backend: str = "gather",
+        na3d_backend: str = "linear_order",
         ccl_manager=None,
         sp_axis: int | None = None,
         tp_axis: int | None = None,
@@ -808,7 +810,13 @@ class DeterministicStages(Module):
         # DET_ in the name because this reaches stages 1-4 ONLY, alongside the other DIFFVAE_DET_*
         # knobs. Stage 5 is selected separately by DIFFVAE_STAGE5_BACKEND; the two used to share the
         # name DIFFVAE_NA3D_BACKEND, so setting it moved both halves of the decode at once.
-        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "gather")
+        self.na3d_backend = na3d_backend or os.environ.get("DIFFVAE_DET_NA3D_BACKEND", "linear_order")
+        # The only validation of this name: the linear-order executor takes no backend argument, so
+        # without this a typo would silently run replicated on every stage.
+        assert self.na3d_backend in {"linear_order"} | W_SHARDED_BACKENDS, (
+            f"unknown NA3D backend {self.na3d_backend!r}; expected one of "
+            f"{sorted({'linear_order'} | W_SHARDED_BACKENDS)}"
+        )
         self.sp_axis = sp_axis
         # TP-over-heads on the orthogonal axis for the W-sharded stages (2-D SP x TP): the det stages
         # otherwise run replicated over this axis. Only applied to the W-sharded stages (1+).
@@ -820,10 +828,10 @@ class DeterministicStages(Module):
         self.conv_in = Linear(in_channels, stage_channels[0], bias=True, mesh_device=mesh_device)
 
         def block_backend(stage: int) -> str:
-            # Stage 0 runs replicated (its W is not shardable), on the gather backend, whose plan
+            # Stage 0 runs replicated (its W is not shardable), on the linear-order executor, whose plan
             # query-shards across the mesh. The rest shard over W on the configured executor.
             if self._w_sharded and stage == 0:
-                return "gather"
+                return "linear_order"
             return self.na3d_backend
 
         self.block_backend = block_backend
