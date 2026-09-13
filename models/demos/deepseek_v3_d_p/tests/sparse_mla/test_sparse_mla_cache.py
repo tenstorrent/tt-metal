@@ -36,11 +36,9 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
-from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
-
-
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import TT_CCL
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     MlaKvCache,
@@ -272,7 +270,8 @@ def test_indexer_gate_reduce_scatter_uses_fp32_accumulation(monkeypatch):
     assert call["compute_kernel_config"] is compute_config
 
 
-def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch):
+@pytest.mark.parametrize("use_metadata", [False, True])
+def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch, use_metadata):
     """Host-only contract test for the overlap seam: local selection forwards the score state's
     runtime bound and core selection, while TP=1 finalization is an identity."""
     indexer = object.__new__(TtIndexer)
@@ -289,14 +288,22 @@ def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch):
         return local_indices
 
     monkeypatch.setattr(ttnn.experimental, "topk_large_indices", fake_topk)
-    state = IndexerSelectionState(logits, topk_valid_length=768, requires_tp_redistribution=False)
+    metadata = object() if use_metadata else None
+    state = IndexerSelectionState(
+        logits,
+        topk_valid_length=None if use_metadata else 768,
+        requires_tp_redistribution=False,
+        valid_length_tensor=metadata,
+        valid_length_offset=128 if use_metadata else 0,
+    )
 
     selected = indexer.select_local(state, subdevice_id=subdevice_id, sub_core_grids=core_grid)
     assert selected is local_indices
     assert captured == {
         "input": logits,
         "k": 512,
-        "valid_length": 768,
+        "valid_length": None if use_metadata else 768,
+        **({"valid_length_tensor": metadata, "valid_length_offset": 128} if use_metadata else {}),
         "subdevice_id": subdevice_id,
         "sub_core_grids": core_grid,
     }
@@ -311,7 +318,14 @@ def test_indexer_forward_is_sequential_stage_wrapper(monkeypatch):
     final_indices = object()
     calls = []
 
-    monkeypatch.setattr(indexer, "score", lambda *args, **kwargs: calls.append("score") or state)
+    metadata = (object(), object(), object())
+
+    def score(*args, **kwargs):
+        assert kwargs["metadata"] is metadata
+        calls.append("score")
+        return state
+
+    monkeypatch.setattr(indexer, "score", score)
     monkeypatch.setattr(
         indexer,
         "select_local",
@@ -323,7 +337,7 @@ def test_indexer_forward_is_sequential_stage_wrapper(monkeypatch):
         lambda actual_indices, actual_state: calls.append(("finalize", actual_indices, actual_state)) or final_indices,
     )
 
-    assert indexer.forward(object(), object(), 32) is final_indices
+    assert indexer.forward(object(), object(), 32, metadata=metadata) is final_indices
     assert calls == ["score", ("select_local", state), ("finalize", local_indices, state)]
 
 
@@ -735,7 +749,7 @@ def _build_mla(
     weight_cache_path,
     *,
     seq_len=SEQ_LEN,
-    is_chunked=False,
+    is_chunked=True,
     active_seq_len=None,
     sparse_mla_overlap_profile=None,
     sparse_kv_cache_format=MlaKvCacheFormat.BF16_RM,
@@ -754,7 +768,7 @@ def _build_mla(
         sparse_kv_cache_format=sparse_kv_cache_format,
         tp_shard_kv=tp_shard_kv,
         is_chunked=is_chunked,
-        active_seq_len=active_seq_len,
+        active_seq_len=seq_len if active_seq_len is None else active_seq_len,
         # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
         # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
         # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
