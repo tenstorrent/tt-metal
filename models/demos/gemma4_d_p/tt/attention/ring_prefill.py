@@ -136,11 +136,11 @@ def write_chunk_to_packed_ring_cache(
     """Append one packed global-attention chunk to its CP-local history."""
     chunk = packed_kv if packed_kv.dtype == cache.dtype else ttnn.typecast(packed_kv, cache.dtype)
     if prefill_metadata is not None:
-        slot_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+        slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
             cache,
             chunk,
-            slot_t,
+            slot_idx_t,
             kv_actual_global_t,
             layer_idx=layer_idx,
             num_layers=num_layers,
@@ -260,11 +260,11 @@ def write_chunk_to_ring_cache(
             # offset is not baked into runtime args and one captured trace serves every
             # chunk. Same two tensors the ring read uses — they describe the chunk, not
             # the layer, and the host refreshes them once per chunk.
-            slot_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
+            slot_idx_t, kv_actual_global_t = prefill_metadata.slot_idx, prefill_metadata.kv_actual_global
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 cache=cache,
                 input=chunk,
-                slot_idx=slot_t,
+                slot_idx=slot_idx_t,
                 layer_idx=layer_idx,
                 num_layers=num_layers,
                 kv_actual_global=kv_actual_global_t,
