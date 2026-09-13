@@ -275,8 +275,10 @@ std::vector<std::optional<Tensor>> pow_bw(
     power_input.deallocate();
     Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
     result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    // Handle negative inputs by returning infinity. Strictly less-than: the golden
+    // (ttnn/ttnn/operations/unary_backward.py) only masks input < 0, since input == 0
+    // has a finite gradient for every exponent >= 1 (e.g. d/dx[x^2] at x=0 is 0).
+    where(ttnn::ltz(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
