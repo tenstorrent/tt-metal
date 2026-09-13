@@ -23,11 +23,6 @@ class MLP:
         tp = mesh_config.tp_degree
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
-        # Tag the cache filenames with the weight dtype so that flipping a
-        # MLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
-        # doesn't collide with a previously-cached file that holds the same
-        # logical weight at a different dtype. The rest of the model's cache
-        # entries are unaffected and stay reusable across runs.
         dtype_suffix = f"_{dtype_to_str(dtype)}"
 
         # Match math fidelity to the weight's mantissa width. Fidelity is the number of passes
