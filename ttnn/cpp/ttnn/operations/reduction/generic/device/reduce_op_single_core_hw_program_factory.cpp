@@ -71,12 +71,6 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
 
     // PostMul means the compute kernel applies the scalar after the reduction.
-    // REDUCE_SCALAR applies the scaler tile once per reduced dimension, squaring it, so the host
-    // compensates with sqrt(scaler). sqrt of a negative is NaN, so negative scalers are routed to
-    // the two-step W-then-H path in reduce_op.cpp. Phase 2 removes both.
-    TT_FATAL(operation_attributes.scaler >= 0, "Scalar must be non-negative");
-    const float scaler = std::sqrt(operation_attributes.scaler);
-
     const bool use_post_mul = operation_attributes.scaler_mode == ScalerMode::PostMul;
 
     // ---- Program-scope resource names (drive the generated dfb:: / tensor:: tokens) ----
@@ -169,7 +163,7 @@ ReduceDeviceOperation::ReduceSingleCoreHwProgramFactory::create_program_artifact
         // REDUCE_SCALAR applies the tile once per reduced dimension, which would square the
         // scalar. The HW path is therefore always PostMul, so this tile only carries the identity.
         .compile_time_args =
-            {{"scaler_bits", std::bit_cast<uint32_t>(scaler)}, {"tiles_per_batch", reader_tiles_per_batch}},
+            {{"scaler_bits", std::bit_cast<uint32_t>(1.0f)}, {"tiles_per_batch", reader_tiles_per_batch}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}},
         .hw_config = ttnn::create_reader_datamovement_config(a.device().arch()),
     });
