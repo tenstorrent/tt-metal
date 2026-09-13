@@ -46,6 +46,7 @@ struct Service::AttachedStream {
     uint64_t dropped = 0;  // bytes of frames this consumer never saw
     uint64_t stalls_reported = 0;
     uint32_t chip = 0;
+    uint32_t index = 0;                                        // the producer's stream index
     std::deque<Parked*> pending;                               // this stream's undelivered batches, in decode order
     int64_t cover_seen = std::numeric_limits<int64_t>::min();  // the chip's cover as last read for this stream
 };
@@ -293,9 +294,9 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
             tracy_ = std::make_unique<TracySink>(*this);
         }
         {
-            // Device<->device sync: consumes only the PP_CLOCK samples (idle-eth trackers and link stamps) and
-            // publishes the corrections the other consumers wait on. Its batch callback is a no-op; the decode pass
-            // is what routes the samples to it.
+            // Device<->device sync: reads the eth pushers' streams only, consumes the PP_CLOCK samples they carry
+            // (idle-eth trackers and link stamps) and publishes the corrections the other consumers wait on. Its
+            // batch callback is a no-op; the decode pass is what routes the samples to it.
             auto c = std::make_shared<D2dSyncConsumer>();
             add_consumer(
                 "d2d-sync",
@@ -304,7 +305,8 @@ void Service::register_builtin_consumers(const tt::llrt::RunTimeOptions& rtoptio
                     .on_attach = [c](const CaptureContext& ctx) { c->on_attach(ctx); },
                     .clock_sink = [c](const ClockSample& cs) { c->on_clock(cs); },
                     .on_capture_end = [c](const CaptureContext& ctx) { c->on_capture_end(ctx); },
-                    .waits_for_sync = false});
+                    .waits_for_sync = false,
+                    .eth_streams_only = true});
         }
         auto add_public = [&]<typename C>(const char* name, const std::shared_ptr<C>& c) {
             using B = typename C::Batch;
@@ -343,8 +345,14 @@ void Service::consumer_thread(Consumer& c) {
         auto a = std::make_unique<Attached>();
         a->producer = p;
         const CaptureContext& ctx = p->capture_context();
-        for (const ProducerStream& ps : p->streams()) {
+        const auto streams = p->streams();
+        for (uint32_t si = 0; si < streams.size(); si++) {
+            const ProducerStream& ps = streams[si];
+            if (c.hooks.eth_streams_only && !ps.eth) {
+                continue;
+            }
             auto s = std::make_unique<AttachedStream>();
+            s->index = si;
             s->cursor = ps.walked->load(std::memory_order_acquire);
             const CaptureContext::Device& dev = ctx.devices[ps.dev];
             s->chip = dev.chip_id;
@@ -471,8 +479,8 @@ void Service::consumer_thread(Consumer& c) {
     };
     // One batch of up to kBatchFrames frames from the stream, read in place up to the ingest's walk position and
     // decoded into the arenas. False when the stream had nothing new.
-    auto read = [&](Attached& a, AttachedStream& s, uint32_t stream_index) {
-        const ProducerStream& ps = a.producer->streams()[stream_index];
+    auto read = [&](Attached& a, AttachedStream& s, uint32_t attached_index) {
+        const ProducerStream& ps = a.producer->streams()[s.index];
         const Walked w = walk_frames(
             ps.fifo,
             s.cursor,
@@ -480,7 +488,7 @@ void Service::consumer_thread(Consumer& c) {
             ps.marks,
             std::span<std::byte>(frames_buf.get(), kFramesBytes),
             frame_words,
-            [&] { return a.producer->live_head(stream_index); });
+            [&] { return a.producer->live_head(s.index); });
         if (w.cursor == s.cursor) {
             return false;
         }
@@ -515,7 +523,7 @@ void Service::consumer_thread(Consumer& c) {
         data_arena.commit(d, n.data_bytes);
         parked.push_back(Parked{
             .a = &a,
-            .stream = stream_index,
+            .stream = attached_index,
             .delivered = false,
             .zones = z,
             .events = e,
@@ -578,7 +586,7 @@ void Service::consumer_thread(Consumer& c) {
         }
         for (size_t i = 0; i < a.streams.size(); i++) {
             c.dropped.fetch_add(a.streams[i]->dropped, std::memory_order_relaxed);
-            p->finish_stream(static_cast<uint32_t>(i), a.streams[i]->dropped, a.streams[i]->dec.stats);
+            p->finish_stream(a.streams[i]->index, a.streams[i]->dropped, a.streams[i]->dec.stats);
         }
         attached.erase(it);
     };

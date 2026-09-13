@@ -36,7 +36,8 @@ namespace streaming_profiler {
 struct CapturedDevice {
     uint32_t chip_id = 0;
     int numa_node = -1;                                            // the node the sockets bind their FIFOs to
-    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // one per relay, in relay order
+    std::vector<std::unique_ptr<distributed::D2HSocket>> sockets;  // the relays' in relay order, then the eth pushers'
+    uint32_t n_relay_sockets = 0;
     CaptureContext::Device ctx;
     DeviceClock clock;
 };

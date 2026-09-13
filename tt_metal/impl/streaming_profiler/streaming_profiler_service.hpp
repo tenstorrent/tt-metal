@@ -166,6 +166,7 @@ struct ProducerStream {
     const std::atomic<uint64_t>* walked = nullptr;  // bytes, absolute
     uint32_t dev = 0;                               // index into capture_context().devices
     std::span<const std::atomic<uint64_t>> marks;   // frame boundaries, one per kMarkBytes of `fifo`
+    bool eth = false;  // an idle-eth pusher's socket: the chip's clock samples and link stamps, no worker frames
 };
 
 // One capture's streams and what a consumer needs to decode them. Valid from attach_producer() until
@@ -203,6 +204,9 @@ struct ConsumerHooks {
     // first and detached first, so its covers exist before the others' batches and its final publish precedes their
     // drain.
     bool waits_for_sync = true;
+    // Attach to the eth pushers' streams only. The sync engine's inputs all travel on those, and a consumer that
+    // decodes the worker streams too runs behind them under load.
+    bool eth_streams_only = false;
 };
 
 class Service {

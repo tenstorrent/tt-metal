@@ -369,6 +369,7 @@ bool Devices::boot_device(
             return false;
         }
     }
+    ctx.out.n_relay_sockets = static_cast<uint32_t>(ctx.out.sockets.size());
     // Idle-eth pushers come up after the relays so their sockets follow the relay sockets (the receiver indexes
     // sockets as a contiguous prefix in launch order). A pusher that fails is dropped and the capture continues.
     for (uint32_t k = 0; k < ctx.eth.size();) {
