@@ -347,7 +347,8 @@ struct semaphore
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_post(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
@@ -360,7 +361,8 @@ inline void t6_semaphore_post(const std::uint8_t index)
 template <std::uint32_t WaitRes0 = p_stall::NOTHING, std::uint32_t WaitRes1 = p_stall::NOTHING, std::uint32_t WaitRes2 = p_stall::NOTHING>
 inline void t6_semaphore_get(const std::uint8_t index)
 {
-    if constexpr (WaitRes0 != p_stall::NOTHING)
+    // Each slot is independently optional: emit the stall whenever any resource is named.
+    if constexpr (WaitRes0 != p_stall::NOTHING || WaitRes1 != p_stall::NOTHING || WaitRes2 != p_stall::NOTHING)
     {
         TTI_STALLWAIT(p_stall::STALL_SYNC, WaitRes2, WaitRes1, WaitRes0);
     }
