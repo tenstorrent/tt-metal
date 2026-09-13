@@ -288,9 +288,11 @@ class Gemma4Attention:
         if tt_k is not None:
             tt_k.deallocate(True)
         tt_v.deallocate(True)
+
+        # Concat heads + apply out proj + all_reduce
         tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         projected = ttnn.linear(tt_out, self.weights.o_proj)
         tt_out.deallocate(True)
-        tt_out = projected
-        tt_out = ccl_allreduce(tt_out, self.mesh_config, self.ccl_manager)
+        tt_out = ccl_allreduce(projected, self.mesh_config, self.ccl_manager)
+
         return tt_out
