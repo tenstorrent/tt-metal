@@ -91,6 +91,8 @@ serve_profiles:
     max_num_seqs: 4
     env:
       QWEN36_DRAFTER: dflash2
+      QWEN36_DFLASH_RAGGED: "1"
+      QWEN36_DFLASH_FOLD_SEED: "1"
     args:
       - [--max-num-batched-tokens, "262144"]
       - --no-async-scheduling           # the plugin's block-output contract is synchronous
