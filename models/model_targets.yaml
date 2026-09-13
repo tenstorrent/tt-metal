@@ -6,6 +6,19 @@ description: Centralized perf/accuracy targets for models CI.
 # - TODO: explicit gap placeholder; excluded from normal target resolution and treated as missing/TODO by validator.
 # `prefill_time_to_first_token` values are in milliseconds (ms).
 targets:
+  llama3.1-8b-qb2:
+    skus:
+      p300x2:
+        entries:
+          - batch_size: 1
+            status: active
+            perf: {}
+            accuracy:
+              # Mean of the four canonical IFEval accuracies, first 28 Meta rows.
+              ifeval: 80.47
+              ifeval_tolerance: 0.07
+            owner_id: U03HY7MK4BT
+            team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
   # leg (qwen2_7b / phi4 / deepseek); consumed by the demo's CI=true central accuracy gate. Values are
   # measured floors and are refreshed per-model during the re-measure sweep.

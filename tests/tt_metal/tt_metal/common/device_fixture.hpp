@@ -175,6 +175,28 @@ class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture
 // Requires slow dispatch mode.
 class UnitMeshFixture : public MeshDeviceSingleCardFixture {};
 
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires fast dispatch mode.
+class UnitMeshFastDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        // Emule has no HWCommandQueue, so TT_METAL_EMULE_MODE always enables slow
+        // dispatch. Skip only on real silicon under slow dispatch; still run on emule.
+        auto* emulated = getenv("TT_METAL_EMULE_MODE");
+        if (slow_dispatch && !emulated) {
+            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        AnyDispatchMeshDeviceSingleCardFixture::SetUp();
+    }
+
+public:
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() {
+        TT_FATAL(!devices_.empty(), "MeshDevice not initialized in {}", __FUNCTION__);
+        return devices_.front();
+    }
+};
+
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
     void SetUp() override {
