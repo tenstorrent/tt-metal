@@ -100,6 +100,26 @@ static constexpr std::uint32_t kRelayDoneMask = 0xFFFF0000u;
 // the stop word, the heartbeat behind done) travel in one host write.
 static constexpr std::uint32_t kRelayCtrlWordStride = 64;
 
+// Idle-eth tile table: the host lists tiles, an idle-eth core writes each one's wall-clock reading.
+//   [ETH_TILE_N]          tile count, host-written
+//   [ETH_TILE_READY]      kEthTileReadyWord | count once every tile is written
+//   [ETH_TILE_LOOP_RTT]   the core's loopback read: round trip (wall ticks) and reading (quarter ticks)
+//   [ETH_TILE_LOOP_BIAS]
+//   [ETH_TILE_XY_0 ..)    y << 16 | x per tile, host-written; then per tile an int64, the core's wall tick minus the
+//                         tile's as the bracket read it, and the read's round trip in wall ticks
+enum EthTileTable : std::uint32_t {
+    ETH_TILE_N = 0,
+    ETH_TILE_READY = 1,
+    ETH_TILE_LOOP_RTT = 2,
+    ETH_TILE_LOOP_BIAS = 3,
+    ETH_TILE_XY_0 = 8,
+    ETH_TILE_OUT_WORDS = 3,
+};
+static constexpr std::uint32_t kEthTileReadyWord = 0x71B1E000u;
+constexpr std::uint32_t eth_tile_out_word(std::uint32_t n_tiles, std::uint32_t tile) {
+    return ETH_TILE_XY_0 + n_tiles + ETH_TILE_OUT_WORDS * tile;
+}
+
 // STICKY_META (SPSC/drainer backend, legacy / synthetic bench path only): an 8B context packet whose high
 // word carries (core_x, core_y, risc) + this type and whose low word is a 32-bit host-side ID. The host
 // forward-fills that identity onto the following timing markers. Its type sits in the same bits as a

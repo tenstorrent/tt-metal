@@ -46,7 +46,7 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     // link path to the root -- is finished at once, so no consumer waits for it.
     std::vector<bool> reach(ctx.devices.size(), false);
     const uint32_t root = ctx.root_dev;
-    if (root < ctx.devices.size() && ctx.devices[root].eth_clock.frequency_ghz > 0.0) {
+    if (root < ctx.devices.size() && ctx.devices[root].has_eth_tracker) {
         reach[root] = true;
         for (bool progress = true; progress;) {
             progress = false;
@@ -61,7 +61,7 @@ void D2dSyncConsumer::on_attach(const CaptureContext& ctx) {
     for (size_t dev = 0; dev < ctx.devices.size(); dev++) {
         const CaptureContext::Device& d = ctx.devices[dev];
         SyncCorrections::clear(d.chip_id);
-        if (!reach[dev] || d.eth_clock.frequency_ghz <= 0.0) {
+        if (!reach[dev] || !d.has_eth_tracker) {
             SyncCorrections::finish(d.chip_id);
         }
     }

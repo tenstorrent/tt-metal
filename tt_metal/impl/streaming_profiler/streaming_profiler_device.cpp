@@ -70,6 +70,10 @@ constexpr uint32_t kEthStrideUs = 3;
 constexpr uint32_t kEthCtrlBytes = 128;  // done(+0)/heartbeat(+4) at 0, stop at 64
 // Pusher scratch for one linked core: its control vector, then its two ring images (BH eth has DM0 and DM1).
 constexpr uint32_t kEthScratchBytes = 4608;
+// Tile table (hostdev EthTileTable): the header, a coordinate per Tensix tile and an int64 offset per tile.
+constexpr uint32_t kEthTableBytes = 4096;
+constexpr uint32_t kEthTableMaxTiles =
+    (kEthTableBytes / sizeof(uint32_t) - kernel_profiler::ETH_TILE_XY_0) / (1 + kernel_profiler::ETH_TILE_OUT_WORDS);
 static_assert(
     kEthScratchBytes >= kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE + 2 * kernel_profiler::PROFILER_L1_BUFFER_SIZE,
     "the pusher scratch must hold a control vector and two whole rings");
@@ -287,13 +291,14 @@ std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::Mes
         eth_prof_l1_ = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::PROFILER);
         const uint32_t ebase = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         const uint32_t esize = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        const uint32_t need = kCfgReserve + kEthCtrlBytes + slot_bytes_ + kPageSize;
+        const uint32_t need = kCfgReserve + kEthCtrlBytes + slot_bytes_ + kEthScratchBytes + kEthTableBytes + kPageSize;
         if (esize >= need) {
             eth_cfg_ = ebase + esize - kCfgReserve;
             eth_ctrl_ = eth_cfg_ - kEthCtrlBytes;
             eth_stage_ = (eth_ctrl_ - slot_bytes_) & ~(kPageSize - 1u);  // the pack pads assume a page-aligned slot
             eth_scratch_ = (eth_stage_ - kEthScratchBytes) & ~(kPageSize - 1u);
-            eth_ok_ = eth_scratch_ >= ebase;
+            eth_table_ = (eth_scratch_ - kEthTableBytes) & ~(kPageSize - 1u);
+            eth_ok_ = eth_table_ >= ebase;
         }
         if (!eth_ok_) {
             log_warning(
@@ -377,34 +382,10 @@ bool Devices::boot_device(
 
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
     ctx.out.clock = sync_device_clock(cluster, ctx.chip_id, ctx.cores.front().virt);
-    // The idle-eth core's wall clock (0xFFB121F0) is a different counter from the workers'
-    // -- free-running from power-on, not device init -- so the PP_CLOCK samples need their own anchor to land on
-    // the host timeline. Measured the same way, on the idle-eth core.
+    ctx.out.ctx.tile_offset.assign(ctx.out.ctx.core_xy.size(), 0);
+    ctx.out.ctx.has_eth_tracker = !ctx.eth.empty();
     if (!ctx.eth.empty()) {
-        ctx.out.ctx.eth_clock = sync_device_clock(cluster, ctx.chip_id, ctx.eth.front().virt);
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] Device {}: eth clock anchor_ticks {} at host ns {} (+-{:.0f} ns) ghz {:.5f}; worker "
-            "clock anchor_ticks {} at host ns {} (+-{:.0f} ns) ghz {:.5f}",
-            ctx.chip_id,
-            ctx.out.ctx.eth_clock.anchor_ticks,
-            ctx.out.ctx.eth_clock.anchor_host_ns,
-            ctx.out.ctx.eth_clock.anchor_sigma_ns,
-            ctx.out.ctx.eth_clock.frequency_ghz,
-            ctx.out.clock.anchor_ticks,
-            ctx.out.clock.anchor_host_ns,
-            ctx.out.clock.anchor_sigma_ns,
-            ctx.out.clock.frequency_ghz);
-        // Same chip AICLK as the workers: reuse the worker's reliably-measured frequency, keep only the eth
-        // anchor tick (the counter's zero). The idle-eth core runs the pusher, so its own slope read is noisier.
-        ctx.out.ctx.eth_clock.frequency_ghz = ctx.out.clock.frequency_ghz;
-        // The two counters share AICLK, so their offset is one constant: the two anchors' ticks at a common host
-        // instant, good to the anchors' ~15 ns until the pusher measures it over the NoC.
-        const DeviceClock& e = ctx.out.ctx.eth_clock;
-        const DeviceClock& w = ctx.out.clock;
-        ctx.out.ctx.eth_minus_worker_ticks = std::llround(
-            static_cast<double>(e.anchor_ticks) - static_cast<double>(w.anchor_ticks) -
-            static_cast<double>(e.anchor_host_ns - w.anchor_host_ns) * w.frequency_ghz);
+        read_tile_offsets(ctx);
     }
     TT_FATAL(
         ctx.out.clock.frequency_ghz > 0.0,
@@ -697,6 +678,137 @@ void Devices::write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, u
         .write_core(&value, sizeof(value), tt_cxy_pair(ctx.chip_id, virt), eth_prof_l1_ + index * sizeof(uint32_t));
 }
 
+void Devices::read_tile_offsets(DeviceCtx& ctx) {
+    auto& cluster = MetalContext::instance(context_id_).get_cluster();
+    const EthPusher& e = ctx.eth.front();
+    const uint32_t n = static_cast<uint32_t>(ctx.cores.size());
+    // One core's table: per tile its wall tick minus the tile's, and the read's round trip. False until written.
+    auto read_table = [&](const CoreCoord& virt,
+                          uint32_t count,
+                          std::vector<int64_t>& value,
+                          std::vector<uint32_t>& rtt) {
+        std::vector<uint32_t> t(kernel_profiler::eth_tile_out_word(count, count), 0);
+        cluster.read_core(
+            t.data(), static_cast<uint32_t>(t.size() * sizeof(uint32_t)), tt_cxy_pair(ctx.chip_id, virt), eth_table_);
+        if (t[kernel_profiler::ETH_TILE_READY] != (kernel_profiler::kEthTileReadyWord | count)) {
+            return false;
+        }
+        value.resize(count);
+        rtt.resize(count);
+        for (uint32_t i = 0; i < count; i++) {
+            const uint32_t w = kernel_profiler::eth_tile_out_word(count, i);
+            value[i] = static_cast<int64_t>((static_cast<uint64_t>(t[w + 1]) << 32) | t[w]);
+            rtt[i] = t[w + 2];
+        }
+        return true;
+    };
+    std::vector<int64_t> va;
+    std::vector<uint32_t> ra;
+    // The pusher writes its table before the heartbeat launch_eth_pusher waited for, so a missing marker is a bug.
+    TT_FATAL(read_table(e.virt, n, va, ra), "streaming profiler: device {} pusher tile table not written", ctx.chip_id);
+    std::vector<int64_t>& off = ctx.out.ctx.tile_offset;
+    std::copy(va.begin(), va.end(), off.begin());
+
+    // The pusher's own column: the reads that crossed one ring instead of two. Their round trip is roughly half the
+    // others' (184 against 328 ticks measured), so the split is by round trip, well under the median.
+    std::vector<uint32_t> sorted(ra);
+    std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+    const uint32_t median_rtt = sorted[sorted.size() / 2];
+    std::vector<uint32_t> column;
+    for (uint32_t i = 0; i < n; i++) {
+        if (ra[i] * 5u < median_rtt * 4u) {
+            column.push_back(i);
+        }
+    }
+    std::string column_note;
+    if (column.empty()) {
+        column_note = "no tile in the pusher's column";
+    } else if (!e.has_helper) {
+        column_note = fmt::format(
+            "{} tiles in the pusher's column keep their one-ring reading (no second idle eth)", column.size());
+    } else {
+        // The helper reads the column tiles over two-ring paths; its wall clock is the pusher's, so its readings
+        // replace the pusher's as they are.
+        const uint32_t nb = static_cast<uint32_t>(column.size());
+        std::vector<uint32_t> table(kernel_profiler::ETH_TILE_XY_0, 0);
+        for (uint32_t i : column) {
+            table.push_back(packed_xy(ctx.cores[i].virt));
+        }
+        table[kernel_profiler::ETH_TILE_N] = nb;
+        cluster.write_core(
+            table.data(),
+            static_cast<uint32_t>(table.size() * sizeof(uint32_t)),
+            tt_cxy_pair(ctx.chip_id, e.helper_virt),
+            eth_table_);
+        Program p = CreateProgram();
+        const std::vector<uint32_t> ca = {
+            kEthStrideUs * 50u,
+            eth_cfg_,
+            eth_stage_,
+            eth_ctrl_,
+            packed_xy(e.helper_virt),
+            eth_scratch_,
+            eth_table_,
+            1u};
+        auto kid = CreateKernel(
+            p,
+            "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",
+            e.helper_logical,
+            EthernetConfig{
+                .eth_mode = Eth::IDLE,
+                .noc = NOC::RISCV_0_default,
+                .processor = DataMovementProcessor::RISCV_0,
+                .compile_args = ca});
+        SetRuntimeArgs(p, kid, e.helper_logical, std::vector<uint32_t>{0});
+        detail::CompileProgram(ctx.device, p, /*force_slow_dispatch=*/true);
+        detail::WriteRuntimeArgsToDevice(ctx.device, p, /*force_slow_dispatch=*/true);
+        detail::LaunchProgram(ctx.device, p, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        std::vector<int64_t> vb;
+        std::vector<uint32_t> rb;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!read_table(e.helper_virt, nb, vb, rb)) {
+            TT_FATAL(
+                std::chrono::steady_clock::now() < deadline,
+                "streaming profiler: device {} helper eth ({},{}) tile table not written within 2 s",
+                ctx.chip_id,
+                e.helper_logical.x,
+                e.helper_logical.y);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        detail::WaitProgramDone(ctx.device, p, false);
+        uint32_t one_ring = 0;
+        for (uint32_t j = 0; j < nb; j++) {
+            off[column[j]] = vb[j];
+            one_ring += rb[j] * 5u < median_rtt * 4u;
+        }
+        column_note = fmt::format(
+            "{} tiles in the pusher's column read through eth ({},{})", nb, e.helper_logical.x, e.helper_logical.y);
+        if (one_ring != 0) {
+            log_warning(
+                tt::LogMetal,
+                "[streaming profiler] Device {}: helper eth ({},{}) reached {} of the pusher's column tiles over one "
+                "ring too; those keep a one-ring reading",
+                ctx.chip_id,
+                e.helper_logical.x,
+                e.helper_logical.y,
+                one_ring);
+        }
+    }
+    const auto [lo, hi] = std::minmax_element(off.begin(), off.begin() + n);
+    log_info(
+        tt::LogMetal,
+        "[streaming profiler] Device {}: eth-minus-tensix wall offsets for {} tiles: {} .. {} ticks (spread {}); "
+        "median "
+        "read round trip {} ticks; {}",
+        ctx.chip_id,
+        n,
+        *lo,
+        *hi,
+        *hi - *lo,
+        median_rtt,
+        column_note);
+}
+
 // One idle ethernet core per chip joins the DECODE roster as a standard 5-lane core: its DM0 lane carries the PP_CLOCK
 // tracker, every other lane is always empty, and the decoder skips a lane whose extent is 0 exactly as it does an idle
 // TRISC. It never joins the relay roster (ctx.cores): the core pushes its own ring over its own socket. The lowest
@@ -711,13 +823,20 @@ void Devices::enumerate_eth_cores(const std::shared_ptr<distributed::MeshDevice>
             tt::LogMetal, "[streaming profiler] Device {}: no idle ethernet core; eth clock tracking is OFF", chip);
         return;
     }
-    const CoreCoord logical = *std::min_element(idle.begin(), idle.end(), [](const CoreCoord& a, const CoreCoord& b) {
+    std::vector<CoreCoord> idle_sorted(idle.begin(), idle.end());
+    std::sort(idle_sorted.begin(), idle_sorted.end(), [](const CoreCoord& a, const CoreCoord& b) {
         return a.y != b.y ? a.y < b.y : a.x < b.x;
     });
+    const CoreCoord logical = idle_sorted.front();
     EthPusher e;
     e.logical = logical;
     e.virt = cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH);
     e.phys = cluster.get_physical_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH, /*no_warn=*/true);
+    if (idle_sorted.size() > 1) {
+        e.has_helper = true;
+        e.helper_logical = idle_sorted[1];
+        e.helper_virt = cluster.get_virtual_coordinate_from_logical_coordinates(chip, e.helper_logical, CoreType::ETH);
+    }
     // Zero its control vector and boot it unarmed, exactly as the worker grid is.
     const std::vector<uint8_t> zero_ctrl(kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE, 0);
     cluster.write_core(
@@ -808,10 +927,28 @@ bool Devices::launch_eth_pusher(
         // A stale done, heartbeat or stop word from the previous run reads as this run's live state.
         uint32_t zero_words[kEthCtrlBytes / sizeof(uint32_t)] = {};
         cluster.write_core(zero_words, sizeof(zero_words), tt_cxy_pair(chip, e.virt), eth_ctrl_);
+        // The tile table's header and the worker cores' coordinates; the pusher fills the readings before its
+        // heartbeat starts.
+        TT_FATAL(
+            ctx.cores.size() <= kEthTableMaxTiles,
+            "streaming profiler: device {} has {} Tensix cores, the pusher tile table holds {}",
+            chip,
+            ctx.cores.size(),
+            kEthTableMaxTiles);
+        std::vector<uint32_t> table(kernel_profiler::ETH_TILE_XY_0, 0);
+        for (const WorkerCore& c : ctx.cores) {
+            table.push_back(packed_xy(c.virt));
+        }
+        table[kernel_profiler::ETH_TILE_N] = static_cast<uint32_t>(ctx.cores.size());
+        cluster.write_core(
+            table.data(),
+            static_cast<uint32_t>(table.size() * sizeof(uint32_t)),
+            tt_cxy_pair(chip, e.virt),
+            eth_table_);
 
         auto program = std::make_unique<Program>(CreateProgram());
         const std::vector<uint32_t> ca = {
-            kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt), eth_scratch_};
+            kEthStrideUs * 50u, eth_cfg_, eth_stage_, eth_ctrl_, packed_xy(e.virt), eth_scratch_, eth_table_, 0u};
         auto kid = CreateKernel(
             *program,
             "tt_metal/tools/profiler/sync/eth_clock_pusher.cpp",

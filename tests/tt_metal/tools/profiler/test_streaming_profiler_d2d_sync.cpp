@@ -108,7 +108,7 @@ int main() {
         d.n_eth_cores = static_cast<uint32_t>(eth[c].size());
         d.clock.chip_id = static_cast<uint32_t>(c);
         d.clock.frequency_ghz = kF0 * 1e-9;
-        d.eth_clock = d.clock;
+        d.has_eth_tracker = true;
         ctx.devices.push_back(d);
     }
     // Links: (0 e0 -> 1 e0) and (1 e1 -> 2 e0). Chip 1 receives on e0, sends on e1.

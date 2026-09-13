@@ -50,10 +50,11 @@ struct CaptureContext {
         std::vector<uint32_t> core_xy;  // core index -> packed NoC (y << 16) | x, the identity a frame carries
         uint32_t chip_id = 0;
         DeviceClock clock;         // the worker wall clock's rate, for record durations
-        DeviceClock eth_clock;     // the idle-eth tile's wall clock: frequency_ghz > 0 marks a chip with a tracker
-        uint32_t n_eth_cores = 0;  // trailing cores in `lanes` that are eth (idle + active)
-        // eth wall tick minus worker wall tick on this chip: both count AICLK, so it is one constant per device init.
-        int64_t eth_minus_worker_ticks = 0;
+        bool has_eth_tracker = false;  // an idle-eth pusher tracks this chip's refclk: its records can be placed
+        uint32_t n_eth_cores = 0;      // trailing cores in `lanes` that are eth (idle + active)
+        // Per core, in `core_xy` order: eth wall tick minus that core's wall tick, measured by the pusher at arm.
+        // Every tile keeps its own wall clock on the one AICLK, so each is one integer for the capture; eth cores 0.
+        std::vector<int64_t> tile_offset;
     };
     std::vector<Device> devices;
     // A boot-time eth link sync: the sender on device index dev_a at logical eth core eth_a, the receiver on dev_b

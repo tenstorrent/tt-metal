@@ -99,6 +99,11 @@ private:
         CoreCoord logical, virt, phys;
         std::unique_ptr<Program> program;
         uint32_t sock_idx = 0;  // index into out.sockets, after the relays
+        // A second idle eth core that reads the Tensix tiles in this pusher's own column at boot: the pusher reaches
+        // those over a one-ring path whose split differs from every other tile's; the helper, in another column,
+        // reaches them over two rings like the rest, and every eth tile's wall clock is the same clock.
+        bool has_helper = false;
+        CoreCoord helper_logical, helper_virt;
         // The chip's active eth cores this pusher drains (their rings are NoC-read, their heads written back):
         // they run the fabric router and can spend no cycles on egress, so the idle sibling carries them.
         struct Linked {
@@ -153,6 +158,8 @@ private:
         const distributed::MeshCoordinate& coord,
         uint32_t k);
     void write_eth_ctrl_word(const DeviceCtx& ctx, const CoreCoord& virt, uint32_t index, uint32_t value);
+    // The per-tile wall-clock offsets the pusher measured before its heartbeat started, into the capture context.
+    void read_tile_offsets(DeviceCtx& ctx);
     // One-shot device<->device link sync at boot: the eth sync kernels on every connected active-eth pair of local
     // devices, whose SYNC-ZONE zones the idle pushers then drain. Only when fabric is DISABLED: after fabric init
     // those cores hold live routers, and a launch onto one would write a launch message into a router.
@@ -171,10 +178,10 @@ private:
     uint32_t slot_bytes_ = 0;  // staging slot; mirrors the relay kernel's kSlotWords
     RelayL1 l1_;
     // Idle-eth pusher L1 (IDLE_ETH): the profiler base, and carved from the top of UNRESERVED: socket config,
-    // ctrl words (done/heartbeat, stop), one frame slot.
+    // ctrl words (done/heartbeat, stop), one frame slot, the linked-core scratch, the tile table.
     bool eth_ok_ = false;
     uint64_t eth_prof_l1_ = 0;
-    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0;
+    uint32_t eth_cfg_ = 0, eth_ctrl_ = 0, eth_stage_ = 0, eth_scratch_ = 0, eth_table_ = 0;
     bool aeth_ok_ = false;  // ACTIVE_ETH profiler base resolved: the pusher can drain active eth cores
     uint64_t aeth_prof_l1_ = 0;
     uint32_t aeth_unreserved_ = 0, aeth_unres_size_ = 0;  // ACTIVE_ETH unreserved region: the resident sync stop word
