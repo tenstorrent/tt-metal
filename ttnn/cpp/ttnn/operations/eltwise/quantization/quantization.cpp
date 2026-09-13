@@ -197,6 +197,13 @@ ttnn::Tensor narrow_composite_result(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::Tensor> optional_output_tensor) {
     if (c_dtype != ttnn::DataType::INT8) {
+        if (c_dtype == ttnn::DataType::UINT8) {
+            return ttnn::typecast(
+                ttnn::clamp_tss(shifted, 0.0f, 255.0f),
+                c_dtype,
+                memory_config,
+                optional_output_tensor);
+        }
         return ttnn::typecast(shifted, c_dtype, memory_config, optional_output_tensor);
     }
     return ttnn::quantize(
@@ -461,10 +468,12 @@ Tensor requantize(
             none,
             none,
             none);
-        return ttnn::typecast(
+        return narrow_composite_result(
             ttnn::add(
                 input_scaled, zero_point_full, std::nullopt, memory_config, optional_output_tensor, none, none, none),
-            c_dtype);
+            c_dtype,
+            memory_config,
+            optional_output_tensor);
     }
 
     return std::visit(

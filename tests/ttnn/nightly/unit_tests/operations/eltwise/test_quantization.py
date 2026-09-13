@@ -650,6 +650,34 @@ def test_requantize_uint8_upper_saturation(device):
     result = ttnn.to_torch(out_tt)
     assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
 
+@pytest.mark.parametrize("zero_point", [0, 32, 128])
+@pytest.mark.parametrize("scale", [0.5, 1.0, 2.0])
+def test_quantize_uint8_lower_saturation(device, zero_point, scale):
+    """Test quantize uint8 lower-bound saturation to 0 for negative values (Issue #56290)"""
+    row = [-500.0, -50.0, -10.0, -1.0, -0.5, 0.0, 10.0, 50.0, 255.0, 300.0]
+    input_tr = torch.tensor([row], dtype=torch.float32)
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
+
+@pytest.mark.parametrize("in_zp,out_zp", [(0, 0), (128, 0), (0, 128)])
+@pytest.mark.parametrize("in_scale,out_scale", [(1.0, 1.0), (0.5, 1.0), (1.0, 0.5)])
+def test_requantize_uint8_lower_saturation(device, in_zp, out_zp, in_scale, out_scale):
+    """Test requantize uint8 lower-bound saturation to 0 for negative values (Issue #56290)"""
+    q_in = torch.tensor([[-500, -100, -10, 0, 50, 100, 200, 255, 300]], dtype=torch.int32)
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+
+    q_in_tt = ttnn.from_torch(q_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    result = ttnn.to_torch(out_tt)
+    assert torch.equal(result, expected), f"got {result.tolist()} expected {expected.tolist()}"
+
 
 @pytest.mark.parametrize("x0", [32, 128])
 @pytest.mark.parametrize("x1", [32, 128])

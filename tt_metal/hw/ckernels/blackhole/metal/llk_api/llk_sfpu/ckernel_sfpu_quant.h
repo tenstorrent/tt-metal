@@ -54,12 +54,15 @@ namespace ckernel::sfpu {
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN_2S_COMP = 4;
 constexpr std::uint32_t QUANT_REPLAY_LEN_SIGN_MAGN = 2;
+constexpr std::uint32_t QUANT_REPLAY_LEN_UINT8 = 5;
 constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 6;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_2S_COMP = 7;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_SIGN_MAGN = 3;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_UINT8 = 8;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_UINT8_INT8_IN = 6;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_IN = 5;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 7;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT_INT32_IN = 9;
@@ -184,7 +187,9 @@ void quant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    constexpr std::uint32_t REPLAY_LEN = SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP;
+    constexpr std::uint32_t REPLAY_LEN = (OUTPUT_FORMAT == DataFormat::UInt8)
+        ? QUANT_REPLAY_LEN_UINT8
+        : (SIGN_MAGNITUDE_FORMAT ? QUANT_REPLAY_LEN_SIGN_MAGN : QUANT_REPLAY_LEN_2S_COMP);
 
     lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
@@ -196,6 +201,10 @@ void quant_init(const uint zero_point) {
         // descale. For unsigned (uint8) output, round into the full [0, 255]
         // range, else clamp to signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            // FP32_TO_UINT8 returns magnitude for negative inputs. Clamp negative lanes to 0.0 first:
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
@@ -212,7 +221,7 @@ void quant_init(const uint zero_point) {
                 p_sfpu::LREG0,
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         }
-        if constexpr (!SIGN_MAGNITUDE_FORMAT) {
+        if constexpr (!SIGN_MAGNITUDE_FORMAT && OUTPUT_FORMAT != DataFormat::UInt8) {
             // Convert STOCH_RND's sign-magnitude output to 2's-complement so the
             // trailing INT32_2S_COMP SFPSTORE writes out 2's-complement bits
             // (on BH the store mode itself is a no-op, so the bits in LREG0 are
@@ -274,9 +283,10 @@ void requant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    constexpr std::uint32_t REPLAY_LEN =
-        INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN
-                   : (SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP);
+    constexpr std::uint32_t REPLAY_LEN = (OUTPUT_FORMAT == DataFormat::UInt8)
+        ? (INT8_INPUT ? REQUANT_REPLAY_LEN_UINT8_INT8_IN : REQUANT_REPLAY_LEN_UINT8)
+        : (INT8_INPUT ? REQUANT_REPLAY_LEN_INT8_IN
+                      : (SIGN_MAGNITUDE_FORMAT ? REQUANT_REPLAY_LEN_SIGN_MAGN : REQUANT_REPLAY_LEN_2S_COMP));
 
     lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
     {
@@ -304,6 +314,9 @@ void requant_init(const uint zero_point) {
         // (uint8) output, round into the full [0, 255] range; otherwise clamp to
         // signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+            TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
@@ -320,7 +333,7 @@ void requant_init(const uint zero_point) {
                 p_sfpu::LREG0,
                 sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
         }
-        if constexpr (!SIGN_MAGNITUDE_FORMAT) {
+        if constexpr (!SIGN_MAGNITUDE_FORMAT && OUTPUT_FORMAT != DataFormat::UInt8) {
             // Convert STOCH_RND's output to 2's-complement for the trailing
             // INT32_2S_COMP SFPSTORE. Same cast+SETSGN combo as the input side;
             // see INT_REPR_SWAP_CAST above.
@@ -412,6 +425,23 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_quant_uint8(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    constexpr std::uint32_t dst_tile_size = 64;
+    const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
+    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    const std::uint32_t out_off = dst_index_out * dst_tile_size;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_7, in0_off);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);
+        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_UINT8);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
+    }
+}
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte in [0,
@@ -445,6 +475,28 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
         }
         lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
         TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);  // store + dst_reg += 2
+    }
+}
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool INT8_INPUT = false>
+inline void calculate_requant_uint8(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    constexpr std::uint32_t dst_tile_size = 64;
+    constexpr std::uint32_t REPLAY_LEN =
+        INT8_INPUT ? REQUANT_REPLAY_LEN_UINT8_INT8_IN : REQUANT_REPLAY_LEN_UINT8;
+    const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
+    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    const std::uint32_t out_off = dst_index_out * dst_tile_size;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, in0_off);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_7, in1_off);
+        if constexpr (INT8_INPUT) {
+            _int8_input_unbias_();
+        }
+        lltt::replay(REQUANT_REPLAY_SLOT, REPLAY_LEN);
+        TT_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_6, out_off);
     }
 }
 
