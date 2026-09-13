@@ -924,6 +924,7 @@ class DeterministicStages(Module):
     def load_checkpoint(self, path, *, statistics: bool = True) -> None:
         self.load_state_dict(self.state_from_checkpoint(path, statistics=statistics))
 
+    @timing_tree.span("mesh_device", "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE)
     def _wshard(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
         """Reshard a replicated ``(T*H*W, ch)`` volume into this chip's W-band ``(T*H*(W/sp), ch)``.
 
@@ -941,6 +942,7 @@ class DeterministicStages(Module):
         flat = ttnn.reshape(band, (t * h * (w // self.sp), ch))
         return ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
 
+    @timing_tree.span("mesh_device", "det -> replicated context gather", category=timing_tree.ALLGATHER)
     def _wgather(self, x: ttnn.Tensor, dims: tuple[int, int, int]) -> ttnn.Tensor:
         """Gather a W-sharded ``(T*H*(W/sp), ch)`` band back to the replicated ``(T*H*W, ch)`` volume.
 
@@ -974,61 +976,76 @@ class DeterministicStages(Module):
         the band directly (same ``sp_axis``, same W order) rather than re-sharding a replicated context.
         ``dims`` is still the FULL ``(T, H, W)``; the caller derives ``W/sp`` from ``self.sp``.
         """
-        with timing_tree.span(self.mesh_device, "conv_in (denorm folded)", category=timing_tree.MLP):
-            x = self.conv_in(x)
+        x = self._conv_in(x)
         count = len(self.upsamples) if stages is None else stages
         sharded = False
         for stage in range(count):
-            # Labelled with the dims going IN: the out-dims do not exist until the upsample below
-            # runs, and a span names itself at open so a leaked one is still identifiable.
-            with timing_tree.span(self.mesh_device, f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"):
-                t, h, w = dims
-                stage_sharded = self._w_sharded and stage > 0
-                if stage_sharded:
-                    assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
-                    if not sharded:
-                        with timing_tree.span(
-                            self.mesh_device, "reshard: replicated -> W-sharded", category=timing_tree.RESHAPE
-                        ):
-                            x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
-                        sharded = True
-                local_dims = (t, h, w // self.sp) if stage_sharded else dims
-
-                # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is
-                # its blocks rather than its blocks plus whatever it had to build first.
-                with timing_tree.span(
-                    self.mesh_device, f"stage {stage + 1} setup: rope tables + plan", category=timing_tree.SETUP
-                ):
-                    cos, sin = self._rope(dims)
-                    if stage_sharded:
-                        cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
-                        sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
-                    plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
-
-                # dim read here rather than after the loop: NABlock is residual, so its channel count
-                # is unchanged by the blocks.
-                with timing_tree.span(
-                    self.mesh_device, f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}"
-                ):
-                    for index, block in enumerate(self.det_stages[stage]):
-                        x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
-                        log_dram(
-                            self.mesh_device,
-                            f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}",
-                        )
-
-                with timing_tree.span(self.mesh_device, f"upsample {stage + 1}", category=timing_tree.UPSAMPLE):
-                    x, out_dims = self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
-                if stage_sharded:
-                    out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
-                dims = out_dims
-                log_dram(self.mesh_device, f"det stage {stage} upsampled to {dims} sharded={stage_sharded}")
-
+            x, dims, sharded = self._run_stage(x, stage, dims, sharded=sharded, drop_leading_frame=drop_leading_frame)
         if sharded and gather_output:
-            with timing_tree.span(self.mesh_device, "det -> replicated context gather", category=timing_tree.ALLGATHER):
-                x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
+            x = self._wgather(x, dims)  # W-sharded -> replicated context; stage-5 handoff unchanged
             log_dram(self.mesh_device, f"det gathered to replicated {dims}")
         return x, dims
+
+    @timing_tree.span("mesh_device", "conv_in (denorm folded)", category=timing_tree.MLP)
+    def _conv_in(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        return self.conv_in(x)
+
+    # Labelled with the dims going IN: the out-dims do not exist until the upsample runs, and a span
+    # names itself at open so a leaked one is still identifiable.
+    @timing_tree.span(
+        "mesh_device", lambda self, x, stage, dims, **k: f"det stage {stage} (in {dims[0]},{dims[1]},{dims[2]})"
+    )
+    def _run_stage(
+        self, x: ttnn.Tensor, stage: int, dims: tuple[int, int, int], *, sharded: bool, drop_leading_frame: bool
+    ) -> tuple[ttnn.Tensor, tuple[int, int, int], bool]:
+        """One deterministic stage: the reshard at the stage-0 -> 1 boundary, tables and plan, the
+        blocks, the upsample. Returns the activation, its FULL out-dims, and whether it is W-sharded."""
+        t, h, w = dims
+        stage_sharded = self._w_sharded and stage > 0
+        if stage_sharded:
+            assert w % self.sp == 0, f"stage {stage} W={w} not divisible by sp={self.sp}"
+            if not sharded:
+                x = self._wshard(x, dims)  # replicated -> W-sharded at the stage-0 -> 1 boundary
+                sharded = True
+        local_dims = (t, h, w // self.sp) if stage_sharded else dims
+        cos, sin, plan = self._stage_setup(stage, dims, stage_sharded)
+        x = self._run_blocks(x, stage, local_dims, cos, sin, plan, stage_sharded)
+        x, out_dims = self._upsample(x, stage, local_dims, drop_leading_frame)
+        if stage_sharded:
+            out_dims = (out_dims[0], out_dims[1], out_dims[2] * self.sp)  # local W -> full W
+        log_dram(self.mesh_device, f"det stage {stage} upsampled to {out_dims} sharded={stage_sharded}")
+        return x, out_dims, sharded
+
+    # Tables and plan are per-stage setup, not block work; timed apart so a stage's number is its
+    # blocks rather than its blocks plus whatever it had to build first.
+    @timing_tree.span(
+        "mesh_device",
+        lambda self, stage, *a: f"stage {stage + 1} setup: rope tables + plan",
+        category=timing_tree.SETUP,
+    )
+    def _stage_setup(self, stage: int, dims: tuple[int, int, int], stage_sharded: bool):
+        cos, sin = self._rope(dims)
+        if stage_sharded:
+            cos = ttnn.mesh_partition(cos, dim=3, cluster_axis=self.sp_axis)
+            sin = ttnn.mesh_partition(sin, dim=3, cluster_axis=self.sp_axis)
+        plan = None if stage_sharded else self._plan(dims, self.stage_kernels[stage])
+        return cos, sin, plan
+
+    # dim read from the input rather than after the blocks: NABlock is residual, so its channel
+    # count is unchanged by them.
+    @timing_tree.span(
+        "mesh_device",
+        lambda self, x, stage, *a: f"STAGE {stage + 1}: {len(self.det_stages[stage])}x NABlock dim {x.shape[-1]}",
+    )
+    def _run_blocks(self, x: ttnn.Tensor, stage: int, local_dims, cos, sin, plan, stage_sharded: bool) -> ttnn.Tensor:
+        for index, block in enumerate(self.det_stages[stage]):
+            x = block(x, dims=local_dims, cos=cos, sin=sin, device_plan=plan)
+            log_dram(self.mesh_device, f"det stage {stage} block {index} dims={local_dims} sharded={stage_sharded}")
+        return x
+
+    @timing_tree.span("mesh_device", lambda self, x, stage, *a: f"upsample {stage + 1}", category=timing_tree.UPSAMPLE)
+    def _upsample(self, x: ttnn.Tensor, stage: int, local_dims, drop_leading_frame: bool):
+        return self.upsamples[stage](x, dims=local_dims, drop_leading_frame=drop_leading_frame)
 
 
 class DiffVAEDecoder(Module):
