@@ -424,22 +424,12 @@ class Gemma4Model:
             embeds = ccl_allgather(embeds, self.mesh_config, self.ccl_manager)
         return embeds
 
-    # ── Generator-compatible interface ────────────────────────────────────
-
-    def _reshape_prefill_embeds(self, tt_embeds, seq_len):
-        if len(tt_embeds.shape) == 3:
-            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
-        if tt_embeds.shape[2] != seq_len:
-            return ttnn.reshape(tt_embeds, (1, 1, seq_len, self.hidden_size))
-        return tt_embeds
-
     def transform_and_embed_prefill_inputs_device(self, tokens):
-        """Embed CP-sharded tokens into tiled hidden states inside the prefill trace."""
-        seq_len = tokens.shape[-1]
-        if len(tokens.shape) == 4:
-            tokens = ttnn.reshape(tokens, (1, seq_len))
-        embeds = self._reshape_prefill_embeds(self.embed_tokens(tokens), seq_len)
-        return ttnn.to_layout(embeds, ttnn.TILE_LAYOUT)
+        """Embed CP-sharded tokens into tiled hidden states."""
+        assert len(tokens.shape) == 2 and tokens.shape[0] == 1, (
+            f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
+        )
+        return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)
 
     def process_output_prefill(self, tt_out, last_token_idx):
         """Read prefill logits to host and slice to the last token's vocab row.
