@@ -11,6 +11,7 @@ import struct
 import sys
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import NamedTuple
 
 import numpy as np
@@ -20,7 +21,11 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.adapter import DEFAULT_MODEL, get_adapter
 from models.demos.common.prefill.runners.migration import is_per_host_storage, migration_table_path
-from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
+from models.demos.common.prefill.runners.runner_utils import (
+    load_trace_golden_span,
+    load_trace_token_ids,
+    resolve_trace_dir,
+)
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -498,15 +503,60 @@ def run_schedule(cfg: ProducerConfig, *, push_fn, now_fn=time.perf_counter, slee
     )
 
 
-def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+@lru_cache(maxsize=None)
+def _golden_span(trace_dir) -> tuple[int, int]:
+    """``load_trace_golden_span`` memoized: every slot asks for the same trace, and the metadata a
+    million-token golden carries is tens of megabytes of JSON."""
+    return load_trace_golden_span(trace_dir)
+
+
+def _resolve_pcc_window(real_len: int, trace_dir) -> tuple[int, int]:
+    """Absolute prompt positions ``[start, end)`` to PCC for a slot that ran ``real_len`` tokens.
+
+    The end is the deepest position both the run and the golden reach. ``PREFILL_PCC_WINDOW_TOKENS``
+    then keeps only that many positions before it, which is what makes a full-length prefill
+    checkable against a golden that covers only its tail. Zero (the default) keeps the whole span.
+
+    A prefix golden shortens to whatever the run filled. A windowed one cannot: its rows are pinned
+    to absolute positions, so a run that stops short of the window has nothing to compare and says
+    so instead of sliding the golden onto the wrong tokens.
+    """
+    golden_start, golden_end = _golden_span(trace_dir)
     golden_cap = int(os.environ.get("PREFILL_PCC_GOLDEN_LEN", "0"))
     if golden_cap:
-        real_len = min(real_len, golden_cap)
-    if ADAPTER.name == "minimax_m3":
-        return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, real_len, trace_dir)
-    if ADAPTER.name == "gpt_oss_d_p":
-        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, real_len, trace_dir)
-    return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, real_len, trace_dir)
+        if golden_start:
+            raise RuntimeError(
+                f"PREFILL_PCC_GOLDEN_LEN={golden_cap} counts rows from position 0, but {trace_dir} is a "
+                f"windowed golden over [{golden_start},{golden_end}). Unset it and bound the compare with "
+                f"PREFILL_PCC_WINDOW_TOKENS."
+            )
+        golden_end = min(golden_end, golden_cap)
+    if golden_end > real_len:
+        if golden_start:
+            raise RuntimeError(
+                f"golden covers [{golden_start},{golden_end}) but the run filled only {real_len} "
+                f"tokens: the window was never written. Raise the pushed chunk count."
+            )
+        golden_end = real_len
+    window_tokens = int(os.environ.get("PREFILL_PCC_WINDOW_TOKENS", "0"))
+    start = max(golden_start, golden_end - window_tokens) if window_tokens else golden_start
+    if start >= golden_end:
+        raise RuntimeError(f"empty PCC window [{start},{golden_end}) for golden {trace_dir}")
+    return start, golden_end
+
+
+def _read_slot_kv_and_check_pcc(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+    win_start, win_end = _resolve_pcc_window(real_len, trace_dir)
+    if ADAPTER.name in ("minimax_m3", "gpt_oss_d_p"):
+        if win_start != 0:
+            raise RuntimeError(
+                f"{ADAPTER.name} KV PCC reads from position 0 only; window [{win_start},{win_end}) "
+                f"needs the offset read the MLA path has"
+            )
+        if ADAPTER.name == "minimax_m3":
+            return _read_slot_kv_and_check_pcc_m3(table, device_map, slot_id, win_end, trace_dir)
+        return _read_slot_kv_and_check_pcc_gpt_oss(table, device_map, slot_id, win_end, trace_dir)
+    return _read_slot_kv_and_check_pcc_mla(table, device_map, slot_id, win_start, win_end, trace_dir)
 
 
 def _config_names(table) -> list:
@@ -680,7 +730,7 @@ def _full_indexer_layer_indices(num_layers: int):
     return [layer for layer in range(num_layers) if not indexer_layer_is_reused(hf_config, layer)]
 
 
-def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
+def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, win_start: int, win_end: int, trace_dir):
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
@@ -693,26 +743,30 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     KV_LORA = ADAPTER.model_config.KV_LORA_RANK
     HEAD_DIM = KV_LORA + ADAPTER.model_config.QK_ROPE_HEAD_DIM
     tokens_per_block = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
-    read_len = ((real_len + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+    read_start = (win_start // tokens_per_block) * tokens_per_block
+    read_end = ((win_end + tokens_per_block - 1) // tokens_per_block) * tokens_per_block
+    lo = win_start - read_start
+    win_len = win_end - win_start
+    golden_lo = win_start - _golden_span(trace_dir)[0]
 
     min_pcc = 1.0
     checked = 0
     for layer in range(NUM_LAYERS):
-        loc0 = table.lookup(layer, 0, slot_id)
+        loc0 = table.lookup(layer, read_start, slot_id)
         try:
             _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
         except KeyError:
             continue
 
         decoded_rows = []
-        for pos in range(0, read_len, tokens_per_block):
+        for pos in range(read_start, read_end, tokens_per_block):
             loc = table.lookup(layer, pos, slot_id)
             unique_id = _resolve_unique_id(table.get_device_group(loc.device_group_index).fabric_node_ids, device_map)
             raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
             decoded_rows.append(_decode_kv_chunk(raw, HEAD_DIM))
-        device_kv = torch.cat(decoded_rows, dim=0)[:real_len]
+        device_kv = torch.cat(decoded_rows, dim=0)[lo : lo + win_len]
 
-        golden = _load_golden_kv_post(trace_dir, layer, real_len)
+        golden = _load_golden_kv_post(trace_dir, layer, golden_lo + win_len, golden_lo)
         _, pcc_nope = comp_pcc(golden[:, :KV_LORA], device_kv[:, :KV_LORA])
 
         golden_pe = golden[:, KV_LORA:]
@@ -725,8 +779,8 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         logger.info(f"[producer] slot {slot_id} layer {layer:>2} KV PCC: nope={pcc_nope:.5f} pe={pcc_pe:.5f}")
 
     logger.info(
-        f"[producer] slot {slot_id} KV PCC over [0,{real_len}) across {checked}/{NUM_LAYERS} local layers -> "
-        f"{min_pcc:.6f}"
+        f"[producer] slot {slot_id} KV PCC over [{win_start},{win_end}) across {checked}/{NUM_LAYERS} "
+        f"local layers -> {min_pcc:.6f}"
     )
     if checked == 0:
         raise RuntimeError(f"slot {slot_id}: no local layers resolved against the device map (nothing verified)")
@@ -753,23 +807,23 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         min_index = 1.0
         checked_index = 0
         for layer in index_rows:
-            loc0 = table.lookup(layer, 0, slot_id, 1)
+            loc0 = table.lookup(layer, read_start, slot_id, 1)
             try:
                 _resolve_unique_id(table.get_device_group(loc0.device_group_index).fabric_node_ids, device_map)
             except KeyError:
                 continue
 
             decoded_rows = []
-            for pos in range(0, read_len, tokens_per_block):
+            for pos in range(read_start, read_end, tokens_per_block):
                 loc = table.lookup(layer, pos, slot_id, 1)
                 unique_id = _resolve_unique_id(
                     table.get_device_group(loc.device_group_index).fabric_node_ids, device_map
                 )
                 raw = ttnn.experimental.disaggregation.read_dram_umd(unique_id, loc.noc_addr, loc.size_bytes)
                 decoded_rows.append(_decode_kv_chunk(raw, index_head_dim))
-            dev_ik = torch.cat(decoded_rows, dim=0)[:real_len]
+            dev_ik = torch.cat(decoded_rows, dim=0)[lo : lo + win_len]
 
-            golden_ik = _load_golden_index_k(trace_dir, layer, real_len)
+            golden_ik = _load_golden_index_k(trace_dir, layer, golden_lo + win_len, golden_lo)
             dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             min_index = min(min_index, pcc_index)
@@ -777,7 +831,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
             logger.info(f"[producer] slot {slot_id} layer {layer:>2} index PCC: {pcc_index:.5f}")
 
         logger.info(
-            f"[producer] slot {slot_id} index PCC over [0,{real_len}) across "
+            f"[producer] slot {slot_id} index PCC over [{win_start},{win_end}) across "
             f"{checked_index}/{len(index_rows)} local layers -> {min_index:.6f}"
         )
         mins["index"] = min_index
