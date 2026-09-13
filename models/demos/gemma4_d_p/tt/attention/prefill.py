@@ -16,7 +16,7 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
-    PackedRingKVCache,
+    GlobalRingKVCache,
     ring_packed_prefill_attention,
     ring_prefill_attention,
     write_chunk_to_packed_ring_cache,
@@ -64,7 +64,7 @@ def prefill_forward(
 
     tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
 
-    packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
+    packed_global_ring = weights.is_global and isinstance(ring_kv_cache, GlobalRingKVCache)
     packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
     if weights.is_global:
         # The tied projection is one semantic KV value. Normalize it once without
@@ -142,8 +142,8 @@ def prefill_forward(
     else:
         packed_q = None
         write_chunk_to_ring_cache(
-            ring_kv_cache[0],
-            ring_kv_cache[1],
+            ring_kv_cache.k,
+            ring_kv_cache.v,
             tt_k,
             tt_v,
             mesh_config,
@@ -180,8 +180,8 @@ def prefill_forward(
     else:
         tt_sdpa = ring_prefill_attention(
             tt_q,
-            ring_kv_cache[0],
-            ring_kv_cache[1],
+            ring_kv_cache.k,
+            ring_kv_cache.v,
             mesh_config=mesh_config,
             ccl_manager=ccl_manager,
             num_local_kv_heads=num_local_kv_heads_ring,

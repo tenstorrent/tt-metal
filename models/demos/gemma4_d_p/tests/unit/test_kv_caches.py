@@ -16,12 +16,12 @@ def test_external_cache_allocation_preserves_semantic_layer_order(monkeypatch):
     )
     monkeypatch.setattr(
         kv_caches,
-        "init_packed_ring_kv_cache",
+        "init_global_ring_kv_cache",
         lambda *args, **kwargs: calls.append(("global", args, kwargs)) or "global-cache",
     )
     monkeypatch.setattr(
         kv_caches,
-        "init_ring_kv_cache",
+        "init_sliding_ring_kv_cache",
         lambda *args, **kwargs: calls.append(("sliding", args, kwargs)) or "sliding-cache",
     )
     hf = SimpleNamespace(

@@ -20,6 +20,21 @@ from .global_kv_cache import GLOBAL_HEAD_DIM, GLOBAL_PACKED_DIM, GLOBAL_ROTARY_D
 TILE_HEIGHT = 32
 
 
+@dataclass(frozen=True)
+class SlidingRingKVCache:
+    """Separate K and V cache tensors for sliding attention."""
+
+    k: ttnn.Tensor
+    v: ttnn.Tensor
+
+
+@dataclass(frozen=True)
+class GlobalRingKVCache:
+    """One physical global-attention cache with overlapping K and V views."""
+
+    kv: ttnn.Tensor
+
+
 def migration_ring_memory_config(mesh_device, row_dim):
     """One migratable 32-token row per round-robin DRAM shard."""
     banks = ttnn.CoreRangeSet(
@@ -68,7 +83,7 @@ def ring_cache_seq_len(max_seq_len, cp):
     return max_seq_len // cp
 
 
-def init_ring_kv_cache(
+def init_sliding_ring_kv_cache(
     mesh_config, num_local_kv_heads, head_dim, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Contiguous CP-sharded K/V caches for the ring path.
@@ -93,17 +108,10 @@ def init_ring_kv_cache(
         # Every rank holds an identically shaped slab; content diverges on first write.
         return _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, head_dim)
 
-    return [_zeros(), _zeros()]
+    return SlidingRingKVCache(k=_zeros(), v=_zeros())
 
 
-@dataclass(frozen=True)
-class PackedRingKVCache:
-    """One physical global-attention cache with overlapping K and V views."""
-
-    kv: ttnn.Tensor
-
-
-def init_packed_ring_kv_cache(
+def init_global_ring_kv_cache(
     mesh_config, num_local_kv_heads, max_seq_len, num_layers=1, num_users=1, cache_dtype=ttnn.bfloat8_b
 ):
     """Allocate the global [Krot128 | Vordered512] CP-sharded cache."""
@@ -112,7 +120,7 @@ def init_packed_ring_kv_cache(
     seq_local = ring_cache_seq_len(max_seq_len, cp)
     shape = [num_users * num_layers, num_local_kv_heads, seq_local, GLOBAL_PACKED_DIM]
     cache = _allocate_migration_ring_cache(mesh_device, shape, cache_dtype, GLOBAL_PACKED_DIM)
-    return PackedRingKVCache(cache)
+    return GlobalRingKVCache(cache)
 
 
 def write_chunk_to_packed_ring_cache(

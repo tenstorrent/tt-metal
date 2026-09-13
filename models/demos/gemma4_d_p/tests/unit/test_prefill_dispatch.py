@@ -74,11 +74,13 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
     from models.demos.gemma4_d_p.tt import attention
 
     tensor = SimpleNamespace(shape=(1, 1, 32768, 512))
-    cache = SimpleNamespace(kv=tensor) if is_global else (tensor, tensor)
+    from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache, SlidingRingKVCache
+
+    cache = GlobalRingKVCache(tensor) if is_global else SlidingRingKVCache(tensor, tensor)
     monkeypatch.setattr(attention, "load_attention_weights", lambda **_: SimpleNamespace(is_global=is_global))
     allocate = Mock(side_effect=AssertionError("external caches must not allocate replacements or tail pools"))
-    monkeypatch.setattr(attention, "init_ring_kv_cache", allocate)
-    monkeypatch.setattr(attention, "init_packed_ring_kv_cache", allocate)
+    monkeypatch.setattr(attention, "init_sliding_ring_kv_cache", allocate)
+    monkeypatch.setattr(attention, "init_global_ring_kv_cache", allocate)
     monkeypatch.setattr(ttnn, "zeros", allocate)
     result = attention.Gemma4Attention(
         config=SimpleNamespace(is_sliding=not is_global, sliding_window=1024),

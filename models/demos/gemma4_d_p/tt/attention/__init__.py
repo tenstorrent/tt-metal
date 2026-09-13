@@ -7,7 +7,7 @@ import ttnn
 
 from .weights import load_attention_weights
 from .prefill import prefill_forward
-from .ring_prefill import init_packed_ring_kv_cache, init_ring_kv_cache
+from .ring_prefill import init_global_ring_kv_cache, init_sliding_ring_kv_cache
 
 
 class Gemma4AttentionConfig:
@@ -62,7 +62,7 @@ class Gemma4Attention:
         self.layer_idx = layer_idx
 
         if ring_kv_cache is not None:
-            cache = ring_kv_cache.kv if hasattr(ring_kv_cache, "kv") else ring_kv_cache[0]
+            cache = ring_kv_cache.k if config.is_sliding else ring_kv_cache.kv
             if cache.shape[-2] * mesh_config.cp_degree < max_seq_len:
                 raise ValueError("External ring cache is too small for the configured prefill capacity")
 
@@ -83,7 +83,7 @@ class Gemma4Attention:
                 1 if self.weights.kv_replicated else config.num_key_value_heads // mesh_config.tp_degree
             )
             if self.weights.is_global:
-                self.ring_kv_cache = init_packed_ring_kv_cache(
+                self.ring_kv_cache = init_global_ring_kv_cache(
                     mesh_config=mesh_config,
                     num_local_kv_heads=num_local_kv_heads,
                     max_seq_len=max_seq_len,
@@ -91,7 +91,7 @@ class Gemma4Attention:
                     num_users=max_batch_size,
                 )
             else:
-                self.ring_kv_cache = init_ring_kv_cache(
+                self.ring_kv_cache = init_sliding_ring_kv_cache(
                     mesh_config=mesh_config,
                     num_local_kv_heads=num_local_kv_heads,
                     head_dim=config.head_dim,

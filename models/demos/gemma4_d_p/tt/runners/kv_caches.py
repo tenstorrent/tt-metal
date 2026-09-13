@@ -11,8 +11,8 @@ import ttnn
 from models.demos.common.prefill.adapter import KvCaches
 from models.demos.gemma4_d_p.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import (
-    init_packed_ring_kv_cache,
-    init_ring_kv_cache,
+    init_global_ring_kv_cache,
+    init_sliding_ring_kv_cache,
     ring_cache_capacity,
 )
 
@@ -66,7 +66,7 @@ def allocate_ring_kv_caches(
         config = Gemma4AttentionConfig(hf_config, layer_idx)
         local_heads = 1 if layer_type == "full_attention" else config.num_key_value_heads // mesh_config.tp_degree
         if layer_type == "full_attention":
-            cache = init_packed_ring_kv_cache(
+            cache = init_global_ring_kv_cache(
                 mesh_config,
                 local_heads,
                 max_seq_len,
@@ -74,7 +74,7 @@ def allocate_ring_kv_caches(
                 cache_dtype=cache_dtype,
             )
         elif layer_type == "sliding_attention":
-            cache = init_ring_kv_cache(
+            cache = init_sliding_ring_kv_cache(
                 mesh_config,
                 local_heads,
                 config.head_dim,
