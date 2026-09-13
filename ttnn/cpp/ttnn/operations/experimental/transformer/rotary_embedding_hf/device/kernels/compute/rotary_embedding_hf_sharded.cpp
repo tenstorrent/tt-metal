@@ -136,18 +136,26 @@ void kernel_main() {
             rotated_in_interm_cb.push_back(Wt);
 
             // sin_interim = rotated * sin (broadcast rows)
+            // Restore both operands after the scalar-multiply/copy chain; the trig caches and
+            // input can have different formats. The following chains leave reconfiguration to us.
+            reconfig_data_format(rotated_in_interm_cb_id, sin_cb_id);
+            pack_reconfig_data_format(rotated_in_interm_cb_id, sin_interm_cb_id);
             mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, rotated_input, ckl::input(sin_input, ckl::BroadcastDim::Row)>{},
                 ckl::PackTile<sin_output>{});
 
+            reconfig_data_format(rotated_in_interm_cb_id, in_cb_id, sin_cb_id, cos_cb_id);
+            pack_reconfig_data_format(sin_interm_cb_id, cos_interm_cb_id);
             ckl::eltwise_chain<ckl::InitReconfigOwner::Caller>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt),
                 ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, in_input, ckl::input(cos_input, ckl::BroadcastDim::Row)>{},
                 ckl::PackTile<cos_output>{});
 
             // out = cos_interim + sin_interim
+            reconfig_data_format(in_cb_id, cos_interm_cb_id, cos_cb_id, sin_interm_cb_id);
+            pack_reconfig_data_format(cos_interm_cb_id, out_cb_id);
             ckl::add<cos_interm_input, sin_interm_input, rotary_output>(
                 ckl::IterationShape::tiles(Wt).block_size(/*block_size=*/Wt));
         }
