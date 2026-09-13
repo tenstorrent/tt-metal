@@ -19,8 +19,8 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .ring_prefill import (
-    ring_packed_prefill_attention,
-    ring_prefill_attention,
+    global_ring_prefill_attention,
+    sliding_ring_prefill_attention,
     write_chunk_to_packed_ring_cache,
     write_chunk_to_ring_cache,
 )
@@ -250,7 +250,7 @@ class Gemma4Attention:
         num_local_kv_heads_ring = tt_v.shape[1]
         ring_logical_n = self.ring_max_seq_len
         if is_global:
-            tt_sdpa = ring_packed_prefill_attention(
+            tt_sdpa = global_ring_prefill_attention(
                 packed_q,
                 self.ring_kv_cache.kv,
                 mesh_config=self.mesh_config,
@@ -267,7 +267,7 @@ class Gemma4Attention:
             )
             packed_kv.deallocate(True)
         else:
-            tt_sdpa = ring_prefill_attention(
+            tt_sdpa = sliding_ring_prefill_attention(
                 tt_q,
                 self.ring_kv_cache.k,
                 self.ring_kv_cache.v,
