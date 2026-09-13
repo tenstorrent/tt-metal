@@ -15,7 +15,6 @@ from .operations import (
     apply_output_projection,
     apply_per_head_norm,
     apply_qkv_projection,
-    concat_heads,
     prefill_short_lived_memcfg,
     split_qkv_heads_prefill,
 )
@@ -290,7 +289,7 @@ class Gemma4Attention:
         if tt_k is not None:
             tt_k.deallocate(True)
         tt_v.deallocate(True)
-        tt_out = concat_heads(tt_sdpa)
+        tt_out = ttnn.experimental.nlp_concat_heads(tt_sdpa, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         tt_out = apply_output_projection(tt_out, self.weights)
         tt_out = ccl_allreduce(tt_out, self.mesh_config, self.ccl_manager)
         return tt_out
