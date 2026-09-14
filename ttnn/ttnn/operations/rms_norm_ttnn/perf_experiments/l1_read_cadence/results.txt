@@ -1,0 +1,89 @@
+D41 -- placement-conditional NoC read-barrier cadence in rms_norm_ttnn_reader.cpp
+=================================================================================
+Blackhole p150b, AICLK 1350 MHz.  [1, 9, 384, 1024] bfloat16 TILE interleaved
+(108 tile-rows over 108 cores, WT_CHUNK=32, 1 tile-row per core).  eps 1e-2.
+Metric: sum of DEVICE KERNEL DURATION [ns] over the op's programs, ONE dispatch
+per variant per process (no warm-up transient; some cases accumulate a residual,
+so no trial loop).  "native" = ttnn._native_rms_norm.
+
+bench_family.py -- four cases, native vs generated, in one process
+------------------------------------------------------------------
+case               native   shipped   D41     ratio nat/gen before -> after
+RMSN     L1->L1    19,853   33,906    21,030  0.603 -> 0.944
+RMSN     L1->DRAM  33,940   47,481    35,047  0.702 -> 0.968
+RMSN_GB  L1->L1    35,442*  35,160    29,269  0.886 -> 1.211*
+RMSN     DRAM->L1  25,395   25,256    25,407  0.992 -> 1.000   (control, unchanged)
+
+  * native's RMSN_GB samples span 31,158 / 31,990 / 34,648 / 35,442 across runs,
+    so read that ratio as ">= 1.0", not as 1.211.  The generated side is stable:
+    35,160 -> 29,269 ns, -17%.
+
+  The DRAM control is unchanged BY CONSTRUCTION, not just by measurement: the only
+  compile-time word that differs between the L1 and DRAM builds is the x accessor's
+  config word (IsDram), and `if constexpr (RD_GROUP)` erases the added barrier from
+  the DRAM build entirely.  Verified in the emitted KERNEL_COMPILE_TIME_ARGS:
+  ...,32,0,0,2048,... (L1) vs ...,32,0,2,2048,... (DRAM), index 33 = the config word.
+
+  Output is BIT-IDENTICAL to the shipped kernel in every case (sha256 of the f32
+  view of the bf16 output): 9afe852fcc4dcf75 for RMSN, d502429030415937 for RMSN_GB,
+  before and after.
+
+bench_residual.py -- the two-stream arm (group halves to 4 in `w`)
+-----------------------------------------------------------------
+in= L1    61,950 -> 28,887 ns   (-53%)   PCC 0.999990, max abs 0.04199 both
+in= DRAM  44,978 -> 44,589 ns   (flat)   PCC 0.999990, max abs 0.04199 both
+
+  The largest win in the family, as expected: a residual issues a second read per
+  width tile inside the SAME loop, so the shipped cadence leaves 64 reads per core
+  (6,912 grid-wide) outstanding against worker L1.
+
+bench_gb_isolated.py -- why the per-channel read is NOT capped
+-------------------------------------------------------------
+RMSN_GB L1->L1, gamma + bias + x all L1 interleaved, three fresh processes each:
+
+  per-channel cadence capped at 8 txns : 31,374 / 32,530 / 33,421 ns
+  per-channel cadence shipped (1 barr) : 28,533 / 29,619 / 30,693 ns
+
+  Non-overlapping ranges; capping COSTS ~2.9 us median.  Mechanism: the per-channel
+  operands are read in a prologue with their own barriers, and that prologue's length
+  staggers the grid -- which is why reader_read_x on RMSN_GB is 6,285 ns against the
+  18,848 it costs with no per-channel operand.  Shortening the prologue re-synchronises
+  all 108 cores onto the activation read and gives back more than it saves.  So the
+  deep queue stays there; it is doing double duty as a traffic stagger.
+
+Cadence sweep (from the l1_resident_regression investigation, in0_L1 -> out_L1)
+------------------------------------------------------------------------------
+reads per barrier  32 (shipped)  16      8       4       native (8)
+whole op (ns)      33,089        21,873  20,819  21,360  19,505
+in0_DRAM (ns)      25,404        26,044  27,210  --      24,815
+
+  8 is the optimum and it is NOT monotonic.  16 would be the best single compromise
+  if one refused to condition on placement -- but the buffer type is already in the
+  accessor's config word, so there is no reason to refuse.
+
+Scope note
+----------
+This does not move the median of the 416-case reference comparison (1.4183 either
+way -- six cases cannot move a median).  Its value is the tail: worst case 0.591x
+-> ~0.94x.
+
+Structural proof that the DRAM path is untouched
+------------------------------------------------
+Statistics alone cannot settle "the DRAM path must not regress at all" -- the
+generated DRAM number spans 25,144-25,525 ns across runs and the shipped 25,256 sits
+inside that.  So compare the MACHINE CODE instead.  Compile ncrisck.cc against both
+reader sources under identical flags, once with the DRAM-input compile-time args
+(config word index 33 = 2) and once with the L1 ones (= 0):
+
+  DRAM args, shipped -> D41 : 797 -> 797 instructions, mnemonic histogram IDENTICAL.
+                              The only textual difference is stack-slot renumbering
+                              (sw a1,24(sp) -> sw a1,20(sp) and friends) -- register
+                              allocator churn from the extra constexprs in scope, not
+                              added work.  The barrier is provably not in this build.
+  L1 args,   shipped -> D41 : 804 -> 816 instructions (+12), and the added mnemonics
+                              are exactly one masked barrier: andi (the % 8), beqz/bne
+                              (the branch), lw + fence (the outstanding-read counter
+                              read and the memory fence), li/lui (its address).
+
+(That A/B drops -flto and silences warnings, so neither object is the shipped binary;
+both sides are built the same way, which is all the comparison needs.)

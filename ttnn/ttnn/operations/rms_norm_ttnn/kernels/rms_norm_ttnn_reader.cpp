@@ -283,6 +283,10 @@ FORCE_INLINE void stage_per_channel_chunk(const Acc& acc, uint32_t first_wt) {
             }
         }
     } else {
+        // D41's barrier cap is deliberately NOT applied here: measured, it LOSES ~2.9 us
+        // on RMSN_GB L1->L1 (capped 31,374/32,530/33,421 vs shipped 28,533/29,619/30,693,
+        // three fresh dispatches each).  This read is a PROLOGUE whose length staggers the
+        // grid; shortening it re-synchronises all 108 cores onto the activation read.
         const uint32_t tile_bytes = get_tile_size(CB_TILES);
         cb_reserve_back(CB_TILES, WT_CHUNK);
         uint32_t l1_addr = get_write_ptr(CB_TILES);
@@ -613,6 +617,26 @@ void kernel_main() {
     constexpr bool PC_COMPACT_HOLD = (PC_COMPACT != 0);
     constexpr bool PC_LAZY = (PC_COMPACT == 2);
     constexpr bool PC_CHUNKED = (PC_CHUNK != 0);
+    // ---- D41: THE PLACEMENT-CONDITIONAL READ BARRIER CADENCE ----------------
+    // `stage_tile_rows` runs the deepest read queue the block allows -- right against 8
+    // DRAM banks, wrong against ~110 worker L1s, where there is no bank latency to hide
+    // and the requests queue against each other (measured: the trailing barrier 3,736 ->
+    // 16,783 ns moving x DRAM -> L1, while the issue loop gets CHEAPER).  So cap the
+    // queue only when the activation is L1-resident, off `ArgConfig::IsDram` in the x
+    // accessor's own config word -- no new compile-time arg, so `TensorAccessorArgs<33>()`
+    // and the READER_CT_SCALARS it mirrors do not move.
+    //
+    // The cap is in TRANSACTIONS, not bytes: what saturates a worker L1 is how many
+    // requests are outstanding against it, and a byte cap would track dtype instead.  8 is
+    // native layernorm's block_size and the sweep's optimum (32 -> 33,089 ns, 16 -> 21,873,
+    // 8 -> 20,819, 4 -> 21,360; native 19,505) -- not monotonic.  A residual issues a
+    // second read per width tile in this same loop, so it halves the group in `w`.
+    constexpr uint32_t RD_BARRIER_TXNS = 8;
+    constexpr uint32_t RD_STREAMS_PER_W = (NATIVE_X ? 0u : 1u) + ((HAS_R && !NATIVE_R) ? 1u : 0u);
+    constexpr uint32_t RD_GROUP_W = (RD_STREAMS_PER_W != 0) ? (RD_BARRIER_TXNS / RD_STREAMS_PER_W) : RD_BARRIER_TXNS;
+    // Compiled out on a DRAM activation, and on a chunk the group does not cut (there the
+    // only `w` that could fire is the last, which the trailing barrier already covers).
+    constexpr bool RD_GROUP = (!x_args.is_dram) && (RD_GROUP_W != 0) && (RD_GROUP_W < WT_CHUNK);
     static_assert(!PC_COMPACT_HOLD || !PC_NARROW, "rms_norm_ttnn: the compact hold is the TILE form, not D30's");
     // The cache stores exactly what TRIM == 2 fetches, so the descriptor may only
     // turn it on where BOTH operands admit the face-row granularity.
@@ -1375,6 +1399,13 @@ void kernel_main() {
                         noc_async_read_tile(tile_base + w, ra, rl1);
 #endif
                         rl1 += x_tile_bytes;
+                    }
+                    // D41: drain every RD_GROUP_W width tiles, resetting per tile-row
+                    // (TXN_ROWS == 1 on the profiled plan, so the group is one row).
+                    if constexpr (RD_GROUP) {
+                        if (((w + 1) % RD_GROUP_W) == 0) {
+                            noc_async_read_barrier();
+                        }
                     }
                 }
                 // Step over the (already zeroed) pad pages so the next tile-row starts
