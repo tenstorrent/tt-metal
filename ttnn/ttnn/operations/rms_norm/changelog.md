@@ -18,3 +18,61 @@
 - **Device time (post-R1 baseline for Refinement 2, Tracy, one fresh run)**: `(1,1,32,7168)` bf16 / HiFi2 / 16-bit DEST / bf16 TILE gamma: **9208 ns** on 26 cores (Phase 0 corner: 10288 ns). Already under the clock-unscaled 14894 ns R2 goal; R2 re-measures and clock-scales.
 - **Issues encountered**: none on device — every named cell passed on the first run. One self-caught host bug before it could bite: the `cb_gamma_sticks`-on-`cb_normed` alias assumed `T_g ≤ T_acc`, which 16-bit DEST + fp32 ROW_MAJOR gamma violates at B = 1 (fixed by sizing the shared CB as the max demand; pinned by `test_rms_norm_row_major_16bit_dest[...-fp32_gamma]`).
 - **Tests added**: `test_rms_norm_precision_matrix.py` (240 cells + results file writer), `test_rms_norm_numeric_config.py` (11: R3 sharded bf16/bf8b × both DEST widths, ROW_MAJOR at 16-bit DEST with bf16/fp32 RM gamma on R1/R2, bf8b no-gamma, `{float32, False}` refusal), `test_rms_norm_perf_shape_flagged_config` (4 shapes at the perf-flagged config, profile by node id). Probes `probes/probe_012.py`, `probe_013.py`.
+
+## Perf 1 — tournament round 1 (reader ordering + column-0 fused SFPU finalize)
+- **Date**: 2026-09-14. Device: Blackhole p150b, 1350 MHz, 13×10 compute grid. Hard cap: 2 experiments. `SUPPORTED` unchanged.
+- **Focus case** (perf-flagged `LOOSE_CASES`, `minimum_expected_speedup=7.0`): `(1,1,32,7168)` bf16 / TILE / DRAM interleaved, bf16 TILE gamma, `HiFi2`, `fp32_dest_acc_en=False`, `math_approx_mode=False`, soft PCC 0.9995; goal ≤ 14894 ns unscaled (104259 / 7). Blocking: R2, 26 cores (13×2 rectangle), `core_w_tiles` 9/8, `block_rows` 1.
+- **Instrumentation (permanent)**: new `ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp` (`MaybeDeviceZoneScope(name)` = `DeviceZoneScopedN` under `PROFILE_KERNEL`, nothing otherwise). Zones split waits from payload: reader `reader_scaler`, `reader_gamma_{zero_fill,issue,barrier}`, `reader_publish_shard`, `reader_x_{reserve,issue,barrier}` / `reader_x_sticks`; compute `compute_{shard_wait,x_tilize,x_wait,sumsq,collapse,gather_wait,combine,rstd_wait,gamma_tilize,normalize,scale,untilize}`; writer `writer_{partial_wait,gather_self_copy,gather_sem_wait,gather_send_issue,gather_send_barrier,rstd_handoff_wait,mcast_send,mcast_receive,out_wait,out_issue,out_barrier}` / `writer_out_sticks`. Coverage ≥ 98 % of every RISC span, no core at the marker cap, `*-KERNEL` max/p50 ≤ 1.10 (balanced). Measurement-only ablation switches (compile-time, 0 in production): `RMS_NORM_ABLATE=READ_X,WRITE_OUT,ELTWISE,FINALIZE` env → kernel defines via `rms_norm_program_descriptor._perf_ablation_defines`. Tooling: `perf_experiments/zone_report.py` (per-zone table from `profile_log_device.csv`), `perf_experiments/guard_report.py` + `tests/.../test_rms_norm_perf_guard.py` (12-cell guard set, one profiled run).
+
+### Measured breakdown (focus case, instrumented full = 9941 ns; un-instrumented Refinement-1 baseline 9208 ns)
+Peer-core unpack-thread timeline (median over 26 cores): `compute_x_wait` 2522 → `sumsq` 299 → `collapse` 166 → `compute_rstd_wait` 3231 → `normalize` 369 → `scale` 619; then writer `out_wait` 1219 (compute), `out_issue` 976, `out_barrier` 277. Reader: `scaler` 305, `gamma_issue` 290, `gamma_barrier` 809, `x_issue` 298, `x_barrier` 662 — x was published ~2.4 µs after start because scaler + gamma preceded it. Root: `gather_self_copy` 170, `gather_sem_wait` 618, `compute_gather_wait` 959, `compute_combine` unpack 451 / **math 2470 (occupancy)** / pack 193, `rstd_handoff_wait` 1535, `mcast_send` 650; peers `mcast_receive` 2725.
+
+Cumulative ablation ladder (payload stubbed, sync kept): full 9941 → FINALIZE solo 8861 (−1080) · READ_X solo 9056 (−885) → READ_X+WRITE_OUT 7402 → +ELTWISE 6055 → +FINALIZE **5044** (everything stubbed at once). The 5.0 µs floor = reader serialization (~1.4 µs) + collective (gather skew 0.6, 26-tile add 0.45, handoff, mcast 0.65) + kernel start/stop.
+
+**Ranked headroom**: (1) reader ordering — x behind scaler+gamma, ~1.4 µs pure serialization (x bytes ≈ 0.9 µs, aggregate 468 KB ≈ DRAM roofline); (2) root finalize — three full-tile SFPU passes + two inits on a column-0-valid tile, 1.08 µs on every core's critical path; (3) output write 1.65 µs (near DRAM roofline, 468 KB), eltwise 1.35 µs (D+E FPU fusion is catalog-null), collective transport ~2 µs (T3).
+
+### Portfolio (cap 2)
+1. `reader_x_first` — issue block-0 x first; scaler and gamma after. T1.
+2. `finalize_col0_sfpu` — one column-0-scoped sfpi pass `rsqrt(sum·1/W + eps)` over the 8 even-parity vectors of the left faces instead of `mul_unary_tile` + `add_unary_tile` + `rsqrt_tile` (96 vectors, 2 inits). T2/T3 raw sfpi.
+Not floated (cap / gated): D+E fusion (catalog `compute_fusion`: FPU dest-reuse loses), output-write coalescing (interleaved DRAM tiles, near roofline), collective topology change (T3).
+
+### Verdicts
+| idea | verdict | baseline → candidate (focus) | domain |
+|---|---|---|---|
+| `reader_x_first` | **WIN** | x published 2789/3590 → 1552/1705 ns (median/slowest core), byte-identical CBs in 6 regimes (TILE/RM x, TILE/RM/no gamma, 26/10/130-core geometries); bench kernel ns flat-to-+1.16× | applies everywhere; RM gamma needs the compute-side tilize moved (done); R3 untested by the bench (publish-first applied, measured end-to-end below) |
+| `finalize_col0_sfpu` | **WIN** | math-thread 990.6 → 227.6 ns/call @16-bit DEST (966.6 → 221.8 @fp32 DEST); menu: fused_full 821, col0_c 509, fused_c 424, col0_skip_3pass 283, **col0_skip_fused 228**; max rel err vs float64: 3.82e-3 vs baseline 5.10e-3 @16-bit (fewer DEST truncations), 7.35e-8 vs 7.74e-8 @fp32 — no option trades precision | applies everywhere, no exceptions (both DEST modes, approx on/off, sum=0, wide range) |
+Mechanism notes from the reader bench: the first DRAM burst of a kernel costs ~1.15 µs of barrier, the second ~0.65 µs; a RISC L1 store loop (scaler fill) running while NoC reads land slows ~6× (305 → 1600–1900 ns), so the scaler is filled after the x push and before the gamma issue.
+
+### Graduated (one unqualified path each; replaced code deleted; no carve-outs)
+- **Reader order** (`rms_norm_reader.cpp`): `load_x_block(0)` → `prepare_scaler()` → `load_gamma_slice()` → `load_x_block(1..)`; R3: `publish_x_shard` → scaler → gamma. Old order deleted. Domain: every regime/layout/gamma mode. Compute-side consequence: the RM-gamma tilize moved from kernel start to block 0 just before D — it must run **before** D packs the first normed tile because `cb_gamma_sticks` aliases `cb_normed`'s allocation (the first placement after D failed the two RM-gamma guard cells; fixed and re-measured).
+- **Finalize** (`rms_norm_compute.cpp` `finalize_rstd_col0`): the reduce post-op is now `rsqrt_tile_init()` + one hand-rolled two-face sfpi walk (SFPMAD → stock `_calculate_sqrt_body_<APPROX, RECIPROCAL>` → RNE to bf16 under 16-bit DEST), even-parity stride. `binop_with_scalar` include and the three stock calls deleted. Domain: every root / Cw==1 core, every regime, dtype and DEST width (the golden suite exercises all).
+- **Whole-op, focus case** (instrumented): **9941 → 7782 ns (−21.7 %)**; `compute_x_wait` 2522 → 1176, root combine math 2470 → 1508, `compute_rstd_wait` 3231 → 2521. PCC gate 0.9995 passes. Against the flagged goal: 7782 ns vs ≤ 14894 ns (1.9× under, before clock scaling).
+
+### Guard set (instrumented ns, one profiled run each; `perf_experiments/ablation/guard_{before,after,after_rm_fixed}.txt`)
+| cell | cores | before | after | Δ |
+|---|---|---|---|---|
+| R2 decode 32×7168 bf16 HiFi2 16-bit (focus) | 26 | 9830 | 7730 | −21.4 % |
+| R3 decode 32×5120 WIDTH_SHARDED [32,160] 8×4 | 32 | 6539 | 4775 | −27.0 % |
+| R3 decode 32×7168 WIDTH_SHARDED [32,256] 7×4 | 28 | 7000 | 4786 | −31.6 % |
+| R3 32×2048 WIDTH_SHARDED 8 cores, fp32 DEST HiFi4 | 8 | 6398 | 4540 | −29.0 % |
+| R1 prefill 8192×1024 | 130 | 119941 | 118852 | −0.9 % (noise) |
+| R1 prefill 8192×7168 | 120 | 679966 | 683867 | +0.6 % (noise) |
+| R1 (2,4,128,512) no gamma, fp32 DEST | 32 | 10269 | 9607 | −6.4 % |
+| R2 (residency) 64×12288, fp32 DEST | 52 | 20438 | 15227 | −25.5 % |
+| R2 RM x + RM gamma 32×7168, 16-bit | 26 | 11324 | 9765 | −13.8 % |
+| R1 RM x + fp32 RM gamma 256×1024, 16-bit | 16 | 13804 | 11259 | −18.4 % |
+| R1 fp32 x + fp32 gamma 128×4096, fp32 DEST | 32 | 25600 | 21659 | −15.4 % |
+| R2 bf8b x + bf8b gamma 32×4096, HiFi4 16-bit | 8 | 9899 | 7729 | −21.9 % |
+No material regression on any supported cell; the two prefill cells are DRAM-bound and flat within noise.
+
+**Golden**: `eval/golden_tests/rms_norm/` — `test_golden.py` 1646 passed / 9626 skipped / 360 xfailed / 0 failed; `test_regression.py` + `test_translated.py` 62 passed / 28 xfailed — identical counts to Refinement 1 (1708 / 388).
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `rsqrt_tile` / `mul_unary_tile` / `add_unary_tile` (SFPU unary family) | capability | each hardcodes `VectorMode::RC` × `ITERATIONS=8` (32 vectors) and owns its own init; there is no way to (a) scope a unary to the column-0 vectors — `VectorMode::C` plus an even-parity `dst_reg += 2` stride — or (b) fuse a scalar FMA with rsqrt into one DEST pass with one init. Downstream reads only column 0 (`BroadcastDim::Col`), so 88 of 96 vector ops and 2 of 3 DEST round trips were wasted. | 990.6 /call (16-bit DEST), 966.6 (fp32) | 227.6 (16-bit), 221.8 (fp32) | `kernels/rms_norm_compute.cpp:57-89` (`finalize_rstd_col0_body` / `finalize_rstd_col0`), called at `:142` |
+| `_llk_math_eltwise_unary_sfpu_params_` → `_llk_math_eltwise_sfpu_apply_vector_mode_` (`VectorMode::C` face walk) | capability | its 2-trip left-face loop is fully unrolled by the compiler (`#pragma GCC unroll 0` notwithstanding), and two interleaved MAD+rsqrt bodies overflow the SFPU register file — sfpi cannot spill, so a fused body under `VectorMode::C` is an ICE (`sfpi_funcs.h:467 cannot store sfpu register`). The face walk is hand-rolled with `_llk_math_eltwise_sfpu_start_/inc_dst_face_addr_/done_` and an asm-opaque trip count (`li %0, 2`) so one body copy exists per iteration. | n/a (does not compile) | 227.6 | `kernels/rms_norm_compute.cpp:74-89` |
+The reader reorder bypasses nothing (dataflow API level, helper calls unchanged).
+
+### Left for round 2 (focus case, instrumented after)
+`compute_rstd_wait` 2521 ns (collective: gather skew `writer_gather_sem_wait` 455, root 26-tile add `compute_combine` unpack 456, `rstd_handoff_wait` 747, `mcast_send` 650, `mcast_receive` 1988); output write `out_issue` 1020 + `out_barrier` 286 (468 KB aggregate ≈ DRAM roofline); `compute_x_wait` 1176 (first DRAM burst ≈ 1.15 µs barrier, at roofline); eltwise D+E ~1 µs.

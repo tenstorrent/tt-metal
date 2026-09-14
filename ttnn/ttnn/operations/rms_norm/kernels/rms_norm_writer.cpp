@@ -30,7 +30,14 @@
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers_dataflow.hpp"
+
+// Perf ablation (measurement only, never set in production): RMS_NORM_ABLATE_WRITE_OUT stubs the
+// output tile writes' payload while keeping wait / barrier / pop and the per-tile address generation.
+#ifndef RMS_NORM_ABLATE_WRITE_OUT
+#define RMS_NORM_ABLATE_WRITE_OUT 0
+#endif
 
 using namespace dataflow_kernel_lib;
 
@@ -87,6 +94,8 @@ void kernel_main() {
             return;
         }
         if constexpr (output_rm) {
+            // The helper owns wait / issue / barrier / pop per tile-row, so this zone is the stage's occupancy.
+            MaybeDeviceZoneScope("writer_out_sticks");
             write_sticks_after_untilize<cb_out_sticks>(
                 output_acc,
                 tile_rows * rows,
@@ -95,16 +104,30 @@ void kernel_main() {
                 w_tile_start * tile_rows * out_elem_bytes);
         } else {
             const uint32_t block_tiles = rows * core_w_tiles;
-            cb_wait_front(cb_output_tiles, block_tiles);
+            {
+                MaybeDeviceZoneScope("writer_out_wait");
+                cb_wait_front(cb_output_tiles, block_tiles);
+            }
             uint32_t src = get_read_ptr(cb_output_tiles);
-            for (uint32_t r = 0; r < rows; ++r) {
-                const uint32_t row_base = (block_row_tile_start + r) * tensor_w_tiles + w_tile_start;
-                for (uint32_t c = 0; c < core_w_tiles; ++c) {
-                    noc_async_write(src, output_acc.get_noc_addr(row_base + c), out_tile_bytes);
-                    src += out_tile_bytes;
+            {
+                MaybeDeviceZoneScope("writer_out_issue");
+                for (uint32_t r = 0; r < rows; ++r) {
+                    const uint32_t row_base = (block_row_tile_start + r) * tensor_w_tiles + w_tile_start;
+                    for (uint32_t c = 0; c < core_w_tiles; ++c) {
+                        const uint64_t dst = output_acc.get_noc_addr(row_base + c);
+                        if constexpr (RMS_NORM_ABLATE_WRITE_OUT) {
+                            asm volatile("" : : "r"(static_cast<uint32_t>(dst)), "r"(src) : "memory");
+                        } else {
+                            noc_async_write(src, dst, out_tile_bytes);
+                        }
+                        src += out_tile_bytes;
+                    }
                 }
             }
-            noc_async_write_barrier();
+            {
+                MaybeDeviceZoneScope("writer_out_barrier");
+                noc_async_write_barrier();
+            }
             cb_pop_front(cb_output_tiles, block_tiles);
         }
     };
@@ -125,30 +148,47 @@ void kernel_main() {
 
             // exchange_partials_block
             if (is_active) {
-                cb_wait_front(cb_partial_collapsed, rows);
+                {
+                    MaybeDeviceZoneScope("writer_partial_wait");
+                    cb_wait_front(cb_partial_collapsed, rows);
+                }
                 const uint32_t src = get_read_ptr(cb_partial_collapsed);
                 if (is_root) {
                     cb_reserve_back(cb_gather, rows * num_partials);
-                    // own slot: local L1 -> L1 copy through the NoC (strided destination)
-                    for (uint32_t r = 0; r < rows; ++r) {
-                        noc_async_read(
-                            get_noc_addr(my_x[noc_index], my_y[noc_index], src + r * partial_tile_bytes),
-                            gather_base + (r * num_partials + w_split_index) * partial_tile_bytes,
-                            partial_tile_bytes);
+                    {
+                        MaybeDeviceZoneScope("writer_gather_self_copy");
+                        // own slot: local L1 -> L1 copy through the NoC (strided destination)
+                        for (uint32_t r = 0; r < rows; ++r) {
+                            noc_async_read(
+                                get_noc_addr(my_x[noc_index], my_y[noc_index], src + r * partial_tile_bytes),
+                                gather_base + (r * num_partials + w_split_index) * partial_tile_bytes,
+                                partial_tile_bytes);
+                        }
+                        noc_async_read_barrier();
                     }
-                    noc_async_read_barrier();
-                    gather_sem.wait(num_partials_expected);
+                    {
+                        MaybeDeviceZoneScope("writer_gather_sem_wait");
+                        gather_sem.wait(num_partials_expected);
+                    }
                     gather_sem.set(0);
                     cb_push_back(cb_gather, rows * num_partials);
                 } else {
-                    for (uint32_t r = 0; r < rows; ++r) {
-                        noc_async_write(
-                            src + r * partial_tile_bytes,
-                            get_noc_addr(
-                                root_x, root_y, gather_base + (r * num_partials + w_split_index) * partial_tile_bytes),
-                            partial_tile_bytes);
+                    {
+                        MaybeDeviceZoneScope("writer_gather_send_issue");
+                        for (uint32_t r = 0; r < rows; ++r) {
+                            noc_async_write(
+                                src + r * partial_tile_bytes,
+                                get_noc_addr(
+                                    root_x,
+                                    root_y,
+                                    gather_base + (r * num_partials + w_split_index) * partial_tile_bytes),
+                                partial_tile_bytes);
+                        }
                     }
-                    noc_async_write_barrier();
+                    {
+                        MaybeDeviceZoneScope("writer_gather_send_barrier");
+                        noc_async_write_barrier();
+                    }
                     gather_sem.up(noc, root_x, root_y, 1);
                 }
                 cb_pop_front(cb_partial_collapsed, rows);
@@ -156,16 +196,25 @@ void kernel_main() {
 
             // broadcast_rstd_block
             if (is_root) {
-                cb_wait_front(cb_rstd_handoff, rows);
+                {
+                    MaybeDeviceZoneScope("writer_rstd_handoff_wait");
+                    cb_wait_front(cb_rstd_handoff, rows);
+                }
                 cb_reserve_back(cb_rstd, rows);
-                sender.send(get_read_ptr(cb_rstd_handoff), get_write_ptr(cb_rstd), rows * partial_tile_bytes);
+                {
+                    MaybeDeviceZoneScope("writer_mcast_send");
+                    sender.send(get_read_ptr(cb_rstd_handoff), get_write_ptr(cb_rstd), rows * partial_tile_bytes);
+                }
                 cb_push_back(cb_rstd, rows);
                 cb_pop_front(cb_rstd_handoff, rows);
             } else {
                 if (is_active) {
                     cb_reserve_back(cb_rstd, rows);
                 }
-                receiver.receive();
+                {
+                    MaybeDeviceZoneScope("writer_mcast_receive");
+                    receiver.receive();
+                }
                 if (is_active) {
                     cb_push_back(cb_rstd, rows);
                 }

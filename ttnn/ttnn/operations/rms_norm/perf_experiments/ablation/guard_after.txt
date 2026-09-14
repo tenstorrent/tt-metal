@@ -1,0 +1,13 @@
+cell                                 cores  kernel_ns    brisc   ncrisc   trisc1
+R2_decode_7168_focus                    26       7730     7730     3250     5701
+R3_decode_5120_sharded_8x4              32       4775     3883     1885     4670
+R3_decode_7168_sharded_7x4              28       4786     3675     2531     4674
+R3_2048_sharded_8_fp32dest               8       4540     2990     1596     4407
+R1_prefill_1024                        130     118852   118718   110248   116447
+R1_prefill_7168                        120     683867   683727   646651   680071
+R1_4d_no_gamma_fp32dest                 32       9607     9603     3804     6604
+R2_residency_64x12288_fp32dest          52      15227    15225     8607    10779
+R2_rm_x_rm_gamma                        26       9808     9807     4212     8127
+R1_rm_x_rm_gamma_fp32_16bit             16      11304    11235     5769     9713
+R1_fp32_x_fp32_gamma                    32      21659    21509    16457    17564
+R2_bf8b_x_bf8b_gamma                     8       7729     7521     2664     6688

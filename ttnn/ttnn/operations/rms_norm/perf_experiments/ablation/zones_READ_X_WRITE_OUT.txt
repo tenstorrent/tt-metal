@@ -1,0 +1,59 @@
+run host id 1024 (present: [1024]), CHIP_FREQ 1350 MHz, 2146 marker rows
+
+== kernel span (per RISC): max / p50 across cores ==
+  NCRISC   cores= 26 max=     2037 p50=     1838 ratio=1.11
+  BRISC    cores= 26 max=     7309 p50=     7197 ratio=1.02
+  TRISC_0  cores= 26 max=     6895 p50=     6783 ratio=1.02
+  TRISC_1  cores= 26 max=     6861 p50=     6758 ratio=1.02
+  TRISC_2  cores= 26 max=     7041 p50=     6941 ratio=1.01
+
+== zones: per RISC, per zone (ns summed over executions on a core; stats across cores) ==
+  RISC     zone                             cores exec/core  median_ns     max_ns     min_ns
+  NCRISC   reader_gamma_barrier                26         1        793       1015        560
+  NCRISC   reader_scaler                       26         1        312        317        306
+  NCRISC   reader_gamma_issue                  26         1        286        289        259
+  NCRISC   reader_x_issue                      26         1        145        145        135
+  NCRISC   reader_x_reserve                    26         1         33         33         33
+  NCRISC   reader_x_barrier                    26         1         24         24         24
+  BRISC    writer_mcast_receive                25         1       2707       3065       2213
+  BRISC    writer_partial_wait                 26         1       2201       2376       2044
+  BRISC    writer_rstd_handoff_wait             1         1       1530       1530       1530
+  BRISC    writer_out_wait                     26         1       1216       1222       1110
+  BRISC    writer_gather_sem_wait               1         1        865        865        865
+  BRISC    writer_mcast_send                    1         1        651        651        651
+  BRISC    writer_gather_send_barrier          25         1        262        370        127
+  BRISC    writer_out_issue                    26         1        148        152        138
+  BRISC    writer_gather_self_copy              1         1        135        135        135
+  BRISC    writer_gather_send_issue            25         1         63         63         62
+  BRISC    writer_out_barrier                  26         1         30         32         30
+  TRISC_0  compute_rstd_wait                   26         1       3254       3542       1772
+  TRISC_0  compute_x_wait                      26         1       1657       1880       1439
+  TRISC_0  compute_gather_wait                  1         1       1164       1164       1164
+  TRISC_0  compute_scale                       26         1        621        623        539
+  TRISC_0  compute_combine                      1         1        455        455        455
+  TRISC_0  compute_normalize                   26         1        370        379        342
+  TRISC_0  compute_sumsq                       26         1        298        298        270
+  TRISC_0  compute_collapse                    26         1        170        170        147
+  TRISC_1  compute_normalize                   26         1       3716       4010       1145
+  TRISC_1  compute_combine                      1         1       2676       2676       2676
+  TRISC_1  compute_sumsq                       26         1       1977       2317       1735
+  TRISC_1  compute_scale                       26         1        563        564        505
+  TRISC_1  compute_collapse                    26         1        122        123        119
+  TRISC_1  compute_gather_wait                  1         1         16         16         16
+  TRISC_1  compute_rstd_wait                   26         1         15         19         15
+  TRISC_1  compute_x_wait                      26         1         14         16         13
+  TRISC_2  compute_normalize                   26         1       3777       4071       3306
+  TRISC_2  compute_collapse                    26         1       1822       1984       1642
+  TRISC_2  compute_scale                       26         1        591        593        541
+  TRISC_2  compute_sumsq                       26         1        272        275        270
+  TRISC_2  compute_combine                      1         1        196        196        196
+  TRISC_2  compute_x_wait                      26         1         14         19         13
+  TRISC_2  compute_gather_wait                  1         1         14         14         14
+  TRISC_2  compute_rstd_wait                   26         1         14         18         14
+
+== zone coverage: last user-zone end vs *-KERNEL end (cycles), per RISC (worst core) ==
+  NCRISC   min coverage  97.6% (core (14, 2))
+  BRISC    min coverage  99.2% (core (1, 2))
+  TRISC_0  min coverage  99.4% (core (15, 2))
+  TRISC_1  min coverage  99.6% (core (14, 3))
+  TRISC_2  min coverage  99.6% (core (15, 3))

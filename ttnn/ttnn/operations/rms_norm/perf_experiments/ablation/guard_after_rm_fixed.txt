@@ -1,0 +1,4 @@
+WARNING: 2 rms_norm dispatches, expected 12
+cell                                 cores  kernel_ns    brisc   ncrisc   trisc1
+dispatch_0                              26       9765     9760     4067     8031
+dispatch_1                              16      11259    11196     5785     9660

@@ -1,0 +1,1 @@
+/localdev/sjovic/2026_09_14/1641_sjovic_ci-experiment-2/clones/rms_norm_run1/tt-metal/generated/profiler/reports/2026_09_14_20_21_55/ops_perf_results_2026_09_14_20_21_55.csv

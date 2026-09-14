@@ -126,21 +126,27 @@ Stall-shadow check: the only stage that waits on a peer is `broadcast_rstd_block
 Logical schedule (reader, compute, writer are asynchronous kernels; adjacent blocks pipeline through the depth-2 CBs):
 
 ```cpp
+// Reader order (Perf 1, perf_experiments/reader_x_first): the FIRST DRAM burst is the compute's critical
+// path, so block 0's x read goes first; the scaler fill (a RISC L1 store loop) runs after the x push and
+// never while NoC data is landing (L1 arbitration slows it ~6x); gamma — consumed only by scale_block — last.
+load_x_block(0, rows);       // reader: block 0 first (R3: publish_x_shard — the shard is already resident)
 prepare_scaler();            // once per core: 1 bf16 tile = 1.0 (SUM), pool-type-aware overload
 load_gamma_slice();          // once per core (gamma present): Wc tiles resident for the whole kernel
                              //   TILE gamma: reader reads tiles [w_tile_start, +Wc) of the padded tile-row
                              //   RM gamma:   reader reads the W-slice of the single stick (+ zero-fills 31 rows),
-                             //               compute tilize_gamma_slice() -> cb_gamma_tiles
-publish_x_shard();           // R3 only, once: cb_wait_front(cb_x_tiles, Rt*Wc) — the shard is already resident
+                             //               compute tilize_gamma_slice() -> cb_gamma_tiles, in block 0 just
+                             //               before scale_block (its first consumer)
 
 for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
     const uint32_t rows = (block_idx + 1 < num_blocks_this_core) ? block_rows : last_block_rows;
-    load_x_block(block_idx, rows);        // reader: rows*Wc tiles -> cb_x_tiles, ONE push per block
+    load_x_block(block_idx, rows);        // reader: rows*Wc tiles -> cb_x_tiles, ONE push per block (block 0 above)
                                           //   RM: 32*rows stick-chunks -> cb_x_sticks; compute tilize_x_block()
     sumsq_block(rows);                    // A: Σ_w x*x accumulated in DEST per tile-row -> rows fp32 tiles
     collapse_block(rows);                 // B: within-tile row-sum -> rows column-0-valid tiles
     exchange_partials_block(rows);        // Cw>1: writer unicasts rows tiles into root's cb_gather slot; root gathers
-    combine_block(rows);                  // root (or Cw==1): Σ over Cw slots (no re-collapse) -> *1/W, +eps, rsqrt
+    combine_block(rows);                  // root (or Cw==1): Σ over Cw slots (no re-collapse) -> rsqrt(Σ/W + eps)
+                                          //   Perf 1: ONE column-0-scoped sfpi pass (8 even-parity vectors of the
+                                          //   left faces) — the tile is column-0-valid and only column 0 is read
     broadcast_rstd_block(rows);           // Cw>1: root mcasts rows rstd tiles -> cb_rstd on every group core (loopback)
     normalize_block(rows);                // D: x ⊙ bcast_col(rstd) -> cb_normed (gamma) | cb_output_tiles (no gamma)
     scale_block(rows);                    // E (gamma only): ⊙ bcast_row(gamma_slice) -> cb_output_tiles
@@ -172,7 +178,7 @@ Per operation — block shape, what stays resident, intended fixed-cost frequenc
 | **overlap** (`block_rows` = coarsest that fits) | at `Rt ≥ cores` with narrow W, one block = the whole per-core assignment → no reader/compute overlap within a core (single block) | `block_rows = ceil(core_row_tiles / 2)` (two blocks, depth 2) |
 | `collapse_algorithm` (`ReduceTile` for the 1-tile-per-row collapse) | catalog `row_reduce_accumulate`: for 1–2 tiles the single FPU reduce is fastest, but the SFPU `AccumulateViaAdd` collapse is more accurate in bf16 and shares a DEST window with the finalize | `ReduceAlgorithm::AccumulateViaAdd` for `collapse_block` |
 | `partial_payload` (send the whole 4 KiB collapsed tile) | only column 0 (faces 0 and 2, 2 × 1 KiB fp32) carries the sum | send faces 0 and 2 only (two 1 KiB writes per sender), halving gather/mcast bytes |
-| `sfpu_scope` (`rsqrt_tile` at `VectorMode::RC`) | only column 0 of the rstd tile is read downstream (`BroadcastDim::Col`); catalog `sfpu_tile_scope` measures ~2–4× on the finalize | col-0 stride (`c_skip`) body for mul/add/rsqrt |
+| `sfpu_scope` — **built (Perf 1)**: the finalize is one fused col-0-stride sfpi pass (`c_skip`, 8 vectors) | measured 990.6 → 227.6 ns per call (16-bit DEST), whole-op −1080 ns ablation ceiling on the perf-flagged decode shape; see `changelog.md` Perf 1 | — |
 | `format_reconfig` (chains/reduce reconfig formats at every phase) | only a subset of boundaries actually change format (x bf16 → fp32 partials → fp32 rstd → out bf16); catalog `compute_block_size` second lever up to 1.19× | `DataFormatReconfig::Disabled` / `ReduceDataFormatReconfigMode::NONE` on boundaries where the host proves both formats equal |
 | `normed_roundtrip` (`cb_normed` L1 round trip between D and E) | costs `B·Wc·4 KiB` L1 (lowers `core_w_tiles_max_l1`, raising Cw); catalog `compute_fusion` says the FPU L1 round trip is faster than DEST reuse, but the L1 saving could pay back through fewer W-splits | fuse D+E in DEST: `BinaryFpu<Mul, x, rstd Col>` → `CopyTile<gamma_rep, D1>` → SFPU binary mul (needs a row-replicated gamma tile via `unary_bcast<Row>` once) — **gated on the precision baseline** (the DEST→Src path truncates) |
 | `reader_noc_placement` (`row_wise=True` group layout) | catalog `noc_placement`: column lines are ~2.9× slower on WH for interleaved reads | groups laid out along x (default here) vs y |

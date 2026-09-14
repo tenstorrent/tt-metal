@@ -20,6 +20,7 @@ derived from it. `derive_blocking()` is pure and host-checkable.
 from __future__ import annotations
 
 import math
+import os
 import struct
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,6 +29,23 @@ from typing import Optional
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+
+
+def _perf_ablation_defines() -> list:
+    """Measurement-only kernel defines (never set in production). RMS_NORM_ABLATE is a comma-separated
+    list of stage switches the kernels understand (e.g. "READ_X,WRITE_OUT,ELTWISE"); each becomes a
+    -DRMS_NORM_ABLATE_<NAME>=1 (ELTWISE maps to the eltwise-chain library's CKL_ELTWISE_CHAIN_SKIP_COMPUTE).
+    An ablated kernel produces wrong output by design; it exists so /perf-measure can peel stages
+    cumulatively without touching the kernel source."""
+    spec = os.environ.get("RMS_NORM_ABLATE", "")
+    defines = []
+    for name in (n.strip().upper() for n in spec.split(",") if n.strip()):
+        if name == "ELTWISE":
+            defines.append(("CKL_ELTWISE_CHAIN_SKIP_COMPUTE", "1"))
+        else:
+            defines.append((f"RMS_NORM_ABLATE_{name}", "1"))
+    return defines
+
 
 # =============================================================================
 # §H0 — knobs (single source of truth)
@@ -584,11 +602,13 @@ def create_program_descriptor(
             Wt,
             Rt,
         ]
+    ablation_defines = _perf_ablation_defines()
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
         core_ranges=active_cores,
         compile_time_args=reader_ct,
         named_compile_time_args=reader_named,
+        defines=ablation_defines,
         runtime_args=reader_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
@@ -615,6 +635,7 @@ def create_program_descriptor(
                 core_ranges=_core_range_set([(r.x, r.y) for r in wroles]),
                 compile_time_args=[],
                 named_compile_time_args=named_common + [("CORE_W_TILES", wc)],
+                defines=ablation_defines,
                 runtime_args=compute_rt,
                 config=compute_kernel_config,
             )
@@ -664,6 +685,7 @@ def create_program_descriptor(
             ("MCAST_CT_BASE", 0),
             ("MCAST_RT_BASE", mcast_rt_base),
         ],
+        defines=ablation_defines,
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
