@@ -9,4 +9,5 @@
     wh_n150_civ2:
       timeout: 15
   team: ttnn
+  budget_type: pr_gate
   owner_id: U076Z1JJUQZ # Artem Yerofieiev

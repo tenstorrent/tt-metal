@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -159,7 +159,7 @@ void run_all_tests(
 /* =================== LOOP THROUGH SCHEMES ==================== */
 /* ============================================================= */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesLoopback) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 100;
@@ -168,7 +168,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesLoopb
     unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 101;
@@ -177,7 +177,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoo
     unit_tests::dm::core_to_all::multicast_schemes::run_all_tests(get_mesh_device(), test_case_id, loopback);
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemesNoLoopback2_0) {
     uint32_t test_case_id = unit_tests::dm::core_to_all::START_ID_2_0 + 10;
     bool loopback = false;
 
@@ -205,7 +205,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemesNoLoo
         10. Sender out grid ending not row not column
 */
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOneToAllMulticastSchemeSingle) {
     GTEST_SKIP() << "Skipping test";
 
     uint32_t test_case_id = 102;

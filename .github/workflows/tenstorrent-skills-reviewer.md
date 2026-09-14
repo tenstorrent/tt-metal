@@ -1,7 +1,9 @@
 ---
 description: Reviews pull requests with Tenstorrent domain-knowledge skills — kernel structural correctness, L1 footprint, race hazards, trace safety, precision policy, CCL topology, and program-cache correctness
 emoji: 🔷
-engine: copilot
+engine:
+  id: copilot
+  max-continuations: 6
 model: claude-sonnet-5
 features:
   gh-aw-detection: true
@@ -216,7 +218,7 @@ permissions:
   pull-requests: read
 network: defaults
 tools:
-  bash: ["cat", "ls", "find", "grep", "head", "tail", "wc", "python3"]
+  bash: [":*"]
   github:
     toolsets: [pull_requests, repos]
     lockdown: false
