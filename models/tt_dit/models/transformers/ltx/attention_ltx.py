@@ -39,16 +39,11 @@ class LTXAttention(Module):
         (True, 8, 4): (128, 512),
     }
 
-    # V2A cross ring-SDPA q_chunk = the per-device audio Q (audio_N / sp_factor), keyed by
-    # (is_blackhole, sp, tp); assumes audio_N=256. A q_chunk wider than the Q shard pads the
-    # query rows and burns ~2x SDPA compute, so it must track sp, not be fixed per model.
-    # k_chunk reuses the self-attn ring value; misses fall back to the self-attn ring q_chunk.
-    # TODO: audio_N depends on video duration (ceil(round((num_frames/fps)*25), 32*sp)); derive
-    # q_chunk from the actual Q shard (q_BHNE.shape[2]) instead of hardcoding per mesh.
-    cross_ring_sdpa_q_chunk_map = {
-        (True, 4, 2): 64,  # BH 2x4
-        (True, 8, 4): 32,  # BH 4x8
-    }
+    # V2A cross ring-SDPA q_chunk: one chunk covering the whole per-device audio Q shard, sized
+    # from the live Q tensor (audio_N / sp_factor; audio_N is the 256 SP pad untraced and the 512
+    # bucket traced). A chunk wider than the shard pads the query rows and burns ~2x SDPA compute;
+    # a chunk narrower than the shard splits it into several chunks, a cross-path configuration
+    # the kernel tests never cover. k_chunk reuses the self-attn ring value.
     default_sdpa_chunk_size = (256, 256)
 
     # Per-stage ring-SDPA chunk, keyed by (is_blackhole, sp, tp, N); N is the physical (SP-padded
@@ -262,15 +257,10 @@ class LTXAttention(Module):
             if b == mesh_key[0]
         }
 
-        # V2A cross ring SDPA: q_chunk matched to the per-device audio Q; k_chunk reuses the
-        # self-attn ring value.
-        cross_ring_q_chunk = self.cross_ring_sdpa_q_chunk_map.get(mesh_key, ring_sdpa_chunk_size[0])
-        self.cross_ring_sdpa_program_config = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=self.sdpa_worker_grid,
-            q_chunk_size=cross_ring_q_chunk,
-            k_chunk_size=ring_sdpa_chunk_size[1],
-            exp_approx_mode=False,
-        )
+        # V2A cross ring SDPA program configs, built per Q-shard length on first use (see the
+        # class comment); k_chunk reuses the self-attn ring value.
+        self._cross_ring_k_chunk = ring_sdpa_chunk_size[1]
+        self._cross_ring_sdpa_program_configs: dict[int, ttnn.SDPAProgramConfig] = {}
 
         # All SDPA (ring + cross) runs HiFi2, matching the Wan attention config.
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
@@ -592,6 +582,21 @@ class LTXAttention(Module):
         gate = ttnn.multiply(ttnn.sigmoid(gate_logits), 2.0)
         return ttnn.permute(gate, (1, 3, 2, 0))
 
+    def _cross_ring_sdpa_program_config(self, q_shard_len: int) -> ttnn.SDPAProgramConfig:
+        """SDPA program config for the V2A cross ring path, with q_chunk equal to the per-device Q
+        shard so the shard is one chunk. Cached per shard length: the same module serves the 256
+        (untraced) and 512 (bucket) audio lengths."""
+        cfg = self._cross_ring_sdpa_program_configs.get(q_shard_len)
+        if cfg is None:
+            cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=self.sdpa_worker_grid,
+                q_chunk_size=q_shard_len,
+                k_chunk_size=self._cross_ring_k_chunk,
+                exp_approx_mode=False,
+            )
+            self._cross_ring_sdpa_program_configs[q_shard_len] = cfg
+        return cfg
+
     def forward(
         self,
         spatial_1BND: ttnn.Tensor,
@@ -833,7 +838,7 @@ class LTXAttention(Module):
                 joint_strategy="rear",
                 logical_n=logical_n_tensor if logical_n_tensor is not None else kv_logical_n,
                 is_cross=True,
-                program_config=self.cross_ring_sdpa_program_config,
+                program_config=self._cross_ring_sdpa_program_config(q_BHNE.shape[2]),
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(sp_mesh_axis),
