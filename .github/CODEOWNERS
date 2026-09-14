@@ -195,10 +195,10 @@ tt_metal/llrt/rtoptions.cpp @tenstorrent/metalium-api-owners @jbaumanTT @abhulla
 tt_metal/llrt/rtoptions.hpp @tenstorrent/metalium-api-owners
 tt_metal/logging/ @abhullar-tt @jbaumanTT
 tt_metal/logging/**/CMakeLists.txt @abhullar-tt @jbaumanTT @tenstorrent/metalium-developers-infra
-tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ebanerjeeTT @ncvetkovicTT @lpremovicTT @rtawfik01 @nvelickovicTT @tenstorrent/metalium-api-owners
+tt_metal/programming_examples/ @tt-asaigal @afuller-TT @ncvetkovicTT @lpremovicTT @rtawfik01 @nvelickovicTT @tenstorrent/metalium-api-owners
 tt_metal/programming_examples/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 tt_metal/programming_examples/profiler/test_noc_event_profiler/ @sohaibnadeemTT
-tt_metal/programming_examples/**/CMakeLists.txt @tt-asaigal @afuller-TT @ebanerjeeTT @tenstorrent/metalium-api-owners @tenstorrent/metalium-developers-infra
+tt_metal/programming_examples/**/CMakeLists.txt @tt-asaigal @tenstorrent/metalium-api-owners @tenstorrent/metalium-developers-infra
 tt_metal/soc_descriptors @abhullar-tt @aliuTT @ubcheema
 tt_metal/sources.cmake @tenstorrent/metalium-api-owners
 tt_metal/test @tenstorrent/metalium-developers-infra
