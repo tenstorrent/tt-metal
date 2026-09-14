@@ -208,9 +208,13 @@ def writes_in(path, defs):
             continue
         if PER_THREAD.search(line):
             continue  # per-thread file; cannot cross threads
+        # A write whose thread cannot be determined is REPORTED, not dropped: the file/function
+        # naming conventions thread_of() keys on do not cover every spelling (a ThreadId template
+        # parameter dispatches by value, shared headers carry no thread in the name). Silently
+        # skipping those is the one outcome the rest of this checker is written to avoid. It is a
+        # note rather than a finding -- an unclassified write is a gap in this tool's coverage, not
+        # evidence of a hazard, and must not fail anyone's commit.
         th = thread_of(path, joined)
-        if th is None:
-            continue
         if MUTEX_ACQ.search(line):
             held = True
         if MUTEX_REL.search(line):
@@ -312,8 +316,10 @@ def main():
     # Derive ownership from the tree: which threads write which bits of which word.
     owners = defaultdict(lambda: defaultdict(int))  # word -> thread -> bitmask
     for _, _, th, kind, _, word, bits, _ in every:
+        # th is None for an unclassified write; it must not become an owner, or every real write
+        # to the word would read it as another thread and report against it.
         if (
-            kind == "masked"
+            kind == "masked" and th is not None
         ):  # whole-word/unresolved writes tell us nothing about ownership
             owners[word][th] |= bits
 
@@ -334,10 +340,13 @@ def main():
         )
         return 2
 
-    findings = []
+    findings, unclassified = [], []
     for path, ln, th, kind, field, word, bits, guarded in collect(
         args.files or all_h, defs
     ):
+        if th is None:
+            unclassified.append((path, ln, field, word))
+            continue
         others = {t: b for t, b in owners[word].items() if t != th and b}
         if not others:
             continue
@@ -440,6 +449,20 @@ def main():
         print(
             "  fix: masked cfg_reg_rmw_tensix for your own bits; for a shared FIELD, hold mutex::REG_RMW\n"
         )
+    if unclassified:
+        print(
+            f"note: {len(unclassified)} config write(s) whose thread could not be determined, "
+            "so they were not checked:"
+        )
+        for path, ln, field, word in unclassified:
+            print(f"  {os.path.relpath(path)}:{ln}: {field} (config word {word})")
+        print(
+            "  These are a coverage gap in this checker, not hazards. thread_of() keys on the\n"
+            "  llk_unpack/llk_math/llk_pack file and function naming; a write dispatched by a\n"
+            "  ThreadId template parameter, or sitting in a shared header, carries neither.\n"
+            "  Review by hand, or teach thread_of() the spelling. Never fails the commit.\n"
+        )
+
     if new:
         print(f"{len(new)} new cross-thread config write(s).")
         return 1
