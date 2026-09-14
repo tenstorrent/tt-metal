@@ -43,19 +43,20 @@ def tag_alignment(inputs, axes):
 INPUT_TAGGERS = {"rank": tag_rank, "alignment": tag_alignment}
 
 # ---------------------------------------------------------------------------
-# 2. SUPPORTED — the Phase 0 rectangle (one entry per TARGET axis)
+# 2. SUPPORTED — one entry per TARGET axis
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16, ttnn.float32],
-    # Phase 0 is the maxed-out precision corner: fp32 DEST accumulation only.
-    "fp32_dest_acc_en": [True],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
+    # Two-axis precision model (dtype x DEST width). Every accumulated-intermediate page format and the
+    # collective payload stride follow this flag (rms_norm_program_descriptor.acc_dtype_for).
+    "fp32_dest_acc_en": [True, False],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "rank": [2, 3, 4],
     "alignment": ["tile_aligned"],
     "gamma_mode": ["gamma", "no_gamma"],
     # "none" is the canonical "no weight tensor" sentinel — always legal.
-    "gamma_dtype": [ttnn.bfloat16, ttnn.float32, "none"],
+    "gamma_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, "none"],
     "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT, "none"],
     "memory_layout": [
         ttnn.TensorMemoryLayout.INTERLEAVED,
@@ -69,8 +70,7 @@ SUPPORTED = {
 
 EXCLUSIONS = [
     # fp32 input with 16-bit DEST accumulation is lossy by construction — natively rejected
-    # forever (references/precision_convention.md). Listed now so the cell stays refused the
-    # day fp32_dest_acc_en=False joins SUPPORTED.
+    # forever (references/precision_convention.md).
     {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
 ]
 

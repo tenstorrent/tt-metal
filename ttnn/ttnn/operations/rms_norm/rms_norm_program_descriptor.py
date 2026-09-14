@@ -41,8 +41,20 @@ DEPTH_OUT_STICKS_ROWS = 2  # ROW_MAJOR output stick buffer depth, in tile-rows
 L1_MARGIN_BYTES = 64 * 1024
 
 TILE = 32
-P32 = ttnn.tile_size(ttnn.float32)  # fp32 intermediate tile bytes (all accumulated intermediates)
 T_SCALER = ttnn.tile_size(ttnn.bfloat16)  # bf16 reduce-scaler tile bytes
+
+
+def acc_dtype_for(fp32_dest_acc_en: bool):
+    """Page format of every ACCUMULATED intermediate (sumsq partials, collapsed partials, gather slots,
+    rstd, normed): it follows the DEST width, not the tensor dtype. fp32 DEST -> Float32 pages; 16-bit
+    DEST -> Float16_b pages (the value is already rounded to 16 bits in DEST before it is packed, so a
+    wider page would carry no extra precision and cost 2x the bytes on every collective payload)."""
+    return ttnn.float32 if fp32_dest_acc_en else ttnn.bfloat16
+
+
+def acc_tile_bytes_for(fp32_dest_acc_en: bool) -> int:
+    return ttnn.tile_size(acc_dtype_for(fp32_dest_acc_en))
+
 
 # Circular-buffer slots. The kernels receive these as NAMED compile-time args (same names).
 CB_X_TILES = 0
@@ -96,7 +108,9 @@ class Footprint:
     t_in: int  # input tile bytes
     t_out: int  # output tile bytes
     t_g: int  # gamma tile bytes (0 without gamma)
+    t_acc: int  # accumulated-intermediate tile bytes (follows the DEST width: acc_tile_bytes_for)
     has_gamma: bool
+    gamma_rm: bool  # ROW_MAJOR gamma: its start-up stick block aliases cb_normed (sized max of the two)
     input_rm: bool  # ROW_MAJOR input (output layout == input layout)
     sharded: bool  # R3: x/out already resident, not allocated by the op
 
@@ -113,15 +127,17 @@ class Footprint:
         else:
             x_term = DEPTH_X * self.t_in
             out_term = DEPTH_OUT * self.t_out
-        normed_term = P32 if self.has_gamma else 0
+        normed_term = self.t_acc if self.has_gamma else 0
         collective = num_partials + 2 + (2 if has_collective else 0)  # gather slots + sumsq/rstd (+ collapsed/handoff)
-        return wc * (x_term + normed_term + out_term) + P32 * collective
+        return wc * (x_term + normed_term + out_term) + self.t_acc * collective
 
     def fixed(self, wc: int) -> int:
         """Bytes independent of block_rows: resident gamma slice, scaler, RM output stick window."""
         total = T_SCALER
         if self.has_gamma:
             total += wc * self.t_g
+        if self.gamma_rm:
+            total += wc * self.t_g  # upper bound of the cb_normed/cb_gamma_sticks union beyond B*wc*t_acc
         if self.input_rm:
             total += DEPTH_OUT_STICKS_ROWS * wc * self.t_out
         return total
@@ -250,11 +266,13 @@ def derive_blocking(
     grid_x: int,
     grid_y: int,
     l1_free_bytes: Optional[int] = None,
+    fp32_dest_acc_en: bool = True,
 ) -> Blocking:
     """Pure host derivation (§H0-H3). `l1_free_bytes` (largest contiguous free L1 block per bank at
     descriptor-build time) further bounds the CB budget: the CB region is carved from the bottom of
     the unreserved L1 up to the lowest live buffer, so tensors other than this op's own shards
-    (e.g. a caller's still-live L1 tensors) shrink it below the nominal unreserved size."""
+    (e.g. a caller's still-live L1 tensors) shrink it below the nominal unreserved size.
+    `fp32_dest_acc_en` sets the accumulated-intermediate page width the footprint is priced at."""
     shape = list(input_tensor.padded_shape)
     w = shape[-1]
     rt = (math.prod(shape[:-2]) if len(shape) > 2 else 1) * _ceil_div(shape[-2], TILE)
@@ -266,7 +284,9 @@ def derive_blocking(
         t_in=t_in,
         t_out=t_in,
         t_g=ttnn.tile_size(gamma.dtype) if gamma is not None else 0,
+        t_acc=acc_tile_bytes_for(fp32_dest_acc_en),
         has_gamma=gamma is not None,
+        gamma_rm=gamma is not None and gamma.layout == ttnn.ROW_MAJOR_LAYOUT,
         input_rm=input_rm,
         sharded=sharded,
     )
@@ -401,7 +421,12 @@ def create_program_descriptor(
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
     l1_free_bytes = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
-    blocking = derive_blocking(input_tensor, gamma, grid.x, grid.y, l1_free_bytes)
+    fp32_dest_acc_en = bool(compute_kernel_config.fp32_dest_acc_en)
+    # Single source of truth for the accumulation width: every accumulated-intermediate CB page, the
+    # footprint model and the writer's gather/mcast payload stride derive from these two values.
+    acc_dtype = acc_dtype_for(fp32_dest_acc_en)
+    t_acc = acc_tile_bytes_for(fp32_dest_acc_en)
+    blocking = derive_blocking(input_tensor, gamma, grid.x, grid.y, l1_free_bytes, fp32_dest_acc_en)
 
     input_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     sharded = blocking.regime.startswith("R3")
@@ -415,9 +440,10 @@ def create_program_descriptor(
 
     in_dtype, out_dtype = input_tensor.dtype, output_tensor.dtype
     t_in, t_out = ttnn.tile_size(in_dtype), ttnn.tile_size(out_dtype)
-    e_in, e_out = input_tensor.element_size(), output_tensor.element_size()
+    # Element bytes only exist on the stick (ROW_MAJOR) paths; block-float tensors (bfloat8_b) are TILE-only.
+    e_in, e_out = (input_tensor.element_size(), output_tensor.element_size()) if input_rm else (0, 0)
     t_g = ttnn.tile_size(gamma.dtype) if has_gamma else 0
-    e_g = gamma.element_size() if has_gamma else 0
+    e_g = gamma.element_size() if gamma_mode == GAMMA_MODE_RM else 0
 
     B = blocking.block_rows
     Cw = blocking.num_w_splits
@@ -438,14 +464,14 @@ def create_program_descriptor(
     # slot offset, so they must sit at the same L1 address on every core: they are created first,
     # uniformly over the whole program range, ahead of any per-W-group (ragged-size) CB.
     cbs = [
-        _cb(CB_GATHER, all_cores, P32, B * num_partials, ttnn.float32),  # exactly one round (mechanism cap)
-        _cb(CB_RSTD, all_cores, P32, B, ttnn.float32),  # exactly one round (mechanism cap)
+        _cb(CB_GATHER, all_cores, t_acc, B * num_partials, acc_dtype),  # exactly one round (mechanism cap)
+        _cb(CB_RSTD, all_cores, t_acc, B, acc_dtype),  # exactly one round (mechanism cap)
         _cb(CB_SCALER, all_cores, T_SCALER, 1, ttnn.bfloat16),
-        _cb(CB_SUMSQ_PARTIAL, all_cores, P32, B, ttnn.float32),
+        _cb(CB_SUMSQ_PARTIAL, all_cores, t_acc, B, acc_dtype),
     ]
     if Cw > 1:
-        cbs.append(_cb(CB_PARTIAL_COLLAPSED, all_cores, P32, B, ttnn.float32))
-        cbs.append(_cb(CB_RSTD_HANDOFF, all_cores, P32, B, ttnn.float32))
+        cbs.append(_cb(CB_PARTIAL_COLLAPSED, all_cores, t_acc, B, acc_dtype))
+        cbs.append(_cb(CB_RSTD_HANDOFF, all_cores, t_acc, B, acc_dtype))
 
     if sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
@@ -469,13 +495,17 @@ def create_program_descriptor(
                 cbs.append(_cb(CB_OUTPUT_TILES, cr, t_out, DEPTH_OUT * B * wc, out_dtype))
         if has_gamma:
             cbs.append(_cb(CB_GAMMA_TILES, cr, t_g, wc, gamma.dtype))
-            normed_fds = [ttnn.CBFormatDescriptor(buffer_index=CB_NORMED, data_format=ttnn.float32, page_size=P32)]
+            normed_fds = [ttnn.CBFormatDescriptor(buffer_index=CB_NORMED, data_format=acc_dtype, page_size=t_acc)]
+            normed_bytes = B * wc * t_acc
             if gamma_mode == GAMMA_MODE_RM:
-                # cb_gamma_sticks aliases cb_normed's allocation: start-up-only vs per-block lifetimes.
+                # cb_gamma_sticks aliases cb_normed's allocation: start-up-only vs per-block lifetimes. The
+                # allocation is the larger of the two demands, rounded to a multiple of both page sizes.
                 normed_fds.append(
                     ttnn.CBFormatDescriptor(buffer_index=CB_GAMMA_STICKS, data_format=gamma.dtype, page_size=t_g)
                 )
-            cbs.append(ttnn.CBDescriptor(total_size=B * wc * P32, core_ranges=cr, format_descriptors=normed_fds))
+                page_lcm = max(t_acc, t_g)  # both are powers of two
+                normed_bytes = _ceil_div(max(normed_bytes, wc * t_g), page_lcm) * page_lcm
+            cbs.append(ttnn.CBDescriptor(total_size=normed_bytes, core_ranges=cr, format_descriptors=normed_fds))
 
     # ---------------- semaphores + multicast families ----------------
     semaphores = [
@@ -527,7 +557,7 @@ def create_program_descriptor(
         ("OUT_ELEM_BYTES", e_out),
         ("GAMMA_TILE_BYTES", t_g),
         ("GAMMA_ELEM_BYTES", e_g),
-        ("P32_BYTES", P32),
+        ("ACC_TILE_BYTES", t_acc),
     ]
 
     # ---------------- reader (active cores) ----------------

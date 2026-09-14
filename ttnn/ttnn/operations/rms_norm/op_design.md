@@ -215,12 +215,13 @@ H0  constants (knobs):  W_TILES_PER_CORE_TARGET = 16     # grid-sync lamp
                         L1_MARGIN_BYTES = 64 KiB
     L1_CB_BUDGET = ttnn.get_max_worker_l1_unreserved_size() - L1_MARGIN_BYTES
                    - (R3: input_shard_bytes + output_shard_bytes)          # shards are already resident
-    P32 = 4096; T_in = tile bytes(input dtype); T_out = T_in; T_g = tile bytes(gamma dtype); T_sc = 2048
+    T_acc = tile bytes(fp32_dest_acc_en ? Float32 : Float16_b) = 4096 | 2048   # every accumulated intermediate follows the DEST width
+    T_in = tile bytes(input dtype); T_out = T_in; T_g = tile bytes(gamma dtype); T_sc = 2048
 
-H1  per-block bytes  per_block(Wc, Cw) = Wc·(x_term + HG·P32 + out_term) + P32·(Cw + 2 + 2·[Cw>1])
+H1  per-block bytes  per_block(Wc, Cw) = Wc·(x_term + HG·T_acc + out_term) + T_acc·(Cw + 2 + 2·[Cw>1])
         x_term   = DEPTH_X·T_in (TILE interleaved) | (DEPTH_X_STICKS_BLOCKS + 1)·T_in (RM) | 0 (R3)
         out_term = DEPTH_OUT·T_out (TILE)          | T_out (RM; + fixed DEPTH_OUT_STICKS_ROWS·Wc·T_out) | 0 (R3)
-    fixed(Wc)   = HG·Wc·T_g + T_sc  (+ RM: DEPTH_OUT_STICKS_ROWS·Wc·T_out)
+    fixed(Wc)   = HG·Wc·T_g + T_sc  (+ RM: DEPTH_OUT_STICKS_ROWS·Wc·T_out) (+ RM gamma: Wc·T_g — the stick block aliased on cb_normed, sized max(B·Wc·T_acc, Wc·T_g))
     block_rows_max_l1(Wc, Cw) = floor((L1_CB_BUDGET - fixed(Wc)) / per_block(Wc, Cw))
 
 H2  num_w_splits (interleaved only; R3 takes Cw from the shard grid bbox):
@@ -235,7 +236,7 @@ H3  block_rows = min(core_row_tiles, block_rows_max_l1(core_w_tiles_max, Cw));  
 
 ## Circular Buffers
 
-Formats follow the DEST width (`fp32_dest_acc_en=True` ⇒ `Float32` for every accumulated intermediate); `cb_x_tiles`/`cb_gamma_tiles`/`cb_output_tiles` carry tensor dtypes (relayout only — no accumulation crosses them). "Producer/Consumer" are per compile-time build; a `/` separates the two builds (`NUM_W_SPLITS == 1` / `> 1`), never two owners in one build.
+Formats follow the DEST width (`fp32_dest_acc_en=True` ⇒ `Float32`, `False` ⇒ `Float16_b` for every accumulated intermediate — host rule `acc_dtype_for()` in the program descriptor, surfaced to the writer as the `ACC_TILE_BYTES` payload stride); `cb_x_tiles`/`cb_gamma_tiles`/`cb_output_tiles` carry tensor dtypes (relayout only — no accumulation crosses them). "Producer/Consumer" are per compile-time build; a `/` separates the two builds (`NUM_W_SPLITS == 1` / `> 1`), never two owners in one build.
 
 | Semantic Name | Index | Page Size | Num Pages | Sizing rationale | Format | Producer | Consumer | Lifetime |
 |---------------|-------|-----------|-----------|------------------|--------|----------|----------|-----------|
@@ -337,12 +338,12 @@ Helpers considered and rejected for the two raw dataflow entries `load_x_block`/
 
 | Axis (name as in `feature_spec.TARGET`) | Phase 0 | Refinement candidates (`TARGET − SUPPORTED`) |
 |---|---|---|
-| `dtype` | bfloat16, float32 | bfloat8_b |
-| `fp32_dest_acc_en` | True | False (knob: page formats and `DEST_AUTO_LIMIT` follow the config; `{float32, False}` stays an EXCLUSION forever) |
+| `dtype` | bfloat16, float32, bfloat8_b (Refinement 1) | — |
+| `fp32_dest_acc_en` | True, False (Refinement 1: page formats and `DEST_AUTO_LIMIT` follow the config; `{float32, False}` stays an EXCLUSION forever) | — |
 | `layout` | TILE_LAYOUT, ROW_MAJOR_LAYOUT | — |
 | `rank` (tagger `tag_rank`) | 2, 3, 4 | — |
 | `gamma_mode` | gamma, no_gamma | — |
-| `gamma_dtype` | bfloat16, float32, "none" | bfloat8_b |
+| `gamma_dtype` | bfloat16, float32, bfloat8_b (Refinement 1), "none" | — |
 | `gamma_layout` | TILE_LAYOUT, ROW_MAJOR_LAYOUT, "none" | — |
 | `memory_layout` | INTERLEAVED, WIDTH_SHARDED | — |
 

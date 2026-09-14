@@ -49,7 +49,8 @@ void kernel_main() {
     constexpr uint32_t out_page_bytes = get_named_compile_time_arg_val("OUT_PAGE_BYTES");  // tile (TILE) or stick (RM)
     constexpr uint32_t out_tile_bytes = get_named_compile_time_arg_val("OUT_TILE_BYTES");
     constexpr uint32_t out_elem_bytes = get_named_compile_time_arg_val("OUT_ELEM_BYTES");
-    constexpr uint32_t partial_tile_bytes = get_named_compile_time_arg_val("P32_BYTES");
+    // Gather/mcast payload stride: the accumulated-intermediate page (follows the DEST width, host-derived).
+    constexpr uint32_t partial_tile_bytes = get_named_compile_time_arg_val("ACC_TILE_BYTES");
     constexpr uint32_t mcast_ct_base = get_named_compile_time_arg_val("MCAST_CT_BASE");
     constexpr uint32_t mcast_rt_base = get_named_compile_time_arg_val("MCAST_RT_BASE");
     constexpr uint32_t tile_rows = 32;
