@@ -74,7 +74,12 @@ from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3Aud
 from ...models.audio_vae.minimax_h3.encoder_minimax_h3_audio import MiniMaxH3AudioEncoder
 from ...models.transformers.minimax_h3.adaln_cache_minimax_h3 import MiniMaxH3AdalnCache
 from ...models.transformers.minimax_h3.attention_minimax_h3 import prepare_rope_tables
-from ...models.transformers.minimax_h3.lora_targets_minimax_h3 import is_host_path, minimax_h3_fusion_groups
+from ...models.transformers.minimax_h3.lora_targets_minimax_h3 import (
+    is_host_path,
+    is_native_keyspace,
+    minimax_h3_fusion_groups,
+    translate_native_entries,
+)
 from ...models.transformers.minimax_h3.transformer_minimax_h3 import MiniMaxH3Transformer3DModel
 from ...models.vae.minimax_h3.vae_minimax_h3 import DEFAULT_TILE_SIZE, MiniMaxH3Vae, MiniMaxH3VaeConfig
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, ParallelFactor, VAEParallelConfig
@@ -1061,11 +1066,16 @@ class MiniMaxH3Pipeline:
         return f"lora={self._lora_digest}@{self.lora_strength:g}"
 
     def _lora_adapter_entries(self) -> list:
-        """Parse the adapter once; both halves are read from this."""
+        """Parse the adapter once, on the diffusers keyspace; both halves are read from this.
+
+        Adapters trained against MiniMax's own release are translated here rather than at either
+        consumer, so the device bind and the AdaLN fold see one keyspace between them.
+        """
         if self._lora_entries is None:
             entries, stats = parse_adapter(self.lora_path)
-            logger.info(f"adapter {self.lora_path.name}: {stats}")
-            self._lora_entries = entries
+            native = is_native_keyspace(entries)
+            logger.info(f"adapter {self.lora_path.name}: {stats}, keyspace={'native' if native else 'diffusers'}")
+            self._lora_entries = translate_native_entries(entries)
         return self._lora_entries
 
     def _adaln_lora_fold(self):

@@ -26,7 +26,12 @@ import ttnn
 from ....lora.apply import FusionGroup, apply_adapter
 from ....lora.keys import parse_adapter
 from ....lora.promote import promote_to_lora
-from ....models.transformers.minimax_h3.lora_targets_minimax_h3 import minimax_h3_fusion_groups, minimax_h3_host_paths
+from ....models.transformers.minimax_h3.lora_targets_minimax_h3 import (
+    is_native_keyspace,
+    minimax_h3_fusion_groups,
+    minimax_h3_host_paths,
+    translate_native_entries,
+)
 from ....models.transformers.minimax_h3.transformer_block_minimax_h3 import (
     MODALITY_NUM,
     NUM_MODULATION_PARAMS,
@@ -180,13 +185,117 @@ def test_lora_published_adapter_coverage():
     real_entries, real_stats = parse_adapter(path)
     logger.info(f"{path}: {real_stats}")
     assert sum(real_stats.counts.values()) == real_stats.tensors, f"unclassified tensors: {real_stats}"
+    ranks = {entry.rank for entry in real_entries if entry.kind == "lora"}
+    logger.info(f"{path}: ranks {sorted(ranks)}, metadata {real_stats.metadata}")
+    assert None not in ranks
+
+    # Only the in-house adapters carry a count manifest. A published file without one still gets
+    # the classification check above -- which is the one that catches a missed convention -- but
+    # has nothing to cross-check the counts against, and inventing an expectation for it would
+    # gate on this file's shape rather than on the loader.
     metadata = real_stats.metadata
+    if "low_rank_tensors" not in metadata:
+        return
     assert real_stats.counts["lora"] == int(metadata["low_rank_tensors"])
     assert real_stats.counts["diff"] + real_stats.counts["diff_b"] == int(metadata["diff_tensors"])
     assert real_stats.counts.get("set_weight", 0) == int(metadata["set_weight_tensors"])
     expected = FASTH3_VSA_COUNTS if int(metadata["set_weight_tensors"]) else FASTH3_DENSE_COUNTS
     assert {k: real_stats.counts.get(k, 0) for k in expected} == expected
-    assert {entry.rank for entry in real_entries if entry.kind == "lora"} == {int(metadata["rank"])}
+    assert ranks == {int(metadata["rank"])}
+
+
+def test_lora_published_adapter_translates_onto_diffusers_keyspace():
+    """Whatever keyspace the published file uses, nothing native-spelled survives translation.
+
+    The routing stage rejects a path the model has no parameter for, so an un-renamed leaf is
+    caught eventually -- but only on a mesh, after the base weights load. This says it on the Mac.
+    """
+    path = os.environ.get("MINIMAX_H3_LORA_PATH")
+    if path is None:
+        pytest.skip("set MINIMAX_H3_LORA_PATH to gate the published adapter")
+
+    entries, _ = parse_adapter(path)
+    translated = translate_native_entries(entries)
+    logger.info(f"{path}: native={is_native_keyspace(entries)}, {len(entries)} -> {len(translated)} entries")
+
+    leftovers = [
+        entry.path
+        for entry in translated
+        if entry.path.startswith(("blocks.", "final_layer.", "time_embedder.proj_"))
+        or entry.path.endswith(("qkv_proj", "out_proj", "mlp.fc1", "mlp.fc2"))
+        or ".blocks." in entry.path
+    ]
+    assert not leftovers, f"native spellings survived translation: {sorted(set(leftovers))[:10]}"
+
+
+# ---------------------------------------------------------------------------- native keyspace
+
+
+def native_block_adapter(diffusers: dict[str, torch.Tensor], *, prefix: str) -> dict[str, torch.Tensor]:
+    """The same adapter as ``synthetic_block_adapter``, spelled the way MiniMax's release names it.
+
+    Built by inverting the two row transforms rather than by generating fresh tensors, so the test
+    that translates it back has something exact to compare against.
+    """
+    native = {}
+    for key, value in diffusers.items():
+        leaf = key.removeprefix(f"{prefix}.")
+        if leaf.startswith("attn.to_"):
+            continue  # folded into qkv_proj below
+        native_leaf = {
+            "attn.to_out.0": "attn.out_proj",
+            "ff.net.0.proj": "mlp.fc1",
+            "ff.net.2": "mlp.fc2",
+        }
+        for slot in ("lora_A.weight", "lora_B.weight"):
+            if leaf.endswith(slot):
+                stem = leaf.removesuffix(f".{slot}")
+                if stem in native_leaf:
+                    leaf = f"{native_leaf[stem]}.{slot}"
+                break
+        if leaf.startswith("mlp.fc1") and leaf.endswith("lora_B.weight"):
+            value_half, gate = value.chunk(2, dim=0)  # diffusers order is [value; gate]
+            value = torch.cat((gate, value_half), dim=0)
+        native[f"blocks.0.{leaf}"] = value
+
+    a = diffusers[f"{prefix}.attn.to_q.lora_A.weight"]
+    for member in ("to_k", "to_v"):
+        assert torch.equal(diffusers[f"{prefix}.attn.{member}.lora_A.weight"], a), "qkv split shares one A"
+    native["blocks.0.attn.qkv_proj.lora_A.weight"] = a
+    native["blocks.0.attn.qkv_proj.lora_B.weight"] = torch.cat(
+        [diffusers[f"{prefix}.attn.{member}.lora_B.weight"] for member in ("to_q", "to_k", "to_v")], dim=0
+    )
+    return native
+
+
+def test_native_keyspace_translation_reproduces_the_diffusers_adapter():
+    """A native-spelled adapter translates to exactly the diffusers-spelled one it came from.
+
+    The two row transforms -- the contiguous q/k/v split and the SwiGLU half swap -- are invisible
+    to shape checks and to output parity, so this compares tensors rather than key sets.
+    """
+    prefix = "transformer_blocks.0"
+    diffusers = synthetic_block_adapter(rank=8, prefix=prefix)
+    # One A for the whole fused projection, which is what a qkv_proj adapter carries.
+    shared_a = diffusers[f"{prefix}.attn.to_q.lora_A.weight"]
+    for member in ("to_k", "to_v"):
+        diffusers[f"{prefix}.attn.{member}.lora_A.weight"] = shared_a
+
+    native = native_block_adapter(diffusers, prefix=prefix)
+    assert is_native_keyspace(parse_adapter(native)[0])
+    assert not is_native_keyspace(parse_adapter(diffusers)[0])
+
+    translated = {entry.path: entry for entry in translate_native_entries(parse_adapter(native)[0])}
+    expected = {entry.path: entry for entry in parse_adapter(diffusers)[0]}
+    assert set(translated) == set(expected)
+    for path, entry in expected.items():
+        got = translated[path]
+        assert got.kind == entry.kind, path
+        if entry.kind == "lora":
+            assert torch.equal(got.A, entry.A), f"{path}: A"
+            assert torch.equal(got.B, entry.B), f"{path}: B"
+        else:
+            assert torch.equal(got.delta, entry.delta), f"{path}: delta"
 
 
 def test_lora_partial_fused_group_is_fatal(expect_error):
