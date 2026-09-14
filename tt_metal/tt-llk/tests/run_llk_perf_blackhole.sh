@@ -8,7 +8,8 @@
 # pytest-split sharding: compile this shard's items (producer), then measure
 # them (consumer) -- one invocation each over the whole perf suite.
 #
-# Usage: SPEED_OF_LIGHT=<true|false> run_llk_perf_blackhole.sh <group> <n_groups>
+# Usage: SPEED_OF_LIGHT=<true|false> LLK_DISABLE_PERF_RELEVANCE=<0|1> \
+#        run_llk_perf_blackhole.sh <group> <n_groups>
 set -euo pipefail
 
 GROUP="${1:?usage: run_llk_perf_blackhole.sh <group> <n_groups>}"
