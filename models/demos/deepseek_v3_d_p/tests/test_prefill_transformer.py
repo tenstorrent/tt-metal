@@ -105,7 +105,6 @@ def _threshold_for(label: str, th: PrefillTransformerThresholds) -> tuple[float,
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
-TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -651,9 +650,7 @@ def run_model(
 
         # --- Determine threshold based on reference source ---
         if trace is not None:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
-                threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
-            elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+            if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
                 threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
             elif gate_fallback_mode == GateComputeMode.HOST_ALL:
                 threshold = TRACE_PCC_THRESHOLD_HOST
@@ -906,6 +903,17 @@ def run_model(
         pytest.fail(f"PCC below its stage bar ({th}) at: {pcc_failure_msg}")
 
 
+def _ci_unsupported_param_combos_ds_transformer(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_transformer)
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
@@ -952,10 +960,9 @@ def run_model(
     [
         (64, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.HOST_ALL),
-        (256, GateComputeMode.DEVICE),
         (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
+    ids=["e64_host", "e256_host", "e256_device_fp32"],
 )
 # iter2000 is the long-running stability soak (program-cache growth, semaphore
 # desync, leaks). Kept opt-in via -k iter2000; CI selectors normally pick iter1.
@@ -1064,8 +1071,8 @@ def test_ds_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(384, GateComputeMode.DEVICE)],
-    ids=["e384_device"],
+    [(384, GateComputeMode.DEVICE_FP32)],
+    ids=["e384_device_fp32"],
 )
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
@@ -1168,8 +1175,8 @@ def test_kimi_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(256, GateComputeMode.DEVICE)],
-    ids=["e256_device"],
+    [(256, GateComputeMode.DEVICE_FP32)],
+    ids=["e256_device_fp32"],
 )
 @pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])

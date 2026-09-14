@@ -41,8 +41,6 @@ class GateComputeMode(Enum):
 
     DEVICE = "device"  # matmul device, gate device (bf16)
     DEVICE_FP32 = "device_fp32"  # matmul device, gate device (fp32)
-    HOST_GROUPED_GATE = "host_grouped_gate"  # matmul device, grouped gate host
-    HOST_MATMUL = "host_matmul"  # matmul host, grouped gate device (bf16)
     HOST_ALL = "host_all"  # matmul host, grouped gate host
     # DeepSeek-V4 hash routing: expert indices come from a static tid2eid[input_ids] table
     # (not top-k); weights are still score_func(x@W) gathered at those indices, normalized, scaled.
@@ -63,8 +61,6 @@ class GateComputeMode(Enum):
 GATE_MODE_FAMILY = {
     GateComputeMode.DEVICE: "sigmoid",
     GateComputeMode.DEVICE_FP32: "sigmoid",
-    GateComputeMode.HOST_GROUPED_GATE: "sigmoid",
-    GateComputeMode.HOST_MATMUL: "sigmoid",
     GateComputeMode.HOST_ALL: "sigmoid",
     GateComputeMode.HASH_HOST: "hash",
     GateComputeMode.HASH_DEVICE: "hash",
@@ -658,7 +654,7 @@ class TtMoEGatePrefill(LightweightModule):
             self.torch_bias = torch_bias_fallback  # (n_experts,)
 
         # Reference model for host grouped-gate paths
-        if fallback_mode in (GateComputeMode.HOST_GROUPED_GATE, GateComputeMode.HOST_ALL):
+        if fallback_mode == GateComputeMode.HOST_ALL:
             from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 
             self.ref_config = SimpleNamespace(
@@ -1209,7 +1205,6 @@ class TtMoEGatePrefill(LightweightModule):
         if mode in (
             GateComputeMode.DEVICE,
             GateComputeMode.DEVICE_FP32,
-            GateComputeMode.HOST_GROUPED_GATE,
             GateComputeMode.HASH_DEVICE,
             GateComputeMode.GPT_HOST,
             GateComputeMode.GPT_DEVICE,
@@ -1217,7 +1212,7 @@ class TtMoEGatePrefill(LightweightModule):
             logits = self._device_matmul(x)
         elif mode == GateComputeMode.HASH_HOST:
             pass  # the reference HashRouter computes logits from composed host x in Phase 2
-        else:  # HOST_MATMUL, HOST_ALL
+        else:  # HOST_ALL
             host_logits = self._host_matmul(x)
 
         # ---- Phase 2: Grouped gate ----
@@ -1239,16 +1234,6 @@ class TtMoEGatePrefill(LightweightModule):
                 padding_config=padding_config,
                 actual_start=actual_start,
             )
-
-        elif mode == GateComputeMode.HOST_GROUPED_GATE:
-            host_logits = self._compose_logits_to_host(logits)
-            host_indices, host_scores = self._host_grouped_gate(host_logits)
-            ttnn_scores = self._host_scores_to_device(host_scores)
-            ttnn_top_k_experts_indices = self._host_indices_to_device(host_indices)
-
-        elif mode == GateComputeMode.HOST_MATMUL:
-            logits = self._host_logits_to_device(host_logits)
-            ttnn_scores, ttnn_top_k_experts_indices = self._device_grouped_gate(logits)
 
         elif mode == GateComputeMode.HOST_ALL:
             host_indices, host_scores = self._host_grouped_gate(host_logits)
