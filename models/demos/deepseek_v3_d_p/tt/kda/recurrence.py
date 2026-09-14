@@ -298,11 +298,7 @@ def _distributed_affine_prefix(
         memory_config=output_memory,
     )
     entry_state = ttnn.reshape(entry_state, (batch_heads, key_dim, value_dim))
-    final_state = ttnn.all_broadcast(
-        carry,
-        cluster_axis=sequence_parallel_axis,
-        memory_config=state_memory_config,
-    )[0]
+    final_state = ttnn.to_memory_config(carry, state_memory_config)
     return entry_state, final_state
 
 
