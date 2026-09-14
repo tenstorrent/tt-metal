@@ -135,14 +135,32 @@ def iter_subblocks(Mb, Nb, dest_regs):
     return [(sh, sw) for sh, sw in pairs if sh * sw == best_area]
 
 
+def block_cap(tiles_per_core, block_sizes):
+    """Largest block size worth sweeping along one axis: the smallest candidate at or above the per-core tile
+    extent. The op clamps the last block to a partial block, so every larger candidate measures the same
+    partial block again."""
+    for b in block_sizes:
+        if b >= tiles_per_core:
+            return b
+    return block_sizes[-1]
+
+
 def iter_block_configs(M, N, grid_x, grid_y, fp32_acc):
-    """Yield (M_block, K_block, N_block, subblock_h, subblock_w) candidates that pass op validation and
-    are not larger than the per-core tile extent along M (split over grid y) and N (split over grid x)."""
-    m_tiles_per_core = max(1, math.ceil(math.ceil(M / 32) / grid_y))
-    n_tiles_per_core = max(1, math.ceil(math.ceil(N / 32) / grid_x))
+    """Yield (M_block, K_block, N_block, subblock_h, subblock_w) candidates that pass op validation.
+
+    minimal_matmul parallelizes M over grid y and N over grid x, and transposes that mapping when M > N
+    (minimal_matmul_program_descriptor.cpp, transpose_core_grid). Blocks beyond the per-core extent are
+    capped at the first candidate that covers it (see block_cap)."""
+    transpose_core_grid = M > N
+    m_axis_cores = grid_x if transpose_core_grid else grid_y
+    n_axis_cores = grid_y if transpose_core_grid else grid_x
+    m_tiles_per_core = math.ceil(math.ceil(M / 32) / m_axis_cores)
+    n_tiles_per_core = math.ceil(math.ceil(N / 32) / n_axis_cores)
     block_sizes = get_block_sizes()
+    m_cap = block_cap(m_tiles_per_core, block_sizes)
+    n_cap = block_cap(n_tiles_per_core, block_sizes)
     for Mb, Kb, Nb in product(block_sizes, repeat=3):
-        if Mb > m_tiles_per_core or Nb > n_tiles_per_core:
+        if Mb > m_cap or Nb > n_cap:
             continue
         for sh, sw in iter_subblocks(Mb, Nb, DEST_REGS[fp32_acc]):
             yield (Mb, Kb, Nb, sh, sw)
@@ -189,25 +207,43 @@ def csv_columns():
 
 
 def summarize_best_blocking(sweep_csv_path, best_json_path):
-    """Pick the highest-TFLOP/s row per (dtype_column, M, N, K) and emit JSON + a paste-able literal."""
+    """Pick the highest-TFLOP/s row per (dtype_column, M, N, K) and emit JSON + a paste-able literal.
+
+    An `oob` winner (config=None, the op's own default blocking on the full grid) is emitted as None so that
+    phase 2 replays it as config=None rather than as an explicit config on the requested grid. Rows from
+    more than one grid in the same CSV are flagged: their winners are not comparable."""
     best = {}
+    grids = set()
     with open(sweep_csv_path, newline="") as f:
         for row in csv.DictReader(f):
+            grids.add(row["grid"])
             key = (row["dtype_column"], int(row["M"]), int(row["N"]), int(row["K"]))
             tflops = float(row["tflops"])
             if key not in best or tflops > best[key]["tflops"]:
+                blocking = tuple(int(row[c]) for c in ("M_block", "K_block", "N_block", "subblock_h", "subblock_w"))
                 best[key] = {
                     "tflops": tflops,
                     "mode": row["mode"],
-                    "blocking": tuple(
-                        int(row[c]) for c in ("M_block", "K_block", "N_block", "subblock_h", "subblock_w")
-                    ),
+                    "grid": row["grid"],
+                    "blocking": None if row["mode"] == "oob" else blocking,
+                    "oob_default": blocking if row["mode"] == "oob" else None,
                 }
     if not best:
         return
+    if len(grids) > 1:
+        logger.warning(
+            f"Sweep CSV mixes rows from several grids {sorted(grids)}; winners are not comparable across grids"
+        )
     json_payload = [
         dict(
-            dtype_column=k[0], M=k[1], N=k[2], K=k[3], tflops=v["tflops"], mode=v["mode"], blocking=list(v["blocking"])
+            dtype_column=k[0],
+            M=k[1],
+            N=k[2],
+            K=k[3],
+            tflops=v["tflops"],
+            mode=v["mode"],
+            grid=v["grid"],
+            blocking=None if v["blocking"] is None else list(v["blocking"]),
         )
         for k, v in sorted(best.items())
     ]
@@ -216,7 +252,12 @@ def summarize_best_blocking(sweep_csv_path, best_json_path):
 
     lines = ["BEST_BLOCKING = {"]
     for k, v in sorted(best.items()):
-        lines.append(f"    {k!r}: {v['blocking']!r},  # {v['tflops']:.1f} TFLOP/s ({v['mode']})")
+        if v["blocking"] is None:
+            lines.append(
+                f"    {k!r}: None,  # {v['tflops']:.1f} TFLOP/s (op default {v['oob_default']}, grid {v['grid']})"
+            )
+        else:
+            lines.append(f"    {k!r}: {v['blocking']!r},  # {v['tflops']:.1f} TFLOP/s (grid {v['grid']})")
     lines.append("}")
     logger.info(
         "Best blocking per (dtype_column, M, N, K); paste into test_minimal_matmul_benchmark.py:\n" + "\n".join(lines)

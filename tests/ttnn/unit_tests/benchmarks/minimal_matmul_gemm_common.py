@@ -226,12 +226,16 @@ def pcc(a, b):
 
 
 def check_rows_pcc(in0, in1, out_t, num_rows=32):
-    """Cheap correctness check: PCC of a random row slice of the output against torch. A full reference
-    for 16384^3 on CPU is impractical."""
-    M = in0.shape[0]
-    rows = torch.randperm(M)[: min(num_rows, M)]
-    reference = in0[rows].float() @ in1.float()
-    actual = ttnn.to_torch(out_t)[rows].float()
+    """Cheap correctness check: PCC of one tile-aligned band of num_rows output rows against torch. The band is
+    sliced on device so only rows * N elements are transferred; a full reference for 16384^3 on CPU is
+    impractical."""
+    M, N = in0.shape[0], in1.shape[1]
+    num_rows = min(num_rows, M)
+    row0 = int(torch.randint(0, M // num_rows, (1,))) * num_rows if M > num_rows else 0
+    band_t = ttnn.slice(out_t, [row0, 0], [row0 + num_rows, N])
+    actual = ttnn.to_torch(band_t).float()
+    ttnn.deallocate(band_t)
+    reference = in0[row0 : row0 + num_rows].float() @ in1.float()
     return pcc(reference, actual)
 
 

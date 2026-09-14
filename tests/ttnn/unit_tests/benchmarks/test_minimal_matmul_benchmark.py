@@ -81,9 +81,10 @@ SHAPES_ENV = "TTNN_MINIMAL_MATMUL_SHAPES"
 # Minimum acceptable PCC of the 32-row check per column (bfloat4_b carries a 4-bit mantissa).
 PCC_THRESHOLD = {"BF16": 0.99, "TF32": 0.99, "FP32": 0.99, "FP8": 0.99, "FP4": 0.90}
 
-# (dtype_column, M, N, K) -> (M_block, K_block, N_block, subblock_h, subblock_w), blocks in tiles.
-# Paste the BEST_BLOCKING literal logged at the end of a phase-1 sweep here. Missing keys use the op's
-# default blocking (8/8/8, sub-block 2x4 or 4x2 with bf16 accumulation, 2x2 with fp32 accumulation).
+# (dtype_column, M, N, K) -> (M_block, K_block, N_block, subblock_h, subblock_w) in tiles, or None when the
+# sweep winner was the op's own default blocking (config=None: 8/8/8, sub-block 2x4 or 4x2 with bf16
+# accumulation, 2x2 with fp32 accumulation). Paste the BEST_BLOCKING literal logged at the end of a phase-1
+# sweep here. Missing keys use the op default for bf16 accumulation and FALLBACK_BLOCKING_FP32_ACC for fp32.
 BEST_BLOCKING = {}
 
 # Explicit fallback for fp32 accumulation when BEST_BLOCKING has no entry (bf16 accumulation uses config=None).
@@ -92,7 +93,10 @@ FALLBACK_BLOCKING_FP32_ACC = (4, 8, 4, 2, 2)
 
 def blocking_for(dtype_column, M, N, K, core_grid, fp32_acc):
     """Return (ttnn.MinimalMatmulConfig or None, label) for a sheet cell."""
-    blocking = BEST_BLOCKING.get((dtype_column, M, N, K))
+    key = (dtype_column, M, N, K)
+    if key in BEST_BLOCKING and BEST_BLOCKING[key] is None:
+        return None, "default (sweep winner)"
+    blocking = BEST_BLOCKING.get(key)
     label = "best"
     if blocking is None:
         if not fp32_acc:
@@ -101,6 +105,25 @@ def blocking_for(dtype_column, M, N, K, core_grid, fp32_acc):
         label = "fallback-fp32"
     Mb, Kb, Nb, sh, sw = blocking
     return make_matmul_config(blocking, core_grid), f"{label} {Mb}/{Kb}/{Nb} sub {sh}x{sw}"
+
+
+@pytest.fixture(scope="session")
+def sheet_report():
+    """Row appender for the sheet CSV. The file is truncated once per pytest session, so an eager-only or
+    trace-only invocation never appends to rows from an earlier run."""
+    artifacts_dir = Path(os.environ["TT_METAL_HOME"]) / "generated"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = artifacts_dir / SHEET_CSV_NAME
+    columns = csv_columns()
+    with open(csv_path, "w", newline="") as f:
+        csv.writer(f).writerow(columns)
+
+    def append(row):
+        with open(csv_path, "a", newline="") as f:
+            csv.writer(f).writerow([row.get(c, "") for c in columns])
+
+    append.path = csv_path
+    yield append
 
 
 def selected_shapes():
@@ -162,15 +185,12 @@ def csv_columns():
 def test_minimal_matmul_gemm_sheet(
     device,
     grid_size,
+    sheet_report,
     use_trace,
     num_warmup_iterations,
     num_measurement_iterations,
 ):
-    artifacts_dir = Path(os.environ["TT_METAL_HOME"]) / "generated"
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = artifacts_dir / SHEET_CSV_NAME
-    # eager runs first and creates the file; trace appends so both modes land in one CSV.
-    write_header = not use_trace or not csv_path.exists()
+    csv_path = sheet_report.path
 
     grid_x, grid_y = resolve_grid(device, grid_size)
     core_grid = ttnn.CoreCoord(grid_x, grid_y)
@@ -178,178 +198,161 @@ def test_minimal_matmul_gemm_sheet(
     grid_str = f"{grid_x}x{grid_y}"
     num_cores = grid_x * grid_y
 
-    columns = csv_columns()
     peak_by_column = {}
     pcc_failures = []
     unrunnable = []
+    write_row = sheet_report
 
-    with open(csv_path, "w" if write_header else "a", newline="") as f:
-        writer = csv.writer(f)
-        if write_header:
-            writer.writerow(columns)
+    for M, N, K in selected_shapes():
+        flops = 2 * M * N * K
+        measured = {}  # dtype_column -> (metrics, row_pcc, blocking_label, grid used)
 
-        def write_row(row):
-            writer.writerow([row.get(c, "") for c in columns])
-            f.flush()
-
-        for M, N, K in selected_shapes():
-            flops = 2 * M * N * K
-            measured = {}  # dtype_column -> (metrics, row_pcc, blocking_label, grid used)
-
-            for dtype_column in SHEET_COLUMN_ORDER:
-                spec = DTYPE_COLUMNS[dtype_column]
-                row = dict(
-                    M=M,
-                    N=N,
-                    K=K,
-                    flops=flops,
-                    dtype_column=dtype_column,
-                    ttnn_dtype=str(spec["dtype"]) if spec["dtype"] is not None else "N/A",
-                    fidelity=str(spec["fidelity"]),
-                    passes=spec["passes"],
-                    accumulation="fp32" if spec["fp32_acc"] else "bf16",
-                    grid=grid_str,
-                    use_trace=use_trace,
-                    note=spec["note"],
-                )
-
-                if spec["dtype"] is None:
-                    row.update(
-                        blocking="N/A",
-                        theoretical_tflops=fmt(
-                            theoretical_tflops(num_cores, get_device_frequency_hz(), spec["passes"]), 2
-                        ),
-                        measured_tflops="N/A",
-                        utilization_pct="N/A",
-                    )
-                    write_row(row)
-                    logger.info(f"{dtype_column} {shape_id((M, N, K))}: N/A ({spec['note']})")
-                    continue
-
-                source_column = spec.get("measure_as", dtype_column)
-                if source_column not in measured:
-                    src = DTYPE_COLUMNS[source_column]
-                    compute_kernel_config = make_compute_kernel_config(device, src)
-                    config, blocking_label = blocking_for(source_column, M, N, K, core_grid, src["fp32_acc"])
-                    cores_used = num_cores if config is not None else full_grid.x * full_grid.y
-                    grid_used = grid_str if config is not None else f"{full_grid.x}x{full_grid.y}"
-
-                    op_fn = minimal_matmul_fn(config, compute_kernel_config)
-
-                    in0, in1, in0_t, in1_t = make_inputs(device, M, N, K, src["dtype"])
-                    output_t = None
-                    try:
-                        inference_time_avg, trisc1_dur, device_freq_hz, output_t = run_measurement(
-                            device,
-                            in0_t,
-                            in1_t,
-                            op_fn,
-                            use_trace,
-                            num_warmup_iterations,
-                            num_measurement_iterations,
-                            get_profiler_build_enabled(),
-                        )
-                        metrics = compute_metrics(
-                            M, N, K, src["passes"], cores_used, inference_time_avg, trisc1_dur, device_freq_hz
-                        )
-                        row_pcc = check_rows_pcc(in0, in1, output_t)
-                        measured[source_column] = (metrics, row_pcc, blocking_label, grid_used)
-                    except RuntimeError as e:
-                        if not is_skippable_benchmark_runtime_error(e):
-                            raise
-                        reason = runtime_error_reason(e)
-                        logger.warning(
-                            f"{source_column} {shape_id((M, N, K))} blocking {blocking_label} not runnable: {reason}"
-                        )
-                        measured[source_column] = (None, None, blocking_label, f"not runnable: {reason}")
-                    finally:
-                        for t in (output_t, in0_t, in1_t):
-                            if t is not None:
-                                ttnn.deallocate(t)
-
-                metrics, row_pcc, blocking_label, grid_used = measured[source_column]
-                if metrics is None:
-                    unrunnable.append((dtype_column, (M, N, K), blocking_label))
-                    row.update(
-                        blocking=blocking_label,
-                        theoretical_tflops=fmt(
-                            theoretical_tflops(num_cores, get_device_frequency_hz(), spec["passes"]), 2
-                        ),
-                        measured_tflops="N/A",
-                        utilization_pct="N/A",
-                        note=(row["note"] + "; " if row["note"] else "") + grid_used,
-                    )
-                    row["grid"] = grid_str
-                    write_row(row)
-                    continue
-                threshold = PCC_THRESHOLD[dtype_column]
-                note = row["note"]
-                if row_pcc < threshold:
-                    pcc_failures.append((dtype_column, (M, N, K), row_pcc))
-                    note = (note + "; " if note else "") + f"PCC {row_pcc:.4f} below {threshold}"
-                row.update(
-                    grid=grid_used,
-                    blocking=blocking_label,
-                    time_avg_ms=fmt(metrics["time_avg_ms"], 4),
-                    theoretical_tflops=fmt(metrics["theoretical_tflops"], 2),
-                    measured_tflops=fmt(metrics["measured_tflops"], 2),
-                    utilization_pct=fmt(metrics["utilization_pct"], 2),
-                    pcc=fmt(row_pcc, 5),
-                    note=note,
-                )
-                row.update(device_metric_fields(metrics))
-                write_row(row)
-
-                device_str = (
-                    f", device util {metrics['device_utilization_pct']:.1f}%"
-                    if "device_utilization_pct" in metrics
-                    else ""
-                )
-                logger.info(
-                    f"{dtype_column} {shape_id((M, N, K))} trace={use_trace} blocking {blocking_label} grid {grid_used}: "
-                    f"{metrics['time_avg_ms']:.3f} ms, {metrics['measured_tflops']:.1f} / {metrics['theoretical_tflops']:.0f} TFLOP/s "
-                    f"= {metrics['utilization_pct']:.1f}%{device_str}, pcc {row_pcc:.4f}"
-                )
-
-                best = peak_by_column.get(dtype_column)
-                if best is None or metrics["measured_tflops"] > best["measured_tflops"]:
-                    peak_by_column[dtype_column] = dict(
-                        metrics, shape=(M, N, K), blocking=blocking_label, grid=grid_used
-                    )
-
-        # PEAK summary rows: best sustained rate per dtype column over the sheet shapes.
         for dtype_column in SHEET_COLUMN_ORDER:
             spec = DTYPE_COLUMNS[dtype_column]
-            best = peak_by_column.get(dtype_column)
             row = dict(
-                M="PEAK",
-                N="",
-                K="",
+                M=M,
+                N=N,
+                K=K,
+                flops=flops,
                 dtype_column=dtype_column,
                 ttnn_dtype=str(spec["dtype"]) if spec["dtype"] is not None else "N/A",
                 fidelity=str(spec["fidelity"]),
                 passes=spec["passes"],
                 accumulation="fp32" if spec["fp32_acc"] else "bf16",
+                grid=grid_str,
                 use_trace=use_trace,
+                note=spec["note"],
             )
-            if best is None:
-                row.update(measured_tflops="N/A", utilization_pct="N/A", note=spec["note"])
-            else:
+
+            if spec["dtype"] is None:
                 row.update(
-                    flops=best["flops"],
-                    grid=best["grid"],
-                    blocking=best["blocking"],
-                    theoretical_tflops=fmt(best["theoretical_tflops"], 2),
-                    measured_tflops=fmt(best["measured_tflops"], 2),
-                    utilization_pct=fmt(best["utilization_pct"], 2),
-                    note=f"best over sheet shapes, at {shape_id(best['shape'])}",
+                    blocking="N/A",
+                    theoretical_tflops=fmt(theoretical_tflops(num_cores, get_device_frequency_hz(), spec["passes"]), 2),
+                    measured_tflops="N/A",
+                    utilization_pct="N/A",
                 )
-                row.update(device_metric_fields(best))
-                logger.info(
-                    f"PEAK {dtype_column} trace={use_trace}: {best['measured_tflops']:.1f} TFLOP/s "
-                    f"({best['utilization_pct']:.1f}%) at {shape_id(best['shape'])}"
+                write_row(row)
+                logger.info(f"{dtype_column} {shape_id((M, N, K))}: N/A ({spec['note']})")
+                continue
+
+            source_column = spec.get("measure_as", dtype_column)
+            if source_column not in measured:
+                src = DTYPE_COLUMNS[source_column]
+                compute_kernel_config = make_compute_kernel_config(device, src)
+                config, blocking_label = blocking_for(source_column, M, N, K, core_grid, src["fp32_acc"])
+                cores_used = num_cores if config is not None else full_grid.x * full_grid.y
+                grid_used = grid_str if config is not None else f"{full_grid.x}x{full_grid.y}"
+
+                op_fn = minimal_matmul_fn(config, compute_kernel_config)
+
+                in0, in1, in0_t, in1_t = make_inputs(device, M, N, K, src["dtype"])
+                output_t = None
+                try:
+                    inference_time_avg, trisc1_dur, device_freq_hz, output_t = run_measurement(
+                        device,
+                        in0_t,
+                        in1_t,
+                        op_fn,
+                        use_trace,
+                        num_warmup_iterations,
+                        num_measurement_iterations,
+                        get_profiler_build_enabled(),
+                    )
+                    metrics = compute_metrics(
+                        M, N, K, src["passes"], cores_used, inference_time_avg, trisc1_dur, device_freq_hz
+                    )
+                    row_pcc = check_rows_pcc(in0, in1, output_t)
+                    measured[source_column] = (metrics, row_pcc, blocking_label, grid_used)
+                except RuntimeError as e:
+                    if not is_skippable_benchmark_runtime_error(e):
+                        raise
+                    reason = runtime_error_reason(e)
+                    logger.warning(
+                        f"{source_column} {shape_id((M, N, K))} blocking {blocking_label} not runnable: {reason}"
+                    )
+                    measured[source_column] = (None, None, blocking_label, f"not runnable: {reason}")
+                finally:
+                    for t in (output_t, in0_t, in1_t):
+                        if t is not None:
+                            ttnn.deallocate(t)
+
+            metrics, row_pcc, blocking_label, grid_used = measured[source_column]
+            if metrics is None:
+                unrunnable.append((dtype_column, (M, N, K), blocking_label))
+                row.update(
+                    blocking=blocking_label,
+                    theoretical_tflops=fmt(theoretical_tflops(num_cores, get_device_frequency_hz(), spec["passes"]), 2),
+                    measured_tflops="N/A",
+                    utilization_pct="N/A",
+                    note=(row["note"] + "; " if row["note"] else "") + grid_used,
                 )
+                row["grid"] = grid_str
+                write_row(row)
+                continue
+            threshold = PCC_THRESHOLD[dtype_column]
+            note = row["note"]
+            if row_pcc < threshold:
+                pcc_failures.append((dtype_column, (M, N, K), row_pcc))
+                note = (note + "; " if note else "") + f"PCC {row_pcc:.4f} below {threshold}"
+            row.update(
+                grid=grid_used,
+                blocking=blocking_label,
+                time_avg_ms=fmt(metrics["time_avg_ms"], 4),
+                theoretical_tflops=fmt(metrics["theoretical_tflops"], 2),
+                measured_tflops=fmt(metrics["measured_tflops"], 2),
+                utilization_pct=fmt(metrics["utilization_pct"], 2),
+                pcc=fmt(row_pcc, 5),
+                note=note,
+            )
+            row.update(device_metric_fields(metrics))
             write_row(row)
+
+            device_str = (
+                f", device util {metrics['device_utilization_pct']:.1f}%" if "device_utilization_pct" in metrics else ""
+            )
+            logger.info(
+                f"{dtype_column} {shape_id((M, N, K))} trace={use_trace} blocking {blocking_label} grid {grid_used}: "
+                f"{metrics['time_avg_ms']:.3f} ms, {metrics['measured_tflops']:.1f} / {metrics['theoretical_tflops']:.0f} TFLOP/s "
+                f"= {metrics['utilization_pct']:.1f}%{device_str}, pcc {row_pcc:.4f}"
+            )
+
+            best = peak_by_column.get(dtype_column)
+            if best is None or metrics["measured_tflops"] > best["measured_tflops"]:
+                peak_by_column[dtype_column] = dict(metrics, shape=(M, N, K), blocking=blocking_label, grid=grid_used)
+
+    # PEAK summary rows: best sustained rate per dtype column over the sheet shapes.
+    for dtype_column in SHEET_COLUMN_ORDER:
+        spec = DTYPE_COLUMNS[dtype_column]
+        best = peak_by_column.get(dtype_column)
+        row = dict(
+            M="PEAK",
+            N="",
+            K="",
+            dtype_column=dtype_column,
+            ttnn_dtype=str(spec["dtype"]) if spec["dtype"] is not None else "N/A",
+            fidelity=str(spec["fidelity"]),
+            passes=spec["passes"],
+            accumulation="fp32" if spec["fp32_acc"] else "bf16",
+            use_trace=use_trace,
+        )
+        if best is None:
+            row.update(measured_tflops="N/A", utilization_pct="N/A", note=spec["note"])
+        else:
+            row.update(
+                flops=best["flops"],
+                grid=best["grid"],
+                blocking=best["blocking"],
+                theoretical_tflops=fmt(best["theoretical_tflops"], 2),
+                measured_tflops=fmt(best["measured_tflops"], 2),
+                utilization_pct=fmt(best["utilization_pct"], 2),
+                note=f"best over sheet shapes, at {shape_id(best['shape'])}",
+            )
+            row.update(device_metric_fields(best))
+            logger.info(
+                f"PEAK {dtype_column} trace={use_trace}: {best['measured_tflops']:.1f} TFLOP/s "
+                f"({best['utilization_pct']:.1f}%) at {shape_id(best['shape'])}"
+            )
+        write_row(row)
 
     logger.info(f"Sheet CSV written to {csv_path}")
     assert not unrunnable, f"Cells with a blocking that is not runnable (written as N/A): {unrunnable}"
