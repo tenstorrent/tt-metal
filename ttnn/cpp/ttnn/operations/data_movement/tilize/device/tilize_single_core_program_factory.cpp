@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize_single_core_program_factory.hpp"
+#include "ttnn/operations/data_movement/tilize/device/tilize_device_operation.hpp"
+
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -177,6 +180,18 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(compute_desc));
 
     return desc;
+}
+
+void TilizeSingleCoreProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const TilizeParams& /*operation_attributes*/,
+    const TilizeInputs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Every shape-derived arg is keyed, so only the reader/writer buffer addresses move on a hit.
+    // Reader is pushed first, writer second, each taking its buffer at slot 0.
+    patch_tilize_kernel_slot0(program, 0, tensor_args.input_tensor.buffer()->address());
+    patch_tilize_kernel_slot0(program, 1, tensor_return_value.buffer()->address());
 }
 
 }  // namespace ttnn::prim

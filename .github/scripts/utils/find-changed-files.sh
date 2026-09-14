@@ -32,6 +32,7 @@ LLK_TESTS_CHANGED=false
 LLK_UNIT_TESTS_CHANGED=false
 LLK_PERF_CHANGED=false
 LLK_CI_CHANGED=false
+TTSIM_CI_CHANGED=false
 WORKFLOWS_CHANGED=false
 
 
@@ -47,6 +48,38 @@ while IFS= read -r FILE; do
             CMAKE_CHANGED=true
             LLK_SFPI_CHANGED=true
             ANY_CODE_CHANGED=true
+            ;;
+        tt_metal/ttsim-version)
+            # Pins the ttsim release that fetch-ttsim downloads for every sim_* SKU. An
+            # incompatible simulator build breaks the ttsim pipelines and nothing else, so
+            # this gets its own flag rather than the blanket ANY_CODE_CHANGED fanout.
+            TTSIM_CI_CHANGED=true
+            ;;
+        tests/pipeline_reorg/ttsim_merge_gate_tests.yaml|tests/pipeline_reorg/ttsim_sanity_tests.yaml|tests/pipeline_reorg/ttsim_unit_tests.yaml|tests/pipeline_reorg/ttsim-skip-list.yaml)
+            # ttsim test matrices and the skip list. These are maintained independently of
+            # the code they run, so a PR that only tunes them must still validate itself.
+            TTSIM_CI_CHANGED=true
+            ;;
+        # The ttsim actions and the ttsim-*-impl.yaml workflows that drive them, including
+        # ttsim-merge-gate-tests-impl.yaml, which owns the merge-gate matrix.
+        # WORKFLOWS_CHANGED is raised too because this pattern matches before the
+        # .github/workflows/*.yaml catch-all below: without it a ttsim-*.yaml-only PR
+        # would lose the standard full-gate fanout that catch-all exists to guarantee.
+        .github/actions/fetch-ttsim/**|.github/actions/setup-ttsim/**|.github/workflows/ttsim-*.yaml)
+            TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
+            ;;
+        # The gate that schedules the ttsim legs, and the budget they are checked
+        # against. A PR that rewires either must exercise the legs it just changed
+        # rather than skipping them and discovering a broken filter on main.
+        # WORKFLOWS_CHANGED is raised too so this keeps the standard full-gate fanout
+        # it gets from the .github/workflows/*.yaml catch-all below.
+        .github/workflows/merge-gate.yaml)
+            TTSIM_CI_CHANGED=true
+            WORKFLOWS_CHANGED=true
+            ;;
+        .github/time_budget.yaml)
+            TTSIM_CI_CHANGED=true
             ;;
         .clang-tidy|**/.clang-tidy)
             CLANG_TIDY_CONFIG_CHANGED=true
@@ -82,13 +115,17 @@ while IFS= read -r FILE; do
             LLK_QUASAR_CHANGED=true
             LLK_TESTS_CHANGED=true
             ;;
+        tt_metal/tt-llk/tests/python_tests/fuser/**)
+            LLK_QUASAR_CHANGED=true
+            LLK_TESTS_CHANGED=true
+            ;;
         tt_metal/tt-llk/tests/**)
             LLK_TESTS_CHANGED=true
             ;;
         .github/workflows/llk-*.yaml|.github/workflows/build-quasar-perf.yml|.github/scripts/llk-*.sh|tests/pipeline_reorg/llk_unit_tests.yaml|tests/pipeline_reorg/llk_merge_gate_tests.yaml)
             LLK_CI_CHANGED=true
             ;;
-        tt_metal/**/*.@(h|hpp|c|cpp|cc|py))
+        tt_metal/**/*.@(h|hpp|inl|c|cpp|cc|py))
             TTMETALIUM_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -103,7 +140,7 @@ while IFS= read -r FILE; do
             TTMETALIUM_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        ttnn/**/*.@(h|hpp|c|cpp|py))
+        ttnn/**/*.@(h|hpp|inl|c|cpp|py))
             TTNN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -115,11 +152,11 @@ while IFS= read -r FILE; do
             TTNN_TESTS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tt-train/**/*.@(h|hpp|c|cpp|py))
+        tt-train/**/*.@(h|hpp|inl|c|cpp|py))
             TTTRAIN_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
-        tools/**/*.@(h|hpp|c|cpp|py))
+        tools/**/*.@(h|hpp|inl|c|cpp|py))
             TOOLS_CHANGED=true
             ANY_CODE_CHANGED=true
             ;;
@@ -156,6 +193,85 @@ while IFS= read -r FILE; do
     esac
 done <<< "$CHANGED_FILES"
 
+# --- run-clang-tidy inputs: raw snapshot + dedicated re-scans ---------------
+# Snapshot the language-agnostic per-file flags NOW, before the blanket
+# submodule/workflow "treat as everything changed" fallback below mutates
+# them. run-clang-tidy must reflect only changes that can plausibly alter
+# clang-tidy results; deriving it from the post-fallback values would force
+# a full code-analysis rescan for every workflow-only PR, including
+# standalone workflows with zero relevance to what gets built or scanned.
+RAW_CMAKE_CHANGED=$CMAKE_CHANGED
+RAW_CLANG_TIDY_CONFIG_CHANGED=$CLANG_TIDY_CONFIG_CHANGED
+RAW_LLK_WORMHOLE_CHANGED=$LLK_WORMHOLE_CHANGED
+RAW_LLK_BLACKHOLE_CHANGED=$LLK_BLACKHOLE_CHANGED
+RAW_LLK_COMMON_CHANGED=$LLK_COMMON_CHANGED
+RAW_LLK_SFPI_CHANGED=$LLK_SFPI_CHANGED
+
+# clang-tidy is a C/C++-only linter, so the "did relevant source change?"
+# half of run-clang-tidy gets its own dedicated scan for C/C++ extensions
+# only. The shared flags above (tt-metalium-changed, tools-changed, ...) are
+# deliberately NOT reused here: their patterns also match .py files (and
+# e.g. tools/triage/requirements.txt) because other jobs legitimately fire
+# on Python changes — but a Python-only PR cannot affect clang-tidy output.
+# Each directory needs BOTH a root-level (dir/*.ext) and a nested
+# (dir/**/*.ext) alternative: this script only enables extglob, not
+# globstar, so in case-pattern matching `dir/**/*.ext` requires at least
+# one subdirectory component and would miss files directly in `dir/`.
+# tests/scale_out and tests/tt_eager are included because the clang-tidy
+# CMake preset inherits TT_METAL_BUILD_TESTS=TRUE and TTNN_BUILD_TESTS=TRUE,
+# and tests/CMakeLists.txt builds those trees under exactly those flags.
+#
+# .fbs is included alongside the C/C++ extensions: FlatBuffer schemas
+# (tt_metal/impl/flatbuffer/*.fbs, tt_metal/api/.../serialized_descriptors/*.fbs,
+# ttnn/core/tensor/flatbuffer/*.fbs, tt-train/.../serialization/*.fbs) generate
+# *_generated.h headers via GENERATE_FBS_HEADER (cmake/flatbuffers.cmake) that
+# are compiled straight into their target's sources with no SKIP_LINTING or
+# HeaderFilterRegex exclusion — clang-tidy genuinely analyzes them, so an
+# .fbs-only PR must not be skipped.
+#
+# .proto is deliberately NOT included, despite generating C++ the same way:
+# GENERATE_PROTO_FILES (cmake/protobuf.cmake) sets SKIP_LINTING on the
+# generated .pb.cc, drops a no-op .clang-tidy into the generated directory so
+# the .pb.h is never scanned via #include either, and the repo's top-level
+# .clang-tidy HeaderFilterRegex separately excludes '.pb.h$' outright. Same
+# reasoning excludes .capnp: tt_metal/impl/CMakeLists.txt sets SKIP_LINTING
+# on every capnp-generated RPC source/header. Neither can affect clang-tidy
+# output no matter how the schema changes.
+CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=false
+# Explicit, human-auditable list of workflow files whose changes affect the
+# clang-tidy scan itself (its definition, implementation, caller/inputs, or
+# the docker image it runs inside). Deliberately a literal list rather than
+# any computed call-graph traversal. NOT listed on purpose:
+# .github/workflows/check-harbor.yaml — it only health-checks the Harbor
+# registry cache and cannot affect what gets built or scanned.
+CLANG_TIDY_KEY_WORKFLOW_CHANGED=false
+while IFS= read -r FILE; do
+    case "$FILE" in
+        @(tt_metal|ttnn|tests/tt_metal|tests/ttnn|tests/scale_out|tests/tt_eager|tt-train|tools|tt_stl)/*(*/)*.@(h|hpp|c|cpp|cc|inl|tpp|fbs))
+            CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
+            ;;
+        # tt_metal/llrt/hal's codegen.py/codegen.sh regenerate dev_msgs.hpp,
+        # fabric_telemetry.hpp, and realtime_profiler_msgs.hpp (+ *_impl.hpp),
+        # which ARE linted (no SKIP_LINTING in tt_metal/llrt/hal/CMakeLists.txt).
+        # Their primary inputs (tt_metal/hw/inc/hostdev/*.h) already match the
+        # pattern above, but the generator scripts themselves don't live under
+        # tt_metal/**/*.h|.cpp — a change to the generator logic alone, with no
+        # input header touched, would otherwise regenerate different linted
+        # headers undetected.
+        tt_metal/llrt/hal/codegen/codegen.py|tt_metal/llrt/hal/codegen/codegen.sh)
+            CPP_SOURCE_FOR_CLANG_TIDY_CHANGED=true
+            ;;
+        .github/workflows/code-analysis.yaml|\
+        .github/workflows/clang-tidy-reusable.yaml|\
+        .github/workflows/pr-gate.yaml|\
+        .github/workflows/build-docker-artifact.yaml|\
+        .github/workflows/resolve-docker-pull-refs.yaml)
+            CLANG_TIDY_KEY_WORKFLOW_CHANGED=true
+            ;;
+    esac
+done <<< "$CHANGED_FILES"
+# ----------------------------------------------------------------------------
+
 SUBMODULE_PATHS=$(git config --file .gitmodules --get-regexp path | awk '{print $2}')
 SUBMODULE_CHANGED=false
 for submodule_path in $SUBMODULE_PATHS; do
@@ -164,6 +280,24 @@ for submodule_path in $SUBMODULE_PATHS; do
         break
     fi
 done
+
+# run-clang-tidy: should the code-analysis (clang-tidy) job run? Computed
+# from the dedicated C/C++-only scan and the RAW pre-fallback flags above
+# (plus SUBMODULE_CHANGED, which the fallback never mutates, and the explicit
+# key-workflow list) — must be decided before the blanket fallback below
+# forces the shared flags true. Submodules stay included to match the repo's
+# conservative posture: a submodule bump can change header behavior
+# clang-tidy would flag. LLK flags are included because LLK sources are
+# compiled into Metalium device kernels.
+RUN_CLANG_TIDY=false
+if [[ "$CPP_SOURCE_FOR_CLANG_TIDY_CHANGED" = true || \
+      "$RAW_CMAKE_CHANGED" = true || "$RAW_CLANG_TIDY_CONFIG_CHANGED" = true || \
+      "$RAW_LLK_WORMHOLE_CHANGED" = true || "$RAW_LLK_BLACKHOLE_CHANGED" = true || \
+      "$RAW_LLK_COMMON_CHANGED" = true || "$RAW_LLK_SFPI_CHANGED" = true || \
+      "$SUBMODULE_CHANGED" = true || "$CLANG_TIDY_KEY_WORKFLOW_CHANGED" = true ]]; then
+    RUN_CLANG_TIDY=true
+fi
+
 if [[ "$SUBMODULE_CHANGED" = true || "$WORKFLOWS_CHANGED" = true ]]; then
     # Treat any submodule or workflow change as a change to everything; not going to manage dependency trees for this.
     # For workflows this guarantees a workflow-only PR runs the full standard gate (build + smoke + examples + code-analysis)
@@ -206,6 +340,7 @@ declare -A changes=(
     [tools-changed]=$TOOLS_CHANGED
     [submodule-changed]=$SUBMODULE_CHANGED
     [any-code-changed]=$ANY_CODE_CHANGED
+    [run-clang-tidy]=$RUN_CLANG_TIDY
     [docs-changed]=$DOCS_CHANGED
     [model-charts-changed]=$MODEL_CHARTS_CHANGED
     [models-changed]=$MODELS_CHANGED
@@ -219,6 +354,7 @@ declare -A changes=(
     [llk-unit-tests-changed]=$LLK_UNIT_TESTS_CHANGED
     [llk-perf-changed]=$LLK_PERF_CHANGED
     [llk-ci-changed]=$LLK_CI_CHANGED
+    [ttsim-ci-changed]=$TTSIM_CI_CHANGED
 )
 
 for var in "${!changes[@]}"; do

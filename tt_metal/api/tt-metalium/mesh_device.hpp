@@ -164,10 +164,25 @@ public:
     SystemMemoryManager& sysmem_manager() override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
-    // If cq_id is not provided, the current command queue is returned from the current thread
+    MeshTraceId begin_mesh_trace(MeshCommandQueue& cq);
+    void begin_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
+    void end_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id);
+    void replay_mesh_trace(MeshCommandQueue& cq, const MeshTraceId& trace_id, bool blocking);
+    [[deprecated(
+        "Use begin_mesh_trace(MeshCommandQueue&) instead. begin_mesh_trace(uint8_t) will be removed after September "
+        "9th, 2026.")]]
     MeshTraceId begin_mesh_trace(uint8_t cq_id);
+    [[deprecated(
+        "Use begin_mesh_trace(MeshCommandQueue&, const MeshTraceId&) instead. begin_mesh_trace(uint8_t, const "
+        "MeshTraceId&) will be removed after September 9th, 2026.")]]
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    [[deprecated(
+        "Use end_mesh_trace(MeshCommandQueue&, const MeshTraceId&) instead. end_mesh_trace(uint8_t, const "
+        "MeshTraceId&) will be removed after September 9th, 2026.")]]
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    [[deprecated(
+        "Use replay_mesh_trace(MeshCommandQueue&, const MeshTraceId&, bool) instead. replay_mesh_trace(uint8_t, const "
+        "MeshTraceId&, bool) will be removed after September 9th, 2026.")]]
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);

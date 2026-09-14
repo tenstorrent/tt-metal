@@ -48,7 +48,7 @@ using test_types::ReflectablePoint;
 using test_types::ReflectableRect;
 using ::testing::HasSubstr;
 
-TEST(ReflectionTest, PrintReflectableStruct) {
+TEST(ReflectionTest, CPU_PrintReflectableStruct) {
     ReflectablePoint p{10, 20};
     std::stringstream ss;
     ss << p;
@@ -59,7 +59,7 @@ TEST(ReflectionTest, PrintReflectableStruct) {
     EXPECT_THAT(result, HasSubstr("y=20"));
 }
 
-TEST(ReflectionTest, PrintNestedReflectableStruct) {
+TEST(ReflectionTest, CPU_PrintNestedReflectableStruct) {
     ReflectableRect rect{{1, 2}, {3, 4}};
     std::stringstream ss;
     ss << rect;
@@ -70,7 +70,7 @@ TEST(ReflectionTest, PrintNestedReflectableStruct) {
     EXPECT_THAT(result, HasSubstr("bottom_right="));
 }
 
-TEST(ReflectionTest, PrintStructWithCompileTimeAttributesContainingReflectable) {
+TEST(ReflectionTest, CPU_PrintStructWithCompileTimeAttributesContainingReflectable) {
     // This test verifies that the template ordering is correct.
     // ContainerWithReflectable uses compile-time attributes (supports_conversion_to_string_v),
     // and contains a ReflectablePoint field that needs the Reflectable operator<<.
@@ -87,7 +87,7 @@ TEST(ReflectionTest, PrintStructWithCompileTimeAttributesContainingReflectable) 
     EXPECT_THAT(result, HasSubstr("y=10"));
 }
 
-TEST(ReflectionTest, PrintVectorOfReflectable) {
+TEST(ReflectionTest, CPU_PrintVectorOfReflectable) {
     std::vector<ReflectablePoint> points{{1, 2}, {3, 4}};
     std::stringstream ss;
     ss << points;
@@ -99,7 +99,7 @@ TEST(ReflectionTest, PrintVectorOfReflectable) {
     EXPECT_THAT(result, HasSubstr("y=4"));
 }
 
-TEST(ReflectionTest, PrintOptionalReflectable) {
+TEST(ReflectionTest, CPU_PrintOptionalReflectable) {
     std::optional<ReflectablePoint> opt_point = ReflectablePoint{7, 8};
     std::stringstream ss;
     ss << opt_point;
@@ -109,14 +109,14 @@ TEST(ReflectionTest, PrintOptionalReflectable) {
     EXPECT_THAT(result, HasSubstr("y=8"));
 }
 
-TEST(ReflectionTest, PrintOptionalNullopt) {
+TEST(ReflectionTest, CPU_PrintOptionalNullopt) {
     std::optional<ReflectablePoint> opt_point = std::nullopt;
     std::stringstream ss;
     ss << opt_point;
     EXPECT_EQ(ss.str(), "std::nullopt");
 }
 
-TEST(ReflectionTest, FmtFormatReflectable) {
+TEST(ReflectionTest, CPU_FmtFormatReflectable) {
     ReflectablePoint p{42, 99};
     std::string result = fmt::format("{}", p);
 
@@ -125,7 +125,7 @@ TEST(ReflectionTest, FmtFormatReflectable) {
     EXPECT_THAT(result, HasSubstr("y=99"));
 }
 
-TEST(ReflectionTest, FmtFormatContainerWithReflectable) {
+TEST(ReflectionTest, CPU_FmtFormatContainerWithReflectable) {
     ContainerWithReflectable container{"fmt_test", {15, 25}};
     std::string result = fmt::format("{}", container);
 
@@ -139,7 +139,7 @@ TEST(ReflectionTest, FmtFormatContainerWithReflectable) {
 // operator() return type as std::map<K, V> while returning a std::unordered_map, so any
 // instantiation of from_json for an unordered_map failed to compile. Exercising that
 // instantiation here guards it (and asserts the declared return type is unordered_map).
-TEST(ReflectionTest, FromJsonUnorderedMapRoundTrip) {
+TEST(ReflectionTest, CPU_FromJsonUnorderedMapRoundTrip) {
     const std::unordered_map<std::string, int> original{{"a", 1}, {"b", 2}, {"c", 3}};
 
     const nlohmann::json json_object = ttsl::json::to_json(original);
@@ -152,7 +152,7 @@ TEST(ReflectionTest, FromJsonUnorderedMapRoundTrip) {
 }
 
 // The sibling std::map specialization (the correct one the bug was copy-pasted from) still works.
-TEST(ReflectionTest, FromJsonMapRoundTrip) {
+TEST(ReflectionTest, CPU_FromJsonMapRoundTrip) {
     const std::map<std::string, int> original{{"a", 1}, {"b", 2}, {"c", 3}};
 
     const nlohmann::json json_object = ttsl::json::to_json(original);

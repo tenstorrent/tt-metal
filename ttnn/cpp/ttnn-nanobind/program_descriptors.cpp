@@ -686,7 +686,11 @@ void py_module_types(nb::module_& mod) {
         .def_rw(
             "math_approx_mode",
             &tt::tt_metal::ComputeConfigDescriptor::math_approx_mode,
-            "Approximation mode for mathematical operations");
+            "Approximation mode for mathematical operations")
+        .def_rw(
+            "enable_trisc2_rvv",
+            &tt::tt_metal::ComputeConfigDescriptor::enable_trisc2_rvv,
+            "Compile the TRISC2 (pack) binary with the RISC-V Vector (Zve32f) extension (Blackhole only)");
 
     // TODO_NANOBIND: do we still need this?
     // export_enum<tt::tt_metal::KernelDescriptor::SourceType>(mod, "SourceType");
@@ -720,11 +724,23 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::KernelDescriptor::CompileTimeArgs compile_time_args,
                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args,
                tt::tt_metal::KernelDescriptor::Defines defines,
-               tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
+               const nb::object& runtime_args,
                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
                std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
                tt::tt_metal::KernelDescriptor::ConfigDescriptor config,
-               tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths) {
+               tt::tt_metal::KernelDescriptor::IncludePaths compiler_include_paths,
+               tt::tt_metal::experimental::blaze::NamedCompileTimeArgs blaze_named_compile_time_args) {
+                // Accept RuntimeArgsWrapper, RuntimeArgsView, or the raw RuntimeArgs type, mirroring
+                // the .runtime_args property setter rather than relying on the generic sequence
+                // caster falling back to the wrapper's __iter__.
+                tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args_cpp;
+                if (nb::isinstance<RuntimeArgsWrapper>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsWrapper&>(runtime_args).get();
+                } else if (nb::isinstance<RuntimeArgsView>(runtime_args)) {
+                    runtime_args_cpp = nb::cast<RuntimeArgsView&>(runtime_args).get_ref();
+                } else {
+                    runtime_args_cpp = nb::cast<tt::tt_metal::KernelDescriptor::RuntimeArgs>(runtime_args);
+                }
                 new (self) tt::tt_metal::KernelDescriptor{
                     kernel_source,
                     source_type,
@@ -732,15 +748,13 @@ void py_module_types(nb::module_& mod) {
                     std::move(compile_time_args),
                     std::move(named_compile_time_args),
                     std::move(defines),
-                    std::move(runtime_args),
+                    std::move(runtime_args_cpp),
                     std::move(common_runtime_args),
                     ////////////////////////////////////////////////////////////
                     // Blaze-only experimental named args
                     // Removal is tracked by issue #50953
-                    // Deliberately constructed EMPTY here: the Blaze named-arg surface is kept
-                    // OUT of the Python __init__ signature. It is settable ONLY post-construction
-                    // via the blaze_named_* def_prop_rw setters below (experimental / temporary).
-                    tt::tt_metal::experimental::blaze::NamedKernelArgs{},
+                    tt::tt_metal::experimental::blaze::NamedKernelArgs{
+                        .named_compile_time_args = std::move(blaze_named_compile_time_args)},
                     ////////////////////////////////////////////////////////////
                     opt_level,
                     std::move(config),
@@ -758,6 +772,9 @@ void py_module_types(nb::module_& mod) {
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             nb::arg("compiler_include_paths") = nb::cast(tt::tt_metal::KernelDescriptor::IncludePaths()),
+            nb::kw_only(),
+            nb::arg("blaze_named_compile_time_args") =
+                nb::cast(tt::tt_metal::experimental::blaze::NamedCompileTimeArgs()),
             R"pbdoc(
                 Initialize a KernelDescriptor with complete configuration.
 
@@ -773,6 +790,7 @@ void py_module_types(nb::module_& mod) {
                     opt_level: Optimization level for kernel compilation
                     config: Configuration descriptor for the kernel
                     compiler_include_paths: Additional include paths passed to the kernel compiler as -I flags
+                    blaze_named_compile_time_args: Experimental Blaze arguments exposed through blaze_ct_args only
             )pbdoc")
         .def_rw(
             "kernel_source",
@@ -834,9 +852,16 @@ void py_module_types(nb::module_& mod) {
         // Blaze-only experimental named args
         // Removal is tracked by issue #50953
         //
-        // These 4 def_prop_rw setters are the ENTIRE Python surface for the temporary,
-        // Blaze-only named runtime args. They are intentionally kept off __init__ and
-        // loudly marked so they acquire no new users before deletion (issue #50953).
+        // Temporary Blaze named-arg properties. Compile-time args can also be supplied
+        // to __init__; runtime args are set only through these properties.
+        .def_prop_rw(
+            "blaze_named_compile_time_args",
+            [](const tt::tt_metal::KernelDescriptor& self) { return self.blaze_named_args.named_compile_time_args; },
+            [](tt::tt_metal::KernelDescriptor& self, tt::tt_metal::experimental::blaze::NamedCompileTimeArgs args) {
+                self.blaze_named_args.named_compile_time_args = std::move(args);
+            },
+            "[EXPERIMENTAL, BLAZE-ONLY, TEMPORARY - WILL BE DELETED, see issue #50953] Named compile-time "
+            "arguments exposed through blaze_ct_args.")
         .def_prop_rw(
             "blaze_named_common_runtime_args",
             [](const tt::tt_metal::KernelDescriptor& self) {

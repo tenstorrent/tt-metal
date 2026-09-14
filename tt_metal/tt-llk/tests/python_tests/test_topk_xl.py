@@ -22,6 +22,7 @@ from helpers.llk_params import (
     TopKSortDirection,
     TopKXLChunkBaseMode,
     TopKXLIndexOp,
+    TopKXLSortMode,
     format_dict,
 )
 from helpers.param_config import parametrize
@@ -75,6 +76,38 @@ def _decode_row_major(raw: int, K: int) -> int:
     return tile * ELEMENTS_PER_TILE + face * ELEMENTS_PER_FACE + offset_in_face
 
 
+def _index_to_chunk_offset(raw: int, K: int, row_major: bool = False) -> int:
+    """
+    Turn an add_lsb index field into the element's offset in its chunk. The default
+    numbering is the tile coordinate `_decode_row_major` translates; the row_major
+    numbering is already the offset, in bits [10:0].
+    """
+    return (raw & 0x7FF) if row_major else _decode_row_major(raw, K)
+
+
+def _sort_position(dest_offset: int, K: int) -> int:
+    """
+    Position of a Dest word in the sequence the bitonic network sorts, 0 .. K-1.
+
+    `dest_offset` indexes a slot's Dest region in packed order, which is also the L1
+    order the copy reads, so an element's starting offset is its chunk offset. The
+    sort's order is a bit permutation of that (tile, row, column): from the most
+    significant field down, column bits [3:0], tile, row bit [4], column bit [4], row
+    bits [3:0]. K=512 uses one tile and rows 0 .. 15, dropping the two middle fields.
+    """
+    tile, within_tile = divmod(dest_offset, ELEMENTS_PER_TILE)
+    face, within_face = divmod(within_tile, ELEMENTS_PER_FACE)
+    row = (face // 2) * FACE_DIM + within_face // FACE_DIM
+    column = (face % 2) * FACE_DIM + within_face % FACE_DIM
+    return (
+        (K // FACE_DIM) * (column % FACE_DIM)
+        + 64 * tile
+        + 32 * (row // FACE_DIM)
+        + FACE_DIM * (column // FACE_DIM)
+        + row % FACE_DIM
+    )
+
+
 def _bitcast_float32(words: torch.Tensor) -> torch.Tensor:
     """Reinterpret integer bit patterns as float32."""
     return words.to(torch.int32).view(torch.float32)
@@ -108,6 +141,20 @@ def _make_row(search_len: int, seed: int, mode: str) -> torch.Tensor:
         return _distinct_bf16_from_hi16(hi16)
     if mode == "random":
         return torch.randn(search_len, generator=gen).to(torch.bfloat16).float()
+    if mode.startswith("planted:"):
+        # K distinct high values planted at seeded positions over a constant
+        # low filler. The only stimulus that supports search_len > 16384 with
+        # an exact index golden: bf16 has no 2^16 distinct finite positive
+        # values (0x3F80 + 16384 is already +inf), so "positive" cannot scale
+        # -- and the planted positions land in every chunk, exercising the
+        # full runtime chunk-id range.
+        k = int(mode.split(":", 1)[1])
+        row = torch.full((search_len,), 1.0, dtype=torch.float32)  # 0x3F80 filler
+        positions = torch.randperm(search_len, generator=gen)[:k]
+        row[positions] = _distinct_bf16_from_hi16(
+            0x4080 + torch.randperm(k, generator=gen)
+        )
+        return row
     if mode == "all_equal":
         # Degenerate input: all identical.
         return torch.full((search_len,), 3.0, dtype=torch.float32)
@@ -173,6 +220,11 @@ def _variant(
     fused_reduce=False,
     chunk_base_mode=TopKXLChunkBaseMode.Static,
     chunk_base=0,
+    fused_e2e=False,
+    seg_base=0,
+    sort_mode=TopKXLSortMode.Dispatch,
+    lsb_row_major=False,
+    reinit_after_copy=False,
     dest_sync=DestSync.Full,
     formats=FORMATS,
 ):
@@ -213,6 +265,11 @@ def _variant(
                 fused_reduce=fused_reduce,
                 chunk_base_mode=chunk_base_mode,
                 chunk_base=chunk_base,
+                fused_e2e=fused_e2e,
+                seg_base=seg_base,
+                sort_mode=sort_mode,
+                lsb_row_major=lsb_row_major,
+                reinit_after_copy=reinit_after_copy,
             ),
         ],
         variant_stimuli=StimuliConfig(
@@ -251,6 +308,56 @@ def _run_test_topk(K, compare_index_set=True, index_offset=0, **kwargs):
         index_offset=index_offset,
         value_format=kwargs.get("formats", FORMATS).input_format,
     )
+
+
+def _regions(result, K):
+    """
+    Row 0's value and index regions as raw uint32 words, still in packed Dest order.
+    `_extract_hw_topk` drops that order; the sort-order tests need it.
+    """
+    res = torch.tensor(result, dtype=format_dict[FORMATS.output_format])
+    region = _tiles_per_sequence(K) * ELEMENTS_PER_TILE
+    return res[:region], res[region : 2 * region]
+
+
+def _sorted_sequence(K, **kwargs):
+    """
+    Run a single-chunk Separate variant and return the K-element sequence local_sort
+    left in Dest, indexed by sort position: sequence[p] = (bf16 high 16, chunk offset).
+    The pairing is asserted here, so callers only have to look at the order.
+
+    The default `positive` stimulus is distinct and all positive, so the high 16 bits
+    compare as integers in value order.
+    """
+    result, rows = _run(
+        K,
+        index_op=TopKXLIndexOp.Separate,
+        group_id=GROUP_ID,
+        group_shift=GROUP_SHIFT,
+        **kwargs,
+    )
+    value_words, index_words = _regions(result, K)
+    sequence = {}
+    for offset in range(value_words.numel()):
+        value = int(value_words[offset])
+        if (value >> 16) == BF16_NEG_INF_HI16:  # only K=512 pads its Dest tile
+            continue
+        raw = int(index_words[offset]) & ((1 << GROUP_SHIFT) - 1)
+        sequence[_sort_position(offset, K)] = (
+            value >> 16,
+            _index_to_chunk_offset(raw, K),
+        )
+    assert sorted(sequence) == list(
+        range(K)
+    ), f"Dest holds {len(sequence)} finite lanes, not the sequence 0..K-1"
+
+    row = rows[0]
+    for position, (hi16, offset) in sequence.items():
+        assert (int(row[offset].view(torch.int32)) >> 16) & 0xFFFF == hi16, (
+            f"sort position {position} reports offset {offset}, which does not hold "
+            f"the value alongside it"
+        )
+    return [sequence[p] for p in range(K)]
 
 
 def _extract_hw_topk(result, K, num_rows, num_regions=2):
@@ -350,10 +457,11 @@ def _check_coordinates(
     group_id=0,
     group_shift=GROUP_SHIFT,
     core_id=None,
+    row_major=False,
 ):
     """
-    Validate the index ops that report a tile coordinate instead of a flat index:
-    index word is [group_id<<shift | core_id<<11 | tile coordinate].
+    Validate the index ops that report a per-chunk coordinate instead of a flat index:
+    index word is [group_id<<shift | core_id<<11 | coordinate].
 
     Checks the group_id and core_id fields, that every coordinate identifies its
     element's position, and that the values are the top-K. With num_chunks == 1
@@ -362,6 +470,7 @@ def _check_coordinates(
 
     `core_id=None` skips the core_id check: a group_shift of 11 or less puts the
     group id over bits [15:11], leaving no separable core bits to read back.
+    `row_major` selects the add_lsb numbering the coordinate is in.
     """
     num_rows = rows.shape[0]
     for r, (hw_iw, hw_val) in enumerate(_extract_hw_topk(result, K, num_rows)):
@@ -381,7 +490,7 @@ def _check_coordinates(
                 f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
             )
 
-        pos = [_decode_row_major(int(x), K) for x in raw.tolist()]
+        pos = [_index_to_chunk_offset(int(x), K, row_major) for x in raw.tolist()]
         if num_chunks == 1:
             assert set(pos) == set(range(K)), f"row {r}: decoded positions != 0..K-1"
         else:
@@ -476,26 +585,36 @@ def test_topk_xl_separate_indices(K, core_id, group_shift):
     )
 
 
-@parametrize(K=[512, 1024, 2048])
-def test_topk_xl_remove_msb(K):
+def _check_remove_msb(result, K, rows, core_id=0, row_major=False):
     """
-    remove_msb_values: fused region -> [0 | raw], packed in place as one region.
-    Check the value half is zeroed and the decoded positions form the full 0..K-1 set.
+    remove_msb_values packs the fused region in place as one region of
+    [0 | core_id<<11 | coordinate]. Check the value half is zeroed, the core_id field
+    survives, and the coordinates form the full 0..K-1 set. `row_major` selects the
+    add_lsb numbering the coordinate is in.
     """
-    (K,) = K
-
-    result, rows = _run(
-        K, index_op=TopKXLIndexOp.RemoveMsb, group_id=GROUP_ID, group_shift=GROUP_SHIFT
-    )
     for r, (fused, _) in enumerate(_extract_hw_topk(result, K, rows.shape[0], 1)):
         assert fused.numel() == K, f"row {r}: expected {K} lanes, got {fused.numel()}"
         untouched = int(torch.count_nonzero(fused >> 16))
         assert untouched == 0, f"row {r}: value half not zeroed in {untouched} lanes"
 
-        pos = [_decode_row_major(int(x), K) for x in (fused & 0xFFFF).tolist()]
+        hw_core = (fused >> CORE_ID_SHIFT) & CORE_ID_MASK
+        assert torch.all(hw_core == core_id), (
+            f"row {r}: core_id field is "
+            f"{sorted(set(int(c) for c in hw_core.tolist()))[:4]}, want {core_id}"
+        )
+
+        pos = [_index_to_chunk_offset(int(x), K, row_major) for x in fused.tolist()]
         assert set(pos) == set(
             range(K)
-        ), f"row {r}: decoded positions are not the full 0..K-1 set"
+        ), f"row {r}: coordinates are not the full 0..K-1 set"
+
+
+@parametrize(K=[512, 1024, 2048])
+def test_topk_xl_remove_msb(K):
+    (K,) = K
+
+    result, rows = _run(K, index_op=TopKXLIndexOp.RemoveMsb)
+    _check_remove_msb(result, K, rows)
 
 
 # chunk_base is saved by one of three inits, based on a template argument:
@@ -641,6 +760,88 @@ def test_topk_xl_fused_reduce(K, num_chunks):
     )
 
 
+@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4, 32])
+def test_topk_xl_fused_e2e(K, num_chunks):
+    """
+    Fused END-TO-END (the topk_large_indices wide-row path): the chunk id is
+    stamped at RUNTIME into index bits [15:11] (_topk_xl_add_lsb_indices_rt_),
+    every merge/rebuild stays in the fused word, and ONE row-major global
+    split per row (_topk_xl_separate_indices_row_major_global_) recovers
+    chunk_id * K + within-chunk. num_chunks=32 exercises the full 5-bit stamp
+    range (ids 0..31), the information-theoretic limit of the fused word.
+    """
+    mode = f"planted:{K}" if num_chunks * K > 16384 else "positive"
+    _run_test_topk(K, num_chunks=num_chunks, fused_e2e=True, mode=mode)
+
+
+@parametrize(K=[512, 1024, 2048], seg_base_chunks=[32, 96, 160])
+def test_topk_xl_fused_e2e_segment_base(K, seg_base_chunks):
+    """
+    Segment-base split (_topk_xl_separate_indices_row_major_global_base_,
+    segmented fusion): a runtime seg_base is OR'd into every decoded index.
+    seg_base = seg_chunks * K is 2^(5 + log2 K)-aligned while the decoded
+    local index occupies exactly those low bits, so OR == ADD with zero bit
+    overlap -- the golden simply shifts by seg_base (index_offset).
+
+    The lattice pins each LREG5 load path: K=1024 combines the base with the
+    chunk-field rescale (chunk_field_shift = -1) and its 32-chunk base
+    (0x8000) probes lower-half sign handling; K=512 x 160 (0x14000) and
+    K=1024 x 96 (0x18000) load BOTH halves nonzero; K=2048 bases are pure
+    upper-half (n * 65536).
+    """
+    seg_base = seg_base_chunks * K
+    _run_test_topk(
+        K, num_chunks=4, fused_e2e=True, seg_base=seg_base, index_offset=seg_base
+    )
+
+
+@parametrize(K=[512, 1024, 2048], with_seg_base=[False, True])
+def test_topk_xl_fused_e2e_partial_tail(K, with_seg_base):
+    """-inf padded tail lanes must sort last and never win index lanes --
+    with and without a segment base on the split."""
+    seg_base = (32 * K) if with_seg_base else 0
+    _run_test_topk(
+        K,
+        num_chunks=3,
+        tail_elements=K // 2 + 17,
+        fused_e2e=True,
+        seg_base=seg_base,
+        index_offset=seg_base,
+    )
+
+
+def test_topk_xl_fused_e2e_denormal_word():
+    """
+    +0-valued winners produce denormal-shaped fused words (0x0000xxxx): the
+    runtime stamp and the GLOBAL split must move them with raw integer
+    load/stores -- an FP32 flush would annihilate the index (making it 0,
+    tripping the distinct-index assert). Mirrors
+    test_topk_xl_denormal_fused_word through the fused-e2e pipeline.
+    """
+    _run_test_topk(512, num_chunks=2, mode="zeros_win", fused_e2e=True)
+
+
+def test_topk_xl_fused_e2e_signed():
+    """Negative fused words carrying runtime stamps order correctly."""
+    _run_test_topk(2048, num_chunks=2, mode="signed", fused_e2e=True)
+
+
+def test_topk_xl_fused_e2e_two_rows():
+    """Row-loop re-entry after a global split: ADDR_MOD/LREG12 residue from
+    row r must not leak into row r+1's stamp or split."""
+    _run_test_topk(1024, num_chunks=4, num_rows=2, fused_e2e=True)
+
+
+@parametrize(K=[512, 2048])
+def test_topk_xl_fused_e2e_single_chunk(K):
+    """num_chunks=1: the global split runs on a raw descending local sort
+    with no merge/rebuild in between (the op's single-segment tail case).
+    The harness golden requires >= K valid elements, so the tail is full;
+    -inf pad-lane handling through a split is covered at the op level."""
+    (K,) = K
+    _run_test_topk(K, num_chunks=1, fused_e2e=True)
+
+
 @parametrize(K=[512, 1024, 2048], partial_tail=[False, True])
 def test_topk_xl_input_float32(K, partial_tail):
     """
@@ -666,3 +867,118 @@ def test_topk_xl_dest_sync_half(K):
     (K,) = K
 
     _run_test_topk(K, num_chunks=2, num_rows=2, dest_sync=DestSync.Half)
+
+
+@parametrize(K=[512, 1024, 2048], sort_direction=list(TopKSortDirection))
+def test_topk_xl_local_sort_order(K, sort_direction):
+    """local_sort leaves the whole K-element sequence sorted in Dest."""
+    values = [hi16 for hi16, _ in _sorted_sequence(K, sort_direction=sort_direction)]
+
+    ascending = sort_direction == TopKSortDirection.Ascending
+    inversions = [p for p in range(K - 1) if (values[p] < values[p + 1]) != ascending]
+    assert not inversions, (
+        f"Dest is not {'ascending' if ascending else 'descending'} in sort-position "
+        f"order: {len(inversions)} inversions, first between positions "
+        f"{inversions[0]} and {inversions[0] + 1}"
+    )
+
+
+# Smoke test on the entry point only. `_topk_xl_local_sort_` is a pure forward to
+# `_topk_xl_local_sort_generic_` for K != 2048, so calling the generic body directly
+# builds the same SFPU code the default path already covers; both legal K are kept
+# because the network itself differs between them, but nothing past that would.
+@parametrize(K=[512, 1024])
+def test_topk_xl_local_sort_generic(K):
+    (K,) = K
+
+    _run_test_topk(K, num_rows=2, sort_mode=TopKXLSortMode.Generic)
+
+
+# early_exit_K64 stops the generic body after the per-column len-64 builds, so each
+# 64-element column is sorted on its own and nothing crosses a column boundary. The
+# tt-blaze sparse-K reader wants that: it can stop scanning a column at the first
+# all-zero packed mask word.
+#
+# The len-64 build flips direction between pairs of columns and early exit keeps that
+# flip whenever there is more than one pair, so K=2048 alternates column directions
+# while K=1024, a single pair, does not.
+@parametrize(K=[1024, 2048], sort_direction=list(TopKSortDirection))
+def test_topk_xl_local_sort_early_exit(K, sort_direction):
+    sequence = _sorted_sequence(
+        K, sort_mode=TopKXLSortMode.EarlyExitK64, sort_direction=sort_direction
+    )
+
+    # An element's starting Dest offset is its chunk offset, so this is the set each
+    # column has to still hold afterwards.
+    members = {}
+    for offset in range(K):
+        members.setdefault(_sort_position(offset, K) // 64, set()).add(offset)
+
+    ascending = sort_direction == TopKSortDirection.Ascending
+    for column, expected in sorted(members.items()):
+        entries = sequence[64 * column : 64 * (column + 1)]
+        values = [hi16 for hi16, _ in entries]
+        column_ascending = ascending != (K == 2048 and column % 2 == 1)
+        assert values == sorted(values, reverse=not column_ascending), (
+            f"column {column} is not sorted "
+            f"{'ascending' if column_ascending else 'descending'}"
+        )
+        assert {offset for _, offset in entries} == expected, (
+            f"column {column} does not hold the elements it started with: "
+            f"missing {sorted(expected - {o for _, o in entries})[:8]}, "
+            f"unexpected {sorted({o for _, o in entries} - expected)[:8]}"
+        )
+
+
+# row_major=true stamps each element's chunk offset instead of the tile coordinate the
+# default numbering needs decoding from. The offset fits in bits [10:0] for every K, so
+# core_id keeps bits [15:11] either way.
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
+def test_topk_xl_add_lsb_indices_row_major(K, core_id):
+    result, rows = _run(
+        K,
+        index_op=TopKXLIndexOp.Separate,
+        group_id=GROUP_ID,
+        group_shift=GROUP_SHIFT,
+        core_id=core_id,
+        lsb_row_major=True,
+    )
+    _check_coordinates(
+        result,
+        K,
+        rows,
+        group_id=GROUP_ID,
+        core_id=core_id,
+        row_major=True,
+    )
+
+
+# The other index op that reports a raw coordinate. remove_msb_values packs in place,
+# so the row_major numbering has to survive as [0 | core_id<<11 | chunk offset] with
+# nothing left to decode.
+@parametrize(K=[512, 1024, 2048], core_id=[0, 31])
+def test_topk_xl_remove_msb_row_major(K, core_id):
+    result, rows = _run(
+        K, index_op=TopKXLIndexOp.RemoveMsb, core_id=core_id, lsb_row_major=True
+    )
+    _check_remove_msb(result, K, rows, core_id=core_id, row_major=True)
+
+
+# Check reinits that run after copy init.
+@parametrize(K=[512, 1024, 2048], num_chunks=[2, 4], fused=[False, True])
+def test_topk_xl_reinit_after_copy(K, num_chunks, fused):
+    if not fused:
+        _run_test_topk(K, num_chunks=num_chunks, num_rows=2, reinit_after_copy=True)
+        return
+
+    result, rows = _run(
+        K,
+        num_chunks=num_chunks,
+        fused_reduce=True,
+        reinit_after_copy=True,
+        group_id=GROUP_ID,
+        group_shift=GROUP_SHIFT,
+    )
+    _check_coordinates(
+        result, K, rows, num_chunks=num_chunks, group_id=GROUP_ID, core_id=None
+    )

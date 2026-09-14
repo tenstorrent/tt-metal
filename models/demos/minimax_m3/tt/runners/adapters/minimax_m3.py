@@ -14,9 +14,14 @@ architecture (GQA + block-sparse MSA) with a REGULAR TP-head-sharded triple KV c
 not the DeepSeek merged/replicated kvpe cache. Single-rank AND pipeline-parallel (multi-galaxy D2D)
 prefill are wired: the runtime slices the model by rank (first_layer_idx / is_first_rank / is_last_rank),
 and the D2D activation ships emb-replicated across TP (pipeline_activation_emb_tp_sharded=False) to match
-M3's SP residual layout. KV-chunk-table migration IS wired for the single-rank case: the multi-tensor
-cache is described by a multi-config table (one config per (tensor, head-shard); see
-``tt/runners/kv_chunk_table.py``); pipelined migration is not yet wired (same limit as DeepSeek).
+M3's SP residual layout. KV-chunk-table migration is wired for BOTH: the multi-tensor cache is described
+by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/kv_chunk_table.py``), and
+with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
+indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
+
+Limitation: the block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3
+does not support multi-turn continuation from a prefix that is not chunk-aligned (the producer's
+``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode resumes at a 32-token boundary); ``prefill_chunk`` asserts on it.
 
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
@@ -80,11 +85,17 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
     prefill_trace_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240"
 
-    l1_small_size = 0
+    # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
+    # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
+    # importing the adapter stays cheap).
+    l1_small_size = 1152
 
-    # M3's sequence-parallel residual keeps the full embedding on every TP col (emb replicated, seq
-    # SP-sharded), so the D2D hidden state ships emb-replicated across TP.
-    pipeline_activation_emb_tp_sharded = False
+    # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
+    @property
+    def pipeline_activation_emb_tp_sharded(self):
+        from models.demos.minimax_m3.tt.residual import use_sharded_residual
+
+        return use_sharded_residual()
 
     # ------------------------------------------------------------------
     # HF config

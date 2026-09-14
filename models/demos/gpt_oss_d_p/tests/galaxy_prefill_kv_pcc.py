@@ -13,17 +13,23 @@ when not on a galaxy or when no golden trace is provided.
 
 Env:
   PREFILL_TRACE_DIR   golden trace dir (metadata.json + kv_cache/layer_N.safetensors)     [required]
-  PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for chunks 1+); "0" -> one-shot            [default 0]
-  PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 5120]
+  PREFILL_CHUNKED     "1" -> chunked (SP ring cache-read for every chunk); "0" -> one-shot           [default 0]
+  PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode only)                             [default 8192]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement                   [default 1]
   PREFILL_NUM_LAYERS  build/run only the first N decoder layers (faster partial-model runs) [default: all]
+  PREFILL_NUM_USERS   cache slots; EVERY slot prefills the same prompt and is PCC-checked
+                      independently (exercises the packed multi-user slot math)              [default 1]
+  GPT_OSS_BOUNDED_SLIDING_KV  "1" -> bounded circular KV cache on sliding layers (circular write +
+                      host-readback PCC; the on-device ring cache-read of a bounded layer is not
+                      supported in this build, and the ring path serves EVERY chunk, so chunked
+                      mode rejects the flag)                                                [default 0]
   EXPERT_DTYPE        MoE routed-expert weight dtype: "bf4" or "bf8"                        [default bf4]
   GPT_OSS_WEIGHTS_FROM_CACHE  "1" -> pass an empty state_dict (load tilized weights from the TTNN cache)
   HF_MODEL            real gpt-oss weights dir (read by ModelArgs)
 
 Run (single Blackhole galaxy, after weights + golden are staged):
   export HF_MODEL=/path/to/gpt-oss-120b
-  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+  export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
   PREFILL_TRACE_DIR=/path/to/golden/longbook_8192 \\
     python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
 """
@@ -93,32 +99,36 @@ def main():
     token_ids = list(json.load(open(Path(golden_dir) / "metadata.json"))["token_ids"])
     n_tokens = len(token_ids)
     chunked = os.getenv("PREFILL_CHUNKED", "0") == "1"
-    chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "5120"))
+    chunk_size = int(os.getenv("PREFILL_CHUNK_SIZE", "8192"))
     tps_iters = int(os.getenv("PREFILL_TPS_ITERS", "1"))
+
+    bounded_kv = os.getenv("GPT_OSS_BOUNDED_SLIDING_KV", "0") == "1"
+    num_users = int(os.getenv("PREFILL_NUM_USERS", "1"))
 
     n_chunks, chunk, total = plan(n_tokens, chunk_size, chunked, ROWS)
     print(
         f"[prefill-pcc] golden={golden_dir} n_tokens={n_tokens} "
         f"mode={'chunked' if chunked else 'one-shot'} chunk={chunk} n_chunks={n_chunks} total={total} "
-        f"tps_iters={tps_iters}",
+        f"tps_iters={tps_iters} bounded_sliding_kv={bounded_kv} num_users={num_users}",
         flush=True,
     )
     if chunked:
-        # chunks 1+ drive the SP ring cache-read (attention/dense_sp.py); chunk 0 is the gather-Q
-        # stand-in. Full-attention layers fold the sink once across ring iterations (accuracy-clean).
+        # Every sequence-parallel chunk, including chunk 0, drives the SP ring cache-read
+        # (attention/dense_sp.py). Full-attention layers fold the sink once across ring iterations.
         print(
-            "[prefill-pcc] chunked: chunk 0 = gather-Q stand-in, chunks 1+ = ring cache-read (sinks all layers)",
+            "[prefill-pcc] chunked: every chunk = ring cache-read (sinks all layers)",
             flush=True,
         )
 
     from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
     from models.demos.gpt_oss_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
-    # Chunked (chunks 1+) uses the ring cache-read, which needs the cyclic torus route for the
-    # sliding-halo wraparound -> FABRIC_1D_RING + the torus mesh descriptor
-    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto). One-shot
-    # (gather-Q AllGather) runs on the linear fabric + the plain mesh descriptor.
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING if chunked else ttnn.FabricConfig.FABRIC_1D)
+    # Chunked SP prefill uses the cache-backed ring path from chunk 0; one-shot uses the exact
+    # all-gather fallback. Both use ring collectives and therefore need the cyclic torus route
+    # -> FABRIC_1D_RING + the torus mesh descriptor
+    # (TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_torus_xy_graph_descriptor.textproto).
+    _linear = os.getenv("PREFILL_TOPOLOGY", "ring") == "linear"
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D if _linear else ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(ROWS, COLS))
     print(f"[prefill-pcc] mesh opened {tuple(mesh.shape)} ndev={mesh.get_num_devices()}", flush=True)
     try:
@@ -151,12 +161,14 @@ def main():
             num_layers=num_layers,
             max_seq_len=total,
             mesh_shape=(ROWS, COLS),
-            chunk_size=chunk,
-            num_users=1,
+            default_chunk_size=chunk,
+            num_users=num_users,
             expert_weight_dtype=expert_dtype,
             cache_dtype=kv_cache_dtype,
             weight_cache_path=cache_path,
             owns_kv_cache=True,  # standalone harness owns its cache (runtime.kv_cache)
+            topology=ttnn.Topology.Linear if _linear else ttnn.Topology.Ring,
+            bounded_sliding_kv_cache=bounded_kv,
         )
         runtime = TtPrefillRuntime(mesh, hf_config, state_dict, cfg)
         del state_dict
@@ -167,10 +179,13 @@ def main():
         padded = token_ids + [0] * (total - n_tokens)
 
         def run_once():
-            for c in range(n_chunks):
-                a = c * chunk
-                inp = runtime.make_chunk_input(padded[a : a + chunk])
-                runtime.prefill_chunk(inp, slot_id=0, actual_start=a, actual_end=min(a + chunk, n_tokens))
+            # Every slot prefills the same prompt: each slot's cache must independently match the
+            # golden, so cross-slot corruption in the packed batch math shows up as a PCC failure.
+            for slot in range(num_users):
+                for c in range(n_chunks):
+                    a = c * chunk
+                    inp = runtime.make_chunk_input(padded[a : a + chunk])
+                    runtime.prefill_chunk(inp, slot_id=slot, actual_start=a, actual_end=min(a + chunk, n_tokens))
             ttnn.synchronize_device(mesh)
 
         times = []
@@ -192,7 +207,12 @@ def main():
         )
 
         # --- accuracy: per-layer KV PCC vs golden (K permuted HF->Meta over head_dim; V raw) ---
-        min_pcc = runtime.kv_cache_pcc_check(slot_id=0, n_chunks=n_chunks, trace_dir=golden_dir)
+        min_pcc = 1.0
+        for slot in range(num_users):
+            slot_pcc = runtime.kv_cache_pcc_check(slot_id=slot, n_chunks=n_chunks, trace_dir=golden_dir)
+            if num_users > 1:
+                print(f"[prefill-pcc] slot {slot}: min KV PCC = {slot_pcc:.5f}", flush=True)
+            min_pcc = min(min_pcc, slot_pcc)
         print(f"[prefill-pcc] min KV PCC across {num_layers} layers = {min_pcc:.5f}", flush=True)
         # Gate on a PCC floor when GPT_OSS_KV_PCC_MIN is set (CI / regression); unset during bring-up
         # so the harness just reports the number. A failing gate exits non-zero.

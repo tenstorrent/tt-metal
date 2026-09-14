@@ -48,7 +48,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     auto barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, subdevice_core_range_set, 0, sem_buffer_type);
     tt::tt_metal::distributed::Synchronize(
-        mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
+        *mesh_device, std::nullopt, subdevice_ids);  // interaction with subdevice needs to be investigated
 
     for (const auto& coord : tensor_coords.coords()) {
         auto cached_program = create_at(

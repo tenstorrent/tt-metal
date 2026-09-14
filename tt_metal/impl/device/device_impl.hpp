@@ -222,12 +222,8 @@ private:
     void initialize_smc_dispatch_telemetry_control();
     void invalidate_smc_dispatch_telemetry_control();
 
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_unsafe();
-    // NOLINTNEXTLINE(readability-make-member-function-const)
-    void mark_allocations_safe();
-
     CoreCoord physical_worker_core_from_logical_core(const CoreCoord& logical_core) const;
+    CoreCoord physical_eth_core_from_logical_core(const CoreCoord& logical_core) const;
     CoreCoord dram_core_from_dram_channel(uint32_t dram_channel, NOC noc = NOC::NOC_0) const;
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
@@ -285,6 +281,9 @@ private:
     // Friend declaration for experimental API
     friend uint32_t experimental::Device::get_worker_noc_hop_distance(
         IDevice* device, const CoreCoord& logical_src, const CoreCoord& logical_dst, NOC noc);
+
+    friend experimental::Device::CoreAtNocHops experimental::Device::get_closest_worker_to_eth_core(
+        const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 
     friend class experimental::DispatchContext;
 };

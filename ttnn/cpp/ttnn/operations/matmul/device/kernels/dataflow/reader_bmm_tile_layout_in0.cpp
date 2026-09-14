@@ -14,10 +14,10 @@ void kernel_main() {
     // RUNTIME ARGS
     uint32_t rt_args_idx = 0;
     // in0 tensor args
-    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in0_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // batch args
-    const uint32_t batch = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t batch = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -40,7 +40,7 @@ void kernel_main() {
 
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
 
 #ifdef IN0_SHARDED
@@ -50,7 +50,6 @@ void kernel_main() {
 #else
 
     constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
-    constexpr const uint32_t in0_tile_hw = get_tile_hw(dfb_id_in0);
     // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in0
     // CB pages are sized to match (see the program factory), so tiles must be laid out in L1 at the
     // padded stride. The NOC still reads the unpadded tile of data into each padded slot. No-op when
