@@ -27,7 +27,8 @@ ttnn::Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard,
     bool distributed,
     std::vector<uint32_t> dense_row_hint,
-    std::optional<ttnn::Tensor> stream_order) {
+    std::optional<ttnn::Tensor> stream_order,
+    std::optional<ttnn::Tensor> lse_out) {
     const uint32_t d = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
 
@@ -57,7 +58,8 @@ ttnn::Tensor vsa_sdpa(
         coarse_real_per_shard,
         distributed,
         std::move(dense_row_hint),
-        std::move(stream_order));
+        std::move(stream_order),
+        std::move(lse_out));
 }
 
 }  // namespace ttnn::transformer

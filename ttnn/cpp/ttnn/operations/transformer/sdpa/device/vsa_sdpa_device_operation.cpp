@@ -137,6 +137,20 @@ void VsaSdpaOperation::validate_on_program_cache_miss(const VsaSdpaParams& attrs
     TT_FATAL(
         t.v.dtype() == DataType::BFLOAT16 || t.v.dtype() == DataType::BFLOAT8_B, "vsa_sdpa: v must be bf16 or bfp8_b");
     TT_FATAL(t.indices.dtype() == DataType::UINT32, "indices must be uint32");
+    if (t.lse_out.has_value()) {
+        const auto& lse = *t.lse_out;
+        TT_FATAL(attrs.streaming, "vsa_sdpa lse_out needs streaming=True");
+        TT_FATAL(lse.dtype() == DataType::BFLOAT16, "vsa_sdpa: lse_out must be bf16");
+        TT_FATAL(lse.layout() == Layout::TILE, "vsa_sdpa: lse_out must be TILE");
+        TT_FATAL(lse.memory_config().buffer_type() == BufferType::DRAM, "vsa_sdpa: lse_out must be in DRAM");
+        TT_FATAL(!lse.memory_config().is_sharded(), "vsa_sdpa: lse_out must be interleaved");
+        const auto& ls = lse.logical_shape();
+        const auto& qs = t.q.logical_shape();
+        TT_FATAL(
+            ls.rank() == 4 && ls[0] == 1 && ls[1] == qs[1] && ls[2] == qs[2] && ls[3] == 32,
+            "vsa_sdpa: lse_out must be [1, H, S, 32] matching q (got {})",
+            ls);
+    }
     TT_FATAL(t.block_counts.dtype() == DataType::UINT32, "block_counts must be uint32");
 
     validate_common(attrs, t);
@@ -191,6 +205,7 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
         attrs.dense_row_hint,
         t.dense_row_mask.has_value(),
         t.stream_order.has_value(),
+        t.lse_out.has_value(),
         attrs.compute_kernel_config,
         t.q.logical_shape(),
         t.q.dtype(),
@@ -293,7 +308,8 @@ Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard,
     bool distributed,
     std::vector<uint32_t> dense_row_hint,
-    std::optional<Tensor> stream_order) {
+    std::optional<Tensor> stream_order,
+    std::optional<Tensor> lse_out) {
     using OperationType = ttnn::prim::VsaSdpaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -316,6 +332,7 @@ Tensor vsa_sdpa(
             .indices = indices,
             .block_counts = block_counts,
             .dense_row_mask = std::move(dense_row_mask),
+            .lse_out = std::move(lse_out),
             .stream_order = std::move(stream_order),
         });
 }

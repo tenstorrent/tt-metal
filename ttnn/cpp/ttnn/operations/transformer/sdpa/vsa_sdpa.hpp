@@ -50,6 +50,8 @@ ttnn::Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard = 0,
     bool distributed = false,
     std::vector<uint32_t> dense_row_hint = {},
-    std::optional<ttnn::Tensor> stream_order = std::nullopt);
+    std::optional<ttnn::Tensor> stream_order = std::nullopt,
+    // preallocated [1,H,S,32] bf16 TILE; filled with threshold*scale + ln(row_sum) per query row
+    std::optional<ttnn::Tensor> lse_out = std::nullopt);
 
 }  // namespace ttnn::transformer

@@ -526,7 +526,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("coarse_real_per_shard") = 0,
         nb::arg("distributed") = false,
         nb::arg("dense_row_hint") = std::vector<uint32_t>{},
-        nb::arg("stream_order") = nb::none());
+        nb::arg("stream_order") = nb::none(),
+        nb::arg("lse_out") = nb::none());
 
     const auto* const chunked_doc =
         R"doc(

@@ -105,6 +105,7 @@ Tensor vsa_sdpa(
     uint32_t coarse_real_per_shard = 0,
     bool distributed = false,
     std::vector<uint32_t> dense_row_hint = {},
-    std::optional<Tensor> stream_order = std::nullopt);
+    std::optional<Tensor> stream_order = std::nullopt,
+    std::optional<Tensor> lse_out = std::nullopt);
 
 }  // namespace ttnn::prim
