@@ -610,6 +610,7 @@ from ttnn._ttnn.operations.data_movement import (
     SliceParams,
     SliceInputs,
     SliceDeviceOperation,
+    SliceTileProgramFactory,
 )
 
 import pathlib
