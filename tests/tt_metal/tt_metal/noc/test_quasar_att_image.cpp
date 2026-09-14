@@ -178,7 +178,7 @@ TEST(QuasarAttImageAether, EndpointEntriesMatchTheConfigTable) {
             << "remote selector " << selector;
     }
 
-    // The pass-through local window resolves through the per-initiator entry 0.
+    // Selector zero of the translating local window resolves through the per-initiator entry 0.
     EXPECT_EQ(program.local_endpoint_index, quasar_aether_2x3_att_config::LOCAL_WINDOW.endpoint_table_offset);
 }
 

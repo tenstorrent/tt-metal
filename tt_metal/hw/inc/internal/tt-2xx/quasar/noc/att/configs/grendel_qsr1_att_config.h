@@ -125,11 +125,11 @@ constexpr std::uint64_t LOCAL_WINDOW_BASE = LOCAL_WINDOW.make_address(/*selector
 static_assert(LOCAL_WINDOW_BASE == 0x1800000000ull);
 
 // The declarative map: everything the shared resolver needs, as data.
-// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile). No logical DRAM or dispatch binding
-// exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
+// Windows are indexed by WindowClass (LoopbackScratch, Worker, Dram, FullTile, Local). No logical DRAM or dispatch
+// binding exists in the checked-in descriptor, so those identities resolve invalid until descriptor-owned rows exist.
 inline constexpr noc_att::MapData MAP{
-    .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW}},
-    .local_window_class = noc_att::WindowClass::FullTile,  // boot-patched ep256 = self at selector 0
+    .windows = {{LOOPBACK_SCRATCH_WINDOW, WORKER_WINDOW, DRAM_WINDOW, TILE_WINDOW, LOCAL_WINDOW}},
+    .local_window_class = noc_att::WindowClass::Local,  // boot-patched ep256 = self at selector 0
     .worker_origin_x = ATT_WORKER_API_ORIGIN_X,
     .worker_origin_y = ATT_WORKER_API_ORIGIN_Y,
     .worker_grid_x = ATT_WORKER_GRID_X,

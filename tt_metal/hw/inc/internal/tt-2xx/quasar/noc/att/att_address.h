@@ -43,10 +43,11 @@ struct NocMulticastAddress {
 /// window). Add values before Count; Count doubles as the array extent and
 /// Invalid marks "no role" in ResolvedTile.
 enum class WindowClass : std::uint8_t {
-    LoopbackScratch = 0,
+    LoopbackScratch = 0,  // optional selector-free, pass-through self aperture
     Worker,
     Dram,
     FullTile,
+    Local,
 
     // Add values before this line.
     Count,
@@ -144,6 +145,24 @@ struct MapData {
 
 constexpr const Window& map_window(const MapData& map, WindowClass window_class) {
     return map.windows[static_cast<std::size_t>(window_class)];
+}
+
+/// @brief Find the role of a matching, supported window. Shared windows can
+/// occupy several roles; their address arithmetic and endpoint rows agree.
+constexpr WindowClass matching_window_class(const MapData& map, NocAddress address) {
+    constexpr WindowClass candidates[] = {
+        WindowClass::Worker,
+        WindowClass::Dram,
+        WindowClass::FullTile,
+        WindowClass::Local,
+        WindowClass::LoopbackScratch};
+    for (WindowClass window_class : candidates) {
+        const Window& window = map_window(map, window_class);
+        if (!is_no_window(window) && window.matches(address)) {
+            return window_class;
+        }
+    }
+    return WindowClass::Invalid;
 }
 
 /// @brief Every operand for this initiator's own L1 is
@@ -287,10 +306,11 @@ constexpr std::optional<NocAddress> Address::encode(std::uint64_t size) const {
         return std::nullopt;
     }
     if (kind_ == Kind::LoopbackScratch) {
-        // Boot-owned absolute aperture; tt-metal never widens or relocates it.
-        constexpr std::uint64_t begin = 0x100000;
-        constexpr std::uint64_t end = 0x200000;
-        if (offset_ >= begin && offset_ < end && size <= end - offset_) {
+        // Scratch operands are absolute addresses in the map's boot-owned
+        // pass-through aperture. An absent aperture must not emit raw operands.
+        const Window& scratch = map_window(Map, WindowClass::LoopbackScratch);
+        if (!is_no_window(scratch) && !scratch.translate_address && scratch.endpoint_size == 0 &&
+            scratch.matches(offset_) && scratch.transfer_supported(scratch.local_address(offset_), size)) {
             return offset_;
         }
         return std::nullopt;
@@ -315,47 +335,43 @@ constexpr bool transfer_supported(NocAddress address, std::uint64_t size) {
     if (size == 0) {
         return false;
     }
-    // Ordered by likelihood: worker traffic dominates, the loopback scratch window is rare.
-    constexpr WindowClass candidates[] = {
-        WindowClass::Worker, WindowClass::Dram, WindowClass::FullTile, WindowClass::LoopbackScratch};
-    for (WindowClass window_class : candidates) {
-        const Window& window = map_window(Map, window_class);
-        if (window.matches(address)) {
-            return window.transfer_supported(window.local_address(address), size);
-        }
+    const WindowClass window_class = matching_window_class(Map, address);
+    if (window_class == WindowClass::Invalid) {
+        return false;
     }
-    return false;
+    const Window& window = map_window(Map, window_class);
+    return window.transfer_supported(window.local_address(address), size);
 }
 
 template <const MapData& Map>
 constexpr bool is_self_address(NocAddress address, ResolvedTile current_tile) {
-    // An address through the map's constant Local identity (the boot-patched
-    // self endpoint, e.g. QSR1 ep256) is self by the boot contract, regardless
-    // of this initiator's coordinates.
-    const Window& self_window = map_window(Map, Map.local_window_class);
-    if (self_window.matches(address) && self_window.selector(address) == 0) {
-        return true;
+    const WindowClass window_class = matching_window_class(Map, address);
+    if (window_class == WindowClass::Invalid) {
+        return false;
     }
-    // The loopback scratch aperture resolves to the boot-patched self endpoint
-    // on every initiator, so it is self even when this initiator's identity is
-    // unknown.
-    const Window& scratch = map_window(Map, WindowClass::LoopbackScratch);
-    if (scratch.matches(address)) {
+    const std::uint16_t endpoint = map_window(Map, window_class).endpoint_index(address);
+    // Every alias of the boot-patched endpoint is self, including scratch.
+    // Only this row is unconditional: a local window can select other tiles.
+    const Window& self_window = map_window(Map, Map.local_window_class);
+    if (!is_no_window(self_window) && endpoint == self_window.endpoint_table_offset) {
         return true;
     }
     if (!current_tile.valid) {
         return false;
     }
-    const Window& worker = map_window(Map, WindowClass::Worker);
-    if (worker.matches(address)) {
-        if (current_tile.window == WindowClass::Worker && worker.selector(address) == current_tile.selector) {
-            return true;
-        }
-    }
-    const Window& full_tile = map_window(Map, WindowClass::FullTile);
-    if (full_tile.matches(address)) {
-        if (current_tile.window == WindowClass::FullTile && full_tile.selector(address) == current_tile.selector) {
-            return true;
+    // Compare physical endpoint coordinates, not window classes: one tile can
+    // have worker and full-tile aliases, and windows can share endpoint rows.
+    const std::uint32_t current_word = (current_tile.noc_y << 6) | current_tile.noc_x;
+    constexpr WindowClass endpoint_windows[] = {WindowClass::Worker, WindowClass::FullTile};
+    for (WindowClass endpoint_window : endpoint_windows) {
+        const Window& window = map_window(Map, endpoint_window);
+        const Table<std::uint16_t>& words =
+            endpoint_window == WindowClass::Worker ? Map.worker_endpoint_words : Map.full_tile_endpoint_words;
+        if (!is_no_window(window) && endpoint >= window.endpoint_table_offset) {
+            const std::uint32_t selector = endpoint - window.endpoint_table_offset;
+            if (selector < words.size()) {
+                return words[selector] == current_word;
+            }
         }
     }
     return false;
@@ -363,16 +379,14 @@ constexpr bool is_self_address(NocAddress address, ResolvedTile current_tile) {
 
 template <const MapData& Map>
 constexpr std::optional<NocAddress> extract_local_address(NocAddress address) {
-    // Ordered by likelihood: worker traffic dominates, the loopback scratch window is rare.
-    constexpr WindowClass candidates[] = {
-        WindowClass::Worker, WindowClass::Dram, WindowClass::FullTile, WindowClass::LoopbackScratch};
-    for (WindowClass window_class : candidates) {
-        const Window& window = map_window(Map, window_class);
-        if (window.matches(address)) {
-            return window.local_address(address);
-        }
+    const WindowClass window_class = matching_window_class(Map, address);
+    if (window_class == WindowClass::Invalid) {
+        return std::nullopt;
     }
-    return std::nullopt;
+    const Window& window = map_window(Map, window_class);
+    // A pass-through window preserves the absolute address delivered by ATT.
+    // Translating windows in these maps have BAR 0 and strip the window bits.
+    return window.translate_address ? window.local_address(address) : address;
 }
 
 /// The packed software multicast-descriptor layout (36-bit local address,
@@ -383,6 +397,11 @@ constexpr std::optional<NocAddress> extract_local_address(NocAddress address) {
 inline constexpr std::uint32_t DESCRIPTOR_LOCAL_BITS = 36;
 inline constexpr std::uint32_t DESCRIPTOR_NODE_BITS = 6;
 inline constexpr std::uint64_t DESCRIPTOR_LOCAL_LIMIT = std::uint64_t{1} << DESCRIPTOR_LOCAL_BITS;
+inline constexpr std::uint32_t DESCRIPTOR_NODE_LIMIT = 1u << DESCRIPTOR_NODE_BITS;
+inline constexpr std::uint32_t DESCRIPTOR_BITS = DESCRIPTOR_LOCAL_BITS + 4 * DESCRIPTOR_NODE_BITS;
+// A valid packed descriptor uses only 60 bits. Keep the integer interface while
+// carrying packing failure to the resolver in a reserved bit.
+inline constexpr NocAddress INVALID_MULTICAST_DESCRIPTOR = NocAddress{1} << DESCRIPTOR_BITS;
 
 /// @brief Multicast is worker-rectangle-only, so it works directly in worker
 /// coordinates. The result carries the flat start address plus the extent and
@@ -415,6 +434,10 @@ constexpr NocAddress make_multicast_descriptor(
     std::uint32_t end_x,
     std::uint32_t end_y,
     std::uint64_t local_address) {
+    if (start_x >= DESCRIPTOR_NODE_LIMIT || start_y >= DESCRIPTOR_NODE_LIMIT || end_x >= DESCRIPTOR_NODE_LIMIT ||
+        end_y >= DESCRIPTOR_NODE_LIMIT || local_address >= DESCRIPTOR_LOCAL_LIMIT) {
+        return INVALID_MULTICAST_DESCRIPTOR;
+    }
     return (std::uint64_t{start_y} << (DESCRIPTOR_LOCAL_BITS + 3 * DESCRIPTOR_NODE_BITS)) |
            (std::uint64_t{start_x} << (DESCRIPTOR_LOCAL_BITS + 2 * DESCRIPTOR_NODE_BITS)) |
            (std::uint64_t{end_y} << (DESCRIPTOR_LOCAL_BITS + DESCRIPTOR_NODE_BITS)) |
@@ -423,6 +446,9 @@ constexpr NocAddress make_multicast_descriptor(
 
 template <const MapData& Map>
 constexpr NocMulticastAddress resolve_worker_multicast(NocAddress descriptor, std::uint64_t size = 1) {
+    if ((descriptor >> DESCRIPTOR_BITS) != 0) {
+        return {0, 0, 0};
+    }
     const std::uint32_t end_x = (descriptor >> DESCRIPTOR_LOCAL_BITS) & 0x3f;
     const std::uint32_t end_y = (descriptor >> (DESCRIPTOR_LOCAL_BITS + DESCRIPTOR_NODE_BITS)) & 0x3f;
     const std::uint32_t start_x = (descriptor >> (DESCRIPTOR_LOCAL_BITS + 2 * DESCRIPTOR_NODE_BITS)) & 0x3f;

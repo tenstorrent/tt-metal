@@ -107,10 +107,11 @@ inline constexpr noc_att::MapData::DispatchEntry DISPATCH_ENTRIES[] = {
 
 // The declarative map: everything the shared resolver needs, as data. This
 // map has a single remote window, so the Worker/Dram/FullTile roles all point
-// at it and differ only in which selector table resolution consults.
+// at it and differ only in which selector table resolution consults. There is
+// no pass-through scratch aperture; Local has its own translating window.
 inline constexpr noc_att::MapData MAP{
-    .windows = {{LOCAL_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW}},
-    .local_window_class = noc_att::WindowClass::LoopbackScratch,  // pass-through local window, entry 0 = self
+    .windows = {{noc_att::NO_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, REMOTE_WINDOW, LOCAL_WINDOW}},
+    .local_window_class = noc_att::WindowClass::Local,  // translating local window, entry 0 = self
     .worker_origin_x = ATT_WORKER_API_ORIGIN_X,
     .worker_origin_y = ATT_WORKER_API_ORIGIN_Y,
     .worker_grid_x = ATT_WORKER_GRID_X,

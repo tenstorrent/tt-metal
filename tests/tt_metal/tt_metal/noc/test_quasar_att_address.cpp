@@ -106,6 +106,41 @@ TEST(QuasarAttAddressQsr1, ExtractLocalAddressInvertsEncode) {
     static_assert(!noc_att::extract_local_address<QSR1>(0xDEAD).has_value());
 }
 
+TEST(QuasarAttAddressQsr1, ScratchExtractionPreservesAbsoluteAddressesAndBounds) {
+    for (std::uint64_t address : {0x100000ull, 0x100040ull, 0x1FFFFCull}) {
+        const auto encoded = Address::loopback_scratch(address).encode<QSR1>(4);
+        ASSERT_TRUE(encoded.has_value());
+        EXPECT_EQ(*encoded, address);
+        EXPECT_TRUE(noc_att::is_self_address<QSR1>(*encoded, noc_att::INVALID_TILE));
+        EXPECT_EQ(noc_att::extract_local_address<QSR1>(*encoded), address);
+        EXPECT_TRUE(noc_att::transfer_supported<QSR1>(*encoded, 4));
+    }
+    static_assert(!noc_att::transfer_supported<QSR1>(0x1FFFFCull, 8));
+    static_assert(!Address::loopback_scratch(0x100000).encode<QSR1>(UINT64_MAX).has_value());
+    static_assert(!Address::loopback_scratch(0x100000).encode<QSR1>(0).has_value());
+}
+
+TEST(QuasarAttAddressQsr1, FullTileAliasesMatchEveryInitiatorsPhysicalIdentity) {
+    // Endpoint 256 is patched to the initiator; all other full-tile rows are
+    // fixed. Workers must recognize both their worker and full-tile aliases.
+    for (std::uint16_t current_word : grendel_qsr1_att_config::ATT_FULL_TILE_ENDPOINT_WORDS) {
+        const auto current = noc_att::resolve_current(QSR1, current_word & 63, current_word >> 6);
+        ASSERT_TRUE(current.valid);
+        for (std::uint32_t selector = 0; selector < QSR1.full_tile_endpoint_words.size(); ++selector) {
+            const auto address = grendel_qsr1_att_config::TILE_WINDOW.make_address(selector, 0x40);
+            const bool expected_self = selector == 0 || QSR1.full_tile_endpoint_words[selector] == current_word;
+            EXPECT_EQ(noc_att::is_self_address<QSR1>(address, current), expected_self)
+                << "initiator " << current_word << ", full-tile selector " << selector;
+            EXPECT_EQ(noc_att::is_self_address<QSR1>(address, noc_att::INVALID_TILE), selector == 0);
+        }
+        for (std::uint32_t selector = 0; selector < QSR1.worker_endpoint_words.size(); ++selector) {
+            const auto address = grendel_qsr1_att_config::WORKER_WINDOW.make_address(selector, 0x40);
+            EXPECT_EQ(
+                noc_att::is_self_address<QSR1>(address, current), QSR1.worker_endpoint_words[selector] == current_word);
+        }
+    }
+}
+
 TEST(QuasarAttAddressQsr1, WorkerMulticastEncodesTheRectangleStart) {
     // Rectangle (2,2)..(9,5): full grid, 32 destinations, start at selector 0.
     constexpr noc_att::NocMulticastAddress mcast = noc_att::make_worker_multicast<QSR1>(2, 2, 9, 5, 0x40, 4);
@@ -164,6 +199,65 @@ TEST(QuasarAttAddressAether, SelfDetectionUsesThePatchedEntryZero) {
     static_assert(current.selector == 0);
     static_assert(noc_att::is_self_address<AETHER>(0x1000000040ull, current));
     static_assert(!noc_att::is_self_address<AETHER>(0x1004000040ull, current));
+}
+
+TEST(QuasarAttAddressAether, ScratchApertureIsUnsupported) {
+    static_assert(!Address::loopback_scratch(0x100000).encode<AETHER>().has_value());
+    static_assert(!Address::loopback_scratch(0x100040).encode<AETHER>(4).has_value());
+    static_assert(!Address::loopback_scratch(0x1FFFFC).encode<AETHER>(4).has_value());
+    static_assert(!noc_att::transfer_supported<AETHER>(0x100040, 4));
+    static_assert(!noc_att::extract_local_address<AETHER>(0x100040).has_value());
+    // The absent scratch role must not make its parked compare a real operand.
+    static_assert(!noc_att::is_self_address<AETHER>(UINT64_MAX, noc_att::INVALID_TILE));
+    static_assert(!noc_att::transfer_supported<AETHER>(UINT64_MAX, 1));
+    static_assert(!noc_att::extract_local_address<AETHER>(UINT64_MAX).has_value());
+    // The independent translating local window still supports local operands.
+    constexpr auto local = Address::local(0x100040).encode<AETHER>(4);
+    static_assert(local.has_value());
+    static_assert(noc_att::transfer_supported<AETHER>(*local, 4));
+    static_assert(*noc_att::extract_local_address<AETHER>(*local) == 0x100040);
+}
+
+TEST(QuasarAttAddressAether, LocalSelectorsFollowTheProgrammedEndpointRows) {
+    // Local selectors 1..6 alias remote selectors 0..5 because their table
+    // offsets are 0 and 1. Only local selector 0 is patched to self.
+    for (std::uint16_t current_word : quasar_aether_2x3_att_config::ATT_FULL_TILE_ENDPOINT_WORDS) {
+        const auto current = noc_att::resolve_current(AETHER, current_word & 63, current_word >> 6);
+        ASSERT_TRUE(current.valid);
+        for (std::uint32_t selector = 0; selector < 8; ++selector) {
+            const auto address = quasar_aether_2x3_att_config::LOCAL_WINDOW.make_address(selector, 0x40);
+            const bool expected_self = selector == 0 || (selector <= AETHER.full_tile_endpoint_words.size() &&
+                                                         AETHER.full_tile_endpoint_words[selector - 1] == current_word);
+            EXPECT_EQ(noc_att::is_self_address<AETHER>(address, current), expected_self)
+                << "initiator " << current_word << ", local selector " << selector;
+            EXPECT_EQ(noc_att::is_self_address<AETHER>(address, noc_att::INVALID_TILE), selector == 0);
+        }
+    }
+}
+
+TEST(QuasarAttAddressAether, MulticastPackingRejectsOverflowBeforeFieldsCanAlias) {
+    for (std::uint32_t bad_coordinate : {64u, UINT32_MAX}) {
+        const noc_att::NocAddress descriptors[] = {
+            noc_att::make_multicast_descriptor(bad_coordinate, 1, 0, 1, 0x40),
+            noc_att::make_multicast_descriptor(0, bad_coordinate, 0, 1, 0x40),
+            noc_att::make_multicast_descriptor(0, 1, bad_coordinate, 1, 0x40),
+            noc_att::make_multicast_descriptor(0, 1, 0, bad_coordinate, 0x40),
+        };
+        for (auto descriptor : descriptors) {
+            EXPECT_EQ(noc_att::resolve_worker_multicast<AETHER>(descriptor, 4).rectangle_count, 0);
+            EXPECT_EQ(noc_att::resolve_worker_multicast<QSR1>(descriptor, 4).rectangle_count, 0);
+        }
+    }
+    for (std::uint64_t bad_offset : {std::uint64_t{1} << 36, UINT64_MAX}) {
+        const auto descriptor = noc_att::make_multicast_descriptor(0, 1, 0, 1, bad_offset);
+        EXPECT_EQ(noc_att::resolve_worker_multicast<AETHER>(descriptor, 4).rectangle_count, 0);
+    }
+    constexpr auto valid = noc_att::make_multicast_descriptor(0, 1, 0, 1, 0x40);
+    static_assert(noc_att::resolve_worker_multicast<AETHER>(valid, 4).rectangle_count == 1);
+    static_assert(noc_att::make_multicast_descriptor(63, 63, 63, 63, (1ull << 36) - 1) == (1ull << 60) - 1);
+    for (std::uint32_t bit = 60; bit < 64; ++bit) {
+        EXPECT_EQ(noc_att::resolve_worker_multicast<AETHER>(valid | (1ull << bit), 4).rectangle_count, 0);
+    }
 }
 
 TEST(QuasarAttAddressAether, OversizedIdentitiesClampAndReject) {
