@@ -230,6 +230,9 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     if (dense) {
         sync_defines["DENSE_MODE"] = "1";
     }
+    if (args.accumulate_into_outputs) {
+        sync_defines["SEED_COLUMN_GRADIENTS"] = "1";
+    }
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";

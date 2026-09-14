@@ -44,6 +44,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
     RingCyclicDirection ring_direction = RingCyclicDirection::Backward,
     uint32_t rows_per_block_tiles = 1U,
     bool use_barrier = false,
+    bool accumulate_into_outputs = false,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);

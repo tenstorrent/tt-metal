@@ -29,6 +29,13 @@ struct CyclicSDPABackwardParams {
     // the counters deadlock, flipping this says in one run whether the
     // endpoint protocol or something underneath it is at fault.
     bool use_barrier{false};
+
+    // Accumulate into the outputs rather than overwrite them: every gradient
+    // starts from what the output buffer holds. The caller must then pass
+    // preallocated outputs carrying its running sums. dQ always behaves this
+    // way; this extends it to dK and dV, whose first visit otherwise starts
+    // from zero without reading it.
+    bool accumulate_into_outputs{false};
 };
 
 struct CyclicSDPABackwardInputs {

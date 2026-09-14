@@ -101,6 +101,13 @@
 #define ENDPOINT_SYNC 0
 #endif
 
+// SEED_COLUMN_GRADIENTS: read the column gradients from DRAM on every visit,
+// not only on a revisit, so the compute kernel accumulates into whatever the
+// caller passed as the outputs. See the compute kernel.
+#ifndef SEED_COLUMN_GRADIENTS
+#define SEED_COLUMN_GRADIENTS 0
+#endif
+
 // DENSE_MODE selects the unmasked schedule: every block pair is live, which
 // is what a ring-attention step needs when the visiting key/value chunk is
 // earlier in the sequence than the local query chunk. It changes the schedule
@@ -360,7 +367,10 @@ void kernel_main() {
         // wait is on that kernel's progress, not on anything chip-wide.
         if (column_changed) {
             const uint32_t owned_slot = (j == owned_column[0]) ? 0u : 1u;
-            if (visited[owned_slot]) {
+            // On a first visit that is seeded, the DRAM value is the caller's
+            // incoming accumulator, which nothing on this core wrote; the wait
+            // below is then trivially satisfied and harmless.
+            if (visited[owned_slot] || SEED_COLUMN_GRADIENTS) {
                 WAYPOINT("COLW");
 #if ENDPOINT_SYNC
                 do {

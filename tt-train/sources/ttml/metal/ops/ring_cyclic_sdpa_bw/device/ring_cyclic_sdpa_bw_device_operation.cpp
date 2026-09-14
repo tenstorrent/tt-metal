@@ -98,6 +98,7 @@ ttml_ring_cyclic_sdpa_bw(
     ttml::metal::ops::ring_cyclic_sdpa_bw::RingDirection ring_direction,
     uint32_t rows_per_block_tiles,
     bool use_barrier,
+    bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
@@ -110,7 +111,8 @@ ttml_ring_cyclic_sdpa_bw(
         .mask_type = mask_type,
         .ring_direction = ring_direction,
         .rows_per_block_tiles = rows_per_block_tiles,
-        .use_barrier = use_barrier};
+        .use_barrier = use_barrier,
+        .accumulate_into_outputs = accumulate_into_outputs};
     auto tensors = OperationType::tensor_args_t{
         .query = query,
         .key = key,

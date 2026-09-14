@@ -25,6 +25,11 @@ struct RingCyclicSDPABackwardParams {
 
     uint32_t rows_per_block_tiles{1U};
     bool use_barrier{false};
+    // Add this step's contribution into the preallocated outputs, which the
+    // caller passes as its running accumulators, instead of writing a fresh
+    // per-step gradient the caller must then add. A chip the causal schedule
+    // skips has no program and leaves them untouched, which is exactly right.
+    bool accumulate_into_outputs{false};
 };
 
 struct RingCyclicSDPABackwardInputs {
