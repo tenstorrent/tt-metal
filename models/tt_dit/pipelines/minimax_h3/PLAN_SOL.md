@@ -219,6 +219,41 @@ row LSE**, which it does not today - check whether the exact row sums already co
 core (`vsa_sum_service.hpp`) can be exported cheaply. That op change is the main new C++ work in this
 plan.
 
+### Step 1 result: the oracle is in, and it moves two of the estimates
+
+`sol_attn_reference/` vendors the Triton reference (Sana ``sol-engine`` @ ``8e0db4fa562d``) as the
+algorithm of record -- it cannot run here, no triton and no CUDA -- and `sol_attn_oracle.py` is the
+pure-torch transcription. `test_sol_attn_oracle_minimax_h3.py` is host-only, 15 tests, 2.7 s, no
+device. The load-bearing one is `tau -> -inf`: every block routes exact, the approximate branch
+empties, and the result must equal dense attention. That pins the softmax shift, the base-2 scores
+and the shared denominator at once.
+
+Routing at H3's block geometry, `tau=1.0`:
+
+| shape | thresh | blocks | per-row selected (min/mean/max) | density |
+|---|---|---|---|---|
+| 15s_768p | diag | 1808 | 256 / 288.8 / 326 | **15.97%** |
+| 15s_768p | exact | 1808 | 261 / 289.0 / 318 | **15.99%** |
+| 10s_768p | diag | 1216 | 161 / 195.1 / 228 | 16.04% |
+| 10s_768p | exact | 1216 | 163 / 195.3 / 220 | 16.06% |
+
+**These are Gaussian pooled keys and query centroids, not real activations.** They characterise the
+threshold formula, not this model -- real Q/K carry RoPE and spatial structure that will move both
+numbers. Re-run them against pooled tensors dumped from a generation (the `VSA_DUMP_INDICES=1`
+machinery is the place to hang that) before treating any of it as an H3 property. With that said,
+three things follow:
+
+* **Sol-Attn at the validated `tau` is denser than our VSA, not sparser: ~16% against 10%.** Porting
+  it as-is gives the fine stage ~60% more work. It is a fidelity-at-higher-cost trade, and anyone
+  expecting a latency win from it is reading Sol's "2.1x on attention" against a *dense* baseline we
+  do not run.
+* **The per-row spread is narrow (+-12%).** This substantially weakens "Problem 1" below: a fixed
+  width sized at the max wastes ~13% over the mean, so fixed-width-plus-count is comfortable and no
+  dynamic-count device path is needed.
+* **`diag` and `exact` agree to 0.02 pp.** The `D x D` second moment buys nothing at this geometry, so
+  the port only needs the diagonal-variance threshold -- one `D`-vector of per-dim variance per
+  (batch, head), not a matrix.
+
 ### What it is worth
 
 **Not latency.** O2 already establishes the fine stage runs at 23-25% of HiFi2 peak with per-TRISC
