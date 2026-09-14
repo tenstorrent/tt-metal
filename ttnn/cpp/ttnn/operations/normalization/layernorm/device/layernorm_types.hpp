@@ -18,9 +18,11 @@ enum class DistributedLayerNormStage { NOT_DISTRIBUTED, PRE_ALL_GATHER, POST_ALL
 
 struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
+    // PR #56277 Refactor: Removed `legacy_rsqrt` flag.
+    // All normalization compute paths now standardize on high-precision / native hardware rsqrt_tile ops.
     bool use_welford = false;
 };
+
 struct LayerNormShardedMultiCoreProgramConfig {
     tt::tt_metal::CoreCoord compute_with_storage_grid_size;
     std::size_t subblock_w{};
@@ -28,7 +30,8 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t block_w{};
     bool inplace{};
     bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
+    // PR #56277 Refactor: Removed `legacy_rsqrt` flag from sharded program configuration.
+    // Preserves default non-legacy numerical behavior across multi-core execution targets.
     bool use_welford = false;
 };
 

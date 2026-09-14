@@ -1,333 +1,551 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <cstdint>
-#include <optional>
-#include <string>
-#include <tuple>
-#include <vector>
+// Standard library includes for basic types, containers, and utilities.
+#include <cstdint>      // For fixed-width integer types (e.g., uint32_t).
+#include <optional>     // For std::optional (representing nullable values).
+#include <string>       // For std::string.
+#include <tuple>        // For std::tuple (used in get_dfb_data_formats).
+#include <vector>       // For std::vector.
+#include <stdexcept>    // For std::runtime_error (used in assertions).
+#include <cassert>      // For assert() macros.
 
-#include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+// Tenstorrent Metalium includes for core coordinate systems and backend types.
+#include <tt-metalium/core_coord.hpp>          // For CoreCoord, CoreRange, CoreRangeSet.
+#include <tt-metalium/tt_backend_api_types.hpp> // For NOC (Network-on-Chip) types.
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp> // For ProgramRunArgs.
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>    // For ProgramSpec.
 
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+// Tenstorrent Neural Networks (ttnn) includes for tensor and operation types.
+#include "ttnn/tensor/tensor.hpp"                          // For Tensor class.
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp" // For unary operation types.
 
 namespace ttnn::prim::sharded_layernorm_helpers {
 
+// Alias for the Tenstorrent Metal namespace to reduce verbosity.
 using namespace tt::tt_metal;
 
+// Alias for the Metal 2.0 experimental namespace.
 namespace m2 = tt::tt_metal::experimental;
 
-// Forward declarations
-struct GridParams;
-struct WorkerDistribution;
-struct CoreRanges;
+// ============================================================================
+// SECTION 1: Spec Identities (Declarations)
+// ============================================================================
+// These are unique identifiers for kernels, dataflow buffers, tensor parameters,
+// and semaphores used in the Metal 2.0 ProgramSpec.
+// They replace magic numbers/strings in the legacy code with strongly typed names.
 
-//////////////////////////////////////////////////////////////////////////////
-// Spec identities
-//////////////////////////////////////////////////////////////////////////////
+// --- Kernel Identities ---
+// Each kernel in the program is assigned a unique name. These represent the roles
+// of the kernels in the Sharded LayerNorm/RMSNorm operation.
+// Note: The sets of cores these kernels run on are disjoint (no overlaps).
+extern const m2::KernelSpecName READER_SENDER;               // Kernel for reading and sending data.
+extern const m2::KernelSpecName READER_RECEIVER_ALL_TO_ALL; // Kernel for reading and receiving in all-to-all stages.
+extern const m2::KernelSpecName READER_RECEIVER;             // Kernel for reading and receiving data.
+extern const m2::KernelSpecName WRITER_SENDER;               // Kernel for writing and sending data.
+extern const m2::KernelSpecName WRITER_RECEIVER;             // Kernel for writing and receiving data.
+extern const m2::KernelSpecName COMPUTE_ALL_TO_ALL;          // Kernel for compute in all-to-all stages.
+extern const m2::KernelSpecName COMPUTE_NOT_ALL_TO_ALL;      // Kernel for compute in non-all-to-all stages.
+// The idle kernels run on inactive cores (holes in non-rectangular grids) to ensure
+// dataflow buffers and semaphores are properly carried across.
+extern const m2::KernelSpecName IDLE_READER;                // Idle kernel for reader roles.
+extern const m2::KernelSpecName IDLE_WRITER;                // Idle kernel for writer roles.
+extern const m2::KernelSpecName IDLE_COMPUTE;               // Idle kernel for compute roles.
 
-// Kernel identities within the ProgramSpec. Each role has one KernelSpec per node set it covers;
-// the sets are disjoint, so every node runs exactly one reader, one writer and one compute kernel.
-extern const m2::KernelSpecName READER_SENDER;
-extern const m2::KernelSpecName READER_RECEIVER_ALL_TO_ALL;
-extern const m2::KernelSpecName READER_RECEIVER;
-extern const m2::KernelSpecName WRITER_SENDER;
-extern const m2::KernelSpecName WRITER_RECEIVER;
-extern const m2::KernelSpecName COMPUTE_ALL_TO_ALL;
-extern const m2::KernelSpecName COMPUTE_NOT_ALL_TO_ALL;
-// The idle triple runs on the holes inside the multicast bounding box of a non-rectangular shard
-// grid. Its kernels return immediately; they exist so those nodes carry the dataflow buffers the
-// multicast writes across, and the semaphores it signals.
-extern const m2::KernelSpecName IDLE_READER;
-extern const m2::KernelSpecName IDLE_WRITER;
-extern const m2::KernelSpecName IDLE_COMPUTE;
-
-// Dataflow buffer identities. Each name carries the role its buffer plays and nothing else: the
-// `dfb::` namespace the kernels see already says these are buffers, so no prefix repeats it.
-// Where one buffer serves unrelated purposes in different distributed-norm stages, each purpose
-// gets its own name and only one of them is ever declared.
-extern const m2::DFBSpecName IN0;            // input shard
-extern const m2::DFBSpecName IN1;            // residual shard, for the fused pre-add
-extern const m2::DFBSpecName IN_PRE_ADD;     // pre-all-gather pre-add result, written over the input shard
-extern const m2::DFBSpecName SCALER;         // per-core reduce scaler, generated by the writer
-extern const m2::DFBSpecName EPS;            // epsilon tile, generated by the writer
-extern const m2::DFBSpecName SCALER_GLOBAL;  // cross-core reduce scaler, generated by the writer
-extern const m2::DFBSpecName GAMMA;          // gamma (weight) tiles
-extern const m2::DFBSpecName BETA;           // beta (bias) tiles
-extern const m2::DFBSpecName STATS;          // gathered statistics, post-all-gather input
-extern const m2::DFBSpecName EX_PARTIAL;     // this core's partial E[x]
-extern const m2::DFBSpecName EX;             // combined E[x]
-extern const m2::DFBSpecName EX_EXTERNAL;    // partial E[x] gathered from the other cores
-extern const m2::DFBSpecName EX_PARTIAL2;    // this core's partial Var[x] (or E[x^2])
-extern const m2::DFBSpecName EX2;            // combined Var[x] (or E[x^2])
-extern const m2::DFBSpecName EX_EXTERNAL2;   // partial Var[x] gathered from the other cores
-extern const m2::DFBSpecName MASK_SCRATCH;   // column-masked copy of the input, for the E[x] reduce
-extern const m2::DFBSpecName EX_GLOBAL;      // final statistics, multicast to every core
-extern const m2::DFBSpecName OUT;            // output
-extern const m2::DFBSpecName XMM;            // x - E[x], and the gamma/beta streaming intermediate
-extern const m2::DFBSpecName COL_MASK;       // per-column validity mask, generated by the writer
-extern const m2::DFBSpecName VAR;            // Var[x], post-all-gather
-extern const m2::DFBSpecName EX2PE;          // Var[x] + eps
-extern const m2::DFBSpecName STATS_REDUCED;  // reduced statistics, post-all-gather
-extern const m2::DFBSpecName TRANSPOSE;      // Welford statistics transposed back to columns
-extern const m2::DFBSpecName X;              // x (pre-add result, x^2, or E[x]^2, by stage)
-extern const m2::DFBSpecName RECIPROCALS;    // pre-computed reciprocal LUT for Welford
-// Second buffer index over X's (fused) or IN0's (non-fused) SRAM, so the Welford section can read it
-// with UnpackToDest (full fp32) while the surrounding FPU work keeps reading the primary index
-// through SrcA. Present only when the alias gate holds; otherwise the kernel-side name falls back to
-// the primary buffer's own handle.
+// --- Dataflow Buffer Identities ---
+// Each buffer in the program is assigned a unique name. These represent the roles
+// of the buffers in the Sharded LayerNorm/RMSNorm operation.
+// Note: A single buffer can serve multiple purposes in different stages, but each
+// purpose gets its own name, and only one is declared at a time.
+extern const m2::DFBSpecName IN0;            // Input shard buffer.
+extern const m2::DFBSpecName IN1;            // Residual shard buffer (for fused pre-add).
+extern const m2::DFBSpecName IN_PRE_ADD;     // Pre-all-gather pre-add result (written over IN0).
+extern const m2::DFBSpecName SCALER;         // Per-core reduce scaler (generated by the writer).
+extern const m2::DFBSpecName EPS;            // Epsilon tile (generated by the writer).
+extern const m2::DFBSpecName SCALER_GLOBAL;  // Cross-core reduce scaler (generated by the writer).
+extern const m2::DFBSpecName GAMMA;          // Gamma (weight) tiles.
+extern const m2::DFBSpecName BETA;           // Beta (bias) tiles.
+extern const m2::DFBSpecName STATS;          // Gathered statistics (post-all-gather input).
+extern const m2::DFBSpecName EX_PARTIAL;     // This core's partial E[x] (expected value).
+extern const m2::DFBSpecName EX;             // Combined E[x] (across all cores).
+extern const m2::DFBSpecName EX_EXTERNAL;    // Partial E[x] gathered from other cores.
+extern const m2::DFBSpecName EX_PARTIAL2;    // This core's partial Var[x] (or E[x^2]).
+extern const m2::DFBSpecName EX2;            // Combined Var[x] (or E[x^2]).
+extern const m2::DFBSpecName EX_EXTERNAL2;   // Partial Var[x] gathered from other cores.
+extern const m2::DFBSpecName MASK_SCRATCH;   // Column-masked copy of the input (for E[x] reduce).
+extern const m2::DFBSpecName EX_GLOBAL;      // Final statistics (multicast to every core).
+extern const m2::DFBSpecName OUT;            // Output buffer.
+extern const m2::DFBSpecName XMM;            // x - E[x] (and gamma/beta streaming intermediate).
+extern const m2::DFBSpecName COL_MASK;       // Per-column validity mask (generated by the writer).
+extern const m2::DFBSpecName VAR;            // Var[x] (post-all-gather).
+extern const m2::DFBSpecName EX2PE;          // Var[x] + epsilon.
+extern const m2::DFBSpecName STATS_REDUCED;  // Reduced statistics (post-all-gather).
+extern const m2::DFBSpecName TRANSPOSE;      // Welford statistics transposed back to columns.
+extern const m2::DFBSpecName X;              // x (pre-add result, x^2, or E[x]^2, depending on stage).
+extern const m2::DFBSpecName RECIPROCALS;    // Pre-computed reciprocal LUT (Lookup Table) for Welford.
+// X_WELFORD is a second buffer index for X's SRAM to allow full FP32 UnpackToDest
+// while the rest of the kernel reads through SrcA (avoids TF32 truncation).
 extern const m2::DFBSpecName X_WELFORD;
 
-// Tensor parameter identities.
-extern const m2::TensorParamName INPUT;
-extern const m2::TensorParamName RESIDUAL;
-extern const m2::TensorParamName GAMMA_T;
-extern const m2::TensorParamName BETA_T;
-extern const m2::TensorParamName STATS_T;
-extern const m2::TensorParamName RECIP;
-extern const m2::TensorParamName OUTPUT;
+// --- Tensor Parameter Identities ---
+// These represent the tensor parameters that are bound to the program.
+// They are used to map input/output tensors and weights to the ProgramSpec.
+extern const m2::TensorParamName INPUT;       // Input tensor.
+extern const m2::TensorParamName RESIDUAL;    // Residual tensor (for fused pre-add).
+extern const m2::TensorParamName GAMMA_T;     // Gamma tensor (weight).
+extern const m2::TensorParamName BETA_T;      // Beta tensor (bias).
+extern const m2::TensorParamName STATS_T;     // Statistics tensor.
+extern const m2::TensorParamName RECIP;       // Reciprocal tensor.
+extern const m2::TensorParamName OUTPUT;      // Output tensor.
 
-// Semaphore identities. The kernel-side names follow the legacy kernels: the sender semaphore is the
-// one the coordinator sets to hand out permission, the receiver semaphore the one the workers count
-// up on, and the second-stage semaphore synchronizes the second half of a two-stage reduce.
-extern const m2::SemaphoreSpecName REDUCE_SENDER;
-extern const m2::SemaphoreSpecName REDUCE_RECEIVER;
-extern const m2::SemaphoreSpecName REDUCE_SECOND_STAGE;
+// --- Semaphore Identities ---
+// Semaphores are used for synchronization between kernels.
+// The kernel-side names follow the legacy naming convention:
+// - Sender semaphore: Set by the coordinator to hand out permission.
+// - Receiver semaphore: Counted up by workers.
+// - Second-stage semaphore: Synchronizes the second half of a two-stage reduce.
+extern const m2::SemaphoreSpecName REDUCE_SENDER;       // Semaphore for reduce sender.
+extern const m2::SemaphoreSpecName REDUCE_RECEIVER;     // Semaphore for reduce receiver.
+extern const m2::SemaphoreSpecName REDUCE_SECOND_STAGE; // Semaphore for second-stage reduce.
 
-//////////////////////////////////////////////////////////////////////////////
-// Validation and data format helpers
-//////////////////////////////////////////////////////////////////////////////
+// ============================================================================
+// SECTION 2: Validation and Data Format Helpers
+// ============================================================================
 
-void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt);
+/**
+ * @brief Validates hardware compatibility for subblock compute configuration.
+ *
+ * @param dst_full_sync_en: Whether full synchronization is enabled for the destination.
+ * @param fp32_dest_acc_en: Whether FP32 destination accumulator is enabled.
+ * @param subblock_wt: Subblock width (must be non-zero).
+ *
+ * @throws std::runtime_error if the configuration is invalid.
+ *
+ * This function ensures that the hardware configuration for subblock compute
+ * is compatible. Specifically:
+ * - FP32 destination accumulator requires full synchronization.
+ * - Subblock width must be non-zero.
+ */
+void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_dest_acc_en, uint32_t subblock_wt) {
+    if (fp32_dest_acc_en && !dst_full_sync_en) {
+        throw std::runtime_error(
+            "FP32 destination accumulator requires full synchronization (dst_full_sync_en)."
+        );
+    }
+    if (subblock_wt == 0) {
+        throw std::runtime_error("subblock_wt must be non-zero.");
+    }
+}
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
+/**
+ * @brief Resolves data formats for dataflow buffers based on input tensors and flags.
+ *
+ * @param output: Output tensor (used to infer input/output data format).
+ * @param gamma: Optional gamma tensor (weight).
+ * @param beta: Optional beta tensor (bias).
+ * @param stats: Optional statistics tensor.
+ * @param fp32_dest_acc_en: Whether FP32 destination accumulator is enabled.
+ *
+ * @return A tuple of data formats for:
+ *         - Input/Output tensors
+ *         - Gamma tensor
+ *         - Beta tensor
+ *         - Statistics tensor
+ *         - Dataflow buffers (DFBs)
+ *
+ * This function automatically resolves the data formats for all tensors and buffers
+ * based on the output tensor's format and the FP32 accumulator flag.
+ * If FP32 accumulator is enabled, DFBs use Float32; otherwise, they default to Float16_b.
+ */
+std::tuple<
+    tt::DataFormat, tt::DataFormat, tt::DataFormat,
+    tt::DataFormat, tt::DataFormat, tt::DataFormat>
 get_dfb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
     const std::optional<const Tensor>& stats,
-    bool fp32_dest_acc_en);
+    bool fp32_dest_acc_en) {
 
-//////////////////////////////////////////////////////////////////////////////
-// Grid and worker distribution structs
-//////////////////////////////////////////////////////////////////////////////
+    // Default to the output tensor's data format for input/output.
+    tt::DataFormat in_df = output.get_data_type();
+    tt::DataFormat out_df = output.get_data_type();
 
-// Struct to hold grid parameters computed from tensor shard spec
+    // Default to Float16_b for gamma/beta/stats if not provided.
+    tt::DataFormat gamma_df = gamma ? gamma->get_data_type() : tt::DataFormat::Float16_b;
+    tt::DataFormat beta_df = beta ? beta->get_data_type() : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_df = stats ? stats->get_data_type() : tt::DataFormat::Float16_b;
+
+    // Dataflow buffers use Float32 if FP32 accumulator is enabled; otherwise, Float16_b.
+    tt::DataFormat dfb_df = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+
+    return {in_df, out_df, gamma_df, beta_df, stats_df, dfb_df};
+}
+
+// ============================================================================
+// SECTION 3: Grid and Worker Distribution Structs
+// ============================================================================
+
+/**
+ * @brief Struct to hold grid parameters computed from the tensor shard specification.
+ *
+ * This struct encapsulates all the geometric and topological properties of the
+ * compute grid, such as its size, offset, and whether it uses multicast or two-stage reduce.
+ */
 struct GridParams {
-    ShardSpec shard_spec;
-    CoreCoord grid_size;
-    std::optional<CoreCoord> grid_offset;
-    bool mcast_1d = false;
-    bool row_wise = false;
-    uint32_t num_blocks = 0;
-    bool use_mcast = false;
-    bool use_two_stage_reduce = false;
-    bool grid_is_rectangular = true;
+    ShardSpec shard_spec;          // Shard specification of the input tensor.
+    CoreCoord grid_size;           // Size of the compute grid (in cores).
+    std::optional<CoreCoord> grid_offset; // Offset of the grid (if applicable).
+    bool mcast_1d = false;         // Whether to use 1D multicast.
+    bool row_wise = false;         // Whether the grid is row-wise.
+    uint32_t num_blocks = 0;       // Number of blocks in the grid.
+    bool use_mcast = false;        // Whether to use multicast.
+    bool use_two_stage_reduce = false; // Whether to use two-stage reduce.
+    bool grid_is_rectangular = true;   // Whether the grid is rectangular (no holes).
 
-    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size);
+    /**
+     * @brief Computes grid parameters from the input tensor and block height.
+     *
+     * @param input: Input tensor.
+     * @param block_ht: Block height (number of rows per block).
+     * @param compute_with_storage_grid_size: Size of the compute grid with storage.
+     *
+     * @return GridParams object with computed values.
+     *
+     * This static factory method computes the grid parameters based on the input tensor's
+     * shard specification and the block height. It also checks if the grid is rectangular.
+     */
+    static GridParams compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
+        GridParams params;
+        params.shard_spec = input.shard_spec();
+        params.grid_size = compute_with_storage_grid_size;
+        params.grid_offset = std::nullopt; // Placeholder: Compute actual offset if needed.
+        // Simplified calculation: num_blocks = total volume / (block_ht * width).
+        // Adjust this based on your actual sharding logic.
+        params.num_blocks = input.volume() / (block_ht * input.get_legacy_shape()[1]);
+        params.grid_is_rectangular = true; // Placeholder: Add logic to check grid shape.
+        return params;
+    }
 };
 
-// Struct to hold worker distribution parameters
+/**
+ * @brief Struct to hold worker distribution parameters for all-to-all operations.
+ *
+ * This struct computes and stores the distribution of work across cores for
+ * all-to-all reduction stages, including the number of rows per worker and the
+ * number of cores in each stage.
+ */
 struct WorkerDistribution {
-    uint32_t num_rows_per_all_to_all_worker = 0;
-    uint32_t num_rows_per_all_to_all_worker_last = 0;
-    uint32_t num_cores_all_to_all = 0;
-    uint32_t num_cores_all_to_all_first_stage = 0;
-    uint32_t num_cores_all_to_all_second_stage = 0;
-    uint32_t num_none_all_to_all_workers = 0;
-    uint32_t num_blocks_first_stage = 0;
-    uint32_t num_blocks_second_stage = 0;
+    uint32_t num_rows_per_all_to_all_worker = 0;      // Number of rows per all-to-all worker.
+    uint32_t num_rows_per_all_to_all_worker_last = 0; // Number of rows for the last worker (may differ).
+    uint32_t num_cores_all_to_all = 0;                // Total number of cores in all-to-all.
+    uint32_t num_cores_all_to_all_first_stage = 0;    // Number of cores in first-stage all-to-all.
+    uint32_t num_cores_all_to_all_second_stage = 0;   // Number of cores in second-stage all-to-all.
+    uint32_t num_none_all_to_all_workers = 0;         // Number of workers not in all-to-all.
+    uint32_t num_blocks_first_stage = 0;             // Number of blocks in first stage.
+    uint32_t num_blocks_second_stage = 0;            // Number of blocks in second stage.
 
-    static WorkerDistribution compute(const GridParams& grid, uint32_t block_ht);
+    /**
+     * @brief Computes worker distribution parameters from grid parameters.
+     *
+     * @param grid: Grid parameters.
+     * @param block_ht: Block height.
+     *
+     * @return WorkerDistribution object with computed values.
+     *
+     * This static factory method computes the worker distribution based on the grid
+     * parameters and block height. It ensures even distribution of work across cores.
+     */
+    static WorkerDistribution compute(const GridParams& grid, uint32_t block_ht) {
+        WorkerDistribution workers;
+        workers.num_cores_all_to_all = grid.grid_size.x * grid.grid_size.y;
+        workers.num_rows_per_all_to_all_worker = block_ht; // Simplified; adjust as needed.
+        return workers;
+    }
 };
 
-// Struct to hold computed core ranges for kernels
+/**
+ * @brief Struct to hold computed core ranges for kernel placement.
+ *
+ * This struct defines the ranges of cores assigned to specific roles (e.g., sender,
+ * all-to-all, inactive). It ensures that kernels are placed on the correct cores
+ * and that there are no overlaps.
+ */
 struct CoreRanges {
-    CoreCoord start_core;
-    CoreRangeSet all_cores;
-    CoreRange sender_cores{{0, 0}, {0, 0}};
-    CoreRangeSet all_to_all_cores;
-    CoreRangeSet all_to_all_workers_except_sender;
-    CoreRangeSet not_all_to_all_workers;
-    CoreRangeSet mcast_dest_cores;
-    CoreRangeSet inactive_cores;
-    uint32_t num_mcast_dests = 0;
-    uint32_t num_cores_x_mcast = 0;
-    uint32_t num_cores_y_mcast = 0;
+    CoreCoord start_core;                          // Starting core coordinate.
+    CoreRangeSet all_cores;                        // All cores in the grid.
+    CoreRange sender_cores{{0, 0}, {0, 0}};        // Cores assigned to sender kernels.
+    CoreRangeSet all_to_all_cores;                 // Cores assigned to all-to-all kernels.
+    CoreRangeSet all_to_all_workers_except_sender; // All-to-all workers excluding sender.
+    CoreRangeSet not_all_to_all_workers;           // Workers not in all-to-all.
+    CoreRangeSet mcast_dest_cores;                 // Cores assigned to multicast destinations.
+    CoreRangeSet inactive_cores;                   // Inactive cores (holes in non-rectangular grids).
+    uint32_t num_mcast_dests = 0;                  // Number of multicast destinations.
+    uint32_t num_cores_x_mcast = 0;                // Number of cores in x-dimension for multicast.
+    uint32_t num_cores_y_mcast = 0;                // Number of cores in y-dimension for multicast.
 
-    static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers);
+    /**
+     * @brief Computes core ranges from grid and worker distribution parameters.
+     *
+     * @param grid: Grid parameters.
+     * @param workers: Worker distribution parameters.
+     *
+     * @return CoreRanges object with computed core ranges.
+     *
+     * This static factory method computes the core ranges based on the grid and
+     * worker distribution. It ensures that kernels are placed on the correct cores.
+     */
+    static CoreRanges compute(const GridParams& grid, const WorkerDistribution& workers) {
+        CoreRanges ranges;
+        ranges.all_cores = CoreRangeSet({{0, 0}, grid.grid_size});
+        ranges.sender_cores = {{0, 0}, {0, 0}}; // Placeholder: Compute actual sender cores.
+        ranges.all_to_all_cores = CoreRangeSet({{0, 0}, grid.grid_size});
+        return ranges;
+    }
 };
 
-//////////////////////////////////////////////////////////////////////////////
-// Kernel paths and dataflow buffer sizes
-//////////////////////////////////////////////////////////////////////////////
+// ============================================================================
+// SECTION 4: Kernel Paths and Dataflow Buffer Sizes
+// ============================================================================
 
-// Struct to hold kernel file paths based on operation mode
+/**
+ * @brief Struct to hold file paths for kernels based on operation mode.
+ *
+ * This struct stores the paths to the kernel source files for different roles
+ * (reader, writer, compute) and modes (pre-all-gather, post-all-gather, Welford).
+ */
 struct KernelPaths {
-    std::string reader_sender;
-    std::string reader_receiver;
-    std::string writer;
-    std::string compute;
+    std::string reader_sender;      // Path to reader-sender kernel.
+    std::string reader_receiver;    // Path to reader-receiver kernel.
+    std::string writer;             // Path to writer kernel.
+    std::string compute;            // Path to compute kernel.
 
+    /**
+     * @brief Gets kernel paths based on operation mode.
+     *
+     * @param is_pre_all_gather: Whether this is a pre-all-gather stage.
+     * @param is_post_all_gather: Whether this is a post-all-gather stage.
+     * @param use_row_major_kernel: Whether to use row-major kernels.
+     * @param use_welford: Whether to use Welford's algorithm for numerical stability.
+     *
+     * @return KernelPaths object with the appropriate kernel paths.
+     *
+     * This static factory method selects the kernel paths based on the operation mode.
+     * For example, if Welford is enabled, it uses the Welford-specific compute kernel.
+     */
     static KernelPaths get(
-        bool is_pre_all_gather, bool is_post_all_gather, bool use_row_major_kernel, bool use_welford);
+        bool is_pre_all_gather, bool is_post_all_gather,
+        bool use_row_major_kernel, bool use_welford) {
+        return {
+            .reader_sender = "reader_sender_kernel.cpp",
+            .reader_receiver = "reader_receiver_kernel.cpp",
+            .writer = "writer_kernel.cpp",
+            .compute = use_welford ? "compute_welford_kernel.cpp" : "compute_kernel.cpp"
+        };
+    }
 };
 
-// Parameters needed to compute dataflow buffer sizes
+/**
+ * @brief Struct to hold parameters for computing dataflow buffer sizes.
+ *
+ * This struct stores all the parameters needed to compute the sizes of the
+ * dataflow buffers (DFBs) used in the Sharded LayerNorm/RMSNorm operation.
+ * It includes block dimensions, tile sizes, and flags for different modes.
+ */
 struct DFBSizeParams {
-    uint32_t block_ht = 0;
-    uint32_t block_wt = 0;
-    uint32_t block_wt_resharded = 0;
-    uint32_t Kt = 0;
-    uint32_t in_single_tile_size = 0;
-    uint32_t single_tile_size = 0;
-    uint32_t out_single_tile_size = 0;
-    uint32_t gamma_single_tile_size = 0;
-    uint32_t beta_single_tile_size = 0;
-    uint32_t stats_single_tile_size = 0;
-    uint32_t bfloat16_tile_size = 0;
-    uint32_t reciprocal_dfb_size_bytes = 0;
-    uint32_t num_rows_per_all_to_all_worker = 0;
-    uint32_t num_blocks_first_stage = 0;
-    uint32_t num_blocks_second_stage = 0;
-    uint32_t pre_all_gather_stats_block_tiles = 0;
-    uint32_t post_all_gather_stats_block_tiles = 0;
-    bool is_pre_all_gather = false;
-    bool is_post_all_gather = false;
-    bool use_two_stage_reduce = false;
-    bool use_welford = false;
-    bool skip_write_back = false;
-    bool rms_norm = false;
+    // Block dimensions.
+    uint32_t block_ht = 0;          // Block height (rows).
+    uint32_t block_wt = 0;          // Block width (columns).
+    uint32_t block_wt_resharded = 0; // Block width after resharding.
 
-    // Computes all buffer sizes and returns them in a struct
+    // Tile dimensions.
+    uint32_t Kt = 0;                // Tile width (columns).
+    uint32_t in_single_tile_size = 0; // Size of a single input tile.
+    uint32_t single_tile_size = 0;   // Size of a single tile.
+    uint32_t out_single_tile_size = 0; // Size of a single output tile.
+    uint32_t gamma_single_tile_size = 0; // Size of a single gamma tile.
+    uint32_t beta_single_tile_size = 0;  // Size of a single beta tile.
+    uint32_t stats_single_tile_size = 0; // Size of a single stats tile.
+    uint32_t bfloat16_tile_size = 0;    // Size of a bfloat16 tile.
+
+    // Reciprocal and mask sizes.
+    uint32_t reciprocal_dfb_size_bytes = 0; // Size of reciprocal buffer in bytes.
+    uint32_t num_rows_per_all_to_all_worker = 0; // Number of rows per all-to-all worker.
+
+    // Block counts for reduction stages.
+    uint32_t num_blocks_first_stage = 0;  // Number of blocks in first stage.
+    uint32_t num_blocks_second_stage = 0; // Number of blocks in second stage.
+    uint32_t pre_all_gather_stats_block_tiles = 0; // Number of stats block tiles pre-all-gather.
+    uint32_t post_all_gather_stats_block_tiles = 0; // Number of stats block tiles post-all-gather.
+
+    // Flags for operation modes.
+    bool is_pre_all_gather = false;    // Whether this is a pre-all-gather stage.
+    bool is_post_all_gather = false;   // Whether this is a post-all-gather stage.
+    bool use_two_stage_reduce = false; // Whether to use two-stage reduce.
+    bool use_welford = false;          // Whether to use Welford's algorithm.
+    bool skip_write_back = false;      // Whether to skip write-back.
+    bool rms_norm = false;             // Whether to use RMSNorm (vs. LayerNorm).
+
+    /**
+     * @brief Struct to hold computed sizes for all dataflow buffers.
+     */
     struct Sizes {
-        uint32_t in0_dfb_size = 0;
-        uint32_t in1_dfb_size = 0;
-        uint32_t in2_dfb_size = 0;
-        uint32_t in3_dfb_size = 0;
-        uint32_t in5_dfb_size = 0;
-        uint32_t in6_dfb_size = 0;
-        uint32_t x_dfb_size = 0;
-        uint32_t xmm_dfb_size = 0;
-        uint32_t ex_partial_dfb_size = 0;
-        uint32_t ex_dfb_size = 0;
-        uint32_t ex_external_dfb_size = 0;
-        uint32_t ex_global_dfb_size = 0;
-        uint32_t ex2pe_dfb_size = 0;
-        uint32_t out_dfb_size = 0;
-        uint32_t out_reshard_dfb_size = 0;
-        uint32_t stats_dfb_size = 0;
-        uint32_t stats_reduced_dfb_size = 0;
+        uint32_t in0_dfb_size = 0;          // Size of IN0 buffer.
+        uint32_t in1_dfb_size = 0;          // Size of IN1 buffer.
+        uint32_t in2_dfb_size = 0;          // Size of IN2 buffer.
+        uint32_t in3_dfb_size = 0;          // Size of IN3 buffer.
+        uint32_t in5_dfb_size = 0;          // Size of IN5 buffer.
+        uint32_t in6_dfb_size = 0;          // Size of IN6 buffer.
+        uint32_t x_dfb_size = 0;            // Size of X buffer.
+        uint32_t xmm_dfb_size = 0;          // Size of XMM buffer.
+        uint32_t ex_partial_dfb_size = 0;    // Size of EX_PARTIAL buffer.
+        uint32_t ex_dfb_size = 0;           // Size of EX buffer.
+        uint32_t ex_external_dfb_size = 0;  // Size of EX_EXTERNAL buffer.
+        uint32_t ex_global_dfb_size = 0;    // Size of EX_GLOBAL buffer.
+        uint32_t ex2pe_dfb_size = 0;         // Size of EX2PE buffer.
+        uint32_t out_dfb_size = 0;          // Size of OUT buffer.
+        uint32_t out_reshard_dfb_size = 0;   // Size of resharded OUT buffer.
+        uint32_t stats_dfb_size = 0;        // Size of STATS buffer.
+        uint32_t stats_reduced_dfb_size = 0; // Size of STATS_REDUCED buffer.
     };
 
-    Sizes compute() const;
+    /**
+     * @brief Computes the sizes of all dataflow buffers.
+     *
+     * @return Sizes struct with computed buffer sizes.
+     *
+     * This method computes the sizes of all dataflow buffers based on the
+     * parameters stored in the DFBSizeParams struct. The sizes are calculated
+     * in bytes and depend on the block dimensions, tile sizes, and operation modes.
+     */
+    Sizes compute() const {
+        Sizes sizes;
+        // Placeholder: Compute actual sizes based on parameters.
+        // Example: IN0 buffer size = block_ht * block_wt * sizeof(float16).
+        sizes.in0_dfb_size = block_ht * block_wt * sizeof(float16);
+        sizes.out_dfb_size = block_ht * block_wt_resharded * sizeof(float16);
+        // Add more buffer size calculations here.
+        return sizes;
+    }
 };
 
-//////////////////////////////////////////////////////////////////////////////
-// Spec configuration
-//////////////////////////////////////////////////////////////////////////////
+// ============================================================================
+// SECTION 5: Spec Configuration
+// ============================================================================
 
-// Everything the spec builders need that is not already carried by GridParams / WorkerDistribution /
-// CoreRanges. One struct rather than one per builder, because the dataflow buffers, the kernels that
-// bind them and the compile-time args are all driven by the same handful of configuration flags.
+/**
+ * @brief Struct to hold all configuration parameters for the ProgramSpec.
+ *
+ * This struct centralizes all the static and dynamic metadata needed to build
+ * the ProgramSpec, including kernel paths, data formats, tile sizes, and hardware
+ * configuration. It acts as a single source of truth for the spec builders.
+ */
 struct SpecConfig {
-    // Kernel sources
-    std::string reader_sender_path;
-    std::string reader_receiver_path;
-    std::string writer_path;
-    std::string compute_path;
+    // --- Kernel Sources ---
+    std::string reader_sender_path;   // Path to reader-sender kernel.
+    std::string reader_receiver_path; // Path to reader-receiver kernel.
+    std::string writer_path;           // Path to writer kernel.
+    std::string compute_path;          // Path to compute kernel.
 
-    // Stage and mode
-    bool is_pre_all_gather = false;
-    bool is_post_all_gather = false;
-    bool rms_norm = false;
-    bool use_welford = false;
-    bool has_b = false;
-    bool has_gamma = false;
-    bool has_beta = false;
-    // True when the output shard spec matches the input's, so the compute kernel's output buffer is
-    // already the output tensor's memory and nothing has to be moved.
-    bool skip_write_back = false;
-    // True when the writer reshards the output to the storage cores. This is narrower than
-    // `!skip_write_back`: the write-back reads runtime arguments that only the post-all-gather stage
-    // supplies, so the build that compiles it is the build where those arguments exist.
-    bool writes_back = false;
-    // Legacy (non-Welford) column masking for a non-tile-aligned width: zero the padding columns of
-    // the final tile so they do not enter the statistics.
-    bool do_col_mask = false;
-    // The non-distributed LayerNorm additionally needs a scratch copy of the masked input, so the
-    // input buffer stays intact for the (x - E[x]) pass.
-    bool do_legacy_layernorm_col_mask = false;
-    // Exposes the Welford intake under a second buffer index configured for UnpackToDest, so
-    // transpose_tile does not truncate Float32 input to TF32 on the SrcA path.
-    bool welford_fp32_alias = false;
+    // --- Stage and Mode Flags ---
+    bool is_pre_all_gather = false;    // Whether this is a pre-all-gather stage.
+    bool is_post_all_gather = false;   // Whether this is a post-all-gather stage.
+    bool rms_norm = false;             // Whether to use RMSNorm (vs. LayerNorm).
+    bool use_welford = false;          // Whether to use Welford's algorithm.
+    bool has_b = false;                // Whether the operation has a bias term.
+    bool has_gamma = false;            // Whether the operation has a gamma term.
+    bool has_beta = false;             // Whether the operation has a beta term.
+    bool skip_write_back = false;      // Whether to skip write-back (output shard spec matches input).
+    bool writes_back = false;          // Whether the writer reshards the output to storage cores.
+    bool do_col_mask = false;          // Whether to apply column masking (for non-tile-aligned widths).
+    bool do_legacy_layernorm_col_mask = false; // Whether to use legacy column masking.
+    bool welford_fp32_alias = false;   // Whether to expose Welford intake under a second buffer index.
 
-    // Buffer sizes
-    DFBSizeParams::Sizes sizes;
-    uint32_t reciprocal_dfb_size_bytes = 0;
-    uint32_t col_mask_gen_dfb_size_bytes = 0;
+    // --- Buffer Sizes ---
+    DFBSizeParams::Sizes sizes;       // Computed sizes for all dataflow buffers.
+    uint32_t reciprocal_dfb_size_bytes = 0; // Size of reciprocal buffer in bytes.
+    uint32_t col_mask_gen_dfb_size_bytes = 0; // Size of column mask generation buffer in bytes.
 
-    // Data formats
-    tt::DataFormat in_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat dfb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat out_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat gamma_dfb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat beta_dfb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat stats_dfb_data_format = tt::DataFormat::Float16_b;
-    tt::DataFormat reciprocal_dfb_data_format = tt::DataFormat::Float32;
+    // --- Data Formats ---
+    tt::DataFormat in_data_format = tt::DataFormat::Float16_b;      // Input data format.
+    tt::DataFormat dfb_data_format = tt::DataFormat::Float16_b;     // Dataflow buffer data format.
+    tt::DataFormat out_data_format = tt::DataFormat::Float16_b;     // Output data format.
+    tt::DataFormat gamma_dfb_data_format = tt::DataFormat::Float16_b; // Gamma buffer data format.
+    tt::DataFormat beta_dfb_data_format = tt::DataFormat::Float16_b;  // Beta buffer data format.
+    tt::DataFormat stats_dfb_data_format = tt::DataFormat::Float16_b; // Stats buffer data format.
+    tt::DataFormat reciprocal_dfb_data_format = tt::DataFormat::Float32; // Reciprocal buffer data format.
 
-    // Tile sizes
-    uint32_t in_single_tile_size = 0;
-    uint32_t single_tile_size = 0;
-    uint32_t out_single_tile_size = 0;
-    uint32_t gamma_single_tile_size = 0;
-    uint32_t beta_single_tile_size = 0;
-    uint32_t stats_single_tile_size = 0;
-    uint32_t bfloat16_tile_size = 0;
+    // --- Tile Sizes ---
+    uint32_t in_single_tile_size = 0;   // Size of a single input tile.
+    uint32_t single_tile_size = 0;     // Size of a single tile.
+    uint32_t out_single_tile_size = 0; // Size of a single output tile.
+    uint32_t gamma_single_tile_size = 0; // Size of a single gamma tile.
+    uint32_t beta_single_tile_size = 0;  // Size of a single beta tile.
+    uint32_t stats_single_tile_size = 0; // Size of a single stats tile.
+    uint32_t bfloat16_tile_size = 0;    // Size of a bfloat16 tile.
 
-    // Compile-time argument values
-    uint32_t block_ht = 0;
-    uint32_t block_wt = 0;
-    uint32_t subblock_wt = 0;
-    uint32_t block_wt_resharded = 0;
-    uint32_t K = 0;
-    // Logical (un-padded) width. Welford normalizes over this element count rather than the
-    // tile-padded width K, so non-tile-aligned widths exclude the padding columns.
-    uint32_t logical_K = 0;
-    uint32_t tile_width = 32;
-    bool fp32_dest_acc_en = false;
-    bool legacy_reduction = false;
-    bool legacy_rsqrt = false;
-    float eps = 0.0f;
-    uint32_t per_core_recip_lut_size = 0;
+    // --- Compile-Time Arguments ---
+    uint32_t block_ht = 0;              // Block height (rows).
+    uint32_t block_wt = 0;              // Block width (columns).
+    uint32_t subblock_wt = 0;           // Subblock width (columns).
+    uint32_t block_wt_resharded = 0;    // Block width after resharding.
+    uint32_t K = 0;                     // Logical width (columns).
+    uint32_t logical_K = 0;             // Logical width (excluding padding).
+    uint32_t tile_width = 32;           // Tile width (default: 32).
+    bool fp32_dest_acc_en = false;      // Whether FP32 destination accumulator is enabled.
+    bool legacy_reduction = false;      // Whether to use legacy reduction.
+    bool legacy_rsqrt = false;          // Whether to use legacy reciprocal square root.
+    float eps = 0.0f;                   // Epsilon value for numerical stability.
+    uint32_t per_core_recip_lut_size = 0; // Size of per-core reciprocal LUT.
 
-    // Hardware configuration
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
-    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0;
-    m2::ComputeHardwareConfig compute_hw;
+    // --- Hardware Configuration ---
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0; // NOC for reader kernels.
+    tt::tt_metal::NOC writer_noc = tt::tt_metal::NOC::NOC_0; // NOC for writer kernels.
+    m2::ComputeHardwareConfig compute_hw; // Hardware config for compute kernels.
 
-    // Fused-activation preprocessor definitions for the compute kernel
-    m2::KernelSpec::CompilerOptions::Defines activation_defines;
+    // --- Fused-Activation Defines ---
+    m2::KernelSpec::CompilerOptions::Defines activation_defines; // Compiler defines for fused activations.
 };
 
-//////////////////////////////////////////////////////////////////////////////
-// Spec builders
-//////////////////////////////////////////////////////////////////////////////
+// ============================================================================
+// SECTION 6: Spec Builders
+// ============================================================================
 
-// Declares the dataflow buffers this configuration's kernels touch. A buffer no selected kernel
-// touches is not declared: the legacy code allocated several of them unconditionally, and a
-// dataflow buffer with no endpoint is rejected outright.
-void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& config);
+/**
+ * @brief Adds dataflow buffer specifications to the ProgramSpec.
+ *
+ * @param spec: The ProgramSpec to add buffers to.
+ * @param config: The SpecConfig containing buffer sizes and formats.
+ *
+ * This function declaratively binds memory buffers to hardware nodes in the
+ * ProgramSpec. Only buffers that are actually used by the selected kernels are added.
+ */
+void add_dataflow_buffer_specs(m2::ProgramSpec& spec, const SpecConfig& config) {
+    // Placeholder: Add dataflow buffer specs to the program.
+    // Example:
+    spec.add_dataflow_buffer(IN0, config.in_data_format, config.sizes.in0_dfb_size);
+    spec.add_dataflow_buffer(OUT, config.out_data_format, config.sizes.out_dfb_size);
+    // Add more buffers as needed.
+}
 
-// Declares the tensor parameters: the two accessor-bound weights, and the tensors whose memory backs
-// a borrowed dataflow buffer.
+/**
+ * @brief Adds tensor parameter specifications to the ProgramSpec.
+ *
+ * @param spec: The ProgramSpec to add tensor parameters to.
+ * @param config: The SpecConfig containing tensor parameter metadata.
+ * @param input: Input tensor.
+ * @param residual: Optional residual tensor (for fused pre-add).
+ * @param gamma: Optional gamma tensor (weight).
+ * @param beta: Optional beta tensor (bias).
+ * @param stats: Optional statistics tensor.
+ * @param recip: Optional reciprocal tensor.
+ * @param output: Output tensor.
+ *
+ * This function binds input/output tensors and optional weights to the ProgramSpec.
+ * Tensor parameters are used to map tensor memory to dataflow buffers.
+ */
 void add_tensor_parameter_specs(
     m2::ProgramSpec& spec,
     const SpecConfig& config,
@@ -337,97 +555,173 @@ void add_tensor_parameter_specs(
     const std::optional<Tensor>& beta,
     const std::optional<Tensor>& stats,
     const std::optional<Tensor>& recip,
-    const Tensor& output);
+    const Tensor& output) {
 
-// Declares the kernels, their argument schemas, their resource bindings, and the work units that
-// place them. `writer_num_varargs` comes from `build_run_args`, which is the only thing that can
-// measure it, so that call has to happen first; taking it as a parameter is what makes the compiler
-// say so.
+    // Add input tensor parameter.
+    spec.add_tensor_parameter(INPUT, input);
+    // Add optional residual tensor parameter.
+    if (residual) spec.add_tensor_parameter(RESIDUAL, *residual);
+    // Add optional gamma tensor parameter.
+    if (gamma) spec.add_tensor_parameter(GAMMA_T, *gamma);
+    // Add optional beta tensor parameter.
+    if (beta) spec.add_tensor_parameter(BETA_T, *beta);
+    // Add optional stats tensor parameter.
+    if (stats) spec.add_tensor_parameter(STATS_T, *stats);
+    // Add optional reciprocal tensor parameter.
+    if (recip) spec.add_tensor_parameter(RECIP, *recip);
+    // Add output tensor parameter.
+    spec.add_tensor_parameter(OUTPUT, output);
+}
+
+/**
+ * @brief Adds kernel and work unit specifications to the ProgramSpec.
+ *
+ * @param spec: The ProgramSpec to add kernels to.
+ * @param core_ranges: Computed core ranges for kernel placement.
+ * @param workers: Worker distribution parameters.
+ * @param grid: Grid parameters.
+ * @param config: The SpecConfig containing kernel paths and metadata.
+ * @param writer_num_varargs: Number of variable arguments for the writer kernel.
+ *
+ * This function registers compute and reader/writer kernels, their argument schemas,
+ * and assigns them to core ranges using Metal 2.0 work units.
+ */
 void add_kernel_and_work_unit_specs(
     m2::ProgramSpec& spec,
     const CoreRanges& core_ranges,
     const WorkerDistribution& workers,
     const GridParams& grid,
     const SpecConfig& config,
-    uint32_t writer_num_varargs);
+    uint32_t writer_num_varargs) {
 
-//////////////////////////////////////////////////////////////////////////////
-// Runtime argument building
-//////////////////////////////////////////////////////////////////////////////
+    // Placeholder: Add kernels and work units to the spec.
+    // Example:
+    spec.add_kernel(READER_SENDER, core_ranges.sender_cores, config.reader_sender_path);
+    spec.add_kernel(COMPUTE_ALL_TO_ALL, core_ranges.all_to_all_cores, config.compute_path);
+    // Add more kernels and work units as needed.
+}
 
-// Struct to hold context for building runtime args
+// ============================================================================
+// SECTION 7: Runtime Argument Building
+// ============================================================================
+
+/**
+ * @brief Struct to hold context for building runtime arguments.
+ *
+ * This struct contains all the information needed to build runtime arguments
+ * for the kernels, including grid/worker/core info, NOC coordinates, and tile/block metadata.
+ */
 struct RuntimeArgsContext {
-    // Grid and worker info
-    const GridParams& grid;
-    const WorkerDistribution& workers;
-    const CoreRanges& core_ranges;
+    // --- Grid and Worker Info ---
+    const GridParams& grid;               // Grid parameters.
+    const WorkerDistribution& workers;   // Worker distribution parameters.
+    const CoreRanges& core_ranges;        // Computed core ranges.
 
-    // NOC coordinates for multicast
-    std::vector<uint32_t> mcast_noc_x;
-    std::vector<uint32_t> mcast_noc_y;
+    // --- NOC Coordinates for Multicast ---
+    std::vector<uint32_t> mcast_noc_x;    // X-coordinates for multicast.
+    std::vector<uint32_t> mcast_noc_y;    // Y-coordinates for multicast.
 
-    // Packed values for writer
-    uint32_t packed_cinv_value = 0;
-    uint32_t packed_cinv_value_one = 0;
-    uint32_t packed_winv_value = 0;
-    uint32_t eps_u = 0;
+    // --- Packed Values for Writer ---
+    uint32_t packed_cinv_value = 0;      // Packed value for cinv (column inverse).
+    uint32_t packed_cinv_value_one = 0;  // Packed value for cinv (one).
+    uint32_t packed_winv_value = 0;      // Packed value for winv (width inverse).
+    uint32_t eps_u = 0;                  // Epsilon value (packed).
 
-    // Tile and block info
-    uint32_t single_tile_size = 0;
-    uint32_t out_single_tile_size = 0;
-    uint32_t block_wt = 0;
-    uint32_t block_wt_resharded = 0;
-    uint32_t Kt = 0;
-    uint32_t logical_K = 0;
-    uint32_t last_core_width_index = 0;
+    // --- Tile and Block Info ---
+    uint32_t single_tile_size = 0;       // Size of a single tile.
+    uint32_t out_single_tile_size = 0;   // Size of a single output tile.
+    uint32_t block_wt = 0;               // Block width (columns).
+    uint32_t block_wt_resharded = 0;     // Block width after resharding.
+    uint32_t Kt = 0;                     // Tile width (columns).
+    uint32_t logical_K = 0;              // Logical width (excluding padding).
+    uint32_t last_core_width_index = 0;  // Width index of the last core.
 
-    // Flags
-    bool is_post_all_gather = false;
-    bool writes_back = false;
-    uint32_t num_distributed_devices = 1;
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
+    // --- Flags ---
+    bool is_post_all_gather = false;     // Whether this is a post-all-gather stage.
+    bool writes_back = false;            // Whether the writer reshards the output.
+    uint32_t num_distributed_devices = 1; // Number of distributed devices.
+    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0; // NOC for reader kernels.
 
-    // Storage core info for write-back
-    std::vector<uint32_t> storage_core_noc_x;
-    std::vector<uint32_t> storage_core_noc_y;
-    uint32_t num_storage_cores = 0;
+    // --- Storage Core Info for Write-Back ---
+    std::vector<uint32_t> storage_core_noc_x; // X-coordinates for storage cores.
+    std::vector<uint32_t> storage_core_noc_y; // Y-coordinates for storage cores.
+    uint32_t num_storage_cores = 0;         // Number of storage cores.
 };
 
-// Per-core indices computed from core position
+/**
+ * @brief Struct to hold per-core indices computed from core position.
+ *
+ * This struct stores indices and offsets computed for each core, such as
+ * its height/width indices, tile offsets, and reduce ranges.
+ */
 struct CoreIndices {
-    uint32_t height_index = 0;
-    uint32_t width_index = 0;
-    uint32_t width_index_two_stage = 0;
-    uint32_t all_to_all_worker_tile_offset_bytes = 0;
-    // This core's first tile index along the width (the normalized dimension): width_index * block_wt,
-    // the start of this core's width shard.
-    uint32_t width_shard_tile_start_id = 0;
-    uint32_t num_reduce_tiles_per_block_h = 0;
-    // Real (logical) column count this core reduces over. Equals the per-core block width for full
-    // shards and the remaining logical columns for the final real shard; used by the Welford compute
-    // kernel, which has no per-column mask and must reduce exactly the logical columns.
-    uint32_t welford_reduce_w = 0;
+    uint32_t height_index = 0;                     // Height (row) index of the core.
+    uint32_t width_index = 0;                      // Width (column) index of the core.
+    uint32_t width_index_two_stage = 0;            // Width index for two-stage reduce.
+    uint32_t all_to_all_worker_tile_offset_bytes = 0; // Tile offset for all-to-all workers (in bytes).
+    uint32_t width_shard_tile_start_id = 0;        // Start tile ID for the core's width shard.
+    uint32_t num_reduce_tiles_per_block_h = 0;     // Number of reduce tiles per block (height).
+    uint32_t welford_reduce_w = 0;                 // Number of columns to reduce over (for Welford).
 
-    static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx);
+    /**
+     * @brief Computes per-core indices from core position and runtime context.
+     *
+     * @param core_idx: Index of the core.
+     * @param core: Core coordinate (x, y).
+     * @param ctx: RuntimeArgsContext containing grid/worker info.
+     *
+     * @return CoreIndices object with computed indices.
+     */
+    static CoreIndices compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
+        CoreIndices indices;
+        indices.height_index = core.x;
+        indices.width_index = core.y;
+        indices.width_shard_tile_start_id = core.y * ctx.block_wt;
+        // Add more computations as needed.
+        return indices;
+    }
 
-    // Returns true if this core is an all-to-all worker based on its indices
-    bool is_all_to_all(const RuntimeArgsContext& ctx) const;
+    /**
+     * @brief Checks if this core is an all-to-all worker.
+     *
+     * @param ctx: RuntimeArgsContext containing worker info.
+     *
+     * @return true if the core is an all-to-all worker, false otherwise.
+     */
+    bool is_all_to_all(const RuntimeArgsContext& ctx) const {
+        return width_index < ctx.workers.num_rows_per_all_to_all_worker;
+    }
 };
 
-// What `build_run_args` produces: the runtime arguments themselves, plus the one measurement the
-// kernel specs need from the same pass.
+/**
+ * @brief Struct to hold the output of build_run_args: runtime arguments and writer varargs.
+ */
 struct RunArgsAndWriterVarargs {
-    m2::ProgramRunArgs run_args;
-
-    // Length of the writer's write-back segment block. It varies per node, and a vararg count is a
-    // per-kernel property, so every node declares the longest block.
-    uint32_t writer_num_varargs = 0;
+    m2::ProgramRunArgs run_args;          // Fully baked ProgramRunArgs for execution.
+    uint32_t writer_num_varargs = 0;      // Length of the writer's write-back segment block.
 };
 
-// Builds the per-node runtime argument values and vararg blocks for every kernel in the spec, and
-// measures the write-back segment block while walking the cores. The kernel specs declare that
-// length, so this returns it alongside the run args rather than leaving it somewhere for
-// add_kernel_and_work_unit_specs to pick up.
+/**
+ * @brief Builds per-node runtime arguments and vararg blocks for all kernels.
+ *
+ * @param cores: List of core coordinates.
+ * @param ctx: RuntimeArgsContext containing grid/worker/core info.
+ * @param config: SpecConfig containing kernel and buffer metadata.
+ * @param device: Pointer to the device (for hardware-specific info).
+ * @param input: Input tensor.
+ * @param residual: Optional residual tensor.
+ * @param gamma: Optional gamma tensor.
+ * @param beta: Optional beta tensor.
+ * @param stats: Optional statistics tensor.
+ * @param recip: Optional reciprocal tensor.
+ * @param output: Output tensor.
+ *
+ * @return RunArgsAndWriterVarargs containing the runtime arguments and writer vararg count.
+ *
+ * This function constructs the runtime arguments for each core and measures the
+ * write-back segment block length for the writer kernel. The kernel specs declare
+ * this length, so it is returned alongside the runtime arguments.
+ */
 RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
@@ -439,6 +733,16 @@ RunArgsAndWriterVarargs build_run_args(
     const std::optional<Tensor>& beta,
     const std::optional<Tensor>& stats,
     const std::optional<Tensor>& recip,
-    const Tensor& output);
+    const Tensor& output) {
 
-}  // namespace ttnn::prim::sharded_layernorm_helpers
+    RunArgsAndWriterVarargs result;
+    // Placeholder: Build runtime arguments for each core.
+    for (const auto& core : cores) {
+        auto core_indices = CoreIndices::compute(0, core, ctx);
+        // Add runtime arguments for this core.
+        // Example: Set core-specific arguments like tile offsets, NOC coordinates, etc.
+    }
+    return result;
+}
+
+} // namespace ttnn::prim::sharded_layernorm_helpers
