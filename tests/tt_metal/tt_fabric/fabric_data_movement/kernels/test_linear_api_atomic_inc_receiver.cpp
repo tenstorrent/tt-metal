@@ -67,7 +67,10 @@ void kernel_main() {
         if constexpr (
             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_ATOMIC_INC ||
             noc_packet_type == NocPacketType::NOC_FUSED_UNICAST_SCATTER_WRITE_ATOMIC_INC) {
-            bool data_written = false;
+            // Presence check only: confirms the fused write landed before the atomic increment is observed.
+            // No mismatch/value reporting exists yet for this packet type (unlike test_linear_api_receiver.cpp's
+            // check_packet_data path), so the result is not read back into test_results.
+            [[maybe_unused]] bool data_written = false;
             for (uint32_t j = 0; j < payload_size_words; j++) {
                 if (start_addr[j] != 0) {
                     data_written = true;
