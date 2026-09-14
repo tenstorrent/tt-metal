@@ -168,7 +168,7 @@ GTEST_SUBTORUS_4X4_PIPELINE="${GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK}:MultiHo
 GTEST_SINGLE_GALAXY_SLICE="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 GTEST_SINGLE_GALAXY_BLITZ="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 GTEST_SINGLE_GALAXY_2X2_RING="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.Test2x2StageRingPipelineOnSingleGalaxy"
-GTEST_SINGLE_GALAXY_2X2_Z="ControlPlaneFixture.Test2x2StageRingForcedOntoZByConfigTorus:ControlPlaneFixture.Test2x2StageRingZRoutersNoDeadlockAvoidanceAcrossFabricConfigs"
+GTEST_SINGLE_GALAXY_2X2_Z="ControlPlaneFixture.Test2x2StageRingForcedOntoZByConfigTorus:ControlPlaneFixture.Test2x2StageRingZRoutersNoDeadlockAvoidanceAcrossFabricConfigs:ControlPlaneFixture.Test2x2StageRingZDeadlockAvoidanceAgreesBetweenTorusAndMeshPeers"
 # Llama 8b pod MGDs (40 host ranks): layout + corner pins + pod CP init; omit TestPipelineBuilderCheck
 # (40-stage resolve_graph_layout ring does not finish in reasonable time on these MGDs).
 GTEST_LLama_8B_POD_LAYOUT="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"

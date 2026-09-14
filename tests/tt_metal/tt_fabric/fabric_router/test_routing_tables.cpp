@@ -2438,6 +2438,37 @@ TEST_F(ControlPlaneFixture, Test2x2StageRingZRoutersNoDeadlockAvoidanceAcrossFab
     }
 }
 
+// Focused regression for the exact #56298 misalignment: one end of a Z cable is a TORUS_Y rank, the other
+// end is a FABRIC_2D (mesh) rank. Before the fix the torus end compiled the Z router with deadlock
+// avoidance / first-level-ACK ON while the mesh end had it OFF, so the torus sender waited for ACKs the
+// mesh receiver never sent and the Z pair starved. Both ends must compile the Z router with the SAME
+// (disabled) DA polarity. This asserts the two mismatched configs from the bug report agree on Z.
+TEST_F(ControlPlaneFixture, Test2x2StageRingZDeadlockAvoidanceAgreesBetweenTorusAndMeshPeers) {
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_line_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_line_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+    const std::filesystem::path mgd_path(mgd_path_env);
+
+    // The two ends of the Z cable in the #56298 repro: a torus rank and a mesh rank.
+    auto torus_cp = make_control_plane_with_fabric_config(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y);
+    auto mesh_cp = make_control_plane_with_fabric_config(mgd_path, tt::tt_fabric::FabricConfig::FABRIC_2D);
+    const auto& torus_ctx = torus_cp->get_fabric_context();
+    const auto& mesh_ctx = mesh_cp->get_fabric_context();
+    ASSERT_EQ(torus_ctx.get_fabric_topology(), tt::tt_fabric::Topology::Torus);
+    ASSERT_EQ(mesh_ctx.get_fabric_topology(), tt::tt_fabric::Topology::Mesh);
+
+    const bool torus_z_da = torus_ctx.need_deadlock_avoidance_support(eth_chan_directions::Z);
+    const bool mesh_z_da = mesh_ctx.need_deadlock_avoidance_support(eth_chan_directions::Z);
+
+    // The mesh end never enables DA on Z; the torus end must match it (this is the regression: it used to be
+    // true on the torus end). Both ends of the cable therefore agree, and neither starves.
+    EXPECT_FALSE(mesh_z_da) << "FABRIC_2D (mesh) Z end unexpectedly has deadlock avoidance on";
+    EXPECT_FALSE(torus_z_da) << "FABRIC_2D_TORUS_Y (torus) Z end has deadlock avoidance on -- #56298 mismatch";
+    EXPECT_EQ(torus_z_da, mesh_z_da) << "Z deadlock-avoidance polarity mismatched across a torus<->mesh Z cable";
+}
+
 // ---------------------------------------------------------------------------
 // Pure CPU-only unit tests for the inter-mesh hop allocator behind the blitz
 // decode pipeline builder (detail::assign_non_colliding_hops). No control plane
