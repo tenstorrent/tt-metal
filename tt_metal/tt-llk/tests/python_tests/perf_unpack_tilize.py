@@ -7,6 +7,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PerfRunType
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import UNPACK_TILIZE_RELEVANCE
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     LOOP_FACTOR,
@@ -109,6 +110,7 @@ def _perf_unpack_tilize(
             tile_count_res=tile_count,
         ),
         unpack_to_dest=formats.input_format == DataFormat.Int32,
+        relevance=UNPACK_TILIZE_RELEVANCE,
     )
 
     configuration.run(perf_report)

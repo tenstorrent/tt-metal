@@ -1223,6 +1223,8 @@ class TestConfig:
             "passed_runtimes",
             "current_run_type",
             "temp_elfs",
+            # Host-side opt-in TILE_LOOP relevance map; only projected templates hash.
+            "relevance",
             # Host-side determinism-check opt-out; does not affect the compiled kernel.
             "expected_nondeterministic",
         ]

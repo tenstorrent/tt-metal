@@ -4,6 +4,7 @@
 import pytest
 from helpers.param_config import parametrize
 from helpers.perf.core import ALL_PERF_RUN_TYPES
+from helpers.perf.relevance import PACK_RELEVANCE
 from test_pack import PACK_SWEEP
 from test_pack import test_pack as run_pack
 
@@ -38,4 +39,5 @@ def test_perf_pack(
         loop_factor=loop_factor,
         is_perf=is_perf,
         perf_report=perf_report,
+        relevance=PACK_RELEVANCE,
     )

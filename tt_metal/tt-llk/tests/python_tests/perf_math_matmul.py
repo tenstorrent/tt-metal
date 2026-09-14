@@ -26,6 +26,7 @@ from helpers.matmul_sweep import (
 )
 from helpers.param_config import DEST_SYNC_TILE_LIMITS, input_output_formats
 from helpers.perf.core import PerfConfig
+from helpers.perf.relevance import MATH_MATMUL_RELEVANCE
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -300,6 +301,7 @@ def test_perf_math_matmul(
             tile_count_res=matmul_config.tile_dimensions.output_tile_cnt * num_blocks,
         ),
         dest_acc=matmul_config.dest_acc,
+        relevance=MATH_MATMUL_RELEVANCE,
     )
 
     configuration.run(perf_report)
