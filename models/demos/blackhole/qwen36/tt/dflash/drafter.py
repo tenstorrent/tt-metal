@@ -123,6 +123,9 @@ class TtDFlashDrafter:
         self._ctx_k: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_v: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_len = 0
+        # Staged step inputs; None until alloc_step_buffers(). See there.
+        self._sb = None
+        self._staged_new_ctx = 0
         if self._cap is not None:
             self._alloc_ctx_buffers()
         # Projection matmul program configs, keyed (m_tiles, K, N); see _proj_pc.
@@ -215,6 +218,18 @@ class TtDFlashDrafter:
             "mask": self._replicate(torch.zeros(1, 1, q_len, kv_len, dtype=torch.bfloat16)),
             "mask_full": self._replicate(torch.zeros(1, 1, q_len, kv_len, dtype=torch.bfloat16)),
             "ctx": self._replicate(torch.zeros(1, 1, ctx_pad, self.cfg.hidden_size, dtype=torch.bfloat16)),
+            # The block's token ids, for the noise embedding. This one is the reason a capture is
+            # impossible without staging at all: TtTarget.embed_device does ttnn.from_torch(ids)
+            # every step, and a host upload inside a capture is illegal outright -- not merely
+            # baked in, but rejected.
+            "tok": ttnn.from_torch(
+                torch.zeros(1, q_len, dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=_DRAM,
+                **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+            ),
         }
         return self._sb
 
@@ -249,6 +264,29 @@ class TtDFlashDrafter:
         self._stage_host(mask, sb["mask"])
         self._stage_host(mask_full, sb["mask_full"])
 
+    def stage_tokens(self, ids):
+        """DMA the block's token ids into the fixed buffer. **Outside** trace capture.
+
+        The embedding then runs on device from this buffer, so the only thing crossing PCIe per step
+        is ``q_len`` ints instead of an upload a capture would refuse outright.
+        """
+        sb = self._sb
+        q_len = sb["q_len"]
+        assert ids.shape[-1] <= q_len, f"staged token buffer holds {q_len} ids, got {ids.shape[-1]}"
+        host = torch.zeros(1, q_len, dtype=torch.int32)
+        host[:, : ids.shape[-1]] = ids.to(torch.int32).cpu().reshape(1, -1)
+        ttnn.copy_host_to_device_tensor(
+            ttnn.from_torch(
+                host,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+            ),
+            sb["tok"],
+        )
+        return sb["tok"]
+
     def stage_taps(self, kv_source, new_ctx: int):
         """Copy this step's tap projection into the fixed context buffer, LEFT-padded.
 
@@ -259,6 +297,7 @@ class TtDFlashDrafter:
         sb = self._sb
         ctx_pad = sb["ctx_pad"]
         assert 0 <= new_ctx <= ctx_pad, f"staged context holds {ctx_pad} rows, got {new_ctx}"
+        self._staged_new_ctx = new_ctx
         # Clear, then write the real rows into the tail. The clear matters: rows the mask marks
         # invalid are still PROJECTED, and a previous step's values left in those rows would be
         # projected too -- masked out of the attention, but not out of the K/V the step commits.
@@ -732,7 +771,7 @@ class TtDFlashDrafter:
 
     # ---- forward ---------------------------------------------------------------------------
 
-    def forward(self, kv_source: ttnn.Tensor, noise: ttnn.Tensor, start: int):
+    def forward(self, kv_source: ttnn.Tensor, noise: ttnn.Tensor, start: int, *, staged: bool = False):
         """Run the drafter over one block.
 
         Args:
@@ -745,7 +784,9 @@ class TtDFlashDrafter:
             ``[1, 1, q_len, hidden]`` — the final-normed hidden states for the block.
         """
         q_len = noise.shape[-2]
-        new_ctx = kv_source.shape[-2] if kv_source is not None else 0
+        # When staged, the context went to stage_taps rather than to this call, so the row count
+        # comes from there and kv_source may be None.
+        new_ctx = self._staged_new_ctx if staged else (kv_source.shape[-2] if kv_source is not None else 0)
         hist_len = self._ctx_len
         assert hist_len + new_ctx == start, (
             f"drafter context is at {hist_len} + {new_ctx} new rows but the block starts at {start}; "
@@ -767,10 +808,27 @@ class TtDFlashDrafter:
             # Everything per-step is a CONSTANT shape here: 16 padded context rows + q_len block
             # rows for kv_src, a [1,1,q_len,C+16+q_len] mask pair, and a persistent [1,nkv,C,hd]
             # history. Only tensor CONTENTS vary, which is what a capture can tolerate.
-            cos, sin, q_cos, q_sin = self._fixed_rope(start, q_len, ctx_pad)
-            mask, mask_full = (self._replicate(t) for t in self._fixed_mask_tensors(q_len, new_ctx, ctx_pad))
-            ctx_rm = ttnn.to_layout(kv_source, ttnn.ROW_MAJOR_LAYOUT) if new_ctx else None
-            if new_ctx < ctx_pad:
+            sb = self._sb if staged else None
+            if staged:
+                # Everything this step consumes already sits at a fixed address, refilled in place
+                # by stage_step / stage_taps / stage_tokens. Nothing is built here, which is the
+                # point: a replay re-runs recorded ops against recorded addresses and can do neither.
+                assert sb is not None, "staged=True needs alloc_step_buffers()"
+                assert q_len == sb["q_len"], f"staged for q_len {sb['q_len']}, got {q_len}"
+                assert ctx_pad == sb["ctx_pad"], (
+                    f"staged for ctx_pad {sb['ctx_pad']}, got {ctx_pad}; a step accepting more than "
+                    f"{sb['ctx_pad']} rows (the prompt step) must run unstaged"
+                )
+                cos, sin = sb["cos"], sb["sin"]
+                q_cos, q_sin = sb["q_cos"], sb["q_sin"]
+                mask, mask_full = sb["mask"], sb["mask_full"]
+                # stage_taps already left the context left-padded to ctx_pad at a fixed address.
+                ctx_rm = ttnn.to_layout(sb["ctx"], ttnn.ROW_MAJOR_LAYOUT)
+            else:
+                cos, sin, q_cos, q_sin = self._fixed_rope(start, q_len, ctx_pad)
+                mask, mask_full = (self._replicate(t) for t in self._fixed_mask_tensors(q_len, new_ctx, ctx_pad))
+                ctx_rm = ttnn.to_layout(kv_source, ttnn.ROW_MAJOR_LAYOUT) if new_ctx else None
+            if not staged and new_ctx < ctx_pad:
                 pad = self._replicate(
                     # noise, not kv_source: the very first step has no accepted context at all
                     # (kv_source is None) and both carry the same hidden width.
@@ -812,7 +870,11 @@ class TtDFlashDrafter:
                 ttnn.deallocate(mlp)
                 ttnn.deallocate(residual)
 
-            for t in (cos, sin, q_cos, q_sin, mask, mask_full, ctx_rm):
+            # A staged step owns only ctx_rm (its own layout conversion); the rest are persistent
+            # buffers the NEXT step refills in place. Freeing them would invalidate exactly the
+            # addresses a capture records.
+            transient = (ctx_rm,) if staged else (cos, sin, q_cos, q_sin, mask, mask_full, ctx_rm)
+            for t in transient:
                 if t is not None:
                     ttnn.deallocate(t)
             self._ctx_len = hist_len + new_ctx

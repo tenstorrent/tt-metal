@@ -214,3 +214,82 @@ def test_masked_history_alone_is_inert(mesh_device, reset_seeds, ensure_gc):
     value = float(str(pcc).split()[-1]) if not isinstance(pcc, float) else pcc
     logger.info(f"no-padding step (new_ctx=16, hist_len=0), masked history is the ONLY delta: pcc {value:.6f}")
     assert value > 0.9999, f"masked history alone changed the attention: pcc {value:.6f}"
+
+
+@pytest.mark.timeout(0)
+@torch.no_grad()
+@pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
+def test_staged_step_matches_unstaged(mesh_device, reset_seeds, ensure_gc):
+    """Stage 2 gate: a step reading PERSISTENT buffers must equal one that builds its inputs.
+
+    Staging is what makes a capture possible. ``forward`` normally builds this step's rope slices
+    and masks fresh (``ttnn.from_torch`` -- a host upload, illegal inside a capture) and reads the
+    tap projection at whatever address ``project_taps`` just returned. ``alloc_step_buffers`` +
+    ``stage_step`` + ``stage_taps`` move all of that to fixed addresses refilled in place, so a
+    replay has something stable to read.
+
+    None of it is supposed to change the arithmetic -- the staged buffers hold the SAME values, just
+    somewhere permanent -- so the bar is equality. The interesting failure is not a big divergence
+    but a small one on a later step, which would mean a buffer is carrying a previous step's
+    contents (a stale mask, an uncleared context tail) rather than this step's.
+    """
+    from models.common.utility_functions import comp_pcc
+
+    path = resolve_drafter_path()
+    cfg = DFlashDrafterConfig.from_pretrained(path)
+    drafter = TtDFlashDrafter(mesh_device, cfg, load_drafter_state_dict(path), ctx_capacity=256)
+
+    # Varying accept counts, so a stale buffer from the previous step cannot pass unnoticed.
+    steps = ((0, 16), (7, 16), (16, 16), (3, 16), (11, 16))
+    gen_seed, hidden_size = 31, cfg.hidden_size
+
+    def _mk(rows, gen):
+        t = (torch.randn(1, 1, rows, hidden_size, generator=gen, dtype=torch.float32) * 0.05).to(torch.bfloat16)
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=drafter.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(drafter.device)) if drafter.multi else {}),
+        )
+
+    def _run_mode(staged):
+        gen = torch.Generator().manual_seed(gen_seed)
+        drafter.reset()
+        if staged:
+            drafter.alloc_step_buffers(q_len=16, ctx_pad=16)
+        out, start = [], 0
+        for new_ctx, q_len in steps:
+            kv_source = _mk(new_ctx, gen) if new_ctx else None
+            noise = _mk(q_len, gen)
+            start += new_ctx
+            if staged:
+                drafter.stage_step(start, new_ctx)
+                drafter.stage_taps(kv_source, new_ctx)
+                hidden = drafter.forward(None, noise, start, staged=True)
+            else:
+                hidden = drafter.forward(kv_source, noise, start)
+            composer = dict(mesh_composer=ttnn.ConcatMeshToTensor(drafter.device, dim=0)) if drafter.multi else {}
+            out.append(ttnn.to_torch(hidden, **composer)[:1].float())
+            ttnn.deallocate(hidden)
+            if kv_source is not None:
+                ttnn.deallocate(kv_source)
+        return out
+
+    unstaged = _run_mode(False)
+    staged = _run_mode(True)
+
+    worst = 1.0
+    for i, ((new_ctx, _), a, b) in enumerate(zip(steps, unstaged, staged)):
+        assert a.shape == b.shape, f"step {i}: shape changed {tuple(a.shape)} -> {tuple(b.shape)}"
+        _, pcc = comp_pcc(a, b, 0.99)
+        value = float(str(pcc).split()[-1]) if not isinstance(pcc, float) else pcc
+        worst = min(worst, value)
+        logger.info(f"step {i} (new_ctx={new_ctx:2d}) staged vs unstaged: pcc {value:.6f}")
+    logger.info(f"worst pcc across {len(steps)} staged steps: {worst:.6f}")
+    assert worst > 0.9999, (
+        f"a staged step diverged from the equivalent unstaged one (worst pcc {worst:.6f}); the "
+        "buffers are supposed to hold identical values, so suspect one carrying a previous step's "
+        "contents -- an uncleared context tail or a mask that stage_step did not refill"
+    )

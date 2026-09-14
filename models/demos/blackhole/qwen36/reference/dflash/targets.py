@@ -278,7 +278,6 @@ class TtTarget:
         back to full width for the drafter, which keeps its hidden replicated. ~160 KB for a block.
         """
         import ttnn
-        from models.demos.blackhole.qwen36.tt import tp_common as tpc
 
         seq = ids.shape[1]
         multi = self.model.num_devices > 1
@@ -288,8 +287,27 @@ class TtTarget:
             device=self.model.device,
             **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.model.device)) if multi else {}),
         )
+        return self._embed_tokens(tok, seq, own=True)
+
+    def embed_device_staged(self, tok):
+        """Same embedding, from a token buffer the caller already staged. Trace-safe.
+
+        :meth:`embed_device` uploads the ids with ``ttnn.from_torch`` every step, which a trace
+        capture rejects outright -- not baked in, illegal. Given a persistent device buffer (see
+        ``TtDFlashDrafter.stage_tokens``) the embedding and its vocab all-gather become ordinary
+        device work that a capture can record. The buffer is NOT deallocated: the next step refills
+        it in place, at the address the capture recorded.
+        """
+        return self._embed_tokens(tok, tok.shape[-1], own=False)
+
+    def _embed_tokens(self, tok, seq, *, own):
+        import ttnn
+        from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+        multi = self.model.num_devices > 1
         x = self.model.embd(tok)
-        ttnn.deallocate(tok)
+        if own:
+            ttnn.deallocate(tok)
         x = ttnn.reshape(x, (1, 1, seq, x.shape[-1]))
         if multi:
             x = tpc.tuned_vocab_all_gather(
