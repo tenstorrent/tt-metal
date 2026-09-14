@@ -1856,8 +1856,9 @@ class ttMLA:
         if q_seq_sharded is not q:
             ttnn.deallocate(q_seq_sharded)
 
-        # indices must match q_rm's seq sharding. Incoming is replicated full-glob [1,1,S_global,k] or
-        # SP-sharded [1,1,S/sp,k]; under reshard the row count must drop to S/(sp·tp), so split over TP.
+        # Indices must match q_rm's sequence sharding. Direct TP sequence shards [1,1,S/(sp*tp),k]
+        # already match after head-to-sequence redistribution. Partition legacy globally replicated
+        # [1,1,S_global,k] or SP-only [1,1,S/sp,k] inputs over SP and TP as needed.
         idx = indices
         if sp > 1 and indices.shape[2] == seq_len_local * sp:
             # Replicated full-glob indices → reshard rows onto the SP axis (inverse of all_gather).
@@ -1869,6 +1870,10 @@ class ttMLA:
             if idx is not indices:
                 ttnn.deallocate(idx)
             idx = idx_seq_sharded
+        assert idx.shape[2] == q_rm.shape[2], (
+            f"indexer indices carry {idx.shape[2]} query rows but q has {q_rm.shape[2]}; "
+            "the indexer's output_tp_sequence_sharded must match this layer's reshard decision"
+        )
         # k_chunk_size must be a multiple of 32 that divides TOPK (prod TOPK=2048 → 128).
         k_chunk = next((c for c in (128, 64, 32) if idx.shape[-1] % c == 0), 32)
         out = ttnn.transformer.sparse_sdpa(
