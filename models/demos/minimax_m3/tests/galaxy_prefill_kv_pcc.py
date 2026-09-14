@@ -14,8 +14,8 @@ Env:
   PREFILL_CHUNK_SIZE  chunk size in tokens (chunked mode)                                  [default 5120]
   PREFILL_TPS_ITERS   prefill repetitions for the throughput measurement (less noise)      [default 1]
   PREFILL_SKIP_PCC    "1" -> perf only: skip the per-layer golden KV PCC (no kv_cache/ needed) [default 0]
-  PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, assert measured median is
-                        within +/- PREFILL_PERF_MARGIN of this value                           [default: unset]
+  PREFILL_EXPECTED_TPS  whole-sequence tok/s baseline; when set, fail if the measured median is more
+                        than PREFILL_PERF_MARGIN below it, warn if it is that far above (retune)  [default: unset]
   PREFILL_PERF_MARGIN fraction tolerance around PREFILL_EXPECTED_TPS (e.g. 0.05 = +/-5%)     [default 0.05]
   PREFILL_REQUIRE_HIGH_POWER  "1" -> require is_high_power() (>=130W TDP via tt-smi); skip
                         otherwise. Used by the Blaze perf job; leave unset for accuracy/KV PCC   [default 0]
@@ -378,10 +378,17 @@ def main():
                 f"{expected_tps:.1f} +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]",
                 flush=True,
             )
-            assert low <= whole_tps <= high, (
-                f"whole-sequence throughput {whole_tps:.1f} tok/s outside baseline "
-                f"{expected_tps:.1f} tok/s +/- {margin * 100:.1f}% band [{low:.1f}, {high:.1f}]"
+            # Only the floor fails: it is the regression guard. Above the band means main got faster and the
+            # centre is stale; failing there would block every unrelated PR until someone retunes the yaml.
+            assert whole_tps >= low, (
+                f"whole-sequence throughput {whole_tps:.1f} tok/s below baseline "
+                f"{expected_tps:.1f} tok/s - {margin * 100:.1f}% (floor {low:.1f})"
             )
+            if whole_tps > high:
+                logger.warning(
+                    f"[prefill-pcc] PERF GATE: {whole_tps:.1f} tok/s is above the baseline band (ceiling {high:.1f}); "
+                    f"retune PREFILL_EXPECTED_TPS to the new median"
+                )
 
         # --- accuracy: per-layer KV PCC vs golden (skipped in perf-only mode; synthetic
         # traces carry only metadata.json, so there is no golden KV cache to compare against) ---
