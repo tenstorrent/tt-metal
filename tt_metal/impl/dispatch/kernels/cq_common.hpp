@@ -387,6 +387,7 @@ class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
 <<<<<<< HEAD
+<<<<<<< HEAD
         auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 =======
 <<<<<<< HEAD
@@ -397,6 +398,9 @@ public:
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
 >>>>>>> 0219f39d96e (optimizations)
 >>>>>>> ab390d534a8 (optimizations)
+=======
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
+>>>>>>> fde858c1e44 (semaphore cache opt)
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
@@ -413,11 +417,15 @@ public:
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
 <<<<<<< HEAD
+<<<<<<< HEAD
         auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 =======
         volatile tt_l1_ptr uint32_t* sem_addr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>((get_semaphore<programmable_core_type>(my_sem_id)));
 >>>>>>> ab390d534a8 (optimizations)
+=======
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
+>>>>>>> fde858c1e44 (semaphore cache opt)
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate

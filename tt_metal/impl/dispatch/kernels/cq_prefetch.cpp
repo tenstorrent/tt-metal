@@ -3527,6 +3527,11 @@ void kernel_main_hd() {
     uint32_t l1_cache[l1_cache_elements_rounded];
     PrefetchExecBufState exec_buf_state;
 
+    // Must precede any downstream traffic.
+    fd_seed_upstream_sem<my_downstream_cb_sem_id>();
+    fd_seed_upstream_sem<my_downstream_sync_sem_id>();
+    fd_seed_upstream_sem<my_dispatch_s_cb_sem_id>();
+
     asm volatile("csrw 0x323, %0" ::"r"(STALL_DCACHE));
     asm volatile("csrw 0x324, %0" ::"r"(STALL_ICACHE));
     asm volatile("csrw 0x325, %0" ::"r"(STALL_LONG_LAT));
