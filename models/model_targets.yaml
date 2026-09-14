@@ -1342,10 +1342,19 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
-            # decode_t/s/u corrected 14.4 -> 22.0 (measured in run 27016350392).
+            # 2026-09-14: reseeded from TTTv2. The previous 22.0 / 123 pair was measured on TTTv1
+            # (run 27016350392). The gated case is now eval-32-perf-report, which runs TTTv2 with
+            # trace_mode="all" and replayed prefill; both metrics measure slower there, so the old
+            # pair was not a regression floor for this stack. Two TTTv2 readings on wh_llmbox_perf:
+            # 18.847 t/s/u & 141.6 ms (run 34846024995) and 20.1 t/s/u & 140 ms (run 34537180006,
+            # job 102826367877). Centre between them, and set per-metric tolerances wider than the
+            # 0.05 PERF_TOLERANCE default so the observed run-to-run spread does not flap the gate:
+            # decode floor 17.55 t/s/u, TTFT ceiling 162.2 ms. Both still catch a gross regression.
             perf:
-              decode_t/s/u: 22.0
-              prefill_time_to_first_token: 123
+              decode_t/s/u: 19.5
+              decode_t_s_u_tolerance: 0.10
+              prefill_time_to_first_token: 141
+              prefill_time_to_first_token_tolerance: 0.15
             accuracy: {}
       # p300x2 == bh_quietbox_2. Measured on workflow run 26785408151
       # (ci-eval-32 invocation; decode_t/s = batch_size * decode_t/s/u).
