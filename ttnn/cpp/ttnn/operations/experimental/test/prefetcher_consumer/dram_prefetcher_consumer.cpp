@@ -42,9 +42,9 @@ void DramPrefetcherConsumerDeviceOperation::validate_on_program_cache_miss(
         const auto* source_buffer = tensor_args.ordinary_source_tensor->buffer();
         TT_FATAL(source_buffer != nullptr && source_buffer->is_dram(), "ordinary_source_tensor must be in DRAM");
         TT_FATAL(
-            source_buffer->size() >= attrs.ordinary_read_bytes,
-            "ordinary source buffer has {} bytes, smaller than requested {}-byte read",
-            source_buffer->size(),
+            source_buffer->aligned_size_per_bank() >= attrs.ordinary_read_bytes,
+            "ordinary source allocation has {} bytes per bank, smaller than requested {}-byte read",
+            source_buffer->aligned_size_per_bank(),
             attrs.ordinary_read_bytes);
         TT_FATAL(tensor_args.timing_tensor.has_value(), "timing_tensor required");
         const auto* timing_buffer = tensor_args.timing_tensor->buffer();
@@ -77,6 +77,7 @@ ttsl::hash::hash_t DramPrefetcherConsumerDeviceOperation::compute_program_hash(
         attrs.page_size_bytes,
         attrs.ordinary_read_bytes,
         std::hash<tt::tt_metal::experimental::GlobalCircularBuffer>{}(*attrs.global_cb),
+        static_cast<uint64_t>(attrs.global_cb->buffer_address()),
         static_cast<uint64_t>(attrs.global_cb->config_address()),
         static_cast<uint64_t>(source_buffer != nullptr ? source_buffer->address() : 0),
         static_cast<uint64_t>(timing_buffer != nullptr ? timing_buffer->address() : 0));

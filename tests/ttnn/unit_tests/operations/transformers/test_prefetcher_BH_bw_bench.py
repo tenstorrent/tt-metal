@@ -240,25 +240,7 @@ def test_mpfe_priority_contention(device):
 
     torch.manual_seed(0x4D504645)
     pt_weight = torch.randn(1, 1, K, N)
-    dram_core_range_set = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-    )
-    weight_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(
-            dram_core_range_set,
-            [K, N // num_dram_banks],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    tt_weight = ttnn.as_tensor(
-        pt_weight,
-        device=device,
-        dtype=dtype,
-        memory_config=weight_mem_config,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, dtype)
 
     bank_to_receivers = [
         (
