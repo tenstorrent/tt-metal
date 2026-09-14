@@ -230,6 +230,74 @@ void bind_ttnn_cluster(nb::module_& mod) {
                 - The device must be opened first (e.g. via
                   ``ttnn.open_mesh_device``); otherwise this throws.
         )doc");
+
+    mod.def(
+        "translate_core_coord",
+        [](uint32_t device_id, uint32_t x, uint32_t y, const std::string& core_type) -> nb::tuple {
+            auto [tx, ty] = tt::tt_metal::internal::translate_core_coord(device_id, x, y, core_type);
+            return nb::make_tuple(tx, ty);
+        },
+        nb::arg("device_id"),
+        nb::arg("x"),
+        nb::arg("y"),
+        nb::arg("core_type") = "WORKER",
+        R"doc(
+            Translate a logical core coordinate to the corresponding translated (virtual) NOC coordinate.
+
+            LOGICAL coordinates are the user-facing contiguous grid starting at (0,0).
+            TRANSLATED (virtual) coordinates are what the NoC APIs use (they hide harvested cores).
+
+            Args:
+                device_id (int): Logical chip id (matches ``IDevice::id()``).
+                x (int): Logical x coordinate.
+                y (int): Logical y coordinate.
+                core_type (str): The type of core. One of "WORKER", "TENSIX", "ETH",
+                    "ACTIVE_ETH", "IDLE_ETH", "DRAM", "PCIE", "ARC", "DISPATCH".
+                    Defaults to "WORKER".
+
+            Returns:
+                tuple[int, int]: A tuple of (translated_x, translated_y) coordinates.
+
+            Example:
+                >>> import ttnn
+                >>> # Open a device first
+                >>> mesh = ttnn.open_mesh_device(...)
+                >>> # Translate logical (0, 0) worker core to translated coordinates
+                >>> tx, ty = ttnn.cluster.translate_core_coord(0, 0, 0, "WORKER")
+                >>> print(f"Translated: ({tx}, {ty})")
+        )doc");
+
+    mod.def(
+        "translated_to_physical",
+        [](uint32_t device_id, uint32_t x, uint32_t y) -> nb::tuple {
+            auto [px, py] = tt::tt_metal::internal::translated_to_physical(device_id, x, y);
+            return nb::make_tuple(px, py);
+        },
+        nb::arg("device_id"),
+        nb::arg("x"),
+        nb::arg("y"),
+        R"doc(
+            Translate a translated (virtual) NOC coordinate to physical NOC0 coordinate.
+
+            TRANSLATED coordinates are what the NoC APIs use (they hide harvested cores).
+            PHYSICAL/NOC0 coordinates are actual hardware coordinates on the die.
+
+            Args:
+                device_id (int): Logical chip id (matches ``IDevice::id()``).
+                x (int): Translated x coordinate.
+                y (int): Translated y coordinate.
+
+            Returns:
+                tuple[int, int]: A tuple of (physical_x, physical_y) coordinates.
+
+            Example:
+                >>> import ttnn
+                >>> # Open a device first
+                >>> mesh = ttnn.open_mesh_device(...)
+                >>> # Convert translated coordinate to physical
+                >>> px, py = ttnn.cluster.translated_to_physical(0, 18, 18)
+                >>> print(f"Physical: ({px}, {py})")
+        )doc");
 }
 
 }  // namespace

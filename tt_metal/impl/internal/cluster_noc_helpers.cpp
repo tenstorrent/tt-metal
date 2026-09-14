@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <umd/device/cluster_descriptor.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
@@ -100,6 +101,57 @@ std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
         });
     }
     return out;
+}
+
+namespace {
+tt::CoreType parse_core_type(const std::string& s) {
+    if (s == "WORKER" || s == "TENSIX") {
+        return tt::CoreType::WORKER;
+    }
+    if (s == "ETH" || s == "ETHERNET") {
+        return tt::CoreType::ETH;
+    }
+    if (s == "ACTIVE_ETH") {
+        return tt::CoreType::ACTIVE_ETH;
+    }
+    if (s == "IDLE_ETH") {
+        return tt::CoreType::IDLE_ETH;
+    }
+    if (s == "DRAM") {
+        return tt::CoreType::DRAM;
+    }
+    if (s == "PCIE") {
+        return tt::CoreType::PCIE;
+    }
+    if (s == "ARC") {
+        return tt::CoreType::ARC;
+    }
+    if (s == "DISPATCH") {
+        return tt::CoreType::DISPATCH;
+    }
+    TT_FATAL(false, "Unknown core type: {}", s);
+    return tt::CoreType::UNSPECIFIED;
+}
+}  // namespace
+
+std::pair<std::uint32_t, std::uint32_t> translate_core_coord(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y, const std::string& core_type) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const tt::CoreType ct = parse_core_type(core_type);
+    const CoreCoord logical_coord(x, y);
+    const CoreCoord translated =
+        cluster.get_virtual_coordinate_from_logical_coordinates(static_cast<ChipId>(device_id), logical_coord, ct);
+    return {static_cast<std::uint32_t>(translated.x), static_cast<std::uint32_t>(translated.y)};
+}
+
+std::pair<std::uint32_t, std::uint32_t> translated_to_physical(
+    std::uint32_t device_id, std::uint32_t x, std::uint32_t y) {
+    const auto& cluster = MetalContext::instance().get_cluster();
+    const auto& soc_desc = cluster.get_soc_desc(static_cast<ChipId>(device_id));
+    const CoreCoord translated_coord(x, y);
+    const CoreCoord physical =
+        soc_desc.translate_coord_to(translated_coord, tt::CoordSystem::TRANSLATED, tt::CoordSystem::NOC0);
+    return {static_cast<std::uint32_t>(physical.x), static_cast<std::uint32_t>(physical.y)};
 }
 
 }  // namespace tt::tt_metal::internal
