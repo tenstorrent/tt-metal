@@ -273,7 +273,7 @@ void run_bmm_single_node(distributed::MeshDevice& mesh_device, const BmmParams& 
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
     auto& mesh_device = *devices_[0];
     BmmParams p;
-    if (arch != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4;
         p.Kt = 2;
         p.Nt = 3;
@@ -296,7 +296,7 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, Bmm) {
 TEST_F(QuasarMeshDeviceSingleCardFixture, BmmTranspose) {
     auto& mesh_device = *devices_[0];
     BmmParams p;
-    if (arch != ARCH::QUASAR) {
+    if (mesh_device.arch() != ARCH::QUASAR) {
         p.Mt = 4;
         p.Kt = 2;
         p.Nt = 3;
