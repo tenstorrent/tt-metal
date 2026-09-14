@@ -100,7 +100,8 @@ EdgeCapability facing_capability_of(const PerDirectionCapabilities& caps, Routin
 // canary is for.
 void check_vc0_downstream_capacity(const RouterTurnSet& turn_set, bool express_routing_enabled) {
     if (express_routing_enabled) {
-        const size_t vc0_limit = builder_config::get_vc0_downstream_edm_count(/*is_2D_routing=*/true, /*express=*/true);
+        const size_t vc0_limit =
+            builder_config::get_vc0_downstream_edm_count(/*is_2D_routing=*/true, /*express_routing_enabled=*/true);
         TT_FATAL(
             turn_set[0].size() <= vc0_limit,
             "Express VC0 outbound direction count ({}) exceeds the downstream EDM count ({})",
@@ -259,7 +260,13 @@ RouterVcShape router_vc_shape(
     // created on 1D. That oddity is preserved, not fixed -- consumers already tolerate counts
     // exceeding created channels. Whether any 1D configuration should ever set requires_vc1 is a
     // separate question, deliberately out of scope here.
-    shape.num_vcs = requires_vc2 ? 3 : (requires_vc1 ? 2 : 1);
+    if (requires_vc2) {
+        shape.num_vcs = 3;
+    } else if (requires_vc1) {
+        shape.num_vcs = 2;
+    } else {
+        shape.num_vcs = 1;
+    }
 
     // Per-VC counts: zero unless an arm sets them. VC0 always has its receiver.
     uint32_t vc0_senders = 0, vc1_senders = 0, vc2_senders = 0;

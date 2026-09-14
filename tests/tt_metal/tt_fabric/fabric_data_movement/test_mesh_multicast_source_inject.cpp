@@ -79,7 +79,7 @@ enum class SourceInjectCoverage {
 };
 
 template <typename Visitor>
-bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, Visitor&& visitor) {
+bool visit_candidate_branches(const tt_metal::distributed::MeshShape& mesh_shape, const Visitor& visitor) {
     const uint32_t y_size = mesh_shape[0];
     const uint32_t x_size = mesh_shape[1];
 

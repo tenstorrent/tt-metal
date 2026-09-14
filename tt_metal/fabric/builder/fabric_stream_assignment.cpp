@@ -96,7 +96,7 @@ constexpr uint32_t k_first_pinned_id = 30;  // the pinned/scratch region {30, 31
 // constant, one authority. With the inactive sentinel out of register range (k_unused_stream_id),
 // id 0 is an ordinary register, so the pin can sit at the bottom of the file and every other group
 // simply packs above it in one contiguous run.
-static constexpr uint32_t k_worker_free_slots_pin = connection_interface::sender_channel_0_free_slots_stream_id;
+constexpr uint32_t k_worker_free_slots_pin = connection_interface::sender_channel_0_free_slots_stream_id;
 
 std::string describe(const StreamRequirements& need) {
     std::string out;

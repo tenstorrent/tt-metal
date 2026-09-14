@@ -230,7 +230,10 @@ int AxisRouteTopology::next_row(int src, int dst) const {
         const auto& run = leaf_runs[leaf_run_of[dst]];
         const bool from_before = nearer_end_is_before(dst);
         const int entry = from_before ? run.anchor_before : run.anchor_after;
-        return src == entry ? (from_before ? run.rows.front() : run.rows.back()) : next_row(src, entry);
+        if (src != entry) {
+            return next_row(src, entry);
+        }
+        return from_before ? run.rows.front() : run.rows.back();
     }
     const int src_domain = domain_of[src];
     const int dst_domain = domain_of[dst];
@@ -418,7 +421,10 @@ std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& m
     // Group the skipped rows into maximal runs. A run needs a transit row either side to attach to.
     const auto neighbour = [&](int row, int delta) {
         const int peer = row + delta;
-        return (peer < 0 || peer >= len) ? (wraps ? ((peer % len) + len) % len : kNone) : peer;
+        if (peer >= 0 && peer < len) {
+            return peer;
+        }
+        return wraps ? ((peer % len) + len) % len : kNone;
     };
     for (int row = 0; row < len; row++) {
         const int before = neighbour(row, -1);
@@ -489,6 +495,7 @@ std::optional<AxisRouteTopology> derive_express_ring_topology(const MeshGraph& m
             return std::pair{topo.pos_in_domain[x.first], x} < std::pair{topo.pos_in_domain[y.first], y};
         });
         std::vector<int> landings;
+        landings.reserve(topo.crossovers.size());
         for (const auto& [a, b] : topo.crossovers) {
             landings.push_back(a);
         }
