@@ -29,6 +29,7 @@
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <llrt/tt_cluster.hpp>
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 
 namespace tt::tt_metal {
 
@@ -220,18 +221,27 @@ AllocatorConfig L1BankingAllocator::generate_config(
     // Tensix/Eth <-> Tensix/Eth src and dst addrs must be L1_ALIGNMENT aligned
     const auto& logical_size = soc_desc.get_grid_size(CoreType::TENSIX);
     const auto& compute_size = tt::get_compute_grid_size(env, device_id, num_hw_cqs, dispatch_core_config);
-    // Under ATT, a DRAM endpoint is only addressable within its window's
-    // local-address field - 64 MiB per endpoint on the current Quasar maps -
-    // while the DRAM view itself is larger. Clamp the allocator so it never
-    // hands out an address the interconnect cannot express: without this,
-    // top-down allocations (kernel binaries) land at the top of the view and
-    // every fast-dispatch program launch composes an out-of-window operand.
-    // Interim until the maps widen the DRAM window span (map-sizing issue
-    // raised with the ATT map owner).
+    // Under ATT, a DRAM endpoint is only addressable within its window's local-address field, which
+    // can be smaller than the descriptor's DRAM view. Clamp the bank size to the selected map's DRAM
+    // window so the allocator never hands out an address the interconnect cannot express: without
+    // this, top-down allocations (kernel binaries) land at the top of the view and every fast-dispatch
+    // program launch composes an out-of-window operand. Per map (see qa_att_windows.hpp):
+    //  - quasar_aether_2x3: 64 MiB window < view => clamped to 64 MiB.
+    //  - grendel_qsr1: the window carries 8 GiB of local address, but bit 32 of that field is the D2D
+    //    link select onto the same GDDR, so the descriptor's 1 GiB view is the real bound => min()
+    //    leaves the view unclamped.
     uint64_t att_dram_view_size = soc_desc.dram_view_size;
-    if (hal.get_arch() == tt::ARCH::QUASAR && std::getenv("TT_METAL_NOC_ATT") != nullptr) {
-        constexpr uint64_t k_att_dram_window_span = 64ull * 1024 * 1024;
-        att_dram_view_size = std::min<uint64_t>(att_dram_view_size, k_att_dram_window_span);
+    if (hal.get_arch() == tt::ARCH::QUASAR) {
+        if (const auto att_map = env.get_rtoptions().get_noc_att_map(); att_map.has_value()) {
+            const quasar_att::MapInfo* map_info = quasar_att::find_map(*att_map);
+            TT_FATAL(
+                map_info != nullptr,
+                "Unknown TT_METAL_NOC_ATT map '{}' (expected {})",
+                *att_map,
+                quasar_att::KNOWN_MAP_NAMES);
+            att_dram_view_size =
+                std::min<uint64_t>(att_dram_view_size, quasar_att::dram_window_local_address_limit(*map_info));
+        }
     }
     AllocatorConfig config(
         {.num_dram_channels = static_cast<size_t>(soc_desc.get_num_dram_views()),

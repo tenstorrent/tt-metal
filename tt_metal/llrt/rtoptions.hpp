@@ -20,6 +20,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -285,6 +286,12 @@ class RunTimeOptions {
     // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
     bool use_quasar_tensix_dispatch_cores = false;
 
+    // Quasar: NoC address-translation-table (ATT) map device traffic is composed against (TT_METAL_NOC_ATT).
+    // Empty means plain XY addressing. MetalEnvImpl defaults it to "grendel_qsr1" on the qsr.s1 emulator model
+    // when the variable is unset; noc_att_specified_ records an explicit setting (including an explicit off).
+    std::string noc_att_map_;
+    bool noc_att_specified_ = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -419,6 +426,11 @@ class RunTimeOptions {
     // Bump this if dispatch_s logs that it self-disabled because the buffer was too small.
     uint32_t device_print_dispatch_l1_cache_bytes = 0;
 
+    // Route DEVICE_PRINT through the dispatch_s DRAM aggregator (TT_METAL_DPRINT_DISPATCH_AGGREGATION, default
+    // on). Off: dispatch_s is built with DEVICE_PRINT_DISPATCH_ENABLED=0 and the dprint server polls each print
+    // core's L1 buffers directly.
+    bool dprint_dispatch_aggregation_enabled = true;
+
     // Enable hybrid lockstep + per-core L1 allocator mode
     bool allocator_mode_hybrid = false;
 
@@ -514,6 +526,8 @@ public:
 
     void disable_watcher_assert() { watcher_disabled_features.insert(watcher_assert_str); }
     void enable_watcher_assert() { watcher_disabled_features.erase(watcher_assert_str); }
+    // Auto-disabled under an ATT NoC map: the NoC sanitizer decodes XY operands and cannot run there.
+    void disable_watcher_noc_sanitize() { watcher_disabled_features.insert(watcher_noc_sanitize_str); }
 
     bool get_lightweight_kernel_asserts() const { return lightweight_kernel_asserts; }
     void set_lightweight_kernel_asserts(bool enabled) { lightweight_kernel_asserts = enabled; }
@@ -659,6 +673,13 @@ public:
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
         }
+        // The ATT map changes every device binary (NoC backend + address composition), so each map gets
+        // its own JIT build directory instead of thrashing the non-ATT one. Only appended when a map is
+        // selected so existing non-ATT (and non-Quasar) cache keys stay unchanged.
+        if (!noc_att_map_.empty()) {
+            compile_hash_str += "_att:";
+            compile_hash_str += noc_att_map_;
+        }
         return compile_hash_str;
     }
 
@@ -775,6 +796,17 @@ public:
 
     // If this fallback is removed, should also remove dispatch_cores entry from core descriptor YAML files.
     bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
+
+    // Quasar ATT map selected for device NoC traffic (TT_METAL_NOC_ATT); nullopt = plain XY addressing.
+    std::optional<std::string_view> get_noc_att_map() const {
+        if (noc_att_map_.empty()) {
+            return std::nullopt;
+        }
+        return std::string_view(noc_att_map_);
+    }
+    // True when TT_METAL_NOC_ATT was set explicitly (any value, including off/none/0).
+    bool is_noc_att_specified() const { return noc_att_specified_; }
+    void set_noc_att_map(std::string map) { noc_att_map_ = std::move(map); }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -956,6 +988,9 @@ public:
 
     uint32_t get_device_print_dispatch_l1_cache_bytes() const { return device_print_dispatch_l1_cache_bytes; }
     void set_device_print_dispatch_l1_cache_bytes(uint32_t v) { device_print_dispatch_l1_cache_bytes = v; }
+
+    bool get_dprint_dispatch_aggregation_enabled() const { return dprint_dispatch_aggregation_enabled; }
+    void set_dprint_dispatch_aggregation_enabled(bool v) { dprint_dispatch_aggregation_enabled = v; }
 
     const SanitizerSettings& get_sanitizer_settings() const { return sanitizer_settings; }
 

@@ -15,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
@@ -87,6 +88,7 @@ enum class EnvVarID {
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
     TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
+    TT_METAL_NOC_ATT,                   // Quasar: NoC address-translation-table map for device traffic
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -210,6 +212,7 @@ enum class EnvVarID {
     TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US,        // dispatch_s DevicePrintDispatch stall-detection period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US,         // dispatch_s DevicePrintDispatch full-dispatch period (us)
     TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES,  // dispatch_s DevicePrintDispatch L1 cache size override (bytes)
+    TT_METAL_DPRINT_DISPATCH_AGGREGATION,           // Route DEVICE_PRINT through the dispatch_s DRAM aggregator
 
     // ========================================
     // LIGHTWEIGHT KERNEL DEBUGGING
@@ -645,6 +648,26 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 tt::LogDevice,
                 "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
             break;
+
+        // TT_METAL_NOC_ATT
+        // Quasar: the NoC address-translation-table (ATT) map device traffic is composed against
+        // (grendel_qsr1 | quasar_aether_2x3). "off", "none" or "0" force plain XY addressing. When unset,
+        // XY addressing is used except that MetalEnvImpl defaults the qsr.s1 emulator model to
+        // grendel_qsr1 (its NoC only routes through the boot-programmed tables). Unknown map names are
+        // rejected by the Quasar HAL when the JIT defines are generated.
+        // Default: unset
+        // Usage: export TT_METAL_NOC_ATT=grendel_qsr1
+        case EnvVarID::TT_METAL_NOC_ATT: {
+            this->noc_att_specified_ = true;
+            // Compare the off/none/0 sentinels case-insensitively (so "OFF", "Off", "None" all opt out);
+            // the map name itself is kept verbatim for the known-map lookup.
+            std::string lowered(value);
+            std::transform(
+                lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char ch) { return std::tolower(ch); });
+            this->noc_att_map_ =
+                (lowered == "off" || lowered == "none" || lowered == "0") ? std::string() : std::string(value);
+            break;
+        }
 
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.
@@ -1779,6 +1802,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // that aggregation self-disabled because the cache was too small.
         case EnvVarID::TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES:
             this->device_print_dispatch_l1_cache_bytes = std::stoul(value);
+            break;
+
+        // TT_METAL_DPRINT_DISPATCH_AGGREGATION
+        // Route DEVICE_PRINT data through the dispatch_s DRAM aggregator. "0" disables it: dispatch_s is
+        // built with DEVICE_PRINT_DISPATCH_ENABLED=0 and the dprint server polls each print core's L1
+        // buffers directly (needed where dispatch_s cannot compose the aggregator's raw NoC/DRAM operands,
+        // e.g. Quasar under ATT).
+        // Default: 1 (enabled)
+        // Usage: export TT_METAL_DPRINT_DISPATCH_AGGREGATION=0
+        case EnvVarID::TT_METAL_DPRINT_DISPATCH_AGGREGATION:
+            this->dprint_dispatch_aggregation_enabled = std::strcmp(value, "0") != 0;
             break;
 
         // TT_METAL_ALLOCATOR_MODE_HYBRID

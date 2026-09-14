@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <algorithm>
 #include <filesystem>
+#include <optional>
+#include <string>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
 #include <limits>
@@ -22,6 +24,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "tt_metal/common/tt_backend_api_types.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
@@ -157,6 +160,81 @@ bool should_enable_blackhole_dram_programmable_cores(const Cluster& cluster, con
         res);
     return res.dram_programmable_cores;
 }
+
+// qsr.s1 - the Quasar chiplet emulator model - only routes device NoC traffic through the
+// boot-programmed address-translation tables, so tt-metal has to compose device addresses against
+// the grendel_qsr1 ATT map there. The aether 2x3 model routes plain XY and stays non-ATT. Detected
+// from the simulator directory name: UMD ships the qsr.s1 models as `emu-qsr-s1-*` (for example
+// emu-qsr-s1-t6x4_DM) and aether as `emu-quasar-2x3*`. The soc descriptor's DRAM view count
+// (qsr.s1: 4, aether 2x3: 2) is only a consistency check - it is not decisive on its own, so a
+// hypothetical non-ATT 4-view model is never switched to ATT silently.
+//
+// Split so the map decision (a basename check, no Cluster needed) can run BEFORE the Cluster ctor,
+// which opens the simulator and blocks 20-75 min on the handshake; the DRAM-view consistency warning
+// (which needs the Cluster's soc descriptor) runs after.
+constexpr size_t k_qsr_s1_num_dram_views = 4;
+
+// The simulator directory basename, with any trailing separator stripped so filename() is not empty.
+std::string quasar_simulator_name(const llrt::RunTimeOptions& rtoptions) {
+    std::string simulator = rtoptions.get_simulator_path().string();
+    while (simulator.size() > 1 && simulator.back() == '/') {
+        simulator.pop_back();
+    }
+    return std::filesystem::path(simulator).filename().string();
+}
+
+// UMD ships the qsr.s1 models as `emu-qsr-s1-*` (for example emu-qsr-s1-t6x4_DM) and aether as
+// `emu-quasar-2x3*`.
+bool simulator_is_qsr_s1(const llrt::RunTimeOptions& rtoptions) {
+    return quasar_simulator_name(rtoptions).starts_with("emu-qsr-s1");
+}
+
+// Set the qsr.s1 ATT default from the simulator path alone. Only called when the user did not set
+// TT_METAL_NOC_ATT; an explicit value (including off) wins.
+void default_quasar_noc_att_from_path(llrt::RunTimeOptions& rtoptions) {
+    if (!simulator_is_qsr_s1(rtoptions)) {
+        return;
+    }
+    rtoptions.set_noc_att_map("grendel_qsr1");
+    log_info(
+        tt::LogMetal,
+        "Defaulting TT_METAL_NOC_ATT=grendel_qsr1: simulator '{}' is a qsr.s1 model, whose NoC only routes "
+        "device traffic through the boot-programmed address-translation tables. Set TT_METAL_NOC_ATT=off to "
+        "opt out (plain XY addressing) or name another map explicitly.",
+        quasar_simulator_name(rtoptions));
+}
+
+// The soc-descriptor DRAM-view consistency check for the qsr.s1 ATT default (qsr.s1: 4, aether 2x3:
+// 2). Only a consistency check - not decisive on its own, so a hypothetical non-ATT 4-view model is
+// never switched to ATT silently. Runs after the Cluster is up; the map was already decided above.
+void warn_quasar_noc_att_dram_views(const llrt::RunTimeOptions& rtoptions, const Cluster& cluster) {
+    std::optional<size_t> num_dram_views;
+    const auto chip_ids = cluster.all_chip_ids();
+    if (!chip_ids.empty()) {
+        num_dram_views = cluster.get_soc_desc(*chip_ids.begin()).get_num_dram_views();
+    }
+    const std::string simulator_name = quasar_simulator_name(rtoptions);
+
+    if (simulator_is_qsr_s1(rtoptions)) {
+        if (num_dram_views && *num_dram_views != k_qsr_s1_num_dram_views) {
+            log_warning(
+                tt::LogMetal,
+                "Simulator '{}' looks like qsr.s1 by name but its soc descriptor exposes {} DRAM views (qsr.s1 "
+                "exposes {}); check the TT_METAL_SIMULATOR / soc descriptor pairing.",
+                simulator_name,
+                *num_dram_views,
+                k_qsr_s1_num_dram_views);
+        }
+    } else if (num_dram_views && *num_dram_views == k_qsr_s1_num_dram_views) {
+        log_warning(
+            tt::LogMetal,
+            "Simulator '{}' exposes {} DRAM views like the qsr.s1 model but its directory is not named "
+            "emu-qsr-s1-*; leaving the NoC on plain XY addressing. Set TT_METAL_NOC_ATT=grendel_qsr1 if this is a "
+            "qsr.s1 image.",
+            simulator_name,
+            *num_dram_views);
+    }
+}
 }  // namespace
 
 void MetalEnvImpl::initialize_base_objects() {
@@ -169,6 +247,40 @@ void MetalEnvImpl::initialize_base_objects() {
 
     const auto platform_arch = get_platform_architecture(*this->rtoptions_);
 
+    // Settle the ATT configuration BEFORE constructing the Cluster: its ctor opens the simulator and
+    // blocks 20-75 min on the handshake, so a bad TT_METAL_NOC_ATT or a watcher/ATT conflict must be
+    // caught here, not after the emulator is already up. The map decision needs only the simulator path
+    // (a basename check); the soc-descriptor DRAM-view consistency warning, which needs the Cluster,
+    // stays after it.
+    if (platform_arch == tt::ARCH::QUASAR) {
+        if (const auto att_map = this->rtoptions_->get_noc_att_map(); att_map.has_value()) {
+            // (a) An explicit, non-off TT_METAL_NOC_ATT must name a known map. Without this the JIT build
+            // only TT_THROWs when the defines are generated - long after device open.
+            TT_FATAL(
+                quasar_att::find_map(*att_map) != nullptr,
+                "TT_METAL_NOC_ATT='{}' is not a known ATT map (expected {}).",
+                *att_map,
+                quasar_att::KNOWN_MAP_NAMES);
+        } else if (this->rtoptions_->get_simulator_enabled() && !this->rtoptions_->is_noc_att_specified()) {
+            // ATT-by-default for the qsr.s1 emulator model, decided from the simulator directory name.
+            default_quasar_noc_att_from_path(*this->rtoptions_);
+        }
+
+        // (b) The watcher's NoC sanitizer decodes XY operands and cannot run under ATT (qa_hal TT_FATALs
+        // on it when the JIT defines are generated). Disable it here, before the emulator is up, so a bare
+        // TT_METAL_WATCHER=<n> alongside an ATT map does not abort minutes into the run.
+        if (this->rtoptions_->get_noc_att_map().has_value() && this->rtoptions_->get_watcher_enabled() &&
+            !this->rtoptions_->watcher_noc_sanitize_disabled()) {
+            this->rtoptions_->disable_watcher_noc_sanitize();
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_NOC_ATT map '{}' is active with the watcher enabled: disabling the watcher NoC "
+                "sanitizer, which decodes XY operands and cannot run under ATT. Set "
+                "TT_METAL_WATCHER_DISABLE_SANITIZE_NOC=1 to silence this.",
+                *this->rtoptions_->get_noc_att_map());
+        }
+    }
+
     cluster_ = std::make_unique<Cluster>(*this->rtoptions_);
     this->verify_fw_capabilities();
 
@@ -180,6 +292,13 @@ void MetalEnvImpl::initialize_base_objects() {
                 "Enabling DRAM-backed command queues for Quasar simulator because host hugepages are not available");
             this->rtoptions_->set_dram_backed_cq(true);
         }
+    }
+
+    // The soc-descriptor DRAM-view consistency check for the qsr.s1 ATT default needs the Cluster, so it
+    // runs here; the map itself was already decided from the simulator path before the Cluster above.
+    if (platform_arch == tt::ARCH::QUASAR && this->rtoptions_->get_simulator_enabled() &&
+        !this->rtoptions_->is_noc_att_specified()) {
+        warn_quasar_noc_att_dram_views(*this->rtoptions_, *this->cluster_);
     }
 
     // Get is_base_routing_fw_enabled from the already-constructed Cluster instead of running
