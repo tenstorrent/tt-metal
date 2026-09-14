@@ -1,0 +1,41 @@
+{"ev":"start","model":"llama_3_1_8b","mesh":"8x4","recipe_sha":"9db7c74"}
+{"t":"2026-09-14T21:33Z","ev":"enter","stage":"E"}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"weight_loading","chosen":"models/demos/minimax_m3/tt/model_config.py","envelope":"hidden 6144, head_dim 128, chunk 5120, sp8xtp4","rejected":["gpt_oss_d_p/tt/attention/weights.py: mxfp4 packed blocks, wrong scheme for a plain bf16 checkpoint"]}
+{"t":"2026-09-14T21:52Z","ev":"skip","stage":"E","row":"dequant","why":"Llama-3.1-8B-Instruct ships plain bf16 safetensors with no quantization_config, so there is no scale to apply"}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"norm_embedding","chosen":"models/demos/minimax_m3/tt/{rms_norm,parallel_embedding}.py","envelope":"hidden 6144, head_dim 128, chunk 5120, sp8xtp4","rejected":["gpt_oss_d_p/tt/rms_norm.py: measured at sp4xtp8, wrong mesh orientation for this spec"]}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"mlp","chosen":"models/demos/minimax_m3/tt/dense_mlp.py (structure only)","envelope":"hidden 6144, inter 12288, chunk 5120, sp8xtp4","rejected":["m3 swigluoai activation: Llama is plain silu SwiGLU, so the math is written fresh"]}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"attention","chosen":"models/demos/minimax_m3/tt/attention/{operations,weights,dense_sp}.py","envelope":"hidden 6144, head_dim 128, chunk 5120, sp8xtp4","rejected":["gpt_oss_d_p/tt/attention: sinks + sliding alternation, head_dim 64, sp4xtp8 - math only"]}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"rope","chosen":"models/tt_transformers/tt/common.py precompute_freqs/gather_cos_sin/get_rot_transformation_mat","envelope":"head_dim 128, llama3 scaling factor 8 orig_ctx 8192","rejected":["minimax_m3 apply_rope partial-rotary wrapper: Llama rotates the full head_dim"]}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"kv_cache","chosen":"models/demos/minimax_m3/tt/attention/kv_cache.py","envelope":"head_dim 128, cache 10240, chunk 5120, sp8xtp4","rejected":["minimax_m3 index_k third cache: GQA needs 2 tensors, not 3","gpt_oss_d_p kv_cache.py: same layout but measured at head_dim 64 / sp4xtp8"]}
+{"t":"2026-09-14T21:52Z","ev":"source","stage":"E","part":"runtime","chosen":"models/demos/minimax_m3/tt/tt_prefill_runtime.py","envelope":"hidden 6144, chunk 5120, sp8xtp4","rejected":["deepseek_v3_d_p tt_prefill_runtime.py: MLA cache lifecycle, wrong cache count"]}
+{"t":"2026-09-14T21:56Z","ev":"enter","stage":"D1"}
+{"t":"2026-09-14T22:13Z","ev":"verify","stage":"D1","result":"fail","failed":["tests/torch_ref/test_reference_llama.py::test_rope_inv_freq_vs_hf"]}
+{"t":"2026-09-14T22:18Z","ev":"judgment","stage":"D1","kind":"model_quirk","issue":"reference builds llama3 inv_freq in fp64, HF in fp32, so an atol 1e-9 equality on values spanning 1.0 to 3e-7 fails","fix":"compare at fp32 relative resolution and pin the cos/sin gap to the fp32 angle ulp instead","failed":["tests/torch_ref/test_reference_llama.py::test_rope_inv_freq_vs_hf"]}
+{"t":"2026-09-14T22:19Z","ev":"verify","stage":"D1","result":"fail","failed":["tests/torch_ref/test_reference_llama.py::test_rope_freqs_match_the_device_rope_source"]}
+{"t":"2026-09-14T22:19Z","ev":"judgment","stage":"D1","kind":"reference_gap","issue":"tt_transformers precompute_freqs forms position*inv_freq in fp32, so its cos/sin differ from an fp64 reference by 3e-4 in the fast columns","fix":"bounded the gap by the fp32 angle ulp per column; later gave both sides one shared fp64 frequency source","failed":["tests/torch_ref/test_reference_llama.py::test_rope_freqs_match_the_device_rope_source"]}
+{"t":"2026-09-14T22:20Z","ev":"verify","stage":"D1","result":"pass","failed":[]}
+{"t":"2026-09-14T22:21Z","ev":"enter","stage":"D2"}
+{"t":"2026-09-14T22:24Z","ev":"verify","stage":"D2","result":"pass","failed":[]}
+{"t":"2026-09-14T22:25Z","ev":"enter","stage":"D3"}
+{"t":"2026-09-14T22:31Z","ev":"judgment","stage":"D3","kind":"reference_gap","issue":"borrowed KV cache allocates per-chip dim1=1, encoding the sources' one KV head per chip; Llama has 8 kv heads at tp=4","fix":"allocate dim1 = num_kv_heads // tp (2) and assert the chunk's head count matches the cache's","failed":[]}
+{"t":"2026-09-14T22:38Z","ev":"verify","stage":"D3","result":"fail","failed":["tests/unit/test_mlp_vs_ref.py::test_swiglu_vs_ref"]}
+{"t":"2026-09-14T22:40Z","ev":"judgment","stage":"D3","kind":"model_quirk","issue":"gpt-oss/M3 swigluoai scores 0.955 against Llama's silu-swiglu on random data, clearing pcc_lower_bound 0.85","fix":"wrote the activation fresh and restated the negative control as two absolute bounds tied to pcc_target","failed":["tests/unit/test_mlp_vs_ref.py::test_swiglu_vs_ref"]}
+{"t":"2026-09-14T22:44Z","ev":"verify","stage":"D3","result":"pass","failed":[]}
+{"t":"2026-09-14T22:45Z","ev":"enter","stage":"M1"}
+{"t":"2026-09-14T22:50Z","ev":"judgment","stage":"M1","kind":"reference_gap","issue":"DeepSeek golden-cache helpers take a variant object and name their payload slots for MLA (ref_kvpe_list)","fix":"imported the helpers unchanged and adapted at the edges: a SimpleNamespace variant and a stacked [k,v] payload","failed":[]}
+{"t":"2026-09-14T22:55Z","ev":"verify","stage":"M1","result":"pass","failed":[]}
+{"t":"2026-09-14T22:56Z","ev":"enter","stage":"M2"}
+{"t":"2026-09-14T23:05Z","ev":"verify","stage":"M2","result":"pass","failed":[]}
+{"t":"2026-09-14T23:06Z","ev":"enter","stage":"M3"}
+{"t":"2026-09-14T23:20Z","ev":"verify","stage":"M3","result":"pass","failed":[]}
+{"t":"2026-09-14T23:21Z","ev":"enter","stage":"P1"}
+{"t":"2026-09-14T23:30Z","ev":"verify","stage":"P1","result":"fail","failed":["tests/unit/test_weight_loader.py::test_meta_permute_preserves_the_rotation"]}
+{"t":"2026-09-14T23:35Z","ev":"skip","stage":"P1","row":"gpt_oss_d_p/tests/unit/test_mxfp4_loader.py","why":"checkpoint is unquantized bf16 with no quantization_config, so there is no dequantization to verify; replaced by test_weight_loader.py"}
+{"t":"2026-09-14T23:42Z","ev":"verify","stage":"P1","result":"fail","failed":["tests/torch_ref/test_golden_trace_rope_precision.py::test_golden_trace_rope_frequencies_are_fp16_rounded"]}
+{"t":"2026-09-14T23:45Z","ev":"verify","stage":"P1","result":"fail","failed":["tests/torch_ref/test_golden_trace_rope_precision.py::test_golden_trace_rope_frequencies_are_fp16_rounded"]}
+{"t":"2026-09-14T23:47Z","ev":"judgment","stage":"P1","kind":"model_quirk","issue":"fp16 relative resolution is 2^-11 only where fp16 is normal; the rescaled slow rope frequencies are subnormal and shift by up to 5%","fix":"asserted the accumulated phase error (position times delta_inv) instead of the relative frequency shift","failed":["tests/torch_ref/test_golden_trace_rope_precision.py::test_golden_trace_rope_frequencies_are_fp16_rounded"]}
+{"t":"2026-09-14T23:48Z","ev":"judgment","stage":"P1","kind":"model_quirk","issue":"golden trace layer-0 K only reaches 0.9860 at 10240 tokens, degrading monotonically with position while V is exact","fix":"root-caused to fp16-rounded rope inverse frequencies in the trace generator; reproducing them gives PCC 1.000000","failed":[]}
+{"t":"2026-09-14T23:50Z","ev":"verify","stage":"P1","result":"pass","failed":[]}
+{"t":"2026-09-14T23:51Z","ev":"enter","stage":"P2"}
+{"t":"2026-09-14T23:58Z","ev":"verify","stage":"P2","result":"pass","failed":[]}
+{"t":"2026-09-14T23:59Z","ev":"skip","stage":"P2","row":"models/demos/common/prefill/tools/bringup_digest.py --lint","why":"the tool does not exist on this branch; the recipe section 7 lint is implemented as tests/test_bringup_log.py and runs in the suite"}
