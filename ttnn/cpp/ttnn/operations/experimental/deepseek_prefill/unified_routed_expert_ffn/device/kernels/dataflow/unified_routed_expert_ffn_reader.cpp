@@ -84,7 +84,13 @@ void kernel_main() {
 
     // M-row NoC coord table: GRID_X (x, y) pairs starting at runtime arg 30.
     // Used to resolve the sender's NoC addr per phase-4 K-block kb (= gx).
-    constexpr uint32_t M_ROW_NOC_RT_OFFSET = 30;
+    // COUNTS_BCAST occupies 7 args before the M-row NoC table.
+    constexpr uint32_t COUNTS_BCAST_RT = 30;
+    // DOWN_SPLIT go/done sems sit between COUNTS_BCAST and the M-row NoC table.
+    constexpr uint32_t DOWN_SEM_RT = COUNTS_BCAST_RT + 7;
+    // IN1_WRITER_MCAST go/done sems follow the DOWN_SPLIT pair.
+    constexpr uint32_t MCAST_SEM_RT = DOWN_SEM_RT + 2;
+    constexpr uint32_t M_ROW_NOC_RT_OFFSET = MCAST_SEM_RT + 2;
 
     // -------------------------- compile-time args -------------------------
     constexpr uint32_t cb_in0_x = get_compile_time_arg_val(0);
@@ -153,10 +159,17 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(30);
-    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(31);
+    // DOWN_SPLIT: K-rows of each down block this RISC reads on NoC 0; the writer reads
+    // [down_split_k, in0_block_w_d) on NoC 1. Equals in0_block_w_d when the split is off.
+    constexpr uint32_t down_split_k = get_compile_time_arg_val(30);
+    constexpr bool split_down = down_split_k < in0_block_w_d;
+    // IN1_WRITER_MCAST: 1 => the WRITER runs the gate/up multicast on its own NoC 1
+    // and this RISC only reads gate from DRAM, so the read overlaps the multicast.
+    constexpr bool writer_mcasts_in1 = get_compile_time_arg_val(31) != 0;
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(32);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(33);
 
-    constexpr uint32_t x_accessor_offset = 32;
+    constexpr uint32_t x_accessor_offset = 34;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -262,7 +275,7 @@ void kernel_main() {
 
     // Look up active token count for this expert from device-side buffers.
     // Reserve+read+push so the compute kernel (TRISC) and writer kernel
-    // (NCRISC) can cb_wait_front on these CBs and read the same L1 data.
+    // (BRISC) can cb_wait_front on these CBs and read the same L1 data.
     //
     // Each scratch CB is a single page sized (host-side) to hold up to
     // MAX_GLOBAL_EXPERTS UINT32 entries, so `1` here is the whole buffer and a
@@ -276,9 +289,63 @@ void kernel_main() {
     const uint32_t idx_l1 = cb_idx_scratch_obj.get_write_ptr();
     const uint32_t counts_page_size = counts_acc.get_aligned_page_size();
     const uint32_t idx_page_size = idx_acc.get_aligned_page_size();
-    noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
-    noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
-    noc_read.async_read_barrier();
+    {
+        // COUNTS_BCAST: one core reads the two pages and multicasts them to the grid.
+        // Every core needs counts/idx to derive its chunking, but all of them hitting the
+        // same two DRAM pages at once serialises on a single bank. One read plus one L1
+        // multicast pays the DRAM latency once.
+        const bool is_counts_reader = get_arg_val<uint32_t>(COUNTS_BCAST_RT) != 0;
+        const uint32_t cb_nx_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 1);
+        const uint32_t cb_ny_start = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 2);
+        const uint32_t cb_nx_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 3);
+        const uint32_t cb_ny_end = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 4);
+        Semaphore<> counts_valid_sem(get_arg_val<uint32_t>(COUNTS_BCAST_RT + 5));
+        const uint32_t counts_num_receivers = get_arg_val<uint32_t>(COUNTS_BCAST_RT + 6);
+        if (is_counts_reader) {
+            noc_read.async_read(counts_acc, CoreLocalMem<uint32_t>(counts_l1), counts_page_size, {.page_id = 0}, {});
+            noc_read.async_read(idx_acc, CoreLocalMem<uint32_t>(idx_l1), idx_page_size, {.page_id = 0}, {});
+            noc_read.async_read_barrier();
+            if (counts_num_receivers > 0) {
+                // linked=true so the valid-sem multicast is ordered behind both data
+                // multicasts on the same reserved path (as for the weight mcast).
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(counts_l1),
+                    MulticastEndpoint{},
+                    counts_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = counts_l1},
+                    /*linked=*/true);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(idx_l1),
+                    MulticastEndpoint{},
+                    idx_page_size,
+                    counts_num_receivers,
+                    {.offset_bytes = 0},
+                    {.noc_x_start = cb_nx_start,
+                     .noc_y_start = cb_ny_start,
+                     .noc_x_end = cb_nx_end,
+                     .noc_y_end = cb_ny_end,
+                     .addr = idx_l1},
+                    /*linked=*/true);
+                noc.async_writes_flushed();
+                counts_valid_sem.set(1);
+                counts_valid_sem.set_multicast<NocOptions::DEFAULT>(
+                    noc, cb_nx_start, cb_ny_start, cb_nx_end, cb_ny_end, counts_num_receivers);
+            }
+        } else {
+            counts_valid_sem.wait(1);
+            // Reset our own copy rather than trusting the runtime to re-init semaphores on
+            // every launch: each core waits on its OWN L1 copy, so a cached program must
+            // not see a stale 1 and skip the wait — that would read the previous
+            // invocation's counts, silently correct only while consecutive calls agree.
+            counts_valid_sem.set(0);
+        }
+    }
     cb_counts_scratch_obj.push_back(1);
     cb_idx_scratch_obj.push_back(1);
 
@@ -311,6 +378,16 @@ void kernel_main() {
     // experts: both kernels loop experts in the same order with the same
     // per-expert effective_chunks, so the per-K-block increments stay matched.
     uint32_t up_seq = 0;
+    // Separate counter and sems so the gate/up slot indexing stays a pure gate/up count
+    // (DOWN_SEM_RT is defined with the other runtime-arg offsets above).
+    uint32_t down_seq = 0;
+    Semaphore<> down_go_sem(get_arg_val<uint32_t>(DOWN_SEM_RT));
+    Semaphore<> down_done_sem(get_arg_val<uint32_t>(DOWN_SEM_RT + 1));
+    // IN1_WRITER_MCAST handshake: gate/up blocks only, so it needs its own counter
+    // for the same cross-chunk reason down_seq does.
+    Semaphore<> mcast_go_sem(get_arg_val<uint32_t>(MCAST_SEM_RT));
+    Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(MCAST_SEM_RT + 1));
+    uint32_t mc_seq = 0;
 
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
@@ -615,8 +692,21 @@ void kernel_main() {
             }
 
             if (is_in1_sender) {
-                in1_ready_sem.wait(in1_num_receivers);
-                in1_ready_sem.set(0);
+                if constexpr (writer_mcasts_in1) {
+                    // The writer multicasts, so it owns the receivers' ready handshake. This
+                    // RISC only needs its own slot back: cb_in1_* is double-buffered, so the
+                    // block numbered mc_seq reuses the slot mc_seq-2 used, and THAT block's
+                    // multicast must have drained. Waiting on mc_seq-2 rather than mc_seq is
+                    // what lets this DRAM read overlap the writer's multicast of the previous
+                    // block, which is the whole point.
+                    ++mc_seq;
+                    if (mc_seq >= 3) {
+                        mcast_done_sem.wait_min(mc_seq - 2);
+                    }
+                } else {
+                    in1_ready_sem.wait(in1_num_receivers);
+                    in1_ready_sem.set(0);
+                }
 
                 // DRAM read gate region first.
                 uint32_t l1_w_gate = cb_in1_gate_obj.get_write_ptr();
@@ -668,13 +758,21 @@ void kernel_main() {
                 }
                 noc_read.async_read_barrier();
 
+                // IN1_WRITER_MCAST: gate is in L1 -- hand this slot to the writer, which
+                // multicasts it (and `up`, which it read itself) on NoC 1. Signalled BEFORE
+                // the up_done wait below so the writer starts as early as possible.
+                if constexpr (writer_mcasts_in1) {
+                    mcast_go_sem.set(mc_seq);
+                }
+
                 // UP_SPLIT: wait for the writer's NoC-1 `up` read before mcast.
                 if constexpr (up_split) {
                     up_done_sem.wait_min(up_seq);
                 }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; the
                 // locally-read weights go straight to compute via cb_push_back.
-                if (in1_num_receivers > 0) {
+                // IN1_WRITER_MCAST moves this whole multicast to the writer's NoC 1.
+                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
                     // The LAST in1 data multicast before the in1_valid sem must
                     // be linked=true so the (posted) valid-sem multicast travels
@@ -722,7 +820,7 @@ void kernel_main() {
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
-                if (in1_num_receivers > 0) {
+                if (!writer_mcasts_in1 && in1_num_receivers > 0) {
                     noc.async_writes_flushed();
                     in1_valid_sem.set(IN1_VALID);
                     in1_valid_sem.set_multicast<NocOptions::DEFAULT>(
@@ -746,6 +844,18 @@ void kernel_main() {
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
                 }
+            }
+        }
+
+        // IN1_WRITER_MCAST: drain the decoupled weight-multicast pipeline before phase 4.
+        // in1_ready_sem is SHARED by phase 3 (gate/up mcast) and phase 4 (down mcast):
+        // receivers up() it in both. Once the phase-3 multicast runs on the writer it can
+        // lag into the window where receivers are already acking for phase 4, and the writer
+        // then consumes acks meant for the down multicast -- after which the reader's
+        // phase-4 mcast waits forever for acks that were eaten.
+        if constexpr (writer_mcasts_in1) {
+            if (is_in1_sender) {
+                mcast_done_sem.wait_min(mc_seq);
             }
         }
 
@@ -775,6 +885,14 @@ void kernel_main() {
             cb_in1_down_obj.reserve_back(d_in1_block_num_tiles);
             cb_in0_down_full_obj.reserve_back(d_in0_block_num_tiles);
 
+            // DOWN_SPLIT: slot reserved -> release the writer to read the block on NoC 1.
+            if constexpr (split_down) {
+                if (is_in1_sender) {
+                    ++down_seq;
+                    down_go_sem.set(down_seq);
+                }
+            }
+
             // Step 1: receivers ack BOTH senders (in1_down and act) at the
             // top of the K-block iter. The in1_down ack lets the in1_down
             // sender immediately start DRAM reads; the act ack lets the act
@@ -801,7 +919,9 @@ void kernel_main() {
                 in1_ready_sem.set(0);
                 uint32_t l1_w = cb_in1_down_obj.get_write_ptr();
                 in1_block_start = l1_w;
-                for (uint32_t k = 0; k < in0_block_w_d; ++k) {
+                // DOWN_SPLIT: only the rows this RISC keeps; the writer reads the rest on
+                // NoC 1 into the upper part of the same slot.
+                for (uint32_t k = 0; k < down_split_k; ++k) {
                     for (uint32_t n = 0; n < per_core_N_d; ++n) {
                         const uint32_t row = kb * in0_block_w_d + k;
                         const uint32_t col = my_nt_d * per_core_N_d + n;
@@ -831,6 +951,11 @@ void kernel_main() {
             // longer hidden under the activated wait — measure before keeping.
             if (is_in1_sender) {
                 noc_read.async_read_barrier();
+                // DOWN_SPLIT: the writer's block must have landed before it is multicast
+                // (or consumed locally at GRID_Y == 1).
+                if constexpr (split_down) {
+                    down_done_sem.wait_min(down_seq);
+                }
                 // GRID_Y == 1: no column receivers — skip mcast/valid-sem; this
                 // core consumes the locally-read down weight directly.
                 if (in1_num_receivers > 0) {
