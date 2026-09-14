@@ -450,13 +450,11 @@ def visualize(*function_args, file_name=None, visualize_node=visualize_node, **f
 
 get_graph = ttnn.torch_tracer.get_graph
 
-GRAPH_STACK = None
 ENABLE_TRACER = False
 
 
 def enable_tracing():
     global ENABLE_TRACER
-    global GRAPH_STACK
     if ttnn.CONFIG.enable_fast_runtime_mode:
         raise ValueError("Tracing is not supported in fast runtime mode.")
     if ENABLE_TRACER:
@@ -464,15 +462,12 @@ def enable_tracing():
     # Only claim the flag once the torch side is actually on, or a failure here leaves tracing half-enabled.
     ttnn.torch_tracer.enable_tracing()
     ENABLE_TRACER = True
-    GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
 
 def disable_tracing():
     global ENABLE_TRACER
-    global GRAPH_STACK
     ENABLE_TRACER = False
     ttnn.torch_tracer.disable_tracing()
-    GRAPH_STACK = ttnn.torch_tracer.GRAPH_STACK
 
 
 def is_tracing_enabled():

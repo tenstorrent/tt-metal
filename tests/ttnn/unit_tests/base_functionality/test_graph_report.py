@@ -12,6 +12,7 @@ This tests the decoupled workflow:
 
 import contextlib
 import gc
+import hashlib
 import json
 import sqlite3
 import sys
@@ -5764,15 +5765,18 @@ class TestReportConfigDoesNotEnableLegacyTracer:
         with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
             "enable_logging", True
         ), ttnn.manage_config("enable_graph_report", True):
-            assert ttnn.from_torch(make_tensor(), dtype=dtype).dtype == dtype
+            output = ttnn.from_torch(make_tensor(), dtype=dtype)
+            assert (
+                output.dtype == dtype
+            ), f"from_torch under the report config returned {output.dtype}, expected {dtype}"
             assert not ttnn.tracer.is_tracing_enabled(), "enable_graph_report switched the legacy tracer on"
 
     def test_explicit_tracer_still_works(self):
         """Fixing the above must not disable ttnn.tracer for callers that ask for it directly."""
         with ttnn.manage_config("enable_fast_runtime_mode", False):
             with ttnn.tracer.trace():
-                assert ttnn.tracer.is_tracing_enabled()
-            assert not ttnn.tracer.is_tracing_enabled()
+                assert ttnn.tracer.is_tracing_enabled(), "ttnn.tracer.trace() did not enable tracing"
+            assert not ttnn.tracer.is_tracing_enabled(), "tracing still enabled after leaving ttnn.tracer.trace()"
 
     @_FROM_TORCH_CONVERSION_CASES
     def test_from_torch_conversions_under_explicit_tracer(self, make_tensor, dtype):
@@ -5782,7 +5786,8 @@ class TestReportConfigDoesNotEnableLegacyTracer:
         """
         with ttnn.manage_config("enable_fast_runtime_mode", False):
             with ttnn.tracer.trace():
-                assert ttnn.from_torch(make_tensor(), dtype=dtype).dtype == dtype
+                output = ttnn.from_torch(make_tensor(), dtype=dtype)
+                assert output.dtype == dtype, f"from_torch under the tracer returned {output.dtype}, expected {dtype}"
 
 
 @pytest.mark.usefixtures("collect_stale_devices")
@@ -5841,11 +5846,31 @@ class TestTracerStateSurvivesFailure:
 
 class TestReportNameDerivedFromTestId:
     """
-    A report asked for without report_name is named after the test. tests/ttnn/conftest.py used to do this, but it
-    runs after the root autouse fixture had already given up, so no test anywhere got a report without the name.
+    A report asked for without report_name is named after the test. The root autouse fixture has to derive the name
+    itself: tests/ttnn/conftest.py sets one too (through the same function), but it runs after that fixture has
+    already read report_name, and tests outside tests/ttnn never see it.
     """
 
+    _NODEID = "tests/ttnn/unit_tests/base_functionality/test_graph_report.py::TestReportNameDerivedFromTestId::test_x"
+
+    def test_derived_name_is_unique_per_case_and_fits_the_report_path(self):
+        """ttnn::Config keeps only the first 64 characters of report_name, so the unique part has to sit inside them."""
+        names = {graph_report.derive_report_name(f"{self._NODEID}[{case}]") for case in ("a", "b")}
+        assert len(names) == 2, f"parametrized cases of one test share a report_name: {names}"
+        for name in names:
+            assert len(name) <= 64, f"derived report_name is cut by ttnn::Config: {name!r} ({len(name)} chars)"
+            assert name.startswith(
+                "test_graph_report_test_x"
+            ), f"derived report_name lacks file stem and test name: {name!r}"
+
+        long_nodeid = f"{self._NODEID}[{'p' * 80}]"
+        name = graph_report.derive_report_name(long_nodeid)
+        digest = hashlib.sha1(long_nodeid.encode()).hexdigest()[:8]
+        assert len(name) <= 64 and name.endswith(digest), f"hash does not survive the 64-character cut: {name!r}"
+
     def test_report_is_written_without_report_name(self, request, device, tmp_path):
+        if ttnn.graph.is_graph_capture_active():
+            pytest.skip("graph reporting is already on for this run, so the nested fixture would join that capture")
         with ttnn.manage_config("enable_fast_runtime_mode", False), ttnn.manage_config(
             "enable_logging", True
         ), ttnn.manage_config("enable_graph_report", True), ttnn.manage_config(
@@ -5855,7 +5880,8 @@ class TestReportNameDerivedFromTestId:
         ):
             with contextlib.contextmanager(graph_report.run_pytest_graph_report_fixture)(request):
                 report_name = str(ttnn.CONFIG.report_name)
-                assert request.node.nodeid in report_name, f"report_name not derived from the test id: {report_name!r}"
+                expected_name = graph_report.derive_report_name(request.node.nodeid)
+                assert report_name == expected_name, f"report_name {report_name!r} not derived from the test id"
                 report_path = Path(ttnn.CONFIG.report_path)
                 assert report_path.is_relative_to(tmp_path), f"report not under root_report_path: {report_path}"
                 ttnn.relu(
@@ -5863,6 +5889,25 @@ class TestReportNameDerivedFromTestId:
                 )
             assert (report_path / "db.sqlite").exists(), f"no db.sqlite written under {report_path}"
             assert ttnn.CONFIG.report_name is None, "fixture leaked its derived report_name into the config"
+
+
+class TestConfigHelpersUsedByTheReportFixture:
+    """The derived report_name goes through manage_config, and configs written by ttnn spell an unset one as null."""
+
+    def test_manage_config_restores_when_the_block_raises(self, expect_error):
+        original = ttnn.CONFIG.report_name
+        with expect_error(RuntimeError, "boom"):
+            with ttnn.manage_config("report_name", "leaked"):
+                raise RuntimeError("boom")
+        assert (
+            ttnn.CONFIG.report_name == original
+        ), f"report_name left as {ttnn.CONFIG.report_name!r} after the block raised"
+
+    def test_null_report_name_in_a_config_dictionary_unsets_it(self):
+        """save_config_to_json_file writes "report_name": null; reloading it used to try PosixPath(None)."""
+        with ttnn.manage_config("report_name", "previous"):
+            ttnn.load_config_from_dictionary({"report_name": None})
+            assert ttnn.CONFIG.report_name is None, f"null report_name loaded as {ttnn.CONFIG.report_name!r}"
 
 
 @skip_for_slow_dispatch()
