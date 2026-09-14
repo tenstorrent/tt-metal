@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
+#include "move_force.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -168,13 +169,21 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
 
 }  // namespace ttnn::operations::data_movement
 
+namespace ttnn::operations::data_movement::detail {
+
+Tensor move_force_native(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config) {
+    if (input_tensor.memory_config().is_sharded()) {
+        return move_sharded(input_tensor, memory_config);
+    }
+    return move_impl(input_tensor, memory_config);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
 namespace ttnn {
 
 Tensor move(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
-    if (input_tensor.memory_config().is_sharded()) {
-        return operations::data_movement::move_sharded(input_tensor, output_mem_config);
-    }
-    return operations::data_movement::move_impl(input_tensor, output_mem_config);
+    return operations::data_movement::detail::move_force_native(input_tensor, output_mem_config);
 }
 
 }  // namespace ttnn

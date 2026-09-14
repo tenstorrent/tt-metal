@@ -12,6 +12,7 @@
 #include "ttnn-nanobind/bind_function.hpp"
 
 #include "move.hpp"
+#include "move_force.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -38,6 +39,19 @@ void bind_move(nb::module_& mod) {
         nb::arg("input_tensor").noconvert(),
         nb::kw_only(),
         nb::arg("memory_config") = nb::none());
+
+    mod.def(
+        "move_force_native",
+        &move_force_native,
+        nb::arg("input_tensor").noconvert(),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::call_guard<nb::gil_scoped_release>(),
+        R"doc(
+            Verification only: runs native Move without public implementation routing.
+            Preserves native allocation, input consumption and no-op behavior.
+            Use ttnn.move for the public API. No codegen port is implied by this entrypoint.
+        )doc");
 }
 
 }  // namespace ttnn::operations::data_movement::detail
