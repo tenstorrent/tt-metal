@@ -59,7 +59,9 @@ ALWI void custom_mm_block_init(
         S0.face_r_dim, static_cast<std::uint32_t>(in1_register_format), ct_dim)));
 
     MATH((llk_math_pack_sync_init<fp32_dest_acc_en>()));
-    MATH((llk_math_hw_configure<fp32_dest_acc_en, in0_descriptor, in1_descriptor>()));
+    // Match the unpacker's physical ordering, including the source-format
+    // caches maintained by current Metal: weights -> SrcA, activations -> SrcB.
+    MATH((llk_math_hw_configure<fp32_dest_acc_en, in1_descriptor, in0_descriptor>()));
     MATH((_llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(S0.face_r_dim, ct_dim)));
 
     PACK((llk_pack_dest_init<fp32_dest_acc_en, ckernel::PackMode::Default>(out_cb_id)));
@@ -110,7 +112,7 @@ ALWI void custom_mm_block_init(
         const auto in0_id = get_operand_id(in0_cb_id);
         llk_math_pack_sync_init<fp32_dest_acc_en>();
         _llk_math_hw_configure_<fp32_dest_acc_en>(
-            unpack_dst_format[in0_id], static_cast<std::uint32_t>(in1_register_format));
+            static_cast<std::uint32_t>(in1_register_format), unpack_dst_format[in0_id]);
         _llk_math_custom_mm_init_<transpose, split_acc, dense_packing>(get_operand_face_r_dim(in0_id), ct_dim);
     }));
 
