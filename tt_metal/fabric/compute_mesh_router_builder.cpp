@@ -242,7 +242,7 @@ ComputeMeshRouterBuilder::ComputeMeshRouterBuilder(
     FabricRouterBuilder(local_node, location),
     erisc_builder_(std::move(erisc_builder)),
     tensix_builder_(std::move(tensix_builder)),
-    vc_shape_(std::move(vc_shape)),
+    vc_shape_(vc_shape),
     turns_by_vc_(std::move(turns_by_vc)),
     downstream_is_tensix_builder_(downstream_is_tensix_builder),
     connection_registry_(std::move(connection_registry)),
@@ -566,7 +566,7 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
         location,
         std::move(edm_builder),
         std::move(tensix_builder_opt),
-        std::move(archetype.shape),
+        archetype.shape,
         std::move(archetype.turns),
         downstream_is_tensix_builder,
         std::move(connection_registry)));
