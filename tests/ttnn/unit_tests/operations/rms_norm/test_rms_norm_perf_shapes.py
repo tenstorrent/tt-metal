@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """LLM-representative shapes from eval/golden_tests/rms_norm/feature_spec.py's perf cases, run at the
-Phase 0 precision corner (HiFi4, fp32 DEST accumulation). Correctness-checked here; the point of the
-file is to be profiled by node id:
+Phase 0 precision corner (HiFi4, fp32 DEST accumulation) and, in the second test, at the perf-flagged
+config (HiFi2, 16-bit DEST). Correctness-checked here; the point of the file is to be profiled by node id:
 
     scripts/run_safe_pytest.sh --profile \
         "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_shapes.py::test_rms_norm_perf_shape[decode_7168]"
@@ -38,3 +38,27 @@ def test_rms_norm_perf_shape(device, shape):
     ttnn_g = ttnn.from_torch(g.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     out = rms_norm(ttnn_x, gamma=ttnn_g)
     assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.995)
+
+
+# The perf-flagged config every feature_spec._PERF_BASE case is pinned to (bf16 / TILE / HiFi2 /
+# fp32_dest_acc_en=False / bf16 TILE gamma). Refinement 2 measures this exact node id:
+#
+#     scripts/run_safe_pytest.sh --profile \
+#         "tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf_shapes.py::test_rms_norm_perf_shape_flagged_config[decode_7168]"
+PERF_FLAGGED_CONFIG = ttnn.ComputeConfigDescriptor(
+    math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=False, math_approx_mode=False
+)
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_rms_norm_perf_shape_flagged_config(device, shape):
+    torch.manual_seed(0)
+    x = torch.randn(shape, dtype=torch.float32).to(torch.bfloat16)
+    g = torch.randn(shape[-1], dtype=torch.float32).to(torch.bfloat16)
+    xf, gf = x.float(), g.float()
+    expected = xf / torch.sqrt((xf * xf).mean(-1, keepdim=True) + 1e-6) * gf
+
+    ttnn_x = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_g = ttnn.from_torch(g.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    out = rms_norm(ttnn_x, gamma=ttnn_g, compute_kernel_config=PERF_FLAGGED_CONFIG)
+    assert_with_pcc(expected, ttnn.to_torch(out).float(), 0.9995)  # the perf cases' soft PCC gate
