@@ -153,6 +153,19 @@ def talker_config(allow_download=True):
     return model_config(allow_download)["talker_config"]
 
 
+def load_prefixed(prefix, dtype=torch.float32, allow_download=True, strip=True):
+    """Every tensor whose key starts with `prefix`, read by name and nothing else."""
+    state = {}
+    with safe_open(weights_path(allow_download), framework="pt") as f:
+        names = [key for key in f.keys() if key.startswith(prefix)]
+        if not names:
+            raise KeyError(f"no {prefix}* tensors in {weights_path(allow_download)}")
+        for name in names:
+            tensor = f.get_tensor(name)
+            state[name[len(prefix) :] if strip else name] = tensor if dtype is None else tensor.to(dtype)
+    return state
+
+
 def load_talker_state(dtype=torch.float32, allow_download=True):
     """The 28-layer decoder's weights, keyed as `Qwen3TTSTalkerModel` expects them.
 

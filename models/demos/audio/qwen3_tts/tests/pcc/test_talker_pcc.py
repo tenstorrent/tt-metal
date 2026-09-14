@@ -6,21 +6,23 @@
 
 Block boundary: embeddings [1, T, 2048] -> hidden states [1, T, 2048].
 
-**Read this before judging the end-to-end number.** A 28-layer residual stack amplifies
-small perturbations, and this model amplifies them hard. Measured on a 24-position prompt:
+Input is a real prompt, built from real token ids through the model's own embedding and
+projection path. That choice matters more than it looks. Random embeddings land far outside
+the activation distribution the weights were trained on, and a 28-layer residual stack
+amplifies the difference: the same graph scores 0.936 on random input and 0.995 on this
+one, with top-1 codec agreement going from 71% to 92%. Test with what the model will see.
+
+Measured here, 26-token prompt, bf16 on Blackhole P150:
 
     per layer, each fed the reference's own fp32 input   0.9998 to 0.99999, mean 0.99996
-    end to end, TTNN bf16 vs CPU fp32                    0.936
-    end to end, CPU bf16 vs CPU fp32                     0.956
+    end to end                                           0.9949
+    codec top-1 agreement                                24/26, both misses near-ties
 
-The middle row is the one that says whether this port is correct, and it says yes. The
-third row is the control: the reference drifts nearly as far from itself in bf16 as the
-device does, so the end-to-end loss is the number format rather than the implementation.
-Raising device tensors to fp32 moves it to 0.9396, and fp32 weights change nothing at all,
-because the compute is bf16-class whatever the tensors say.
-
-So `test_layers_match_the_reference_in_isolation` is the correctness gate, and the
-end-to-end test gates loosely against a break rather than against drift.
+The per-layer number is what says the implementation is right, because it removes
+accumulated drift: a wiring error shows up as one bad layer, rounding shows up as nothing.
+The end-to-end number carries 28 layers of bf16 rounding on top of that. For reference, the
+CPU model in bf16 reaches only 0.956 against its own fp32 output on random input, so the
+device is not the limiting factor.
 """
 
 import pytest
@@ -36,6 +38,7 @@ from models.demos.audio.qwen3_tts.reference.qwen.talker import (
     Qwen3TTSTalkerRotaryEmbedding,
     apply_multimodal_rotary_pos_emb,
 )
+from models.demos.audio.qwen3_tts.tests.reference_helpers import codec_head, talker_prompt
 from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import (
     MASK_FILL,
     TtTalker,
@@ -44,23 +47,23 @@ from models.demos.audio.qwen3_tts.tt.ttnn_qwen3_talker import (
     rotary_tables,
 )
 
-LENGTH = 24
-
-# Per-layer, drift removed. Measured 0.9998 at worst, so this catches a wiring error while
-# leaving room for a different card or a compiler change.
+# Per-layer with drift removed. Measured 0.9998 at worst.
 LAYER_PCC = 0.999
 
-# End to end through 28 layers. Measured 0.936 and deterministic; the reference in bf16
-# manages only 0.956, so there is no implementation headroom to recover here. Gated to
-# catch something breaking, not to certify precision.
-STACK_PCC = 0.92
+# End to end through 28 layers of bf16. Measured 0.9949 and deterministic.
+STACK_PCC = 0.99
+
+# Codec top-1 agreement. Measured 24/26; the two misses are near-ties where the device
+# picked the reference's second choice, which sampling at temperature 0.9 would blur anyway.
+MIN_TOKEN_AGREEMENT = 0.85
 
 
 def mixed_position_ids(length):
     """Three different position sequences, one per MRoPE axis.
 
     Equal axes make the interleaved selection a no-op, which would let a wrong selection
-    pass unnoticed.
+    pass unnoticed. A text-only prompt does have equal axes, so the selection is pinned
+    here rather than through the device tests.
     """
     return torch.stack([torch.arange(length), torch.arange(length) * 2 + 1, torch.arange(length) * 3 + 7]).reshape(
         3, 1, length
@@ -73,33 +76,35 @@ def talker_config():
 
 
 @pytest.fixture(scope="module")
-def prompt(talker_config):
-    torch.manual_seed(0)
-    embeddings = torch.randn(1, LENGTH, talker_config["hidden_size"]) * 0.02
-    return embeddings, mixed_position_ids(LENGTH)
+def prompt():
+    return talker_prompt()
 
 
 @pytest.fixture(scope="module")
 def reference_outputs(prompt):
     embeddings, positions = prompt
     reference = TalkerReference(dtype=torch.float32)
-    hidden, intermediates = reference(embeddings, position_ids=positions, return_intermediates=True)
-    return hidden, intermediates
+    return reference(embeddings, position_ids=positions, return_intermediates=True)
+
+
+def _to_device(device, tensor):
+    return ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
 # ── host-side tables ────────────────────────────────────────────────────────
 
 
-def test_rotary_tables_match_the_reference(talker_config, prompt):
+def test_rotary_tables_match_the_reference(talker_config):
     """The rotation is built on host, so it is pinned against upstream's own function."""
-    _, positions = prompt
     cfg = dict(talker_config)
     cfg.setdefault("pad_token_id", None)
     config = Qwen3TTSTalkerConfig(**cfg)
+    length = 24
+    positions = mixed_position_ids(length)
 
     torch.manual_seed(1)
-    query = torch.randn(1, cfg["num_attention_heads"], LENGTH, cfg["head_dim"])
-    key = torch.randn(1, cfg["num_key_value_heads"], LENGTH, cfg["head_dim"])
+    query = torch.randn(1, cfg["num_attention_heads"], length, cfg["head_dim"])
+    key = torch.randn(1, cfg["num_key_value_heads"], length, cfg["head_dim"])
 
     cos_ref, sin_ref = Qwen3TTSTalkerRotaryEmbedding(config)(query, positions)
     query_ref, key_ref = apply_multimodal_rotary_pos_emb(
@@ -121,12 +126,12 @@ def test_rotary_tables_match_the_reference(talker_config, prompt):
     assert torch.equal(key * cos + rotate_half(key) * sin, key_ref)
 
 
-def test_rotary_selection_reads_all_three_axes(talker_config, prompt):
+def test_rotary_selection_reads_all_three_axes(talker_config):
     """Guards the test above: with equal axes the selection cannot be got wrong."""
-    _, positions = prompt
-    equal_axes = torch.arange(LENGTH).reshape(1, 1, LENGTH).expand(3, 1, LENGTH).contiguous()
+    length = 24
+    equal_axes = torch.arange(length).reshape(1, 1, length).expand(3, 1, length).contiguous()
 
-    mixed_cos, _ = rotary_tables(talker_config, positions)
+    mixed_cos, _ = rotary_tables(talker_config, mixed_position_ids(length))
     equal_cos, _ = rotary_tables(talker_config, equal_axes)
     assert not torch.equal(mixed_cos, equal_cos), "the three axes are not reaching the tables"
 
@@ -144,26 +149,26 @@ def test_causal_mask_blocks_the_future():
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_layers_match_the_reference_in_isolation(device, talker_config, prompt, reference_outputs):
+def test_layers_match_the_reference_in_isolation(device, prompt, reference_outputs):
     """The correctness gate: each layer fed the reference's own fp32 input for that layer.
 
-    Removing accumulated drift is what makes this measure the implementation. A wiring
-    error appears as one bad layer; rounding appears as nothing.
+    Removing accumulated drift is what makes this measure the implementation rather than
+    28 layers of rounding.
     """
     embeddings, positions = prompt
     _, gold = reference_outputs
+    length = embeddings.shape[1]
     model = TtTalker(device, preprocess_talker_parameters(device))
 
-    cos, sin, mask = model.host_inputs(LENGTH, positions)
-    to_device = lambda tensor: ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    cos_tt, sin_tt, mask_tt = to_device(cos), to_device(sin), to_device(mask)
+    cos, sin, mask = model.host_inputs(length, positions)
+    cos_tt, sin_tt, mask_tt = (_to_device(device, t) for t in (cos, sin, mask))
 
     failures = []
     for index, layer in enumerate(model.layers):
         source = embeddings if index == 0 else gold[f"layers.{index - 1}"]
         want = gold[f"layers.{index}"]
-        got = ttnn.to_torch(layer(to_device(source), cos_tt, sin_tt, mask_tt, LENGTH)).float().reshape(want.shape)
-        passed, message = comp_pcc(want, got, pcc=LAYER_PCC)
+        got = ttnn.to_torch(layer(_to_device(device, source), cos_tt, sin_tt, mask_tt, length)).float()
+        passed, message = comp_pcc(want, got.reshape(want.shape), pcc=LAYER_PCC)
         print(f"  [layers.{index:<2d}] {message}")
         if not passed:
             failures.append(f"layers.{index}: {message}")
@@ -172,18 +177,53 @@ def test_layers_match_the_reference_in_isolation(device, talker_config, prompt, 
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_full_stack_runs_end_to_end(device, talker_config, prompt, reference_outputs):
-    """All 28 layers in one pass. See the module docstring on why the gate is loose."""
+def test_full_stack_matches_the_reference(device, prompt, reference_outputs):
+    """All 28 layers in one pass, on a real prompt."""
     embeddings, positions = prompt
     gold, _ = reference_outputs
+    length = embeddings.shape[1]
     model = TtTalker(device, preprocess_talker_parameters(device))
 
-    cos, sin, mask = model.host_inputs(LENGTH, positions)
-    to_device = lambda tensor: ttnn.from_torch(tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    hidden = model(to_device(embeddings), to_device(cos), to_device(sin), to_device(mask))
+    cos, sin, mask = model.host_inputs(length, positions)
+    hidden = model(*(_to_device(device, t) for t in (embeddings, cos, sin, mask)))
 
     got = ttnn.to_torch(hidden).float().reshape(gold.shape)
     passed, message = comp_pcc(gold, got, pcc=STACK_PCC)
     print(f"full stack {tuple(got.shape)}  {message}")
-    assert passed, f"talker below PCC {STACK_PCC}: {message}"
     assert torch.isfinite(got).all()
+    assert passed, f"talker below PCC {STACK_PCC}: {message}"
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_codec_tokens_agree_with_the_reference(device, prompt, reference_outputs):
+    """What PCC is a proxy for: do the hidden states pick the same codec tokens?
+
+    Disagreements are allowed only where the reference itself is nearly indifferent. A
+    device pick outside the reference's top two is a real divergence, not rounding.
+    """
+    embeddings, positions = prompt
+    gold, _ = reference_outputs
+    length = embeddings.shape[1]
+    model = TtTalker(device, preprocess_talker_parameters(device))
+
+    cos, sin, mask = model.host_inputs(length, positions)
+    hidden = model(*(_to_device(device, t) for t in (embeddings, cos, sin, mask)))
+    got = ttnn.to_torch(hidden).float().reshape(gold.shape)
+
+    head = codec_head()
+    reference_logits, device_logits = (gold @ head.T)[0], (got @ head.T)[0]
+    reference_choice, device_choice = reference_logits.argmax(-1), device_logits.argmax(-1)
+
+    agreement = (reference_choice == device_choice).float().mean().item()
+    print(f"codec top-1 agreement {int(agreement * length)}/{length}")
+
+    escapes = []
+    for index in torch.nonzero(reference_choice != device_choice).flatten().tolist():
+        rank = int((reference_logits[index] > reference_logits[index][device_choice[index]]).sum())
+        top_two = reference_logits[index].topk(2).values
+        print(f"  pos {index:2d}: reference rank {rank}, top-1/top-2 gap {(top_two[0] - top_two[1]):.4f}")
+        if rank > 1:
+            escapes.append(f"pos {index} picked reference rank {rank}")
+
+    assert not escapes, "device chose outside the reference's top two: " + "; ".join(escapes)
+    assert agreement >= MIN_TOKEN_AGREEMENT, f"codec top-1 agreement {agreement:.2f} below {MIN_TOKEN_AGREEMENT}"

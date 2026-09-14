@@ -17,7 +17,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
-| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **done**, per-layer PCC 0.9998 |
+| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **prefill done**, PCC 0.995 |
 | 5 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
 | 6 | Codec decoder → waveform | device | not started |
 
@@ -61,13 +61,14 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoint and, for the device tests, a card. 47 tests, 25 s warm.
+it needs only the checkpoint and, for the device tests, a card. 53 tests, 45 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
 pytest models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py   # host only
 pytest models/demos/audio/qwen3_tts/tests/test_tokenizer.py            # host only
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker encoder
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py       # talker
 ```
 
 `test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from
@@ -82,14 +83,26 @@ instruction speaks as the user. It also pins the seam that is easiest to get wro
 language never enters the text stream, and every language id falls inside the talker's
 3072-entry codec vocabulary rather than the 151k text one.
 
-`pcc/test_talker_pcc.py` gates each of the 28 layers at **0.999** with each layer fed the
-reference's own fp32 input, which is what measures the implementation. Measured 0.9998 at
-worst, 0.99996 on average. It also runs the whole stack in one pass, where PCC falls to
-0.936: a 28-layer residual stack amplifies small perturbations, and the CPU reference in
-bf16 only reaches 0.956 against itself in fp32, so that loss is the number format rather
-than the port. Raising device tensors to fp32 gives 0.9396, and fp32 weights change nothing,
-because the compute is bf16-class whatever the tensors say. The end-to-end gate is therefore
-set to catch a break, not to certify precision.
+`pcc/test_talker_pcc.py` runs a real prompt, built from real token ids through the model's
+own embedding and projection path, and reports three things:
+
+| measurement | value |
+|---|---|
+| per layer, each fed the reference's fp32 input | 0.9998 to 0.99999 |
+| end to end, 28 layers of bf16 | **0.9949** |
+| codec top-1 token agreement | 24/26 |
+
+The per-layer number measures the implementation, since feeding each layer the reference's
+own input removes accumulated drift: a wiring error shows as one bad layer, rounding shows
+as nothing. The end-to-end number carries 28 layers of bf16 rounding on top. The token check
+is the one that says whether any of it matters, and it allows a disagreement only where the
+reference is nearly indifferent; both misses here are near-ties where the device took the
+reference's second choice, with logit gaps of 0.11 and 0.07.
+
+The input choice is load-bearing. Random embeddings sit far outside the activation
+distribution the weights were trained on, and the same graph scores 0.936 with 71% token
+agreement on them. Raising device tensors to fp32 recovers almost nothing (0.9396), and fp32
+weights change nothing at all, because the compute is bf16-class whatever the tensors say.
 
 `pcc/test_speaker_pcc.py` gates every block and the embedding at **0.999**, not the usual
 0.99. Upstream pads each convolution in reflect mode, which `ttnn.conv1d` cannot do, so this

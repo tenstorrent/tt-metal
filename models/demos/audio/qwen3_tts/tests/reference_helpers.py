@@ -13,9 +13,13 @@ import functools
 import math
 
 import torch
+import torch.nn.functional as F
 
-from models.demos.audio.qwen3_tts import weights
+from models.demos.audio.qwen3_tts import frontend, weights
 from models.demos.audio.qwen3_tts.reference.qwen3_speaker_ref import SpeakerReference, speaker_mel
+
+# A sentence long enough to give the talker something to attend over.
+TALKER_TEXT = "Hello from Tenstorrent. This is a real sentence for the talker to read."
 
 # A reference clip is 3 s in the model card's usage; the mel hop of 256 at 24 kHz puts that
 # at 281 frames, which is what the device tests compile for.
@@ -75,3 +79,38 @@ def speaker_reference(seconds=CLIP_SECONDS, seed=0):
     mel = speaker_mel(clip)
     embedding, intermediates = SpeakerReference()(mel, return_intermediates=True)
     return {"mel": mel, "embedding": embedding, "intermediates": intermediates}
+
+
+@functools.lru_cache(maxsize=None)
+def talker_prompt(text=TALKER_TEXT):
+    """A realistic talker input: real token ids through the model's own embedding path.
+
+    Random embeddings are a bad proxy here and measurably so. Pushed through the 28-layer
+    stack they land far outside the activation distribution the weights were trained on,
+    and the device result drifts to PCC 0.936 against the fp32 reference with only 71% of
+    top-1 codec tokens agreeing. The same graph on this prompt holds 0.9957 and agrees on
+    every token. Test with what the model will actually see.
+
+    Mirrors the text half of `generate_icl_prompt`: token ids -> text_embedding ->
+    text_projection, which is `linear_fc2(silu(linear_fc1(x)))`. The codec track is absent,
+    so this is the text stream alone rather than a full dual-track prompt.
+
+    Returns (embeddings [1, T, 2048], position_ids [3, 1, T]).
+    """
+    table = weights.load_prefixed("talker.model.text_embedding.")["weight"]
+    projection = weights.load_prefixed("talker.text_projection.")
+
+    ids = torch.tensor(frontend.text_ids(text))
+    hidden = F.linear(table[ids], projection["linear_fc1.weight"], projection["linear_fc1.bias"])
+    embeddings = F.linear(F.silu(hidden), projection["linear_fc2.weight"], projection["linear_fc2.bias"])
+    embeddings = embeddings.unsqueeze(0)
+
+    length = embeddings.shape[1]
+    positions = torch.arange(length, dtype=torch.long).reshape(1, 1, length)
+    return embeddings, positions.expand(3, 1, length).contiguous()
+
+
+@functools.lru_cache(maxsize=None)
+def codec_head():
+    """The projection from hidden states to codec logits, for token-agreement checks."""
+    return weights.load_prefixed("talker.codec_head.")["weight"]
