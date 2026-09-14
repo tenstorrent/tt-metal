@@ -329,7 +329,8 @@ void py_module(nb::module_& m) {
             nb::arg("x"),
             nb::arg("num_heads"),
             "Split a single separately-projected tensor into heads.\n"
-            "(B, 1, S, num_heads * head_dim) -> (B, num_heads, S, head_dim).");
+            "(B, 1, S, num_heads * head_dim) -> (B, num_heads, S, head_dim).\n"
+            "head_dim must be a multiple of 32. The input must not be sharded.");
         py_multi_head_utils.def("heads_fusion", &ttml::ops::heads_fusion, nb::arg("x"));
         py_multi_head_utils.def(
             "grouped_heads_creation",
