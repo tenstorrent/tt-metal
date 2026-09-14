@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::cyclic_sdpa_bw::device {
@@ -14,6 +15,13 @@ struct CyclicSDPABackwardParams {
     // number of cores one schedule needs follows from it and the sequence
     // length: C = N / (2 * rows_per_block_tiles * 32).
     uint32_t rows_per_block_tiles{1U};
+
+    // Which block pairs the schedule covers. Causal is the paper's triangle.
+    // None is the unmasked schedule: every pair is live, which is what a
+    // ring-attention step needs when the visiting key/value chunk is earlier
+    // in the sequence than the local query chunk. Arbitrary is rejected --
+    // there is no mask tensor path here.
+    ttml::metal::AttentionMaskType mask_type{ttml::metal::AttentionMaskType::Causal};
 
     // Algorithm 3 rather than Algorithm 4: order the timesteps with a
     // chip-wide barrier instead of the endpoint counters. Both compute the

@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "cyclic_sdpa_bw_device_operation_types.hpp"
+#include "metal/common/const_utils.hpp"
 #include "cyclic_sdpa_bw_program_factory.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
@@ -42,6 +43,7 @@ ttml_cyclic_sdpa_bw(
     const ttnn::Tensor& row_scalar,
     uint32_t rows_per_block_tiles = 1U,
     bool use_barrier = false,
+    ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);

@@ -185,6 +185,74 @@ Reference make_reference(uint32_t N, uint32_t d) {
     return r;
 }
 
+// The same reference with nothing masked: every query row attends to every
+// key. This is what a ring-attention step computes when the visiting
+// key/value chunk is earlier in the sequence than the local query chunk, and
+// it is what MaskMode::Dense has to reproduce.
+//
+// Q and K are drawn independently here, as they are in the ring: the two
+// chunks are different slices of the sequence, so there is no reason for the
+// block matrix to be square-symmetric in any way the schedule could exploit.
+Reference make_dense_reference(uint32_t N, uint32_t d) {
+    Reference r;
+    r.N = N;
+    r.d = d;
+    const float scale = 1.0F / std::sqrt(static_cast<float>(d));
+    r.Q = random_bf16_matrix(N, d, 11);
+    r.K = random_bf16_matrix(N, d, 12);
+    r.V = random_bf16_matrix(N, d, 13);
+    r.dO = random_bf16_matrix(N, d, 14);
+
+    const xt::xarray<float> S = xt::linalg::dot(r.Q, xt::transpose(r.K)) * scale;
+    xt::xarray<float> P = xt::zeros<float>({N, N});
+    std::vector<float> lse(N, 0.0F);
+    for (uint32_t i = 0; i < N; ++i) {
+        float m = -std::numeric_limits<float>::infinity();
+        for (uint32_t j = 0; j < N; ++j) {
+            m = std::max(m, S(i, j));
+        }
+        float sum = 0.0F;
+        for (uint32_t j = 0; j < N; ++j) {
+            sum += std::exp(S(i, j) - m);
+        }
+        lse[i] = m + std::log(sum);
+        for (uint32_t j = 0; j < N; ++j) {
+            P(i, j) = std::exp(S(i, j) - lse[i]);
+        }
+    }
+
+    r.O = xt::linalg::dot(P, r.V);
+    const xt::xarray<float>& O = r.O;
+    const xt::xarray<float> dP = xt::linalg::dot(r.dO, xt::transpose(r.V));
+    std::vector<float> u(N, 0.0F);
+    for (uint32_t i = 0; i < N; ++i) {
+        float sum = 0.0F;
+        for (uint32_t c = 0; c < d; ++c) {
+            sum += r.dO(i, c) * O(i, c);
+        }
+        u[i] = sum;
+    }
+
+    xt::xarray<float> dS = xt::zeros<float>({N, N});
+    for (uint32_t i = 0; i < N; ++i) {
+        for (uint32_t j = 0; j < N; ++j) {
+            dS(i, j) = P(i, j) * (dP(i, j) - u[i]) * scale;
+        }
+    }
+
+    r.dQ = xt::linalg::dot(dS, r.K);
+    r.dK = xt::linalg::dot(xt::transpose(dS), r.Q);
+    r.dV = xt::linalg::dot(xt::transpose(P), r.dO);
+
+    r.lse_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    r.u_tile = xt::zeros<float>({1u, 1u, N, kTile});
+    for (uint32_t i = 0; i < N; ++i) {
+        r.lse_tile(0, 0, i, 0) = lse[i];
+        r.u_tile(0, 0, i, 0) = u[i];
+    }
+    return r;
+}
+
 xt::xarray<float> as_4d(const xt::xarray<float>& m) {
     const auto shape = m.shape();
     xt::xarray<float> out = xt::zeros<float>(
@@ -904,6 +972,97 @@ void check_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32
         expect_close(dQ, ref.dQ, 0.06F, "dQ" + at, g);
         expect_close(dK, ref.dK, 0.06F, "dK" + at, g);
         expect_close(dV, ref.dV, 0.06F, "dV" + at, g);
+    }
+}
+
+// The unmasked schedule, through the same op. C follows from N and Bt as
+// usual; what changes is that the schedule covers every block pair rather
+// than the causal triangle, in 2T timesteps rather than T + 1.
+void check_dense_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, uint32_t d = 64) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = make_dense_reference(N, d);
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, slices), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.lse_tile, slices), device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.u_tile, slices), device);
+
+    const auto [grad_query, grad_key, grad_value] = ttml::metal::cyclic_sdpa_bw(
+        query, key, value, grad_output, lse, row_scalar, Bt, use_barrier,
+        ttml::metal::AttentionMaskType::None);
+
+    const auto dQ = ttml::core::to_xtensor(grad_query);
+    const auto dK = ttml::core::to_xtensor(grad_key);
+    const auto dV = ttml::core::to_xtensor(grad_value);
+    for (uint32_t g = 0; g < slices; ++g) {
+        const std::string at = " slice " + std::to_string(g);
+        expect_close(dQ, ref.dQ, 0.06F, "dQ" + at, g);
+        expect_close(dK, ref.dK, 0.06F, "dK" + at, g);
+        expect_close(dV, ref.dV, 0.06F, "dV" + at, g);
+    }
+}
+
+TEST(CyclicSdpaBwDenseOpTest, OneSlice) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, MoreCores) {
+    check_dense_op(/* C */ 8, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, TallBlocks) {
+    check_dense_op(/* C */ 4, /* Bt */ 2, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, WiderHead) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false, /* d */ 128);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, FourSlices) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 4, /* use_barrier */ false);
+}
+
+// The barrier variant of the dense schedule. It has to agree with the
+// endpoint variant exactly, which is the property that says removing the
+// chip-wide barrier changed nothing -- the same invariant the causal
+// schedule is held to.
+TEST(CyclicSdpaBwDenseOpTest, WithTheBarrier) {
+    check_dense_op(/* C */ 4, /* Bt */ 1, /* slices */ 1, /* use_barrier */ true);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, BarrierAndEndpointAgreeBitwise) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    constexpr uint32_t C = 4u;
+    constexpr uint32_t Bt = 1u;
+    constexpr uint32_t d = 64u;
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = make_dense_reference(N, d);
+
+    const auto query = ttml::core::from_xtensor(as_4d(ref.Q), device);
+    const auto key = ttml::core::from_xtensor(as_4d(ref.K), device);
+    const auto value = ttml::core::from_xtensor(as_4d(ref.V), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d(ref.dO), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.lse_tile, device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(ref.u_tile, device);
+
+    const auto run = [&](bool use_barrier) {
+        const auto [dq, dk, dv] = ttml::metal::cyclic_sdpa_bw(
+            query, key, value, grad_output, lse, row_scalar, Bt, use_barrier,
+            ttml::metal::AttentionMaskType::None);
+        return std::array<xt::xarray<float>, 3>{
+            ttml::core::to_xtensor(dq), ttml::core::to_xtensor(dk), ttml::core::to_xtensor(dv)};
+    };
+    const auto with_barrier = run(true);
+    const auto with_endpoints = run(false);
+    const char* names[] = {"dQ", "dK", "dV"};
+    for (uint32_t k = 0; k < 3u; ++k) {
+        EXPECT_TRUE(with_barrier[k] == with_endpoints[k])
+            << names[k] << " differs between the barrier and endpoint variants of the dense schedule";
     }
 }
 

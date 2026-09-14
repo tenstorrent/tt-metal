@@ -17,9 +17,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     const ttnn::Tensor& log_sum_exp,
     const ttnn::Tensor& row_scalar,
     uint32_t rows_per_block_tiles,
-    bool use_barrier) {
+    bool use_barrier,
+    AttentionMaskType mask_type) {
     auto result = ttnn::prim::ttml_cyclic_sdpa_bw(
-        query, key, value, grad_output, log_sum_exp, row_scalar, rows_per_block_tiles, use_barrier);
+        query, key, value, grad_output, log_sum_exp, row_scalar, rows_per_block_tiles, use_barrier, mask_type);
     return {result[0], result[1], result[2]};
 }
 
@@ -31,7 +32,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw_from_forward
     const ttnn::Tensor& attn_output,
     const ttnn::Tensor& log_sum_exp,
     uint32_t rows_per_block_tiles,
-    bool use_barrier) {
+    bool use_barrier,
+    AttentionMaskType mask_type) {
     // D = rowsum(dO . O), one value per row, which the kernel reads from
     // column 0 of a tile -- which is where a width reduction leaves it. The
     // product is taken in Float32 rather than in the operands' bfloat16,
@@ -46,7 +48,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw_from_forward
         ttnn::multiply(grad_output_fp32, attn_output_fp32), /* dim */ 3, /* keep_dim */ true);
 
     return cyclic_sdpa_bw(
-        query, key, value, grad_output, log_sum_exp, row_scalar, rows_per_block_tiles, use_barrier);
+        query, key, value, grad_output, log_sum_exp, row_scalar, rows_per_block_tiles, use_barrier, mask_type);
 }
 
 }  // namespace ttml::metal

@@ -222,6 +222,14 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     if (!args.use_barrier) {
         sync_defines["ENDPOINT_SYNC"] = "1";
     }
+    // The unmasked schedule: every block pair live, 2T timesteps in two
+    // passes. All three kernels need it, since it changes the timestep count
+    // and which pair each core takes; the compute kernel additionally stops
+    // applying the intra-block triangular mask.
+    const bool dense = args.mask_type == ttml::metal::AttentionMaskType::None;
+    if (dense) {
+        sync_defines["DENSE_MODE"] = "1";
+    }
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";
