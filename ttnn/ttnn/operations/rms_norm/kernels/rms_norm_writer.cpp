@@ -5,8 +5,8 @@
 //
 // Per block (Cw > 1 builds only — the cross-core face of the W axis):
 //   exchange_partials_block  peers unicast their `rows` collapsed partials into the root's cb_gather
-//                            slot (r*Cw + w_split_index) and bump the root's SEM_GATHER; the root
-//                            copies its own partial into its slot, waits for Cw-1 arrivals, resets
+//                            slot (r*num_partials + w_split_index; num_partials = active W slices) and bump the root's
+//                            SEM_GATHER; the root copies its own partial into its slot, waits for Cw-1 arrivals, resets
 //                            the semaphore and publishes the round.
 //   broadcast_rstd_block     root: SenderPipe::send(cb_rstd_handoff -> cb_rstd) with loopback (the
 //                            root's own copy lands in its cb_rstd); every other core in the group
@@ -72,6 +72,7 @@ void kernel_main() {
     const uint32_t root_x = get_arg_val<uint32_t>(11);
     const uint32_t root_y = get_arg_val<uint32_t>(12);
     const uint32_t num_partials_expected = get_arg_val<uint32_t>(13);
+    const uint32_t num_partials = get_arg_val<uint32_t>(14);  // gather slots per row (active W slices)
 
     const auto output_acc = TensorAccessor(output_args, output_addr, out_page_bytes);
 
@@ -125,24 +126,24 @@ void kernel_main() {
                 cb_wait_front(cb_partial_collapsed, rows);
                 const uint32_t src = get_read_ptr(cb_partial_collapsed);
                 if (is_root) {
-                    cb_reserve_back(cb_gather, rows * num_w_splits);
+                    cb_reserve_back(cb_gather, rows * num_partials);
                     // own slot: local L1 -> L1 copy through the NoC (strided destination)
                     for (uint32_t r = 0; r < rows; ++r) {
                         noc_async_read(
                             get_noc_addr(my_x[noc_index], my_y[noc_index], src + r * partial_tile_bytes),
-                            gather_base + (r * num_w_splits + w_split_index) * partial_tile_bytes,
+                            gather_base + (r * num_partials + w_split_index) * partial_tile_bytes,
                             partial_tile_bytes);
                     }
                     noc_async_read_barrier();
                     gather_sem.wait(num_partials_expected);
                     gather_sem.set(0);
-                    cb_push_back(cb_gather, rows * num_w_splits);
+                    cb_push_back(cb_gather, rows * num_partials);
                 } else {
                     for (uint32_t r = 0; r < rows; ++r) {
                         noc_async_write(
                             src + r * partial_tile_bytes,
                             get_noc_addr(
-                                root_x, root_y, gather_base + (r * num_w_splits + w_split_index) * partial_tile_bytes),
+                                root_x, root_y, gather_base + (r * num_partials + w_split_index) * partial_tile_bytes),
                             partial_tile_bytes);
                     }
                     noc_async_write_barrier();

@@ -94,8 +94,11 @@ class Footprint:
     input_rm: bool  # ROW_MAJOR input (output layout == input layout)
     sharded: bool  # R3: x/out already resident, not allocated by the op
 
-    def per_block(self, wc: int, cw: int) -> int:
-        """Bytes per block-row unit: everything that scales with block_rows."""
+    def per_block(self, wc: int, num_partials: int, has_collective: bool) -> int:
+        """Bytes per block-row unit: everything that scales with block_rows.
+
+        num_partials = gather slots per row (the group's ACTIVE W slices); has_collective = the
+        group has more than one core (the compute->writer handoff CBs exist)."""
         if self.sharded:
             x_term, out_term = 0, 0
         elif self.input_rm:
@@ -105,7 +108,7 @@ class Footprint:
             x_term = DEPTH_X * self.t_in
             out_term = DEPTH_OUT * self.t_out
         normed_term = P32 if self.has_gamma else 0
-        collective = cw + 2 + (2 if cw > 1 else 0)  # gather slots + sumsq/rstd (+ collapsed/handoff)
+        collective = num_partials + 2 + (2 if has_collective else 0)  # gather slots + sumsq/rstd (+ collapsed/handoff)
         return wc * (x_term + normed_term + out_term) + P32 * collective
 
     def fixed(self, wc: int) -> int:
@@ -117,9 +120,9 @@ class Footprint:
             total += DEPTH_OUT_STICKS_ROWS * wc * self.t_out
         return total
 
-    def block_rows_max(self, wc: int, cw: int, budget: int) -> int:
+    def block_rows_max(self, wc: int, num_partials: int, has_collective: bool, budget: int) -> int:
         free = budget - self.fixed(wc)
-        return free // self.per_block(wc, cw) if free > 0 else 0
+        return free // self.per_block(wc, num_partials, has_collective) if free > 0 else 0
 
 
 # =============================================================================
@@ -170,7 +173,8 @@ class Blocking:
     regime: str
     tensor_row_tiles: int
     tensor_w_tiles: int
-    num_w_splits: int
+    num_w_splits: int  # cores in the group rectangle (mcast rect; R3: the shard grid's bounding box)
+    num_partials: int  # gather slots per row = ACTIVE cores per group (R3: shard-grid cores; else == num_w_splits)
     rect_a: int
     rect_b: int
     num_row_groups: int
@@ -201,7 +205,7 @@ def _derive_w_splits(wt: int, rt: int, grid_x: int, grid_y: int, fp: Footprint, 
     # residency floor — the widest per-core slice whose block footprint fits at least one tile-row
     core_w_tiles_max_l1 = 0
     for wc in range(wt, 0, -1):
-        if fp.block_rows_max(wc, _ceil_div(wt, wc), budget) >= 1:
+        if fp.block_rows_max(wc, _ceil_div(wt, wc), _ceil_div(wt, wc) > 1, budget) >= 1:
             core_w_tiles_max_l1 = wc
             break
     if core_w_tiles_max_l1 == 0:
@@ -267,7 +271,8 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
         a, b = x1 - x0 + 1, y1 - y0 + 1
         cw = a * b
-        block_rows_max = fp.block_rows_max(core_w_tiles, cw, budget)
+        num_partials = len(shard_cores)
+        block_rows_max = fp.block_rows_max(core_w_tiles, num_partials, cw > 1, budget)
         if block_rows_max < 1:
             raise ValueError("rms_norm: the WIDTH_SHARDED intermediates do not fit next to the resident shards")
         block_rows = min(rt, block_rows_max)
@@ -286,6 +291,7 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
             tensor_row_tiles=rt,
             tensor_w_tiles=wt,
             num_w_splits=cw,
+            num_partials=num_partials,
             rect_a=a,
             rect_b=b,
             num_row_groups=1,
@@ -302,7 +308,7 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
     qw, rw = divmod(wt, cw)
     core_w_tiles_max = qw + (1 if rw > 0 else 0)
 
-    block_rows_max = fp.block_rows_max(core_w_tiles_max, cw, budget)
+    block_rows_max = fp.block_rows_max(core_w_tiles_max, cw, cw > 1, budget)
     if block_rows_max < 1:
         raise ValueError("rms_norm: derived W split does not fit the per-core L1 budget")
     block_rows = min(max(row_counts), block_rows_max)
@@ -331,6 +337,7 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
         tensor_row_tiles=rt,
         tensor_w_tiles=wt,
         num_w_splits=cw,
+        num_partials=cw,
         rect_a=a,
         rect_b=b,
         num_row_groups=num_row_groups,
@@ -384,6 +391,7 @@ def create_program_descriptor(
 
     B = blocking.block_rows
     Cw = blocking.num_w_splits
+    num_partials = blocking.num_partials
     Wt = blocking.tensor_w_tiles
     Rt = blocking.tensor_row_tiles
     W = Wt * TILE
@@ -400,7 +408,7 @@ def create_program_descriptor(
     # slot offset, so they must sit at the same L1 address on every core: they are created first,
     # uniformly over the whole program range, ahead of any per-W-group (ragged-size) CB.
     cbs = [
-        _cb(CB_GATHER, all_cores, P32, B * Cw, ttnn.float32),  # exactly one round (mechanism cap)
+        _cb(CB_GATHER, all_cores, P32, B * num_partials, ttnn.float32),  # exactly one round (mechanism cap)
         _cb(CB_RSTD, all_cores, P32, B, ttnn.float32),  # exactly one round (mechanism cap)
         _cb(CB_SCALER, all_cores, T_SCALER, 1, ttnn.bfloat16),
         _cb(CB_SUMSQ_PARTIAL, all_cores, P32, B, ttnn.float32),
@@ -537,6 +545,7 @@ def create_program_descriptor(
                 inv_w_bits,
                 eps_bits,
                 Rt,
+                num_partials,
             ]
         compute_kernels.append(
             ttnn.KernelDescriptor(
@@ -573,6 +582,7 @@ def create_program_descriptor(
                 rv.x,
                 rv.y,
                 num_partials_expected,
+                num_partials,
             ] + mcast_rt
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -582,7 +592,7 @@ def create_program_descriptor(
         + [
             ("OUT_PAGE_BYTES", output_tensor.buffer_page_size()),
             ("MCAST_CT_BASE", 0),
-            ("MCAST_RT_BASE", 14),
+            ("MCAST_RT_BASE", 15),
         ],
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),

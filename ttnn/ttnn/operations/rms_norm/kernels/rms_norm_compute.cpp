@@ -7,10 +7,10 @@
 //   [tilize_x_block]   RM input: 32*rows sticks -> rows*Wc tiles                  (tilize helper)
 //   A sumsq_block      x*x accumulated in DEST per tile-row -> rows fp32 tiles      (sum_of_squares / eltwise_chain)
 //   B collapse_block   within-tile row sum -> rows column-0-valid tiles            (reduce, ReduceTile)
-//   C combine_block    root (or Cw==1): sum of Cw slots -> *1/W, +eps, rsqrt      (reduce, AccumulateViaAdd+Skip)
-//   D normalize_block  x (.) bcast_col(rstd) -> cb_normed | cb_output_tiles        (mul, BroadcastDim::Col)
-//   E scale_block      normed (.) bcast_row(gamma_slice) -> cb_output_tiles        (mul, BroadcastDim::Row)
-//   [untilize_x_block] RM output: rows*Wc tiles -> sticks                          (untilize helper)
+//   C combine_block    root (or Cw==1): sum of the num_partials slots -> *1/W, +eps, rsqrt (reduce,
+//   AccumulateViaAdd+Skip) D normalize_block  x (.) bcast_col(rstd) -> cb_normed | cb_output_tiles        (mul,
+//   BroadcastDim::Col) E scale_block      normed (.) bcast_row(gamma_slice) -> cb_output_tiles        (mul,
+//   BroadcastDim::Row) [untilize_x_block] RM output: rows*Wc tiles -> sticks                          (untilize helper)
 //
 // R3 (WIDTH_SHARDED): x and out are the resident shard buffers. The chains address them with
 // TileOffset::Set (base = block_idx * block_rows * core_w_tiles) under caller-managed (None, None)
@@ -64,6 +64,7 @@ void kernel_main() {
     const uint32_t inv_w_bits = get_arg_val<uint32_t>(4);
     const uint32_t eps_bits = get_arg_val<uint32_t>(5);
     const uint32_t tensor_row_tiles = get_arg_val<uint32_t>(6);
+    const uint32_t num_partials = get_arg_val<uint32_t>(7);  // gather slots per row = active W slices
 
     compute_kernel_hw_startup(cb_x_tiles, cb_scaler, cb_output_tiles);
 
@@ -142,7 +143,7 @@ void kernel_main() {
                 ReduceFp32Mode::Fast,
                 ReduceAlgorithm::AccumulateViaAdd,
                 ReduceWithinTile::Skip>(
-                ReduceInputBlockShape::of(rows, num_w_splits),
+                ReduceInputBlockShape::of(rows, num_partials),
                 ReduceInputMemoryLayout::contiguous(),
                 NoAccumulation{},
                 finalize_rstd);
