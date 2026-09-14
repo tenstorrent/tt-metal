@@ -864,7 +864,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/gemma4_d_p/tests/test_prefill_correctness.py \
-        -k "device_prefill_matches_hf or device_multi_user_prefill_isolated_by_user_id or device_traced_prefill_matches_eager or device_multi_chunk_traced_prefill_matches_eager or device_chunk_boundary_matches_hf" \
+        -k "device_prefill_matches_hf or device_multi_user_prefill_isolated_by_user_id or device_external_ring_caches_match_internal_prefill or device_traced_prefill_matches_eager or device_multi_chunk_traced_prefill_matches_eager or device_chunk_boundary_matches_hf" \
         -vv --tb=short --timeout=3600
     '
   test_type: gemma4_d_p
