@@ -129,10 +129,22 @@ def survey_model(repo_root, model_root, env=None, timeout_s: int = 1800, python_
     run_env.update(env or {})
     run_env.pop("TT_PERF_LAYERS", None)  # walk at FULL depth: a capped build hides short stacks
     from .probes import (
+        LOW_MEM_REFERENCE_ENV,
         memory_cap_preexec_fn,
         run_with_low_memory_fallback,
         wait_for_memory_headroom_before_device_work,
     )
+
+    # stacks_from_census reads ONLY block counts, never a reference VALUE -- same "shapes only"
+    # contract as _run_perf_node/_adaptive_run (agent/perf_test_gen.py, cc_optimize/perf_mcp.py),
+    # so the fp32 precision a reference build defaults to is pure waste here too, unconditionally
+    # -- not just when run_with_low_memory_fallback's pre-launch memory reading happens to look
+    # low. That check can miss the real failure the same way it did before those two fixes: a
+    # `model.to(dtype)` cast keeps the whole bf16 model alive as a second buffer while building the
+    # fp32 copy, peaking at ~2x the model's fp32 footprint transiently, well after memory looked
+    # healthy at launch. This walk is FULL uncapped depth (line above), exactly the shape that
+    # peak hits hardest.
+    run_env.setdefault(LOW_MEM_REFERENCE_ENV, "1")
 
     wait_for_memory_headroom_before_device_work("stack survey (full-depth build)")
     try:
