@@ -4,6 +4,7 @@
 Each test encodes a mistake the checker made during development, so a regression is caught rather
 than rediscovered. Run: python3 -m pytest tt_metal/tt-llk/infra/tests/ -q
 """
+
 import importlib.util
 import os
 import subprocess
@@ -393,7 +394,9 @@ def test_unknown_thread_is_reported_as_a_note_and_does_not_fail(tree):
         """,
     )
     r = run(tmp)
-    assert r.returncode == 0, f"an unclassified write must not fail the commit:\n{r.stdout}"
+    assert (
+        r.returncode == 0
+    ), f"an unclassified write must not fail the commit:\n{r.stdout}"
     assert "whose thread could not be determined" in r.stdout, r.stdout
     assert "shared_helper.h" in r.stdout, r.stdout
 
@@ -426,4 +429,6 @@ def test_unknown_thread_does_not_become_an_owner(tree):
     )
     r = run(tmp)
     assert r.returncode == 0, r.stdout
-    assert "SAME-FIELD" not in r.stdout, f"the note must not create a finding:\n{r.stdout}"
+    assert (
+        "SAME-FIELD" not in r.stdout
+    ), f"the note must not create a finding:\n{r.stdout}"
