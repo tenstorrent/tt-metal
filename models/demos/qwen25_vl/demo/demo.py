@@ -753,7 +753,9 @@ def test_demo(
 
     prefill_tok_s = prefill_lens[0] / total_inference_prefill_time * batch_size
     # total_inference_decode_time is the last batch's decode time, so use that batch's token count.
-    decode_tok_s_user = (num_tokens_generated_decode[batch_idx] - 1) / total_inference_decode_time  # Remove the compile time
+    decode_tok_s_user = (
+        num_tokens_generated_decode[batch_idx] - 1
+    ) / total_inference_decode_time  # Remove the compile time
     decode_tok_s = (
         (num_tokens_generated_decode[batch_idx] - 1) / total_inference_decode_time * batch_size
     )  # Remove the compile time
