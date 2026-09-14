@@ -38,17 +38,17 @@ namespace {
 
 static_assert(TT_ZONE_STALL_ID == (TT_ZONE_RESERVED_TU << TT_ZONE_LOCAL_BITS));
 
-constexpr api::Site kStallSite{.name = api::STALL_ZONE_NAME};
-constexpr const api::Site* kStallSites[1] = {&kStallSite};
+constexpr api::MarkerSite kStallSite{.name = api::STALL_ZONE_NAME};
+constexpr const api::MarkerSite* kStallSites[1] = {&kStallSite};
 constexpr api::detail::SiteTu kStallTu{kStallSites};
 
 // Builds the tables behind api::detail::site_of from the zone-name registry as ELFs load. Nothing is ever freed: a
-// record may hold a Site's address for the life of the process, and a reader may still be walking a replaced table.
+// record may hold a site's address for the life of the process, and a reader may still be walking a replaced table.
 class SiteTables {
 public:
     void add(std::span<const tt::llrt::ZoneMetaEntry* const> entries) {
         std::lock_guard<std::mutex> lk(mu_);
-        std::map<uint32_t, std::vector<const api::Site*>> grown;
+        std::map<uint32_t, std::vector<const api::MarkerSite*>> grown;
         for (const tt::llrt::ZoneMetaEntry* e : entries) {
             const uint32_t tu = TT_ZONE_TU_OF(e->zone_id), local = TT_ZONE_LOCAL_OF(e->zone_id);
             auto [it, fresh] = grown.try_emplace(tu);
@@ -62,15 +62,15 @@ public:
                 it->second.resize(local + 1, nullptr);
             }
             if (it->second[local] == nullptr) {
-                it->second[local] =
-                    &sites_.emplace_back(api::Site{.name = e->name, .location = {.file = e->file, .line = e->line}});
+                it->second[local] = &sites_.emplace_back(
+                    api::MarkerSite{.name = e->name, .location = {.file = e->file, .line = e->line}});
             }
         }
         for (auto& [tu, v] : grown) {
-            auto arr = std::make_unique<const api::Site*[]>(v.size());
+            auto arr = std::make_unique<const api::MarkerSite*[]>(v.size());
             std::copy(v.begin(), v.end(), arr.get());
             auto t = std::make_unique<api::detail::SiteTu>(
-                api::detail::SiteTu{std::span<const api::Site* const>(arr.get(), v.size())});
+                api::detail::SiteTu{std::span<const api::MarkerSite* const>(arr.get(), v.size())});
             api::detail::SiteRegistry::tus[tu].store(t.get(), std::memory_order_release);
             arrays_.push_back(std::move(arr));
             tus_.push_back(std::move(t));
@@ -79,8 +79,8 @@ public:
 
 private:
     std::mutex mu_;
-    std::deque<api::Site> sites_;
-    std::vector<std::unique_ptr<const api::Site*[]>> arrays_;
+    std::deque<api::MarkerSite> sites_;
+    std::vector<std::unique_ptr<const api::MarkerSite*[]>> arrays_;
     std::vector<std::unique_ptr<api::detail::SiteTu>> tus_;
 };
 

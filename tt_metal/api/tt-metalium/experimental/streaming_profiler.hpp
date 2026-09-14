@@ -46,7 +46,7 @@ struct SourceLocation {
 };
 
 /** @brief A marker's name and where it is written in kernel source code. */
-struct Site {
+struct MarkerSite {
     std::string_view name;  // Valid for the lifetime of the process.
     SourceLocation location;
 };
@@ -96,17 +96,17 @@ inline constexpr uint32_t ZONE_LOCAL_BITS = 14;
 inline constexpr uint32_t ZONE_TU_COUNT = 1u << (ZONE_ID_BITS - ZONE_LOCAL_BITS);
 
 struct SiteTu {
-    std::span<const Site* const> sites;
+    std::span<const MarkerSite* const> sites;
 };
 struct SiteRegistry {
     static std::atomic<const SiteTu*> tus[ZONE_TU_COUNT];
 };
-inline constexpr Site UNNAMED_SITE{};
+inline constexpr MarkerSite UNNAMED_SITE{};
 
-inline const Site& site_of(uint32_t zone_id) {
+inline const MarkerSite& site_of(uint32_t zone_id) {
     const SiteTu* tu = SiteRegistry::tus[zone_id >> ZONE_LOCAL_BITS].load(std::memory_order_acquire);
     const uint32_t local = zone_id & ((1u << ZONE_LOCAL_BITS) - 1u);
-    const Site* s = tu != nullptr && local < tu->sites.size() ? tu->sites[local] : nullptr;
+    const MarkerSite* s = tu != nullptr && local < tu->sites.size() ? tu->sites[local] : nullptr;
     return s != nullptr ? *s : UNNAMED_SITE;
 }
 
@@ -134,7 +134,7 @@ constexpr RecordType accepted_batch() {
 class Record {
 public:
     /** @brief The marker this record came from. */
-    const Site& site() const { return detail::site_of(zone_id_); }
+    const MarkerSite& site() const { return detail::site_of(zone_id_); }
     /** @brief The core that emitted the record. */
     Core core() const {
         return Core{

@@ -4,12 +4,12 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/device_types.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
+#include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <span>
 #include <memory>
+#include <span>
 #include <utility>
 
 namespace tt::umd {
@@ -114,11 +114,12 @@ public:
      * profiler tensix). The region must be at least
      * D2HSocket::required_config_buffer_size() bytes, L1-aligned, and live for
      * the lifetime of the socket.
+     *
+     * For any sender_core_type but TENSIX, `sender_core.core_coord` is the core's
+     * physical NoC coordinate (such cores have no logical grid).
      */
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
-        // For any type but TENSIX, `sender_core.core_coord` is the core's physical NoC coordinate (such cores
-        // have no logical grid) and host writes into its L1 carry that core type's L1 NoC offset.
         HalProgrammableCoreType sender_core_type = HalProgrammableCoreType::TENSIX;
     };
 
