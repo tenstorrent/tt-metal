@@ -103,24 +103,26 @@ bf16 control arm: the broker killed it at 100.6 s with `[MCP killed: chips left 
 left the PCIe bus during the *warmup* generation's VAE decode; the broker's bridge reset then failed
 (job 229, exit 8) and the host went off the network.
 
-**This was a rack event, not a decode trip.** `g14blx03` and `g14blx02` -- both BH Galaxies -- were
-unreachable simultaneously while `yyz-ird` and `wh-lb-84` stayed up, so the chips leaving the PCIe bus
-reads as a symptom of the rack going down rather than something the decode caused. The run happened to
-be in the decode when it hit. The control arm also executes byte-identical code to pre-change (the
-typecast branch is skipped when the dtypes match), so neither the lever nor the decode is implicated
-on this evidence.
+Job 234 then reproduced it exactly: bfp8 arm, killed at 115.4 s, **same 8 chips (8-15)**, same point
+in the stage -- immediately after `decoder weights uploaded` and the same two
+`No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
+using default 8x8x8` warnings. Two for two, both arms, and the control arm runs byte-identical code
+to pre-change (the typecast branch is skipped when the dtypes match). **The lever is not implicated;
+the 15 s yuv420 decode is.**
 
-Two `No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
-using default 8x8x8` warnings did appear just before the fault. Registering those two shapes in the
-decoder blocking table is worth doing on its own merits (it is O4's work), but **do not read them as
-the cause** -- there is no evidence for that beyond adjacency in the log.
+Chips 8-15 are one row of the 4x8 -- one UBB tray, one power rail. `69e6a5d195b`'s own message already
+records the history: *"Every chip-drop incident on blx04 lands in the VAE or audio decode and none in
+the denoise... 21 of 21 prior incidents sit on one UBB tray, so the rail is marginal either way."*
+These are incidents 22 and 23. Note the cap is already active -- `get_matmul_core_grid` clamps 32-chip
+Blackhole to 11x10 and 11x10 is the grid in the warnings -- so those two shapes are *inside* the cap
+and it trips anyway. The cap reduced the rate; it did not fix the rail.
 
-**The open question this raised.** 56% of the bytes bought only 70.5% of the time. O6 frames the
-gather as link-bound at 87-93 GB/s, ~90% of line rate; if that were the whole story, halving the
-payload would have halved the time. ~14 percentage points are unaccounted for. Candidates: bfp8 page
-handling in the CCL dataflow kernels, or a fixed per-chunk sync cost that does not scale with
-payload. **Unresolved** -- and worth resolving, because it caps every future payload-narrowing lever
-including the AGMM arm below.
+**Consequence: there is no 15 s e2e number to be had on blx04 as it stands**, for either arm, and the
+sibling Galaxy blx02 was unreachable throughout. Anyone wanting an e2e A/B should run the 5 s or 10 s
+arm of the same test (`test_zz_yuv_timing.py` parametrizes 5/10/15) where the decode draw is lower --
+accepting that it is a different working point -- or wait for the tray. Registering the two matmul
+shapes in the VAE decoder blocking table is worth doing regardless (it is O4's work), but on this
+evidence the rail is marginal at 11x10 and better blocking is a mitigation, not a fix.
 
 ### Follow-ons once S1 is proven
 
