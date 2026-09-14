@@ -100,14 +100,20 @@ the VSA port: real in Tracy, invisible in one generation.
 
 **The e2e A/B was attempted and produced nothing.** Job 227, `test_zz_yuv_timing.py -k 15s` on the
 bf16 control arm: the broker killed it at 100.6 s with `[MCP killed: chips left PCIe]` -- chips 8-15
-left the PCIe bus during the *warmup* generation's VAE decode, immediately after two
-`No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
-using default 8x8x8` warnings. The broker's bridge reset then failed (job 229, exit 8) and the host
-went off the network. The control arm executes byte-identical code to pre-change (the typecast branch
-is skipped when the dtypes match), so the lever is not implicated; the trip is the yuv420 decode's
-power profile with default blocking on an 11x10 grid. **Anyone retrying the e2e walks back into that
-stage** -- and is retrying for a delta the instrument cannot resolve. Fix the decode blocking first if
-this stage is going to be exercised repeatedly.
+left the PCIe bus during the *warmup* generation's VAE decode; the broker's bridge reset then failed
+(job 229, exit 8) and the host went off the network.
+
+**This was a rack event, not a decode trip.** `g14blx03` and `g14blx02` -- both BH Galaxies -- were
+unreachable simultaneously while `yyz-ird` and `wh-lb-84` stayed up, so the chips leaving the PCIe bus
+reads as a symptom of the rack going down rather than something the decode caused. The run happened to
+be in the decode when it hit. The control arm also executes byte-identical code to pre-change (the
+typecast branch is skipped when the dtypes match), so neither the lever nor the decode is implicated
+on this evidence.
+
+Two `No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
+using default 8x8x8` warnings did appear just before the fault. Registering those two shapes in the
+decoder blocking table is worth doing on its own merits (it is O4's work), but **do not read them as
+the cause** -- there is no evidence for that beyond adjacency in the log.
 
 **The open question this raised.** 56% of the bytes bought only 70.5% of the time. O6 frames the
 gather as link-bound at 87-93 GB/s, ~90% of line rate; if that were the whole story, halving the
