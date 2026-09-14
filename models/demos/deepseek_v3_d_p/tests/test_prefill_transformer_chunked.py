@@ -187,82 +187,65 @@ LAYER_PCC_THRESHOLD = 0.88
 KV_CACHE_PCC_THRESHOLD = 0.85
 INDEXER_K_PCC_THRESHOLD = 0.95
 
-# Per-chunk baseline medians (seconds) for the perf gate, derived from completed CI runs. Keyed by
+# Per-chunk baseline medians (seconds) for the perf gate, derived from completed Galaxy runs. Keyed by
 # (num_layers, n_chunks, num_iters) so only exact configs with CI numbers are gated; every other combo
 # in the sweep stays record-only. Each list has one entry per chunk (index c == chunk c). Recalibrate
-# from the per-chunk median across multiple independent Galaxy runs rather than copying one run's
-# measurements directly.
+# from completed Galaxy CI runs that exercise the exact configuration, and record the source run.
 #
 # Traced and untraced get SEPARATE tables and SEPARATE margins, selected by mode in
 # `kimi_chunked_perf_gate` -- a traced baseline can never gate an untraced run or vice versa. The two
-# are different regimes, not a small delta: traced measures 0.6-0.95 s/chunk (a ramp, since chunk c
-# attends to KV[0:c*CHUNK]) while untraced is a flat ~0.81 s/chunk, host-dispatch bound so the op2op
-# gap swamps the depth ramp entirely.
+# are different regimes: traced follows the KV-depth ramp, while untraced also pays host-dispatch
+# overhead, which can dominate the early chunks and obscure that ramp.
 KIMI_TRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-traced]
     # (55k / code_debug). These numbers were updated for the K2.6 -> K2.7 weights transition (#54944),
-    # then re-cut twice; the medians below are the current cut.
-    #
-    # The shift from the previous cut is -10.8% to -15.2% per chunk, largest at chunk 0 and tapering
-    # with depth. In absolute terms it is close to flat -- 0.072-0.076 s off chunks 0-5, drifting to
-    # 0.087-0.093 s over chunks 7-10 -- so the bulk of it is a fixed cost coming off the front of each
-    # chunk, whose share shrinks as the depth ramp grows (chunk c attends to KV[0:c*CHUNK]). The extra
-    # saving at the deep chunks is on top of that and does scale with the attended window.
+    # then re-cut twice. Recentered to CI run 34492835936 / job 102927415897.
     (61, 11, 10): [
-        0.412,
-        0.418,
-        0.451,
+        0.413,
+        0.419,
+        0.452,
         0.481,
-        0.512,
-        0.546,
-        0.574,
-        0.608,
-        0.656,
-        0.696,
-        0.735,
+        0.513,
+        0.549,
+        0.584,
+        0.623,
+        0.676,
+        0.716,
+        0.756,
     ],
 }
 KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
     # test_kimi_prefill_transformer_chunked_perf[...-L61-preload0-chunks_eleven-ten_iters-notrace]
-    # (55k / code_debug), 2026-09-01 on an 8x4 galaxy, per-chunk medians of run 33534897935/job
-    # 99949625303.
-    #
-    # WITHIN a run the untraced spread is huge -- per-chunk stddev reaches 0.33 s (~30%), because every
-    # iteration re-dispatches every op from host and pays a fresh, variable op2op gap. The MEDIAN of the
-    # 9 post-warmup iterations is not: on the previous baseline no chunk median across 32 recorded runs
-    # landed further than 3.2% from its median-of-runs value. So the gate is on the median, with
-    # UNTRACED_PERF_MARGIN rather than the traced 3%.
-    #
-    # If this goes flaky, re-center on the median over several runs before widening. Widening to 10% is
-    # the fallback after that -- a band that needs more than 10% is a regression, not noise.
-    (61, 11, 10): [0.805, 0.808, 0.811, 0.816, 0.808, 0.806, 0.806, 0.805, 0.802, 0.823, 0.854],
+    # 55k / code_debug: per-chunk medians over nine post-warmup iterations on a Galaxy with
+    # TT_METAL_SHM_TRACKING_DISABLED=1 and LOGURU_LEVEL=ERROR. Tolerance is 5%.
+    (61, 11, 10): [0.710, 0.708, 0.710, 0.709, 0.711, 0.717, 0.711, 0.713, 0.725, 0.763, 0.797],
 }
+
 # Per-mode +/- tolerance band around each baseline chunk median (fraction). Traced replays a captured
 # program, so the device is its only noise source; untraced re-dispatches from host every iteration and
 # carries the op2op gap, so it needs the wider band. Overridable per test via the perf_margin pytest
 # argument (None = use the mode default; see test_prefill_block_perf.py's `margin` column).
 #
-# 5% untraced is deliberately tight: the worst per-chunk deviation over all 32 recorded runs is 3.2%,
-# so CI noise already spends ~2/3 of the band. That is the intended bar -- catch a >5% eager-dispatch
-# regression -- but it leaves little slack, so triage a failure as noise-vs-regression (compare the
-# other chunks and the traced twin from the same run) before touching the number.
+# Keep the untraced band at 5% to catch eager-dispatch regressions. Compare the other chunks and the
+# traced twin from the same run before attributing a failure to noise or recalibrating the baseline.
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-# GLM-5.2 per-chunk baseline medians (seconds)
+# GLM-5.2 per-chunk baseline medians (seconds), recentered to CI run 34492835936 /
+# job 102927415889.
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
     (78, 11, 10): [
+        0.542,
+        0.541,
+        0.555,
+        0.551,
+        0.567,
+        0.565,
+        0.563,
+        0.567,
         0.585,
-        0.583,
-        0.598,
-        0.593,
-        0.608,
-        0.607,
-        0.605,
-        0.611,
-        0.627,
-        0.632,
-        0.644,
+        0.590,
+        0.601,
     ],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
