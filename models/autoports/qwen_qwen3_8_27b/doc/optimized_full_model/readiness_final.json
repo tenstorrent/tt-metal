@@ -1,0 +1,70 @@
+{
+  "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+  "hf_metadata": {
+    "hf_model_id": "Qwen/Qwen3.8-27B",
+    "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "snapshot": "/home/mvasiljevic/hf-cache/hub/models--Qwen--Qwen3.8-27B/snapshots/1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "tokenizer": "Qwen2Tokenizer",
+    "chat_template": true,
+    "prompt_source": "models/demos/deepseek_v3/demo/aime_under_8k_prompts.json",
+    "prompt_source_sha256": "ced18521fe26b8e304b3d9900e9c05e33387a3967dbb964c941eaca77321ef99",
+    "generation_length": 100,
+    "top_k": 100,
+    "command": "models/autoports/qwen_qwen3_8_27b/tests/hf_reference.py --output models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+    "prompt_mode": "chat",
+    "dtype": "bfloat16",
+    "state_load": "strict assign from pinned safetensors",
+    "reference_method": "HF sequential greedy logits and top100, 100 exact tokens, no stop truncation"
+  },
+  "prefill": [
+    {
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 99,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100
+    }
+  ],
+  "decode": [
+    {
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "matches_top1": 98,
+      "matches_top5": 100,
+      "matches_top100": 100,
+      "total": 100,
+      "k": 100,
+      "elapsed_s": 3.4952584942802787,
+      "e2e_t/s/u": 28.61018724756475,
+      "ttft_ms": 348.6544322222471,
+      "decode_tokens": 99.0,
+      "decode_elapsed_s": 3.146559676155448,
+      "decode_t/s/u": 31.46293418498291
+    }
+  ],
+  "autoregressive": {
+    "hf_completion": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/autoregressive/hf_completion.txt",
+    "tt_completion": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/autoregressive/tt_completion.txt",
+    "meta": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/autoregressive/autoregressive_meta.json"
+  },
+  "qualitative": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+  "qualitative_extended": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+  "final_context": [
+    {
+      "length": 262143,
+      "generated": 2,
+      "position": 262144,
+      "seconds": 79.06514197867364
+    },
+    {
+      "length": 262144,
+      "generated": 1,
+      "position": 262144,
+      "seconds": 78.2309732157737
+    }
+  ]
+}

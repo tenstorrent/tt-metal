@@ -1,13 +1,24 @@
 # Qwen/Qwen3.8-27B TTNN autoport
 
-Full-model batch-1 performance on four Blackhole p300c devices: **97.24 ms TTFT,
-39.06 decode tokens/s/user**, warmed S128/G128, canonical split model/sampling
-traces with on-device token feedback. AIME teacher forcing is **38.76 tokens/s/user**
-at S203/G100 and 99.56 ms TTFT; it explicitly uploads reference feedback tokens.
-These measurements include request reset and first-token sampling in TTFT.
+Optimized full-model performance on four Blackhole p300c devices, warmed B1:
 
-Stage6 is validated with independent **clean-pass**; see [full-model evidence](doc/full_model/README.md).
-Prefill and decode both achieve **100% top-5 and top-100** on the fresh AIME24 reference.
-The public context remains **262,144 tokens**, with internal logical-length handling
-and page32 KV caches. The decoder policy and TP4 strategy remain inherited from
-[Stage5](doc/optimized_multichip_decoder/README.md). No vLLM integration is included.
+| Measurement | Before stage7 | Final default |
+| --- | ---: | ---: |
+| TTFT, S128/G128 | 86.312 ms | **59.295 ms** |
+| Traced token-out with immediate delivery | 39.433 t/s/user | 40.328 t/s/user |
+| Traced token-out with deferred complete delivery | Not implemented | **40.385 t/s/user** |
+| Traced teacher forcing with token delivery, S203/G100 | 39.300 t/s/user | **40.238 t/s/user** |
+
+TTFT improves31.30%. Deferred decode includes one final history transfer and
+output construction; its steady loop keeps token feedback, sampling and
+position/RoPE advance on device. Teacher forcing explicitly uploads reference
+tokens and is measured separately. See [stage7 evidence](doc/optimized_full_model/README.md)
+for exact commands, delivery boundaries, profiles, validation and review status.
+
+Stage7 has an independent [clean-pass review](doc/optimized_full_model/stage_review.md).
+Fresh AIME24 prefill and decode both achieve **100% top-5 and top-100**.
+The public context remains **262,144 tokens**, including valid non-aligned
+prompts, explicit cache/page/position state, fixed slots and inactive rows.
+The selected [Stage5 decoder policy](doc/optimized_multichip_decoder/README.md)
+and residual layout are preserved. [Stage6](doc/full_model/README.md) records
+the completed starting model. No vLLM integration is included.

@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
+from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
 
 p = argparse.ArgumentParser()
 p.add_argument("--full", action="store_true")
@@ -25,7 +25,7 @@ a = p.parse_args()
 if a.profile and a.full:
     p.error("Full-stack profiling is prohibited; use the reduced stack")
 torch.set_num_threads(8)
-ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+configure_fabric()
 mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
 gen = None
 try:
@@ -45,6 +45,11 @@ try:
     )
     prompt = gen.tokenizer(prompt, add_special_tokens=False)["input_ids"]
     prompt = (prompt * ((a.length + len(prompt) - 1) // len(prompt)))[: a.length]
+    if a.profile:
+        # Match the persistent cache/history geometry of S128/G128 timing,
+        # while profiling only one representative decode step per window.
+        gen._ensure_cache(1, a.length + 127)
+        gen._ensure_history(127)
     print("PREFILL_BEGIN", flush=True)
     out = gen.generate(prompt, a.generate)
     print("GENERATED", out, gen.tokenizer.decode(out), flush=True)
@@ -85,8 +90,10 @@ try:
         ttnn.synchronize_device(mesh)
         tracy.signpost("PERF_SAMPLE_END")
         ttnn.ReadDeviceProfiler(mesh)
+        gen._reset_history()
         tracy.signpost("PERF_TOKEN_OUT")
-        gen.decode_forward(page_table=gen.page_table, kv_cache=gen.cache)
+        gen.decode_forward(page_table=gen.page_table, kv_cache=gen.cache, read_from_device=False, record_history=True)
+        ttnn.synchronize_device(mesh)
         tracy.signpost("PERF_TOKEN_OUT_END")
         ttnn.ReadDeviceProfiler(mesh)
     report = dict(
@@ -99,6 +106,11 @@ try:
         perf=benchmark,
         head_strategy=a.head_strategy,
         head_comparison=comparison,
+        persistent_geometry=dict(
+            cache_capacity=gen.cache.capacity,
+            page_table_shape=list(gen.page_table.shape),
+            history_capacity=gen.history_capacity,
+        ),
     )
     a.output.write_text(json.dumps(report, indent=2) + "\n")
 finally:

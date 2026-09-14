@@ -1,0 +1,1555 @@
+{
+  "status": "passed",
+  "full": false,
+  "mesh": [
+    1,
+    4
+  ],
+  "lengths": [
+    33
+  ],
+  "generated": 4,
+  "boundaries": [
+    {
+      "length": 33,
+      "generated": 4,
+      "tokens": [
+        220,
+        220,
+        220,
+        220
+      ],
+      "all_tokens_equal": true,
+      "final_position": 36,
+      "cold": {
+        "ttft_s": 0.5573788117617369,
+        "decode_s": 1.2447683047503233,
+        "decode_tokens": 3,
+        "tokens_per_second": 2.4100870728723627,
+        "counters": {
+          "seed_refreshes": 2,
+          "position_refreshes": 2,
+          "token_refreshes": 1,
+          "rope_refreshes": 2,
+          "history_cursor_refreshes": 1,
+          "resets": 1,
+          "prefill_eager_calls": 1,
+          "token_readbacks": 1,
+          "trace_captures": 2,
+          "prefill_trace_captures": 1,
+          "model_replays": 3,
+          "sampling_replays": 3,
+          "history_appends": 3,
+          "history_readbacks": 1
+        },
+        "steady_state_counters": {
+          "trace_captures": 2,
+          "prefill_trace_captures": 1,
+          "model_replays": 3,
+          "sampling_replays": 3,
+          "history_appends": 3
+        },
+        "delivery_counters": {
+          "history_readbacks": 1
+        },
+        "deferred_token_readback": true,
+        "prefill_trace_eligible": true,
+        "history_capacity": 8,
+        "host_sampling": false,
+        "teacher_forcing": false
+      },
+      "warmed": {
+        "ttft_s": 0.2131239054724574,
+        "decode_s": 1.1946222549304366,
+        "decode_tokens": 3,
+        "tokens_per_second": 2.5112540701618618,
+        "counters": {
+          "seed_refreshes": 2,
+          "position_refreshes": 2,
+          "token_refreshes": 1,
+          "rope_refreshes": 2,
+          "history_cursor_refreshes": 1,
+          "resets": 1,
+          "token_readbacks": 1,
+          "model_replays": 3,
+          "sampling_replays": 3,
+          "history_appends": 3,
+          "history_readbacks": 1,
+          "prefill_token_refreshes": 1,
+          "prefill_replays": 1
+        },
+        "steady_state_counters": {
+          "model_replays": 3,
+          "sampling_replays": 3,
+          "history_appends": 3
+        },
+        "delivery_counters": {
+          "history_readbacks": 1
+        },
+        "deferred_token_readback": true,
+        "prefill_trace_eligible": true,
+        "history_capacity": 8,
+        "host_sampling": false,
+        "teacher_forcing": false
+      },
+      "guarded": {
+        "identity": {
+          "traces": [
+            "MeshTraceId(2)",
+            "MeshTraceId(3)",
+            "MeshTraceId(4)"
+          ],
+          "tensors": {
+            "feedback": {
+              "identity": 136843980759152,
+              "addresses": [
+                5853376,
+                5853376,
+                5853376,
+                5853376
+              ]
+            },
+            "positions": {
+              "identity": 136843982127200,
+              "addresses": [
+                5853504,
+                5853504,
+                5853504,
+                5853504
+              ]
+            },
+            "rope": {
+              "identity": 136699018820992,
+              "addresses": [
+                5853568,
+                5853568,
+                5853568,
+                5853568
+              ]
+            },
+            "table": {
+              "identity": 136699018821088,
+              "addresses": [
+                5950080,
+                5950080,
+                5950080,
+                5950080
+              ]
+            },
+            "history": {
+              "identity": 136699018820416,
+              "addresses": [
+                5853632,
+                5853632,
+                5853632,
+                5853632
+              ]
+            },
+            "cursor": {
+              "identity": 136699018820320,
+              "addresses": [
+                5853760,
+                5853760,
+                5853760,
+                5853760
+              ]
+            },
+            "decode_logits": {
+              "identity": 136844342506048,
+              "addresses": [
+                200462464,
+                200462464,
+                200462464,
+                200462464
+              ]
+            },
+            "prefill_tokens": {
+              "identity": 136844342494000,
+              "addresses": [
+                9654400,
+                9654400,
+                9654400,
+                9654400
+              ]
+            },
+            "prefill_positions": {
+              "identity": 136844342508016,
+              "addresses": [
+                9654592,
+                9654592,
+                9654592,
+                9654592
+              ]
+            },
+            "prefill_output": {
+              "identity": 136844342542864,
+              "addresses": [
+                198373504,
+                198373504,
+                198373504,
+                198373504
+              ]
+            }
+          },
+          "preparation": 136844012664000
+        },
+        "replay_order": [
+          "MeshTraceId(4)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)",
+          "MeshTraceId(2)",
+          "MeshTraceId(3)"
+        ],
+        "perf": {
+          "ttft_s": 0.22214698512107134,
+          "decode_s": 1.1848145481199026,
+          "decode_tokens": 3,
+          "tokens_per_second": 2.53204183284252,
+          "counters": {
+            "seed_refreshes": 2,
+            "position_refreshes": 2,
+            "token_refreshes": 1,
+            "rope_refreshes": 2,
+            "history_cursor_refreshes": 1,
+            "resets": 1,
+            "token_readbacks": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1,
+            "prefill_token_refreshes": 1,
+            "prefill_replays": 1
+          },
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          },
+          "deferred_token_readback": true,
+          "prefill_trace_eligible": true,
+          "history_capacity": 8,
+          "host_sampling": false,
+          "teacher_forcing": false
+        },
+        "decode_guard": {
+          "decode_calls": 3,
+          "nonblocking_replays": 6,
+          "reads": [
+            {
+              "kind": "first_token",
+              "after_decode_calls": 0,
+              "seconds": 0.015252427197992802
+            },
+            {
+              "kind": "history",
+              "after_decode_calls": 3,
+              "seconds": 0.0033507738262414932
+            }
+          ],
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          }
+        }
+      }
+    }
+  ],
+  "changed_inputs": [
+    {
+      "prompt": "second",
+      "mode": "sampled",
+      "parameters": {
+        "top_k": 8,
+        "top_p": 0.9,
+        "temperature": 0.8,
+        "seed": 37
+      },
+      "tokens": [
+        12,
+        220,
+        13,
+        220
+      ],
+      "guarded": {
+        "identity": {
+          "traces": [
+            "MeshTraceId(7)",
+            "MeshTraceId(8)",
+            "MeshTraceId(9)"
+          ],
+          "tensors": {
+            "feedback": {
+              "identity": 136843980759152,
+              "addresses": [
+                5853376,
+                5853376,
+                5853376,
+                5853376
+              ]
+            },
+            "positions": {
+              "identity": 136843982127200,
+              "addresses": [
+                5853504,
+                5853504,
+                5853504,
+                5853504
+              ]
+            },
+            "rope": {
+              "identity": 136699018820992,
+              "addresses": [
+                5853568,
+                5853568,
+                5853568,
+                5853568
+              ]
+            },
+            "table": {
+              "identity": 136699018821088,
+              "addresses": [
+                5950080,
+                5950080,
+                5950080,
+                5950080
+              ]
+            },
+            "history": {
+              "identity": 136699018820416,
+              "addresses": [
+                5853632,
+                5853632,
+                5853632,
+                5853632
+              ]
+            },
+            "cursor": {
+              "identity": 136699018820320,
+              "addresses": [
+                5853760,
+                5853760,
+                5853760,
+                5853760
+              ]
+            },
+            "decode_logits": {
+              "identity": 136844342507248,
+              "addresses": [
+                200462464,
+                200462464,
+                200462464,
+                200462464
+              ]
+            },
+            "prefill_tokens": {
+              "identity": 136846780198384,
+              "addresses": [
+                9654400,
+                9654400,
+                9654400,
+                9654400
+              ]
+            },
+            "prefill_positions": {
+              "identity": 136846780196512,
+              "addresses": [
+                9654592,
+                9654592,
+                9654592,
+                9654592
+              ]
+            },
+            "prefill_output": {
+              "identity": 136843981966720,
+              "addresses": [
+                198373504,
+                198373504,
+                198373504,
+                198373504
+              ]
+            }
+          },
+          "preparation": 136843980816256
+        },
+        "replay_order": [
+          "MeshTraceId(9)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)"
+        ],
+        "perf": {
+          "ttft_s": 0.21847142931073904,
+          "decode_s": 1.1867429027333856,
+          "decode_tokens": 3,
+          "tokens_per_second": 2.5279274837795107,
+          "counters": {
+            "seed_refreshes": 2,
+            "position_refreshes": 2,
+            "token_refreshes": 1,
+            "rope_refreshes": 2,
+            "history_cursor_refreshes": 1,
+            "resets": 1,
+            "token_readbacks": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1,
+            "prefill_token_refreshes": 1,
+            "prefill_replays": 1
+          },
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          },
+          "deferred_token_readback": true,
+          "prefill_trace_eligible": true,
+          "history_capacity": 8,
+          "host_sampling": false,
+          "teacher_forcing": false
+        },
+        "decode_guard": {
+          "decode_calls": 3,
+          "nonblocking_replays": 6,
+          "reads": [
+            {
+              "kind": "first_token",
+              "after_decode_calls": 0,
+              "seconds": 0.01515545230358839
+            },
+            {
+              "kind": "history",
+              "after_decode_calls": 3,
+              "seconds": 0.0033487211912870407
+            }
+          ],
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          }
+        }
+      }
+    },
+    {
+      "prompt": "first",
+      "mode": "greedy",
+      "parameters": {
+        "top_k": 1,
+        "top_p": 0.0,
+        "temperature": 1.0,
+        "seed": 37
+      },
+      "tokens": [
+        220,
+        220,
+        220,
+        220
+      ],
+      "guarded": {
+        "identity": {
+          "traces": [
+            "MeshTraceId(7)",
+            "MeshTraceId(8)",
+            "MeshTraceId(9)"
+          ],
+          "tensors": {
+            "feedback": {
+              "identity": 136843980759152,
+              "addresses": [
+                5853376,
+                5853376,
+                5853376,
+                5853376
+              ]
+            },
+            "positions": {
+              "identity": 136843982127200,
+              "addresses": [
+                5853504,
+                5853504,
+                5853504,
+                5853504
+              ]
+            },
+            "rope": {
+              "identity": 136699018820992,
+              "addresses": [
+                5853568,
+                5853568,
+                5853568,
+                5853568
+              ]
+            },
+            "table": {
+              "identity": 136699018821088,
+              "addresses": [
+                5950080,
+                5950080,
+                5950080,
+                5950080
+              ]
+            },
+            "history": {
+              "identity": 136699018820416,
+              "addresses": [
+                5853632,
+                5853632,
+                5853632,
+                5853632
+              ]
+            },
+            "cursor": {
+              "identity": 136699018820320,
+              "addresses": [
+                5853760,
+                5853760,
+                5853760,
+                5853760
+              ]
+            },
+            "decode_logits": {
+              "identity": 136844342507248,
+              "addresses": [
+                200462464,
+                200462464,
+                200462464,
+                200462464
+              ]
+            },
+            "prefill_tokens": {
+              "identity": 136846780198384,
+              "addresses": [
+                9654400,
+                9654400,
+                9654400,
+                9654400
+              ]
+            },
+            "prefill_positions": {
+              "identity": 136846780196512,
+              "addresses": [
+                9654592,
+                9654592,
+                9654592,
+                9654592
+              ]
+            },
+            "prefill_output": {
+              "identity": 136843981966720,
+              "addresses": [
+                198373504,
+                198373504,
+                198373504,
+                198373504
+              ]
+            }
+          },
+          "preparation": 136843980816256
+        },
+        "replay_order": [
+          "MeshTraceId(9)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)"
+        ],
+        "perf": {
+          "ttft_s": 0.21826816257089376,
+          "decode_s": 1.1997828278690577,
+          "decode_tokens": 3,
+          "tokens_per_second": 2.5004525238357678,
+          "counters": {
+            "seed_refreshes": 2,
+            "position_refreshes": 2,
+            "token_refreshes": 1,
+            "rope_refreshes": 2,
+            "history_cursor_refreshes": 1,
+            "resets": 1,
+            "token_readbacks": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1,
+            "prefill_token_refreshes": 1,
+            "prefill_replays": 1
+          },
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          },
+          "deferred_token_readback": true,
+          "prefill_trace_eligible": true,
+          "history_capacity": 8,
+          "host_sampling": false,
+          "teacher_forcing": false
+        },
+        "decode_guard": {
+          "decode_calls": 3,
+          "nonblocking_replays": 6,
+          "reads": [
+            {
+              "kind": "first_token",
+              "after_decode_calls": 0,
+              "seconds": 0.015277065336704254
+            },
+            {
+              "kind": "history",
+              "after_decode_calls": 3,
+              "seconds": 0.003363107331097126
+            }
+          ],
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          }
+        }
+      }
+    },
+    {
+      "prompt": "first",
+      "mode": "sampled",
+      "parameters": {
+        "top_k": 8,
+        "top_p": 0.9,
+        "temperature": 0.8,
+        "seed": 37
+      },
+      "tokens": [
+        11,
+        220,
+        13,
+        220
+      ],
+      "guarded": {
+        "identity": {
+          "traces": [
+            "MeshTraceId(7)",
+            "MeshTraceId(8)",
+            "MeshTraceId(9)"
+          ],
+          "tensors": {
+            "feedback": {
+              "identity": 136843980759152,
+              "addresses": [
+                5853376,
+                5853376,
+                5853376,
+                5853376
+              ]
+            },
+            "positions": {
+              "identity": 136843982127200,
+              "addresses": [
+                5853504,
+                5853504,
+                5853504,
+                5853504
+              ]
+            },
+            "rope": {
+              "identity": 136699018820992,
+              "addresses": [
+                5853568,
+                5853568,
+                5853568,
+                5853568
+              ]
+            },
+            "table": {
+              "identity": 136699018821088,
+              "addresses": [
+                5950080,
+                5950080,
+                5950080,
+                5950080
+              ]
+            },
+            "history": {
+              "identity": 136699018820416,
+              "addresses": [
+                5853632,
+                5853632,
+                5853632,
+                5853632
+              ]
+            },
+            "cursor": {
+              "identity": 136699018820320,
+              "addresses": [
+                5853760,
+                5853760,
+                5853760,
+                5853760
+              ]
+            },
+            "decode_logits": {
+              "identity": 136844342507248,
+              "addresses": [
+                200462464,
+                200462464,
+                200462464,
+                200462464
+              ]
+            },
+            "prefill_tokens": {
+              "identity": 136846780198384,
+              "addresses": [
+                9654400,
+                9654400,
+                9654400,
+                9654400
+              ]
+            },
+            "prefill_positions": {
+              "identity": 136846780196512,
+              "addresses": [
+                9654592,
+                9654592,
+                9654592,
+                9654592
+              ]
+            },
+            "prefill_output": {
+              "identity": 136843981966720,
+              "addresses": [
+                198373504,
+                198373504,
+                198373504,
+                198373504
+              ]
+            }
+          },
+          "preparation": 136843980816256
+        },
+        "replay_order": [
+          "MeshTraceId(9)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)"
+        ],
+        "perf": {
+          "ttft_s": 0.22380675096064806,
+          "decode_s": 1.2078653713688254,
+          "decode_tokens": 3,
+          "tokens_per_second": 2.4837205131563795,
+          "counters": {
+            "seed_refreshes": 2,
+            "position_refreshes": 2,
+            "token_refreshes": 1,
+            "rope_refreshes": 2,
+            "history_cursor_refreshes": 1,
+            "resets": 1,
+            "token_readbacks": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1,
+            "prefill_token_refreshes": 1,
+            "prefill_replays": 1
+          },
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          },
+          "deferred_token_readback": true,
+          "prefill_trace_eligible": true,
+          "history_capacity": 8,
+          "host_sampling": false,
+          "teacher_forcing": false
+        },
+        "decode_guard": {
+          "decode_calls": 3,
+          "nonblocking_replays": 6,
+          "reads": [
+            {
+              "kind": "first_token",
+              "after_decode_calls": 0,
+              "seconds": 0.015306632034480572
+            },
+            {
+              "kind": "history",
+              "after_decode_calls": 3,
+              "seconds": 0.0033837081864476204
+            }
+          ],
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          }
+        }
+      }
+    },
+    {
+      "prompt": "second",
+      "mode": "greedy",
+      "parameters": {
+        "top_k": 1,
+        "top_p": 0.0,
+        "temperature": 1.0,
+        "seed": 37
+      },
+      "tokens": [
+        220,
+        220,
+        220,
+        220
+      ],
+      "guarded": {
+        "identity": {
+          "traces": [
+            "MeshTraceId(7)",
+            "MeshTraceId(8)",
+            "MeshTraceId(9)"
+          ],
+          "tensors": {
+            "feedback": {
+              "identity": 136843980759152,
+              "addresses": [
+                5853376,
+                5853376,
+                5853376,
+                5853376
+              ]
+            },
+            "positions": {
+              "identity": 136843982127200,
+              "addresses": [
+                5853504,
+                5853504,
+                5853504,
+                5853504
+              ]
+            },
+            "rope": {
+              "identity": 136699018820992,
+              "addresses": [
+                5853568,
+                5853568,
+                5853568,
+                5853568
+              ]
+            },
+            "table": {
+              "identity": 136699018821088,
+              "addresses": [
+                5950080,
+                5950080,
+                5950080,
+                5950080
+              ]
+            },
+            "history": {
+              "identity": 136699018820416,
+              "addresses": [
+                5853632,
+                5853632,
+                5853632,
+                5853632
+              ]
+            },
+            "cursor": {
+              "identity": 136699018820320,
+              "addresses": [
+                5853760,
+                5853760,
+                5853760,
+                5853760
+              ]
+            },
+            "decode_logits": {
+              "identity": 136844342507248,
+              "addresses": [
+                200462464,
+                200462464,
+                200462464,
+                200462464
+              ]
+            },
+            "prefill_tokens": {
+              "identity": 136846780198384,
+              "addresses": [
+                9654400,
+                9654400,
+                9654400,
+                9654400
+              ]
+            },
+            "prefill_positions": {
+              "identity": 136846780196512,
+              "addresses": [
+                9654592,
+                9654592,
+                9654592,
+                9654592
+              ]
+            },
+            "prefill_output": {
+              "identity": 136843981966720,
+              "addresses": [
+                198373504,
+                198373504,
+                198373504,
+                198373504
+              ]
+            }
+          },
+          "preparation": 136843980816256
+        },
+        "replay_order": [
+          "MeshTraceId(9)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)",
+          "MeshTraceId(7)",
+          "MeshTraceId(8)"
+        ],
+        "perf": {
+          "ttft_s": 0.21823643147945404,
+          "decode_s": 1.1713711246848106,
+          "decode_tokens": 3,
+          "tokens_per_second": 2.5611012059113474,
+          "counters": {
+            "seed_refreshes": 2,
+            "position_refreshes": 2,
+            "token_refreshes": 1,
+            "rope_refreshes": 2,
+            "history_cursor_refreshes": 1,
+            "resets": 1,
+            "token_readbacks": 1,
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3,
+            "history_readbacks": 1,
+            "prefill_token_refreshes": 1,
+            "prefill_replays": 1
+          },
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          },
+          "deferred_token_readback": true,
+          "prefill_trace_eligible": true,
+          "history_capacity": 8,
+          "host_sampling": false,
+          "teacher_forcing": false
+        },
+        "decode_guard": {
+          "decode_calls": 3,
+          "nonblocking_replays": 6,
+          "reads": [
+            {
+              "kind": "first_token",
+              "after_decode_calls": 0,
+              "seconds": 0.01531149074435234
+            },
+            {
+              "kind": "history",
+              "after_decode_calls": 3,
+              "seconds": 0.0033844690769910812
+            }
+          ],
+          "steady_state_counters": {
+            "model_replays": 3,
+            "sampling_replays": 3,
+            "history_appends": 3
+          },
+          "delivery_counters": {
+            "history_readbacks": 1
+          }
+        }
+      }
+    }
+  ],
+  "capture_guard": {
+    "program_cache_miss_guard_available": true,
+    "guarded_captures": 21,
+    "device_only_prefill_calls": 19
+  },
+  "timing_scope": "Only uninstrumented warmed timings are performance evidence",
+  "layers": [
+    0,
+    3
+  ],
+  "cache_capacity": 8192,
+  "history_capacity": 8,
+  "public_ownership": {
+    "independent_addresses": [
+      [
+        198912128,
+        198912128,
+        198912128,
+        198912128
+      ],
+      [
+        199409792,
+        199409792,
+        199409792,
+        199409792
+      ]
+    ],
+    "public_call_discarded_owned_traces": true,
+    "outputs_survive_other_public_and_traced_requests": true
+  },
+  "page_table": {
+    "runs": [
+      {
+        "mapping": "permuted",
+        "physical_pages": [
+          255,
+          254
+        ],
+        "tokens": [
+          220,
+          220,
+          220,
+          220
+        ],
+        "guarded": {
+          "identity": {
+            "traces": [
+              "MeshTraceId(15)",
+              "MeshTraceId(16)",
+              "MeshTraceId(17)"
+            ],
+            "tensors": {
+              "feedback": {
+                "identity": 136843980759152,
+                "addresses": [
+                  5853376,
+                  5853376,
+                  5853376,
+                  5853376
+                ]
+              },
+              "positions": {
+                "identity": 136843982127200,
+                "addresses": [
+                  5853504,
+                  5853504,
+                  5853504,
+                  5853504
+                ]
+              },
+              "rope": {
+                "identity": 136699018820992,
+                "addresses": [
+                  5853568,
+                  5853568,
+                  5853568,
+                  5853568
+                ]
+              },
+              "table": {
+                "identity": 136699018821088,
+                "addresses": [
+                  5950080,
+                  5950080,
+                  5950080,
+                  5950080
+                ]
+              },
+              "history": {
+                "identity": 136699018820416,
+                "addresses": [
+                  5853632,
+                  5853632,
+                  5853632,
+                  5853632
+                ]
+              },
+              "cursor": {
+                "identity": 136699018820320,
+                "addresses": [
+                  5853760,
+                  5853760,
+                  5853760,
+                  5853760
+                ]
+              },
+              "decode_logits": {
+                "identity": 136844289189968,
+                "addresses": [
+                  200462464,
+                  200462464,
+                  200462464,
+                  200462464
+                ]
+              },
+              "prefill_tokens": {
+                "identity": 136843999114800,
+                "addresses": [
+                  9654400,
+                  9654400,
+                  9654400,
+                  9654400
+                ]
+              },
+              "prefill_positions": {
+                "identity": 136844032701040,
+                "addresses": [
+                  9654592,
+                  9654592,
+                  9654592,
+                  9654592
+                ]
+              },
+              "prefill_output": {
+                "identity": 136843981966720,
+                "addresses": [
+                  198373504,
+                  198373504,
+                  198373504,
+                  198373504
+                ]
+              }
+            },
+            "preparation": 136699019062912
+          },
+          "replay_order": [
+            "MeshTraceId(17)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)"
+          ],
+          "perf": {
+            "ttft_s": 0.22303534764796495,
+            "decode_s": 1.1971928402781487,
+            "decode_tokens": 3,
+            "tokens_per_second": 2.505861962307591,
+            "counters": {
+              "seed_refreshes": 2,
+              "position_refreshes": 2,
+              "token_refreshes": 1,
+              "rope_refreshes": 2,
+              "history_cursor_refreshes": 1,
+              "resets": 1,
+              "token_readbacks": 1,
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3,
+              "history_readbacks": 1,
+              "prefill_token_refreshes": 1,
+              "prefill_replays": 1
+            },
+            "steady_state_counters": {
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3
+            },
+            "delivery_counters": {
+              "history_readbacks": 1
+            },
+            "deferred_token_readback": true,
+            "prefill_trace_eligible": true,
+            "history_capacity": 8,
+            "host_sampling": false,
+            "teacher_forcing": false
+          },
+          "decode_guard": {
+            "decode_calls": 3,
+            "nonblocking_replays": 6,
+            "reads": [
+              {
+                "kind": "first_token",
+                "after_decode_calls": 0,
+                "seconds": 0.015229864045977592
+              },
+              {
+                "kind": "history",
+                "after_decode_calls": 3,
+                "seconds": 0.003343570977449417
+              }
+            ],
+            "steady_state_counters": {
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3
+            },
+            "delivery_counters": {
+              "history_readbacks": 1
+            }
+          }
+        }
+      },
+      {
+        "mapping": "restored",
+        "physical_pages": [
+          0,
+          1
+        ],
+        "tokens": [
+          220,
+          220,
+          220,
+          220
+        ],
+        "guarded": {
+          "identity": {
+            "traces": [
+              "MeshTraceId(15)",
+              "MeshTraceId(16)",
+              "MeshTraceId(17)"
+            ],
+            "tensors": {
+              "feedback": {
+                "identity": 136843980759152,
+                "addresses": [
+                  5853376,
+                  5853376,
+                  5853376,
+                  5853376
+                ]
+              },
+              "positions": {
+                "identity": 136843982127200,
+                "addresses": [
+                  5853504,
+                  5853504,
+                  5853504,
+                  5853504
+                ]
+              },
+              "rope": {
+                "identity": 136699018820992,
+                "addresses": [
+                  5853568,
+                  5853568,
+                  5853568,
+                  5853568
+                ]
+              },
+              "table": {
+                "identity": 136699018821088,
+                "addresses": [
+                  5950080,
+                  5950080,
+                  5950080,
+                  5950080
+                ]
+              },
+              "history": {
+                "identity": 136699018820416,
+                "addresses": [
+                  5853632,
+                  5853632,
+                  5853632,
+                  5853632
+                ]
+              },
+              "cursor": {
+                "identity": 136699018820320,
+                "addresses": [
+                  5853760,
+                  5853760,
+                  5853760,
+                  5853760
+                ]
+              },
+              "decode_logits": {
+                "identity": 136844289189968,
+                "addresses": [
+                  200462464,
+                  200462464,
+                  200462464,
+                  200462464
+                ]
+              },
+              "prefill_tokens": {
+                "identity": 136843999114800,
+                "addresses": [
+                  9654400,
+                  9654400,
+                  9654400,
+                  9654400
+                ]
+              },
+              "prefill_positions": {
+                "identity": 136844032701040,
+                "addresses": [
+                  9654592,
+                  9654592,
+                  9654592,
+                  9654592
+                ]
+              },
+              "prefill_output": {
+                "identity": 136843981966720,
+                "addresses": [
+                  198373504,
+                  198373504,
+                  198373504,
+                  198373504
+                ]
+              }
+            },
+            "preparation": 136699019062912
+          },
+          "replay_order": [
+            "MeshTraceId(17)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)",
+            "MeshTraceId(15)",
+            "MeshTraceId(16)"
+          ],
+          "perf": {
+            "ttft_s": 0.22391805332154036,
+            "decode_s": 1.2052375096827745,
+            "decode_tokens": 3,
+            "tokens_per_second": 2.4891359386828387,
+            "counters": {
+              "seed_refreshes": 2,
+              "position_refreshes": 2,
+              "token_refreshes": 1,
+              "rope_refreshes": 2,
+              "history_cursor_refreshes": 1,
+              "resets": 1,
+              "token_readbacks": 1,
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3,
+              "history_readbacks": 1,
+              "prefill_token_refreshes": 1,
+              "prefill_replays": 1
+            },
+            "steady_state_counters": {
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3
+            },
+            "delivery_counters": {
+              "history_readbacks": 1
+            },
+            "deferred_token_readback": true,
+            "prefill_trace_eligible": true,
+            "history_capacity": 8,
+            "host_sampling": false,
+            "teacher_forcing": false
+          },
+          "decode_guard": {
+            "decode_calls": 3,
+            "nonblocking_replays": 6,
+            "reads": [
+              {
+                "kind": "first_token",
+                "after_decode_calls": 0,
+                "seconds": 0.015253009274601936
+              },
+              {
+                "kind": "history",
+                "after_decode_calls": 3,
+                "seconds": 0.003337559290230274
+              }
+            ],
+            "steady_state_counters": {
+              "model_replays": 3,
+              "sampling_replays": 3,
+              "history_appends": 3
+            },
+            "delivery_counters": {
+              "history_readbacks": 1
+            }
+          }
+        }
+      }
+    ],
+    "physical_kv_writes_follow_changed_table": true,
+    "exact_kv_values": true
+  },
+  "small_generation": {
+    "cold_g1_eager": true,
+    "cached_g1_equal": true,
+    "zero_generation_no_work": true,
+    "guarded": {
+      "identity": {
+        "traces": [
+          "MeshTraceId(18)",
+          "MeshTraceId(19)",
+          "MeshTraceId(20)"
+        ],
+        "tensors": {
+          "feedback": {
+            "identity": 136843980759152,
+            "addresses": [
+              5853376,
+              5853376,
+              5853376,
+              5853376
+            ]
+          },
+          "positions": {
+            "identity": 136843982127200,
+            "addresses": [
+              5853504,
+              5853504,
+              5853504,
+              5853504
+            ]
+          },
+          "rope": {
+            "identity": 136699018820992,
+            "addresses": [
+              5853568,
+              5853568,
+              5853568,
+              5853568
+            ]
+          },
+          "table": {
+            "identity": 136699018821088,
+            "addresses": [
+              5950080,
+              5950080,
+              5950080,
+              5950080
+            ]
+          },
+          "history": {
+            "identity": 136699018820416,
+            "addresses": [
+              5853632,
+              5853632,
+              5853632,
+              5853632
+            ]
+          },
+          "cursor": {
+            "identity": 136699018820320,
+            "addresses": [
+              5853760,
+              5853760,
+              5853760,
+              5853760
+            ]
+          },
+          "decode_logits": {
+            "identity": 136843979996304,
+            "addresses": [
+              199964800,
+              199964800,
+              199964800,
+              199964800
+            ]
+          },
+          "prefill_tokens": {
+            "identity": 136844032701040,
+            "addresses": [
+              9654400,
+              9654400,
+              9654400,
+              9654400
+            ]
+          },
+          "prefill_positions": {
+            "identity": 136843999114800,
+            "addresses": [
+              9654464,
+              9654464,
+              9654464,
+              9654464
+            ]
+          },
+          "prefill_output": {
+            "identity": 136844006683680,
+            "addresses": [
+              198373504,
+              198373504,
+              198373504,
+              198373504
+            ]
+          }
+        },
+        "preparation": 136700421243328
+      },
+      "replay_order": [
+        "MeshTraceId(20)"
+      ],
+      "perf": {
+        "ttft_s": 0.2037180932238698,
+        "decode_s": 4.2282044887542725e-06,
+        "decode_tokens": 0,
+        "tokens_per_second": 0.0,
+        "counters": {
+          "seed_refreshes": 2,
+          "position_refreshes": 2,
+          "token_refreshes": 1,
+          "rope_refreshes": 2,
+          "history_cursor_refreshes": 1,
+          "resets": 1,
+          "token_readbacks": 1,
+          "prefill_token_refreshes": 1,
+          "prefill_replays": 1
+        },
+        "steady_state_counters": {},
+        "delivery_counters": {},
+        "deferred_token_readback": false,
+        "prefill_trace_eligible": true,
+        "history_capacity": 0,
+        "host_sampling": false,
+        "teacher_forcing": false
+      },
+      "decode_guard": {
+        "decode_calls": 0,
+        "nonblocking_replays": 0,
+        "reads": [
+          {
+            "kind": "first_token",
+            "after_decode_calls": 0,
+            "seconds": 0.009195017628371716
+          }
+        ],
+        "steady_state_counters": {},
+        "delivery_counters": {}
+      }
+    }
+  }
+}

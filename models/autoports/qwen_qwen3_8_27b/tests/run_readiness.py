@@ -14,7 +14,7 @@ from unittest.mock import patch
 import torch
 
 import ttnn
-from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
+from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
 from models.common.readiness_check import run_autoregressive as autoregressive
 from models.common.readiness_check import run_prefill_check as prefill
 from models.common.readiness_check import run_teacher_forcing as teacher
@@ -29,6 +29,7 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--only", choices=["prefill", "decode", "autoregressive", "all"], default="all")
     p.add_argument("--qualitative", action="store_true")
+    p.add_argument("--qualitative-extended", action="store_true")
     p.add_argument("--qualitative-reference", default="hf_qualitative.json")
     p.add_argument("--qualitative-output", default="tt_qualitative.json")
     p.add_argument("--benchmark", action="store_true")
@@ -41,7 +42,7 @@ def main():
     assert metadata["hf_model_id"] == "Qwen/Qwen3.8-27B" and metadata["chat_template"]
     assert metadata["revision"] == "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0"
     assert metadata["generation_length"] == 100 and metadata["top_k"] == 100
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    configure_fabric()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
     gen = None
     try:
@@ -62,7 +63,7 @@ def main():
             a.output.write_text(json.dumps(report, indent=2) + "\n")
         if a.only in ("autoregressive", "all"):
             entry = ref.entries[0]
-            prompt_file = root / "doc/full_model/aime24_rendered.txt"
+            prompt_file = a.output.parent / "aime24_rendered.txt"
             prompt_file.write_text(entry.prompt_text)
 
             def exact_control(*, hf_model_id, prompt_token_ids, max_new_tokens, device):
@@ -79,7 +80,7 @@ def main():
                     hf_model_id=str(gen.model.snapshot),
                     prompt_file=prompt_file,
                     mesh_device=mesh,
-                    output_dir=root / "doc/full_model/autoregressive",
+                    output_dir=a.output.parent / "autoregressive",
                     max_new_tokens=entry.num_generated,
                 )
             report["autoregressive"] = {k: str(v) for k, v in artifacts.items()}
@@ -90,7 +91,22 @@ def main():
         if a.qualitative:
             from models.autoports.qwen_qwen3_8_27b.tests.tt_qualitative import run
 
-            report["qualitative"] = str(run(gen, root, a.qualitative_reference, output_name=a.qualitative_output))
+            report["qualitative"] = str(
+                run(gen, root, a.qualitative_reference, output_name=a.qualitative_output, output_dir=a.output.parent)
+            )
+            a.output.write_text(json.dumps(report, indent=2) + "\n")
+        if a.qualitative_extended:
+            from models.autoports.qwen_qwen3_8_27b.tests.tt_qualitative import run
+
+            report["qualitative_extended"] = str(
+                run(
+                    gen,
+                    root,
+                    "hf_qualitative_extended.json",
+                    output_name="tt_qualitative_extended.json",
+                    output_dir=a.output.parent,
+                )
+            )
             a.output.write_text(json.dumps(report, indent=2) + "\n")
         if a.benchmark:
             entry = ref.entries[0]

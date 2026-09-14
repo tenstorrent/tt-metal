@@ -1,0 +1,3736 @@
+{
+  "created_utc": "2026-09-13T22:09:44.640893+00:00",
+  "command": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/python_env/bin/python /home/mvasiljevic/qwen38-full-rerun/tt-metal/models/autoports/qwen_qwen3_8_27b/tests/summarize_full_model_perf.py --profile-dir models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers --benchmark-json models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/after_full_final.json --output models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/perf_summary.json",
+  "cwd": "/home/mvasiljevic/qwen38-full-rerun/tt-metal",
+  "profile_dir": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers",
+  "benchmark_json": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/after_full_final.json",
+  "workload": {
+    "prompt_len": 128,
+    "gen_len": 128,
+    "batch": 1
+  },
+  "layer_counts": {
+    "linear_attention": 48,
+    "full_attention": 16
+  },
+  "primary_delivery_mode": "deferred_delivery",
+  "ttft_ms": 59.29535161703825,
+  "decode_ms_per_token_e2e": 24.761665663791923,
+  "decode_ms_per_token_device": null,
+  "device_time_reason": "Full-model profiling intentionally replaced by real representative layers; expanded kernel/gap times are estimates, not a full-stack device measurement.",
+  "roofline_ms_per_token_estimate": 7.671369574803149,
+  "profile_and_benchmark_runtime_match": true,
+  "workload_comparison": {
+    "profile_persistent_geometry": {
+      "cache_capacity": 256,
+      "page_table_shape": [
+        1,
+        8
+      ],
+      "history_capacity": 127
+    },
+    "benchmark_expected_persistent_geometry": {
+      "cache_capacity": 256,
+      "page_table_shape": [
+        1,
+        8
+      ],
+      "history_capacity": 127
+    },
+    "allocation_fields_match": {
+      "cache_capacity": true,
+      "page_table_shape": true,
+      "history_capacity": true
+    },
+    "benchmark_geometry_provenance": "Cache/page table derived from the fresh benchmark's S+G-1 request and generator page32 rounding; history capacity is recorded in the selected delivery mode.",
+    "profile_minimum_active_decode_context": 129,
+    "benchmark_active_decode_context_range": [
+      129,
+      255
+    ],
+    "limitation": "Reduced profile and full unprofiled benchmark differ in layer count, prompt data and active decode context range; mixed-run residual is not measured host time. Persistent allocation: cache capacity matches (256); page table shape matches ([1, 8]); history capacity matches (127)."
+  },
+  "methodology": {
+    "units": "microseconds unless field explicitly says milliseconds",
+    "partition": "Two norms per hidden stream layer, then final norm; distinguish width5120 hidden norms from width256 Q/K norms. Require seven total/five hidden norms and GDN/SDPA identity; no fixed op count or LM-head chunk count.",
+    "sums": "Charge incoming gaps to the receiving segment. Weight decoder kinds by HF layer counts and add entry/terminal/sampling/history once. Subgroup metrics overlap their parent and must not be added twice.",
+    "device_aggregation": "Compute each device independently; report min/median/max. Never sum four device times or per-op cross-device maxima.",
+    "source_manifest_comparison": "Saved profile and benchmark manifests, not current mutable source checkout."
+  },
+  "named_limitations": [
+    "Reduced profile and full unprofiled benchmark differ in layer count, prompt data and active decode context range; mixed-run residual is not measured host time. Persistent allocation: cache capacity matches (256); page table shape matches ([1, 8]); history capacity matches (127).",
+    "Extrapolated profiler gaps may exceed full unprofiled latency due to instrumentation and non-additive execution; not negative host overhead.",
+    "tt-perf-report DRAM matmul core count fixes the denominator at8 while native readers select16/24 workers; no utilization or saturation conclusion uses this denominator.",
+    "Read bound uses stored weights and minimum unique KV tiles at nominal DRAM bandwidth; excludes other traffic and is not an achievable full-model target."
+  ],
+  "devices": [
+    {
+      "device": 0,
+      "phases": {
+        "prefill": {
+          "ops": 135,
+          "kernel_us": 3049.896,
+          "incoming_gap_us": 733.854,
+          "sum_us": 3783.75,
+          "first_id": 1014,
+          "last_id": 1148
+        },
+        "model": {
+          "ops": 113,
+          "kernel_us": 1634.725,
+          "incoming_gap_us": 122.035,
+          "sum_us": 1756.76,
+          "first_id": 1151,
+          "last_id": 1263
+        },
+        "sample": {
+          "ops": 31,
+          "kernel_us": 435.266,
+          "incoming_gap_us": 62.910000000000004,
+          "sum_us": 498.17600000000004,
+          "first_id": 1266,
+          "last_id": 1296
+        },
+        "token_out": {
+          "ops": 144,
+          "kernel_us": 2081.128,
+          "incoming_gap_us": 193.119,
+          "sum_us": 2274.2470000000003,
+          "first_id": 1299,
+          "last_id": 1442
+        }
+      },
+      "host_signpost_us": {
+        "prefill": 4982.027,
+        "model": 2157.266,
+        "sample": 867.565,
+        "token_out": 2712.827
+      },
+      "intervals_zero_based_half_open": {
+        "entry_and_rope": [
+          0,
+          9
+        ],
+        "linear_attention": [
+          9,
+          57
+        ],
+        "full_attention": [
+          57,
+          99
+        ],
+        "terminal_model": [
+          99,
+          113
+        ],
+        "sampling_without_history": [
+          113,
+          141
+        ],
+        "history_append": [
+          141,
+          144
+        ]
+      },
+      "boundary_audit": {
+        "norm_indices": [
+          9,
+          46,
+          57,
+          65,
+          66,
+          88,
+          99
+        ],
+        "hidden_norm_indices": [
+          9,
+          46,
+          57,
+          88,
+          99
+        ],
+        "hidden_norm_detection": "raw logical input width",
+        "sampling_boundary_source": "contiguous model/sampling trace-ID transition"
+      },
+      "persistent_geometry_from_raw": {
+        "page_table_shape": [
+          1,
+          8
+        ],
+        "cache_capacity": 256,
+        "history_capacity": 127
+      },
+      "segments": {
+        "entry_and_rope": {
+          "ops": 9,
+          "kernel_us": 28.575,
+          "incoming_gap_us": 36.549,
+          "sum_us": 65.124,
+          "first_id": 1299,
+          "last_id": 1307
+        },
+        "linear_attention": {
+          "ops": 48,
+          "kernel_us": 376.756,
+          "incoming_gap_us": 41.642,
+          "sum_us": 418.39799999999997,
+          "first_id": 1308,
+          "last_id": 1355
+        },
+        "full_attention": {
+          "ops": 42,
+          "kernel_us": 268.559,
+          "incoming_gap_us": 35.152,
+          "sum_us": 303.711,
+          "first_id": 1356,
+          "last_id": 1397
+        },
+        "terminal_model": {
+          "ops": 14,
+          "kernel_us": 957.592,
+          "incoming_gap_us": 9.825,
+          "sum_us": 967.417,
+          "first_id": 1398,
+          "last_id": 1411
+        },
+        "sampling_without_history": {
+          "ops": 28,
+          "kernel_us": 444.17600000000004,
+          "incoming_gap_us": 67.481,
+          "sum_us": 511.65700000000004,
+          "first_id": 1412,
+          "last_id": 1439
+        },
+        "history_append": {
+          "ops": 3,
+          "kernel_us": 5.470000000000001,
+          "incoming_gap_us": 2.47,
+          "sum_us": 7.940000000000001,
+          "first_id": 1440,
+          "last_id": 1442
+        }
+      },
+      "head_matmul_only": {
+        "ops": 4,
+        "kernel_us": 888.241,
+        "incoming_gap_us": 2.3129999999999997,
+        "sum_us": 890.554,
+        "first_id": 1400,
+        "last_id": 1406
+      },
+      "decoder_weighted_op_groups": {
+        "MatmulDeviceOperation": {
+          "ops": 256,
+          "kernel_us": 9524.751999999999,
+          "incoming_gap_us": 144.208
+        },
+        "ChunkGdnPrepOperation": {
+          "ops": 48,
+          "kernel_us": 2133.888,
+          "incoming_gap_us": 178.848
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "ops": 128,
+          "kernel_us": 1538.5759999999998,
+          "incoming_gap_us": 71.792
+        },
+        "FillPadDeviceOperation": {
+          "ops": 192,
+          "kernel_us": 1439.376,
+          "incoming_gap_us": 197.28000000000003
+        },
+        "BinaryNgDeviceOperation": {
+          "ops": 352,
+          "kernel_us": 1053.536,
+          "incoming_gap_us": 180.72000000000003
+        },
+        "LayerNormDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 1018.5120000000001,
+          "incoming_gap_us": 121.44
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "ops": 48,
+          "kernel_us": 913.8240000000001,
+          "incoming_gap_us": 25.584000000000003
+        },
+        "SliceDeviceOperation": {
+          "ops": 512,
+          "kernel_us": 726.5120000000002,
+          "incoming_gap_us": 396.97600000000006
+        },
+        "ChunkGdnScanOperation": {
+          "ops": 48,
+          "kernel_us": 697.92,
+          "incoming_gap_us": 159.216
+        },
+        "ReshardDeviceOperation": {
+          "ops": 224,
+          "kernel_us": 535.744,
+          "incoming_gap_us": 193.35999999999999
+        },
+        "SigmoidGatedRmsNormOperation": {
+          "ops": 48,
+          "kernel_us": 535.008,
+          "incoming_gap_us": 23.52
+        },
+        "ReshapeViewDeviceOperation": {
+          "ops": 112,
+          "kernel_us": 482.33599999999996,
+          "incoming_gap_us": 67.45599999999999
+        },
+        "CopyDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 329.664,
+          "incoming_gap_us": 56.256
+        },
+        "SdpaDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 275.776,
+          "incoming_gap_us": 40.912
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "ops": 144,
+          "kernel_us": 187.936,
+          "incoming_gap_us": 120.736
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 166.28799999999998,
+          "incoming_gap_us": 119.648
+        },
+        "UntilizeCodegenDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 155.47199999999998,
+          "incoming_gap_us": 25.200000000000003
+        },
+        "ConcatDeviceOperation": {
+          "ops": 80,
+          "kernel_us": 135.232,
+          "incoming_gap_us": 49.792
+        },
+        "UnaryDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 119.952,
+          "incoming_gap_us": 25.200000000000003
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "ops": 32,
+          "kernel_us": 114.832,
+          "incoming_gap_us": 47.136
+        },
+        "TransposeDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 104.78399999999999,
+          "incoming_gap_us": 143.904
+        },
+        "TypecastDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 65.61600000000001,
+          "incoming_gap_us": 140.64
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 65.328,
+          "incoming_gap_us": 10.4
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 60.368,
+          "incoming_gap_us": 21.024
+        }
+      },
+      "matmuls": [
+        {
+          "index": 11,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 4160",
+          "kernel_us": 37.224,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            4160
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 4160,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 15,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=15;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 42,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.323,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 47,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 63.282,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 53,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.933,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 59,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 3584",
+          "kernel_us": 28.424,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            3584
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 3584,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 12,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=12;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 84,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.558,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 89,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 64.052,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 95,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.977,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 101,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 233.526,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 103,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 234.041,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 105,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 229.904,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 107,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 12928",
+          "kernel_us": 190.77,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            12928
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 12928,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 52,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=52;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        }
+      ],
+      "precision_and_collective_audit": {
+        "decoder_bf16_times_bfp4_lofi": true,
+        "head_bf16_times_bfp8_hifi2": true,
+        "collectives": [
+          {
+            "index": 3,
+            "segment": "entry_and_rope",
+            "op": "AllGatherAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 44,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 55,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 86,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 97,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 116,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 117,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "UINT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          }
+        ]
+      },
+      "sdpa_cache_audit": [
+        {
+          "index": 80,
+          "key_dtype": "BFLOAT8_B",
+          "value_dtype": "BFLOAT8_B"
+        }
+      ],
+      "route_audit": {
+        "topk_operations": [
+          {
+            "index": 113,
+            "op": "TopkRoutePrepDeviceOperation",
+            "reported_cores": 81
+          },
+          {
+            "index": 114,
+            "op": "TopkLargeIndicesDeviceOperation",
+            "reported_cores": 110
+          },
+          {
+            "index": 115,
+            "op": "TopkRouteFinishDeviceOperation",
+            "reported_cores": 2
+          }
+        ],
+        "topk_metrics": {
+          "ops": 3,
+          "kernel_us": 310.73400000000004,
+          "incoming_gap_us": 9.395999999999999,
+          "sum_us": 320.13000000000005,
+          "first_id": 1412,
+          "last_id": 1414
+        },
+        "uses_large_indices_topk": true,
+        "generic_topk_or_argmax": [],
+        "sampling_gathers": [
+          {
+            "index": 116,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "BFLOAT16"
+          },
+          {
+            "index": 117,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "UINT16"
+          }
+        ],
+        "gather_metrics": {
+          "ops": 2,
+          "kernel_us": 28.68,
+          "incoming_gap_us": 1.8980000000000001,
+          "sum_us": 30.578,
+          "first_id": 1415,
+          "last_id": 1416
+        },
+        "only_small_candidate_gathers": true,
+        "sampling_and_seed": [
+          {
+            "index": 138,
+            "op": "ManualSeedDeviceOperation",
+            "ops": 1,
+            "kernel_us": 18.14,
+            "incoming_gap_us": 4.664,
+            "sum_us": 22.804000000000002,
+            "first_id": 1437,
+            "last_id": 1437
+          },
+          {
+            "index": 139,
+            "op": "SamplingDeviceOperation",
+            "ops": 1,
+            "kernel_us": 27.142,
+            "incoming_gap_us": 35.449,
+            "sum_us": 62.590999999999994,
+            "first_id": 1438,
+            "last_id": 1438
+          }
+        ],
+        "trace_ids": [
+          "0",
+          "1"
+        ],
+        "all_token_out_rows_are_trace_replays": true
+      },
+      "extrapolation": {
+        "stack_kernel_sum_us": 22381.232,
+        "stack_with_profile_gaps_us": 24942.48,
+        "nonstack_kernel_us": 1435.813,
+        "nonstack_with_gaps_us": 1552.1380000000001,
+        "expanded_kernel_sum_us": 23817.045,
+        "expanded_with_profile_gaps_us": 26494.618
+      },
+      "prefill_gaps_gt_6us": {
+        "count": 10,
+        "sum_us": 628.171
+      }
+    },
+    {
+      "device": 1,
+      "phases": {
+        "prefill": {
+          "ops": 135,
+          "kernel_us": 3060.629,
+          "incoming_gap_us": 733.457,
+          "sum_us": 3794.086,
+          "first_id": 1014,
+          "last_id": 1148
+        },
+        "model": {
+          "ops": 113,
+          "kernel_us": 1638.609,
+          "incoming_gap_us": 122.277,
+          "sum_us": 1760.886,
+          "first_id": 1151,
+          "last_id": 1263
+        },
+        "sample": {
+          "ops": 31,
+          "kernel_us": 436.893,
+          "incoming_gap_us": 62.364,
+          "sum_us": 499.25699999999995,
+          "first_id": 1266,
+          "last_id": 1296
+        },
+        "token_out": {
+          "ops": 144,
+          "kernel_us": 2084.943,
+          "incoming_gap_us": 192.687,
+          "sum_us": 2277.63,
+          "first_id": 1299,
+          "last_id": 1442
+        }
+      },
+      "host_signpost_us": {
+        "prefill": 4982.027,
+        "model": 2157.266,
+        "sample": 867.565,
+        "token_out": 2712.827
+      },
+      "intervals_zero_based_half_open": {
+        "entry_and_rope": [
+          0,
+          9
+        ],
+        "linear_attention": [
+          9,
+          57
+        ],
+        "full_attention": [
+          57,
+          99
+        ],
+        "terminal_model": [
+          99,
+          113
+        ],
+        "sampling_without_history": [
+          113,
+          141
+        ],
+        "history_append": [
+          141,
+          144
+        ]
+      },
+      "boundary_audit": {
+        "norm_indices": [
+          9,
+          46,
+          57,
+          65,
+          66,
+          88,
+          99
+        ],
+        "hidden_norm_indices": [
+          9,
+          46,
+          57,
+          88,
+          99
+        ],
+        "hidden_norm_detection": "raw logical input width",
+        "sampling_boundary_source": "contiguous model/sampling trace-ID transition"
+      },
+      "persistent_geometry_from_raw": {
+        "page_table_shape": [
+          1,
+          8
+        ],
+        "cache_capacity": 256,
+        "history_capacity": 127
+      },
+      "segments": {
+        "entry_and_rope": {
+          "ops": 9,
+          "kernel_us": 28.845,
+          "incoming_gap_us": 35.977,
+          "sum_us": 64.822,
+          "first_id": 1299,
+          "last_id": 1307
+        },
+        "linear_attention": {
+          "ops": 48,
+          "kernel_us": 378.087,
+          "incoming_gap_us": 40.983,
+          "sum_us": 419.07,
+          "first_id": 1308,
+          "last_id": 1355
+        },
+        "full_attention": {
+          "ops": 42,
+          "kernel_us": 268.583,
+          "incoming_gap_us": 35.492,
+          "sum_us": 304.07500000000005,
+          "first_id": 1356,
+          "last_id": 1397
+        },
+        "terminal_model": {
+          "ops": 14,
+          "kernel_us": 974.85,
+          "incoming_gap_us": 9.577,
+          "sum_us": 984.427,
+          "first_id": 1398,
+          "last_id": 1411
+        },
+        "sampling_without_history": {
+          "ops": 28,
+          "kernel_us": 429.15200000000004,
+          "incoming_gap_us": 68.131,
+          "sum_us": 497.283,
+          "first_id": 1412,
+          "last_id": 1439
+        },
+        "history_append": {
+          "ops": 3,
+          "kernel_us": 5.426,
+          "incoming_gap_us": 2.527,
+          "sum_us": 7.953,
+          "first_id": 1440,
+          "last_id": 1442
+        }
+      },
+      "head_matmul_only": {
+        "ops": 4,
+        "kernel_us": 906.948,
+        "incoming_gap_us": 2.248,
+        "sum_us": 909.196,
+        "first_id": 1400,
+        "last_id": 1406
+      },
+      "decoder_weighted_op_groups": {
+        "MatmulDeviceOperation": {
+          "ops": 256,
+          "kernel_us": 9377.631999999998,
+          "incoming_gap_us": 138.72
+        },
+        "ChunkGdnPrepOperation": {
+          "ops": 48,
+          "kernel_us": 2138.3999999999996,
+          "incoming_gap_us": 178.752
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "ops": 128,
+          "kernel_us": 1743.1999999999998,
+          "incoming_gap_us": 72.464
+        },
+        "FillPadDeviceOperation": {
+          "ops": 192,
+          "kernel_us": 1419.312,
+          "incoming_gap_us": 196.608
+        },
+        "BinaryNgDeviceOperation": {
+          "ops": 352,
+          "kernel_us": 1052.464,
+          "incoming_gap_us": 180.79999999999998
+        },
+        "LayerNormDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 1010.496,
+          "incoming_gap_us": 124.44800000000001
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "ops": 48,
+          "kernel_us": 908.496,
+          "incoming_gap_us": 25.44
+        },
+        "SliceDeviceOperation": {
+          "ops": 512,
+          "kernel_us": 723.8720000000001,
+          "incoming_gap_us": 396.08
+        },
+        "ChunkGdnScanOperation": {
+          "ops": 48,
+          "kernel_us": 697.6800000000001,
+          "incoming_gap_us": 158.88
+        },
+        "SigmoidGatedRmsNormOperation": {
+          "ops": 48,
+          "kernel_us": 562.512,
+          "incoming_gap_us": 23.088
+        },
+        "ReshardDeviceOperation": {
+          "ops": 224,
+          "kernel_us": 527.744,
+          "incoming_gap_us": 194.41599999999997
+        },
+        "ReshapeViewDeviceOperation": {
+          "ops": 112,
+          "kernel_us": 483.008,
+          "incoming_gap_us": 66.96000000000001
+        },
+        "CopyDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 317.52,
+          "incoming_gap_us": 54.864000000000004
+        },
+        "SdpaDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 277.104,
+          "incoming_gap_us": 41.44
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "ops": 144,
+          "kernel_us": 217.02399999999997,
+          "incoming_gap_us": 99.296
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 169.53600000000003,
+          "incoming_gap_us": 119.24799999999999
+        },
+        "UntilizeCodegenDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 155.232,
+          "incoming_gap_us": 24.624000000000002
+        },
+        "ConcatDeviceOperation": {
+          "ops": 80,
+          "kernel_us": 134.832,
+          "incoming_gap_us": 50.256
+        },
+        "UnaryDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 120.576,
+          "incoming_gap_us": 25.248
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "ops": 32,
+          "kernel_us": 114.048,
+          "incoming_gap_us": 47.519999999999996
+        },
+        "TransposeDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 105.072,
+          "incoming_gap_us": 143.47199999999998
+        },
+        "TypecastDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 64.99199999999999,
+          "incoming_gap_us": 141.168
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 64.48,
+          "incoming_gap_us": 10.016
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 60.272,
+          "incoming_gap_us": 21.248
+        }
+      },
+      "matmuls": [
+        {
+          "index": 11,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 4160",
+          "kernel_us": 37.533,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            4160
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 4160,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 15,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=15;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 42,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 15.691,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 47,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 58.86,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 53,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 36.151,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 59,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 3584",
+          "kernel_us": 29.007,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            3584
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 3584,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 12,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=12;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 84,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 16.801,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 89,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 59.579,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 95,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 36.01,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 101,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 242.385,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 103,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 237.157,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 105,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 236.721,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 107,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 12928",
+          "kernel_us": 190.685,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            12928
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 12928,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 52,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=52;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        }
+      ],
+      "precision_and_collective_audit": {
+        "decoder_bf16_times_bfp4_lofi": true,
+        "head_bf16_times_bfp8_hifi2": true,
+        "collectives": [
+          {
+            "index": 3,
+            "segment": "entry_and_rope",
+            "op": "AllGatherAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 44,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 55,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 86,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 97,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 116,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 117,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "UINT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          }
+        ]
+      },
+      "sdpa_cache_audit": [
+        {
+          "index": 80,
+          "key_dtype": "BFLOAT8_B",
+          "value_dtype": "BFLOAT8_B"
+        }
+      ],
+      "route_audit": {
+        "topk_operations": [
+          {
+            "index": 113,
+            "op": "TopkRoutePrepDeviceOperation",
+            "reported_cores": 81
+          },
+          {
+            "index": 114,
+            "op": "TopkLargeIndicesDeviceOperation",
+            "reported_cores": 110
+          },
+          {
+            "index": 115,
+            "op": "TopkRouteFinishDeviceOperation",
+            "reported_cores": 2
+          }
+        ],
+        "topk_metrics": {
+          "ops": 3,
+          "kernel_us": 310.473,
+          "incoming_gap_us": 9.671000000000001,
+          "sum_us": 320.144,
+          "first_id": 1412,
+          "last_id": 1414
+        },
+        "uses_large_indices_topk": true,
+        "generic_topk_or_argmax": [],
+        "sampling_gathers": [
+          {
+            "index": 116,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "BFLOAT16"
+          },
+          {
+            "index": 117,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "UINT16"
+          }
+        ],
+        "gather_metrics": {
+          "ops": 2,
+          "kernel_us": 13.565999999999999,
+          "incoming_gap_us": 1.9329999999999998,
+          "sum_us": 15.498999999999999,
+          "first_id": 1415,
+          "last_id": 1416
+        },
+        "only_small_candidate_gathers": true,
+        "sampling_and_seed": [
+          {
+            "index": 138,
+            "op": "ManualSeedDeviceOperation",
+            "ops": 1,
+            "kernel_us": 18.327,
+            "incoming_gap_us": 4.688,
+            "sum_us": 23.015,
+            "first_id": 1437,
+            "last_id": 1437
+          },
+          {
+            "index": 139,
+            "op": "SamplingDeviceOperation",
+            "ops": 1,
+            "kernel_us": 27.253,
+            "incoming_gap_us": 35.893,
+            "sum_us": 63.146,
+            "first_id": 1438,
+            "last_id": 1438
+          }
+        ],
+        "trace_ids": [
+          "0",
+          "1"
+        ],
+        "all_token_out_rows_are_trace_replays": true
+      },
+      "extrapolation": {
+        "stack_kernel_sum_us": 22445.504,
+        "stack_with_profile_gaps_us": 24980.56,
+        "nonstack_kernel_us": 1438.2730000000001,
+        "nonstack_with_gaps_us": 1554.4850000000001,
+        "expanded_kernel_sum_us": 23883.777000000002,
+        "expanded_with_profile_gaps_us": 26535.045000000002
+      },
+      "prefill_gaps_gt_6us": {
+        "count": 10,
+        "sum_us": 628.888
+      }
+    },
+    {
+      "device": 2,
+      "phases": {
+        "prefill": {
+          "ops": 135,
+          "kernel_us": 3062.19,
+          "incoming_gap_us": 731.308,
+          "sum_us": 3793.498,
+          "first_id": 1014,
+          "last_id": 1148
+        },
+        "model": {
+          "ops": 113,
+          "kernel_us": 1645.971,
+          "incoming_gap_us": 121.066,
+          "sum_us": 1767.037,
+          "first_id": 1151,
+          "last_id": 1263
+        },
+        "sample": {
+          "ops": 31,
+          "kernel_us": 437.07099999999997,
+          "incoming_gap_us": 61.833,
+          "sum_us": 498.904,
+          "first_id": 1266,
+          "last_id": 1296
+        },
+        "token_out": {
+          "ops": 144,
+          "kernel_us": 2088.562,
+          "incoming_gap_us": 190.935,
+          "sum_us": 2279.497,
+          "first_id": 1299,
+          "last_id": 1442
+        }
+      },
+      "host_signpost_us": {
+        "prefill": 4982.027,
+        "model": 2157.266,
+        "sample": 867.565,
+        "token_out": 2712.827
+      },
+      "intervals_zero_based_half_open": {
+        "entry_and_rope": [
+          0,
+          9
+        ],
+        "linear_attention": [
+          9,
+          57
+        ],
+        "full_attention": [
+          57,
+          99
+        ],
+        "terminal_model": [
+          99,
+          113
+        ],
+        "sampling_without_history": [
+          113,
+          141
+        ],
+        "history_append": [
+          141,
+          144
+        ]
+      },
+      "boundary_audit": {
+        "norm_indices": [
+          9,
+          46,
+          57,
+          65,
+          66,
+          88,
+          99
+        ],
+        "hidden_norm_indices": [
+          9,
+          46,
+          57,
+          88,
+          99
+        ],
+        "hidden_norm_detection": "raw logical input width",
+        "sampling_boundary_source": "contiguous model/sampling trace-ID transition"
+      },
+      "persistent_geometry_from_raw": {
+        "page_table_shape": [
+          1,
+          8
+        ],
+        "cache_capacity": 256,
+        "history_capacity": 127
+      },
+      "segments": {
+        "entry_and_rope": {
+          "ops": 9,
+          "kernel_us": 30.357,
+          "incoming_gap_us": 34.895,
+          "sum_us": 65.25200000000001,
+          "first_id": 1299,
+          "last_id": 1307
+        },
+        "linear_attention": {
+          "ops": 48,
+          "kernel_us": 377.415,
+          "incoming_gap_us": 41.955,
+          "sum_us": 419.37,
+          "first_id": 1308,
+          "last_id": 1355
+        },
+        "full_attention": {
+          "ops": 42,
+          "kernel_us": 269.26,
+          "incoming_gap_us": 35.18,
+          "sum_us": 304.44,
+          "first_id": 1356,
+          "last_id": 1397
+        },
+        "terminal_model": {
+          "ops": 14,
+          "kernel_us": 971.032,
+          "incoming_gap_us": 9.813,
+          "sum_us": 980.845,
+          "first_id": 1398,
+          "last_id": 1411
+        },
+        "sampling_without_history": {
+          "ops": 28,
+          "kernel_us": 435.09200000000004,
+          "incoming_gap_us": 66.545,
+          "sum_us": 501.63700000000006,
+          "first_id": 1412,
+          "last_id": 1439
+        },
+        "history_append": {
+          "ops": 3,
+          "kernel_us": 5.406,
+          "incoming_gap_us": 2.547,
+          "sum_us": 7.952999999999999,
+          "first_id": 1440,
+          "last_id": 1442
+        }
+      },
+      "head_matmul_only": {
+        "ops": 4,
+        "kernel_us": 901.476,
+        "incoming_gap_us": 2.3019999999999996,
+        "sum_us": 903.778,
+        "first_id": 1400,
+        "last_id": 1406
+      },
+      "decoder_weighted_op_groups": {
+        "MatmulDeviceOperation": {
+          "ops": 256,
+          "kernel_us": 9505.568,
+          "incoming_gap_us": 144.048
+        },
+        "ChunkGdnPrepOperation": {
+          "ops": 48,
+          "kernel_us": 2137.488,
+          "incoming_gap_us": 178.848
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "ops": 128,
+          "kernel_us": 1580.4159999999997,
+          "incoming_gap_us": 73.40799999999999
+        },
+        "FillPadDeviceOperation": {
+          "ops": 192,
+          "kernel_us": 1450.32,
+          "incoming_gap_us": 196.56
+        },
+        "BinaryNgDeviceOperation": {
+          "ops": 352,
+          "kernel_us": 1057.312,
+          "incoming_gap_us": 182.95999999999998
+        },
+        "LayerNormDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 1014.768,
+          "incoming_gap_us": 121.136
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "ops": 48,
+          "kernel_us": 917.616,
+          "incoming_gap_us": 25.92
+        },
+        "ChunkGdnScanOperation": {
+          "ops": 48,
+          "kernel_us": 731.184,
+          "incoming_gap_us": 155.28
+        },
+        "SliceDeviceOperation": {
+          "ops": 512,
+          "kernel_us": 718.88,
+          "incoming_gap_us": 402.944
+        },
+        "ReshardDeviceOperation": {
+          "ops": 224,
+          "kernel_us": 537.984,
+          "incoming_gap_us": 195.216
+        },
+        "SigmoidGatedRmsNormOperation": {
+          "ops": 48,
+          "kernel_us": 528.672,
+          "incoming_gap_us": 25.200000000000003
+        },
+        "ReshapeViewDeviceOperation": {
+          "ops": 112,
+          "kernel_us": 481.79200000000003,
+          "incoming_gap_us": 68.928
+        },
+        "CopyDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 322.03200000000004,
+          "incoming_gap_us": 55.391999999999996
+        },
+        "SdpaDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 275.504,
+          "incoming_gap_us": 40.448
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "ops": 144,
+          "kernel_us": 183.02400000000003,
+          "incoming_gap_us": 125.168
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 165.152,
+          "incoming_gap_us": 119.77600000000001
+        },
+        "UntilizeCodegenDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 154.752,
+          "incoming_gap_us": 25.008000000000003
+        },
+        "ConcatDeviceOperation": {
+          "ops": 80,
+          "kernel_us": 134.48000000000002,
+          "incoming_gap_us": 50.080000000000005
+        },
+        "UnaryDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 119.616,
+          "incoming_gap_us": 25.344
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "ops": 32,
+          "kernel_us": 114.848,
+          "incoming_gap_us": 47.408
+        },
+        "TransposeDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 104.4,
+          "incoming_gap_us": 144.33599999999998
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 64.16,
+          "incoming_gap_us": 10.16
+        },
+        "TypecastDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 63.744,
+          "incoming_gap_us": 141.792
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 60.368,
+          "incoming_gap_us": 21.36
+        }
+      },
+      "matmuls": [
+        {
+          "index": 11,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 4160",
+          "kernel_us": 36.743,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            4160
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 4160,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 15,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=15;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 42,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.487,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 47,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 63.644,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 53,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.807,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 59,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 3584",
+          "kernel_us": 28.496,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            3584
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 3584,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 12,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=12;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 84,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.34,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 89,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 63.524,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 95,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.695,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 101,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 234.511,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 103,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 237.816,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 105,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 235.039,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 107,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 12928",
+          "kernel_us": 194.11,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            12928
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 12928,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 52,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=52;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        }
+      ],
+      "precision_and_collective_audit": {
+        "decoder_bf16_times_bfp4_lofi": true,
+        "head_bf16_times_bfp8_hifi2": true,
+        "collectives": [
+          {
+            "index": 3,
+            "segment": "entry_and_rope",
+            "op": "AllGatherAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 44,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 55,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 86,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 97,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 116,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 117,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "UINT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          }
+        ]
+      },
+      "sdpa_cache_audit": [
+        {
+          "index": 80,
+          "key_dtype": "BFLOAT8_B",
+          "value_dtype": "BFLOAT8_B"
+        }
+      ],
+      "route_audit": {
+        "topk_operations": [
+          {
+            "index": 113,
+            "op": "TopkRoutePrepDeviceOperation",
+            "reported_cores": 81
+          },
+          {
+            "index": 114,
+            "op": "TopkLargeIndicesDeviceOperation",
+            "reported_cores": 110
+          },
+          {
+            "index": 115,
+            "op": "TopkRouteFinishDeviceOperation",
+            "reported_cores": 2
+          }
+        ],
+        "topk_metrics": {
+          "ops": 3,
+          "kernel_us": 310.956,
+          "incoming_gap_us": 9.62,
+          "sum_us": 320.576,
+          "first_id": 1412,
+          "last_id": 1414
+        },
+        "uses_large_indices_topk": true,
+        "generic_topk_or_argmax": [],
+        "sampling_gathers": [
+          {
+            "index": 116,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "BFLOAT16"
+          },
+          {
+            "index": 117,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "UINT16"
+          }
+        ],
+        "gather_metrics": {
+          "ops": 2,
+          "kernel_us": 18.991999999999997,
+          "incoming_gap_us": 2.0949999999999998,
+          "sum_us": 21.086999999999996,
+          "first_id": 1415,
+          "last_id": 1416
+        },
+        "only_small_candidate_gathers": true,
+        "sampling_and_seed": [
+          {
+            "index": 138,
+            "op": "ManualSeedDeviceOperation",
+            "ops": 1,
+            "kernel_us": 18.33,
+            "incoming_gap_us": 4.524,
+            "sum_us": 22.854,
+            "first_id": 1437,
+            "last_id": 1437
+          },
+          {
+            "index": 139,
+            "op": "SamplingDeviceOperation",
+            "ops": 1,
+            "kernel_us": 27.116,
+            "incoming_gap_us": 34.606,
+            "sum_us": 61.722,
+            "first_id": 1438,
+            "last_id": 1438
+          }
+        ],
+        "trace_ids": [
+          "0",
+          "1"
+        ],
+        "all_token_out_rows_are_trace_replays": true
+      },
+      "extrapolation": {
+        "stack_kernel_sum_us": 22424.08,
+        "stack_with_profile_gaps_us": 25000.800000000003,
+        "nonstack_kernel_us": 1441.8870000000002,
+        "nonstack_with_gaps_us": 1555.6870000000001,
+        "expanded_kernel_sum_us": 23865.967,
+        "expanded_with_profile_gaps_us": 26556.487000000005
+      },
+      "prefill_gaps_gt_6us": {
+        "count": 10,
+        "sum_us": 626.4309999999999
+      }
+    },
+    {
+      "device": 3,
+      "phases": {
+        "prefill": {
+          "ops": 135,
+          "kernel_us": 3054.353,
+          "incoming_gap_us": 734.928,
+          "sum_us": 3789.281,
+          "first_id": 1014,
+          "last_id": 1148
+        },
+        "model": {
+          "ops": 113,
+          "kernel_us": 1645.833,
+          "incoming_gap_us": 121.084,
+          "sum_us": 1766.9170000000001,
+          "first_id": 1151,
+          "last_id": 1263
+        },
+        "sample": {
+          "ops": 31,
+          "kernel_us": 438.488,
+          "incoming_gap_us": 60.628,
+          "sum_us": 499.116,
+          "first_id": 1266,
+          "last_id": 1296
+        },
+        "token_out": {
+          "ops": 144,
+          "kernel_us": 2085.487,
+          "incoming_gap_us": 191.792,
+          "sum_us": 2277.279,
+          "first_id": 1299,
+          "last_id": 1442
+        }
+      },
+      "host_signpost_us": {
+        "prefill": 4982.027,
+        "model": 2157.266,
+        "sample": 867.565,
+        "token_out": 2712.827
+      },
+      "intervals_zero_based_half_open": {
+        "entry_and_rope": [
+          0,
+          9
+        ],
+        "linear_attention": [
+          9,
+          57
+        ],
+        "full_attention": [
+          57,
+          99
+        ],
+        "terminal_model": [
+          99,
+          113
+        ],
+        "sampling_without_history": [
+          113,
+          141
+        ],
+        "history_append": [
+          141,
+          144
+        ]
+      },
+      "boundary_audit": {
+        "norm_indices": [
+          9,
+          46,
+          57,
+          65,
+          66,
+          88,
+          99
+        ],
+        "hidden_norm_indices": [
+          9,
+          46,
+          57,
+          88,
+          99
+        ],
+        "hidden_norm_detection": "raw logical input width",
+        "sampling_boundary_source": "contiguous model/sampling trace-ID transition"
+      },
+      "persistent_geometry_from_raw": {
+        "page_table_shape": [
+          1,
+          8
+        ],
+        "cache_capacity": 256,
+        "history_capacity": 127
+      },
+      "segments": {
+        "entry_and_rope": {
+          "ops": 9,
+          "kernel_us": 32.391,
+          "incoming_gap_us": 34.742,
+          "sum_us": 67.133,
+          "first_id": 1299,
+          "last_id": 1307
+        },
+        "linear_attention": {
+          "ops": 48,
+          "kernel_us": 375.513,
+          "incoming_gap_us": 41.789,
+          "sum_us": 417.30199999999996,
+          "first_id": 1308,
+          "last_id": 1355
+        },
+        "full_attention": {
+          "ops": 42,
+          "kernel_us": 268.123,
+          "incoming_gap_us": 35.459,
+          "sum_us": 303.582,
+          "first_id": 1356,
+          "last_id": 1397
+        },
+        "terminal_model": {
+          "ops": 14,
+          "kernel_us": 970.09,
+          "incoming_gap_us": 9.852,
+          "sum_us": 979.942,
+          "first_id": 1398,
+          "last_id": 1411
+        },
+        "sampling_without_history": {
+          "ops": 28,
+          "kernel_us": 433.94100000000003,
+          "incoming_gap_us": 67.47800000000001,
+          "sum_us": 501.41900000000004,
+          "first_id": 1412,
+          "last_id": 1439
+        },
+        "history_append": {
+          "ops": 3,
+          "kernel_us": 5.429,
+          "incoming_gap_us": 2.472,
+          "sum_us": 7.901,
+          "first_id": 1440,
+          "last_id": 1442
+        }
+      },
+      "head_matmul_only": {
+        "ops": 4,
+        "kernel_us": 898.305,
+        "incoming_gap_us": 2.3249999999999997,
+        "sum_us": 900.63,
+        "first_id": 1400,
+        "last_id": 1406
+      },
+      "decoder_weighted_op_groups": {
+        "MatmulDeviceOperation": {
+          "ops": 256,
+          "kernel_us": 9301.712,
+          "incoming_gap_us": 142.75199999999998
+        },
+        "ChunkGdnPrepOperation": {
+          "ops": 48,
+          "kernel_us": 2138.16,
+          "incoming_gap_us": 177.40800000000002
+        },
+        "AllReduceAsyncDeviceOperation": {
+          "ops": 128,
+          "kernel_us": 1682.3519999999999,
+          "incoming_gap_us": 71.568
+        },
+        "FillPadDeviceOperation": {
+          "ops": 192,
+          "kernel_us": 1445.232,
+          "incoming_gap_us": 196.94400000000002
+        },
+        "BinaryNgDeviceOperation": {
+          "ops": 352,
+          "kernel_us": 1055.7279999999998,
+          "incoming_gap_us": 190.38400000000001
+        },
+        "LayerNormDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 1009.952,
+          "incoming_gap_us": 126.56
+        },
+        "QkvCausalConv1dSiluOperation": {
+          "ops": 48,
+          "kernel_us": 920.496,
+          "incoming_gap_us": 25.872
+        },
+        "ChunkGdnScanOperation": {
+          "ops": 48,
+          "kernel_us": 728.832,
+          "incoming_gap_us": 153.648
+        },
+        "SliceDeviceOperation": {
+          "ops": 512,
+          "kernel_us": 718.9119999999999,
+          "incoming_gap_us": 401.84
+        },
+        "ReshardDeviceOperation": {
+          "ops": 224,
+          "kernel_us": 537.104,
+          "incoming_gap_us": 193.552
+        },
+        "SigmoidGatedRmsNormOperation": {
+          "ops": 48,
+          "kernel_us": 531.648,
+          "incoming_gap_us": 25.92
+        },
+        "ReshapeViewDeviceOperation": {
+          "ops": 112,
+          "kernel_us": 482.192,
+          "incoming_gap_us": 68.192
+        },
+        "CopyDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 317.52,
+          "incoming_gap_us": 54.432
+        },
+        "SdpaDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 274.544,
+          "incoming_gap_us": 40.752
+        },
+        "InterleavedToShardedDeviceOperation": {
+          "ops": 144,
+          "kernel_us": 187.728,
+          "incoming_gap_us": 115.952
+        },
+        "ShardedToInterleavedDeviceOperation": {
+          "ops": 160,
+          "kernel_us": 165.92000000000002,
+          "incoming_gap_us": 121.664
+        },
+        "UntilizeCodegenDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 154.224,
+          "incoming_gap_us": 25.872
+        },
+        "ConcatDeviceOperation": {
+          "ops": 80,
+          "kernel_us": 133.68,
+          "incoming_gap_us": 50.96
+        },
+        "UnaryDeviceOperation": {
+          "ops": 48,
+          "kernel_us": 119.52000000000001,
+          "incoming_gap_us": 25.776000000000003
+        },
+        "RotaryEmbeddingDeviceOperation": {
+          "ops": 32,
+          "kernel_us": 113.44,
+          "incoming_gap_us": 47.408
+        },
+        "TransposeDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 104.88,
+          "incoming_gap_us": 144.24
+        },
+        "TypecastDeviceOperation": {
+          "ops": 96,
+          "kernel_us": 66.192,
+          "incoming_gap_us": 140.352
+        },
+        "PagedFusedUpdateCacheDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 64.256,
+          "incoming_gap_us": 10.048
+        },
+        "NLPCreateQKVHeadsDecodeDeviceOperation": {
+          "ops": 16,
+          "kernel_us": 60.368,
+          "incoming_gap_us": 21.12
+        }
+      },
+      "matmuls": [
+        {
+          "index": 11,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 4160",
+          "kernel_us": 36.864,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            4160
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 4160,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 15,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=15;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 42,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.706,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 47,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 60.202,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 53,
+          "segment": "linear_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.805,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 59,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 3584",
+          "kernel_us": 28.387,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            3584
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 3584,
+          "k_block_tiles": 16,
+          "output_per_core_n_tiles": 12,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=16;per_core_M=1;per_core_N=12;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 84,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 1536 x 5120",
+          "kernel_us": 14.296,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            1536,
+            5120
+          ],
+          "weight_padded_k": 1536,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 6,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=6;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 89,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 5120 x 8704",
+          "kernel_us": 59.944,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            8704
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 8704,
+          "k_block_tiles": 4,
+          "output_per_core_n_tiles": 8,
+          "readers_per_bank": 3,
+          "native_compute_workers": 24,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=4;per_core_M=1;per_core_N=8;fused_activation=std::nullopt;num_workers_per_dram_bank=3)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 95,
+          "segment": "full_attention",
+          "op": "MatmulDeviceOperation 32 x 4352 x 5120",
+          "kernel_us": 35.999,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT4_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "LoFi BF16 x BFP4 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            4352,
+            5120
+          ],
+          "weight_padded_k": 4352,
+          "weight_padded_n": 5120,
+          "k_block_tiles": 17,
+          "output_per_core_n_tiles": 20,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=LoFi;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=17;per_core_M=1;per_core_N=20;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 101,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 235.964,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 103,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 232.957,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 105,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 16384",
+          "kernel_us": 237.916,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            16384
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 16384,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 64,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=64;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        },
+        {
+          "index": 107,
+          "segment": "terminal_model",
+          "op": "MatmulDeviceOperation 32 x 5120 x 12928",
+          "kernel_us": 191.468,
+          "activation_dtype": "BFLOAT16",
+          "weight_dtype": "BFLOAT8_B",
+          "output_dtype": "BFLOAT16",
+          "math_fidelity": "HiFi2 BF16 x BFP8 => BF16",
+          "dram_sharded": "True",
+          "weight_memory": "DEV_0_DRAM_WIDTH_SHARDED",
+          "weight_shape": [
+            1,
+            1,
+            5120,
+            12928
+          ],
+          "weight_padded_k": 5120,
+          "weight_padded_n": 12928,
+          "k_block_tiles": 5,
+          "output_per_core_n_tiles": 52,
+          "readers_per_bank": 2,
+          "native_compute_workers": 16,
+          "reported_cores": 8,
+          "attributes": "{'bcast_batch': 'true'; 'compute_kernel_config': 'ComputeKernelConfig(math_fidelity=HiFi2;math_approx_mode=0;fp32_dest_acc_en=1;packer_l1_acc=1;dst_full_sync_en=0;throttle_level=ThrottleLevel::NO_THROTTLE)'; 'global_cb': 'std::nullopt'; 'output_dtype': 'DataType::BFLOAT16'; 'output_mem_config': 'MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED;buffer_type=BufferType::L1;shard_spec=std::nullopt;nd_shard_spec=std::nullopt;created_with_nd_shard_spec=0;per_core_allocation=0)'; 'output_tile': 'Tile(tile_shape={32; 32};face_shape={16; 16};num_faces=4)'; 'program_config': 'MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(in0_block_w=5;per_core_M=1;per_core_N=52;fused_activation=std::nullopt;num_workers_per_dram_bank=2)'; 'sub_device_id': 'std::nullopt'; 'transpose_a': 'false'; 'transpose_b': 'false'; 'untilize_out': 'false'; 'user_core_coord': 'std::nullopt'; 'user_fused_activation': 'std::nullopt'; 'user_run_batched': 'false'}"
+        }
+      ],
+      "precision_and_collective_audit": {
+        "decoder_bf16_times_bfp4_lofi": true,
+        "head_bf16_times_bfp8_hifi2": true,
+        "collectives": [
+          {
+            "index": 3,
+            "segment": "entry_and_rope",
+            "op": "AllGatherAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 44,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 55,
+            "segment": "linear_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 86,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 97,
+            "segment": "full_attention",
+            "op": "AllReduceAsyncDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_L1_WIDTH_SHARDED"
+          },
+          {
+            "index": 116,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "BFLOAT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          },
+          {
+            "index": 117,
+            "segment": "sampling_without_history",
+            "op": "AllGatherDeviceOperation",
+            "dtype": "UINT16",
+            "input_memory": "DEV_0_DRAM_INTERLEAVED"
+          }
+        ]
+      },
+      "sdpa_cache_audit": [
+        {
+          "index": 80,
+          "key_dtype": "BFLOAT8_B",
+          "value_dtype": "BFLOAT8_B"
+        }
+      ],
+      "route_audit": {
+        "topk_operations": [
+          {
+            "index": 113,
+            "op": "TopkRoutePrepDeviceOperation",
+            "reported_cores": 81
+          },
+          {
+            "index": 114,
+            "op": "TopkLargeIndicesDeviceOperation",
+            "reported_cores": 110
+          },
+          {
+            "index": 115,
+            "op": "TopkRouteFinishDeviceOperation",
+            "reported_cores": 2
+          }
+        ],
+        "topk_metrics": {
+          "ops": 3,
+          "kernel_us": 310.634,
+          "incoming_gap_us": 9.416,
+          "sum_us": 320.05,
+          "first_id": 1412,
+          "last_id": 1414
+        },
+        "uses_large_indices_topk": true,
+        "generic_topk_or_argmax": [],
+        "sampling_gathers": [
+          {
+            "index": 116,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "BFLOAT16"
+          },
+          {
+            "index": 117,
+            "op": "AllGatherDeviceOperation",
+            "input_shape": [
+              1,
+              1,
+              32,
+              32
+            ],
+            "output_shape": [
+              1,
+              1,
+              32,
+              128
+            ],
+            "dtype": "UINT16"
+          }
+        ],
+        "gather_metrics": {
+          "ops": 2,
+          "kernel_us": 17.921999999999997,
+          "incoming_gap_us": 2.174,
+          "sum_us": 20.095999999999997,
+          "first_id": 1415,
+          "last_id": 1416
+        },
+        "only_small_candidate_gathers": true,
+        "sampling_and_seed": [
+          {
+            "index": 138,
+            "op": "ManualSeedDeviceOperation",
+            "ops": 1,
+            "kernel_us": 18.404,
+            "incoming_gap_us": 4.65,
+            "sum_us": 23.054000000000002,
+            "first_id": 1437,
+            "last_id": 1437
+          },
+          {
+            "index": 139,
+            "op": "SamplingDeviceOperation",
+            "ops": 1,
+            "kernel_us": 27.284,
+            "incoming_gap_us": 35.258,
+            "sum_us": 62.542,
+            "first_id": 1438,
+            "last_id": 1438
+          }
+        ],
+        "trace_ids": [
+          "0",
+          "1"
+        ],
+        "all_token_out_rows_are_trace_replays": true
+      },
+      "extrapolation": {
+        "stack_kernel_sum_us": 22314.592,
+        "stack_with_profile_gaps_us": 24887.807999999997,
+        "nonstack_kernel_us": 1441.851,
+        "nonstack_with_gaps_us": 1556.395,
+        "expanded_kernel_sum_us": 23756.443,
+        "expanded_with_profile_gaps_us": 26444.202999999998
+      },
+      "prefill_gaps_gt_6us": {
+        "count": 10,
+        "sum_us": 629.442
+      }
+    }
+  ],
+  "summary": {
+    "extrapolation": {
+      "stack_kernel_sum_us": {
+        "min": 22314.592,
+        "median": 22402.656000000003,
+        "max": 22445.504
+      },
+      "stack_with_profile_gaps_us": {
+        "min": 24887.807999999997,
+        "median": 24961.52,
+        "max": 25000.800000000003
+      },
+      "nonstack_kernel_us": {
+        "min": 1435.813,
+        "median": 1440.0620000000001,
+        "max": 1441.8870000000002
+      },
+      "nonstack_with_gaps_us": {
+        "min": 1552.1380000000001,
+        "median": 1555.0860000000002,
+        "max": 1556.395
+      },
+      "expanded_kernel_sum_us": {
+        "min": 23756.443,
+        "median": 23841.506,
+        "max": 23883.777000000002
+      },
+      "expanded_with_profile_gaps_us": {
+        "min": 26444.202999999998,
+        "median": 26514.8315,
+        "max": 26556.487000000005
+      },
+      "full_unprofiled_minus_expanded_kernels_us": {
+        "min": 877.8886637919204,
+        "median": 920.1596637919229,
+        "max": 1005.222663791923
+      }
+    },
+    "segments_us": {
+      "entry_and_rope": {
+        "min": 64.822,
+        "median": 65.188,
+        "max": 67.133
+      },
+      "linear_attention": {
+        "min": 417.30199999999996,
+        "median": 418.734,
+        "max": 419.37
+      },
+      "full_attention": {
+        "min": 303.582,
+        "median": 303.89300000000003,
+        "max": 304.44
+      },
+      "terminal_model": {
+        "min": 967.417,
+        "median": 980.3935,
+        "max": 984.427
+      },
+      "sampling_without_history": {
+        "min": 497.283,
+        "median": 501.528,
+        "max": 511.65700000000004
+      },
+      "history_append": {
+        "min": 7.901,
+        "median": 7.9465,
+        "max": 7.953
+      }
+    }
+  },
+  "same_profile_accounting": {
+    "token_out_device_span_us": {
+      "min": 2274.2470000000003,
+      "median": 2277.4545,
+      "max": 2279.497
+    },
+    "host_signpost_us_per_device": {
+      "0": 2712.827,
+      "1": 2712.827,
+      "2": 2712.827,
+      "3": 2712.827
+    },
+    "host_minus_device_span_us_per_device": {
+      "0": 438.5799999999999,
+      "1": 435.1970000000001,
+      "2": 433.3300000000004,
+      "3": 435.54800000000023
+    },
+    "scope": "Reduced-layer, instrumented, synchronized signpost window only; not full-model host overhead. Use token_out directly, not separately drained model+sample windows.",
+    "theoretical_read_lower_bound": {
+      "minimum_context_positions": 129,
+      "batch": 1,
+      "representative_layer_counts": {
+        "linear_attention": 1,
+        "full_attention": 1
+      },
+      "read_bytes_per_device_lower_bound": 450483200,
+      "roofline_ms_per_token_lower_bound": 0.8798499999999999,
+      "context_scope": "B1 run_full_model.py prompt plus at least one decode; extra standalone replays may advance context. Count minimum required KV tiles, not allocated cache capacity."
+    }
+  },
+  "theoretical_read_bound": {
+    "status": "estimated_from_verified_stored_geometry",
+    "stored_projection_read_bytes_per_layer_per_device": {
+      "linear_attention": 56770560,
+      "full_attention": 53821440
+    },
+    "profile_decoder_sha_matches_stage5": true,
+    "stage5_decoder_source_sha256": "211b70db973294f7660ba9cd3c4ef0601ffbac32dab4866e3511b4804ff76213",
+    "nominal_dram_bandwidth_bytes_per_second_per_device": 512000000000.0,
+    "decoder_projection_read_bytes_per_device": 3586129920,
+    "selected_head_chunks": [
+      {
+        "logical_k_n": [
+          5120,
+          16384
+        ],
+        "dtype": "BFLOAT8_B",
+        "readers_per_bank": 2,
+        "physical_n_tiles_per_bank": 64,
+        "stored_weight_bytes_per_device": 89128960
+      },
+      {
+        "logical_k_n": [
+          5120,
+          16384
+        ],
+        "dtype": "BFLOAT8_B",
+        "readers_per_bank": 2,
+        "physical_n_tiles_per_bank": 64,
+        "stored_weight_bytes_per_device": 89128960
+      },
+      {
+        "logical_k_n": [
+          5120,
+          16384
+        ],
+        "dtype": "BFLOAT8_B",
+        "readers_per_bank": 2,
+        "physical_n_tiles_per_bank": 64,
+        "stored_weight_bytes_per_device": 89128960
+      },
+      {
+        "logical_k_n": [
+          5120,
+          12928
+        ],
+        "dtype": "BFLOAT8_B",
+        "readers_per_bank": 2,
+        "physical_n_tiles_per_bank": 52,
+        "stored_weight_bytes_per_device": 72417280
+      }
+    ],
+    "selected_head_read_bytes_per_device": 339804160,
+    "kv_bytes_per_position_per_full_layer_per_device": 544,
+    "active_context_positions": {
+      "first": 129,
+      "last": 255,
+      "count": 127
+    },
+    "kv_read_bytes_per_device": {
+      "min": 1392640,
+      "median": 1671168,
+      "max": 2228224,
+      "mean": 1807142.2992125985
+    },
+    "total_read_bytes_per_device": {
+      "min": 3927326720,
+      "median": 3927605248,
+      "max": 3928162304,
+      "mean": 3927741222.2992125
+    },
+    "roofline_ms_per_token_estimate": {
+      "min": 7.67056,
+      "median": 7.671104,
+      "max": 7.672192000000001,
+      "mean": 7.671369574803149
+    },
+    "applies_to_benchmark_runtime": true,
+    "reduced_profile_read_bound": {
+      "minimum_context_positions": 129,
+      "batch": 1,
+      "representative_layer_counts": {
+        "linear_attention": 1,
+        "full_attention": 1
+      },
+      "read_bytes_per_device_lower_bound": 450483200,
+      "roofline_ms_per_token_lower_bound": 0.8798499999999999,
+      "context_scope": "B1 run_full_model.py prompt plus at least one decode; extra standalone replays may advance context. Count minimum required KV tiles, not allocated cache capacity."
+    },
+    "formula": "(sum(layer_count[kind]*stored_projection_bytes[kind]) +selected_head_tiles +full_layer_count*batch*ceil(active_context/32)*32*kv_bytes_per_position)/nominal_device_bandwidth*1000",
+    "head_storage_contract": "bank_tiles=readers*ceil(padded_N/(32*8*readers)); verify all banks active and head per_core_N equals derived physical bank width. per_core_N is not generally input-B geometry.",
+    "scope": "Read-only lower bound on projection weights, head tiles and unique required BF8 K/V tiles. Excludes recurrent state, constants, embeddings, activations, writes, extra KV rereads, CCL and dispatch. Nominal bandwidth is not a measured attainable target."
+  },
+  "full_benchmark": {
+    "immediate_delivery": {
+      "decode_tokens": 127,
+      "ms_per_token": 24.796400512531985,
+      "tokens_per_second": 40.32843393921649,
+      "ttft_ms": 58.85206628590822
+    },
+    "queued_token_out": {
+      "decode_tokens": 127,
+      "ms_per_token": 24.755848696323362,
+      "tokens_per_second": 40.39449474210577,
+      "ttft_ms": 58.59411507844925
+    },
+    "deferred_delivery": {
+      "decode_tokens": 127,
+      "ms_per_token": 24.761665663791923,
+      "tokens_per_second": 40.38500533759582,
+      "ttft_ms": 59.29535161703825
+    },
+    "teacher_forcing_with_token_delivery": {
+      "decode_tokens": 99,
+      "ms_per_token": 24.85225773933861,
+      "tokens_per_second": 40.23779289947976,
+      "ttft_ms": 77.23285257816315
+    }
+  },
+  "whole_loop_delivery_differences": {
+    "immediate_delivery_minus_queued_token_out_us": 40.55181620862314,
+    "deferred_delivery_minus_queued_token_out_us": 5.816967468561529,
+    "immediate_delivery_minus_deferred_delivery_us": 34.73484874006161
+  },
+  "source_manifest_audit": {
+    "profile_metadata": {
+      "sampling_strategy": "split",
+      "full": false,
+      "prompt": [
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716,
+        310,
+        830,
+        11553,
+        13,
+        5044,
+        1683,
+        15060,
+        1472,
+        279,
+        3274,
+        11,
+        9307,
+        1328,
+        30800,
+        11,
+        2814,
+        47675,
+        25605,
+        11,
+        321,
+        60445,
+        55404,
+        11,
+        27224,
+        11,
+        321,
+        30246,
+        303,
+        279,
+        1534,
+        4087,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        814,
+        20139,
+        3069,
+        279,
+        12515,
+        369,
+        6105,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716,
+        310,
+        830,
+        11553,
+        13,
+        5044,
+        1683,
+        15060,
+        1472,
+        279,
+        3274,
+        11,
+        9307,
+        1328,
+        30800,
+        11,
+        2814,
+        47675,
+        25605,
+        11,
+        321,
+        60445,
+        55404,
+        11,
+        27224,
+        11,
+        321,
+        30246,
+        303,
+        279,
+        1534,
+        4087,
+        13,
+        248046,
+        198,
+        248045,
+        846,
+        198,
+        814,
+        20139,
+        3069,
+        279,
+        12515,
+        369,
+        6105,
+        13,
+        248046,
+        198,
+        248045,
+        74455,
+        198,
+        248068,
+        198,
+        248045,
+        8678,
+        198,
+        24342,
+        286,
+        4879,
+        369,
+        716
+      ],
+      "output": [
+        220,
+        220
+      ],
+      "text": "  ",
+      "repeat_equal": true,
+      "perf": {
+        "ttft_s": 0.004729665815830231,
+        "decode_s": 0.0023866035044193268,
+        "decode_tokens": 1,
+        "tokens_per_second": 419.00550223289196,
+        "counters": {
+          "seed_refreshes": 2,
+          "position_refreshes": 2,
+          "token_refreshes": 1,
+          "rope_refreshes": 2,
+          "history_cursor_refreshes": 1,
+          "resets": 1,
+          "token_readbacks": 1,
+          "model_replays": 1,
+          "sampling_replays": 1,
+          "history_appends": 1,
+          "history_readbacks": 1,
+          "prefill_token_refreshes": 1,
+          "prefill_replays": 1
+        },
+        "steady_state_counters": {
+          "model_replays": 1,
+          "sampling_replays": 1,
+          "history_appends": 1
+        },
+        "delivery_counters": {
+          "history_readbacks": 1
+        },
+        "deferred_token_readback": true,
+        "prefill_trace_eligible": true,
+        "history_capacity": 127,
+        "host_sampling": false,
+        "teacher_forcing": false
+      },
+      "head_strategy": "dram",
+      "head_comparison": null,
+      "persistent_geometry": {
+        "cache_capacity": 256,
+        "page_table_shape": [
+          1,
+          8
+        ],
+        "history_capacity": 127
+      }
+    },
+    "profile_manifest": {
+      "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "c790a57d53a3d2bbf9461400088dbd6281aba72ce98285513badc6bb8ad9623c",
+      "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "3f324562925d42fb0c2997672f86fe68926a21869d3f2d351d1f5c3ba9792035",
+      "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "21ebbb0fb0654308171645f77da58e8e424d43db936a9b41e65df9c4982efa0d",
+      "models/autoports/qwen_qwen3_8_27b/tt/model.py": "bf7b0c8a88b158e0c346b97cbf16ca4d9e1fb56b677a3f822d60fbd0db039bcb",
+      "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "211b70db973294f7660ba9cd3c4ef0601ffbac32dab4866e3511b4804ff76213",
+      "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "4797849af321c854084a998f4d5ce4bd6c36dd442a6886efef581391efcffd26",
+      "models/autoports/qwen_qwen3_8_27b/tests/archive_full_model_profiles.py": "f9a3bb05c7483e8101de21f82899594428b4fd16812a74531d7ea5c070b4985a",
+      "models/autoports/qwen_qwen3_8_27b/tests/benchmark_full_model.py": "a43db5067939bc50ee662dd7723eb4b9f43b8de037bf5a933fde138a5782904d",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_deferred_generation.py": "0bac1706b6168f0e90e90d6535d7672355ad2f4f4d9fbab6e23c1b796a0cb2f5",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_prefill_tracing.py": "3e6cf620d4a443b9732896bfbfe39364412b7f0a1f45422f5822c3454d93944b",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_qualitative_artifacts.py": "8121e4e5a1d0e0530c48698b85afbe9ca5b404196b861e10e98e0e010520a2b5",
+      "models/autoports/qwen_qwen3_8_27b/tests/compact_multichip_artifacts.py": "ac64f220eb311341cbddd4d28d4c895e86f8a3de4c35bf1466be2e0a401bc8fe",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_contract.py": "2901e32ef75789526eee79a5670152d62a20bdbc3031ad133fcc2c0b0c3e1cfe",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_memory.py": "d986e6608f6beccf2fb04532a7706e7142c11785a8830c93952ca6786d18a773",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_profile_summary.py": "04f931dbff2a69115a42a17651c093ac751b2d8317b8786af9e336c2b33caf30",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_profile_tables.py": "2b707d1a473fbeab81855e7dccde16f76e4739ed6f58de16c5d10820c0792b73",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_shapes.py": "0d34838f79ed0fc527277c5cb834cd10b8258eac62e19c0f9f75b2f4d1893ee9",
+      "models/autoports/qwen_qwen3_8_27b/tests/gdn_multichip_probe.py": "2a98935650e3dc556054450f9bf696072d08ba6a8155315d70b59ed37509595e",
+      "models/autoports/qwen_qwen3_8_27b/tests/hf_qualitative.py": "46502d889c609e859e2d5cef85445e13429582788312ad781ef8544933751886",
+      "models/autoports/qwen_qwen3_8_27b/tests/hf_reference.py": "7a7f3565f9ae9cdcaa25d2e66468be8c30461a249688be8322de89a751359cd0",
+      "models/autoports/qwen_qwen3_8_27b/tests/mesh_smoke.py": "e0d84e50b020245bacb8666d07e738f2604a109712e6b80426a5dfb62808b9bc",
+      "models/autoports/qwen_qwen3_8_27b/tests/multichip_memory_plan.py": "14ae81a866cf3823ab0702af29ac31a8a7c5edf2d93a15ee623a3624e28e4547",
+      "models/autoports/qwen_qwen3_8_27b/tests/multichip_profile_tables.py": "8c146b07c61077b3dc7c426a53498beca626ed86a48ecb774b74c5a980c701db",
+      "models/autoports/qwen_qwen3_8_27b/tests/optimized_multichip_accounting.py": "0d207ece8e11a5987ce027c99579f2a1c52a1c1f168f087df317c75ff71e3937",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_fused_batch3.py": "7401a37d72201b5adbec776842c4c4a2a476a5101f1554377aaaa8e243fc545b",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_lm_head_geometry.py": "41c8b34ceae5af517f2086a84f2190f716cea26a0559fc73992df3e40224aab8",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_token_history.py": "364b55b049a30087ae6b9ec6d228e514c7d701cbf9cc8114c88ad24f2966de5c",
+      "models/autoports/qwen_qwen3_8_27b/tests/record_decoder_activations.py": "b56441009931217796ae4a084146edbfe26d2346c4d0a2fc06ffc129a104d2cc",
+      "models/autoports/qwen_qwen3_8_27b/tests/reference.py": "ed75eaf6264788d224feb168cb15e03dda30d1683f176db75280202ea094953e",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_decoder.py": "c51c6861b29be120d4720989e6687cd268377844d97a46e08e6c21001c5e48aa",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_full_model.py": "39f4861cbc71b10358b1438a34a68f51a832bc04b657f976d8721e8c211c3b36",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_fused_context.py": "ba1cf6c832afcc75f867212c71dd38230d4559a61a75206f3a6211243e403c28",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py": "f459652fe055df827a61aaac590c1dcf4ce8bd9fe977818feef67cc14cce67d9",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_multichip_capacity.py": "a287bb160381c18b070a9ccd86ca1b47f68e06bdde12e9e4dd8064cad783ae68",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_multichip_decoder.py": "22b17036b15d2c85626b4113f397d9f2ddc2274517ba5c9f116ae0b9196fa294",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_optimized_context.py": "c3965fe1b50008b5cf146ac46ffb35f1b60957ddcf94be086616e23ea11fd2ec",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py": "fdce3a6cf49f4626c1d4b776d2ba2e735a4d480d6907955fe8320670e2082927",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_readiness.py": "4eb99d13b19e6a3b9ec5057f7e56fc26f3bc3360ff904114eaf9b5ba159a0d6f",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_unchunked_control.py": "caed8c55daa116fe8685cd7396a19eb71bb6a994cd3c44dcf1340b3c7b12c254",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_full_model_perf.py": "802c506494a7ea856613a0208c4a240261097bbc9393b6bfb83bbdaf811ecbfc",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_multichip_performance.py": "34533f6339e90081baf06656c065ac47509ac25be5264d60c3f11274bec3f292",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_multichip_validation.py": "6c672371e0bda8ccf5214615852e6981b17c2ce93e6b5379fa4215aa9f27b565",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_optimization.py": "38ff85fa12dbeb6f02ce45c1713765db44ec1314dd18260572e421688952df50",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_optimized_multichip.py": "b654a7e46863f63352c5ecd0e737ea2a6dd8e9df9da605434a785b7d9dc416b1",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_multichip_decoder.py": "7617d5a5e3f0eb46675164ac6e1f286db8c4b68f2de7ac027bd80086e804d62d",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_optimized_decoder.py": "a1ca819eb33176c62847e4bf8704ef350531d0011bfad1d3e99d02dc836b2a3e",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_optimized_multichip_decoder.py": "2d63d2f9a8e78606501b43a0acbd3d64127efb22dc952c09aa596cfe274e6f85",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py": "71c8bb879e204ca96314ef1516b413974a910998f2266e6e7b48bbcbce2e8c05",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_fused_decoder.py": "8505305f486da8df8d5fbca060ad4b784f0528da64c6e575f6df32703703fe76",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_multichip_decoder.py": "0a3cbdc28a52a7350eeb9cc953873a1a192190be6ed4f3b2b46a86a78314cef8",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py": "7596b7f14485d489120ec46bd8a4c78b760cec2f15d26a4e189ff9e95aad5950",
+      "models/autoports/qwen_qwen3_8_27b/tests/tt_qualitative.py": "61c6f1c33d66e36696d395937a5683c2c7f79188a752be3be2be87b06fd69966",
+      "models/autoports/qwen_qwen3_8_27b/tests/tune_decoder_projections.py": "5f960c00fd7560104a76a9f30fb0a32e509e5a140835bec7e111a2eb171c9b63",
+      "models/autoports/qwen_qwen3_8_27b/tests/tune_multichip_projections.py": "ab7e7e308db1b516f9968a155253d6d625b79a9d494fc04c9c1f3b9ce43db187",
+      "models/autoports/qwen_qwen3_8_27b/tests/untilize_candidate.py": "504884a98cf5b96e7271f916b099311a0ad3deba96ada62e9a7be3376f9006fd",
+      "models/autoports/qwen_qwen3_8_27b/tests/verify_optimized_multichip_evidence.py": "cf3f687f1a0d0cd2ce895516355fae5327608e7ee44f58bfbc4314674ea428c5",
+      "models/autoports/qwen_qwen3_8_27b/tests/watch_multichip_decoder.py": "02920c32b26eb8378dd720e10d5788cd95fe56324b82a065baefa565621a5dc3",
+      "models/common/sampling/tt_sampling.py": "a2bf86fb456c10c6d6d8fc3fee1dfe05f5828c3c55808f40c8f752e588ff0fc2",
+      "models/common/sampling/generator.py": "ceed18667c4ca4e1cecfecf9459ddcb137360c6f90c7ffbb97871792b925279a",
+      "ttnn/ttnn/_ttnn.so": "ecded1567a8f871a44e3fc8b16ecb0650992fb3417b4fa64efb5520e47c76ab9",
+      "build/lib/_ttnncpp.so": "3b24cd738cf671f7dcd76a4bf1336feedeb64737d054a254bb29012598f98712"
+    },
+    "benchmark_manifest": {
+      "models/autoports/qwen_qwen3_8_27b/tt/functional_decoder.py": "c790a57d53a3d2bbf9461400088dbd6281aba72ce98285513badc6bb8ad9623c",
+      "models/autoports/qwen_qwen3_8_27b/tt/fused_decoder.py": "3f324562925d42fb0c2997672f86fe68926a21869d3f2d351d1f5c3ba9792035",
+      "models/autoports/qwen_qwen3_8_27b/tt/generator.py": "21ebbb0fb0654308171645f77da58e8e424d43db936a9b41e65df9c4982efa0d",
+      "models/autoports/qwen_qwen3_8_27b/tt/model.py": "bf7b0c8a88b158e0c346b97cbf16ca4d9e1fb56b677a3f822d60fbd0db039bcb",
+      "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": "211b70db973294f7660ba9cd3c4ef0601ffbac32dab4866e3511b4804ff76213",
+      "models/autoports/qwen_qwen3_8_27b/tt/optimized_decoder.py": "4797849af321c854084a998f4d5ce4bd6c36dd442a6886efef581391efcffd26",
+      "models/autoports/qwen_qwen3_8_27b/tests/archive_full_model_profiles.py": "f9a3bb05c7483e8101de21f82899594428b4fd16812a74531d7ea5c070b4985a",
+      "models/autoports/qwen_qwen3_8_27b/tests/benchmark_full_model.py": "a43db5067939bc50ee662dd7723eb4b9f43b8de037bf5a933fde138a5782904d",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_deferred_generation.py": "0bac1706b6168f0e90e90d6535d7672355ad2f4f4d9fbab6e23c1b796a0cb2f5",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_prefill_tracing.py": "3e6cf620d4a443b9732896bfbfe39364412b7f0a1f45422f5822c3454d93944b",
+      "models/autoports/qwen_qwen3_8_27b/tests/check_qualitative_artifacts.py": "8121e4e5a1d0e0530c48698b85afbe9ca5b404196b861e10e98e0e010520a2b5",
+      "models/autoports/qwen_qwen3_8_27b/tests/compact_multichip_artifacts.py": "ac64f220eb311341cbddd4d28d4c895e86f8a3de4c35bf1466be2e0a401bc8fe",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_contract.py": "2901e32ef75789526eee79a5670152d62a20bdbc3031ad133fcc2c0b0c3e1cfe",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_memory.py": "d986e6608f6beccf2fb04532a7706e7142c11785a8830c93952ca6786d18a773",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_profile_summary.py": "04f931dbff2a69115a42a17651c093ac751b2d8317b8786af9e336c2b33caf30",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_profile_tables.py": "2b707d1a473fbeab81855e7dccde16f76e4739ed6f58de16c5d10820c0792b73",
+      "models/autoports/qwen_qwen3_8_27b/tests/full_model_shapes.py": "0d34838f79ed0fc527277c5cb834cd10b8258eac62e19c0f9f75b2f4d1893ee9",
+      "models/autoports/qwen_qwen3_8_27b/tests/gdn_multichip_probe.py": "2a98935650e3dc556054450f9bf696072d08ba6a8155315d70b59ed37509595e",
+      "models/autoports/qwen_qwen3_8_27b/tests/hf_qualitative.py": "46502d889c609e859e2d5cef85445e13429582788312ad781ef8544933751886",
+      "models/autoports/qwen_qwen3_8_27b/tests/hf_reference.py": "7a7f3565f9ae9cdcaa25d2e66468be8c30461a249688be8322de89a751359cd0",
+      "models/autoports/qwen_qwen3_8_27b/tests/mesh_smoke.py": "e0d84e50b020245bacb8666d07e738f2604a109712e6b80426a5dfb62808b9bc",
+      "models/autoports/qwen_qwen3_8_27b/tests/multichip_memory_plan.py": "14ae81a866cf3823ab0702af29ac31a8a7c5edf2d93a15ee623a3624e28e4547",
+      "models/autoports/qwen_qwen3_8_27b/tests/multichip_profile_tables.py": "8c146b07c61077b3dc7c426a53498beca626ed86a48ecb774b74c5a980c701db",
+      "models/autoports/qwen_qwen3_8_27b/tests/optimized_multichip_accounting.py": "0d207ece8e11a5987ce027c99579f2a1c52a1c1f168f087df317c75ff71e3937",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_fused_batch3.py": "7401a37d72201b5adbec776842c4c4a2a476a5101f1554377aaaa8e243fc545b",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_lm_head_geometry.py": "41c8b34ceae5af517f2086a84f2190f716cea26a0559fc73992df3e40224aab8",
+      "models/autoports/qwen_qwen3_8_27b/tests/probe_token_history.py": "364b55b049a30087ae6b9ec6d228e514c7d701cbf9cc8114c88ad24f2966de5c",
+      "models/autoports/qwen_qwen3_8_27b/tests/record_decoder_activations.py": "b56441009931217796ae4a084146edbfe26d2346c4d0a2fc06ffc129a104d2cc",
+      "models/autoports/qwen_qwen3_8_27b/tests/reference.py": "ed75eaf6264788d224feb168cb15e03dda30d1683f176db75280202ea094953e",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_decoder.py": "c51c6861b29be120d4720989e6687cd268377844d97a46e08e6c21001c5e48aa",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_full_model.py": "47be7b09b34576691a0d30956d6d245dc6c81190bd3972d61d7222aa869a341e",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_fused_context.py": "ba1cf6c832afcc75f867212c71dd38230d4559a61a75206f3a6211243e403c28",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_fused_decoder.py": "f459652fe055df827a61aaac590c1dcf4ce8bd9fe977818feef67cc14cce67d9",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_multichip_capacity.py": "a287bb160381c18b070a9ccd86ca1b47f68e06bdde12e9e4dd8064cad783ae68",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_multichip_decoder.py": "22b17036b15d2c85626b4113f397d9f2ddc2274517ba5c9f116ae0b9196fa294",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_optimized_context.py": "c3965fe1b50008b5cf146ac46ffb35f1b60957ddcf94be086616e23ea11fd2ec",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_optimized_decoder.py": "fdce3a6cf49f4626c1d4b776d2ba2e735a4d480d6907955fe8320670e2082927",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_readiness.py": "4eb99d13b19e6a3b9ec5057f7e56fc26f3bc3360ff904114eaf9b5ba159a0d6f",
+      "models/autoports/qwen_qwen3_8_27b/tests/run_unchunked_control.py": "caed8c55daa116fe8685cd7396a19eb71bb6a994cd3c44dcf1340b3c7b12c254",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_full_model_perf.py": "802c506494a7ea856613a0208c4a240261097bbc9393b6bfb83bbdaf811ecbfc",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_multichip_performance.py": "34533f6339e90081baf06656c065ac47509ac25be5264d60c3f11274bec3f292",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_multichip_validation.py": "6c672371e0bda8ccf5214615852e6981b17c2ce93e6b5379fa4215aa9f27b565",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_optimization.py": "38ff85fa12dbeb6f02ce45c1713765db44ec1314dd18260572e421688952df50",
+      "models/autoports/qwen_qwen3_8_27b/tests/summarize_optimized_multichip.py": "b654a7e46863f63352c5ecd0e737ea2a6dd8e9df9da605434a785b7d9dc416b1",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_multichip_decoder.py": "7617d5a5e3f0eb46675164ac6e1f286db8c4b68f2de7ac027bd80086e804d62d",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_optimized_decoder.py": "a1ca819eb33176c62847e4bf8704ef350531d0011bfad1d3e99d02dc836b2a3e",
+      "models/autoports/qwen_qwen3_8_27b/tests/sweep_optimized_multichip_decoder.py": "2d63d2f9a8e78606501b43a0acbd3d64127efb22dc952c09aa596cfe274e6f85",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_functional_decoder.py": "71c8bb879e204ca96314ef1516b413974a910998f2266e6e7b48bbcbce2e8c05",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_fused_decoder.py": "8505305f486da8df8d5fbca060ad4b784f0528da64c6e575f6df32703703fe76",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_multichip_decoder.py": "0a3cbdc28a52a7350eeb9cc953873a1a192190be6ed4f3b2b46a86a78314cef8",
+      "models/autoports/qwen_qwen3_8_27b/tests/test_optimized_decoder.py": "7596b7f14485d489120ec46bd8a4c78b760cec2f15d26a4e189ff9e95aad5950",
+      "models/autoports/qwen_qwen3_8_27b/tests/tt_qualitative.py": "61c6f1c33d66e36696d395937a5683c2c7f79188a752be3be2be87b06fd69966",
+      "models/autoports/qwen_qwen3_8_27b/tests/tune_decoder_projections.py": "5f960c00fd7560104a76a9f30fb0a32e509e5a140835bec7e111a2eb171c9b63",
+      "models/autoports/qwen_qwen3_8_27b/tests/tune_multichip_projections.py": "ab7e7e308db1b516f9968a155253d6d625b79a9d494fc04c9c1f3b9ce43db187",
+      "models/autoports/qwen_qwen3_8_27b/tests/untilize_candidate.py": "504884a98cf5b96e7271f916b099311a0ad3deba96ada62e9a7be3376f9006fd",
+      "models/autoports/qwen_qwen3_8_27b/tests/verify_optimized_multichip_evidence.py": "cf3f687f1a0d0cd2ce895516355fae5327608e7ee44f58bfbc4314674ea428c5",
+      "models/autoports/qwen_qwen3_8_27b/tests/watch_multichip_decoder.py": "02920c32b26eb8378dd720e10d5788cd95fe56324b82a065baefa565621a5dc3",
+      "models/common/sampling/tt_sampling.py": "a2bf86fb456c10c6d6d8fc3fee1dfe05f5828c3c55808f40c8f752e588ff0fc2",
+      "models/common/sampling/generator.py": "ceed18667c4ca4e1cecfecf9459ddcb137360c6f90c7ffbb97871792b925279a",
+      "ttnn/ttnn/_ttnn.so": "ecded1567a8f871a44e3fc8b16ecb0650992fb3417b4fa64efb5520e47c76ab9",
+      "build/lib/_ttnncpp.so": "3b24cd738cf671f7dcd76a4bf1336feedeb64737d054a254bb29012598f98712"
+    },
+    "common_entries": 61,
+    "changed_entries": [
+      "models/autoports/qwen_qwen3_8_27b/tests/run_full_model.py"
+    ],
+    "missing_from_benchmark": [],
+    "missing_from_profile": [],
+    "all_recorded_sources_match": false,
+    "runtime_source_matches": {
+      "models/autoports/qwen_qwen3_8_27b/tt/model.py": true,
+      "models/autoports/qwen_qwen3_8_27b/tt/generator.py": true,
+      "models/autoports/qwen_qwen3_8_27b/tt/multichip_decoder.py": true,
+      "models/common/sampling/tt_sampling.py": true,
+      "ttnn/ttnn/_ttnn.so": true,
+      "build/lib/_ttnncpp.so": true
+    },
+    "all_required_runtime_sources_match": true
+  },
+  "sources_sha256": {
+    "models/autoports/qwen_qwen3_8_27b/tests/summarize_full_model_perf.py": "aeb99cd40f6ff287a5632a754de28cce366fb9610114cf4910fb3165d23b2446",
+    "models/autoports/qwen_qwen3_8_27b/doc/functional_decoder/hf_config.json": "191e0af232104ed8b65258cf3fb2b842e288008baca7633c11b82a1ac7203aab",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/after_full_final.json": "39db3eb6fa0b8ed07a37d234b8b48e8cdf48526414d9c3a46cb4868be22f11f0",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_prefill_perf_report.csv": "53e4eb6524181672147bdf9a7dac930ec4256265e593fc9af74583b37d1bda75",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_prefill_perf_report.txt": "b5b6a8c36029e384a2e96562699afbbb22cdf6bfd5592dd3576223c2d86b17ea",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_model_perf_report.csv": "0d214a389ef26268f3b72b4bbf2e4c683b1329fa7f53d2ca3d215fd1b3568bfc",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_model_perf_report.txt": "e236d0f5c9e4a8a90d6d341cf83a79c495411c62efa5789f558ad44e4cfaa2c5",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_sample_perf_report.csv": "0cc2005f914254deec6d78eaa38a4425a6a7c44de378ef97e633feb7065b2041",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_sample_perf_report.txt": "1532cbae3381de59924fb15e27c57402b77c09d3bffdd01e2c19f818dd4c847a",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_token_out_perf_report.csv": "48fd67028d632144a682f32729e23c07407fdda6e6d6a2bf32a96ad4dc32031c",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_token_out_perf_report.txt": "731d97b3b5e259b93bda8f0bba7d7cfab1e2e99fba91fb0f1032a85b97fdcc9c",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device0_ops.csv.gz": "738097a82500bcbe7343ec3337f56d9582b59260bb7e8aa21c3e5b0f4d99f268",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_prefill_perf_report.csv": "9c1ec648abda89c8f29842b1e11a3fe62e1759976ed09d99f6bb435e9ac8fd98",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_prefill_perf_report.txt": "11ff2c965b6616cbcda67dd11f87834250474ace01916929ff047c1493026ad5",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_model_perf_report.csv": "199fa75edb5130744c905138d253b27977b99fd33e2d1029784045eb227733bd",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_model_perf_report.txt": "7310baa0f1d1b54a3d744cd29c0b6a9aae2abb1f6db42589154d1ce106422a89",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_sample_perf_report.csv": "d04d7e43c4626cda6aa81bfc3a9ee6b79b82fb3b05ef52e3cab8425cfe2bf2bf",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_sample_perf_report.txt": "90fb0223c1a0cfe7b04caa51db5b5fbe34c939c1440bb4fb08fe982ff64c9b01",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_token_out_perf_report.csv": "42a80d6737eac300953d67985c7ecb1f586fc4fbe531b5065f08fd008bf2b7e1",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_token_out_perf_report.txt": "835425d7cbe9fe4920fdc99f8df01b16b80d69d579f35545e19e9ee715627d00",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device1_ops.csv.gz": "18e6c8efef765b6523c4cc5f7e836185f420ed6a413fa0ec4fcdfc6759e2c768",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_prefill_perf_report.csv": "83c85871ea868d87ffc276637d70646c684e17d09def521e4d6a6ea8b14200fb",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_prefill_perf_report.txt": "de63361cd224df6dac373595baf78e97c84c50946411f7d886009d5530dd8069",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_model_perf_report.csv": "a9646b06237dd0ca35b995b274f1f854c31b5bfba686dfa56a54be190e95ab07",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_model_perf_report.txt": "ecfafb7a885a573b0f3cadb9854bde2692f02bed6537e74d6a5d252e54554b53",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_sample_perf_report.csv": "24a92b0f2dd7063d4608a07957518367b7a0a933b63b774d57e5ae7be2f29354",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_sample_perf_report.txt": "10d0201b2636a99794d26e606d8801d24b550a97ddb93253bd624165ce5ac8bd",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_token_out_perf_report.csv": "55c6a12c5556c3f7c27a149d55c685c95e5fdce140e0c4f4c0f91077d35533aa",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_token_out_perf_report.txt": "bd35e194d0c37d28fe810555eecaa9703c4a299d7ae55fd7cb65ff9eafe12284",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device2_ops.csv.gz": "940f780efefafda2e868860fcb59b9db1500e86147df5f87c9777cafeca391d9",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_prefill_perf_report.csv": "ccd715376c03466a35056ea751fce3df9cddbb83505631347c4e678acf3e99ef",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_prefill_perf_report.txt": "2774dcd20e1206ac7937b93b87792ccca70cbc2f16781789f7da812d25d29770",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_model_perf_report.csv": "6d95c388420253a121441b251581a1c90327ce8b6c0ea19a9f41a9a2d8c957de",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_model_perf_report.txt": "1dda57b99c15bccc845c5f8b582406b51b813eebd63316748d59404f5e31bdd7",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_sample_perf_report.csv": "05f5bd453dea8c14df2b71abd90a4560a1f9af550604f3e8e86ad4576903e87b",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_sample_perf_report.txt": "ac9acaaf247dab4262f405592da0409a3b9c3e627f55c89c4b91017f6524bee9",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_token_out_perf_report.csv": "a7f0e2cd18d2b8b7ea25a9f0d8e5502fb31e9ea3efd7ace3041942e0c1e1efa4",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_token_out_perf_report.txt": "a28ff34295e658de87bae631f3e5b84ee6a8d8f5cc6a44313a6c53e969f9b739",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tracy/profile_final_buffers/device3_ops.csv.gz": "1b76c788755d5fe3e8a3bf60e508afd95ace8c2b422a0bef846db5feb2dbb6d2",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/profile_final_buffers.source.sha256": "ffee358847c1b0b063776bb077ce814afb9a910bdde94015c15c6dfbcba2ce2a",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/after_full_final.source.sha256": "854b948e3b049080e1ddcc9efe2b3ce997cc0192bb64d52d2360019354a65749",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/profile_final_buffers.json": "c361d48dbbe2b5655617ae45cd9e562a659feeb0695f3d27e19641309801dcf1",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/profile_final_buffers.commit": "1d831feb3406b80fe6cf18cb4b39adfa00b10b3aded482f24f05fdf6f386def9",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/after_full_final.commit": "1d831feb3406b80fe6cf18cb4b39adfa00b10b3aded482f24f05fdf6f386def9",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/performance_accounting.json": "d272dc147a268924ca09156cfeb75c042dcf1de109551ad361456171d45da7a3",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/memory_capacity_plan.json": "16698eb8dcac958040c39ebe06c90945164fd9b7ace8b14d5932163ff40a586a",
+    "models/autoports/qwen_qwen3_8_27b/doc/optimized_multichip_decoder/perf_tool_provenance.json": "ad32ffeff1385f27e8e804ff29c44118270cdf045767a7a4d9a3158fec9d1773",
+    "models/autoports/qwen_qwen3_8_27b/tests/optimized_multichip_accounting.py": "0d207ece8e11a5987ce027c99579f2a1c52a1c1f168f087df317c75ff71e3937"
+  }
+}

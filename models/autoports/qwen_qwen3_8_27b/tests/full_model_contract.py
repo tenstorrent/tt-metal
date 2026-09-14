@@ -10,7 +10,7 @@ import torch
 
 import ttnn
 from models.autoports.qwen_qwen3_8_27b.tests.run_optimized_decoder import device_only
-from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
+from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
 
 
 def host(t):
@@ -25,7 +25,7 @@ def main():
     p.add_argument("--output", type=Path, required=True)
     a = p.parse_args()
     torch.set_num_threads(8)
-    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+    configure_fabric()
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
     gen = None
     try:
@@ -41,6 +41,13 @@ def main():
                 return sampling_step(logits)
 
         gen._model_step, gen._sampling_step = guarded_model, guarded_sampling
+        append_history = gen._append_history
+
+        def guarded_append():
+            with device_only():
+                return append_history()
+
+        gen._append_history = guarded_append
         b = a.batch
         cache = gen._ensure_cache(b, 128)
         gen.bind_cache(cache, gen.page_table)
@@ -150,8 +157,36 @@ def main():
         assert ((sampled >= 0) & (sampled < gen.model.config.vocab_size)).all()
         gen.set_sampling_params()
         gen.decode_forward(page_table=gen.page_table, kv_cache=cache)
+        print("FIXED_SLOT_HISTORY", flush=True)
+        gen._ensure_history(3)
+        history_rows = []
+        for step in range(3):
+            if step == 1:
+                # Toggle recording off and back on at a nonzero cursor. Both
+                # graph recaptures must preserve already recorded rows.
+                gen.decode_forward(page_table=gen.page_table, kv_cache=cache)
+                assert gen.history_count == 1
+            gen.decode_forward(page_table=gen.page_table, kv_cache=cache, record_history=True)
+            history_rows.append(host(gen.tokens).reshape(32).long())
+        recorded = gen._read_history()
+        assert torch.equal(recorded, torch.stack(history_rows))
+        for old, state in zip(before, [s for s in cache.layers if s.recurrent is not None]):
+            for name, previous in old.items():
+                if inactive:
+                    assert torch.equal(previous[inactive], host(getattr(state, name))[inactive])
+        prior = gen.counters.copy()
+        try:
+            gen.decode_forward(page_table=gen.page_table, kv_cache=cache, record_history=True)
+        except ValueError as error:
+            assert "history capacity" in str(error)
+        else:
+            raise AssertionError("History overflow was accepted")
+        assert gen.counters == prior
+        gen.decode_forward(page_table=gen.page_table, kv_cache=cache)
+        assert gen.history_count == 3
         print("BATCH_LOGIT_DETERMINISM", flush=True)
         gen.reset()
+        assert gen.history_count == 0 and gen._read_history().shape == (0, 32)
         identical = torch.full((b, 33), 1596, dtype=torch.int64)
         same = gen.prefill_forward(
             identical, page_table=gen.page_table, kv_cache=cache, prompt_lens=[33] * b, return_all_logits=True
@@ -215,6 +250,10 @@ def main():
             page_table_changed_and_unchanged=True,
             physical_page_remapping_logits_equal=True,
             greedy_sampled_alternation=True,
+            fixed_slot_history_all_lanes_equal=True,
+            history_recapture_preserves_prior_rows=True,
+            history_overflow_rejected_before_replay=True,
+            default_decode_does_not_consume_history=True,
             steady_state_refresh_counts={
                 k: 0 for k in ("token_refreshes", "position_refreshes", "rope_refreshes", "page_table_refreshes")
             },

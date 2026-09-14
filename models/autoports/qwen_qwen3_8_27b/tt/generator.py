@@ -15,6 +15,13 @@ from models.common.readiness_check.contract import Generator
 from models.common.sampling.tt_sampling import TTSampling
 
 
+def configure_fabric(*, payload_bytes=8192):
+    """Configure the measured TP4 ring before the caller opens its mesh."""
+    router = ttnn.FabricRouterConfig()
+    router.max_packet_payload_size_bytes = payload_bytes
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router)
+
+
 class QwenGenerator(Generator):
     def __init__(self, model, *, host_sampling=False, sampling_strategy="split"):
         self.model, self.mesh = model, model.mesh
@@ -45,6 +52,11 @@ class QwenGenerator(Generator):
         self.owns_cache = True
         self.cache = None
         self.trace = self.sample_trace = None
+        self.prefill_trace = None
+        self.prefill_prepared = None
+        self.trace_records_history = None
+        self.token_history = self.history_cursor = None
+        self.history_capacity = self.history_count = 0
         self.tokens = model.upload(
             torch.zeros(1, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -67,11 +79,113 @@ class QwenGenerator(Generator):
         self.counters["full_logits_readbacks"] += 1
         return ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh, dim=-1)).float()
 
-    def _release_traces(self):
-        for trace in (self.trace, self.sample_trace):
+    def _ensure_history(self, capacity):
+        """Reserve output rows before capture; each row retains all 32 physical slots."""
+        if not 1 <= capacity <= self.model.context:
+            raise ValueError("Token history capacity must lie within the model context")
+        if self.token_history is not None and self.history_capacity >= capacity:
+            return
+        self._release_traces()
+        self.token_history = self.model.upload(
+            torch.zeros(capacity, 1, 1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.history_cursor = self.model.upload(
+            torch.zeros(1, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
+        self.history_capacity, self.history_count = capacity, 0
+        self.counters["history_allocations"] += 1
+
+    def _reset_history(self):
+        if self.history_cursor is not None:
+            self._copy(torch.zeros(1, dtype=torch.int32), self.history_cursor, "history_cursor_refreshes")
+        self.history_count = 0
+
+    def _append_history(self):
+        updated = ttnn.indexed_fill(self.history_cursor, self.token_history, self.tokens, dim=0)
+        ttnn.copy(updated, self.token_history)
+        ttnn.plus_one(self.history_cursor)
+
+    def _read_history(self):
+        """Transfer one history buffer and return its valid prefix in physical slot order."""
+        if self.history_count == 0:
+            return torch.empty(0, 32, dtype=torch.int64)
+        self.counters["history_readbacks"] += 1
+        history = ttnn.to_torch(ttnn.get_device_tensors(self.token_history)[0])
+        return history[: self.history_count, 0, 0, :].long()
+
+    def _release_traces(self, *, keep_prefill=False):
+        for trace in (self.trace, self.sample_trace, self.prefill_trace):
             if trace is not None:
                 ttnn.release_trace(self.mesh, trace)
-        self.trace = self.sample_trace = None
+        self.trace = self.sample_trace = self.prefill_trace = None
+        self.trace_records_history = None
+        if not keep_prefill:
+            self.prefill_prepared = None
+
+    def _prefill_trace_logits(self):
+        """Device-only prefill over generator-owned inputs; output remains transient."""
+        prepared = self.prefill_prepared
+        logits = self.model.prefill(
+            prepared["tokens"],
+            cache=self.cache,
+            page_table=self.page_table,
+            length=prepared["length"],
+            positions=prepared["positions"],
+        )
+        return ttnn.pad(logits, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+
+    def _prefill_trace_step(self):
+        # The copy target predates every trace. No capture-created output may
+        # remain alive when an earlier decode trace is replayed.
+        ttnn.copy(self._prefill_trace_logits(), self.prefill_prepared["output"])
+
+    def _prefill_for_generate(self, tokens):
+        """Own one prefill result until first-token sampling consumes it."""
+        length = tokens.shape[-1]
+        if (tokens < 0).any() or (tokens >= self.model.config.vocab_size).any():
+            raise ValueError("Token IDs lie outside the vocabulary")
+        key = (
+            id(self.cache),
+            self.cache.batch_size,
+            self.cache.capacity,
+            self.cache.num_pages,
+            id(self.page_table),
+            tuple(self.page_table.shape),
+            0,  # Physical slot.
+            0,  # Prefix position.
+            length,
+            False,  # Last-token logits only; public all-logits prefill stays eager.
+        )
+        if self.prefill_prepared is None or self.prefill_prepared["key"] != key:
+            # Fresh persistent buffers must not overlap any live trace's scratch.
+            self._release_traces()
+            self.prefill_prepared = dict(
+                key=key,
+                length=length,
+                tokens=self.model.upload(tokens.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+                positions=self.model.upload(
+                    torch.arange(length, dtype=torch.int32).reshape(1, length),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+            )
+            # This is the real prefill, so it both warms the graph and advances
+            # request state exactly once. Allocate and warm the output copy too.
+            logits = self._prefill_trace_logits()
+            self.prefill_prepared["output"] = ttnn.clone(logits)
+            ttnn.copy(logits, self.prefill_prepared["output"])
+            self.counters["prefill_eager_calls"] += 1
+        else:
+            self._copy(tokens.int(), self.prefill_prepared["tokens"], "prefill_token_refreshes")
+            if self.prefill_trace is None:
+                # G=1 need not create a decode pair just to capture prefill.
+                self._prefill_trace_step()
+                self.counters["prefill_eager_calls"] += 1
+            else:
+                ttnn.execute_trace(self.mesh, self.prefill_trace, cq_id=0, blocking=False)
+                self.counters["prefill_replays"] += 1
+        self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
+        return self.prefill_prepared["output"]
 
     def _ensure_cache(self, batch, capacity):
         if (
@@ -98,6 +212,7 @@ class QwenGenerator(Generator):
             torch.zeros(batch, dtype=torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
         )
         self.active_slots = None
+        self._reset_history()
         self.counters["page_table_allocations"] += 1
         return self.cache
 
@@ -126,6 +241,7 @@ class QwenGenerator(Generator):
         if self.rope_indices is not None:
             self._copy(torch.zeros(self.cache.batch_size, dtype=torch.int32), self.rope_indices, "rope_refreshes")
         self._copy(torch.arange(32, dtype=torch.int32) + self.seed + 1, self.sampler.seeds_tt_tensor, "seed_refreshes")
+        self._reset_history()
         self.remaining_steps = None
         self.reset_active_slots = True
         self.counters["resets"] += 1
@@ -142,6 +258,10 @@ class QwenGenerator(Generator):
         start_pos=None,
         **kwargs,
     ):
+        # Public outputs retain their original independent ownership. They must
+        # not be allocated while a future owned-prefill replay reserves scratch.
+        if self.prefill_prepared is not None:
+            self._release_traces()
         if kv_cache is not self.cache:
             self.bind_cache(kv_cache, page_table)
         tokens = torch.as_tensor(tokens, dtype=torch.int64)
@@ -228,7 +348,7 @@ class QwenGenerator(Generator):
         self.sampler(logits, tt_out_tok=self.tokens)
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
 
-    def _capture(self):
+    def _capture(self, *, record_history=False):
         """Warm both graphs before capture; restore only mutable request state."""
         backups = [
             (state, name, ttnn.clone(getattr(state, name)))
@@ -239,8 +359,11 @@ class QwenGenerator(Generator):
         token_backup, pos_backup = ttnn.clone(self.tokens), ttnn.clone(self.positions)
         rope_backup = ttnn.clone(self.rope_indices)
         seed_backup = ttnn.clone(self.sampler.seeds_tt_tensor)
+        cursor_backup = ttnn.clone(self.history_cursor) if record_history else None
         warm = self._model_step()
         self._sampling_step(warm)
+        if record_history:
+            self._append_history()
         for state, name, tensor in backups:
             ttnn.copy(tensor, getattr(state, name))
         for source, target in (
@@ -250,6 +373,10 @@ class QwenGenerator(Generator):
             (seed_backup, self.sampler.seeds_tt_tensor),
         ):
             ttnn.copy(source, target)
+        if record_history:
+            # Warmup touched only the next unused row. Real replay overwrites it;
+            # restoring the cursor preserves every already-recorded output.
+            ttnn.copy(cursor_backup, self.history_cursor)
         ttnn.synchronize_device(self.mesh)
         captured = []
         open_trace = None
@@ -262,17 +389,31 @@ class QwenGenerator(Generator):
             open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             captured.append(open_trace)
             self._sampling_step(logits)
+            if record_history:
+                self._append_history()
             ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
             open_trace = None
+            if self.prefill_prepared is not None:
+                # Record only after decode logits have acquired a stable address.
+                # The real prefill already warmed this exact graph. Recording it
+                # does not execute or mutate the current decode cache state.
+                open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                captured.append(open_trace)
+                self._prefill_trace_step()
+                ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
+                open_trace = None
         except BaseException:
             if open_trace is not None:
                 ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
             for trace in captured:
                 ttnn.release_trace(self.mesh, trace)
             raise
-        self.trace, self.sample_trace = captured
+        self.trace, self.sample_trace = captured[:2]
+        self.prefill_trace = captured[2] if len(captured) == 3 else None
+        self.trace_records_history = record_history
         self.logits = logits
         self.counters["trace_captures"] += 2
+        self.counters["prefill_trace_captures"] += int(self.prefill_trace is not None)
 
     def decode_forward(
         self,
@@ -283,15 +424,24 @@ class QwenGenerator(Generator):
         kv_cache,
         enable_trace=True,
         read_from_device=True,
+        record_history=False,
         host_sampling=None,
         active_slots=None,
         **kwargs,
     ):
         if kv_cache is not self.cache:
             raise ValueError("Bind external cache with bind_cache before traced decode")
+        compat = self.host_sampling if host_sampling is None else host_sampling
+        if record_history:
+            if compat:
+                raise ValueError("Token history requires device sampling")
+            if self.token_history is None:
+                raise ValueError("Reserve token history before recording decode outputs")
+            if self.history_count >= self.history_capacity:
+                raise ValueError("Token history capacity is exhausted")
         if self.reset_active_slots:
             if active_slots is None and self.active_slots is not None:
-                self._release_traces()
+                self._release_traces(keep_prefill=True)
                 self.active_slots = None
             self.reset_active_slots = False
         if active_slots is not None and tuple(active_slots) != self.active_slots:
@@ -305,7 +455,7 @@ class QwenGenerator(Generator):
                 supplied_positions[i] < 0 or supplied_positions[i] >= kv_cache.capacity for i in proposed
             ):
                 raise ValueError("Active slots require positions inside the cache")
-            self._release_traces()
+            self._release_traces(keep_prefill=True)
             self.active_slots = proposed
         if not enable_trace:
             raise ValueError("Optimized decode requires tracing")
@@ -342,17 +492,22 @@ class QwenGenerator(Generator):
             self._copy(positions.clamp_min(0), self.rope_indices, "rope_refreshes")
         if self.remaining_steps is None or self.remaining_steps <= 0:
             raise ValueError("No decode positions are bound, or cache capacity is exhausted")
+        if self.trace is not None and self.trace_records_history != record_history:
+            self._release_traces(keep_prefill=True)
         if self.trace is None:
-            self._capture()
+            self._capture(record_history=record_history)
         ttnn.execute_trace(self.mesh, self.trace, cq_id=0, blocking=False)
         self.counters["model_replays"] += 1
         self.remaining_steps -= 1
-        if self.host_sampling if host_sampling is None else host_sampling:
+        if compat:
             # Explicit test-only compatibility boundary. Never used in token-out timings.
             logits = self._host_logits(self.logits)[0, 0, : kv_cache.batch_size]
             return logits
         ttnn.execute_trace(self.mesh, self.sample_trace, cq_id=0, blocking=False)
         self.counters["sampling_replays"] += 1
+        if record_history:
+            self.history_count += 1
+            self.counters["history_appends"] += 1
         return self._read_tokens()[: kv_cache.batch_size] if read_from_device else self.tokens
 
     def bind_cache(self, cache, page_table):
@@ -418,6 +573,7 @@ class QwenGenerator(Generator):
             self.page_table = page_table
         else:
             self.page_table = self.model.upload(self.page_host, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self._reset_history()
 
     def generate(
         self,
@@ -426,6 +582,8 @@ class QwenGenerator(Generator):
         *,
         next_input=None,
         enable_trace=True,
+        defer_token_readback=True,
+        trace_prefill=True,
         host_sampling=None,
         top_k=1,
         top_p=0.0,
@@ -444,26 +602,37 @@ class QwenGenerator(Generator):
         if max_new_tokens == 0:
             return []
         compat = self.host_sampling if host_sampling is None else host_sampling
+        deferred = bool(defer_token_readback and not compat and next_input is None and max_new_tokens > 1)
         if compat and top_k != 1:
             raise ValueError("Host compatibility implements greedy sampling; use device sampling for top-k/top-p")
         start = time.perf_counter()
         before_request = self.counters.copy()
         self.set_sampling_params(top_k=top_k, top_p=top_p, temperature=temperature, seed=seed)
         cache = self._ensure_cache(1, len(prompt_token_ids) + max_new_tokens - 1)
+        if deferred:
+            self._ensure_history(max_new_tokens - 1)
         self.reset()
-        logits = self.prefill_forward(
-            torch.tensor([prompt_token_ids]),
-            page_table=self.page_table,
-            kv_cache=cache,
-            prompt_lens=[len(prompt_token_ids)],
-        )[0]
-        padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+        # Bound trace storage to one existing prefill chunk. Longer prompts
+        # retain the full-context, chunked eager path without limiting inputs.
+        use_prefill_trace = bool(trace_prefill and len(prompt_token_ids) <= 4096)
+        if use_prefill_trace:
+            padded = self._prefill_for_generate(torch.tensor([prompt_token_ids]))
+        else:
+            logits = self.prefill_forward(
+                torch.tensor([prompt_token_ids]),
+                page_table=self.page_table,
+                kv_cache=cache,
+                prompt_lens=[len(prompt_token_ids)],
+            )[0]
+            padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, 31), (0, 0)], value=0.0)
+            del logits
+            self.counters["prefill_eager_calls"] += 1
         if compat:
-            first = int(self._host_logits(logits).reshape(-1, self.model.config.vocab_size)[-1].argmax())
+            first = int(self._host_logits(padded)[0, 0, 0].argmax())
         else:
             self._sampling_step(padded)
             first = int(self._read_tokens()[0])
-        del padded, logits
+        del padded
         ttft = time.perf_counter() - start
         outputs = [first]
         forced = next_input(0, first) if next_input is not None else first
@@ -477,7 +646,15 @@ class QwenGenerator(Generator):
         before_steady = self.counters.copy()
         begin = time.perf_counter()
         for step in range(1, max_new_tokens):
-            out = self.decode_forward(page_table=self.page_table, kv_cache=cache, host_sampling=compat)
+            out = self.decode_forward(
+                page_table=self.page_table,
+                kv_cache=cache,
+                host_sampling=compat,
+                read_from_device=not deferred,
+                record_history=deferred,
+            )
+            if deferred:
+                continue
             predicted = int(out[0].argmax()) if compat else int(out[0])
             outputs.append(predicted)
             forced = next_input(step, predicted) if next_input is not None else predicted
@@ -485,6 +662,11 @@ class QwenGenerator(Generator):
                 ids = torch.zeros(1, 1, 1, 32, dtype=torch.int32)
                 ids.reshape(-1)[0] = forced
                 self._copy(ids, self.tokens, "token_refreshes")
+        after_steady = self.counters.copy()
+        if deferred:
+            # The final blocking read drains queued decode and belongs in its
+            # elapsed time, while delivery counters remain outside the loop.
+            outputs.extend(self._read_history()[:, 0].tolist())
         elapsed = time.perf_counter() - begin
         self.last_perf = dict(
             ttft_s=ttft,
@@ -492,7 +674,11 @@ class QwenGenerator(Generator):
             decode_tokens=max_new_tokens - 1,
             tokens_per_second=(max_new_tokens - 1) / elapsed,
             counters=dict(self.counters - before_request),
-            steady_state_counters=dict(self.counters - before_steady),
+            steady_state_counters=dict(after_steady - before_steady),
+            delivery_counters=dict(self.counters - after_steady),
+            deferred_token_readback=deferred,
+            prefill_trace_eligible=use_prefill_trace,
+            history_capacity=self.history_capacity if deferred else 0,
             host_sampling=compat,
             teacher_forcing=next_input is not None,
         )

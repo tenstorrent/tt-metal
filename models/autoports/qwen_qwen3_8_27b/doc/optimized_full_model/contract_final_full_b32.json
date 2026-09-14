@@ -1,0 +1,55 @@
+{
+  "external_cache_binding": true,
+  "unaligned_continuation_pcc": 0.9992144703865051,
+  "explicit_host_sampling_equal": true,
+  "device_only_model_and_sampling_guard": true,
+  "logit_batch_and_repeat_determinism": true,
+  "batch": 32,
+  "full": true,
+  "slots": [
+    31,
+    0
+  ],
+  "prompt_lengths": [
+    31,
+    33
+  ],
+  "persistent_feedback": true,
+  "positions_coherent": true,
+  "inactive_state_unchanged": true,
+  "page_table_changed_and_unchanged": true,
+  "physical_page_remapping_logits_equal": true,
+  "greedy_sampled_alternation": true,
+  "fixed_slot_history_all_lanes_equal": true,
+  "history_recapture_preserves_prior_rows": true,
+  "history_overflow_rejected_before_replay": true,
+  "default_decode_does_not_consume_history": true,
+  "steady_state_refresh_counts": {
+    "token_refreshes": 0,
+    "position_refreshes": 0,
+    "rope_refreshes": 0,
+    "page_table_refreshes": 0
+  },
+  "counters": {
+    "page_table_allocations": 2,
+    "position_refreshes": 12,
+    "token_refreshes": 13,
+    "rope_refreshes": 12,
+    "seed_refreshes": 11,
+    "resets": 7,
+    "trace_captures": 20,
+    "prefill_trace_captures": 2,
+    "model_replays": 22,
+    "sampling_replays": 18,
+    "token_readbacks": 14,
+    "full_logits_readbacks": 138,
+    "page_table_refreshes": 2,
+    "history_allocations": 1,
+    "history_appends": 6,
+    "history_readbacks": 2,
+    "history_cursor_refreshes": 7,
+    "prefill_eager_calls": 1,
+    "prefill_token_refreshes": 1,
+    "prefill_replays": 1
+  }
+}

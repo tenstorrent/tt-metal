@@ -1,0 +1,221 @@
+{
+  "checker_source": "/home/mvasiljevic/qwen38-full-rerun/codex-home/plugins/cache/tenstorrent-skills/tt-model-bringup/0.1.4/runtime/readiness_check/check_degenerate_output.py",
+  "checker_sha256": "8f4b95b367a0d91b43c352b21ffa31c757f219c652b7675120546827177874a3",
+  "sources_sha256": {
+    "tt_qualitative.json": "559eb86b823c1febeab560634389e07eaabda4e120557e0c4ac15fdf905621d7",
+    "tt_qualitative_extended.json": "bd26d7f96b52ad76be6fc9f5cdf77e06bdd96056d011793664e70a3f8b13d990",
+    "tt_qualitative_story_2048.json": "78e3042e0827975c9dc5ebfc1fd233cc98779b9c46754701daa864bec348dfb5"
+  },
+  "exit_code": 0,
+  "findings": [],
+  "measured": [
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt0",
+      "source": "words",
+      "num_tokens": 135,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0667
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt0",
+      "source": "words",
+      "num_tokens": 139,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0647
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt1",
+      "source": "words",
+      "num_tokens": 113,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0531
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt1",
+      "source": "words",
+      "num_tokens": 106,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0566
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt2",
+      "source": "words",
+      "num_tokens": 202,
+      "adjacent_duplication": 0.005,
+      "trigram_loop_fraction": 0.0594
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt2",
+      "source": "words",
+      "num_tokens": 213,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0282
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt3",
+      "source": "words",
+      "num_tokens": 171,
+      "adjacent_duplication": 0.0059,
+      "trigram_loop_fraction": 0.0351
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt3",
+      "source": "words",
+      "num_tokens": 162,
+      "adjacent_duplication": 0.0062,
+      "trigram_loop_fraction": 0.0556
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt4",
+      "source": "words",
+      "num_tokens": 96,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.125
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt4",
+      "source": "words",
+      "num_tokens": 77,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.1169
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "TT prompt5",
+      "source": "words",
+      "num_tokens": 156,
+      "adjacent_duplication": 0.0129,
+      "trigram_loop_fraction": 0.0577
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative.json",
+      "label": "HF prompt5",
+      "source": "words",
+      "num_tokens": 125,
+      "adjacent_duplication": 0.0161,
+      "trigram_loop_fraction": 0.072
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "TT prompt0",
+      "source": "words",
+      "num_tokens": 207,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0435
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "HF prompt0",
+      "source": "words",
+      "num_tokens": 158,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0759
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "TT prompt2",
+      "source": "words",
+      "num_tokens": 812,
+      "adjacent_duplication": 0.0012,
+      "trigram_loop_fraction": 0.0259
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "HF prompt2",
+      "source": "words",
+      "num_tokens": 823,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0146
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "TT prompt3",
+      "source": "words",
+      "num_tokens": 259,
+      "adjacent_duplication": 0.0039,
+      "trigram_loop_fraction": 0.0232
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "HF prompt3",
+      "source": "words",
+      "num_tokens": 276,
+      "adjacent_duplication": 0.0036,
+      "trigram_loop_fraction": 0.0326
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "TT prompt5",
+      "source": "words",
+      "num_tokens": 187,
+      "adjacent_duplication": 0.0161,
+      "trigram_loop_fraction": 0.0481
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_extended.json",
+      "label": "HF prompt5",
+      "source": "words",
+      "num_tokens": 125,
+      "adjacent_duplication": 0.0161,
+      "trigram_loop_fraction": 0.072
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_story_2048.json",
+      "label": "TT prompt2",
+      "source": "words",
+      "num_tokens": 1341,
+      "adjacent_duplication": 0.0007,
+      "trigram_loop_fraction": 0.0157
+    },
+    {
+      "artifact": "models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model/tt_qualitative_story_2048.json",
+      "label": "HF prompt2",
+      "source": "words",
+      "num_tokens": 823,
+      "adjacent_duplication": 0.0,
+      "trigram_loop_fraction": 0.0146
+    }
+  ],
+  "fibonacci_generated_code_tests": {
+    "passed": true,
+    "inputs": [
+      -1,
+      0,
+      1,
+      2,
+      8
+    ]
+  },
+  "completion_lengths": {
+    "0": 418,
+    "1": 148,
+    "2": 1700,
+    "3": 380,
+    "4": 145,
+    "5": 337
+  },
+  "completion_eos": {
+    "0": true,
+    "1": true,
+    "2": true,
+    "3": true,
+    "4": true,
+    "5": true
+  },
+  "story_extension": {
+    "prefix_tokens_equal": 1024,
+    "completed_tokens": 1700
+  },
+  "story_budget_note": "HF and TT1024-token controls both truncate. Any2048 TT extension is completion evidence, not a matched-budget comparison.",
+  "command": "models/autoports/qwen_qwen3_8_27b/tests/check_qualitative_artifacts.py --doc models/autoports/qwen_qwen3_8_27b/doc/optimized_full_model"
+}

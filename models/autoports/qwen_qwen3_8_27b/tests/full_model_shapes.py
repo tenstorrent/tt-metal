@@ -10,15 +10,15 @@ from pathlib import Path
 import torch
 
 import ttnn
-from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator
+from models.autoports.qwen_qwen3_8_27b.tt.generator import build_generator, configure_fabric
 
 p = argparse.ArgumentParser()
 p.add_argument("--full", action="store_true")
-p.add_argument("--lengths", default="1,31,32,33,4095,4096,4097,33,31,4097")
+p.add_argument("--lengths", default="1,1,31,31,32,32,33,33,4095,4095,4096,4096,4097,4097,33,33")
 p.add_argument("--output", type=Path, required=True)
 a = p.parse_args()
 torch.set_num_threads(8)
-ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
+configure_fabric()
 mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=200000000)
 gen = None
 try:
@@ -27,7 +27,7 @@ try:
     report = dict(full=a.full, context=gen.model.context, rows=[])
     for length in map(int, a.lengths.split(",")):
         previous_captures = gen.counters["trace_captures"]
-        known = any(row["length"] == length for row in report["rows"])
+        consecutive = bool(report["rows"] and report["rows"][-1]["length"] == length)
         print("LENGTH_BEGIN", length, flush=True)
         start = time.perf_counter()
         count = min(3, gen.model.context - length + 1)
@@ -42,10 +42,17 @@ try:
                 torch.full((1, length), 1596), page_table=gen.page_table, kv_cache=gen.cache, prompt_lens=[length]
             )
             del result
-        if known:
+        if consecutive:
             assert gen.counters["trace_captures"] == previous_captures
         report["rows"].append(
-            dict(length=length, seconds=time.perf_counter() - start, passed=True, decode_steps=max(0, count - 1))
+            dict(
+                length=length,
+                seconds=time.perf_counter() - start,
+                passed=True,
+                decode_steps=max(0, count - 1),
+                consecutive_trace_reuse=consecutive,
+                perf=gen.last_perf,
+            )
         )
         a.output.write_text(json.dumps(report, indent=2) + "\n")
         print("LENGTH_PASS", length, report["rows"][-1], flush=True)

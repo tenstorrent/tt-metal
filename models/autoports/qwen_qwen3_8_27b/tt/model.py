@@ -90,8 +90,8 @@ class QwenModel:
         if head_strategy == "dram":
             banks = mesh_device.dram_grid_size().x
             bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))})
-            for start in range(0, self.config.vocab_size // 4, 8192):
-                weight = self.head_weight[:, start : min(start + 8192, self.config.vocab_size // 4)]
+            for start in range(0, self.config.vocab_size // 4, 16384):
+                weight = self.head_weight[:, start : min(start + 16384, self.config.vocab_size // 4)]
                 width = ((weight.shape[-1] + banks * 64 - 1) // (banks * 64)) * 64
                 memory = ttnn.MemoryConfig(
                     ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -211,7 +211,7 @@ class QwenModel:
         parts = []
         for weight in self.head_decode_weights:
             config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-                in0_block_w=10,
+                in0_block_w=5,
                 per_core_M=1,
                 per_core_N=weight.memory_config().shard_spec.shape[1] // 32,
                 num_workers_per_dram_bank=2,
@@ -228,14 +228,23 @@ class QwenModel:
             parts.append(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG))
         return ttnn.concat(parts, dim=-1)
 
-    def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False):
+    def prefill(self, tokens, *, cache, page_table, length, start_pos=0, slot=0, all_logits=False, positions=None):
         """Single request, logical length; independent fixed-slot state is updated on device."""
         x = self.embed(tokens, batch=1, length=length)
-        positions = self.upload(
-            torch.arange(start_pos, start_pos + length, dtype=torch.int32).reshape(1, length),
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
+        if positions is None:
+            positions = self.upload(
+                torch.arange(start_pos, start_pos + length, dtype=torch.int32).reshape(1, length),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        elif (
+            not isinstance(positions, ttnn.Tensor)
+            or tuple(positions.shape) != (1, length)
+            or positions.dtype != ttnn.uint32
+            or positions.layout != ttnn.ROW_MAJOR_LAYOUT
+            or positions.memory_config() != ttnn.DRAM_MEMORY_CONFIG
+        ):
+            raise ValueError("Prefill positions must be a UINT32 row-major DRAM tensor with shape [1, length]")
         cc, ss = self.rope(positions, batch=1, length=length)
         pos_matrix = ttnn.reshape(ttnn.typecast(positions, ttnn.int32), [length, 1])
         table = page_table[slot : slot + 1, :]

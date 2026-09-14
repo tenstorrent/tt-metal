@@ -1,0 +1,408 @@
+{
+  "model_id": "Qwen/Qwen3.8-27B",
+  "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "hf_advertised_context": 262144,
+  "supported_context": 262144,
+  "implementation_context_limit": 262144,
+  "largest_tested_prefill": 262144,
+  "largest_tested_decode_context": 262144,
+  "capability_reduction": null,
+  "status": "validated",
+  "layer_kinds": {
+    "linear_attention": {
+      "largest_tested_prefill": 262144,
+      "largest_tested_decode_context": 262144,
+      "context_test_batch_size": 1,
+      "evidence": [
+        "functional_decoder/linear_context.json",
+        "functional_decoder/linear_context.log"
+      ]
+    },
+    "full_attention": {
+      "largest_tested_prefill": 262144,
+      "largest_tested_decode_context": 262144,
+      "context_test_batch_size": 1,
+      "evidence": [
+        "functional_decoder/full_context.json",
+        "functional_decoder/full_context.log"
+      ]
+    }
+  },
+  "batch_coverage": {
+    "largest_tested_batch": 32,
+    "prefill_length_at_batch_32": 257,
+    "decode_context_at_batch_32": 258,
+    "full_context_batch": 1,
+    "additional_linear_batch": 3
+  },
+  "note": "No capability reduction. Long-context and batch32 tests are separate coverage points, not every context/batch combination. Earlier decoder-only batch coverage uses shared logical lengths. The full-model generator owns paged KV, absolute positions, RoPE, recurrent/conv state and padding, and supports mixed logical lengths, fixed slots and inactive rows.",
+  "fused_decoder": {
+    "supported_context": 262144,
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "capability_reduction": null,
+    "context_test_batch_size": 1,
+    "page_size": 32,
+    "kv_dtype": "BF16",
+    "recurrent_dtype": "FP32",
+    "convolution_history": {
+      "dtype": "BF16",
+      "layout": "ROW_MAJOR",
+      "logical_shape_per_user": [
+        3,
+        10240
+      ],
+      "physical_bytes_per_user": 61440,
+      "functional_tile_physical_bytes_per_user": 655360
+    },
+    "state_change": "Linear history retains three actual rows without TILE row padding. Paged KV and recurrence allocation are unchanged; no capacity reduction.",
+    "evidence": [
+      "fused_decoder/verified_linear_context.json",
+      "fused_decoder/verified_full_context.json",
+      "fused_decoder/watcher_final_summary.json",
+      "fused_decoder/corrected_batch3_linear.json"
+    ],
+    "accuracy_method": "Current fused/functional full-output PCC plus frozen functional/HF PCC gives a conservative correlation lower bound >=0.995; direct HF checks also cover short/medium lengths."
+  },
+  "optimized_decoder": {
+    "status": "validated",
+    "supported_context": 262144,
+    "capability_reduction": null,
+    "context_test_batch_size": 1,
+    "page_size": 32,
+    "kv_dtype": "BFP8",
+    "kv_physical_bytes_per_token": 2176,
+    "kv_physical_bytes_at_context_limit": 570425344,
+    "recurrent_dtype": "FP32",
+    "recurrent_physical_bytes_per_user": 3145728,
+    "convolution_history": {
+      "dtype": "BF16",
+      "layout": "ROW_MAJOR",
+      "logical_shape_per_user": [
+        3,
+        10240
+      ],
+      "physical_bytes_per_user": 61440,
+      "functional_tile_physical_bytes_per_user": 655360
+    },
+    "prefill_internal_chunk_limit": 2048,
+    "public_sequence_alignment_requirement": null,
+    "page_allocation_contract": "ceil(logical capacity / 32) pages per user; no rounded SDPA-block allocation required. Runtime block selection bounds every rounded read within mapped capacity.",
+    "decode_layout": "BF16 TILE public [B,1,H]; packed internal [1,1,B,H] width-sharded L1. B1 outputs width-sharded L1. B>=8 attention projections unpack in DRAM for native GDN L1 capacity; other public boundaries interleave in L1.",
+    "projection_storage_bytes": {
+      "full_attention": {
+        "interleaved": 209387520,
+        "dram_sharded": 214990848,
+        "total": 424378368
+      },
+      "linear_attention": {
+        "interleaved": 215654400,
+        "dram_sharded": 221626368,
+        "total": 437280768
+      },
+      "method": "BFP4 576-byte tiles; DRAM widths round to8 banks x3 readers x32 columns. Includes five material projection matrices in both layouts; norms/constants and caller state are additional."
+    },
+    "trace_contract": "Caller-owned persistent input/position/RoPE/page tensors and TTNN trace allocation; restore state after warmup/capture. Measured context probes include trace capture and replay.",
+    "batch_coverage": {
+      "largest_tested_batch": 32,
+      "prefill_length_at_batch_32": 257,
+      "decode_context_at_batch_32": 258,
+      "additional_batches": [
+        1,
+        2,
+        3,
+        8,
+        16
+      ]
+    },
+    "accuracy_method": "Direct real-HF layer-input checks through4097 tokens; complete optimized/fused output parity and determinism at capacity on periodically repeated recorded inputs (not a new long-context HF oracle).",
+    "evidence": [
+      "optimized_decoder/stress_summary.json",
+      "optimized_decoder/stress.xml",
+      "optimized_decoder/context_l0.json",
+      "optimized_decoder/context_l3.json",
+      "optimized_decoder/watcher_summary.json",
+      "optimized_decoder/watcher_long_tails.json",
+      "optimized_decoder/selected_stress.xml"
+    ],
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "layer_kinds": {
+      "linear_attention": {
+        "largest_tested_prefill": 262144,
+        "largest_tested_decode_context": 262144,
+        "prefill_equivalence_pcc": 0.9997950791931444,
+        "last_position_decode_equivalence_pcc": 0.9998990297317505,
+        "repeat_bitwise_equal": true,
+        "evidence": "optimized_decoder/context_l0.json"
+      },
+      "full_attention": {
+        "largest_tested_prefill": 262144,
+        "largest_tested_decode_context": 262144,
+        "prefill_equivalence_pcc": 0.9996872416092273,
+        "last_position_decode_equivalence_pcc": 0.9999096989631653,
+        "repeat_bitwise_equal": true,
+        "evidence": "optimized_decoder/context_l3.json"
+      }
+    },
+    "sdpa_grid": "B1 with fewer than16 mapped pages uses8x2; larger batches and contexts use11x10. The static mapped capacity is trace-safe.",
+    "capacity_source_note": "Capacity probes precede the short-context-only SDPA grid change. That branch is disabled at full capacity and for every linear layer; storage and capacity-path code are unchanged."
+  },
+  "multichip_decoder": {
+    "status": "validated",
+    "mesh": [
+      1,
+      4
+    ],
+    "context": 262144,
+    "projection_policy": "BFP4, prefill interleaved + decode bank-sharded copies",
+    "all_decoder_projection_bytes_per_device": 6886195200,
+    "kv_bytes_per_device": 2281701376,
+    "kv_bytes_per_token_per_full_layer": 544,
+    "recurrence_bytes_per_device_per_user": 37748736,
+    "conv_bytes_per_device_per_user": 737280,
+    "embedding_lm_head_reserve_bytes_per_device": 1271398400,
+    "norm_and_constant_reserve_bytes_per_device": 134217728,
+    "trace_activation_reserve_bytes_per_device": 19327352832,
+    "total_bytes_per_device": 29939351552,
+    "capacity_probe_reserved_bytes_per_device": 12759482368,
+    "capacity_probe_reservation_scope": "All planned persistent weights/KV/recurrent/terminal/constants plus2GiB trace/CCL. Real full-length activations are live in the probe, not double-counted as empty buffers.",
+    "device_dram_bytes": 34138688512,
+    "headroom_bytes_per_device": 4199336960,
+    "shared_collective_l1_workspace": {
+      "ownership": "One TT_CCL context per ordered CQ0 layer stack; no concurrent sharing",
+      "shape": [
+        1,
+        1,
+        32,
+        20480
+      ],
+      "shard": [
+        32,
+        256
+      ],
+      "cores": 80,
+      "bytes_per_core": 16384,
+      "bytes_per_device": 1310720,
+      "count_per_stack": 1
+    },
+    "note": "B1 advertised context; larger batch capacity must be checked independently. No capability reduction.",
+    "capacity_evidence": [
+      "multichip_decoder/capacity_l0_s262143.json",
+      "multichip_decoder/capacity_l0_s262144.json",
+      "multichip_decoder/capacity_l3_s262143.json",
+      "multichip_decoder/capacity_l3_s262144.json",
+      "multichip_decoder/capacity_stack_s262143.json"
+    ],
+    "source_sha256": "e8898b5a80cd8f182c82a9fd94d194d6636522378b003cca37552c66770f02ce",
+    "supported_context": 262144,
+    "capability_reduction": null,
+    "public_sequence_alignment_requirement": null,
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "batch_coverage": {
+      "largest_tested_batch": 32,
+      "prefill_length_at_batch_32": 257,
+      "decode_context_at_batch_32": 258,
+      "full_context_batch": 1
+    },
+    "kv_layout": "BFP8 TILE [physical_pages,1,32,256] per rank, identical replicated page tables",
+    "evidence": [
+      "multichip_decoder/capacity_l0_s262143.json",
+      "multichip_decoder/capacity_l0_s262144.json",
+      "multichip_decoder/capacity_l3_s262143.json",
+      "multichip_decoder/capacity_l3_s262144.json",
+      "multichip_decoder/capacity_stack_s262143.json",
+      "multichip_decoder/mesh_plan.md",
+      "multichip_decoder/memory_capacity_plan.json",
+      "multichip_decoder/topology_initial.log"
+    ]
+  },
+  "optimized_multichip_decoder": {
+    "status": "validated",
+    "mesh": [
+      1,
+      4
+    ],
+    "context": 262144,
+    "projection_policy": "BFP4, prefill interleaved + decode bank-sharded copies",
+    "all_decoder_projection_bytes_per_device": 7015956480,
+    "kv_bytes_per_device": 2281701376,
+    "kv_bytes_per_token_per_full_layer": 544,
+    "recurrence_bytes_per_device_per_user": 37748736,
+    "conv_bytes_per_device_per_user": 737280,
+    "embedding_lm_head_reserve_bytes_per_device": 1271398400,
+    "norm_and_constant_reserve_bytes_per_device": 134217728,
+    "trace_activation_reserve_bytes_per_device": 19327352832,
+    "total_bytes_per_device": 30069112832,
+    "capacity_probe_reserved_bytes_per_device": 12889243648,
+    "capacity_probe_reservation_scope": "All planned persistent weights/KV/recurrent/terminal/constants plus2GiB trace/CCL. Real full-length activations are live in the probe, not double-counted as empty buffers.",
+    "device_dram_bytes": 34138688512,
+    "headroom_bytes_per_device": 4069575680,
+    "shared_collective_l1_workspace": {
+      "ownership": "One TT_CCL context per ordered CQ0 layer stack; no concurrent sharing",
+      "shape": [
+        1,
+        1,
+        32,
+        20480
+      ],
+      "shard": [
+        32,
+        512
+      ],
+      "cores": 40,
+      "bytes_per_core": 32768,
+      "bytes_per_device": 1310720,
+      "count_per_stack": 1
+    },
+    "note": "B1 advertised context; larger batch capacity must be checked independently. No capability reduction.",
+    "capacity_evidence": [
+      "optimized_multichip_decoder/capacity_l0_s262143.json",
+      "optimized_multichip_decoder/capacity_l0_s262144.json",
+      "optimized_multichip_decoder/capacity_l3_s262143.json",
+      "optimized_multichip_decoder/capacity_l3_s262144.json",
+      "optimized_multichip_decoder/capacity_stack_s262143.json"
+    ],
+    "source_sha256": "211b70db973294f7660ba9cd3c4ef0601ffbac32dab4866e3511b4804ff76213",
+    "supported_context": 262144,
+    "capability_reduction": null,
+    "public_sequence_alignment_requirement": null,
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "batch_coverage": {
+      "largest_tested_batch": 32,
+      "prefill_length_at_batch_32": 257,
+      "decode_context_at_batch_32": 258,
+      "full_context_batch": 1
+    },
+    "kv_layout": "BFP8 TILE [physical_pages,1,32,256] per rank, identical replicated page tables",
+    "evidence": [
+      "optimized_multichip_decoder/capacity_l0_s262143.json",
+      "optimized_multichip_decoder/capacity_l0_s262144.json",
+      "optimized_multichip_decoder/capacity_l3_s262143.json",
+      "optimized_multichip_decoder/capacity_l3_s262144.json",
+      "optimized_multichip_decoder/capacity_stack_s262143.json",
+      "multichip_decoder/mesh_plan.md",
+      "optimized_multichip_decoder/memory_capacity_plan.json",
+      "multichip_decoder/topology_initial.log"
+    ]
+  },
+  "full_model": {
+    "supported_context": 262144,
+    "hf_advertised_context": 262144,
+    "capability_reduction": null,
+    "mesh": [
+      1,
+      4
+    ],
+    "batch": 1,
+    "page_size": 32,
+    "kv_dtype": "bfloat8_b",
+    "prefill_fill_dtype": "bfloat8_b",
+    "decode_update_dtype": "bfloat16",
+    "linear_recurrent_dtype": "float32",
+    "resources_bytes_per_device": {
+      "decoder_projections_bfp4_both_layouts": 7015956480,
+      "embedding_bf16_hidden_shard": 635699200,
+      "lm_head_bfp8_vocab_shard": 337715200,
+      "lm_head_bfp8_dram_decode_copy": 339804160,
+      "decoder_norms_constants_reserve": 134217728,
+      "final_norm_bf16": 327680,
+      "rope_bf16_tables": 67108864,
+      "full_kv_bfp8": 2281701376,
+      "linear_recurrence_fp32": 37748736,
+      "linear_conv_bf16_row_major": 737280,
+      "page_table_int32": 32768,
+      "trace_region_per_device": 200000000,
+      "persistent_ccl_and_sampling_reserve": 268435456,
+      "bounded_4096_prefill_activations_and_scratch_reserve": 2147483648
+    },
+    "total_bytes_per_device": 13466968576,
+    "device_dram_bytes": 34138688512,
+    "headroom_bytes_per_device": 20671719936,
+    "projection_source": "optimized_multichip_decoder/memory_capacity_plan.json",
+    "public_sequence_alignment_requirement": null,
+    "prefill_chunk_size": 4096,
+    "executed_capacity_evidence": "full_model/readiness_confirmed.json: all64 layers with selected DRAM terminal and repaired native reader; S262143+decode and S262144 prefill pass, process exit0.",
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "batch_coverage": {
+      "largest_tested_batch": 32,
+      "mixed_prompt_lengths": [
+        31,
+        33
+      ],
+      "fixed_slots": [
+        31,
+        0
+      ],
+      "full_context_batch": 1,
+      "evidence": "full_model/contract_full_b32.json",
+      "scope": "Batch32 short prompts and batch1 maximum context are separate coverage points, not every joint allocation."
+    },
+    "page_allocation_contract": "ceil(logical capacity/32) pages per slot; SDPA K chunk is reduced until it divides mapped capacity",
+    "arithmetic_scope": "Full 64-layer weights and state; bounded stack-level prefill activations. BF8 tile1088B, BF4 tile576B. Reserves conservative; capacity execution recorded separately.",
+    "source_sha256": {
+      "model.py": "25726bd020846dcffca14fcb2fb46ab0784f0fc1d59bc68d5650c10aa222b82b",
+      "generator.py": "7509ddc079fbadac267bd067660a6a22eb2cea90fb795b41e9c64c7ed59cc411"
+    }
+  },
+  "optimized_full_model": {
+    "status": "validated",
+    "supported_context": 262144,
+    "capability_reduction": null,
+    "mesh": [
+      1,
+      4
+    ],
+    "public_sequence_alignment_requirement": null,
+    "history_dtype": "uint32",
+    "history_layout": "ROW_MAJOR replicated [capacity,1,1,32]",
+    "history_capacity_policy": "Request-sized high-water mark, bounded by context; cursor/count reset without clearing data",
+    "history_persistent_max_bytes_per_device": 33554432,
+    "history_append_scratch_max_bytes_per_device": 33554432,
+    "history_cursor_and_alignment_reserve_bytes_per_device": 4096,
+    "conservative_total_bytes_per_device": 13538275840,
+    "device_dram_bytes": 34138688512,
+    "headroom_bytes_per_device": 20600412672,
+    "accounting_note": "Adds history scratch on top of existing2GiB scratch reserve conservatively, plus4MiB prefill input/output reserve. Full64-layer execution passes262143 prompt+last-position decode and262144 prompt. No decoder/KV/activation/CCL dtype or residual policy change.",
+    "evidence": [
+      "optimized_full_model/token_history_probe.json",
+      "optimized_full_model/terminal_contract_full_b32.json",
+      "optimized_full_model/prefill_trace_smoke.json",
+      "optimized_full_model/prefill_deferred_reduced.json",
+      "optimized_full_model/readiness_final.json",
+      "optimized_full_model/prefill_contract_reduced.json",
+      "optimized_full_model/contract_final_full_b32.json",
+      "optimized_full_model/prefill_contract_full.json"
+    ],
+    "source_sha256": {
+      "model.py": "bf7b0c8a88b158e0c346b97cbf16ca4d9e1fb56b677a3f822d60fbd0db039bcb",
+      "generator.py": "21ebbb0fb0654308171645f77da58e8e424d43db936a9b41e65df9c4982efa0d"
+    },
+    "prefill_trace_max_prompt_length": 4096,
+    "prefill_trace_cache_entries": 1,
+    "prefill_trace_persistent_reserve_bytes_per_device": 4194304,
+    "prefill_trace_long_prompt_policy": "Existing chunked eager prefill above4096; all logical lengths remain supported. The bound limits trace retention, not context capability.",
+    "largest_tested_prefill": 262144,
+    "largest_tested_decode_context": 262144,
+    "context_test_batch_size": 1,
+    "fabric_packet_payload_bytes": 8192,
+    "batch_coverage": {
+      "largest_tested_batch": 32,
+      "mixed_prompt_lengths": [
+        31,
+        33
+      ],
+      "fixed_slots": [
+        31,
+        0
+      ],
+      "full_context_batch": 1,
+      "evidence": "optimized_full_model/contract_final_full_b32.json",
+      "scope": "Batch32 short prompts and batch1 maximum context are separate coverage points."
+    },
+    "nonaligned_full_model_evidence": "optimized_full_model/prefill_contract_full.json"
+  }
+}
