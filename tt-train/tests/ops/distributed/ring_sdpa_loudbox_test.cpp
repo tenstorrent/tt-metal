@@ -234,7 +234,23 @@ public:
         // for a device count of 8. Do not overwrite a path the caller set.
         setenv("TT_MESH_GRAPH_DESC_PATH", p150_x8_descriptor_path()->c_str(), /* overwrite */ 0);
 
-        ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+        // Any suite that touched the device before this one reached it through
+        // AutoContext::get_device(), which opens a default 1x1 mesh lazily and
+        // never closes it. SetFabricConfig then refuses -- "not allowed while
+        // devices are still open" -- and every test here skips with the suite
+        // marked failed. Releasing it first is safe whether or not one is open,
+        // and close_device() also drops the fabric config on the way out.
+        ttml::autograd::ctx().close_device();
+
+        // Both the accessor and the initializer throw -- one when it is not
+        // yet initialized, the other when it already is -- so there is no
+        // query to branch on; an earlier suite in the same binary may have
+        // done it.
+        try {
+            ttml::autograd::ctx().initialize_distributed_context(0, nullptr);
+        } catch (const std::exception&) {
+            // Already initialized. Nothing to do.
+        }
         ttml::ttnn_fixed::distributed::enable_fabric(kExpectedChips);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(kMeshRows, kMeshCols));
         ttml::autograd::ctx().set_seed(42);
@@ -243,12 +259,17 @@ public:
         // DDP on axis 0 (extent 2), CP on axis 1 (extent 4): the context
         // assigns axes in the order DDP, CP, TP, and a 2-D mesh needs exactly
         // two parallelisms enabled. This is what gives the ring four devices.
-        ttml::autograd::ctx().initialize_parallelism_context(
-            {.enable_ddp = true, .enable_tp = false, .enable_cp = true});
+        // It is built from the open device, so it comes after open_device();
+        // there is no API to replace one, hence the guard.
+        if (!ttml::autograd::ctx().is_parallelism_context_initialized()) {
+            ttml::autograd::ctx().initialize_parallelism_context(
+                {.enable_ddp = true, .enable_tp = false, .enable_cp = true});
+        }
     }
 
     static void TearDownTestSuite() {
         if (loudbox_available()) {
+            // Leaves no device open, so a later suite's lazy 1x1 open works.
             ttml::autograd::ctx().close_device();
         }
     }
