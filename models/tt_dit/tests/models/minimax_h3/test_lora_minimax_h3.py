@@ -240,7 +240,7 @@ def native_block_adapter(diffusers: dict[str, torch.Tensor], *, prefix: str) -> 
     native = {}
     for key, value in diffusers.items():
         leaf = key.removeprefix(f"{prefix}.")
-        if leaf.startswith("attn.to_"):
+        if leaf.startswith(("attn.to_q", "attn.to_k", "attn.to_v")):
             continue  # folded into qkv_proj below
         native_leaf = {
             "attn.to_out.0": "attn.out_proj",
