@@ -5,6 +5,11 @@ declared support matrix. Host verification covers the binding, validation,
 output creation, planner, cache key, refresh hook, and enqueue path. Numerical
 golden tests alone do not verify all of those behaviors.
 
+Input authority is the **complete final evaluated branch**, pinned by
+[prepare_branch](PREPARE_EVALUATED_BRANCH.md), not the run's starting commit or
+a reconstructed DB source package. The branch's own evaluator revision supplies
+the test suite. DB results are optional historical evidence, not a source overlay.
+
 **Status:** this is a review protocol and implementation specification. The
 current [validation driver](validate_port.py) automates build, factory-contract,
 golden-outcome comparisons, supplied cache tests, and a review receipt. It does
@@ -19,9 +24,9 @@ under this protocol. No operation has been measured by writing this document.
 flowchart TD
     A[Freeze candidate, target build, cases and budgets] --> B[Build and factory contract]
     B --> C[Frozen Python golden suite on target]
-    C --> D{Recorded baseline accounted for?}
+    C --> D{Source baseline admissible?}
     D -- Yes --> E[Native golden suite on same target]
-    D -- No --> X[Investigate baseline or historical replay]
+    D -- No --> X[Investigate source failures or incomplete evaluated checkpoint]
     E --> F{Same cases and accepted behavior?}
     F -- No --> Y[Fix and create fresh validation evidence]
     F -- Yes --> G[Host contract and planner comparison]

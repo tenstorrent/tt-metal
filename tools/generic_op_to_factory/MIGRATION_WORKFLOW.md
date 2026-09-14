@@ -1,5 +1,10 @@
 # Optional historical-runtime replay
 
+New migrations start from the final evaluated branch using
+[prepare_branch](PREPARE_EVALUATED_BRANCH.md), then use `validate_port`.
+This module's starting-commit/DB reconstruction is retained for explicitly
+requested historical diagnostics; it is not a prerequisite for a branch port.
+
 `tools.generic_op_to_factory.migration_workflow` is the historical-runtime
 diagnostic, not a prerequisite of the default [two-golden migration flow](PORT_FLOW.md).
 Use it when target-source execution cannot run, differs from recorded DB outcomes,

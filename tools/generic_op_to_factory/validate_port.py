@@ -3,8 +3,10 @@
 
 """Resumable target-source → native golden/cache validation of a reviewed C++ port.
 
-Source retrieval remains deterministic. Translation is authored/reviewed before
-initialization; this driver never invents a port, repairs failures, or queries a DB.
+The default input is a complete evaluated branch frozen by prepare_branch.
+Legacy export/preparation configs remain supported for historical diagnostics.
+Translation is authored/reviewed before initialization; this driver never
+invents a port, repairs failures, or queries a DB.
 """
 
 import argparse
@@ -22,6 +24,7 @@ from tools.generic_op_to_factory import (
     factory_contract,
     migration_workflow,
     prepare_baseline,
+    prepare_branch,
     prepare_target,
     test_evidence,
 )
@@ -124,32 +127,34 @@ def file_hash(path):
 
 
 def plan(config):
+    branch_mode = "evaluated_branch" in config
     required = {
         "runtime",
-        "target_revision",
-        "preparation",
-        "export",
-        "phase",
         "workspace",
         "source_entry",
         "native_entry",
         "cache_test",
         "build_argv",
         "precompile",
-        "allow_recorded_failures",
         "factory_contract",
     }
-    if required - config.keys() or config.keys() - required - {
+    required |= (
+        {"evaluated_branch", "migration_paths", "allow_source_failures"}
+        if branch_mode
+        else {"target_revision", "preparation", "export", "phase", "allow_recorded_failures"}
+    )
+    optional = {
         "environment",
         "precompile_workers",
         "command_timeout_seconds",
-        "dependency_substitutions",
         "source_aliases",
         "smoke_nodeid",
-    }:
+    }
+    optional |= {"target_revision"} if branch_mode else {"dependency_substitutions"}
+    if required - config.keys() or config.keys() - required - optional:
         raise ExportError("Missing or unknown port validation config keys")
     config = dict(config)
-    for key in ("runtime", "preparation", "export", "workspace"):
+    for key in ("runtime", "workspace", *(("evaluated_branch",) if branch_mode else ("preparation", "export"))):
         path = Path(config[key])
         if not path.is_absolute() or path.is_symlink():
             raise ExportError(f"{key} must be an absolute, unredirected path")
@@ -157,7 +162,8 @@ def plan(config):
     config.setdefault("environment", {})
     config.setdefault("precompile_workers", 6)
     config.setdefault("command_timeout_seconds", None)
-    config.setdefault("dependency_substitutions", [])
+    if not branch_mode:
+        config.setdefault("dependency_substitutions", [])
     config.setdefault("source_aliases", [])
     config.setdefault("smoke_nodeid", None)
     aliases = config["source_aliases"]
@@ -169,7 +175,7 @@ def plan(config):
         raise ExportError("Unsupported environment override")
     if not all(isinstance(v, str) for v in config["environment"].values()):
         raise ExportError("Environment values must be strings")
-    for key in ("precompile", "allow_recorded_failures"):
+    for key in ("precompile", "allow_source_failures" if branch_mode else "allow_recorded_failures"):
         if type(config[key]) is not bool:
             raise ExportError(f"{key} must be an explicit boolean")
     for key in ("precompile_workers", "command_timeout_seconds"):
@@ -192,27 +198,38 @@ def plan(config):
         for a in build
     ):
         raise ExportError("Unsupported build arguments")
-    manifest = verify_preparation(config["preparation"])
-    frozen = verify_export(config["export"])
-    # The prepared source and exported comparison data must belong to the same snapshot.
-    run = json.loads((Path(config["export"]) / "records/run.json").read_bytes())
-    if (
-        run["starting_commit"] != manifest["metal_commit"]
-        or run["eval_commit"] != manifest["eval_commit"]
-        or run["prompt_name"] != manifest["operation"]
-    ):
-        raise ExportError("Preparation and export identities differ")
-    for entry in manifest["files"]:
-        if entry["origin"] == "db" and file_hash(Path(config["export"]) / entry["export_path"]) != entry["sha256"]:
-            raise ExportError("Prepared source differs from export")
-    target = prepare_target.inspect(
-        config["preparation"],
-        config["runtime"],
-        config["target_revision"],
-        allow_installed=True,
-        substitutions=config["dependency_substitutions"],
-    )
-    suite = f"eval/golden_tests/{run['golden_name']}"
+    if branch_mode:
+        if not isinstance(config["migration_paths"], list):
+            raise ExportError("migration_paths must be an explicit list of native migration files")
+        target = prepare_branch.inspect(config["evaluated_branch"], config["runtime"], config["migration_paths"])
+        if config.get("target_revision", target["target_revision"]) != target["target_revision"]:
+            raise ExportError("Target HEAD differs from frozen port revision")
+        config["target_revision"] = target["target_revision"]
+        manifest = {"operation": target["operation"], "preparation_sha256": target["snapshot_sha256"]}
+        frozen = target
+        suite = target["suite"]
+    else:
+        # Legacy DB reconstruction is retained for explicit historical workflows.
+        manifest = verify_preparation(config["preparation"])
+        frozen = verify_export(config["export"])
+        run = json.loads((Path(config["export"]) / "records/run.json").read_bytes())
+        if (
+            run["starting_commit"] != manifest["metal_commit"]
+            or run["eval_commit"] != manifest["eval_commit"]
+            or run["prompt_name"] != manifest["operation"]
+        ):
+            raise ExportError("Preparation and export identities differ")
+        for entry in manifest["files"]:
+            if entry["origin"] == "db" and file_hash(Path(config["export"]) / entry["export_path"]) != entry["sha256"]:
+                raise ExportError("Prepared source differs from export")
+        target = prepare_target.inspect(
+            config["preparation"],
+            config["runtime"],
+            config["target_revision"],
+            allow_installed=True,
+            substitutions=config["dependency_substitutions"],
+        )
+        suite = f"eval/golden_tests/{run['golden_name']}"
     if config["smoke_nodeid"] is not None:
         smoke = config["smoke_nodeid"]
         if not isinstance(smoke, str) or not smoke.startswith(suite + "/") or "::" not in smoke:
@@ -229,13 +246,17 @@ def plan(config):
             raise ExportError("Entries must use module.path:symbol")
     if config["source_entry"] == config["native_entry"] or config["native_entry"] in aliases:
         raise ExportError("Source and native entries must differ")
-    rows = [
-        json.loads(line) for line in (Path(config["export"]) / "records/test_results.jsonl").read_text().splitlines()
-    ]
-    rows = [row for row in rows if row.get("phase") == config["phase"]]
-    historical = compare_baseline.compare_outcomes(rows, rows)
-    if historical["observed_failures"] and not config["allow_recorded_failures"]:
-        raise ExportError("Recorded baseline has failures; explicit acceptance is required")
+    rows = []
+    historical_failures = None
+    if not branch_mode:
+        rows = [
+            json.loads(line)
+            for line in (Path(config["export"]) / "records/test_results.jsonl").read_text().splitlines()
+        ]
+        rows = [row for row in rows if row.get("phase") == config["phase"]]
+        historical_failures = compare_baseline.compare_outcomes(rows, rows)["observed_failures"]
+        if historical_failures and not config["allow_recorded_failures"]:
+            raise ExportError("Recorded baseline has failures; explicit acceptance is required")
     runtime = Path(config["runtime"])
     config["factory_contract"] = factory_contract.validate(config["factory_contract"], runtime)
     for path in (
@@ -274,6 +295,7 @@ def plan(config):
                 Path(compare_baseline.__file__),
                 Path(migration_workflow.__file__),
                 Path(prepare_baseline.__file__),
+                Path(prepare_branch.__file__),
                 Path(export_run.__file__),
                 Path(classify_failures.__file__),
                 Path(dependency_substitutions.__file__),
@@ -281,8 +303,8 @@ def plan(config):
                 Path(test_evidence.__file__),
             )
         },
-        "recorded_case_count": len(rows),
-        "historical_failures": historical["observed_failures"],
+        "recorded_case_count": None if branch_mode else len(rows),
+        "historical_failures": historical_failures,
     }
 
 
@@ -415,7 +437,19 @@ class PortValidation:
             return {}
         if stage == "source_compare":
             junit = self.workspace / self.state["stages"]["source"]["attempts"][-1] / "junit.xml"
-            comparison = compare_baseline.compare(c["export"], junit, c["phase"])
+            if "evaluated_branch" in c:
+                rows = parse_junit_xml(junit)
+                comparison = compare_baseline.compare_outcomes(rows, rows)
+                comparison.update(
+                    comparison_kind="evaluated_branch_source_baseline",
+                    recorded_results_compared=False,
+                    scope="Fresh source baseline on evaluated branch; no claim of DB or historical outcome reproduction",
+                )
+                write_json(attempt / "comparison.json", comparison)
+                if comparison["observed_failures"] and not c["allow_source_failures"]:
+                    raise ExportError("Source baseline has failures; explicit allow_source_failures is required")
+            else:
+                comparison = compare_baseline.compare(c["export"], junit, c["phase"])
         elif stage == "native_compare":
             source = self.workspace / self.state["stages"]["source"]["attempts"][-1] / "junit.xml"
             native = self.workspace / self.state["stages"]["native"]["attempts"][-1] / "junit.xml"
@@ -433,18 +467,23 @@ class PortValidation:
             evidence[str(receipt_path)] = file_hash(receipt_path)
             return evidence
         elif stage == "complete":
+            baseline = self.workspace / self.state["stages"]["source_compare"]["attempts"][-1] / "comparison.json"
+            source_failures = json.loads(baseline.read_bytes())["observed_failures"]
             write_json(
                 attempt / "result.json",
                 {
                     "native_migration_validated": True,
                     "historical_failures": self.planned["historical_failures"],
+                    "source_failures": source_failures,
+                    "input_mode": "evaluated_branch" if "evaluated_branch" in c else "historical_export",
+                    "source_revision": self.planned["target_inputs"].get("source_revision"),
                     "production_ready": False,
                     "independent_review_recorded": True,
                     "factory_kind": "ProgramDescriptor",
                     "factory_contract": c["factory_contract"],
                     "baseline_scope": self.planned["target_inputs"]["baseline_scope"],
                     "dependency_substitutions": self.planned["target_inputs"]["dependency_substitutions"],
-                    "scope": "Recorded golden outcomes/tolerances and explicitly supplied cache regression tests; no performance or trace claim",
+                    "scope": "Source/native golden outcomes/tolerances and explicitly supplied cache regression tests; no performance or trace claim",
                 },
             )
             return {}
@@ -512,7 +551,7 @@ def initialize(config):
     planned = plan(config)
     workspace = Path(planned["config"]["workspace"])
     # Evidence must not contaminate the source snapshot or frozen input packages.
-    for key in ("preparation", "export"):
+    for key in ("evaluated_branch",) if "evaluated_branch" in config else ("preparation", "export"):
         if workspace.is_relative_to(Path(planned["config"][key])):
             raise ExportError("Evidence cannot be written inside frozen inputs")
     if workspace.is_relative_to(Path(planned["config"]["runtime"])):

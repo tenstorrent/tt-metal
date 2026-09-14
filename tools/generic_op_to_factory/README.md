@@ -1,24 +1,27 @@
 # Generic operation → C++ ProgramDescriptor-factory migration
 
-This tt-metal-owned tool freezes a recorded eval run and validates an authored
-native port with two golden suites on one target build. Historical replay is
-an optional diagnostic. All orchestration, mapping,
+This tt-metal-owned tool post-processes a **complete evaluated run branch** and
+validates an authored native port with two golden suites on one target build.
+The branch's final commit, not the DB's `starting_commit`, supplies the operation,
+supporting tt-metal changes and evaluator gitlink. Historical reconstruction is
+an explicit legacy diagnostic, not a prerequisite. All orchestration, mapping,
 review guidance and synthetic tests are versioned together here, on one
 tt-metal branch. The operation being migrated is a separate change.
 
-Start with [PORT_FLOW.md](PORT_FLOW.md) for the complete flow.
+Start with [PREPARE_EVALUATED_BRANCH.md](PREPARE_EVALUATED_BRANCH.md) for the
+branch-based command and validation config, then [PORT_FLOW.md](PORT_FLOW.md)
+for the validation/review contracts.
 
 Use [COMPARISON_GATE.md](COMPARISON_GATE.md) for the detailed migration-acceptance
 protocol: host contract/planner comparison, cache transitions, paired host/device
 profiling, and explicit performance budgets. It distinguishes current automated
 checks from the additional measurement gates that still need tooling.
 
-Open [FLOW.html](FLOW.html) in a browser for an offline visual walkthrough,
-showing the shared target build, the two golden runs, file-only comparisons and
-optional diagnostics. It documents the flow; it is not a live status dashboard.
+The private local `FLOW.html`, if present, is an older visualization, not the
+branch-input specification or a live status dashboard.
 
-1. [Export exact source and evidence](EXPORT_RUN.md) from a read-only DB snapshot.
-2. [Prepare frozen Git inputs](PREPARE_BASELINE.md) and one isolated target worktree.
+1. Checkpoint the **final evaluated tree**, including supporting changes and submodule pins.
+2. [Prepare an isolated worktree from the supplied branch](PREPARE_EVALUATED_BRANCH.md).
 3. [Map the operation](MAPPING.md) and author its native
    [ProgramDescriptor factory](FACTORY_CONTRACT.md) and cache tests.
 4. [Validate source/native parity and cache behavior](PORT_FLOW.md), then complete
@@ -28,7 +31,7 @@ Run entry points from this tt-metal repository root, for example:
 
 ```bash
 python3 -m tools.generic_op_to_factory.export_run --help
-python3 -m tools.generic_op_to_factory.migration_workflow --help
+python3 -m tools.generic_op_to_factory.prepare_branch --help
 python3 -m tools.generic_op_to_factory.validate_port --help
 ```
 
@@ -36,12 +39,13 @@ The orchestration modules use the Python standard library. Live PostgreSQL
 export additionally needs `psycopg2`; offline verification does not. Runtime
 builds and golden tests need the selected checkout's own built environment.
 
-The evaluator repository is still a historical **input**: its recorded Git
-revision supplies golden suites, helpers and pytest plugins. It need not contain
-any of these migration tools, and no evaluator branch or submodule-pin change
-is part of installing the tool. Source and native golden suites share the final
-target worktree and build. A separate historical runtime is needed only for an
-explicit [historical-replay diagnostic](MIGRATION_WORKFLOW.md).
+The evaluated branch's **own evaluator/gitlinks** supply golden suites, helpers
+and pytest plugins. Preparation never overwrites them with the DB's evaluator
+revision, installs exported operation files, or reconstructs missing APIs.
+Source and native golden suites share the final target worktree and build.
+DB exports remain optional provenance/results artifacts; branch validation does
+not read them or claim to reproduce their outcomes. The older
+[historical-replay diagnostic](MIGRATION_WORKFLOW.md) remains separately available.
 
 JUnit parsing is owned locally in `classify_failures.py`, initially copied from
 `tt_ops_code_gen` revision `034527ad845a7b61596139802c4af567983a14bb`.
@@ -61,6 +65,6 @@ runners and small C++20 contract fixtures compiled when a host compiler is
 available. They do not measure native-operation performance or replace real
 build, golden, cache and review evidence for each port.
 
-Missing shared headers require deterministic recovery or an explicitly approved
-[dependency substitution](DEPENDENCY_SUBSTITUTIONS.md). The latter is recorded
-as a changed baseline, never as exact historical runtime reproduction.
+An incomplete evaluated branch must be checkpointed/recovered upstream rather
+than silently repaired from DB exports. [Dependency substitutions](DEPENDENCY_SUBSTITUTIONS.md)
+belong to the legacy reconstruction path, not branch-based post-processing.

@@ -1,9 +1,9 @@
-# Prepare a baseline from a frozen run export
+# Legacy: prepare a baseline from a frozen run export
 
-This is the Git-input preparation step of the default [migration flow](PORT_FLOW.md).
-After preparation, use `prepare_target` for the shared source/native target.
-The historical checkout/install instructions below apply only to the optional
-[historical-runtime diagnostic](MIGRATION_WORKFLOW.md).
+For normal post-evaluation migration, use the complete final run branch via
+[PREPARE_EVALUATED_BRANCH.md](PREPARE_EVALUATED_BRANCH.md). The recorded starting
+commit below is not the final evaluated tree and may lack supporting in-run
+changes. This reconstruction path remains an explicit historical diagnostic.
 
 This stage reads Git objects, not an LLM or the current checkout's files. It
 does not fix generated code or turn a failed run into a passing operation.

@@ -1,4 +1,33 @@
-# From a frozen eval candidate to a validated C++ port
+# From a completed evaluated branch to a validated C++ port
+
+## Default input: the final evaluated branch
+
+Migration is a post-processing step of evaluation. Pass the branch that contains
+the **whole evaluated operation**, including supporting tt-metal APIs, helpers
+and evaluator changes. Use [PREPARE_EVALUATED_BRANCH.md](PREPARE_EVALUATED_BRANCH.md)
+and `prepare_branch --branch BRANCH`; it pins the final commit and initializes
+its recursive gitlinks in one fresh worktree. Dirty run changes must first be
+checkpointed by the caller. The tool does not commit, reset, rebase or push them.
+
+In `validate_port`, use `evaluated_branch`, `migration_paths` and
+`allow_source_failures` instead of `preparation`, `export`, `phase` and
+`allow_recorded_failures`. These are mutually exclusive input modes. The source
+baseline comes from running the unchanged operation and golden suite already
+on that branch; DB retrieval and a historical checkout are not involved.
+
+The validation sequence is **one build → factory contract → source golden →
+source-baseline check → native golden → source/native comparison → cache tests
+→ independent review → scoped receipt**. Smokes and precompile remain optional.
+`source_compare` checks whether source failures were explicitly allowed; it does
+not claim a DB comparison in this mode. Matching failures remain failures.
+Reusing an existing eval report instead of running the source baseline once is
+not implemented: evidence-to-checkpoint/environment binding needs its own gate.
+
+The factory, routing, evidence and review contracts below apply to both modes.
+The old preparation commands/config below are retained only for historical
+reconstruction, **not the starting point for new post-evaluation migrations**.
+
+## Legacy input: reconstructing a historical export
 
 The flow is general; the C++ translation itself is authored and reviewed using
 [MAPPING.md](MAPPING.md), not guessed by a retrieval script. Run IDs are inputs
