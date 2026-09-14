@@ -37,14 +37,17 @@ void matmul_blocks(
     // precondition: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
+    // matmul_block_init validates the live reverse-order unpacker setup
+    // (in1_cb -> SrcA, in0_cb -> SrcB). Preceding tilize can leave unpacker dest
+    // formats stale — Float32 L1 unpacks to Tf32 dest under fp32 dest-acc — so
+    // restore them before init.
+    reconfig_data_format(in1_cb, in0_cb);
     matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
-
-    reconfig_data_format(in1_cb, in0_cb);
 
     CircularBuffer out_cb_obj(out_cb);
 
