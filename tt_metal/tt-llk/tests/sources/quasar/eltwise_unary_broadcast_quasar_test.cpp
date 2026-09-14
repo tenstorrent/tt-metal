@@ -217,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_(tile);
+                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
                     }
                 }
             }
@@ -230,7 +230,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t tile = 0; tile < tiles_in_block; tile++)
                     {
-                        _llk_math_eltwise_unary_broadcast_(tile);
+                        _llk_math_eltwise_unary_broadcast_<unpack_to_dest>(tile);
                     }
                     _llk_math_set_dvalid_<p_cleardvalid::FPU, dest_sync>();
                 }
@@ -260,7 +260,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t output_tiles_in_block = params.OUTPUT_NUM_TILES_IN_BLOCK;
     const Operand& buffer_Res                 = params.buffer_Res;
 #endif
-
 
     {
         ZONE_SCOPED("INIT")

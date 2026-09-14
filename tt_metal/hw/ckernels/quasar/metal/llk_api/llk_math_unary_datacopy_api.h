@@ -92,7 +92,7 @@ inline void llk_math_eltwise_unary_datacopy(const std::uint32_t dst_index, const
     if constexpr (src_b_bcast_type != BroadcastType::NONE && !unpack_to_dest) {
         static_assert(type == DataCopyType::B2D, "Unary broadcast math path requires DataCopyType::B2D");
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
-        _llk_math_eltwise_unary_broadcast_(dst_index);
+        _llk_math_eltwise_unary_broadcast_<false /*unpack_to_dest*/>(dst_index);
     } else {
         // 32-bit unpack-to-dest: math is a sync-only forwarder (unpacker wrrites DEST), no MOP to run.
         if constexpr (!unpack_to_dest) {
