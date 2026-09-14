@@ -178,14 +178,17 @@ class Qwen36DecoderLayer:
         state_blk_idx=None,
         conv_sel=None,
         spec_ctrl=None,
+        spec_cfg=None,
     ):
         # spec_ctrl: QWEN36_GDN_SPEC_FUSED=1 -- the fused GDN spec op's ctrl page ({parity, mi, ring block | HOLD}),
         # which replaces state_blk_idx / conv_sel for the recurrent verify; None (the default) leaves them in charge.
+        # spec_cfg: id of the GDN spec cfg (bucket geometry: per-cfg conv window over the shared ring) the recurrent
+        # verify runs in (TPGatedDeltaNet.prepare_spec_cfg); None = "default", the single-bucket demo path.
         # gdn_masks: persistent device (mask_f32, mask_q, conv_sel) for the traced masked-bucket
         # prefill; only the TP GDN prefill branch consumes it (None => unchanged everywhere).
         # gdn_seed: the spec loop's SEED step (one row per user, T = 1). Everything outside GDN is
         # the verify body at T = 1; GDN takes forward_seed_recurrent instead of the ring verify,
-        # because the ring and E_prev do not exist until capture_verify_trace allocates them.
+        # because the ring and E_prev do not exist until prepare_verify_trace allocates them.
         # n_users / state_blk_idx / conv_sel: the MULTI-USER speculative verify. Its bucket rows are
         # n_users users x T = rows // n_users candidates each, USER-MAJOR (row u*T + j). GDN reshapes
         # them to [n_users, T, C] and reads its per-user initial state / conv window through the two
@@ -273,7 +276,7 @@ class Qwen36DecoderLayer:
                     if gdn_recurrent and gdn_seed:
                         # Spec-decode SEED: one row per user, through the VERIFY's conv1d + fused
                         # recurrent arithmetic but against the DURABLE state (the spec ring and
-                        # E_prev are allocated later, by capture_verify_trace). Same call shape as
+                        # E_prev are allocated later, by prepare_verify_trace). Same call shape as
                         # the verify below, minus the two deferred-commit selectors.
                         attn_output = self.attention.forward_seed_recurrent(
                             attn_input, valid_len, pre_gathered=decode_cfg, n_users=n_users
@@ -289,6 +292,7 @@ class Qwen36DecoderLayer:
                             state_blk_idx=state_blk_idx,
                             conv_sel=conv_sel,
                             spec_ctrl=spec_ctrl,
+                            spec_cfg=spec_cfg,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for

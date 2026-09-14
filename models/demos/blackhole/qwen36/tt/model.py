@@ -48,6 +48,46 @@ class _MaskedBucketTrace:
     output: object  # hidden [1, 1, bucket, dim]; owned by the trace, never cloned
 
 
+@dataclass
+class VerifyConfig:
+    """One prepared / captured spec-verify GEOMETRY (a bucket) of the target model: B users x T = K+1 candidate rows
+    in one 32-row decode tile, with every per-replay input and output buffer its trace bakes in. The dual-bucket
+    serving decoder keeps one per bucket ("8x4", "4x8"); the demo / single-bucket path keeps "default". Rows are
+    BUCKET rows (the decoder maps them to physical slots); the GDN layers hold the matching SpecCfg under the same id
+    and every cfg shares the GDN ring and the DFlash tap buffers (equal row counts)."""
+
+    id: str
+    B: int
+    T: int
+    decode_cfg: bool
+    fused: bool  # QWEN36_GDN_SPEC_FUSED=1: the GDN layers read a ctrl page instead of (state_idx, conv_sel)
+    token_buf: object = None  # [1, B*T] uint32 ROW_MAJOR
+    kvpos_buf: object = None  # [B*T] int32: per-row absolute KV slot / decode cur_pos (-1 = held)
+    kvpt_buf: object = None  # [B*T, nb] int32 per-ROW page table
+    kvpt_users: object = None  # [B, nb] int32 per-USER table (grouped aliased KV write)
+    kvpt1_buf: object = None  # [groups, nb] int32 per-GROUP table (fused spec SDPA)
+    spec_groups: int = 0
+    kv_grouped: bool = False
+    cos_buf: object = None  # [1, B*T, 1, rope_dim] bf16 TILE (per-row decode rope)
+    sin_buf: object = None
+    Nv: int = 0
+    Kc: int = 0
+    state_idx: object = None  # composite GDN path: [B*Nv] uint32
+    conv_sel: object = None  # composite GDN path: [B, K-1+T, K-1+2T] bf16
+    ctrl: object = None  # fused GDN path: [1, spec_ctrl_words(B, Nv)] uint32 page {parity, mi, ring block | HOLD}
+    gdn: object = None  # the GDN layers (TPGatedDeltaNet), in order
+    warmed: bool = False  # the eager warm pass ran: every program the body needs is compiled
+    trace_id: object = None
+    logits_out: object = None  # [1,1,B*T,vocab] bf16 TILE (replicated); owned by the trace
+    rows_out: object = None  # [1,1,B*T,dim/tp] bf16: the drafter feed (spec_feed_rows); owned by the trace
+    ids_out: object = None  # [1,1,B*T] uint32: the in-trace argmax; owned by the trace
+    logits_rm_out: object = None  # ROW_MAJOR copy of logits_out; owned by the trace
+
+    @property
+    def rows(self):
+        return self.B * self.T
+
+
 class Qwen36Model:
     """Qwen3.5-9B text LM on Blackhole P150. HF_MODEL env var selects checkpoint."""
 
@@ -238,6 +278,8 @@ class Qwen36Model:
         self._dflash_tap_layers = (5, 19, 33, 47, 61)  # residual taps after these layers (drafter config)
         self._dflash_tap_bufs = None
         self._dflash_eager_taps = None  # residual clones from the last eager masked prefill chunk
+        # Spec-verify cfgs (buckets): id -> VerifyConfig, see prepare_verify_trace / capture_verify_trace.
+        self._vfy_cfgs = {}
         # Scratch physical KV block for the fixed-width fill page table's pad entries; set by
         # allocate_kv_caches (last block, or QWEN36_PREFILL_BUCKET_PAD_BLOCK).
         self._pad_kv_block = None
@@ -1271,10 +1313,16 @@ class Qwen36Model:
     # groups; GDN reshapes the rows to [B, T, C], which user-major makes a plain reshape.
     #
     # COMMIT IS A DEFERRED SELECT, not a device phase: after readback the host knows each user's
-    # accepted-prefix index mi_u, and writes it into two tiny shared device selectors
-    # (_vfy_state_idx, _vfy_conv_sel) BEFORE the next replay. The recurrent kernel then starts user
-    # u from ring block mi_u and the conv1d from window row mi_u, so nothing is copied between
-    # iterations and there are no commit traces at all.
+    # accepted-prefix index mi_u, and writes it into the cfg's tiny shared device selector(s)
+    # (fused: one ctrl page; composite: state_idx + conv_sel) BEFORE the next replay. The recurrent
+    # kernel then starts user u from ring block mi_u and the conv1d from window row mi_u, so nothing
+    # is copied between iterations and there are no commit traces at all.
+    #
+    # BUCKETS: every (B, T) geometry is a VerifyConfig (self._vfy_cfgs, keyed by id) with its own
+    # per-replay buffers and trace; the GDN layers hold a SpecCfg of the same id (per-cfg window pair,
+    # one shared ring). prepare_verify_trace (phase 1: buffers + eager warm pass, no trace parked) and
+    # capture_verify_trace (phase 2) are split so a server can warm several buckets before capturing
+    # any; the single-cfg callers keep calling capture_verify_trace(page_tables, ...) which does both.
     # ------------------------------------------------------------------------------------------
     def _rope_tp_cos_sin_decode_torch(self, positions):
         """Torch cos/sin [1, B, 1, rope_head_dim] in the DECODE rope layout — one rotation per ROW.
@@ -1295,40 +1343,40 @@ class Qwen36Model:
         sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
         return cos, sin
 
-    def _forward_verify_bucket_tp(self, n_users=1):
-        """Trace body: recurrent verify over the persistent B*T-row bucket buffers -> per-position
-        logits + hidden. Reads only fixed-address buffers so it is trace-capturable. Full-attention
-        layers run the DECODE flash kernel with the rows as pseudo-users (see capture_verify_trace).
-        GDN stays on seq-dim recurrent verify per user (batch dim is not a valid recurrence axis) and
-        takes its per-user starting state through the two shared selectors. Returns (logits, rows,
+    def _forward_verify_bucket_tp(self, cfg):
+        """Trace body of verify cfg ``cfg``: recurrent verify over its persistent B*T-row bucket buffers -> per-position
+        logits + hidden. Reads only fixed-address buffers (cfg.* plus the shared GDN ring / tap bufs) so it is
+        trace-capturable. Full-attention layers run the DECODE flash kernel with the rows as pseudo-users (see
+        capture_verify_trace). GDN stays on seq-dim recurrent verify per user (batch dim is not a valid recurrence
+        axis) and takes its per-user starting state through the cfg's shared selector(s). Returns (logits, rows,
         ids, logits_rm): ``rows`` is the drafter feed [1,1,B*T,dim/tp] bf16 (spec_feed_rows).
         ``logits_rm`` is the ROW_MAJOR bf16 copy the in-trace argmax already needs, kept for the
-        sampling path's host readback — reading the TILE tensor would pay a host untilize of
+        sampling path's host readback -- reading the TILE tensor would pay a host untilize of
         [1,1,B*T,vocab].
         """
-        T = self._vfy_T
+        n_users, T = cfg.B, cfg.T
         rows = n_users * T
-        x = self.embd(self._vfy_token_buf)
+        x = self.embd(cfg.token_buf)
         x = ttnn.reshape(x, (1, 1, rows, x.shape[-1]))
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         for _li, layer in enumerate(self.layers):
             if layer.is_full_attention:
                 # Hybrid verify: every row is a pseudo-user of its own sequence. cur_pos row u*T+j is
-                # p_u+j, so the decode SDPA's own causal bound gives that row exactly [0, p_u+j] —
+                # p_u+j, so the decode SDPA's own causal bound gives that row exactly [0, p_u+j] --
                 # the candidate rows above it are written but masked out. alias_kv_write=True because
                 # a user's T rows share one page table (see TPAttention._write_kv_aliased). At
                 # n_users > 1 that write is issued per CANDIDATE (T calls of n_users rows: one row
                 # per user, and different users are in different blocks) instead of per row, and
-                # _vfy_kvpt_users is the [B, nb] per-user table every group reuses.
+                # cfg.kvpt_users is the [B, nb] per-user table every group reuses.
                 x_new = layer.forward(
                     x,
-                    cos=self._vfy_cos_buf,
-                    sin=self._vfy_sin_buf,
+                    cos=cfg.cos_buf,
+                    sin=cfg.sin_buf,
                     mode="decode",
-                    position_tensor=self._vfy_kvpos_buf,
-                    page_table=self._vfy_kvpt_buf,
+                    position_tensor=cfg.kvpos_buf,
+                    page_table=cfg.kvpt_buf,
                     alias_kv_write=True,
-                    spec_user_page_table=getattr(self, "_vfy_kvpt_users", None),
+                    spec_user_page_table=cfg.kvpt_users,
                     # ...and the SDPA read folds those rows back into a few batch rows
                     # (spec_multi_pos_tiles: groups of 4 candidates, n_users x the single-user
                     # split), so the KV cache streams out of DRAM once per GROUP per layer instead
@@ -1337,7 +1385,7 @@ class Qwen36Model:
                     # falls back to the legacy per-row call for a T with no L1-fitting split
                     # (7, 11, ...).
                     spec_verify_mode=True,
-                    spec_page_table=self._vfy_kvpt1_buf,
+                    spec_page_table=cfg.kvpt1_buf,
                     n_users=n_users,
                 )
             else:
@@ -1346,12 +1394,13 @@ class Qwen36Model:
                     mode="prefill",
                     chunk_size=self.args.gdn_chunk_size,
                     valid_len=rows,
-                    gdn_recurrent=self._vfy_gdn_recurrent,
-                    decode_cfg=self._vfy_decode_cfg,
+                    gdn_recurrent=True,
+                    decode_cfg=cfg.decode_cfg,
                     n_users=n_users,
-                    state_blk_idx=self._vfy_state_idx,
-                    conv_sel=self._vfy_conv_sel,
-                    spec_ctrl=getattr(self, "_vfy_ctrl", None),  # QWEN36_GDN_SPEC_FUSED=1: the fused op's page
+                    state_blk_idx=cfg.state_idx,
+                    conv_sel=cfg.conv_sel,
+                    spec_ctrl=cfg.ctrl,  # QWEN36_GDN_SPEC_FUSED=1: the fused op's page (None on the composite path)
+                    spec_cfg=cfg.id,  # the GDN layers' SpecCfg of the same id (its window pair; the shared ring)
                 )
             ttnn.deallocate(x)
             x = x_new
@@ -1368,7 +1417,7 @@ class Qwen36Model:
         logits = self._lm_head(normed)  # [1,1,B*T,vocab] replicated per device
         ttnn.deallocate(normed)
         # Drafter feed (a new fractured post-norm tensor). Inside the trace, so the persistent
-        # _vfy_rows_out IS the post-norm tensor; its programs are the inner
+        # cfg.rows_out IS the post-norm tensor; its programs are the inner
         # norm's, already compiled by the self.norm call above (only the trailing gather is skipped).
         feed = self.spec_feed_rows(rows_out)
         if feed is not rows_out:
@@ -1424,61 +1473,158 @@ class Qwen36Model:
                 if t is not None:
                     ttnn.deallocate(t)
 
-    def dflash_taps(self):
-        """Gather the 5 DFlash2 verify taps -> (1, T, 25600) host: concat of the residual after
+    def dflash_taps(self, cfg_id="default"):
+        """Gather the 5 DFlash2 verify taps -> (1, rows, 25600) host: concat of the residual after
         layers [5,19,33,47,61], each gathered across the TP mesh. Only valid when _dflash_tap and a
-        verify trace has run (the buffers hold the LAST verify's taps)."""
+        verify trace of cfg ``cfg_id`` has run (the buffers hold the LAST verify's taps)."""
         comp = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-        rows = self._vfy_B * self._vfy_T
+        rows = self.verify_cfg(cfg_id).rows
         outs = [
             ttnn.to_torch(b, mesh_composer=comp).reshape(1, -1, self.args.dim)[:, :rows, :]
             for b in self._dflash_tap_bufs
         ]
         return torch.cat(outs, dim=-1)
 
-    def _vfy_row_positions(self, positions):
-        """Per-ROW absolute positions for the user-major bucket: row u*T + j is positions[u] + j."""
-        T = self._vfy_T
-        return torch.tensor([int(positions[u]) + j for u in range(self._vfy_B) for j in range(T)], dtype=torch.int32)
+    @staticmethod
+    def _vfy_row_positions(positions, cfg):
+        """Per-ROW absolute positions for cfg's user-major bucket: row u*T + j is positions[u] + j."""
+        T = cfg.T
+        return torch.tensor([int(positions[u]) + j for u in range(cfg.B) for j in range(T)], dtype=torch.int32)
 
-    def release_verify_trace(self):
-        """Drop the captured verify trace. No-op when nothing is captured.
+    # ---- the VerifyConfig registry ----
+    def verify_cfg(self, cfg_id="default"):
+        """The prepared / captured VerifyConfig ``cfg_id`` (KeyError when prepare_verify_trace has not run for it)."""
+        cfg = self._vfy_cfgs.get(cfg_id)
+        if cfg is None:
+            raise KeyError(
+                f"verify cfg {cfg_id!r} is not prepared (registered: {sorted(self._vfy_cfgs)}); "
+                "call prepare_verify_trace / capture_verify_trace first"
+            )
+        return cfg
 
-        The trace bakes in the paged KV caches' addresses and every GDN layer's _spec_ring /
-        _verify_win_buf, all of which allocate_kv_caches + prepare_spec_verify re-allocate, so it
-        must never outlive them: free_kv_caches calls this, and so does a re-capture.
+    @property
+    def _vfy_trace_id(self):
+        """Trace id of the "default" verify cfg (None before its capture): the single-cfg callers'
+        ``getattr(model, "_vfy_trace_id", None)`` readiness check (SpeculativeDecoder)."""
+        cfg = self._vfy_cfgs.get("default")
+        return None if cfg is None else cfg.trace_id
+
+    @property
+    def _vfy_B(self):
+        cfg = self._vfy_cfgs.get("default")
+        return None if cfg is None else cfg.B
+
+    @property
+    def _vfy_T(self):
+        cfg = self._vfy_cfgs.get("default")
+        return None if cfg is None else cfg.T
+
+    def release_verify_trace(self, cfg_id=None):
+        """Drop the captured verify trace of cfg ``cfg_id`` (None = every cfg). No-op when nothing is captured.
+
+        A trace bakes in the paged KV caches' addresses and every GDN layer's shared ring / the cfg's window
+        buffers, all of which allocate_kv_caches + prepare_spec_cfg re-allocate, so it must never outlive them:
+        free_kv_caches drops every cfg (release_verify_cfg), and so does a re-prepare of the same id. The cfg's
+        per-replay buffers stay allocated here (a re-capture of a prepared cfg bakes the same addresses).
         """
-        if getattr(self, "_vfy_trace_id", None) is not None:
-            ttnn.release_trace(self.mesh_device, self._vfy_trace_id)
-            self._vfy_trace_id = None
+        ids = list(self._vfy_cfgs) if cfg_id is None else [cfg_id]
+        for cid in ids:
+            cfg = self._vfy_cfgs.get(cid)
+            if cfg is not None and cfg.trace_id is not None:
+                ttnn.release_trace(self.mesh_device, cfg.trace_id)
+                cfg.trace_id = None
+                cfg.logits_out = cfg.rows_out = cfg.ids_out = cfg.logits_rm_out = None
 
-    def capture_verify_trace(self, page_tables, T, warm_positions, decode_cfg=True):
-        """Capture ONE trace of the recurrent verify forward over a fixed B x T bucket
-        (T = len([pending] + drafts) per user, B = max_batch_size users). Replay with verify_traced.
-        GDN state is CARRIED (not reset): the trace advances a per-token ring in place and the host
-        points the next replay at each user's accepted slot (mi) instead of copying anything back.
-        ``page_tables``: torch int32 [B, num_blocks], one row per user — staged ONCE here (a spec
-        request keeps its blocks for its whole generation, so verify_traced never re-stages them).
-        ``warm_positions``: B absolute positions the two throwaway warmup/capture passes write KV at.
-        Capture happens AFTER prompt prefill (so those programs cannot clobber the parked trace), so
-        point the writes PAST each user's prompt frontier; the first real verify overwrites them.
+    def release_verify_cfg(self, cfg_id=None):
+        """release_verify_trace + free the cfg's per-replay device buffers and forget it (None = every cfg).
+
+        The GDN layers' spec cfgs are NOT touched (they belong to the GDN state: reset_state / _release_spec_bufs /
+        release_spec_cfg) and neither are the shared DFlash tap buffers (free_dflash_tap_bufs)."""
+        ids = list(self._vfy_cfgs) if cfg_id is None else [cfg_id]
+        for cid in ids:
+            cfg = self._vfy_cfgs.pop(cid, None)
+            if cfg is None:
+                continue
+            if cfg.trace_id is not None:
+                ttnn.release_trace(self.mesh_device, cfg.trace_id)
+                cfg.trace_id = None
+            cfg.logits_out = cfg.rows_out = cfg.ids_out = cfg.logits_rm_out = None
+            for name in (
+                "token_buf",
+                "kvpos_buf",
+                "kvpt_buf",
+                "kvpt_users",
+                "kvpt1_buf",
+                "cos_buf",
+                "sin_buf",
+                "state_idx",
+                "conv_sel",
+                "ctrl",
+            ):
+                buf = getattr(cfg, name)
+                if buf is not None:
+                    ttnn.deallocate(buf)
+                    setattr(cfg, name, None)
+
+    @staticmethod
+    def _check_grouped_tables(pt, cfg_id):
+        """The grouped aliased KV write is legal only because rows of DIFFERENT users never share a 32-row cache
+        tile: no block may belong to two ROWS of the cfg (a repeat WITHIN one row's table is fine). Host check on
+        the torch tables; a shared block would put two cores on one read-modify-write and silently drop the loser."""
+        _seen = {}
+        for _u in range(int(pt.shape[0])):
+            for _b in {int(v) for v in pt[_u].tolist()}:
+                _prev = _seen.setdefault(_b, _u)
+                assert _prev == _u, (
+                    f"the grouped spec KV write needs per-row block tables that do not overlap, "
+                    f"but block {_b} is named by both row {_prev} and row {_u} of cfg {cfg_id!r}. Set "
+                    f"QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
+                )
+
+    def _verify_cfg_reusable(self, cfg, page_tables, T, decode_cfg):
+        """True when ``cfg`` is prepared, warmed and NOT captured at the same (B, T, decode_cfg, table width) and
+        every GDN layer still holds the matching SpecCfg (reset_state drops those without touching this registry):
+        a capture may then skip the prepare -- nothing new would compile or allocate (the spec's "prepare IF NOT
+        WARMED")."""
+        if not cfg.warmed or cfg.trace_id is not None or cfg.T != int(T) or cfg.decode_cfg != bool(decode_cfg):
+            return False
+        if cfg.kvpt_buf is None or cfg.gdn is None:
+            return False
+        pt = torch.as_tensor(page_tables)
+        pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+        if tuple(pt.shape) != (cfg.B, int(cfg.kvpt_buf.shape[-1])):
+            return False
+        return all(cfg.id in dn._spec_cfgs and dn._spec_cfgs[cfg.id].shape == (cfg.B, cfg.T) for dn in cfg.gdn)
+
+    def prepare_verify_trace(self, page_tables, T, warm_positions, decode_cfg=True, cfg_id="default"):
+        """PHASE 1 of a verify capture for cfg ``cfg_id``: allocate the B x T bucket's per-replay buffers, register the
+        GDN layers' SpecCfg of the same id, run the throwaway seed and the EAGER warm pass (every program the body
+        needs compiles now, with NO trace parked) -- everything capture_verify_trace does except the capture itself,
+        so a server can prepare several buckets and capture them all later. A re-prepare of the same id first drops
+        that cfg (trace + buffers) and rebuilds it; other cfgs are untouched.
+
+        ``page_tables``: torch int32 [B, nb], one row per BUCKET ROW (1 <= B <= max_batch_size, B*T <= 32; the
+        serving decoder maps rows to physical slots) -- staged ONCE here; refresh_verify_page_tables restages them.
+        ``warm_positions``: B absolute positions the throwaway passes write KV at. Run this AFTER prompt prefill (so
+        those programs cannot clobber a parked trace) and point the writes PAST each row's prompt frontier; the first
+        real verify overwrites them. Returns the VerifyConfig (``warmed`` == True).
         """
         from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
 
         assert self.num_devices > 1, "traced verify is the TP path"
         assert self._paged_kv_caches is not None, "allocate_kv_caches first"
+        assert isinstance(cfg_id, str) and cfg_id, f"verify cfg id must be a non-empty str, got {cfg_id!r}"
         pt = page_tables if isinstance(page_tables, torch.Tensor) else torch.as_tensor(page_tables)
         pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
         pt = pt.to(torch.int32).contiguous()
         B = int(pt.shape[0])
-        # B is the model's decode width, not a per-request choice: GDN's fused recurrent decode and
-        # its batched state are both allocated at max_batch_size, and the verify shares them.
-        assert B == self.args.max_batch_size, (
-            f"verify runs the full decode width: page_tables has {B} rows, max_batch_size is "
-            f"{self.args.max_batch_size}"
-        )
-        assert len(warm_positions) == B, f"warm_positions needs one position per user ({B})"
+        # B is the bucket's ROW count: at most the model's decode width (GDN's batched state is allocated at
+        # max_batch_size and every bucket row maps to one of its slots), possibly fewer (a bucket that seats a
+        # subset of the slots at a longer T).
+        assert (
+            1 <= B <= self.args.max_batch_size
+        ), f"verify cfg {cfg_id!r}: page_tables has {B} rows, max_batch_size is {self.args.max_batch_size}"
+        assert len(warm_positions) == B, f"warm_positions needs one position per row ({B})"
         rows = B * T
         # ONE decode tile carries every row of every user. This is the hard cap on B*(K+1) and the
         # reason the demo shrinks K as the batch grows (nlp_create/concat_heads_decode cap at 32
@@ -1487,23 +1633,61 @@ class Qwen36Model:
         # decode_cfg: TILE_SIZE bucket in DECODE matmul config so all layers take DRAM-sharded decode
         # kernels and the weight load is amortized across the B*T tokens (a 32-row M-tile costs the
         # same as a 1-row one; the 128-row prefill bucket is compute-bound even at T=1). NOT bit-exact
-        # with prefill-config verify (different matmul kernels, near-ties round differently) — a valid
+        # with prefill-config verify (different matmul kernels, near-ties round differently) -- a valid
         # continuation, but it breaks "spec reproduces target greedy". Requires exact_kv. HYBRID
         # VERIFY: skip chunked PREFILL SDPA (6 cores serially scanning KV; int-divides chunk_start by
         # 32 so an unaligned anchor drops up to 31 recent tokens). Candidates go through DECODE flash
         # as pseudo-users: write all K/V, then one SDPA-decode with per-row cur_pos so row u*T+j
         # attends [0, p_u+j]. Causality is free and the KV scan spreads over the full grid.
+
+        # The grouped write is legal only because rows of DIFFERENT users never share a 32-row cache
+        # tile. A group holds one row per user, so the sufficient condition is that no block belongs
+        # to two ROWS of this cfg (a repeat WITHIN one row's table is fine -- that row has one row per
+        # group). Check it once, on host, while the tables are still torch and BEFORE anything is
+        # allocated: a shared block would put two cores on one read-modify-write and silently drop the
+        # loser, and a failing check must leak nothing.
+        _kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
+        if _kv_grouped:
+            self._check_grouped_tables(pt, cfg_id)
+
+        # A re-prepare must not leave the old trace parked (its buffers are about to be replaced and its id would
+        # leak): drop THIS cfg first. Other cfgs keep their traces (they bake their own buffers plus the shared
+        # ring / tap bufs, which stay put).
+        self.release_verify_cfg(cfg_id)
+        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
+        assert gdn, "the hybrid verify needs GDN layers"
+        cfg = VerifyConfig(
+            id=cfg_id,
+            B=B,
+            T=T,
+            decode_cfg=bool(decode_cfg),
+            fused=bool(getattr(gdn[0], "_spec_fused", False)),
+            Nv=gdn[0].Nv,
+            Kc=gdn[0].K,
+            gdn=gdn,
+        )
+        cfg.kv_grouped = _kv_grouped
+        # Registered BEFORE the first allocation, so a failure anywhere below leaves a cfg release_verify_cfg can
+        # clean up (every buffer field is None until it is allocated, and release skips the Nones).
+        self._vfy_cfgs[cfg_id] = cfg
+        try:
+            self._prepare_verify_trace_body(cfg, pt, warm_positions)
+        except BaseException:
+            self.release_verify_cfg(cfg_id)
+            raise
+        return cfg
+
+    def _prepare_verify_trace_body(self, cfg, pt, warm_positions):
+        """prepare_verify_trace's allocation + warm pass for the registered ``cfg`` (see there): the per-replay buffers,
+        the GDN SpecCfg on every layer, the commit page, the throwaway seed and the eager warm pass."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
+
+        cfg_id, B, T, rows, gdn = cfg.id, cfg.B, cfg.T, cfg.rows, cfg.gdn
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
-        self._vfy_T, self._vfy_B, self._vfy_gdn_recurrent = T, B, True
-        self._vfy_decode_cfg = bool(decode_cfg)
-
-        # A re-capture must not leave the old trace parked: its buffers are about to be replaced
-        # (prepare_spec_verify reallocates on a shape change) and its id would leak.
-        self.release_verify_trace()
 
         # Persistent per-replay input buffers (addresses baked into the trace).
-        self._vfy_token_buf = ttnn.from_torch(
+        cfg.token_buf = ttnn.from_torch(
             torch.zeros(1, rows, dtype=torch.int32),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1514,14 +1698,14 @@ class Qwen36Model:
         # re-staged per replay by verify_traced (same convention as the prefill traces).
         # Position-exact KV write (paged_update_cache at absolute slots) instead of
         # paged_fill_cache's block-aligned fill: required by the sub-tile decode-config bucket.
-        warm = self._vfy_row_positions(warm_positions)
-        self._vfy_kvpos_buf = ttnn.from_torch(
+        warm = self._vfy_row_positions(warm_positions, cfg)
+        cfg.kvpos_buf = ttnn.from_torch(
             warm, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
         )
-        # Per-ROW page table: row u*T+j is user u's block table (repeat_interleave, not repeat — the
+        # Per-ROW page table: row u*T+j is user u's block table (repeat_interleave, not repeat -- the
         # rows are user-major). The blocks belong to the request for its whole generation, so unlike
-        # the single-user path this is written once, here, and never re-staged.
-        self._vfy_kvpt_buf = ttnn.from_torch(
+        # the single-user path this is written once, here, and re-staged only by refresh_verify_page_tables.
+        cfg.kvpt_buf = ttnn.from_torch(
             pt.repeat_interleave(T, dim=0).contiguous(),
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1532,96 +1716,91 @@ class Qwen36Model:
         # write. The write goes out per candidate index j over the rows {u*T + j}, which are one row
         # per user, so every group's page table is this same table and one persistent buffer serves
         # all T groups (TPAttention._write_kv_aliased). Allocated HERE, before the warmup, so its
-        # address bakes into the trace like every other verify input; never re-staged.
-        #
-        # The grouped write is legal only because rows of DIFFERENT users never share a 32-row cache
-        # tile. A group holds one row per user, so the sufficient condition is that no block belongs
-        # to two users (a repeat WITHIN one user's row is fine — that user has one row per group).
-        # Check it once, on host, while the tables are still torch: a shared block would put two
-        # cores on one read-modify-write and silently drop the loser.
-        _kv_grouped = B > 1 and T > 1 and KV_GROUP_WRITE_OK
-        if _kv_grouped:
-            _seen = {}
-            for _u in range(B):
-                for _b in {int(v) for v in pt[_u].tolist()}:
-                    _prev = _seen.setdefault(_b, _u)
-                    assert _prev == _u, (
-                        f"the grouped spec KV write needs per-user block tables that do not overlap, "
-                        f"but block {_b} is named by both user {_prev} and user {_u}. Set "
-                        f"QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
-                    )
-        self._vfy_kvpt_users = ttnn.from_torch(
+        # address bakes into the trace like every other verify input. (Its per-row disjointness --
+        # cfg.kv_grouped -- was checked by prepare_verify_trace before anything was allocated.)
+        cfg.kvpt_users = ttnn.from_torch(
             pt.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
         )
         # ...plus the SAME tables with one row per CANDIDATE GROUP, for the fused spec SDPA
         # (spec_multi_pos_tiles), which splits each user's T candidates across
         # spec_sdpa_groups(T, B)/B batch rows and wants one aliased page-table row per group. Both
         # tables are built here: the per-row KV write needs the row-count form (and must not slice a
-        # narrower table full-span — a full-span ttnn.slice aliases its input), the SDPA read needs
+        # narrower table full-span -- a full-span ttnn.slice aliases its input), the SDPA read needs
         # this one.
         _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _spec_groups = int(_att0.spec_sdpa_groups(T, B))
-        self._vfy_spec_groups = _spec_groups
+        cfg.spec_groups = _spec_groups
         if _spec_groups >= B and _spec_groups % B == 0:
             pt1 = pt.repeat_interleave(_spec_groups // B, dim=0)
         else:
             pt1 = pt[:1].repeat(_spec_groups, 1)  # fused path off: the buffer exists but is unread
-        self._vfy_kvpt1_buf = ttnn.from_torch(
+        cfg.kvpt1_buf = ttnn.from_torch(
             pt1.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev, mesh_mapper=rep
         )
         # RoPE tables. Hybrid verify feeds the DECODE attention kernel, whose cos/sin are
-        # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) — not the prefill
+        # [1, rows, 1, rope_dim] (one rotation per ROW at that row's own position) -- not the prefill
         # [1, 1, S, rope_dim] table. Same host math the plain decode step uses, so the two paths'
         # rotations are byte-identical and near-ties round the same way.
         cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(warm)
-        self._vfy_cos_buf = ttnn.from_torch(
-            cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
-        self._vfy_sin_buf = ttnn.from_torch(
-            sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep
-        )
+        cfg.cos_buf = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
+        cfg.sin_buf = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=dev, mesh_mapper=rep)
 
         if self._dflash_tap:
             # Persistent fixed-address, dim-fractured buffers the verify trace copies each tap into:
             # one row per verify row (B users x T, user-major like the bucket). A decoder may
             # pre-allocate them (the TP drafter reads them directly and needs them to exist before
-            # its own pre-capture warmups); then they are reused, not re-allocated.
+            # its own pre-capture warmups); then they are reused, not re-allocated. They are SHARED by
+            # every cfg of equal row count (two 32-row buckets); a cfg of a different row count while
+            # others are registered would invalidate the addresses their traces baked, so it is refused.
             if self._dflash_tap_bufs is not None and (
                 len(self._dflash_tap_bufs) != len(self._dflash_tap_layers) or self._dflash_tap_bufs[0].shape[-2] != rows
             ):
+                assert not self._vfy_cfgs, (
+                    f"DFlash tap bufs hold {int(self._dflash_tap_bufs[0].shape[-2])} rows, cfg {cfg_id!r} needs {rows}, "
+                    f"and cfgs {sorted(self._vfy_cfgs)} bake the current ones: a bucket of a different row count "
+                    "needs its own tap bufs (and drafter layout), which is not supported"
+                )
                 for b in self._dflash_tap_bufs:
                     ttnn.deallocate(b)
                 self._dflash_tap_bufs = None
             if self._dflash_tap_bufs is None:
                 self._dflash_tap_bufs = self.alloc_dflash_tap_bufs(rows)
 
-        # The deferred commit's two selectors, SHARED by all GDN layers (they are pure index /
-        # one-hot data, identical for every layer, so one pair of buffers is staged per iteration
-        # instead of 48). state_blk_idx picks each (user, v-head)'s starting block in the per-token
-        # state ring; conv_sel picks each user's conv window rows out of [E_prev | new qkv]. Both are
-        # captured at mi = 0 for every user, which is exactly what the seed leaves behind.
-        gdn = [layer.attention for layer in self.layers if not layer.is_full_attention]
-        assert gdn, "the hybrid verify needs GDN layers"
-        Nv, Kc = gdn[0].Nv, gdn[0].K
-        self._vfy_Nv, self._vfy_Kc = Nv, Kc
+        # The deferred commit's selector(s), SHARED by all GDN layers (pure index / one-hot data,
+        # identical for every layer, so one set of buffers is staged per iteration instead of 48).
+        # Composite path: state_blk_idx picks each (user, v-head)'s starting block in the per-token
+        # state ring; conv_sel picks each user's conv window rows out of [E_prev | new qkv]. Fused path
+        # (QWEN36_GDN_SPEC_FUSED=1): ONE ctrl page {parity, mi, ring block | HOLD}. All captured at
+        # mi = 0 for every user, which is exactly what the seed leaves behind.
+        Nv, Kc = cfg.Nv, cfg.Kc
         _mi0 = [0] * B
-        # QWEN36_GDN_SPEC_FUSED=1: the fused GDN spec op reads ONE ctrl page {parity, mi, ring block | HOLD} instead
-        # of the two selectors (allocated below, once the layers' window pairs exist and have a parity).
-        self._vfy_fused = bool(getattr(gdn[0], "_spec_fused", False))
-        if getattr(self, "_vfy_ctrl", None) is not None:  # a re-capture: drop the previous page (the trace is released)
-            ttnn.deallocate(self._vfy_ctrl)
-        self._vfy_ctrl = None
-        if self._vfy_fused:
-            self._vfy_state_idx = self._vfy_conv_sel = None
+        # Allocate each GDN layer's spec cfg (per-cfg conv window pair; the shared per-token state ring) BEFORE the
+        # warmup pass: the trace bakes their addresses in, and nothing may allocate later.
+        for dn in gdn:
+            dn.prepare_spec_cfg(cfg_id, B, T)
+        if cfg.fused:
+            # The cfg's ctrl page, at the layers' CURRENT window parity for this cfg (a re-prepare at the same spec
+            # shape keeps the pair and its parity; a fresh prepare_spec_cfg resets it to 0). The page is data the op
+            # reads at replay, so the parity it is captured with does not bind later replays -- verify_traced
+            # restages it every iteration and flips every layer's parity for this cfg afterwards, in lockstep.
+            _pars = {dn.spec_cfg(cfg_id).parity for dn in gdn}
+            assert len(_pars) == 1, f"GDN window parities of cfg {cfg_id!r} out of step: {sorted(_pars)}"
+            cfg.ctrl = ttnn.from_torch(
+                spec_ctrl_page(_mi0, B, Nv, parity=_pars.pop()),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=dev,
+                mesh_mapper=rep,
+            )
         else:
-            self._vfy_state_idx = ttnn.from_torch(
+            cfg.state_idx = ttnn.from_torch(
                 spec_state_blk_idx(_mi0, B, Nv),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=dev,
                 mesh_mapper=rep,
             )
-            self._vfy_conv_sel = ttnn.from_torch(
+            cfg.conv_sel = ttnn.from_torch(
                 spec_conv_sel(_mi0, B, T, Kc),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
@@ -1629,64 +1808,192 @@ class Qwen36Model:
                 mesh_mapper=rep,
             )
 
-        # Allocate each GDN layer's spec-verify buffers (per-token state ring + conv window) BEFORE
-        # the warmup pass: the trace bakes their addresses in, and nothing may allocate later.
+        # Throwaway seed, for the PROGRAM CACHE only. The spec loop seeds again after the capture (the
+        # warmup/capture passes scribble the ring and the window), and that later seed must be a pure
+        # cache hit: a program compiling once a trace is parked lands its kernel binaries in memory the
+        # replay writes over. So every program the seed uses -- slice_write into the ring, sync_conv_win's
+        # concat/copy, the window slices / concat / copies -- compiles HERE. Whole-batch when the cfg seats
+        # every slot (the demo path's real post-capture seed_spec_state), else the single-row join seed of
+        # row 0 <- slot 0 (the serving path's seed_spec_row; its warm-up sweep runs every other (row, slot)).
+        # Safe to run now: rec_state and the conv window are valid (the seed forward / prefills ran before,
+        # and left the K taps in step with the window), and the verify writes none of them, so this only
+        # fills the spec buffers with contents the real seed overwrites.
         for dn in gdn:
-            dn.prepare_spec_verify(B, T)
-        if self._vfy_fused:
-            # The shared ctrl page, at the layers' CURRENT window parity (a re-capture at the same spec shape keeps
-            # the pair and its parity; a fresh prepare_spec_verify resets it to 0). The page is data the op reads
-            # at replay, so the parity it is captured with does not bind later replays -- verify_traced restages
-            # it every iteration and flips every layer's parity afterwards, in lockstep.
-            _pars = {dn._spec_win_par for dn in gdn}
-            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
-            self._vfy_ctrl = ttnn.from_torch(
-                spec_ctrl_page(_mi0, B, Nv, parity=_pars.pop()),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=dev,
-                mesh_mapper=rep,
-            )
-
-        # Throwaway seed, for the PROGRAM CACHE only. The spec loop calls seed_spec_state() again
-        # after this capture (the warmup/capture passes below scribble the ring and the window), and
-        # that later call must be a pure cache hit: a program compiling once a trace is parked lands
-        # its kernel binaries in memory the replay writes over. So every program the seed uses —
-        # slice_write into the ring, sync_conv_win's concat/copy, the window copies — compiles HERE.
-        # Safe to run now: rec_state and the conv window are valid (the seed forward ran before
-        # capture, and left the K taps in step with the window), and the verify writes none of
-        # them, so this only fills the spec buffers with contents the real seed overwrites.
-        for dn in gdn:
-            dn.seed_spec_state()
+            if B == dn.B:
+                dn.seed_spec_state(cfg_id)
+            else:
+                dn.seed_spec_row(cfg_id, 0, 0)
         ttnn.synchronize_device(dev)
 
         # Warmup OUTSIDE the trace (compile every program; a compile during replay clobbers the
-        # trace), then the capture pass. Both passes SCRIBBLE the ring and the conv window, which is
-        # fine and is why there is no snapshot/restore here any more: the spec loop calls
-        # dn.seed_spec_state() after capture, which re-initialises token-slot 0 from the live decode
-        # state, and the first replay then runs at mi = 0.
-        wl, wr, wi, wu = self._forward_verify_bucket_tp(n_users=B)
+        # trace). The pass SCRIBBLES the ring and the conv window, which is fine and is why there is
+        # no snapshot/restore here: the spec loop seeds after capture, which re-initialises token-slot 0
+        # from the live decode state, and the first replay then runs at mi = 0.
+        wl, wr, wi, wu = self._forward_verify_bucket_tp(cfg)
         ttnn.deallocate(wl)
         ttnn.deallocate(wr)
         ttnn.deallocate(wi)
         ttnn.deallocate(wu)
         ttnn.synchronize_device(dev)
+        cfg.warmed = True
 
-        self._vfy_trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
-        (
-            self._vfy_logits_out,
-            self._vfy_rows_out,
-            self._vfy_ids_out,
-            self._vfy_logits_rm_out,
-        ) = self._forward_verify_bucket_tp(n_users=B)
-        ttnn.end_trace_capture(dev, self._vfy_trace_id, cq_id=0)
-        self._vfy_gdn = gdn
+    def _assert_gdn_cfgs_live(self, cfg):
+        """Every GDN layer still holds the SpecCfg ``cfg`` bakes (same id and (B, T)). A GDN reset_state between a
+        prepare and its capture (a batched re-allocation; the B=1 prefill-scratch builders no longer do this) pops
+        the SpecCfgs and the ring while this registry keeps cfg.warmed -- the capture body would then assert INSIDE
+        begin_trace_capture. Checked before any capture begins; the remedy is prepare_verify_trace again."""
+        gone = [
+            i
+            for i, dn in enumerate(cfg.gdn or ())
+            if cfg.id not in dn._spec_cfgs or dn._spec_cfgs[cfg.id].shape != (cfg.B, cfg.T)
+        ]
+        assert not gone, (
+            f"verify cfg {cfg.id!r} (B={cfg.B}, T={cfg.T}) is prepared on the model but {len(gone)} GDN layer(s) "
+            f"(first: {gone[:4]}) no longer hold its SpecCfg: a GDN reset_state (allocate_kv_caches / reset_tp) ran "
+            f"since prepare_verify_trace. Run prepare_verify_trace({cfg.id!r}) again before capturing."
+        )
+
+    def _stage_verify_positions(self, cfg, positions, held=()):
+        """Stage cfg's per-ROW positions + decode rope for one pass: row u*T+j at positions[u]+j, -1 on held rows
+        (skipped by the KV write and the decode SDPA). The SAME staging for a replay (verify_traced), the capture pass
+        of a reusable cfg and a re-capture, so every pass writes KV exactly where its caller says. Returns the rows."""
+        assert len(positions) == cfg.B, f"one position per row: got {len(positions)} for {cfg.B} rows"
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        pos = self._vfy_row_positions(positions, cfg)
+        T = cfg.T
+        for u in held:
+            pos[u * T : (u + 1) * T] = -1
+        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, cfg.kvpos_buf)
+        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
+        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, cfg.cos_buf)
+        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
+        ttnn.copy_host_to_device_tensor(_h, cfg.sin_buf)
+        return pos
+
+    def _stage_verify_commit(self, cfg, mi_prev, held=()):
+        """Stage the deferred commit for one pass of ``cfg``: where each row's recurrence and conv window resume.
+        Fused (QWEN36_GDN_SPEC_FUSED=1): ONE ctrl page {parity, mi, ring block | HOLD} at the GDN layers' current
+        window parity FOR THIS CFG (the half holding E_prev; the op writes the other half). Composite: the
+        (state_idx, conv_sel) pair. ``held`` rows get the HOLD sentinel / identity selector."""
+        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
+
+        B, T = cfg.B, cfg.T
+        rep = ttnn.ReplicateTensorToMesh(self.device)
+        if cfg.fused:
+            assert all(
+                0 <= int(mi_prev[u]) < T for u in range(B) if u not in held
+            ), f"mi_prev {list(mi_prev)} out of range [0,{T})"
+            _pars = {dn.spec_cfg(cfg.id).parity for dn in cfg.gdn}
+            assert len(_pars) == 1, f"GDN window parities of cfg {cfg.id!r} out of step: {sorted(_pars)}"
+            _h = ttnn.from_torch(
+                spec_ctrl_page(mi_prev, B, cfg.Nv, parity=_pars.pop(), hold=held),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, cfg.ctrl)
+        else:
+            _h = ttnn.from_torch(
+                spec_state_blk_idx(mi_prev, B, cfg.Nv, hold=held),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, cfg.state_idx)
+            _h = ttnn.from_torch(
+                spec_conv_sel(mi_prev, B, T, cfg.Kc, hold=held),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=None,
+                mesh_mapper=rep,
+            )
+            ttnn.copy_host_to_device_tensor(_h, cfg.conv_sel)
+
+    def capture_verify_trace(self, page_tables=None, T=None, warm_positions=None, decode_cfg=True, cfg_id="default"):
+        """Capture ONE trace of the recurrent verify forward over cfg ``cfg_id``'s fixed B x T bucket
+        (T = len([pending] + drafts) per row). Replay with verify_traced(..., cfg_id=cfg_id).
+
+        Two call shapes:
+          * ``capture_verify_trace(page_tables, T, warm_positions, decode_cfg)`` -- prepare IF NOT WARMED, then
+            capture. The single-cfg demo / serving path, whose cfg is not prepared (or is captured, or changed
+            shape): prepare_verify_trace (fresh buffers, GDN cfg, throwaway seed, eager warm pass) immediately
+            followed by the capture, exactly the sequence that ran before the prepare / capture split. When the
+            cfg IS prepared, warmed and uncaptured at this (B, T, decode_cfg, table width) and the GDN layers still
+            hold its SpecCfg (_verify_cfg_reusable), only the page tables are (re)staged before the capture --
+            the split warm-up reached through the long form.
+          * ``capture_verify_trace(cfg_id=...)`` -- PHASE 2 of a split warm-up: the cfg was prepared earlier
+            (prepare_verify_trace) and only the capture runs now, so no program compiles with any trace parked.
+        GDN state is CARRIED (not reset): the trace advances the per-token ring in place and the host
+        points the next replay at each row's accepted slot (mi) instead of copying anything back.
+        Logs the trace-region bytes the capture added. Returns the VerifyConfig.
+        """
+        if page_tables is not None:
+            assert (
+                T is not None and warm_positions is not None
+            ), "capture_verify_trace(page_tables, T, warm_positions, ...) needs all three"
+            cfg = self._vfy_cfgs.get(cfg_id)
+            if cfg is not None and self._verify_cfg_reusable(cfg, page_tables, T, decode_cfg):
+                # Prepared and warmed by an earlier prepare_verify_trace, nothing captured yet: (re)stage EVERY
+                # per-replay input the capture pass reads exactly as a fresh prepare would -- the tables (the grouped
+                # write's per-row disjointness re-checked on them), the positions + rope at ``warm_positions`` (the
+                # capture pass writes throwaway KV THERE, not at the prepare-time or the last replay's positions:
+                # a released-then-recaptured cfg's buffers hold the last replay's rows, which could lie inside a
+                # new prompt) and the commit page at mi = 0 / no holds / the cfg's CURRENT parity. Nothing compiles.
+                assert len(warm_positions) == cfg.B, f"warm_positions needs one position per row ({cfg.B})"
+                pt = torch.as_tensor(page_tables).to(torch.int32)
+                pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
+                if cfg.kv_grouped:
+                    self._check_grouped_tables(pt, cfg_id)
+                self.refresh_verify_page_tables(pt, cfg_id=cfg_id)
+                self._stage_verify_positions(cfg, warm_positions)
+                self._stage_verify_commit(cfg, [0] * cfg.B)
+            else:
+                cfg = self.prepare_verify_trace(page_tables, T, warm_positions, decode_cfg=decode_cfg, cfg_id=cfg_id)
+        else:
+            cfg = self.verify_cfg(cfg_id)
+            assert cfg.warmed, f"verify cfg {cfg_id!r} was not warmed (prepare_verify_trace first)"
+            assert (
+                cfg.trace_id is None
+            ), f"verify cfg {cfg_id!r} is already captured; release_verify_trace({cfg_id!r}) first"
+        # Both forms: the GDN layers must still hold this cfg's SpecCfg (a reset_state since the prepare pops them
+        # while cfg.warmed stays True) -- checked HERE, not by an assert inside the capture.
+        self._assert_gdn_cfgs_live(cfg)
+        dev = self.device
+        B, T, rows = cfg.B, cfg.T, cfg.rows
+        ttnn.synchronize_device(dev)
+        tr0 = self._trace_region_bytes(dev)
+        cfg.trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+        try:
+            (
+                cfg.logits_out,
+                cfg.rows_out,
+                cfg.ids_out,
+                cfg.logits_rm_out,
+            ) = self._forward_verify_bucket_tp(cfg)
+            ttnn.end_trace_capture(dev, cfg.trace_id, cq_id=0)
+        except BaseException:
+            # Never leave the device in capture mode with a half-captured id on the cfg: close the capture, drop
+            # the trace, forget the outputs, and let the error out. The cfg stays prepared (buffers intact).
+            tid, cfg.trace_id = cfg.trace_id, None
+            cfg.logits_out = cfg.rows_out = cfg.ids_out = cfg.logits_rm_out = None
+            for _close in (lambda: ttnn.end_trace_capture(dev, tid, cq_id=0), lambda: ttnn.release_trace(dev, tid)):
+                try:
+                    _close()
+                except Exception as e:  # already closed / released: the original error is the one to raise
+                    logger.warning(f"verify cfg {cfg.id!r}: cleanup after a failed capture: {e}")
+            raise
+        tr1 = self._trace_region_bytes(dev)
         # Which SDPA the verify's full-attention layers took: the fused grouped read
         # (spec_multi_pos_tiles, groups of T/groups_per_user candidates) or the legacy per-row call.
         # A T with no L1-fitting split (7, 11, ...) stays legacy.
+        _att0 = next(layer.attention for layer in self.layers if layer.is_full_attention)
         _fused = _att0.spec_sdpa_enabled(T)
         _how = (
-            f"FUSED spec_multi_pos_tiles ({_spec_groups} groups x Tg={rows // _spec_groups})"
+            f"FUSED spec_multi_pos_tiles ({cfg.spec_groups} groups x Tg={rows // max(1, cfg.spec_groups)})"
             if _fused
             else f"legacy {rows} pseudo-users"
         )
@@ -1694,61 +2001,69 @@ class Qwen36Model:
         # rows of one candidate index) or the legacy B*T single-row calls.
         _kvw = (
             f"GROUPED ({T} calls x {B} rows per K/V per layer)"
-            if _kv_grouped
+            if cfg.kv_grouped
             else f"per-row ({rows} calls per K/V per layer)"
         )
-        logger.info(
-            f"Verify trace (B={B} users x T={T} = {rows} rows, decode_cfg={decode_cfg}) captured "
-            f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}"
+        _region = (
+            ""
+            if tr0 is None or tr1 is None
+            else f"; TRACE region +{(tr1 - tr0) / 2**20:.1f} MiB (now {tr1 / 2**20:.1f} MiB)"
         )
+        logger.info(
+            f"Verify trace {cfg.id!r} (B={B} users x T={T} = {rows} rows, decode_cfg={cfg.decode_cfg}) captured "
+            f"successfully! verify SDPA: {_how}; verify KV write: {_kvw}{_region}"
+        )
+        return cfg
 
-    def refresh_verify_page_tables(self, page_tables):
-        """Re-point the captured MULTI-USER verify trace at new per-user KV blocks (serving).
+    def refresh_verify_page_tables(self, page_tables, cfg_id="default"):
+        """Re-point the MULTI-USER verify cfg ``cfg_id`` at new per-row KV blocks (serving).
 
-        ``page_tables``: torch int32 [B, nb] (B = captured users, nb = captured width). Restages the
-        three page-table buffers the trace reads exactly as capture_verify_trace built them: the
+        ``page_tables``: torch int32 [B, nb] (B = the cfg's rows, nb = its captured width). Restages the
+        three page-table buffers the trace reads exactly as prepare_verify_trace built them: the
         per-ROW table (row u*T+j = user u), the per-USER table for the grouped KV write, and the
         per-GROUP table for the fused spec SDPA. Host->device copies into the baked buffers; no
-        capture, no allocation. Users whose blocks changed since the last call are the reason to
+        capture, no allocation. Rows whose blocks changed since the last call are the reason to
         call it; the others are simply rewritten with the same rows.
         """
-        assert getattr(self, "_vfy_trace_id", None) is not None, "capture_verify_trace first"
+        cfg = self.verify_cfg(cfg_id)
+        assert cfg.kvpt_buf is not None, f"verify cfg {cfg_id!r} has no page tables (prepare_verify_trace first)"
         pt = torch.as_tensor(page_tables).to(torch.int32)
         pt = pt.reshape(1, -1) if pt.dim() == 1 else pt
-        B, T = self._vfy_B, self._vfy_T
-        nb = int(self._vfy_kvpt_buf.shape[-1])
-        assert tuple(pt.shape) == (B, nb), f"page tables {tuple(pt.shape)} != captured ({B}, {nb})"
+        B, T = cfg.B, cfg.T
+        nb = int(cfg.kvpt_buf.shape[-1])
+        assert tuple(pt.shape) == (B, nb), f"page tables {tuple(pt.shape)} != cfg {cfg_id!r}'s ({B}, {nb})"
         rep = ttnn.ReplicateTensorToMesh(self.device)
-        groups = int(self._vfy_spec_groups)
+        groups = int(cfg.spec_groups)
         if groups >= B and groups % B == 0:
             pt1 = pt.repeat_interleave(groups // B, dim=0)
         else:
             pt1 = pt[:1].repeat(groups, 1)
         for host, buf in (
-            (pt.repeat_interleave(T, dim=0), self._vfy_kvpt_buf),
-            (pt, self._vfy_kvpt_users),
-            (pt1, self._vfy_kvpt1_buf),
+            (pt.repeat_interleave(T, dim=0), cfg.kvpt_buf),
+            (pt, cfg.kvpt_users),
+            (pt1, cfg.kvpt1_buf),
         ):
             h = ttnn.from_torch(
                 host.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep
             )
             ttnn.copy_host_to_device_tensor(h, buf)
 
-    def refresh_verify_page_table(self, page_table):
-        """Re-point the captured verify trace at another sequence's KV blocks.
+    def refresh_verify_page_table(self, page_table, cfg_id="default"):
+        """Re-point the verify cfg ``cfg_id`` at another sequence's KV blocks (every row the same table).
 
-        The trace reads its page tables from the persistent _vfy_kvpt_buf (one row per candidate) and
-        _vfy_kvpt1_buf (one row per fused-SDPA candidate group), both built from the table given to
-        capture_verify_trace. A server replays ONE capture for every request, so it restages those
+        The trace reads its page tables from the persistent per-row table (one row per candidate) and
+        the per-group table (one row per fused-SDPA candidate group), both built from the table given to
+        prepare_verify_trace. A server replays ONE capture for every request, so it restages those
         buffers from the request's own vLLM page-table row (torch [1, num_blocks], same width) whenever
         vLLM hands it a different row -- a host->device copy, no capture. Serving only; the demo's
         identity table never changes."""
-        assert getattr(self, "_vfy_trace_id", None) is not None, "capture_verify_trace first"
+        cfg = self.verify_cfg(cfg_id)
+        assert cfg.kvpt_buf is not None, f"verify cfg {cfg_id!r} has no page tables (prepare_verify_trace first)"
         page_table = torch.as_tensor(page_table).reshape(1, -1).to(torch.int32)
-        nb = int(self._vfy_kvpt_buf.shape[-1])
+        nb = int(cfg.kvpt_buf.shape[-1])
         assert page_table.shape[-1] == nb, f"page table width {page_table.shape[-1]} != captured {nb}"
         rep = ttnn.ReplicateTensorToMesh(self.device)
-        for buf in (self._vfy_kvpt_buf, self._vfy_kvpt1_buf):
+        for buf in (cfg.kvpt_buf, cfg.kvpt1_buf):
             rows = int(buf.shape[0])
             h = ttnn.from_torch(
                 page_table.repeat(rows, 1).contiguous(),
@@ -1759,19 +2074,20 @@ class Qwen36Model:
             )
             ttnn.copy_host_to_device_tensor(h, buf)
 
-    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, hold=None):
-        """Replay the captured verify trace for B users x T candidates.
+    def verify_traced(self, tokens, positions, mi_prev, read_logits=False, hold=None, cfg_id="default"):
+        """Replay the captured verify trace of cfg ``cfg_id`` for its B rows x T candidates.
 
-        ``tokens``: B lists of T ids ([pending] + drafts per user). ``positions``: B ints, user u's
+        ``tokens``: B lists of T ids ([pending] + drafts per row). ``positions``: B ints, row u's
         FIRST verify slot this iteration (row u*T+j lands at positions[u]+j). ``mi_prev``: B ints,
-        each user's accepted-prefix index from the PREVIOUS iteration (0 right after the seed) —
-        this is the whole commit: it selects user u's starting recurrent state (ring block) and conv
-        window rows, so no state is copied between iterations.
+        each row's accepted-prefix index from the PREVIOUS iteration (0 right after the seed / a
+        bucket switch) -- this is the whole commit: it selects row u's starting recurrent state (ring
+        block) and conv window rows, so no state is copied between iterations. Everything is indexed
+        by BUCKET ROW; the serving decoder maps rows to physical slots.
 
         Returns (ids: B*T host ints, feed_rows: the trace's persistent [1,1,B*T,dim/tp] drafter feed,
         logits: torch [B*T, vocab] or None). ``read_logits`` pulls the full logits to host; off for
         greedy (the in-trace argmax ids are enough), on when the sampler needs the distributions. It
-        reads the trace's ROW_MAJOR copy (_vfy_logits_rm_out, the untilize the in-trace argmax
+        reads the trace's ROW_MAJOR copy (cfg.logits_rm_out, the untilize the in-trace argmax
         already pays for) with no cast; the TILE tensor would cost a host untilize and the sampler
         converts to float32 lazily per row.
 
@@ -1779,21 +2095,25 @@ class Qwen36Model:
         before the next replay (the spec loop reads its anchor rows and reseeds the drafter, both
         within the iteration).
 
-        ``hold``: users whose durable spec state this replay must leave bit-identical (serving:
-        everyone but a joining or stepping user). Their rows are staged at position -1
-        (paged_update_cache and the decode SDPA skip such rows: no KV write, no read), the conv
-        selector is the identity (window unchanged) and their ring index is the HOLD sentinel, so
-        the fused op skips their state writes (their mi_prev is irrelevant; the caller passes its
-        current mi). Tokens for held rows are irrelevant too.
+        ``hold``: rows whose durable spec state this replay must leave bit-identical (serving:
+        everyone but a joining or stepping user; every EMPTY row of a bucket). Their rows are staged
+        at position -1 (paged_update_cache and the decode SDPA skip such rows: no KV write, no read),
+        the conv selector is the identity (window unchanged) and their ring index is the HOLD
+        sentinel, so the op skips their state writes (their mi_prev is irrelevant; the caller passes
+        its current mi). Tokens for held rows are irrelevant too.
         """
-        from models.demos.blackhole.qwen36.tt.gdn.tp import spec_conv_sel, spec_ctrl_page, spec_state_blk_idx
-
-        assert getattr(self, "_vfy_trace_id", None) is not None, "call capture_verify_trace first"
-        T, B = self._vfy_T, self._vfy_B
+        cfg = self.verify_cfg(cfg_id)
+        assert cfg.trace_id is not None, f"call capture_verify_trace(cfg_id={cfg_id!r}) first"
+        T, B = cfg.T, cfg.B
         rows = B * T
         assert len(tokens) == B, f"expected {B} users, got {len(tokens)}"
         assert all(len(t) == T for t in tokens), f"expected {T} tokens per user"
         assert len(positions) == B and len(mi_prev) == B, "one position and one mi per user"
+        # Rows are BUCKET rows: a hold outside [0, B) (a physical slot id passed into a narrower bucket) would be a
+        # silent no-op -- an empty torch slice, `u in hold` never matching -- and the row the caller meant to hold
+        # would be verified and overwritten. Exact HOLD is non-negotiable, so it is refused here.
+        held = set(int(u) for u in (hold or ()))
+        assert all(0 <= u < B for u in held), f"hold rows {sorted(held)} outside [0,{B}) of cfg {cfg_id!r}"
         dev = self.device
         rep = ttnn.ReplicateTensorToMesh(dev)
 
@@ -1801,77 +2121,37 @@ class Qwen36Model:
         # of the B x T token lists IS the user-major row order.
         tok = torch.tensor([int(t) for row in tokens for t in row], dtype=torch.int32).reshape(1, rows)
         _h = ttnn.from_torch(tok, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_token_buf)
-        # Absolute cache slot for each row: positions[u] + j. This doubles as the decode SDPA's
-        # per-row cur_pos, which is what makes the hybrid verify causal.
-        pos = self._vfy_row_positions(positions)
-        held = set(hold or ())
-        for u in held:
-            pos[u * T : (u + 1) * T] = -1  # skipped by the KV write and the decode SDPA
-        _h = ttnn.from_torch(pos, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_kvpos_buf)
-        # Hybrid verify: per-ROW decode rope at the rows' own positions.
-        cos_t, sin_t = self._rope_tp_cos_sin_decode_torch(pos)
-        _h = ttnn.from_torch(cos_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_cos_buf)
-        _h = ttnn.from_torch(sin_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep)
-        ttnn.copy_host_to_device_tensor(_h, self._vfy_sin_buf)
-        # The deferred commit (see capture_verify_trace): where each user's recurrence and conv
-        # window resume. Two small host-built tensors, shared by every GDN layer.
-        _fused = bool(getattr(self, "_vfy_fused", False))
-        if _fused:
-            # QWEN36_GDN_SPEC_FUSED=1: ONE ctrl page {parity, mi, ring block | HOLD} for all GDN layers, at their
-            # current window parity (the half holding E_prev; the op writes the other half).
-            assert all(
-                0 <= int(mi_prev[u]) < T for u in range(B) if u not in held
-            ), f"mi_prev {list(mi_prev)} out of range [0,{T})"
-            _pars = {dn._spec_win_par for dn in self._vfy_gdn}
-            assert len(_pars) == 1, f"GDN window parities out of step: {sorted(_pars)}"
-            _h = ttnn.from_torch(
-                spec_ctrl_page(mi_prev, B, self._vfy_Nv, parity=_pars.pop(), hold=held),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=rep,
-            )
-            ttnn.copy_host_to_device_tensor(_h, self._vfy_ctrl)
-        else:
-            _h = ttnn.from_torch(
-                spec_state_blk_idx(mi_prev, B, self._vfy_Nv, hold=held),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=None,
-                mesh_mapper=rep,
-            )
-            ttnn.copy_host_to_device_tensor(_h, self._vfy_state_idx)
-            _h = ttnn.from_torch(
-                spec_conv_sel(mi_prev, B, T, self._vfy_Kc, hold=hold),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=None,
-                mesh_mapper=rep,
-            )
-            ttnn.copy_host_to_device_tensor(_h, self._vfy_conv_sel)
-        # Page tables are NOT re-staged: capture_verify_trace wrote both forms once, and a spec
-        # request holds its blocks for the whole generation.
+        ttnn.copy_host_to_device_tensor(_h, cfg.token_buf)
+        # Absolute cache slot for each row: positions[u] + j (-1 on held rows: skipped by the KV write and the
+        # decode SDPA). This doubles as the decode SDPA's per-row cur_pos, which is what makes the hybrid verify
+        # causal; the per-ROW decode rope rides along at the rows' own positions.
+        self._stage_verify_positions(cfg, positions, held)
+        # The deferred commit (see prepare_verify_trace): where each row's recurrence and conv window resume --
+        # the fused path's ONE ctrl page {parity, mi, ring block | HOLD} at this cfg's current window parity, or the
+        # composite (state_idx, conv_sel) pair. Small host-built tensors, shared by every GDN layer.
+        self._stage_verify_commit(cfg, mi_prev, held)
+        # Page tables are NOT re-staged: prepare_verify_trace wrote all three forms once, and a spec
+        # request holds its blocks for the whole generation (refresh_verify_page_tables when they change).
 
-        ttnn.execute_trace(dev, self._vfy_trace_id, cq_id=0, blocking=False)
+        ttnn.execute_trace(dev, cfg.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(dev)
-        if _fused:
-            # The replay rebuilt every user's conv window into win[1-par] (held users: copied through), so that
-            # half is now E_prev for every GDN layer; flip them together (verify_win_cur / the next page follow).
-            for dn in self._vfy_gdn:
-                dn._spec_win_par ^= 1
+        if cfg.fused:
+            # The replay rebuilt every row's conv window into win[1-par] of THIS cfg (held rows: copied through), so
+            # that half is now E_prev for every GDN layer; flip them together (verify_win_cur / the next page follow).
+            # The other cfgs' parities are untouched: their windows did not move.
+            for dn in cfg.gdn:
+                c = dn.spec_cfg(cfg_id)
+                c.parity ^= 1
 
         # Replicated ids (the trace argmaxed the replicated logits): one replica is the whole answer,
         # and it is B*T uint32 instead of B*T x vocab floats.
-        ids = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_ids_out)[0]).reshape(-1)
+        ids = ttnn.to_torch(ttnn.get_device_tensors(cfg.ids_out)[0]).reshape(-1)
         ids = [int(v) for v in ids[:rows]]
         lt = None
         if read_logits:
-            lt = ttnn.to_torch(ttnn.get_device_tensors(self._vfy_logits_rm_out)[0])
+            lt = ttnn.to_torch(ttnn.get_device_tensors(cfg.logits_rm_out)[0])
             lt = lt.reshape(-1, self.vocab_size)[:rows]
-        return ids, self._vfy_rows_out, lt
+        return ids, cfg.rows_out, lt
 
     def _forward_seed_bucket_tp(self, token_buf, kvpos, kvpt, cos, sin, n_users):
         """``_forward_verify_bucket_tp`` at T = 1: the seed's device body, one row per user.
@@ -2338,6 +2618,41 @@ class Qwen36Model:
     # the batched [B,...] decode buffer. Full bucket => valid_len=None (trace-safe; a
     # one-hot mask in-trace TT_FATALs). Avoids per-layer host dispatch and per-op from_torch.
 
+    @staticmethod
+    def _reset_gdn_scratch(dn, width):
+        """Build a ``width``-row GDN state set on layer ``dn`` with reset_state, WITHOUT dropping the batched state's
+        spec-verify bindings. reset_state allocates against dn.B and, as a full reset, also pops every SpecCfg, the
+        shared ring, the zero row and the [B, K, C] conv-window mirror (_release_spec_bufs) -- right for a batched
+        re-allocation, wrong for a scratch build whose caller restores the batched rec_state / conv_states straight
+        after: the spec buffers derive from THOSE (unchanged) buffers, and a VerifyConfig prepared before the build
+        (the split warm-up: prepare -> first prefill -> capture) would otherwise be left naming SpecCfgs that no
+        longer exist. So the spec bindings are detached before the reset and re-attached after it; reset_state finds
+        nothing to free. The caller sets dn.B back and rebinds rec_state / conv_states / conv_carry / _zero_* itself.
+        """
+        keep = (
+            dn._spec_cfgs,
+            dn._spec_ring,
+            dn._spec_rows,
+            dn._spec_zero_row,
+            dn._conv_win_buf,
+            dn._conv_taps_stale,
+            dn._conv_win_stale,
+        )
+        dn._spec_cfgs, dn._spec_ring, dn._spec_rows, dn._spec_zero_row, dn._conv_win_buf = {}, None, None, None, None
+        try:
+            dn.B = width
+            dn.reset_state()
+        finally:
+            (
+                dn._spec_cfgs,
+                dn._spec_ring,
+                dn._spec_rows,
+                dn._spec_zero_row,
+                dn._conv_win_buf,
+                dn._conv_taps_stale,
+                dn._conv_win_stale,
+            ) = keep
+
     def _alloc_gdn_scratch_b1(self):
         """Allocate a dedicated B=1 GDN state set on every GDN layer, distinct from the
         batched [B,...] decode buffer. Returns the prior batched bindings for the caller to
@@ -2362,9 +2677,8 @@ class Qwen36Model:
                     dn._stable_state,
                 )
             )
-            # reset_state allocates against self.B, so set B=1 first.
-            dn.B = 1
-            dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0/_zero_rec
+            # reset_state allocates against self.B, so set B=1 first (the spec bindings survive: _reset_gdn_scratch).
+            self._reset_gdn_scratch(dn, 1)  # rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_*
             dn._stable_state = True  # in-place carry so the trace's baked addresses survive replays
         return prev
 
@@ -2423,8 +2737,8 @@ class Qwen36Model:
                 dn._zero_rec,
                 dn._stable_state,
             )
-            dn.B = 1
-            dn.reset_state()  # builds rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_conv0/_zero_rec
+            # The batched spec-verify bindings (SpecCfgs, ring, window mirror) survive the build: _reset_gdn_scratch.
+            self._reset_gdn_scratch(dn, 1)  # rec_state [1,Nv,Dk,Dv], conv_states[*] [1,1,D], conv_carry, _zero_*
             scratch.append((dn, dn.rec_state, dn.conv_states, dn.conv_carry, dn._zero_conv0, dn._zero_rec))
             (
                 dn.B,
@@ -4397,10 +4711,10 @@ class Qwen36Model:
 
     def free_kv_caches(self):
         """Release KV caches + GDN state for a fresh generation run."""
-        # The verify trace baked in the paged KV caches freed below and the GDN spec buffers that
-        # the next allocate_kv_caches -> reset_state drops, so it cannot survive this. Before the
+        # Every verify cfg's trace baked in the paged KV caches freed below and the GDN spec buffers that
+        # the next allocate_kv_caches -> reset_state drops, so none can survive this. Before the
         # early-out: the trace must go even when the GDN marker is already clear.
-        self.release_verify_trace()
+        self.release_verify_cfg()
         if self._deltanet_external_states is None:
             return
         # Bucket traces reference the chunk-trace buffers and the KV cache; drop them first.
@@ -4555,8 +4869,7 @@ class Qwen36Model:
                     dn._stable_state,
                 )
             )
-            dn.B = bg
-            dn.reset_state()  # builds rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0/zero_rec
+            self._reset_gdn_scratch(dn, bg)  # rec_state [bg,Nv,Dk,Dv], conv_states[*] [1,bg,D], carry, zero0/zero_rec
             dn._stable_state = True  # forward_prefill_batched writes state in place under this flag
         return prev
 

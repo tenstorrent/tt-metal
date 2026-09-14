@@ -10,8 +10,9 @@ prompt A -> slot 0, a >1-chunk prompt C -> slot 3 (the chunked prefill), prompt 
 rows) -- with the batched state zeroed in place between the two runs. Every GDN layer's full [B, Nv, Dk, Dv] recurrent
 state and its K [1, B, C] conv taps are read back after each run and compared with torch.equal, as are prompt B's
 logits. Also checks the flags a join leaves (taps current, window mirror stale, packed plain-decode history invalid),
-that the untouched slot stays zero, and that the CACHED one-hot seed selector (seed_spec_state_user) is the exact
-one-hot and seeds E_prev row u from the taps exactly.
+that the untouched slot stays zero, and that the single-row spec seed (seed_spec_state_user == seed_spec_row('default',
+u, u): slice / concat / in-place copy, no selector matmul) writes E_prev row u from the slot's taps exactly with a zero
+tail -- and that the old cached one-hot selector (_spec_seed_sel / _spec_seed_selector) is gone.
 
 Run: MESH_DEVICE=P150x4 pytest models/demos/blackhole/qwen36/tests/test_spec_join_exact.py -v -s
 Needs the full model (all 48 GDN layers are compared); no drafter weights are needed (the taps are not captured).
@@ -160,28 +161,21 @@ def test_spec_join_device_copy_is_bit_exact(mesh_device):
             f"[join-exact] device path == host path on all {len(gdns)} GDN layers (rec + {gdns[0].K} taps) and logits"
         )
 
-        # ---- the cached one-hot seed selector: exact one-hot, and the seed it drives is exact --------- #
+        # ---- the single-row seed: E_prev row 1 <- slot 1's taps exactly, zero tail; no cached selector ------ #
         dn0 = gdns[0]
-        dn0.prepare_spec_verify(B, T_VERIFY)
-        assert set(dn0._spec_seed_sel) == set(range(B)), "prepare_spec_verify must prebuild every slot's selector"
-        sel = dn0._spec_seed_selector(1)
-        assert sel is dn0._spec_seed_selector(1), "the selector must be cached, not rebuilt"
-        R = dn0.K - 1 + T_VERIFY
-        expect = torch.zeros(B, R, 2 * R)
-        for v in range(B):
-            for r in range(R):
-                expect[v, r, (R + r) if v == 1 else r] = 1.0
-        got = ttnn.to_torch(ttnn.get_device_tensors(sel)[0]).float()
-        assert torch.equal(got, expect), "cached selector is not the expected one-hot"
-        dn0.seed_spec_state_user(1)
+        dn0.prepare_spec_verify(B, T_VERIFY)  # == prepare_spec_cfg("default", B, T_VERIFY)
+        for name in ("_spec_seed_sel", "_spec_seed_selector"):
+            assert not hasattr(dn0, name), f"the one-hot seed selector ({name}) was removed with the per-row seed"
+        cfg = dn0.spec_cfg("default")
+        assert cfg.shape == (B, T_VERIFY), cfg.shape
+        dn0.seed_spec_state_user(1)  # seed_spec_row("default", 1, 1)
         ttnn.synchronize_device(device)
         win = ttnn.to_torch(ttnn.get_device_tensors(dn0.verify_win_cur())[0])  # [B, R, C], device 0
+        assert win.shape[0] == B and win.shape[1] == dn0.K - 1 + T_VERIFY, win.shape
         taps = torch.stack([ttnn.to_torch(ttnn.get_device_tensors(c)[0])[0, 1] for c in dn0.conv_states])  # [K, C]
-        assert torch.equal(win[1, : dn0.K], taps), "seed with the cached selector: E_prev row 1 != the slot's taps"
-        assert win[1, dn0.K :].abs().sum() == 0, "seed with the cached selector: E_prev row 1 tail not zero"
-        logger.info(
-            "[join-exact] cached seed selector is the exact one-hot and seeds E_prev row 1 from the taps exactly"
-        )
+        assert torch.equal(win[1, : dn0.K], taps), "single-row seed: E_prev row 1 != the slot's taps"
+        assert win[1, dn0.K :].abs().sum() == 0, "single-row seed: E_prev row 1 tail not zero"
+        logger.info("[join-exact] seed_spec_state_user(1) writes E_prev row 1 from the taps exactly (zero tail)")
     finally:
         _release(model)
     del model

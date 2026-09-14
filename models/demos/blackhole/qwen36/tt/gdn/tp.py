@@ -9,6 +9,7 @@ Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm u
 
 import math
 import os
+from dataclasses import dataclass
 
 import torch
 from loguru import logger
@@ -53,6 +54,16 @@ HOLD_SENTINEL = 0xFFFFFFFF  # block index that makes the ring-mode op skip a hea
 _SPEC_FUSED_LOGGED = False  # one [gdn-spec-fused] log line per process (evidence in the gate logs)
 
 
+def _check_hold(hold, n_users):
+    """``hold`` as a set of ROW indices, every one in [0, n_users). A row outside that range would be a silent
+    no-op in every consumer (``u in hold`` never matches; a torch slice at u >= n_users is empty), so the row the
+    caller believed held would be verified and overwritten -- the exact-HOLD guarantee failing without a trace.
+    Rows are BUCKET rows, not physical slots: the serving decoder maps before it calls."""
+    held = set(int(u) for u in (hold or ()))
+    assert all(0 <= u < n_users for u in held), f"hold rows {sorted(held)} outside [0,{n_users})"
+    return held
+
+
 def spec_state_blk_idx(mi, n_users, nv, hold=None):
     """Ring block index per (user, value-head) for the fused recurrent op's deferred-select mode.
 
@@ -71,7 +82,7 @@ def spec_state_blk_idx(mi, n_users, nv, hold=None):
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     idx = torch.empty(n_users * nv, dtype=torch.int32)
     head = torch.arange(nv, dtype=torch.int32)
-    hold = set(hold or ())
+    hold = _check_hold(hold, n_users)
     for u in range(n_users):
         if u in hold:
             idx[u * nv : (u + 1) * nv] = -1  # uint32 0xFFFFFFFF once staged
@@ -101,7 +112,7 @@ def spec_conv_sel(mi, n_users, T, kc, hold=None):
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     rows, cols = kc - 1 + T, kc - 1 + 2 * T
     sel = torch.zeros(n_users, rows, cols, dtype=torch.bfloat16)
-    hold = set(hold or ())
+    hold = _check_hold(hold, n_users)
     for u in range(n_users):
         if u in hold:
             for r in range(rows):
@@ -141,13 +152,48 @@ def spec_ctrl_page(mi, n_users, nv, parity, hold=None):
     """
     assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
     assert parity in (0, 1), f"window parity must be 0 or 1, got {parity}"
-    hold = set(hold or ())
+    hold = _check_hold(hold, n_users)
     words = torch.zeros(spec_ctrl_words(n_users, nv), dtype=torch.int32)
     words[0] = int(parity)
     for u in range(n_users):
         words[1 + u] = 0 if u in hold else int(mi[u])
     words[1 + n_users : 1 + n_users + n_users * nv] = spec_state_blk_idx(mi, n_users, nv, hold=hold)
     return words.reshape(1, -1)
+
+
+@dataclass
+class SpecCfg:
+    """One registered spec-verify GEOMETRY (a bucket) of a GDN layer: n_users users x T = K+1 candidate rows.
+
+    Every cfg owns its conv window (fused: the ping-pong pair; composite: the single E_prev buffer), its zero pads and
+    its window parity. ALL cfgs of a layer share the ONE fp32 state ring (TPGatedDeltaNet._spec_ring): the fused op
+    (gdn_spec_step) only requires the ring to hold >= T*n_users*Nv blocks of [Dk, Dv] and addresses block
+    (t*n_users + u)*Nv + h from its OWN (B, T) arguments (BH = B*Nv is a compile-time arg of its kernels), so two
+    buckets with n_users*T == 32 read and write the same 32*Nv blocks under different geometries; the host owns the
+    meaning of every block as a (cfg, row, mi) triple and two cfgs never run in the same iteration.
+
+    RING POLICY: the ring is allocated by the FIRST cfg a layer registers, at that cfg's n_users*T rows, and never
+    grows (a captured trace may have baked its address); every later cfg must fit (rows <= ring rows). A single-bucket
+    profile therefore keeps its exact footprint (a 1 x 12 profile has a 12-row ring) and a multi-bucket caller prepares
+    its widest bucket first (the dual-bucket decoder's 8x4 / 4x8 are both 32 rows). The composite verify op
+    (QWEN36_GDN_SPEC_FUSED=0) checks the ring EXACTLY against its own (B, T) and is validated single-bucket only:
+    a second cfg on that path raises NotImplementedError.
+    """
+
+    id: str
+    n_users: int
+    T: int
+    R: int  # window rows K-1+T
+    win_pair: object  # QWEN36_GDN_SPEC_FUSED=1: [W0, W1], each bf16 TILE [n_users, R, C]; None on the composite path
+    win_buf: object  # composite path: bf16 TILE [n_users, R, C] E_prev; None on the fused path
+    win_pad: object  # zeros [n_users, T-1, C] (None at T == 1): the tail a whole-batch seed / a switch appends
+    win_pad1: object  # zeros [1, T-1, C] (None at T == 1): the tail a single-row seed appends
+    parity: int = 0  # fused: which half of win_pair is E_prev for the NEXT verify (flipped after every replay)
+    ctrl_words: int = 0  # words in this cfg's gdn_spec_step ctrl page (spec_ctrl_words(n_users, Nv))
+
+    @property
+    def shape(self):
+        return (self.n_users, self.T)
 
 
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
@@ -426,21 +472,19 @@ class TPGatedDeltaNet:
         self.conv_states = None
         self._hist_packed_valid = False
         self.rec_state = None
-        # ---- Batched (multi-user) spec-decode verify buffers; see prepare_spec_verify. ----
-        # (n_users, T) the spec buffers below are sized for; None => prepare_spec_verify not run.
-        self._spec_shape = None
-        # Per-token recurrent-state RING, fp32 TILE [T*B*Nv, Dk, Dv]. The fused recurrent op reads
-        # each (user, head)'s initial state from the block `state_blk_idx` points at and writes that
-        # token's state back IN PLACE, so "commit" is just the host choosing next iteration's index.
+        # ---- Batched (multi-user) spec-decode verify buffers: a REGISTRY of spec cfgs (buckets) over ONE ring. ----
+        # cfg id -> SpecCfg (per-cfg conv window / zero pads / parity), see prepare_spec_cfg. The demo / single-bucket
+        # path's cfg is "default" (prepare_spec_verify); the dual-bucket serving decoder registers one cfg per bucket.
+        self._spec_cfgs = {}
+        # The ONE per-token recurrent-state RING every cfg shares, fp32 TILE [_spec_rows*Nv, Dk, Dv] (_spec_rows =
+        # n_users*T of the first cfg; every later cfg must fit). The spec op reads each (user, head)'s initial state
+        # from the block the ctrl page / state_blk_idx names and writes token t's state to block (t*n_users + u)*Nv + h
+        # IN PLACE, so "commit" is just the host choosing next iteration's index -- and a bucket SWITCH is a block move
+        # between geometries (switch_spec_cfg).
         self._spec_ring = None
-        # E_prev: the conv window each verify consumes and rewrites, bf16 TILE [B, K-1+T, C].
-        self._verify_win_buf = None
-        # Persistent zero rows [B, T-1, C] used once by seed_spec_state to fill _verify_win_buf's
-        # tail (never read: the first replay runs with mi = 0).
-        self._spec_win_pad = None
-        # seed_spec_state_user's per-user one-hot selectors [B, R, 2R] (R = K-1+T), built once per spec shape
-        # and kept on device (freed with the spec buffers) instead of one blocking from_torch per layer per join.
-        self._spec_seed_sel = {}
+        self._spec_rows = None
+        # Shared zero window row [1, K, C]: a switch's source for an EMPTY target row.
+        self._spec_zero_row = None
         # The DURABLE shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
@@ -449,12 +493,10 @@ class TPGatedDeltaNet:
         # rule with per-token ring writes + gated RMSNorm + silu(z)) in place of the composite chains of
         # _verify_fullbatch / _seed_fullbatch. Default OFF: every OFF-path op below is untouched.
         self._spec_fused = os.environ.get("QWEN36_GDN_SPEC_FUSED", "0") == "1"
-        # Fused mode keeps E_prev as a ping-pong PAIR [W0, W1] of [B, K-1+T, C] instead of _verify_win_buf: a verify
-        # reads pair[_spec_win_par] and writes the rebuilt window into the other half, and the host flips
-        # _spec_win_par after every replay (model.verify_traced), so pair[_spec_win_par] is always the current E_prev
-        # (verify_win_cur()). Every layer flips in lockstep: one ctrl page serves all of them.
-        self._verify_win_pair = None
-        self._spec_win_par = 0
+        # Fused mode keeps each cfg's E_prev as a ping-pong PAIR [W0, W1] of [n_users, K-1+T, C] (SpecCfg.win_pair)
+        # instead of a single buffer: a verify reads pair[parity] and writes the rebuilt window into the other half,
+        # and the host flips cfg.parity after every replay (model.verify_traced), so pair[parity] is always the
+        # current E_prev (verify_win_cur). Every layer flips in lockstep: one ctrl page per cfg serves all of them.
         # Fused-mode constants (built eagerly, once): the conv taps as one [1, K, C] tile (tap j in row j), the seed's
         # scratch half of its [B, K, C] window pair and the seed's identity ctrl page (parity 0, mi 0, block u*Nv + h).
         self._spec_taps = None
@@ -492,19 +534,15 @@ class TPGatedDeltaNet:
         self._pending = []  # per-user (rec, conv) states collected during batched per-user prefill
 
     def _release_spec_bufs(self):
-        """Free the batched spec-verify buffers and forget their shape (prepare_spec_verify reallocs)."""
-        for name in ("_spec_ring", "_verify_win_buf", "_spec_win_pad"):
+        """Free every spec cfg's buffers, the shared ring and the zero row (prepare_spec_cfg reallocs)."""
+        for cfg_id in list(getattr(self, "_spec_cfgs", {}) or {}):
+            self.release_spec_cfg(cfg_id)
+        for name in ("_spec_ring", "_spec_zero_row"):  # already gone with the last cfg; belt and braces
             buf = getattr(self, name, None)
             if buf is not None:
                 ttnn.deallocate(buf)
             setattr(self, name, None)
-        for sel in (getattr(self, "_spec_seed_sel", None) or {}).values():
-            ttnn.deallocate(sel)
-        self._spec_seed_sel = {}
-        for buf in getattr(self, "_verify_win_pair", None) or ():  # fused mode's window ping-pong pair
-            ttnn.deallocate(buf)
-        self._verify_win_pair = None
-        self._spec_shape = None
+        self._spec_rows = None
 
     def reset_state(self):
         def z(shape):
@@ -564,7 +602,10 @@ class TPGatedDeltaNet:
             ttnn.deallocate(self._batched_conv_carry)
         self._batched_conv_carry = None
         # rec_state/conv_states got fresh addresses here, so every spec-verify buffer derived from
-        # the old ones is stale — drop them (re-allocated by the next prepare_spec_verify).
+        # the old ones is stale — drop them (re-allocated by the next prepare_spec_verify / prepare_spec_cfg).
+        # NOTE: this pops every SpecCfg (and the ring) while the model's VerifyConfig registry still names them; the
+        # model's capture guard (_assert_gdn_cfgs_live) catches a capture attempted after such a reset, and its B=1
+        # prefill-scratch builders detach the batched spec bindings around this call so THEY do not drop them.
         self._release_spec_bufs()
         if self._conv_win_buf is not None:  # mirrors the now-stale conv_states; re-seeded at capture
             ttnn.deallocate(self._conv_win_buf)
@@ -2077,83 +2118,214 @@ class TPGatedDeltaNet:
     # body runs under a captured trace: a first-time allocation or a host write inside it would
     # either TT_FATAL at capture or bake a throwaway address into the replay.
 
-    def prepare_spec_verify(self, n_users, T):
-        """Allocate the persistent buffers a batched spec verify reads and writes.
+    def prepare_spec_cfg(self, cfg_id, n_users, T):
+        """Register (or return) the spec-verify cfg ``cfg_id``: n_users users x T = K+1 candidate rows (one bucket).
 
-        n_users must be the full decode batch (the ring, the window and the row packing are all
-        sized by it) and n_users * T must fit the one 32-row decode tile every decode matmul,
-        head-split and norm config in this stack assumes.
+        Allocates, idempotently for the same (n_users, T) (a different shape under the same id frees and reallocates
+        that cfg's buffers):
+          _spec_ring       fp32 TILE DRAM [_spec_rows*Nv, Dk, Dv]  ONE ring shared by every cfg, allocated by the
+                           FIRST cfg at n_users*T rows and never grown (a trace may have baked it); a later cfg must
+                           fit (rows <=; gdn_spec_step checks the ring as >= T*B*Nv blocks and addresses block
+                           (t*B + u)*Nv + h from its own (B, T)) -- prepare the widest bucket first. A second cfg on
+                           the composite path (QWEN36_GDN_SPEC_FUSED=0, exact ring check) raises NotImplementedError.
+          cfg.win_pair     bf16 TILE DRAM 2 x [n_users, K-1+T, C]  E_prev ping-pong (QWEN36_GDN_SPEC_FUSED=1), or
+          cfg.win_buf      bf16 TILE DRAM [n_users, K-1+T, C]      E_prev (composite path)
+          cfg.win_pad      bf16 TILE DRAM [n_users, T-1, C]        zero tail (T > 1 only; whole-batch seed, switch)
+          cfg.win_pad1     bf16 TILE DRAM [1, T-1, C]              zero tail for a single-row seed (T > 1 only)
+          _spec_zero_row   bf16 TILE DRAM [1, K, C]                shared zero window row (switch, empty rows)
+          _conv_win_buf    bf16 TILE DRAM [B, K, C]                the durable shift register (_ensure_conv_win)
 
-        Allocates (idempotent for the same (n_users, T); a different shape frees and reallocates):
-          _spec_ring      fp32 TILE DRAM [T*B*Nv, Dk, Dv]  per-token state ring (op writes in place)
-          _verify_win_buf bf16 TILE DRAM [B, K-1+T, C]     E_prev, the conv window
-          _conv_win_buf   bf16 TILE DRAM [B, K, C]         the durable shift register
-          _spec_win_pad   bf16 TILE DRAM [B, T-1, C]       zero tail for the seed (T > 1 only)
-
-        Call it EAGERLY, before the verify warmup pass, so the warmup compiles every program the
-        captured body replays.
+        n_users may be SMALLER than the decode batch B (a bucket seats a subset of the physical slots; the host maps
+        bucket rows to slots), and n_users * T must fit the one 32-row decode tile every decode matmul, head-split
+        and norm config in this stack assumes. Call it EAGERLY, before the verify warmup pass, so the warmup compiles
+        every program the captured body replays. Returns the SpecCfg.
         """
-        assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
+        assert isinstance(cfg_id, str) and cfg_id, f"spec cfg id must be a non-empty str, got {cfg_id!r}"
+        assert 1 <= n_users <= self.B, f"spec cfg {cfg_id!r}: n_users={n_users} must be in [1, B={self.B}]"
         assert T >= 1, f"T must be at least 1, got {T}"
         assert (
             n_users * T <= tpc.TILE_SIZE
         ), f"{n_users} users x {T} rows = {n_users * T} exceeds the {tpc.TILE_SIZE}-row decode tile"
         if self.conv_states is None:
             self.reset_state()
-        if self._spec_shape == (n_users, T):
-            self._ensure_conv_win()
-            return
-        self._release_spec_bufs()
-        B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        cfg = self._spec_cfgs.get(cfg_id)
+        if cfg is not None:
+            if cfg.shape == (n_users, T):
+                self._ensure_conv_win()
+                return cfg
+            self.release_spec_cfg(cfg_id)  # same id, new shape: drop it (and the ring, if it was the last cfg)
+        Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
         mc, cdt = ttnn.DRAM_MEMORY_CONFIG, self.conv_states[0].dtype
-        # fp32 unconditionally: the fused op's ring mode reads and writes fp32 state blocks.
-        self._spec_ring = ttnn.zeros(
-            [T * B * Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
-        )
+        rows = n_users * T
+        if self._spec_ring is None:
+            # fp32 unconditionally: both spec ops' ring modes read and write fp32 state blocks.
+            self._spec_rows = rows
+            self._spec_ring = ttnn.zeros(
+                [rows * Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
+            self._spec_zero_row = ttnn.zeros(
+                [1, K, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
+        elif not self._spec_fused:
+            # The composite op (fused_recurrent_gated_delta_rule, ring mode) checks the ring EXACTLY against its own
+            # (B, T) and its multi-cfg use (seed_spec_row / switch_spec_cfg into win_buf) has no device validation:
+            # multi-bucket is the fused path's (the served one) until a device run says otherwise.
+            raise NotImplementedError(
+                f"spec cfg {cfg_id!r}: multi-bucket spec verify (registered: {sorted(self._spec_cfgs)}) needs the fused "
+                "gdn_spec_step path (QWEN36_GDN_SPEC_FUSED=1); the composite path is single-bucket only"
+            )
+        else:
+            assert rows <= self._spec_rows, (
+                f"spec cfg {cfg_id!r} ({n_users} x {T} = {rows} rows) does not fit the shared ring of "
+                f"{self._spec_rows} rows, which the FIRST cfg sized (registered: {sorted(self._spec_cfgs)}) and a "
+                "captured trace may have baked: prepare the widest bucket first (see SpecCfg's ring policy)"
+            )
+        R = K - 1 + T
+        win_pair = win_buf = None
         if self._spec_fused:
-            # QWEN36_GDN_SPEC_FUSED=1: the window ping-pong pair (see __init__) instead of the single buffer, at
-            # parity 0; plus the fused op's constants, so no host round trip is left for the traced path.
-            self._verify_win_buf = None
-            self._verify_win_pair = [
-                ttnn.zeros([B, K - 1 + T, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+            win_pair = [
+                ttnn.zeros([n_users, R, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
                 for _ in range(2)
             ]
-            self._spec_win_par = 0
+        else:
+            win_buf = ttnn.zeros(
+                [n_users, R, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
+        win_pad = win_pad1 = None
+        if T > 1:
+            win_pad = ttnn.zeros(
+                [n_users, T - 1, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
+            win_pad1 = ttnn.zeros([1, T - 1, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+        cfg = SpecCfg(
+            id=cfg_id,
+            n_users=n_users,
+            T=T,
+            R=R,
+            win_pair=win_pair,
+            win_buf=win_buf,
+            win_pad=win_pad,
+            win_pad1=win_pad1,
+            parity=0,
+            ctrl_words=spec_ctrl_words(n_users, Nv),
+        )
+        self._spec_cfgs[cfg_id] = cfg
+        if self._spec_fused:
+            # The fused op's constants, so no host round trip is left for the traced path; plus the fused T=1 seed's
+            # scratch window + identity ctrl page: every fused-path allocation happens here, eagerly, so no later
+            # seed can allocate (or compile) under a parked trace.
             self._spec_taps_t()
             self._norm_weight_1d()
-            # The fused T=1 seed's scratch window + identity ctrl page too: every fused-path allocation happens here,
-            # eagerly, so no later seed can allocate (or compile) under a parked trace.
             self._ensure_spec_fused_seed()
             global _SPEC_FUSED_LOGGED
             if not _SPEC_FUSED_LOGGED:
                 _SPEC_FUSED_LOGGED = True
                 logger.info(
-                    f"[gdn-spec-fused] QWEN36_GDN_SPEC_FUSED=1: gdn_spec_step verify at (B={B}, T={T}), "
-                    f"hnew_depth={self._spec_hnew_depth(B)}, window pair [{B}, {K - 1 + T}, {C}] x2, ctrl page "
-                    f"{spec_ctrl_words(B, Nv)} words"
+                    f"[gdn-spec-fused] QWEN36_GDN_SPEC_FUSED=1: gdn_spec_step verify, cfg {cfg_id!r} at "
+                    f"(B={n_users}, T={T}), hnew_depth={self._spec_hnew_depth(n_users)}, window pair "
+                    f"[{n_users}, {R}, {C}] x2, ctrl page {cfg.ctrl_words} words, shared ring {self._spec_rows}*Nv blocks"
                 )
-        else:
-            self._verify_win_buf = ttnn.zeros(
-                [B, K - 1 + T, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
-            )
-        self._spec_win_pad = (
-            None
-            if T == 1
-            else ttnn.zeros([B, T - 1, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
-        )
-        self._spec_shape = (n_users, T)
-        # The B per-user seed selectors, built here (eagerly, before any capture) so a join never uploads one.
-        for u in range(B):
-            self._spec_seed_selector(u)
         self._ensure_conv_win()
+        return cfg
 
-    def verify_win_cur(self):
-        """The conv window E_prev the NEXT verify reads -- what the seed / join / materialize paths read and write:
-        _verify_win_buf, or under QWEN36_GDN_SPEC_FUSED=1 the current half of the window ping-pong pair."""
+    def spec_cfg(self, cfg_id="default"):
+        """The registered SpecCfg ``cfg_id`` (KeyError when prepare_spec_cfg has not run for it)."""
+        cfg = self._spec_cfgs.get(cfg_id)
+        if cfg is None:
+            raise KeyError(
+                f"GDN spec cfg {cfg_id!r} is not prepared (registered: {sorted(self._spec_cfgs)}); "
+                "call prepare_spec_cfg(cfg_id, n_users, T) first"
+            )
+        return cfg
+
+    def prepare_spec_verify(self, n_users, T):
+        """The demo / single-bucket path: register the whole-batch cfg "default" (n_users == B).
+
+        ``prepare_spec_cfg("default", n_users, T)`` behind the full-decode-batch check the single-cfg callers
+        (SpeculativeDecoder, the single-bucket serving decoder) rely on; a different (n_users, T) frees and
+        reallocates. Returns the SpecCfg.
+        """
+        assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
+        return self.prepare_spec_cfg("default", n_users, T)
+
+    def release_spec_cfg(self, cfg_id):
+        """Free ONE cfg's window buffers and forget it; the shared ring (and zero row) go with the LAST cfg."""
+        cfg = self._spec_cfgs.pop(cfg_id, None)
+        if cfg is None:
+            return
+        for buf in (cfg.win_buf, cfg.win_pad, cfg.win_pad1, *(cfg.win_pair or ())):
+            if buf is not None:
+                ttnn.deallocate(buf)
+        cfg.win_buf = cfg.win_pad = cfg.win_pad1 = cfg.win_pair = None
+        if not self._spec_cfgs:
+            for name in ("_spec_ring", "_spec_zero_row"):
+                buf = getattr(self, name, None)
+                if buf is not None:
+                    ttnn.deallocate(buf)
+                setattr(self, name, None)
+            self._spec_rows = None
+
+    def _cfg_win_cur(self, cfg):
+        """The E_prev buffer the NEXT verify of ``cfg`` reads (and its seeds / a switch write): win_buf, or under
+        QWEN36_GDN_SPEC_FUSED=1 the current half of the cfg's window ping-pong pair."""
         if self._spec_fused:
-            assert self._verify_win_pair is not None, "spec window pair before prepare_spec_verify"
-            return self._verify_win_pair[self._spec_win_par]
-        return self._verify_win_buf
+            assert cfg.win_pair is not None, f"spec cfg {cfg.id!r} has no window pair (released?)"
+            return cfg.win_pair[cfg.parity]
+        return cfg.win_buf
+
+    def verify_win_cur(self, cfg_id="default"):
+        """The conv window E_prev the NEXT verify of cfg ``cfg_id`` reads -- what the seed / join / materialize /
+        switch paths read and write: the cfg's win_buf, or under QWEN36_GDN_SPEC_FUSED=1 the current half of its
+        window ping-pong pair."""
+        return self._cfg_win_cur(self.spec_cfg(cfg_id))
+
+    def spec_ctrl_page_cfg(self, cfg_id, mi, hold=None):
+        """The gdn_spec_step ctrl page of cfg ``cfg_id`` at ITS current window parity: torch.int32 [1, cfg.ctrl_words]
+        {parity, mi[row], ring block (row, head) | HOLD}. Host data; the caller stages it into the cfg's device page."""
+        cfg = self.spec_cfg(cfg_id)
+        return spec_ctrl_page(mi, cfg.n_users, self.Nv, parity=cfg.parity, hold=hold)
+
+    def _ring4(self):
+        """The shared ring as the rank-4 view slice_write wants, asserted to ALIAS the ring (a copy would make the
+        write land in a temporary)."""
+        ring4 = ttnn.reshape(self._spec_ring, (1, self._spec_rows * self.Nv, self.Dk, self.Dv))
+        assert (
+            ring4.buffer_address() == self._spec_ring.buffer_address()
+        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        return ring4
+
+    # ---- back-compat views of the "default" cfg (the single-bucket demo / test path) ----
+    @property
+    def _spec_shape(self):
+        """(n_users, T) of the "default" cfg, or None when it is not prepared."""
+        cfg = self._spec_cfgs.get("default")
+        return None if cfg is None else cfg.shape
+
+    @property
+    def _verify_win_buf(self):
+        """The "default" cfg's composite-path E_prev (None on the fused path / before prepare)."""
+        cfg = self._spec_cfgs.get("default")
+        return None if cfg is None else cfg.win_buf
+
+    @property
+    def _verify_win_pair(self):
+        cfg = self._spec_cfgs.get("default")
+        return None if cfg is None else cfg.win_pair
+
+    @property
+    def _spec_win_pad(self):
+        cfg = self._spec_cfgs.get("default")
+        return None if cfg is None else cfg.win_pad
+
+    @property
+    def _spec_win_par(self):
+        """Window parity of the "default" cfg (0 before prepare)."""
+        cfg = self._spec_cfgs.get("default")
+        return 0 if cfg is None else cfg.parity
+
+    @_spec_win_par.setter
+    def _spec_win_par(self, value):
+        self.spec_cfg("default").parity = int(value) & 1
 
     # ---- QWEN36_GDN_SPEC_FUSED=1 helpers (gdn_spec_step constants) ----
     @staticmethod
@@ -2258,17 +2430,18 @@ class TPGatedDeltaNet:
             ttnn.deallocate(o_full)
         return o_red
 
-    def seed_spec_state(self):
-        """Load the live decode state into the spec buffers so the first replay can run with mi = 0.
+    def seed_spec_state(self, cfg_id="default"):
+        """Load the live decode state into the spec buffers so the first replay can run with mi = 0 -- WHOLE batch.
 
-        rec_state -> ring token-slot 0 (blocks [0, B*Nv), which is where a mi = 0 state_blk_idx
-        points), and the conv shift register -> the first K rows of E_prev (which is what a mi = 0
-        conv_sel reads: concat rows 1 .. K-1). The window's remaining T-1 rows are zeroed padding
-        that no mi = 0 selector can reach.
+        rec_state -> ring token-slot 0 (blocks [0, B*Nv), which is where a mi = 0 ring index points), and the conv
+        shift register -> the first K rows of E_prev (which is what a mi = 0 selector reads: rows 1 .. K-1). The
+        window's remaining T-1 rows are zeroed padding that no mi = 0 selector can reach. The cfg must seat the full
+        decode batch (row == physical slot); a bucket that seats a subset is seeded row by row (seed_spec_row).
         """
-        assert self._spec_ring is not None, "seed_spec_state before prepare_spec_verify"
+        cfg = self.spec_cfg(cfg_id)
+        assert self._spec_ring is not None, "seed_spec_state before prepare_spec_cfg"
         B, Nv, Dk, Dv = self.B, self.Nv, self.Dk, self.Dv
-        T = self._spec_shape[1]
+        assert cfg.n_users == B, f"seed_spec_state is the whole-batch seed: cfg {cfg_id!r} seats {cfg.n_users} of {B}"
         # --- recurrent state -> ring blocks [0, B*Nv) ---
         # 4D views: slice_write needs input/output/bounds at equal rank and a rank-4 sharded input,
         # and adding a leading unit dim to a TILE tensor is a pure view (same buffer, so the write
@@ -2278,111 +2451,222 @@ class TPGatedDeltaNet:
         sharded = ttnn.to_memory_config(src if cast is None else cast, self._row_shard_memcfg(B * Nv * Dk, Dv))
         if cast is not None:
             ttnn.deallocate(cast)
-        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
-        assert (
-            ring4.buffer_address() == self._spec_ring.buffer_address()
-        ), "the rank-4 ring view copied instead of aliasing; slice_write would write to a temporary"
+        ring4 = self._ring4()
         ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
         # --- conv shift register -> E_prev rows [0, K) ---
         self.sync_conv_win()  # taps are the truth outside the spec loop; mirror them into the window
         full = (
             self._conv_win_buf
-            if self._spec_win_pad is None
-            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if cfg.win_pad is None
+            else ttnn.concat([self._conv_win_buf, cfg.win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         )
-        ttnn.copy(full, self.verify_win_cur())  # full-shape copy: the window buffer keeps its address
+        ttnn.copy(full, self._cfg_win_cur(cfg))  # full-shape copy: the window buffer keeps its address
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
         # Both mirrors now hold the same (live) shift register.
         self._conv_taps_stale, self._conv_win_stale = False, False
 
-    def _spec_seed_selector(self, u):
-        """The [B, R, 2R] bf16 one-hot that seed_spec_state_user(u) multiplies cat([E_prev, conv_win_padded], dim=1)
-        by (R = K-1+T): row r of every other user v picks row r (E_prev itself, the identity); row r of user u picks
-        row R+r (its freshly mirrored shift register). Fixed for a given spec shape, so it is built and
-        uploaded ONCE per (layer, u) -- eagerly by prepare_spec_verify -- and reused by every join; freed with the
-        spec buffers (_release_spec_bufs)."""
-        assert self._spec_shape is not None, "_spec_seed_selector before prepare_spec_verify"
-        sel_tt = self._spec_seed_sel.get(u)
-        if sel_tt is None:
-            B, T = self.B, self._spec_shape[1]
-            R = self.K - 1 + T
-            sel = torch.zeros(B, R, 2 * R, dtype=torch.bfloat16)
-            for v in range(B):
-                for r in range(R):
-                    sel[v, r, (R + r) if v == u else r] = 1.0
-            sel_tt = ttnn.from_torch(
-                sel,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            self._spec_seed_sel[u] = sel_tt
-        return sel_tt
-
     def seed_spec_state_user(self, u):
-        """``seed_spec_state`` for ONE user of a live batch (serving: a request joining slot ``u``).
+        """``seed_spec_state`` for ONE user of the whole-batch "default" cfg (bucket row u == physical slot u): the
+        single-bucket serving join. See seed_spec_row."""
+        self.seed_spec_row("default", u, u)
 
-        Only user u's rows move: rec_state row u -> ring token-slot 0 blocks [u*Nv, (u+1)*Nv) via a
-        slice_write, and its conv shift register -> E_prev rows [0, K) of row u through an exact
-        one-hot matmul over cat([E_prev, conv_win_padded], dim=1) that is the identity for every
-        other user (a slice_write cannot target row u alone: K-1+T rows are not tile-aligned). The
-        other users' ring blocks and window rows are untouched, so their in-flight speculative state
-        survives. Every op here is fixed-shape except the slice_write offset, which hashes per u:
-        warm all B offsets before the verify trace is captured.
+    def seed_spec_row(self, cfg_id, row, phys):
+        """JOIN seed: physical slot ``phys``'s durable GDN state -> row ``row`` of cfg ``cfg_id`` (a request joining a
+        bucket while the other rows are mid-flight). Eager, ~7 device ops per layer; only that row moves.
+
+        rec_state[phys] -> ring token-slot 0 blocks [row*Nv, (row+1)*Nv) via a sharded slice_write (fp32 typecast if
+        the durable state is bf16), and the slot's conv shift register _conv_win_buf[phys] ([1, K, C], mirrored from
+        the taps its prefill wrote) + the cfg's zero tail -> E_prev[row, :] through the slice / concat / in-place-copy
+        idiom write_slot uses at every prefill (no selector matmul: a slice_write cannot target one row of the
+        non-tile-aligned K-1+T window, and a whole-batch one-hot needs equal row counts, which a bucket that seats a
+        subset of the slots does not have). Every other row's ring blocks and window rows are untouched, so their
+        in-flight speculative state survives. Exact: slice / concat / copy move bytes (the typecast is the shipped
+        path's). The ring slice_write offset hashes per row and the window slices per row: the serving decoder's
+        warm-up executes every (cfg, row, phys) before any capture.
         """
-        assert self._spec_ring is not None, "seed_spec_state_user before prepare_spec_verify"
+        cfg = self.spec_cfg(cfg_id)
+        assert self._spec_ring is not None, "seed_spec_row before prepare_spec_cfg"
+        assert self.rec_state is not None and self.conv_states is not None, "batched GDN state not allocated"
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
-        T = self._spec_shape[1]
-        assert 0 <= u < B, f"user {u} of {B}"
-        # --- recurrent state row u -> ring blocks [u*Nv, (u+1)*Nv) of token slot 0 ---
-        row = ttnn.slice(self.rec_state, (u, 0, 0, 0), (u + 1, Nv, Dk, Dv))  # [1, Nv, Dk, Dv]
-        cast = None if row.dtype == ttnn.float32 else ttnn.typecast(row, ttnn.float32)
-        sharded = ttnn.to_memory_config(row if cast is None else cast, self._row_shard_memcfg(Nv * Dk, Dv))
+        assert 0 <= row < cfg.n_users, f"row {row} of cfg {cfg_id!r} ({cfg.n_users} rows)"
+        assert 0 <= phys < B, f"slot {phys} of {B}"
+        # --- recurrent state of slot phys -> ring blocks [row*Nv, (row+1)*Nv) of token slot 0 ---
+        rec = ttnn.slice(self.rec_state, (phys, 0, 0, 0), (phys + 1, Nv, Dk, Dv))  # [1, Nv, Dk, Dv]
+        cast = None if rec.dtype == ttnn.float32 else ttnn.typecast(rec, ttnn.float32)
+        sharded = ttnn.to_memory_config(rec if cast is None else cast, self._row_shard_memcfg(Nv * Dk, Dv))
         # B == 1: the full-range slice is a no-op that RETURNS rec_state itself; never free the live state.
-        if row.buffer_address() != self.rec_state.buffer_address():
-            ttnn.deallocate(row)
+        if rec.buffer_address() != self.rec_state.buffer_address():
+            ttnn.deallocate(rec)
         if cast is not None:
             ttnn.deallocate(cast)
-        ring4 = ttnn.reshape(self._spec_ring, (1, T * B * Nv, Dk, Dv))
-        assert ring4.buffer_address() == self._spec_ring.buffer_address(), "rank-4 ring view copied"
-        ttnn.experimental.slice_write(sharded, ring4, [0, u * Nv, 0, 0], [1, (u + 1) * Nv, Dk, Dv], [1, 1, 1, 1])
+        ring4 = self._ring4()
+        ttnn.experimental.slice_write(sharded, ring4, [0, row * Nv, 0, 0], [1, (row + 1) * Nv, Dk, Dv], [1, 1, 1, 1])
         ttnn.deallocate(sharded)
-        # --- conv shift register row u -> E_prev row u, rows [0, K) (rows K.. zero) ---
-        self.sync_conv_win()  # mirror the taps (user u's are fresh from its prefill; others' are unread)
-        full = (
-            self._conv_win_buf
-            if self._spec_win_pad is None
-            else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        )
-        cat = ttnn.concat([self.verify_win_cur(), full], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, 2R, C]
-        if full is not self._conv_win_buf:
-            ttnn.deallocate(full)
-        sel_tt = self._spec_seed_selector(u)  # cached [B, R, 2R] one-hot (persistent: do not free)
-        new_win = ttnn.matmul(
-            sel_tt, cat, compute_kernel_config=self._cfg_onehot, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(cat)
-        ttnn.copy(new_win, self.verify_win_cur())  # full-shape, in place
-        ttnn.deallocate(new_win)
+        # --- conv shift register of slot phys -> E_prev row `row`, rows [0, K) (rows K.. zero) ---
+        self.sync_conv_win()  # mirror the taps (slot phys's are fresh from its prefill; the others' are unread)
+        tap = ttnn.slice(self._conv_win_buf, (phys, 0, 0), (phys + 1, K, C))  # [1, K, C]
+        tap_owned = tap.buffer_address() != self._conv_win_buf.buffer_address()  # B == 1: a full-range slice aliases
+        if cfg.win_pad1 is not None:
+            new_row = ttnn.concat([tap, cfg.win_pad1], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [1, R, C]
+            if tap_owned:
+                ttnn.deallocate(tap)
+            new_owned = True
+        else:
+            new_row, new_owned = tap, tap_owned
+        self._write_row_dim0(self._cfg_win_cur(cfg), new_row, row, new_owned)
 
-    def materialize_spec_state(self, mi):
+    def _write_row_dim0(self, buf, src, row, owned):
+        """buf[row] <- src ([1, L, C]) IN PLACE (buf keeps its address): the other rows are sliced out, concatenated
+        around src along dim 0 and copied back -- write_slot's _write_index idiom for the spec window (dim-0 concat
+        of tile tensors whose dim 1 is not tile-aligned is the materialize idiom). ``owned``: free src afterwards
+        (False when src aliases a live buffer)."""
+        n = int(buf.shape[0])
+        if n == 1:
+            ttnn.copy(src, buf)
+        else:
+            parts = []
+            if row > 0:
+                parts.append(self._slice_along(buf, 0, 0, row))
+            parts.append(src)
+            if row < n - 1:
+                parts.append(self._slice_along(buf, 0, row + 1, n))
+            new = ttnn.concat(parts, dim=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.copy(new, buf)
+            ttnn.deallocate(new)
+            for p in parts:
+                if p is not src:
+                    ttnn.deallocate(p)
+        if owned:
+            ttnn.deallocate(src)
+
+    def switch_spec_cfg(self, cur_id, tgt_id, moves):
+        """Bucket SWITCH: a WHOLE-BATCH reseed of cfg ``tgt_id``'s token-slot 0 + E_prev from cfg ``cur_id``'s in-flight
+        state, so the next verify runs in ``tgt_id`` with mi_prev = 0 for every live row. Eager, (B_tgt + |L| + 6)
+        device ops per layer; a bit-exact STATE MOVE (slice / concat / reshape-view / to_memory_config / slice_write /
+        copy: no arithmetic on fp32 ring blocks or bf16 window rows).
+
+        ``moves``: per TARGET row, ``(row_cur, mi)`` for a live user -- its state in ``cur_id`` is ring block
+        (mi*B_cur + row_cur)*Nv + h (the recurrent state after consuming its accepted prefix through row mi) and the
+        K conv inputs ending there are E_prev_cur[row_cur, mi : mi+K] -- or None for an EMPTY target row; a dict
+        {row_tgt: move} (missing rows = None) or a list of length B_tgt. A FRESH row (seeded, not yet replayed) is
+        (row_cur, 0): its slot-0 block and rows [0, K) -- an identity of what its seed wrote.
+
+        ring:   B_tgt block slices ([Nv, Dk, Dv] at (mi*B_cur + row_cur)*Nv, or the target row's OWN slot-0 block
+                row_tgt*Nv for an empty row -- an identity move) -> ONE concat [B_tgt, Nv, Dk, Dv] -> rank-4 view ->
+                L1 height shard -> ONE slice_write into slot 0 blocks [0, B_tgt*Nv). The concat materialises EVERY
+                source before the single write, so a target slot-0 block that coincides with a live source block
+                (e.g. cur 4x8 row 1 at mi 1 = block 5 = tgt 8x4 row 5's slot 0) is read before it is overwritten --
+                by construction, on the one in-order command queue, not by loop discipline.
+        window: |L| slices E_prev_cur[row_cur, mi:mi+K] ([1, K, C]) + the shared zero row for empty rows -> ONE
+                concat (dim 0) [B_tgt, K, C] -> ONE concat with the target's zero tail (dim 1) [B_tgt, R_tgt, C] ->
+                ONE copy into the target's CURRENT-parity half (the one its next verify reads). With mi_prev = 0 that
+                verify reads block row_tgt*Nv + h and conv carry rows 1 .. K-1 -- exactly what a fresh join reads.
+        Touches neither rec_state, conv_states, _conv_win_buf, conv_hist_packed nor any staleness flag, and flips no
+        parity (each cfg's parity advances only with its own replays). Empty target rows are HELD in every replay of
+        the target, so their (finite) contents are irrelevant. Program variants (ring slices at up to 32 block
+        offsets, window slices per (row, mi), concat / shard / slice_write / copy per target shape) must all have
+        run eagerly before any capture: the serving decoder's warm-up sweeps every realisation in both directions.
+        """
+        assert cur_id != tgt_id, f"switch_spec_cfg needs two different cfgs, got {cur_id!r} twice"
+        cur, tgt = self.spec_cfg(cur_id), self.spec_cfg(tgt_id)
+        assert self._spec_ring is not None, "switch_spec_cfg before prepare_spec_cfg"
+        Nv, Dk, Dv, K, C = self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
+        B_cur, T_cur, B_tgt = cur.n_users, cur.T, tgt.n_users
+        if isinstance(moves, dict):
+            bad = [r for r in moves if not (0 <= int(r) < B_tgt)]
+            assert not bad, f"moves name target rows {bad} outside [0, {B_tgt})"
+            mv = [moves.get(r) for r in range(B_tgt)]
+        else:
+            mv = list(moves)
+            assert len(mv) == B_tgt, f"moves has {len(mv)} entries, target cfg {tgt_id!r} has {B_tgt} rows"
+        srcs = set()
+        for r_t, m in enumerate(mv):
+            if m is None:
+                continue
+            r_c, mi = int(m[0]), int(m[1])
+            assert 0 <= r_c < B_cur, f"target row {r_t}: source row {r_c} outside cfg {cur_id!r} ({B_cur} rows)"
+            assert 0 <= mi < T_cur, f"target row {r_t}: mi {mi} outside [0, {T_cur})"
+            assert r_c not in srcs, f"source row {r_c} of cfg {cur_id!r} is moved twice"
+            srcs.add(r_c)
+            mv[r_t] = (r_c, mi)
+        ring, mc = self._spec_ring, ttnn.DRAM_MEMORY_CONFIG
+        # --- ring: every target row's new slot-0 block, gathered FIRST, written ONCE ---
+        blocks, parts = [], []  # the [Nv, Dk, Dv] slices and their [1, Nv, Dk, Dv] views (a view aliases its slice)
+        for r_t, m in enumerate(mv):
+            blk = r_t * Nv if m is None else (m[1] * B_cur + m[0]) * Nv
+            part = ttnn.slice(ring, (blk, 0, 0), (blk + Nv, Dk, Dv))  # [Nv, Dk, Dv], a fresh buffer
+            assert part.buffer_address() != ring.buffer_address(), "ring block slice aliased the ring"
+            blocks.append(part)
+            parts.append(ttnn.reshape(part, (1, Nv, Dk, Dv)))
+        new = ttnn.concat(parts, dim=0, memory_config=mc) if B_tgt > 1 else parts[0]  # [B_tgt, Nv, Dk, Dv]
+        view = ttnn.reshape(new, (1, B_tgt * Nv, Dk, Dv))
+        sharded = ttnn.to_memory_config(view, self._row_shard_memcfg(B_tgt * Nv * Dk, Dv))
+        ring4 = self._ring4()
+        ttnn.experimental.slice_write(sharded, ring4, [0, 0, 0, 0], [1, B_tgt * Nv, Dk, Dv], [1, 1, 1, 1])
+        ttnn.deallocate(sharded)
+        if view.buffer_address() != new.buffer_address():
+            ttnn.deallocate(view)
+        # Free every slice exactly once: the leading-dim reshape is expected to alias its slice (the same buffer
+        # address); if it copied instead, the view is a second buffer and both go. With B_tgt == 1, `new` IS parts[0].
+        if B_tgt > 1:
+            ttnn.deallocate(new)
+        for blk_t, p in zip(blocks, parts):
+            if p.buffer_address() != blk_t.buffer_address():
+                ttnn.deallocate(p)
+            ttnn.deallocate(blk_t)
+        # --- window: the K conv inputs of every live row (zero rows for empty ones) -> the target's current E_prev ---
+        win_cur, win_tgt = self._cfg_win_cur(cur), self._cfg_win_cur(tgt)
+        assert win_cur.buffer_address() != win_tgt.buffer_address(), "cfgs share a window buffer"
+        wins, owned = [], []
+        for m in mv:
+            if m is None:
+                wins.append(self._spec_zero_row)
+                owned.append(False)
+            else:
+                r_c, mi = m
+                w1 = ttnn.slice(win_cur, (r_c, mi, 0), (r_c + 1, mi + K, C))  # [1, K, C]
+                wins.append(w1)
+                owned.append(w1.buffer_address() != win_cur.buffer_address())  # a full-range slice aliases
+        if B_tgt > 1:
+            w = ttnn.concat(wins, dim=0, memory_config=mc)  # [B_tgt, K, C]
+            w_owned = True
+            for x, o in zip(wins, owned):
+                if o:
+                    ttnn.deallocate(x)
+        else:
+            w, w_owned = wins[0], owned[0]
+        if tgt.win_pad is not None:
+            full = ttnn.concat([w, tgt.win_pad], dim=1, memory_config=mc)  # [B_tgt, R_tgt, C]
+            if w_owned:
+                ttnn.deallocate(w)
+            full_owned = True
+        else:
+            full, full_owned = w, w_owned
+        ttnn.copy(full, win_tgt)  # full-shape, in place: the target window keeps its baked address
+        if full_owned:
+            ttnn.deallocate(full)
+
+    def materialize_spec_state(self, mi, cfg_id="default"):
         """Pull the accepted state out of the spec buffers back into the durable decode state.
 
         The spec loop never commits on device; this is what ends it (or hands a plain decode step
         the right state). For user u: rec_state row u <- ring block (mi[u]*B + u)*Nv, and
-        _conv_win_buf row u <- E_prev rows [mi[u], mi[u]+K) — exactly the shift register T
-        sequential decode steps would have left after accepting through row mi[u].
+        _conv_win_buf row u <- E_prev rows [mi[u], mi[u]+K) -- exactly the shift register T
+        sequential decode steps would have left after accepting through row mi[u]. Whole-batch: the
+        cfg must seat every physical slot (row == slot).
 
         Leaves the K conv_states taps BEHIND the window (``_conv_taps_stale``); the next tap
         consumer rebuilds them via sync_conv_taps.
         """
-        assert self._spec_ring is not None, "materialize_spec_state before prepare_spec_verify"
+        cfg = self.spec_cfg(cfg_id)
+        assert self._spec_ring is not None, "materialize_spec_state before prepare_spec_cfg"
         B, Nv, Dk, Dv, K, C = self.B, self.Nv, self.Dk, self.Dv, self.K, self.qkv_dim_tp
-        T = self._spec_shape[1]
+        T = cfg.T
+        assert (
+            cfg.n_users == B
+        ), f"materialize_spec_state is whole-batch (row == slot): cfg {cfg_id!r} seats {cfg.n_users} of {B}"
         assert len(mi) == B, f"need one mi per user: got {len(mi)} for {B} users"
         assert all(0 <= int(m) < T for m in mi), f"mi {list(mi)} out of range [0,{T})"
         # --- recurrent state: one slice per user, ONE concat, ONE in-place copy ---
@@ -2400,7 +2684,8 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(r)
         ttnn.deallocate(new_rec)
         # --- conv window: user u's K rows starting at its own mi[u] ---
-        wins = [ttnn.slice(self.verify_win_cur(), (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
+        win_cur = self._cfg_win_cur(cfg)
+        wins = [ttnn.slice(win_cur, (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
         new_win = ttnn.concat(wins, dim=0) if B > 1 else wins[0]
         ttnn.copy(new_win, self._conv_win_buf)
         if B > 1:
@@ -2410,7 +2695,15 @@ class TPGatedDeltaNet:
         self._conv_taps_stale, self._conv_win_stale = True, False
 
     def forward_verify_recurrent(
-        self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None, spec_ctrl=None
+        self,
+        x,
+        valid_len,
+        pre_gathered=False,
+        n_users=1,
+        state_blk_idx=None,
+        conv_sel=None,
+        spec_ctrl=None,
+        spec_cfg=None,
     ):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
@@ -2422,62 +2715,65 @@ class TPGatedDeltaNet:
         valid_len  : n_users * T real rows; must fit one 32-row decode tile.
         pre_gathered: the caller already handed us a FULL-dim activation (decode-config verify runs
                      the layer norms in Mode.DECODE, which gathers pre-norm), so skip the all-gather.
-        n_users    : number of real users packed into the tile; must equal self.B.
+        n_users    : number of real users (bucket ROWS) packed into the tile; at most self.B (a bucket
+                     may seat a subset of the physical slots; the host maps rows to slots).
         state_blk_idx: device uint32 ROW_MAJOR [B*Nv], from spec_state_blk_idx(mi, B, Nv). Selects
                      each (user, head)'s initial state block inside the persistent ring.
         conv_sel   : device bf16 TILE [B, K-1+T, K-1+2T] one-hot, from spec_conv_sel(mi, B, T, K).
                      Rebuilds each user's conv window from the accepted prefix + the new rows.
         spec_ctrl  : QWEN36_GDN_SPEC_FUSED=1 only: device uint32 ROW_MAJOR [1, N] page from spec_ctrl_page
                      ({parity, mi, ring block | HOLD}); replaces the two selectors above (both ignored).
+        spec_cfg   : id of the spec cfg (bucket) this verify runs in (prepare_spec_cfg); None = "default".
+                     The cfg's (n_users, T) must match; its window (pair) is what the body reads and rewrites.
 
-        Side effects: the ring is updated IN PLACE (every candidate's state, for every user) and
-        _verify_win_buf becomes the new E_prev. Neither rec_state nor conv_states moves — the host
+        Side effects: the shared ring is updated IN PLACE (every candidate's state, for every user) and
+        the cfg's E_prev becomes the new window. Neither rec_state nor conv_states moves -- the host
         commits later, by index (materialize_spec_state), not by copying state here.
         """
         assert valid_len <= tpc.TILE_SIZE, f"verify bucket {valid_len} exceeds one tile"
-        assert n_users == self.B, f"spec verify runs the whole decode batch: n_users={n_users}, B={self.B}"
+        assert 1 <= n_users <= self.B, f"spec verify seats at most the decode batch: n_users={n_users}, B={self.B}"
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
         T = valid_len // n_users
         assert n_users * T <= tpc.TILE_SIZE
+        cfg_id = "default" if spec_cfg is None else spec_cfg
+        cfg = self._spec_cfgs.get(cfg_id)
+        assert cfg is not None and cfg.shape == (n_users, T), (
+            f"spec cfg {cfg_id!r} is {None if cfg is None else cfg.shape}, verify asked for {(n_users, T)}; "
+            f"call prepare_spec_cfg({cfg_id!r}, {n_users}, {T}) before capture"
+        )
         if self._spec_fused:
             if spec_ctrl is None:
                 raise ValueError(
                     "QWEN36_GDN_SPEC_FUSED=1: forward_verify_recurrent needs spec_ctrl, the gdn_spec_step ctrl page "
-                    "(spec_ctrl_page); call prepare_spec_verify + seed_spec_state first"
+                    "(spec_ctrl_page); call prepare_spec_cfg + seed_spec_state / seed_spec_row first"
                 )
-            assert self._spec_shape == (n_users, T), (
-                f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
-                "call prepare_spec_verify(n_users, T) before capture"
-            )
-            return self._forward_verify_recurrent_fused(x, valid_len, T, n_users, spec_ctrl, pre_gathered)
+            return self._forward_verify_recurrent_fused(x, valid_len, T, n_users, spec_ctrl, pre_gathered, cfg)
         if state_blk_idx is None or conv_sel is None:
             raise ValueError(
                 "forward_verify_recurrent needs state_blk_idx and conv_sel (the deferred-select verify "
-                "is the only verify path; call prepare_spec_verify + seed_spec_state first)"
+                "is the only verify path; call prepare_spec_cfg + seed_spec_state first)"
             )
-        assert self._spec_shape == (n_users, T), (
-            f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
-            "call prepare_spec_verify(n_users, T) before capture"
+        return self._forward_verify_recurrent_batched(
+            x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered, cfg
         )
-        return self._forward_verify_recurrent_batched(x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered)
 
-    def _forward_verify_recurrent_batched(self, x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered):
+    def _forward_verify_recurrent_batched(self, x, valid_len, T, n_users, state_blk_idx, conv_sel, pre_gathered, cfg):
         """Gather + ONE decode projection over all valid rows, then the batched conv + recurrence.
 
         Key fact this rests on: the decode matmul (matmul_1d_decode) is row-independent and
         processes a full 32-row M-tile however many rows are real, so packing every user's T rows
-        into ONE projection is per-row identical to projecting them one at a time — while collapsing
+        into ONE projection is per-row identical to projecting them one at a time -- while collapsing
         valid_len separate launches into one. The AGMM prefill projection is deliberately avoided:
         it rounds differently and would drift the state away from plain decode.
         """
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
-        return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel)
+        return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel, cfg)
 
-    def _forward_verify_recurrent_fused(self, x, valid_len, T, n_users, spec_ctrl, pre_gathered):
+    def _forward_verify_recurrent_fused(self, x, valid_len, T, n_users, spec_ctrl, pre_gathered, cfg):
         """``_forward_verify_recurrent_batched`` under QWEN36_GDN_SPEC_FUSED=1: the same gather + ONE decode
         projection, handed to gdn_spec_step UN-SLICED (the op reads q|k|v|z|a|b out of the projection tile itself)."""
         qkvzab, _, _, _, bucket = self._verify_project(x, valid_len, pre_gathered, raw=True)
-        return self._verify_fullbatch_fused(qkvzab, T, n_users, bucket, spec_ctrl)
+        return self._verify_fullbatch_fused(qkvzab, T, n_users, bucket, spec_ctrl, cfg)
 
     def _project_qkvzab_raw(self, x, S, out_mc=None):
         """The decode qkvzab projection WITHOUT the four slices: [1, S, W] with q|k|v in columns [0, qkv_dim_tp), z in
@@ -2599,21 +2895,21 @@ class TPGatedDeltaNet:
         self.sync_conv_taps()
         return self._spec_out_tail(gated, R, bucket)
 
-    def _verify_fullbatch_fused(self, qkvzab, T, n_users, bucket, ctrl):
+    def _verify_fullbatch_fused(self, qkvzab, T, n_users, bucket, ctrl, cfg):
         """``_verify_fullbatch`` under QWEN36_GDN_SPEC_FUSED=1: ONE gdn_spec_step dispatch per layer.
 
         The op rebuilds every user's conv window from win[par] (rows mi+1 .. mi+K-1) + its T new projection rows,
         runs the depthwise conv + SiLU, the l2norms, the beta / decay gates, the T-step gated delta rule with each
         token's state written to ring block (t*B + u)*Nv + h (initial block per (u, h) from the ctrl page; HOLD = no
         ring writes, window copied through), the gated RMSNorm and the silu(z) gate, and writes the new window into
-        win[1-par]. Everything it touches is persistent (prepare_spec_verify) or produced in-trace (qkvzab), so the
+        win[1-par]. Everything it touches is persistent (prepare_spec_cfg) or produced in-trace (qkvzab), so the
         body is trace-capturable; ctrl is DATA the host stages per replay (model.verify_traced), which also flips
         _spec_win_par afterwards. The staleness invariant of _verify_fullbatch holds unchanged: for the whole spec loop
         the durable conv truth is win[cur] plus the host's mi; the K taps and _conv_win_buf are behind it until
         materialize_spec_state.
         """
         B, R = n_users, n_users * T
-        win = self._verify_win_pair
+        win = cfg.win_pair  # this cfg's own E_prev pair; the ring is shared by every cfg
         gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B)
         ttnn.deallocate(qkvzab)
         return self._spec_out_tail(gated, R, bucket)
@@ -2690,7 +2986,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(E)
         # Push the window straight back out to the K taps rather than leaving them stale. Two
         # reasons, both about WHEN programs compile: sync_conv_win() branches on _conv_taps_stale,
-        # and the throwaway seed_spec_state() inside capture_verify_trace exists only to compile the
+        # and the throwaway seed inside prepare_verify_trace exists only to compile the
         # branch the REAL post-capture seed_spec_state() will take — so both calls must see the same
         # flags. And a stale-tap window would make the next plain decode step (sync_conv_taps) pay
         # its K slice+copy per layer with the verify trace parked. Costs K copies per layer, once.
@@ -2735,7 +3031,7 @@ class TPGatedDeltaNet:
         ttnn.deallocate(t)
         return out
 
-    def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel):
+    def _verify_fullbatch(self, qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel, cfg):
         """The device body of a batched verify. Inputs are the already-projected [1, B*T, *] rows.
 
         No per-token loop and no commit phase:
@@ -2756,7 +3052,7 @@ class TPGatedDeltaNet:
         #    rows the last commit rejected and appends this iteration's inputs. E_new is stored as
         #    the next E_prev AND is the conv input, so nothing is built twice.
         qkv_new = self._rows_to_users(qkv_all, B, T, C)
-        cat = ttnn.concat([self._verify_win_buf, qkv_new], dim=1, memory_config=mc)  # [B, K-1+2T, C]
+        cat = ttnn.concat([cfg.win_buf, qkv_new], dim=1, memory_config=mc)  # [B, K-1+2T, C]
         ttnn.deallocate(qkv_new)
         E_new = ttnn.matmul(conv_sel, cat, compute_kernel_config=self._cfg_onehot, memory_config=mc)
         ttnn.deallocate(cat)
@@ -2768,7 +3064,7 @@ class TPGatedDeltaNet:
         # own carry is this buffer and conv_sel. materialize_spec_state restores the two-mirror
         # invariant when the loop ends: it rebuilds _conv_win_buf from the accepted rows and sets
         # _conv_taps_stale=True so the next tap consumer (forward_decode, a slot edit) resyncs.
-        ttnn.copy(E_new, self._verify_win_buf)
+        ttnn.copy(E_new, cfg.win_buf)
         conv_all = self._conv1d_verify(E_new, T)  # [B, T, C], SiLU applied
         ttnn.deallocate(E_new)
 
