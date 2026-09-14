@@ -333,6 +333,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t cb_stiles = cb(tile_bytes, 16, bf);                     // cb_stiles
     const uint32_t cb_sumback = cb(tile_bytes, 2 * Sqt, bf);               // cb_sumback
     const uint32_t cb_sacc = cb(((rmax * 64 * 8 + 31) / 32) * 32, 1, bf);  // cb_sacc: int64[rmax][64]
+    // softmax-state handoff (compute -> writer): 2 tiles per sub-row (sum, threshold), double buffered
+    const bool has_lse = t.lse_out.has_value();
+    const uint32_t cb_lse = cb(tile_bytes, 2 * 2 * Sqt, bf);  // cb_lse
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -377,10 +380,16 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     for (uint32_t v : {cb_shdr, cb_stiles, cb_sumback, cb_sacc, Sqt}) {  // row-sum service (args 18..22)
         writer_ct.push_back(v);
     }
+    writer_ct.push_back(cb_lse);
+    writer_ct.push_back(has_lse ? 1u : 0u);
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(writer_ct, writer_crt);
+    // Always appended, standing in with the output buffer when absent, so every later arg keeps its
+    // offset whether or not an LSE was asked for.
+    tt::tt_metal::TensorAccessorArgs((has_lse ? t.lse_out->buffer() : output.buffer()))
+        .append_to(writer_ct, writer_crt);
 
     std::vector<uint32_t> compute_ct = {
         DHt,
@@ -412,7 +421,9 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         chunk_slots,
         cb_shdr,
         cb_stiles,
-        cb_sumback};
+        cb_sumback,
+        cb_lse,
+        has_lse ? 1u : 0u};
 
     // ---- kernels ----
     const std::string kdir = "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/";
@@ -823,7 +834,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
         writer_rt[8] = row_start;
         writer_rt[9] = n_consumers * kRowChunk;  // chunk-cyclic big stride
         writer_rt[10] = row_count;
-        writer_rt[11] = 0u;
+        writer_rt[11] = has_lse ? t.lse_out->buffer()->address() : 0u;
         for (uint32_t pr : my_pass_rows) {
             writer_rt.push_back(pr);
         }
@@ -892,6 +903,7 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     const uint32_t kDenseMaskArg = attrs.distributed ? 9u : 14u;  // reader: dense-mask address arg
     const uint32_t dense_addr = t.dense_row_mask.has_value() ? t.dense_row_mask->buffer()->address() : 0u;
     const uint32_t order_addr = t.stream_order.has_value() ? t.stream_order->buffer()->address() : 0u;
+    const uint32_t lse_addr = t.lse_out.has_value() ? t.lse_out->buffer()->address() : 0u;
     const uint32_t n_exempt = static_cast<uint32_t>(attrs.exempt_ids.size());
     const uint32_t kOrderArg = attrs.distributed ? 0u : 20u + n_exempt;  // streaming reader only
     const auto patch = [&](const std::vector<uint32_t>& ids,
@@ -906,6 +918,9 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
                 args[0] = a0;
                 args[1] = a1;
                 args[2] = a2;
+                if (!is_reader && !attrs.distributed && args.size() > 11) {
+                    args[11] = lse_addr;
+                }
                 if (is_reader) {
                     args[kDenseMaskArg] = dense_addr;
                     if (kOrderArg != 0) {

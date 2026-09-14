@@ -147,8 +147,8 @@ void VsaSdpaOperation::validate_on_program_cache_miss(const VsaSdpaParams& attrs
         const auto& ls = lse.logical_shape();
         const auto& qs = t.q.logical_shape();
         TT_FATAL(
-            ls.rank() == 4 && ls[0] == 1 && ls[1] == qs[1] && ls[2] == qs[2] && ls[3] == 32,
-            "vsa_sdpa: lse_out must be [1, H, S, 32] matching q (got {})",
+            ls.rank() == 4 && ls[0] == 1 && ls[1] == qs[1] && ls[2] == qs[2] && ls[3] == 64,
+            "vsa_sdpa: lse_out must be [1, H, S, 64] matching q (got {})",
             ls);
     }
     TT_FATAL(t.block_counts.dtype() == DataType::UINT32, "block_counts must be uint32");

@@ -57,11 +57,13 @@ struct VsaSdpaInputs {
     // raw-selection mode: [1,1,1,words] uint32 ROW_MAJOR, bit q_tile set -> that q-tile row attends every
     // real block (words*4 bytes must be a multiple of 32); per device, so a tensor rather than an attribute
     std::optional<Tensor> dense_row_mask;
-    // Optional preallocated LSE output (streaming only): [1,H,S,32] bf16 TILE, column 0 of each tile
-    // carries `threshold * scale + ln(row_sum)` for that query row -- the offset the kernel's own
-    // softmax used plus the log of the denominator it divided by. A caller merging this result with a
-    // second attention branch needs it: the op otherwise normalizes and discards the denominator, and
-    // the offset is data-dependent so it cannot be reconstructed. Written in-place, not returned.
+    // Optional preallocated softmax-state output (streaming only): [1,H,S,64] bf16 TILE. Per query
+    // row-tile it carries two tiles, column 0 meaningful in each: the row sum the kernel divided by,
+    // and the threshold its exponentials were taken relative to. A caller merging this result with a
+    // second attention branch needs both -- the op normalizes and discards the denominator, and the
+    // threshold is data-dependent so neither can be reconstructed. The log and the scale multiply are
+    // left to the caller (`lse = threshold * scale + ln(sum)`) so they happen in fp32 rather than
+    // adding two bf16 roundings here. Written in-place, not returned.
     std::optional<Tensor> lse_out;
     // streaming kernel: [1,1,1,n_kv_blocks] uint32 ROW_MAJOR permutation of block ids -- the order the
     // leader streams the sequence in. Online softmax is order-independent; an order that clusters the

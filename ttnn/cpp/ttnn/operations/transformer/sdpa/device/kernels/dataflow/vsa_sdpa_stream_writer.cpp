@@ -46,12 +46,17 @@ void kernel_main() {
     constexpr uint32_t cb_sumback = get_compile_time_arg_val(20);
     constexpr uint32_t cb_sacc = get_compile_time_arg_val(21);
     constexpr uint32_t Sqt = get_compile_time_arg_val(22);
+    constexpr uint32_t cb_lse = get_compile_time_arg_val(23);
+    constexpr bool has_lse = get_compile_time_arg_val(24) == 1;
 
-    constexpr auto out_args = TensorAccessorArgs<23, 0>();
+    constexpr auto out_args = TensorAccessorArgs<25, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
     constexpr auto q_args =
         TensorAccessorArgs<k_args.next_compile_time_args_offset(), k_args.next_common_runtime_args_offset()>();
+    // Always present so the offsets above do not depend on has_lse; aliases the output when absent.
+    constexpr auto lse_args =
+        TensorAccessorArgs<q_args.next_compile_time_args_offset(), q_args.next_common_runtime_args_offset()>();
 
     uint32_t argi = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argi++);
@@ -65,6 +70,7 @@ void kernel_main() {
     const uint32_t row_start = get_arg_val<uint32_t>(argi++);
     const uint32_t row_stride = get_arg_val<uint32_t>(argi++);
     const uint32_t row_count = get_arg_val<uint32_t>(argi++);
+    const uint32_t lse_addr = get_arg_val<uint32_t>(11);  // fixed slot: the tail starts at kPassArg
     constexpr uint32_t kPassArg = 12;         // pass_rows[n_passes] ...
     const uint32_t kRowsArg = 12 + n_passes;  // ... then the row list (q tiles, pass-major)
     (void)row_start;
@@ -78,8 +84,9 @@ void kernel_main() {
 #define VSA_SERVE() ((void)0)
 #endif
     experimental::CB q_cb(cb_q_res), k_cb(cb_k_stream), kreq_cb(cb_kreq), kack_cb(cb_kack);
-    experimental::CB qdone_cb(cb_qdone), out_cb(cb_out);
+    experimental::CB qdone_cb(cb_qdone), out_cb(cb_out), lse_cb(cb_lse);
     const auto out = TensorAccessor(out_args, out_addr);
+    const auto lse = TensorAccessor(lse_args, lse_addr);
     const auto k = TensorAccessor(k_args, k_addr);
     const auto q = TensorAccessor(q_args, q_addr);
 
@@ -187,8 +194,19 @@ void kernel_main() {
                     noc.async_write(
                         out_cb, out, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = page0 + i});
                 }
+                if constexpr (has_lse) {
+                    lse_cb.wait_front(2 * Sqt);
+                    const uint32_t lse0 = (head * n_q_tiles + q_tile) * 2 * Sqt;
+                    for (uint32_t i = 0; i < 2 * Sqt; ++i) {
+                        noc.async_write(
+                            lse_cb, lse, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = lse0 + i});
+                    }
+                }
                 noc.async_write_barrier();
                 out_cb.pop_front(out_tiles_per_row);
+                if constexpr (has_lse) {
+                    lse_cb.pop_front(2 * Sqt);
+                }
                 ++drained;
             }
         }
@@ -300,8 +318,19 @@ void kernel_main() {
                 noc.async_write(
                     out_cb, out, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = page0 + i});
             }
+            if constexpr (has_lse) {
+                lse_cb.wait_front(2 * Sqt);
+                const uint32_t lse0 = (head * n_q_tiles + q_tile) * 2 * Sqt;
+                for (uint32_t i = 0; i < 2 * Sqt; ++i) {
+                    noc.async_write(
+                        lse_cb, lse, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = lse0 + i});
+                }
+            }
             noc.async_write_barrier();
             out_cb.pop_front(out_tiles_per_row);
+            if constexpr (has_lse) {
+                lse_cb.pop_front(2 * Sqt);
+            }
             ++drained;
         }
     }

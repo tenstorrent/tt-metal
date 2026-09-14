@@ -51,7 +51,8 @@ ttnn::Tensor vsa_sdpa(
     bool distributed = false,
     std::vector<uint32_t> dense_row_hint = {},
     std::optional<ttnn::Tensor> stream_order = std::nullopt,
-    // preallocated [1,H,S,32] bf16 TILE; filled with threshold*scale + ln(row_sum) per query row
+    // preallocated [1,H,S,64] bf16 TILE; per query row-tile, tile 0 col 0 = row sum, tile 1 col 0 =
+    // threshold. lse = threshold * scale + ln(sum).
     std::optional<ttnn::Tensor> lse_out = std::nullopt);
 
 }  // namespace ttnn::transformer

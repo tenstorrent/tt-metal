@@ -144,6 +144,8 @@ void kernel_main() {
     constexpr uint32_t cb_shdr = get_compile_time_arg_val(27);      // row-sum service to the writer
     constexpr uint32_t cb_stiles = get_compile_time_arg_val(28);
     constexpr uint32_t cb_sumback = get_compile_time_arg_val(29);
+    constexpr uint32_t cb_lse = get_compile_time_arg_val(30);
+    constexpr bool has_lse = get_compile_time_arg_val(31) == 1;
 
     constexpr uint32_t k_tiles_per_block = Skt * DHt;
     constexpr uint32_t v_tiles_per_block = Skt * vDHt;
@@ -867,6 +869,38 @@ void kernel_main() {
                 CircularBuffer(cb_sumback).wait_front(Sqt);  // the writer's exact row sums (bf16 tiles, column 0)
                 const uint32_t cb_sumsrc = cb_sumback;
 #endif
+                if constexpr (has_lse) {
+                    const uint32_t thr_st = (row_slot * 2 + 1) * Sqt;
+                    CircularBuffer(cb_lse).reserve_back(2 * Sqt);
+                    for (uint32_t s = 0; s < Sqt; ++s) {
+                        reconfig_data_format_srca(cb_sumsrc);
+                        copy_tile_to_dst_init_short(cb_sumsrc);
+                        tile_regs_acquire();
+                        copy_tile(cb_sumsrc, cb_sumsrc == cb_sumback ? s : 0, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_lse);
+                        configure_single_tile_pack(cb_lse);
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_tile<true>(0, cb_lse, 2 * s);
+                        tile_regs_release();
+
+                        reconfig_data_format_srca(cb_max_res);
+                        copy_tile_to_dst_init_short(cb_max_res);
+                        tile_regs_acquire();
+                        copy_tile(cb_max_res, thr_st + s, 0);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        pack_reconfig_data_format(cb_lse);
+                        configure_single_tile_pack(cb_lse);
+                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_tile<true>(0, cb_lse, 2 * s + 1);
+                        tile_regs_release();
+                    }
+                    CircularBuffer(cb_lse).push_back(2 * Sqt);
+                    stream_pack_to_unpack_sync();
+                }
+
                 out_cb.reserve_back(Sqt * vDHt);
                 for (uint32_t s = 0; s < Sqt; ++s) {
                     reconfig_data_format_srca(cb_sumsrc);
