@@ -37,6 +37,13 @@ inline void _calculate_relu_()
     }
 }
 
+// Full FP32 into LREG2. A FLOATB SFPLOADI would drop the low 16 bits.
+inline void _relu_load_threshold_(const std::uint32_t threshold)
+{
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, threshold & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, threshold >> 16);
+}
+
 // Calculates Leaky RELU for number of rows of output SFPU ops (Quasar = 2 rows)
 inline void _calculate_lrelu_sfp_rows_()
 {
@@ -56,7 +63,7 @@ inline void _calculate_lrelu_sfp_rows_()
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_lrelu_(const std::uint32_t slope)
 {
-    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2 (runtime imm)
+    _relu_load_threshold_(slope);
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -70,22 +77,21 @@ inline void _calculate_relu_min_sfp_rows_()
 {
     TTI_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0); // load from dest into lreg[0], uses ADDR_MOD_7 (set to all zeroes)
 
-    // where lreg0 < threshold, load 0 into LREG0[x]
+    // If x < threshold, x = threshold. Dual of ReluMax: swap SFPGT operands, MOV threshold (no relu).
     TTI_SFPGT(p_sfpgt::IMM12_FP32, p_sfpu::LREG0, p_sfpu::LREG2, p_sfpgt::MOD1_SET_CC);
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, 0); // Load 0 into lreg0[x]
-
-    TTI_SFPENCC(0, 0); // clear cc result reg
+    TTI_SFPMOV(p_sfpu::LREG2 /*src*/, p_sfpu::LREG0 /*dest*/, 0);
+    TTI_SFPENCC(0, 0);
 
     // Store from lreg0 into dest register
     TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
-// Implements relu min which returns x when x > threshold, otherwise return 0
-template <int ITERATIONS = SFPU_ITERATIONS>
-inline void _relu_min_(const std::uint32_t threshold)
+// Implements relu min: max(x, threshold). Template list matches BH so the compute
+// API can call without ARCH_QUASAR; VectorType / APPROXIMATION_MODE / T are unused.
+template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
+inline void _relu_min_(T threshold)
 {
-    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
+    _relu_load_threshold_(static_cast<std::uint32_t>(threshold));
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -109,11 +115,11 @@ inline void _calculate_relu_max_sfp_rows_()
     TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
-// Implements relu max
-template <int ITERATIONS = SFPU_ITERATIONS>
-inline void _relu_max_(const std::uint32_t threshold)
+// Implements relu max. Template list matches BH; VectorType / APPROXIMATION_MODE / T are unused.
+template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
+inline void _relu_max_(T threshold)
 {
-    TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
+    _relu_load_threshold_(static_cast<std::uint32_t>(threshold));
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
