@@ -32,9 +32,9 @@ std::string ensure_pch(
     const std::string& opt_level,
     const std::string& cflags,
     const std::string& includes,
-    const std::string& root,
+    const std::string& umbrella_path,
     const std::string& pch_root) {
-    const fs::path umbrella = fs::path(root) / PCH_UMBRELLA;
+    const fs::path umbrella = umbrella_path;
 
     // The umbrella's own text is part of the key, so editing it produces a new artifact
     // instead of silently reusing the one built from the previous contents. Re-reading a

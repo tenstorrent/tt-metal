@@ -181,32 +181,6 @@ void append_tokenized(std::vector<std::string>& args, const std::string& flags) 
     args.insert(args.end(), std::make_move_iterator(tokens.begin()), std::make_move_iterator(tokens.end()));
 }
 
-std::string find_target_pch_root(const tt::tt_metal::jit_server::TargetRecipe& target, const std::string& out_dir) {
-    // Source-mode recipes already carry the tt-metal root as an include directory.
-    // Resolve it as the compiler would, without constructing a device/MetalContext
-    // or requiring an additional server environment variable or RPC field.
-    const auto includes = tt::jit_build::utils::tokenize_flags(target.includes);
-    for (size_t i = 0; i < includes.size(); ++i) {
-        if (!includes[i].starts_with("-I")) {
-            continue;
-        }
-        std::string dir = includes[i].substr(2);
-        if (dir.empty() && i + 1 < includes.size()) {
-            dir = includes[++i];
-        }
-        if (dir.empty()) {
-            continue;
-        }
-        const fs::path root = fs::path(out_dir) / dir;
-        std::error_code ec;
-        if (fs::is_regular_file(root / tt::jit_build::PCH_UMBRELLA, ec)) {
-            return root.string();
-        }
-    }
-    // Older source trees may not ship the optional umbrella.
-    return {};
-}
-
 // Uses posix_spawn with an explicit argument vector — no shell interpretation of
 // client-supplied fields.
 void compile_one(
@@ -215,8 +189,7 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj,
-    const std::string& pch_root,
-    const std::string& source_root) {
+    const std::string& pch_root) {
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
@@ -226,10 +199,10 @@ void compile_one(
     std::string cflags = target.cflags;
     // Preprocess-and-ship sends self-contained .ii files whose standard headers
     // are already expanded, so they cannot benefit from this shared prelude.
-    if (fs::path(target.srcs[src_index]).extension() != ".ii" && !source_root.empty()) {
+    if (fs::path(target.srcs[src_index]).extension() != ".ii" && !target.pch_umbrella.empty()) {
         // Only toolchain headers: kernel-specific -I paths must not create PCH variants.
         const std::string pch =
-            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, "", source_root, pch_root);
+            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, "", target.pch_umbrella, pch_root);
         if (!pch.empty()) {
             defines.insert(defines.begin(), {"-include", pch});
             cflags += " -Winvalid-pch -Wno-error=invalid-pch";
@@ -260,7 +233,7 @@ void compile_one(
             out_dir,
             obj_temp_path,
             obj_temp_path + ".dephash",
-            source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string());
+            fs::exists(target.pch_umbrella) ? target.pch_umbrella : "");
     }
     fs::remove(temp_d_path);
 }
@@ -326,7 +299,6 @@ void build_target(
         temp_objs.push_back(tt::jit_build::utils::FileRenamer::generate_temp_path(obj));
     }
 
-    const std::string source_root = find_target_pch_root(target, out_dir);
     std::vector<bool> compiled(num_objs, false);
     for (size_t i = 0; i < num_objs; ++i) {
         if (need_compile(out_dir, target.objs[i])) {
@@ -349,7 +321,7 @@ void build_target(
 
     for (size_t i = 0; i < num_objs; ++i) {
         if (compiled[i]) {
-            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root, source_root);
+            compile_one(gpp, target, out_dir, i, temp_objs[i], pch_root);
         }
     }
 

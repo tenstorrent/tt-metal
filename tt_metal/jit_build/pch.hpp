@@ -19,7 +19,7 @@ std::string ensure_pch(
     const std::string& opt_level,
     const std::string& cflags,
     const std::string& includes,
-    const std::string& root,
+    const std::string& umbrella_path,
     const std::string& pch_root);
 
 }  // namespace tt::jit_build

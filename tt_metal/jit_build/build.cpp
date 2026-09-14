@@ -678,7 +678,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.compiler_opt_level,
         recipe.cflags,
         this->includes_,
-        env_.root_,
+        recipe.pch_umbrella,
         fmt::format("{}{}/pch/", env_.out_root_, env_.build_key_));
 
     // Preserve the recipe's defines for watcher logging.
@@ -720,9 +720,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     fs::remove(log_file.path());
     bool result = tt::jit_build::utils::exec_command(args, out_dir, log_file.path());
     report_result(this->target_name_, "compile", fmt::format("{}", fmt::join(args, " ")), log_file.path(), result);
-    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
     jit_build::write_dependency_hashes(
-        out_dir, obj_temp_path, obj_temp_path + ".dephash", fs::exists(umbrella) ? umbrella.string() : "");
+        out_dir, obj_temp_path, obj_temp_path + ".dephash", fs::exists(recipe.pch_umbrella) ? recipe.pch_umbrella : "");
     fs::remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -1011,6 +1010,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
     tt::jit_build::TargetRecipe target;
     target.target_name = target_name_;
     target.cflags = cflags_;
+    target.pch_umbrella = (fs::path(env_.root_) / jit_build::PCH_UMBRELLA).string();
     // Per-kernel RVV opt-in: only the pack (TRISC2) compile of a kernel that set
     // ComputeConfig::enable_trisc2_rvv gets the vector flags. Compile-only: lflags_ is
     // untouched, so the link stays stock (the -fno-lto object simply opts out of LTO).
