@@ -110,6 +110,8 @@ python -c "from models.experimental.nomic_embed_text_v2_moe.common import resolv
 pytest models/experimental/nomic_embed_text_v2_moe/tests/pcc/ -v
 ```
 
+Measurements are taken on a single Blackhole chip inside a QuietBox.
+
 Tests skip rather than fail when what they need is absent: the checkpoint, the network, or a
 Blackhole device.
 
@@ -169,4 +171,5 @@ These failures do not raise exceptions, so the test suite includes measurements 
 - Modelling code: <https://huggingface.co/nomic-ai/nomic-bert-2048> (fetched from `main` via `auto_map`)
 - Paper: <https://arxiv.org/pdf/2502.07972>
 - Matryoshka Representation Learning: <https://arxiv.org/pdf/2205.13147>
+- Porting-to-ttnn skill: <https://github.com/sott0n/tt-agent-skills/tree/main/tt-metal/skills/porting-models-to-ttnn>
 - Umbrella issue: <https://github.com/tenstorrent/tt-metal/issues/54916>
