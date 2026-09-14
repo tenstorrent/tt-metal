@@ -21,6 +21,8 @@ from ....parallel.manager import CCLManager
 from ....utils import cache, tensor
 from ....utils.check import assert_quality
 
+TRACE_REGION_SIZE = 16_000_000
+
 
 @pytest.mark.parametrize(
     ("mesh_device", "skip_layers"),
@@ -42,6 +44,7 @@ from ....utils.check import assert_quality
     ],
 )
 def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool) -> None:
+    torch.set_num_threads(1)
     torch.manual_seed(0)
 
     tp_axis = 1
@@ -151,7 +154,7 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": TRACE_REGION_SIZE}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -161,7 +164,15 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
         pytest.param(False, id="unmasked"),
     ],
 )
-def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool) -> None:
+@pytest.mark.parametrize(
+    "traced",
+    [pytest.param(False, id="untraced"), pytest.param(True, id="traced")],
+)
+def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool, traced: bool) -> None:
+    if traced and masked:
+        pytest.skip("traced generation does not support an attention mask")
+
+    torch.set_num_threads(1)
     torch.manual_seed(0)
 
     tp_axis = 1
@@ -267,9 +278,10 @@ def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, ma
         top_p=generation_config.top_p or 1,
         temperature=generation_config.temperature,
         return_logits=True,
+        traced=traced,
     )
 
-    tt_logits = tensor.to_torch(ttnn.stack(tt_out.logits, dim=1), mesh_axes=[..., tp_axis])
+    tt_logits = tt_out.logits
 
     # To compare generated tokens, remove `guide` in the call to `model.generate`!
     # for i in range(tt_out.tokens.size(0)):

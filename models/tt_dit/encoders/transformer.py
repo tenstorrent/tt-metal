@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 import warnings
@@ -21,7 +22,7 @@ from models.tt_dit.layers.normalization import RMSNorm
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor
-from models.tt_dit.utils.tracing import traced_function
+from models.tt_dit.utils.tracing import Tracer, traced_function
 
 MAX_CHUNK_SIZE = 128
 # The decode kernel gets a 32-wide k-chunk wrong (https://github.com/tenstorrent/tt-metal/issues/56171),
@@ -35,7 +36,7 @@ WEIGHT_CACHE_DTYPE = "bf8"
 @dataclass
 class GenerationOutput:
     tokens: torch.Tensor
-    logits: list[ttnn.Tensor] | None
+    logits: torch.Tensor | None
 
 
 @dataclass
@@ -165,6 +166,7 @@ class TransformerEncoder(Module):
         self._ccl_manager = ctx.ccl_manager
         self._cached_position_embeddings = {}
         self._cached_causal_cond = {}  # (max_seq_len,) -> [1, 1, max_seq_len, max_seq_len] 0/1 tensor
+        self._decode_trace: _DecodeTrace | None = None
 
     # TODO: Remove the mask buffer generation from the function to prevent trace assertion errors.
     @traced_function(device=lambda self: self._device, clone_prep_inputs=False)
@@ -178,12 +180,10 @@ class TransformerEncoder(Module):
         skip_final_linear: bool = False,
         output_hidden_states: bool = False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
-        decode = cache is not None and cache.position != 0
-        if decode:
-            (batch_size,) = tokens.shape
-            seq_len = 1
-        else:
-            batch_size, seq_len = tokens.shape
+        if cache is not None:
+            cache.reset()
+
+        batch_size, seq_len = tokens.shape
 
         if self._sp_axis is not None:
             if cache is not None:
@@ -198,47 +198,41 @@ class TransformerEncoder(Module):
                 raise ValueError(msg)
 
         device = tokens.device()
-        dtype = self.token_embedding.weight.dtype
 
-        start_pos = cache.position if cache is not None else 0
-
-        # There should be no need for a mask when start_pos is zero and SP is off, but
+        # There should be no need for a mask when SP is off, but
         # `ttnn.transformer.scaled_dot_product_attention` produces incorrect results when the
         # sequence length is not a multiple of the tile size.
-        if mask is None and start_pos == 0 and (seq_len % 32 != 0 or self._sp_axis is not None):
+        if mask is None and (seq_len % 32 != 0 or self._sp_axis is not None):
             mask = ttnn.ones(
-                [batch_size, start_pos + seq_len * self._sp_factor],
+                [batch_size, seq_len * self._sp_factor],
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
                 device=device,
             )
 
         if pos_embeds is None:
-            pos_embeds = self.get_embeddings(start=start_pos, sequence_length=seq_len, device=device)
+            pos_embeds = self._get_pos_embeds(start=0, sequence_length=seq_len)
 
         # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when
         # using an attention mask
-        padded_seq_len = seq_len if mask is None or start_pos != 0 else _padded_sequence_length(seq_len)
+        padded_seq_len = seq_len if mask is None else _padded_sequence_length(seq_len)
 
         tokens = ttnn.pad(tokens, [(0, padded_seq_len - seq_len)], value=0)
         pos_embeds = tuple(ttnn.pad(x, [(0, padded_seq_len - seq_len), (0, 0)], value=0) for x in pos_embeds)
 
         if mask is not None:
-            assert mask.shape[0] == batch_size
-            if start_pos == 0:
-                assert mask.shape[1] == seq_len * self._sp_factor
+            assert mask.shape == (batch_size, seq_len * self._sp_factor)
 
             attn_bias = self._prepare_attn_bias(
                 mask,
                 query_length=seq_len,
-                query_pos=start_pos,
+                query_pos=0,
                 kv_length=mask.shape[1],
                 device=device,
             )
 
-            if start_pos == 0:
-                bias_padding = padded_seq_len - seq_len
-                attn_bias = ttnn.pad(attn_bias, [(0, bias_padding), (0, bias_padding)], value=-math.inf)
+            bias_padding = padded_seq_len - seq_len
+            attn_bias = ttnn.pad(attn_bias, [(0, bias_padding), (0, bias_padding)], value=-math.inf)
         else:
             attn_bias = None
 
@@ -262,7 +256,6 @@ class TransformerEncoder(Module):
                 attn_bias=attn_bias,
                 pos_embeds=None if i in self._nope_set else pos_embeds,
                 cache=cache,
-                decode=decode,
             )
 
             if (i + 1) % 10 == 0:
@@ -275,7 +268,7 @@ class TransformerEncoder(Module):
             x = x[:, :seq_len, :]
             hidden_states = [h[:, :seq_len, :] for h in hidden_states]
 
-        x = self.final_norm.forward(x, decode=decode)
+        x = self.final_norm.forward(x)
 
         if output_hidden_states:
             hidden_states.append(x)
@@ -288,18 +281,129 @@ class TransformerEncoder(Module):
 
         return hidden_states if output_hidden_states else x
 
-    def get_embeddings(self, start, sequence_length, device: ttnn.MeshDevice) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        cache_key = (start, sequence_length)
-        if cache_key not in self._cached_position_embeddings:
+    def _decode_step(
+        self,
+        tokens: ttnn.Tensor,
+        *,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
+        cache: Cache,
+        attn_bias: ttnn.Tensor | None = None,
+    ) -> ttnn.Tensor:
+        cos, sin = pos_embeds
+        rope_index = ttnn.reshape(ttnn.typecast(cache.position, ttnn.uint32), [-1, 1])
+        cos = ttnn.embedding(rope_index, cos, layout=ttnn.TILE_LAYOUT)
+        sin = ttnn.embedding(rope_index, sin, layout=ttnn.TILE_LAYOUT)
+
+        x = self.token_embedding.forward(tokens)
+
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+            # clone to move out of persistent buffer
+            x = ttnn.clone(x)
+
+        for i, decoder_layer in enumerate(self.layers):
+            x = decoder_layer.forward(
+                x,
+                attn_bias=attn_bias,
+                pos_embeds=None if i in self._nope_set else (cos, sin),
+                cache=cache,
+                decode=True,
+            )
+
+            if (i + 1) % 10 == 0:
+                ttnn.ReadDeviceProfiler(self._device)
+
+        x = self.final_norm.forward(x, decode=True)
+        x = self.final_linear.forward(x)
+
+        # Reading the logits shards one by one costs the host more than a decode step, and a
+        # tile-layout read transfers the padding to 32 rows, so they are gathered and untilized
+        # here.
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _last_token_logits(self, x: ttnn.Tensor, *, index: int) -> ttnn.Tensor:
+        """Applies the lm head to row `index` of the normalized prefill states `[batch, seq, embed]`.
+
+        The head runs over the tile-aligned block of rows holding `index` rather than the whole
+        sequence, and that slice stays on the tile-aligned fast path.
+        """
+        _batch_size, seq_len, _embed_size = x.shape
+        block = index // ttnn.TILE_SIZE * ttnn.TILE_SIZE
+
+        x = x[:, block : min(block + ttnn.TILE_SIZE, seq_len), :]
+        x = self.final_linear.forward(x)
+
+        if self._tp_axis is not None:
+            x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
+
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+        return x[:, index - block]
+
+    def _get_decode_trace(self, *, batch_size: int, size: int) -> _DecodeTrace:
+        """Returns the decode trace for these shapes, building it when the kept one differs."""
+        key = (batch_size, size)
+        if self._decode_trace is not None and self._decode_trace.key == key:
+            return self._decode_trace
+
+        self._release_decode_trace()
+
+        cache = Cache(device=self._device, size=size, batch_size=batch_size)
+        # `ttnn.embedding` converts a tile-layout table on every call, so the step takes row-major ones.
+        pos_embeds = self._get_pos_embeds(start=0, sequence_length=size, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        self._decode_trace = _DecodeTrace(
+            key=key,
+            tracer=Tracer(
+                functools.partial(self._decode_step, pos_embeds=pos_embeds, cache=cache),
+                device=self._device,
+                clone_prep_inputs=False,
+            ),
+            cache=cache,
+        )
+
+        return self._decode_trace
+
+    def _release_decode_trace(self) -> None:
+        """Releases the decode trace kept by `generate`, with its cache."""
+        if self._decode_trace is not None:
+            self._decode_trace.release()
+            self._decode_trace = None
+
+    def deallocate_weights(self) -> None:
+        self._release_decode_trace()
+        self._cached_position_embeddings.clear()
+        self._cached_causal_cond.clear()
+        super().deallocate_weights()
+
+    def _get_pos_embeds(
+        self,
+        start: int,
+        sequence_length: int,
+        layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        cache_key = (start, sequence_length, layout)
+        if cache_key in self._cached_position_embeddings:
+            return self._cached_position_embeddings[cache_key]
+
+        if layout != ttnn.TILE_LAYOUT:
+            cos, sin = self._get_pos_embeds(start, sequence_length)
+            cos = ttnn.to_layout(cos, layout)
+            sin = ttnn.to_layout(sin, layout)
+        else:
             positions = _make_positions(
                 start=start,
                 sequence_length=sequence_length * self._sp_factor,
                 sp_axis=self._sp_axis,
-                device=device,
+                device=self._device,
             )
             cos, sin = self.pos_embedding.forward(positions, dtype=self.token_embedding.weight.dtype)
-            self._cached_position_embeddings[cache_key] = (cos, sin)
-        return self._cached_position_embeddings[cache_key]
+
+        self._cached_position_embeddings[cache_key] = (cos, sin)
+        return cos, sin
 
     def _get_causal_cond(self, max_seq_len: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
         """Return a [1, 1, max_seq_len, max_seq_len] bfloat4_b 0/1 tensor (1 = keep).
@@ -363,7 +467,6 @@ class TransformerEncoder(Module):
         top_k: int | None = None,
         top_p: float = 1,
         temperature: float = 1,
-        use_cache: bool = True,
         return_logits: bool = False,
         guide: torch.Tensor | None = None,
         traced: bool = False,
@@ -372,6 +475,17 @@ class TransformerEncoder(Module):
         # overwriting any padding tokens that are on the right, resuing that space. We use a
         # slightly simpler approach and start generation after the longest input, which is also what
         # the transformers library does.
+
+        if torch.get_num_threads() > 1:
+            warnings.warn(
+                f"torch runs on {torch.get_num_threads()} threads which leads to poor performance; "
+                "call torch.set_num_threads(1)",
+                stacklevel=2,
+            )
+
+        if traced and mask is not None:
+            msg = "traced generation does not currently support an attention mask"
+            raise NotImplementedError(msg)
 
         batch_size, input_length = tokens.shape
         device = self._device
@@ -392,54 +506,90 @@ class TransformerEncoder(Module):
 
         eos_token_tensor = torch.tensor(eos_tokens, dtype=torch.uint32) if eos_tokens else None
 
-        cos, sin = self.get_embeddings(start=0, sequence_length=padded_seq_len, device=device)
-
         finished = torch.zeros([batch_size], dtype=torch.bool)
-        cache = Cache(device=device, size=padded_seq_len) if use_cache else None
         prev_pos = 0
 
         logits = [] if return_logits else None
 
+        cos, sin = self._get_pos_embeds(start=0, sequence_length=padded_seq_len)
+
+        if traced:
+            trace = self._get_decode_trace(batch_size=batch_size, size=padded_seq_len)
+            cache = trace.cache
+            decode_step = trace.tracer
+        else:
+            cache = Cache(device=device, size=padded_seq_len, batch_size=batch_size)
+            decode_step = functools.partial(
+                self._decode_step,
+                pos_embeds=self._get_pos_embeds(
+                    start=0,
+                    sequence_length=padded_seq_len,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                cache=cache,
+            )
+
         tt_input_tokens = tensor.from_torch(tokens, dtype=ttnn.uint32, device=device)
 
-        for pos in range(input_length, max_length):
-            current_logits = self.forward(
-                tokens=tt_input_tokens,
-                mask=mask[:, :pos] if prev_pos == 0 and mask is not None else mask,
-                pos_embeds=(cos[:, prev_pos:pos], sin[:, prev_pos:pos]),
-                cache=cache,
-                traced=traced,
+        decode_attn_bias = (
+            self._prepare_attn_bias(
+                mask,
+                query_length=padded_seq_len,
+                query_pos=0,
+                kv_length=padded_seq_len,
+                device=device,
             )
+            if mask is not None
+            else None
+        )
+
+        for pos in range(input_length, max_length):
             if prev_pos == 0:
-                current_logits = current_logits[:, -1]
+                # The prefill is currently not traced as the performance gain is small.
+                x = self.forward(
+                    tokens=tt_input_tokens,
+                    mask=mask[:, :pos] if mask is not None else None,
+                    pos_embeds=(cos[:, :pos], sin[:, :pos]),
+                    cache=cache,
+                    skip_final_linear=True,
+                )
+                step_output = self._last_token_logits(x, index=pos - 1)
+            else:
+                step_output = decode_step(
+                    tt_input_tokens,
+                    attn_bias=decode_attn_bias[:, :, prev_pos : prev_pos + 1, :]
+                    if decode_attn_bias is not None
+                    else None,
+                )
+                # Outside the step so its not executed twice doe to the tracer's preparation run.
+                cache.advance(1)
+
+            torch_logits = tensor.to_torch(step_output).float()
+
+            if logits is not None:
+                logits.append(torch_logits)
 
             if guide is not None:
                 torch_new_tokens = guide[:, pos : pos + 1].float()
             else:
-                torch_current_logits = tensor.to_torch(current_logits).float()
-                torch_prob = torch.softmax(torch_current_logits / temperature, 1)
+                torch_prob = torch.softmax(torch_logits / temperature, 1)
                 torch_new_tokens = _sample(torch_prob, top_k=top_k, top_p=top_p)
 
             tokens = torch.cat([tokens, torch_new_tokens.to(tokens.dtype)], dim=1)
 
-            tt_input_tokens = tensor.from_torch(
-                tokens[:, -1] if cache is not None else tokens,
-                dtype=ttnn.uint32,
-                device=device,
-            )
-
-            if logits is not None:
-                logits.append(ttnn.squeeze(current_logits, 1))
+            tt_input_tokens = tensor.from_torch(tokens[:, -1], dtype=ttnn.uint32, device=device, on_host=traced)
 
             if eos_token_tensor is not None:
                 finished |= (torch_new_tokens == eos_token_tensor).any(dim=1)
                 if finished.all():
                     break
 
-            if cache is not None:
-                prev_pos = pos
+            prev_pos = pos
 
-        return GenerationOutput(tokens=tokens, logits=logits)
+        return GenerationOutput(
+            tokens=tokens,
+            logits=torch.stack(logits, dim=1) if logits is not None else None,
+        )
 
 
 class TransformerEncoderLayer(Module):
@@ -484,7 +634,13 @@ class TransformerEncoderLayer(Module):
     ) -> ttnn.Tensor:
         residual = x
         x = self.attn_norm.forward(x, decode=decode)
-        x = self.attn.forward(x, attn_bias=attn_bias, pos_embeds=pos_embeds, cache=cache)
+        if decode:
+            if cache is None:
+                msg = "decode requires a cache"
+                raise ValueError(msg)
+            x = self.attn.forward_decode(x, attn_bias=attn_bias, pos_embeds=pos_embeds, cache=cache)
+        else:
+            x = self.attn.forward(x, attn_bias=attn_bias, pos_embeds=pos_embeds, cache=cache)
         x = x + residual
 
         residual = x
@@ -626,9 +782,6 @@ class Attention(Module):
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor] | None,
         cache: Cache | None = None,
     ) -> ttnn.Tensor:
-        if cache is not None and cache.position != 0:
-            return self.forward_decode(x, attn_bias=attn_bias, pos_embeds=pos_embeds, cache=cache)
-
         batch_size, padded_q_seq_len, _ = x.shape
 
         if attn_bias is not None:
@@ -751,7 +904,7 @@ class Attention(Module):
             q,
             k,
             v,
-            cur_pos=[cache.position] * batch_size,
+            cur_pos_tensor=cache.position,
             attn_mask=attn_bias,
             is_causal=attn_bias is None,
             program_config=self._sdpa_decode_program_config(k.shape[2]),
@@ -934,63 +1087,87 @@ class TransformerRmsNorm(Module):
 
 
 class Cache:
-    def __init__(self, *, device: ttnn.MeshDevice, size: int) -> None:
-        self.k_cache = {}
-        self.v_cache = {}
+    def __init__(self, *, device: ttnn.MeshDevice, size: int, batch_size: int) -> None:
+        self._k_cache = {}
+        self._v_cache = {}
 
-        self._position = 0
         self._device = device
+        self._size = size
+        self._batch_size = batch_size
+        self._position = tensor.from_torch(
+            torch.zeros([batch_size], dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+        )
 
-        self.size = size
+    @property
+    def size(self) -> int:
+        return self._size
+
+    @property
+    def batch_size(self) -> int:
+        return self._batch_size
+
+    @property
+    def position(self) -> ttnn.Tensor:
+        """The `[batch]` int32 position on the device the decode kernels take."""
+        return self._position
 
     def prefill(self, cache_id: Hashable, k: ttnn.Tensor, v: ttnn.Tensor) -> None:
         batch_size, local_kv_heads, _seq_len, head_dim = k.shape
+        if batch_size != self._batch_size:
+            msg = f"the cache holds {self._batch_size} sequences, got {batch_size}"
+            raise ValueError(msg)
 
-        assert self._position == 0
+        if cache_id not in self._k_cache:
+            self._k_cache[cache_id] = ttnn.zeros(
+                [batch_size, local_kv_heads, self._size, head_dim],
+                dtype=k.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self._device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            self._v_cache[cache_id] = ttnn.zeros(
+                [batch_size, local_kv_heads, self._size, head_dim],
+                dtype=v.dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=self._device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
-        k_cache = ttnn.zeros(
-            [batch_size, local_kv_heads, self.size, head_dim],
-            dtype=k.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self._device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        v_cache = ttnn.zeros(
-            [batch_size, local_kv_heads, self.size, head_dim],
-            dtype=v.dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=self._device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        self.k_cache[cache_id] = k_cache
-        self.v_cache[cache_id] = v_cache
+        k_cache = self._k_cache[cache_id]
+        v_cache = self._v_cache[cache_id]
 
         for batch_idx in range(batch_size):
             ttnn.fill_cache(k_cache, k[batch_idx : batch_idx + 1], batch_idx)
             ttnn.fill_cache(v_cache, v[batch_idx : batch_idx + 1], batch_idx)
 
     def update(self, cache_id: Hashable, k: ttnn.Tensor, v: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        one, batch_size, _local_kv_heads, _head_dim = k.shape
+        one, _batch_size, _local_kv_heads, _head_dim = k.shape
         assert one == 1
 
-        k_cache = self.k_cache[cache_id]
-        v_cache = self.v_cache[cache_id]
+        k_cache = self._k_cache[cache_id]
+        v_cache = self._v_cache[cache_id]
 
-        pos = [self._position] * batch_size
-
-        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs=pos)
-        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs=pos)
+        ttnn.experimental.paged_update_cache(k_cache, k, update_idxs_tensor=self._position)
+        ttnn.experimental.paged_update_cache(v_cache, v, update_idxs_tensor=self._position)
 
         return k_cache, v_cache
 
     def advance(self, distance: int) -> None:
-        self._position += distance
+        ttnn.copy(self._position + distance, self._position)
 
-    @property
-    def position(self) -> int:
-        return self._position
+    def reset(self) -> None:
+        """Rewinds to the start for a new sequence; the cache tensors stay allocated."""
+        ttnn.fill(self._position, 0, output_tensor=self._position)
+
+
+@dataclass
+class _DecodeTrace:
+    key: tuple[int, int]  # [batch size, cache size]
+    tracer: Tracer
+    cache: Cache
+
+    def release(self) -> None:
+        self.tracer.release_trace()
 
 
 def _apply_rope(x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
