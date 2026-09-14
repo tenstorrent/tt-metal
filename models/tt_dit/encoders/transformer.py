@@ -456,7 +456,7 @@ class TransformerEncoder(Module):
 
         if self._decode_trace is not None:
             warnings.warn(
-                f"caching position embeddings {cache_key} while a decode trace is live"
+                f"caching position embeddings {cache_key} while a decode trace is live",
                 stacklevel=2,
             )
 
