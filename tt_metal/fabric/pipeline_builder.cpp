@@ -157,8 +157,7 @@ GraphLayoutResult detail::resolve_graph_layout_with_connections(
     const std::map<std::string, uint32_t>& node_pipeline_core_counts,
     std::optional<uint32_t> pipeline_core_count,
     const DirectLinks* direct_links) {
-    // The public API retains node-oriented names for Blaze compatibility. Inside
-    // the resolver, graph nodes represent pipeline stages.
+    // Keep the public node names for Blaze compatibility; each node is a stage.
     const auto& stage_chip_counts = node_chip_counts;
     auto stage_pipeline_core_counts = node_pipeline_core_counts;
     if (pipeline_core_count) {
@@ -465,9 +464,8 @@ void PlacementSearch::prepare_connectivity_checks() {
     }
 }
 
-// Reject prefixes whose edges cannot fit simultaneously. Successful temporary
-// links are discarded: future stages may require different choices for them.
-// Placement remains ordinary DFS; worst-case search is still exponential.
+// Check that the placed stages' links fit together. Recompute links as stages
+// are added, since earlier choices may need to change. Worst-case search is exponential.
 bool PlacementSearch::place_stages(size_t stage_index) {
     const auto& name = stage_order[stage_index];
     const auto shape = stage_chip_counts.find(name);
@@ -568,8 +566,7 @@ bool LinkSearch::search_links(size_t edge_index) {
     if (src == dst || !placement.contains(src) || !placement.contains(dst)) {
         return search_links(edge_index + 1);
     }
-    // Placement is fixed. Only occupancy on stages with remaining links
-    // (or pending host endpoints) can affect whether the suffix is feasible.
+    // Cache only occupancy needed by remaining links or host endpoints.
     std::vector<size_t> key{edge_index};
     for (const auto& [endpoint, used_slots] : used_slots_by_chip) {
         const auto& [stage, row, col] = endpoint;

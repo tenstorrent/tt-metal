@@ -116,7 +116,7 @@ GraphLayoutResult resolve_graph_layout(
     const std::map<std::string, uint32_t>& node_pipeline_core_counts = {},
     std::optional<uint32_t> pipeline_core_count = std::nullopt);
 
-// Implementation details shared by the resolver and CPU placement tests.
+// Internal placement types and helpers.
 namespace detail {
 
 struct InternalChip {
