@@ -160,3 +160,23 @@ def flatten_tokens(x: ttnn.Tensor) -> ttnn.Tensor:
 def unflatten_tokens(x: ttnn.Tensor, batch: int, seqlen: int) -> ttnn.Tensor:
     """(1, 1, B*S, H) -> (B, 1, S, H). B and S are arguments because the flat form has lost them."""
     return ttnn.reshape(x, (batch, 1, seqlen, x.shape[-1]))
+
+
+def prepare_token_ids(input_ids: torch.Tensor, device) -> ttnn.Tensor:
+    """Move (B, S) token ids onto the device in the form ttnn.embedding indexes with.
+
+    ttnn.embedding requires a uint32 index tensor in ROW_MAJOR; a TILE index or an int32 one is
+    rejected. The ids are bounded by the tokenizer's 250002 entries, so uint32 is lossless.
+    """
+    return ttnn.from_torch(input_ids.to(torch.uint32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+
+def pooling_mask(attention_mask: torch.Tensor, device, dtype: ttnn.DataType = ACTIVATION_DTYPE) -> ttnn.Tensor:
+    """Turn a (B, S) keep-mask into the (B, 1, S, 1) weight tensor mean_pool multiplies by.
+
+    The trailing singleton broadcasts over the hidden axis, so one multiply zeroes every feature
+    of a padded position. Float rather than integer because it is multiplied into activations and
+    then summed to form the divisor.
+    """
+    batch, seqlen = attention_mask.shape
+    return to_device(attention_mask.reshape(batch, 1, seqlen, 1).float(), device, dtype=dtype)
