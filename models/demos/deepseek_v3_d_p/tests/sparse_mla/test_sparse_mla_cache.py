@@ -35,6 +35,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     resolve_has_indexer,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
@@ -180,6 +181,86 @@ def test_reuse_indexer_forward_raises(expect_error):
         ReuseIndexer().forward()
 
 
+def test_glm52_persistent_indexer_indices_are_replaced_without_deallocation(monkeypatch):
+    """A new full layer overwrites persistent scratch before the previous wrapper is replaced.
+
+    Explicitly deallocating that wrapper would invalidate the new result backed by the same buffer;
+    ordinary reference replacement must carry layer 6's indices safely into shared layer 7.
+    """
+    import models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer as transformer_module
+
+    modes = GLM52Config.indexer_types()[:8]
+    full_outputs = {layer_idx: object() for layer_idx, mode in enumerate(modes) if mode == "full"}
+    latest_full = None
+
+    class FakeLayer:
+        def __init__(self, layer_idx, mode):
+            self.layer_idx = layer_idx
+            self.mode = mode
+
+        def __call__(self, hidden, *args, indexer_indices, **kwargs):
+            nonlocal latest_full
+            if self.mode == "full":
+                assert indexer_indices is None
+                latest_full = full_outputs[self.layer_idx]
+                result = latest_full
+            else:
+                assert indexer_indices is latest_full
+                result = indexer_indices
+            return hidden, None, result
+
+    transformer = object.__new__(TtPrefillTransformer)
+    transformer.is_chunked = True
+    transformer.indexed_rope = object()
+    transformer._has_indexer = True
+    transformer.is_first_rank = False
+    transformer.indexer_types = modes
+    transformer.first_layer_idx = 0
+    transformer.layers = [FakeLayer(layer_idx, mode) for layer_idx, mode in enumerate(modes)]
+    transformer.padding_side = "right"
+    transformer.kv_only_last_layer = False
+    transformer.is_last_rank = False
+
+    monkeypatch.setattr(transformer_module, "signpost", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        ttnn,
+        "deallocate",
+        lambda tensor: pytest.fail("persistent indexer indices must not be explicitly deallocated"),
+    )
+
+    hidden = object()
+    assert transformer.forward(hidden, kvpe_cache=object(), actual_isl=0, actual_start=0) is hidden
+    assert latest_full is full_outputs[6]
+
+
+def test_indexer_gate_reduce_scatter_uses_fp32_accumulation(monkeypatch):
+    """The sequence reduce-scatter must preserve the previous gate reduction's FP32 accumulation."""
+    compute_config = object()
+    reduced = object()
+    call = {}
+
+    def fake_reduce_scatter(tensor, **kwargs):
+        call.update(kwargs)
+        return reduced
+
+    tt_ccl = SimpleNamespace(
+        get_and_cycle_rs_semaphore_handles=lambda **kwargs: "rs_semaphores",
+        get_and_cycle_barrier_semaphore_handle=lambda **kwargs: "barrier_semaphore",
+    )
+    indexer = SimpleNamespace(
+        tp_factor=4,
+        tp_axis=1,
+        tt_ccl=tt_ccl,
+        ccl_num_links=2,
+        tp_ccl_topology="topology",
+        hifi4_fp32_compute_kernel_config=compute_config,
+    )
+    monkeypatch.setattr(ttnn.experimental, "reduce_scatter_minimal_async", fake_reduce_scatter)
+
+    assert TtIndexer._tp_reduce_scatter_sequence(indexer, object()) is reduced
+    assert call["compute_kernel_config"] is compute_config
+
+
 def test_matches_config_rejects_dense():
     """A dense DeepSeek-V3 / R1-style config (no index_* fields) must not look sparse."""
     dense = SimpleNamespace(q_lora_rank=1536, hidden_size=7168)
@@ -202,7 +283,7 @@ def cleanup_cache():
 
 
 def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden):
-    """Single-shot sparse MLA forward, mirroring run_mla_inference's SP×TP input sharding."""
+    """One full-sequence chunk at offset 0, mirroring run_mla_inference's SP×TP input sharding."""
     shard_dims = [None, None]
     shard_dims[TP_AXIS], shard_dims[SP_AXIS] = -1, -2
     tt_hidden = ttnn.from_torch(
@@ -214,7 +295,11 @@ def _forward(mla, mesh_device, rope_tensors, kvpe_cache, index_kv_cache, hidden)
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
     )
     out = mla.forward(
-        hidden_states=tt_hidden, rope_tensors=rope_tensors, kvpe_cache=kvpe_cache, index_kv_cache=index_kv_cache
+        hidden_states=tt_hidden,
+        rope_tensors=rope_tensors,
+        kvpe_cache=kvpe_cache,
+        actual_start=0,  # the modules here are built chunked; one chunk spans the whole sequence
+        index_kv_cache=index_kv_cache,
     )
     return ttnn.to_torch(
         out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
@@ -236,7 +321,7 @@ def _new_kvpe(config, mesh_device, mesh_shape):
 
 
 def _new_index_kv(config, mesh_device, mesh_shape):
-    # Caller-owned indexer key cache for the folded single-shot (block-cyclic) path: 1 layer / 1 user, so
+    # Caller-owned indexer key cache for the block-cyclic path: 1 layer / 1 user, so
     # update_padded_kv_cache's num_slots = cache_batch / layer_num stays >= 1 with the MLA's layer_num=1.
     return init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -251,6 +336,8 @@ def _new_index_kv(config, mesh_device, mesh_shape):
 
 
 def _build_mla(config, state_dict, mesh_device, weight_cache_path):
+    # Sparse has no single-shot path (ttMLA binds the block-cyclic ops from _has_indexer alone), so
+    # build chunked explicitly: one full-sequence chunk, hence active_seq_len == SEQ_LEN.
     return ttMLA(
         config,
         state_dict,
@@ -260,9 +347,8 @@ def _build_mla(config, state_dict, mesh_device, weight_cache_path):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=weight_cache_path,
-        # Single-shot folds onto block-cyclic: the sparse indexer/KVPE write goes through
-        # update_padded_kv_cache (num_slots = cache_batch / layer_num). The test caches are 1 layer / 1 user,
-        # so layer_num must be 1 (matches test_mla.py) or num_slots collapses to 0 and the write asserts.
+        is_chunked=True,
+        active_seq_len=SEQ_LEN,
         layer_num=1,
     )
 
@@ -292,8 +378,8 @@ def test_sparse_mla_cache_only_stays_sparse(mesh_device, device_params, variant,
     weights = random_mla_weights(config)  # device-vs-device round-trip: config-shaped weights suffice
     mesh_shape = list(mesh_device.shape)
 
-    # Sparse single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0): indexed rope
-    # tables + a caller-owned indexer key cache, exactly like the chunked path.
+    # Sparse always runs block-cyclic; these modules are built chunked with one full-seq chunk at offset 0,
+    # so the rope tables are the indexed ones and the indexer key cache is caller-owned.
     rope_tensors = RotarySetup(config, mesh_device, sp_axis=SP_AXIS, is_balanced=False).get_rope_tensors_indexed(
         cache_seq_len_global=SEQ_LEN, chunk_size_global=SEQ_LEN
     )
@@ -393,6 +479,8 @@ def test_glm52_shared_layer_cache_skips_indexer(mesh_device, device_params, vari
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=CACHE_DIR,
+        is_chunked=True,  # sparse is always block-cyclic; construction must say so
+        active_seq_len=SEQ_LEN,
     )
     assert mla_c._has_indexer and mla_c._indexer_reuse, f"{variant.name}: shared layer must be sparse + reuse"
     assert type(mla_c._indexer).__name__ == "ReuseIndexer", "shared layer must bind ReuseIndexer"
@@ -448,6 +536,8 @@ def _build_mla_tp(config, state_dict, mesh_device, *, tp_shard_kv):
         sp_axis=SP_AXIS,
         tp_axis=TP_AXIS,
         weight_cache_path=None,
+        is_chunked=True,  # sparse is always block-cyclic; SEQ_LEN is a single full-sequence chunk
+        active_seq_len=SEQ_LEN,
         layer_num=1,
         tp_shard_kv=tp_shard_kv,
     )

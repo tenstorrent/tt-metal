@@ -40,6 +40,11 @@ protected:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
     void SetUp() override {
+        TT_FATAL(
+            !get_shared_devices().initialized,
+            "Shared DEVICE_PRINT devices are still open. A DevicePrint suite must release them in "
+            "TearDownTestSuite before a per-test fixture opens its own devices.");
+
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids()) {
             ids.push_back(id);
@@ -254,10 +259,21 @@ protected:
 };
 
 class DevicePrintFixture : public DebugToolsMeshFixture {
+public:
+    static constexpr uint32_t kTestDispatchFullUs = 2000;
+
+    static void TearDownTestSuite() { ReleaseSharedDevices(); }
+
+    void RequestFreshDevicesAfterThisTest() { request_fresh_devices_ = true; }
+
 protected:
     int memfd_ = -1;
+    bool request_fresh_devices_{};
     tt::llrt::TargetSelection dprint_previous_targets_{};
     bool test_mode_previous_{};
+    uint32_t dispatch_full_us_previous_{};
+    bool dispatch_full_us_lowered_{};
+    inline static std::string shared_devices_fingerprint_;
 
     void SetUp() override {
         // Save previous DPRINT / test-mode state so TearDown can restore it. TearDown runs even
@@ -294,26 +310,114 @@ protected:
         rtoptions.set_test_mode_enabled(true);
         rtoptions.set_watcher_enabled(false);
 
-        ExtraSetUp();
+        dispatch_full_us_previous_ = rtoptions.get_device_print_dispatch_full_us();
+        dispatch_full_us_lowered_ = (getenv("TT_METAL_DEVICE_PRINT_DISPATCH_FULL_US") == nullptr);
+        if (dispatch_full_us_lowered_) {
+            rtoptions.set_device_print_dispatch_full_us(kTestDispatchFullUs);
+        }
 
-        // Parent class initializes devices and any necessary flags
-        DebugToolsMeshFixture::SetUp();
+        ExtraSetUp();
+        AcquireSharedDevices();
+
+        if (const auto& dprint_server = MetalContext::instance().dprint_server()) {
+            dprint_server->reset_for_new_run();
+        }
     }
 
     void TearDown() override {
-        // Parent class tears down devices
-        DebugToolsMeshFixture::TearDown();
+        auto& shared = get_shared_devices();
+        const auto& dprint_server = MetalContext::instance().dprint_server();
+        if (HasFailure() || request_fresh_devices_ || (dprint_server && dprint_server->hang_detected())) {
+            shared.needs_recovery = true;
+        }
+        request_fresh_devices_ = false;
+        this->devices_.clear();
+        this->id_to_device_.clear();
+
         ExtraTearDown();
 
         auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         rtoptions.set_feature_targets(tt::llrt::RunTimeDebugFeatureDprint, dprint_previous_targets_);
         rtoptions.set_test_mode_enabled(test_mode_previous_);
         rtoptions.set_watcher_enabled(watcher_previous_enabled);
+        if (dispatch_full_us_lowered_) {
+            rtoptions.set_device_print_dispatch_full_us(dispatch_full_us_previous_);
+        }
 
         if (memfd_ >= 0) {
             close(memfd_);
             memfd_ = -1;
         }
+    }
+
+    std::string DevicePrintConfigFingerprint() const {
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        const auto targets = rtoptions.get_feature_targets(tt::llrt::RunTimeDebugFeatureDprint);
+        std::string fingerprint = fmt::format(
+            "enabled={} all_chips={} one_file_per_risc={} prepend={} checkpoint={}",
+            targets.enabled,
+            targets.all_chips,
+            targets.one_file_per_risc,
+            targets.prepend_device_core_risc,
+            rtoptions.get_checkpoint_enabled());
+        fingerprint += fmt::format(
+            " l1_small={} trace_region={} dispatch_full_us={}",
+            l1_small_size_,
+            trace_region_size_,
+            rtoptions.get_device_print_dispatch_full_us());
+        fingerprint += " chip_ids=[";
+        for (int chip_id : targets.chip_ids) {
+            fingerprint += fmt::format("{},", chip_id);
+        }
+        fingerprint += "] mesh_coords=[";
+        for (const auto& [row, col] : targets.mesh_coords) {
+            fingerprint += fmt::format("({},{}),", row, col);
+        }
+        fingerprint += "] all_cores=[";
+        for (const auto& [core_type, debug_class] : targets.all_cores) {
+            fingerprint += fmt::format("{}:{},", static_cast<int>(core_type), debug_class);
+        }
+        fingerprint += "] cores=[";
+        for (const auto& [core_type, core_coords] : targets.cores) {
+            fingerprint += fmt::format("{}:", static_cast<int>(core_type));
+            for (const auto& core : core_coords) {
+                fingerprint += fmt::format("{}-{};", core.x, core.y);
+            }
+        }
+        fingerprint += "]";
+        return fingerprint;
+    }
+
+    void AcquireSharedDevices() {
+        auto& shared = get_shared_devices();
+        const std::string fingerprint = DevicePrintConfigFingerprint();
+        if (shared.initialized && (shared.needs_recovery || fingerprint != shared_devices_fingerprint_)) {
+            ReleaseSharedDevices();
+        }
+        if (!shared.initialized) {
+            create_shared_devices(l1_small_size_, trace_region_size_);
+            shared_devices_fingerprint_ = fingerprint;
+            log_info(tt::LogTest, "DEVICE_PRINT: opened shared devices for config {}", fingerprint);
+        }
+        this->id_to_device_ = shared.id_to_device;
+        this->devices_ = shared.devices;
+
+        this->DetectDispatchMode();
+        this->arch_ = tt::tt_metal::MetalContext::instance().get_cluster().arch();
+        init_max_cbs();
+    }
+
+    static void ReleaseSharedDevices() {
+        auto& shared = get_shared_devices();
+        if (!shared.initialized) {
+            shared_devices_fingerprint_.clear();
+            return;
+        }
+
+        destroy_shared_devices();
+
+        // Deliberately NOT calling MetalContext::teardown() here.
+        shared_devices_fingerprint_.clear();
     }
 
     // Override this function in child classes for additional setup commands between DPRINT setup

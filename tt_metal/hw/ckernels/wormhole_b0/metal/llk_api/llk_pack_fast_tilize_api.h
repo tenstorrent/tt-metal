@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_pack_common_api.h"
 #include "llk_pack_fast_tilize.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK FAST TILIZE
@@ -12,6 +13,7 @@
 
 inline void llk_pack_fast_tilize_init(
     const std::uint32_t input_operand, const std::uint32_t pack_output, const std::uint32_t unit_dim) {
+    SAN_HOOK(unsupported());
     const std::uint8_t input_id = get_output_id(input_operand);
     const std::uint8_t output_id = get_output_id(pack_output);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -26,6 +28,7 @@ inline void llk_pack_fast_tilize_init(
 
 template <bool is_fp32_dest_acc_en>
 inline void llk_pack_fast_tilize_uninit(const std::uint32_t pack_output) {
+    SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(pack_output);
     const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -42,6 +45,7 @@ inline void llk_pack_fast_tilize_block(
     const std::uint32_t output_tile_index,
     const std::uint32_t unit_dim,
     const std::uint32_t num_units) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");

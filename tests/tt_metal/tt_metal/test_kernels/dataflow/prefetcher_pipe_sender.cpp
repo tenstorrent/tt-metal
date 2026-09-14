@@ -21,10 +21,7 @@
 //   [0] l1_staging_addr    - sender-local L1 scratch region pre-populated by the host
 
 #include "api/dataflow/prefetcher_pipe.h"
-#include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
-
-FORCE_INLINE uint32_t staging_addr(uint32_t staging_base, uint32_t byte_offset) { return staging_base + byte_offset; }
 
 void kernel_main() {
     constexpr uint8_t prefetcher_pipe_id = get_compile_time_arg_val(0);
@@ -40,6 +37,7 @@ void kernel_main() {
     constexpr uint32_t pattern_per_receiver_constant = 2;
 
     const uint32_t staging_base = get_arg_val<uint32_t>(0);
+    const CoreLocalMem<uint8_t> staging(staging_base);
 
     Noc noc;
     // Spot-check: log first byte of each entry (host pre-populated staging)
@@ -71,8 +69,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_entries; ++i) {
             DPRINT("Reserving back for broadcast\n");
             gdfb.reserve_back(1);
-            DPRINT("Done reserve back for broadcast to {}\n", staging_addr(staging_base, i * entry_size));
-            gdfb.write_broadcast(staging_addr(staging_base, i * entry_size), 1, noc);
+            DPRINT("Done reserve back for broadcast to {}\n", staging_base + i * entry_size);
+            gdfb.write_broadcast(noc, staging, 1, {.offset_bytes = i * entry_size});
             DPRINT("Done write broadcast\n");
             gdfb.flush_writes(noc);
             DPRINT("Done posted write flush\n");
@@ -84,7 +82,7 @@ void kernel_main() {
         const uint32_t row_bytes = num_recv * entry_size;
         for (uint32_t i = 0; i < num_entries; ++i) {
             gdfb.reserve_back(1);
-            gdfb.write_strided(staging_addr(staging_base, i * row_bytes), 1, 1, entry_size, noc);
+            gdfb.write_strided(noc, staging, 1, 1, entry_size, {.offset_bytes = i * row_bytes});
             gdfb.flush_writes(noc);
             gdfb.push_back(1, noc);
         }
@@ -93,7 +91,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_entries; ++i) {
             gdfb.reserve_back(1);
             for (uint32_t r = 0; r < num_recv; ++r) {
-                gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
+                gdfb.write_to_receiver(noc, r, staging, 1, {.offset_bytes = r * entry_size});
             }
             gdfb.flush_writes(noc);
             gdfb.push_back(1, noc);
@@ -103,7 +101,7 @@ void kernel_main() {
         for (uint32_t r = 0; r < num_recv; ++r) {
             for (uint32_t i = 0; i < num_entries; ++i) {
                 gdfb.reserve_back_for_receiver(r, 1);
-                gdfb.write_to_receiver(r, staging_addr(staging_base, r * entry_size), 1, noc);
+                gdfb.write_to_receiver(noc, r, staging, 1, {.offset_bytes = r * entry_size});
                 gdfb.flush_writes(noc);
                 gdfb.push_back_to_receiver(r, 1, noc);
             }
@@ -113,7 +111,7 @@ void kernel_main() {
         // write_* does not advance fifo_wr_ptr, so one write_broadcast(n) covers the slot;
         // a single push_back(n) then publishes credit for the whole batch.
         gdfb.reserve_back(num_entries);
-        gdfb.write_broadcast(staging_base, num_entries, noc);
+        gdfb.write_broadcast(noc, staging, num_entries);
         gdfb.flush_writes(noc);
         gdfb.push_back(num_entries, noc);
     } else if constexpr (write_primitive == 5) {
@@ -125,7 +123,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_entries; ++i) {
             for (uint32_t r = 0; r < num_recv; ++r) {
                 gdfb.reserve_back_for_receiver(r, 1);
-                gdfb.write_to_receiver(r, staging_addr(staging_base, i * entry_size), 1, noc);
+                gdfb.write_to_receiver(noc, r, staging, 1, {.offset_bytes = i * entry_size});
                 gdfb.flush_writes(noc);
                 gdfb.push_back_to_receiver(r, 1, noc);
             }

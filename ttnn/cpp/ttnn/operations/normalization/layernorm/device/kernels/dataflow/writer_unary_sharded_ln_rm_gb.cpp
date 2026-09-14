@@ -47,10 +47,10 @@ void kernel_main() {
     for (uint32_t i = 0; i < 3 * num_segments_to_write_back; ++i) {
         segment_values[i] = get_vararg(i);
     }
-    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)segment_values;
+    tt_l1_ptr uint32_t* segment_args = reinterpret_cast<tt_l1_ptr uint32_t*>(segment_values);
 #endif
 
-    Noc noc;
+    const Noc noc;
 #ifdef FUSE_GAMMA
     DataflowBuffer dfb_gamma_obj(dfb::gamma);
 #endif
@@ -64,7 +64,7 @@ void kernel_main() {
 #ifndef USE_WELFORD
     {
         const uint32_t scalar_w_bits = get_arg(args::scalar_w);
-        float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
+        const float scalar_w_f = __builtin_bit_cast(float, scalar_w_bits);
         dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
             scalar_w_f);
 
@@ -78,7 +78,7 @@ void kernel_main() {
 
         if constexpr (is_all_to_all_worker) {
             const uint32_t scalar_c_bits = get_arg(args::scalar_c);
-            float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
+            const float scalar_c_f = __builtin_bit_cast(float, scalar_c_bits);
             dataflow_kernel_lib::
                 prepare_reduce_scaler<dfb::scaler_global, ckernel::PoolType::AVG, ckernel::ReduceDim::REDUCE_ROW>(
                     scalar_c_f);
@@ -94,10 +94,10 @@ void kernel_main() {
         constexpr uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_GAMMA ? 1024 : 512;
 
-        UnicastEndpoint local_ep;
+        const UnicastEndpoint local_ep;
         dfb_gamma_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
-            uint32_t tile_id = width_shard_tile_start_id + w;
+            const uint32_t tile_id = width_shard_tile_start_id + w;
             noc.async_read(
                 gamma,
                 dfb_gamma_obj,
@@ -111,8 +111,8 @@ void kernel_main() {
                 mask_read_tile_face_bytes,
                 {.noc_x = my_x[noc.get_noc_id()],
                  .noc_y = my_y[noc.get_noc_id()],
-                 .addr = dfb_gamma_obj.get_write_ptr() + w * gamma_tile_bytes + mask_read_tile_face_bytes},
-                {.offset_bytes = w * gamma_tile_bytes + mask_read_tile_offset_bytes});
+                 .addr = dfb_gamma_obj.get_write_ptr() + (w * gamma_tile_bytes) + mask_read_tile_face_bytes},
+                {.offset_bytes = (w * gamma_tile_bytes) + mask_read_tile_offset_bytes});
         }
         noc.async_read_barrier();
         dfb_gamma_obj.push_back(block_w);
@@ -124,13 +124,13 @@ void kernel_main() {
         const uint32_t beta_tile_bytes = dfb_beta_obj.get_tile_size();
         const auto beta = TensorAccessor(tensor::beta);
 
-        uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
-        uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
+        const uint32_t mask_read_tile_face_bytes = FLOAT32_DTYPE_BETA ? 64 : 32;
+        const uint32_t mask_read_tile_offset_bytes = FLOAT32_DTYPE_BETA ? 1024 : 512;
 
-        UnicastEndpoint local_ep;
+        const UnicastEndpoint local_ep;
         dfb_beta_obj.reserve_back(block_w);
         for (uint32_t w = 0; w < block_w; w++) {
-            uint32_t tile_id = width_shard_tile_start_id + w;
+            const uint32_t tile_id = width_shard_tile_start_id + w;
             noc.async_read(
                 beta,
                 dfb_beta_obj,
@@ -144,8 +144,8 @@ void kernel_main() {
                 mask_read_tile_face_bytes,
                 {.noc_x = my_x[noc.get_noc_id()],
                  .noc_y = my_y[noc.get_noc_id()],
-                 .addr = dfb_beta_obj.get_write_ptr() + w * beta_tile_bytes + mask_read_tile_face_bytes},
-                {.offset_bytes = w * beta_tile_bytes + mask_read_tile_offset_bytes});
+                 .addr = dfb_beta_obj.get_write_ptr() + (w * beta_tile_bytes) + mask_read_tile_face_bytes},
+                {.offset_bytes = (w * beta_tile_bytes) + mask_read_tile_offset_bytes});
         }
         noc.async_read_barrier();
         dfb_beta_obj.push_back(block_w);

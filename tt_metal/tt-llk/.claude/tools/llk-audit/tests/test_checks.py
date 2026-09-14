@@ -1048,6 +1048,782 @@ def test_srcreg_cleardvalid_and_supported_forms():
     assert len(out) == 1 and out[0].hint == "DVALID_CLEAR", out
 
 
+@case
+def test_srcreg_dest_to_src_missing_math_drain():
+    # The real WH shape before the fix: MOVD2A gated on SRCA_VLD alone. The wait
+    # indexes MatrixUnit.SrcABank live, so a bank-flipping FPU op still in flight
+    # makes it pass vacuously -> the move writes the bank the unpacker owns.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+        # 3 more MOVD2As follow in the real code; only the first is reported.
+        macro(F, 130, "TTI_MOVD2A", "TTI_MOVD2A(0, 4, addrmod, 0, 4)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN", out
+    assert out[0].line == 120, out
+
+
+@case
+def test_srcreg_dest_to_src_with_math_drain_is_clean():
+    # The fixed form: MATH | SRCB_VLD drains the FPU pipe first -> no finding.
+    # Also covers the WAIT_SFPU-carrying variant used by the experimental LLKs.
+    F = "tt_llk_blackhole/common/inc/cmath_common.h"
+    for cond in (
+        "p_stall::MATH | p_stall::SRCB_VLD",
+        "p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD",
+    ):
+        facts = [
+            fn("move_d2b_fixed_face", F, 100, 200),
+            macro(
+                F,
+                110,
+                "TTI_STALLWAIT",
+                f"TTI_STALLWAIT(p_stall::STALL_MATH, {cond})",
+                func="m",
+            ),
+            macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, addrmod, 0, 0)", func="m"),
+        ]
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DEST_TO_SRC"
+        ]
+        assert out == [], (cond, out)
+
+
+@case
+def test_srcreg_dest_to_src_wait_in_caller_is_recall_not_flag():
+    # No STALLWAIT in this function: the gate may be in the caller or in the MOP
+    # that replays the move. Must be a RECALL candidate, never a hard flag.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_sdpa_custom_mm.h"
+    facts = [
+        fn("_move_only_", F, 100, 200),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNSEEN", out
+
+
+@case
+def test_srcreg_dest_to_src_direction_and_opcode_exclusions():
+    # MOVA2D/MOVB2D read Src (Src->Dest) and DO auto-wait -> not this class.
+    # TT_OP_MOVD2A is an opcode VALUE, not an issued instruction -> excluded.
+    F = "tt_llk_wormhole_b0/common/inc/cmath_common.h"
+    facts = [
+        fn("move_a2d_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVA2D", "TTI_MOVA2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 130, "TTI_MOVB2D", "TTI_MOVB2D(0, 0, addrmod, 0, 0)", func="m"),
+        macro(F, 140, "TT_OP_MOVD2A", "", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert out == [], out
+
+
+@case
+def test_srcreg_dest_to_src_unrelated_stall():
+    # A preceding STALLWAIT that gates on neither the bank nor the FPU pipe must
+    # not be credited as the gate.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_rmsnorm_bcast_scalar_dest_reuse.h"
+    facts = [
+        fn("reuse_dest_as_src", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_1, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
+
+
+@case
+def test_srcreg_dest_to_src_quasar_is_unconfirmed_not_flagged():
+    # Quasar's 4-operand STALLWAIT splits the wait condition across operands 2..4.
+    # The mask shape matches the WH/BH defect, but Quasar's bank model is not
+    # confirmed to need the drain -> surface as UNCONFIRMED, never as the flag.
+    F = "tt_llk_quasar/common/inc/cmath_common.h"
+    facts = [
+        fn("move_d2a_fixed_face", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, addrmod, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1, out
+    assert out[0].hint == "DEST2SRC_NO_MATH_DRAIN_UNCONFIRMED", out
+    # The identical shape on Wormhole IS the flag.
+    out_wh = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out_wh) == 1 and out_wh[0].hint == "DEST2SRC_NO_MATH_DRAIN", out_wh
+
+
+@case
+def test_srcreg_dummy_publication_serializing():
+    # BH default form: Stall_Clr_Cntrl=0 -> waits on MatrixUnit.Src?Bank while
+    # clearing Unpackers[i].SrcBank. That wait is STRONGER (it holds until no bank
+    # is outstanding), so this is lost overlap, not corruption. Recall candidate,
+    # never a flag.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    facts = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        # A bare unpacker-PIPELINE stall is not a bank guard.
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_both_banks_pairing():
+    """The wait-like bit and a BOTH-BANKS clear are a matched pair.
+
+    Bank_Clr_Ctrl=1 clears both banks, but the own-bank wait covers only the bank
+    being prepared - so with both set the instruction can overwrite a bank the
+    Matrix Unit still owns. With the default drained wait it is correct, and must
+    NOT be reported as serializing (it has to serialize by design).
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    # Unsafe: wait bit (idx 5) = 1 AND both-banks (idx 6) = 1.
+    bad = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 1, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bad))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_BOTH_BANKS_WAITLIKE", out
+
+    # Correct in-tree shape (llk_unpack_AB_custom_mm.h): both banks + default wait.
+    good = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, 0, 0, 0, 1, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", good))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+
+@case
+def test_srcreg_dummy_publication_packed_constant_is_arch_specific():
+    """UNP_ZEROSRC_STALL_RESET_WR_RDY means the wait bit ONLY on Wormhole.
+
+    Blackhole and Quasar take the controls as separate operands and size the last
+    one at 2 bits, so passing the packed 0b10001 there would land bit 4 =
+    Bank_Clr_Ctrl (an unintended both-banks clear) and leave the wait bit clear.
+    Crediting the bare substring as a guard was a false all-clear. Only Wormhole
+    defines these constants today, so the check guards re-introduction; this test
+    pins the behaviour so a header change cannot land unnoticed.
+    """
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_A.h"
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    TXT = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    # All three WH-packed constants must be caught, not just the wait one.
+    # UNP_ZEROSRC_SET_DVALID is the worst: dropped into Blackhole's Unpack_Pop it
+    # sets Clr_to1_fmt_Ctrl and leaves Set_Dvalid (at <<8) at zero, so the DVALID
+    # is never published at all.
+    for const in (
+        "UNP_ZEROSRC_STALL_RESET_WR_RDY",
+        "UNP_ZEROSRC_RESET_ALL_BANKS",
+        "UNP_ZEROSRC_SET_DVALID",
+    ):
+        facts = [
+            fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+            macro(
+                BH,
+                110,
+                "TTI_UNPACR_NOP",
+                f"TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::{const})",
+                func="u",
+            ),
+        ]
+        got = [
+            f
+            for f in SrcRegBank().run(FactBase("blackhole", facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert (
+            len(got) == 1 and got[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+        ), (const, got)
+    # UNP_NEGINFSRC is NOT one of them: on Blackhole it lands as
+    # Src_ClrVal_Ctrl=CLR_SRC_NEGINF + Unpack_Pop=CLR_SRC, bit-identical to
+    # Blackhole's own idiomatic neginf clear. Flagging it would be a false positive.
+    benign = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 1, 0, 0, p_unpacr_nop::UNP_NEGINFSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", benign))
+        if f.hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH"
+    ]
+
+    # On Wormhole it is the real guard -> clean.
+    wh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", WH, 100, 200),
+        macro(WH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", wh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # On Blackhole the same token is a defect, not a guard.
+    bh = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", BH, 100, 200),
+        macro(BH, 110, "TTI_UNPACR_NOP", TXT, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", bh))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_PACKED_WAIT_WRONG_ARCH", out
+
+
+@case
+def test_srcreg_dummy_publication_quasar_operand_index():
+    """Quasar's wait bit is operand 2, not Blackhole's operand 5 (= Nop_type).
+
+    Indexing Quasar with Blackhole's position read an unrelated operand.
+    """
+    Q = "tt_llk_quasar/llk_lib/llk_unpack_unary_operand.h"
+    # Quasar guarded form: Stall_Cntrl (idx 2) = 1.
+    guarded = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 1, 0, 0, p_unpacr::UNP_CLRSRC_ZERO)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # Default form with a 1 sitting at Blackhole's index 5 (Nop_type) must NOT be
+    # mistaken for a guard.
+    default = [
+        fn("_llk_unpack_dest_reuse_dummy_valid_", Q, 100, 200),
+        macro(
+            Q,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(p_unpacr::UNP_A, 1, 0, 0, 0, 1)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("quasar", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_annotated_operand_is_read():
+    """Operands carry inline comments in-tree; the value must be read through them.
+
+    dest_reuse_dummy_unpack() emits `1 /* wait like UNPACR */` — the canonical
+    guarded form. A raw compare against "1" read that as the default form, i.e. the
+    tool reported the reference fix as the thing it was meant to detect.
+    """
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    guarded = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "1 /* wait like UNPACR */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+    # The annotated DEFAULT form must still be reported.
+    default = [
+        fn("dest_reuse_dummy_unpack", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, "
+            "0 /* Stall_Clr_Cntrl */, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", default))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_clr_src_is_a_publication():
+    """CLR_SRC clears the unpacker's bank exactly as ZEROSRC does.
+
+    Keying publication detection on ZEROSRC/SET_DVALID alone hid every
+    both-banks site in the tree, since those are all CLR_SRC with Set_Dvalid=0.
+    """
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_custom_mm.h"
+    facts = [
+        fn("_llk_unpack_reuse_dest_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, 0, 0, 0, 0, 0, p_unpacr_nop::CLR_SRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SERIALIZING", out
+
+
+@case
+def test_srcreg_dummy_publication_guarded_forms_are_clean():
+    # Three accepted guards, one per variant, must all suppress the candidate.
+    BH = "tt_llk_blackhole/llk_lib/llk_unpack_common.h"
+    WH = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    # (1) BH Stall_Clr_Cntrl=1
+    bh = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", BH, 100, 200),
+        macro(
+            BH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    # (2) WH wait-like NoOp encoding
+    wh_bit = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", WH, 100, 200),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)",
+            func="u",
+        ),
+    ]
+    # (3) WH explicit stall on the unpacker-owned-bank conditions (the real shape)
+    wh_stall = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", WH, 100, 200),
+        macro(
+            WH,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(
+            WH,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    for arch, facts in (
+        ("blackhole", bh),
+        ("wormhole", wh_bit),
+        ("wormhole", wh_stall),
+    ):
+        out = [
+            f
+            for f in SrcRegBank().run(FactBase(arch, facts))
+            if f.kind == "dvalid:DUMMY_PUBLISH"
+        ]
+        assert out == [], (arch, out)
+
+
+@case
+def test_srcreg_dummy_publication_scoped_to_publisher_functions():
+    # An ordinary MOP-config publication (tilize/matmul/unpack_A) has no Dest->Src
+    # consumer; unscoped this bucket would swallow ~90% of all publications.
+    F = "tt_llk_blackhole/llk_lib/llk_unpack_A.h"
+    facts = [
+        fn("_llk_unpack_A_mop_config_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+
+
+@case
+def test_srcreg_waitlike_zerosrc_guards_a_following_set_dvalid():
+    # Regression: the WH fix shape is a wait-like ZEROSRC followed by a bare
+    # SET_DVALID that INHERITS that wait by sequencing. Crediting only a real
+    # UNPACR flagged the SET_DVALID and false-positived on correct code.
+    F = "tt_llk_wormhole_b0/llk_lib/experimental/llk_unpack_mul_reduce_scalar.h"
+    FIX = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC_STALL_RESET_WR_RDY)"
+    PUB = "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)"
+    fixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", FIX, func="u"),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", fixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert out == [], out
+    # The same pair with a PLAIN ZEROSRC: the ZEROSRC itself is the serializing form,
+    # but the SET_DVALID after it is correctly NOT flagged. Per
+    # UNPACR_NOP_SETDVALID.md a bare SET_DVALID only needs to be sequenced after
+    # something that performed a wait, and a plain ZEROSRC does perform one (on
+    # MatrixUnit.Src?Bank, which is the STRONGER wait). So exactly one finding.
+    unfixed = [
+        fn("_llk_unpack_mul_reduce_scalar_switch_to_reduce_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(F, 111, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out2 = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", unfixed))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out2) == 1 and out2[0].hint == "DUMMY_PUBLISH_SERIALIZING", out2
+    assert out2[0].line == 110, out2
+
+
+@case
+def test_srcreg_bare_setdvalid_needs_a_predecessor():
+    """A bare SET_DVALID performs NO wait, so it must inherit one by sequencing.
+
+    UNPACR_NOP_SETDVALID.md: it "does not automatically wait at the Wait Gate to
+    ensure that AllowedClient == SrcClient::Unpackers". It also does not CLEAR the
+    bank -- it sets AllowedClient = MatrixUnit and flips Unpackers[i].SrcBank -- so
+    the pipelined/serializing distinction does not apply to it at all.
+    """
+    F = "tt_llk_wormhole_b0/llk_lib/llk_unpack_common.h"
+    PUB = "TTI_UNPACR_NOP(SrcB, p_unpacr_nop::UNP_SET_DVALID)"
+
+    # Nothing before it -> a real defect, and NOT reported as serializing.
+    alone = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", alone))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # An unpacker-PIPELINE stall is not a bank wait, so it still does not count.
+    pipe = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", pipe))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].hint == "DUMMY_PUBLISH_SETDVALID_UNSEQUENCED", out
+
+    # The in-tree WH shape: an SRCA_CLR|SRCB_CLR stall, then two bare SET_DVALIDs.
+    guarded = [
+        fn("_llk_unpack_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            105,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::UNPACK | "
+            "p_stall::SRCA_CLR | p_stall::SRCB_CLR)",
+            func="u",
+        ),
+        macro(F, 110, "TTI_UNPACR_NOP", PUB, func="u"),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_SET_DVALID)",
+            func="u",
+        ),
+    ]
+    assert not [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", guarded))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+
+
+@case
+def test_srcreg_dummy_publication_guard_is_per_src_register():
+    # A guard established on SrcA must NOT clear a publication on SrcB.
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_unpack_A_sdpa.h"
+    facts = [
+        fn("_llk_unpack_A_sdpa_set_srcb_dummy_valid_", F, 100, 200),
+        macro(
+            F,
+            110,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcA, 0, 0, p_unpacr_nop::SET_DVALID, 0, 1, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+        macro(
+            F,
+            111,
+            "TTI_UNPACR_NOP",
+            "TTI_UNPACR_NOP(SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, 0, 0, 0, p_unpacr_nop::UNP_ZEROSRC)",
+            func="u",
+        ),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DUMMY_PUBLISH"
+    ]
+    assert len(out) == 1 and out[0].line == 111, out
+
+
+@case
+def test_srcreg_dest_to_src_gate_must_name_the_written_register():
+    # MOVD2B writes SrcB; a stall naming only SRCA_VLD proves nothing about it.
+    F = "tt_llk_wormhole_b0/x.h"
+    facts = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WRONG_SRC_GATE", out
+    # A stall naming BOTH registers (transpose_dest's shape) gates either move.
+    both = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD | p_stall::SRCB_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", both))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_dest_to_src_bank_flip_rearms_the_drain():
+    # The drain proves the FPU pipe was empty AT THE STALL; a flip issued after it
+    # re-arms the same in-flight-epilogue race.
+    F = "tt_llk_wormhole_b0/x.h"
+    base = [
+        fn("g", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH | p_stall::SRCA_VLD)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    flip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", flip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert (
+        len(out) == 1 and out[0].hint == "DEST2SRC_DRAIN_REARMED" and out[0].line == 140
+    ), out
+    # CLR_NONE does not flip, and the moves of one burst do not re-arm each other.
+    noflip = base + [
+        macro(
+            F,
+            130,
+            "TTI_SETRWC",
+            "TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D)",
+            func="m",
+        ),
+        macro(F, 140, "TTI_MOVD2A", "TTI_MOVD2A(0, 0, a, 0, 0)", func="m"),
+    ]
+    assert [
+        f
+        for f in SrcRegBank().run(FactBase("wormhole", noflip))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ] == []
+
+
+@case
+def test_srcreg_math_drain_alone_is_not_a_gate():
+    # A MATH-only stall settles the bank pointer but never waits for the unpacker
+    # to hand the bank over (the real llk_math_hadamard shape).
+    F = "tt_llk_blackhole/llk_lib/experimental/llk_math_hadamard.h"
+    facts = [
+        fn("_llk_math_hadamard_h128_", F, 100, 300),
+        macro(
+            F,
+            110,
+            "TTI_STALLWAIT",
+            "TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH)",
+            func="m",
+        ),
+        macro(F, 120, "TTI_MOVD2B", "TTI_MOVD2B(0, 0, ADDR_MOD_7, 0, 16)", func="m"),
+    ]
+    out = [
+        f
+        for f in SrcRegBank().run(FactBase("blackhole", facts))
+        if f.kind == "dvalid:DEST_TO_SRC"
+    ]
+    assert len(out) == 1 and out[0].hint == "DEST2SRC_WAIT_UNRELATED", out
+
+
 # --- mailbox-sync (lite) --------------------------------------------------
 
 

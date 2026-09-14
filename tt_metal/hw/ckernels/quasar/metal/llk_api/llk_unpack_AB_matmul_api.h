@@ -28,6 +28,7 @@
 * Each operand gets a BFD id allocated from the unpack partition and its table entry is programmed here;
 * the DFB ids are used only to fetch buffer info, never as BFD ids. Mind the role flip: operandA feeds
 * UNPACR1 -> SrcB (Unp1) and operandB feeds UNPACR0 -> SrcA (Unp0).
+* Operand tile shapes are read from circular-buffer metadata.
 */
 template <bool TRANSPOSE_EN = false>
 __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
@@ -40,15 +41,11 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
     // In1 -> srcA (UNPACR0)
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
-
-    // _llk_unpack_matmul_ takes no TensorShape, so it does not scale its L1 tile indices by the face
-    // count; Quasar matmul is full-tile only (tt-metal #45208).
+    const ckernel::TensorShape src_b_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape src_a_shape = get_operand_tensor_shape(operandB_id);
     LLK_ASSERT(
-        get_operand_tensor_shape(operandA_id).total_num_faces() == ckernel::MAX_NUM_FACES,
-        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
-    LLK_ASSERT(
-        get_operand_tensor_shape(operandB_id).total_num_faces() == ckernel::MAX_NUM_FACES,
-        "this path indexes L1 in whole tiles, so it supports full 32x32 tiles only");
+        ckernel::validate_matmul_tensor_shapes_(src_b_shape, src_a_shape),
+        "unsupported SrcB/input0 and SrcA/input1 TensorShape pair for matmul");
 
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandA_id);
     llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandB_id);
@@ -58,7 +55,9 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
         ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
         ct_dim,
         rt_dim,
-        kt_dim);
+        kt_dim,
+        src_b_shape,
+        src_a_shape);
 
     // MxFp4 operands feeding matmul are ALWAYS unpacked as the 2x-packed src-register format
     // (MxFp4_2x_B) on Quasar. The generated unpack_dst_format[] table keeps the op-agnostic MX
@@ -150,6 +149,7 @@ __attribute__((always_inline)) inline void llk_unpack_AB_matmul_init(
  * Output [rt_dim, ct_dim] = Input0 [rt_dim, kt_dim] x Input1 [kt_dim, ct_dim]
  * This unpacker only sets up Input0 [rt_dim, 1] x Input1 [1, ct_dim]
  * kt_dim is assumed to be iterated over outside this api call
+ * Operand tile shapes are read from circular-buffer metadata.
  */
 inline void llk_unpack_AB_matmul(
     const std::uint32_t operandA,
@@ -166,6 +166,8 @@ inline void llk_unpack_AB_matmul(
 
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
+    const ckernel::TensorShape src_b_shape = get_operand_tensor_shape(operandA_id);
+    const ckernel::TensorShape src_a_shape = get_operand_tensor_shape(operandB_id);
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
@@ -176,6 +178,6 @@ inline void llk_unpack_AB_matmul(
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx + tile_index_b;
 
     WAYPOINT("UPMW");
-    _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1);
+    _llk_unpack_matmul_(ct_dim, rt_dim, kt_dim, l1_tile_idx_0, l1_tile_idx_1, src_b_shape, src_a_shape);
     WAYPOINT("UPMD");
 }

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
+#include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -128,7 +128,7 @@ void pcie_read_bw_test(
 
 }  // namespace unit_tests::dm::pcie_read_bw
 
-TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidth) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeReadBandwidth) {
     uint32_t test_id = 603;
     CoreCoord master_core_coord = {0, 0};
 
@@ -136,7 +136,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidth) {
 }
 
 /* ========== Sweep 1M transactions with varying transaction sizes; Test id = 605 ========== */
-TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeReadBandwidthSweep) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -172,7 +172,7 @@ TEST_F(GenericMeshDeviceFixture, PCIeReadBandwidthSweep) {
 }
 
 /* ========== Host-side D2H (ReadShard) bandwidth sweep; Test id = 607 ========== */
-TEST_F(GenericMeshDeviceFixture, PCIeHostReadBandwidthSweep) {
+TEST_F(UnitMeshFastDispatchFixture, PCIeHostReadBandwidthSweep) {
     // Remove GTEST_SKIP to run the test
     GTEST_SKIP() << "Skipping: CLI timeout with large iteration count";
     auto mesh_device = get_mesh_device();

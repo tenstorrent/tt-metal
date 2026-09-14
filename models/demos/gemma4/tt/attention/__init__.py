@@ -24,6 +24,9 @@ from .kv_cache import init_kv_cache
 from .decode import decode_forward, packed_decode_forward
 from .prefill import flush_deferred_bounded_fills, prefill_forward
 
+# Named sentinel for optional per-request arguments (clearer than a bare `...`).
+_UNSET = object()
+
 
 class Gemma4AttentionConfig:
     """Configuration for a single attention layer, derived from HF config + layer type."""
@@ -441,7 +444,7 @@ class Gemma4Attention:
             except Exception:
                 pass
 
-    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False, req_key=..., all_keys: bool = False):
+    def _release_sliding_prefill_tail(self, *, clear_persistent: bool = False, req_key=_UNSET, all_keys: bool = False):
         """Drop cross-chunk sliding tails.
 
         Default (``req_key`` given): drop only that request's tail — the shared
@@ -457,7 +460,7 @@ class Gemma4Attention:
         """
         tails = getattr(self, "_sliding_tails_by_key", None) or {}
         pool_map = getattr(self, "_tail_pool_map", None)
-        if req_key is not ... and not all_keys and not clear_persistent:
+        if req_key is not _UNSET and not all_keys and not clear_persistent:
             self._dealloc_tail(tails.pop(req_key, None))
             if pool_map is not None:
                 pool_map.pop(req_key, None)  # pool buffers persist (boot-owned)

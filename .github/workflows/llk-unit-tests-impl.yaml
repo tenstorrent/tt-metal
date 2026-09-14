@@ -17,20 +17,12 @@ on:
         required: false
         type: string
         default: unit
-        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. merge_gate for merge-gate, unit for L2 nightly)."
+        description: "Which tests yaml to load: merge_gate for merge-gate, unit for L2 nightly."
       enable-llk-asserts:
         required: false
         type: boolean
         default: true
         description: "Enable LLK asserts"
-      per-test-timeout:
-        required: false
-        type: string
-        default: ""
-        description: >-
-          Max allowed timeout (minutes) for any individual test SKU entry in the
-          tests yaml. Verified during load-test-matrix via verify_time_budget.py.
-          Empty skips the per-test ceiling check.
       sku-allowlist:
         required: false
         type: string
@@ -67,19 +59,6 @@ jobs:
           sparse-checkout-cone-mode: true
       - name: Install dependencies
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        run: |
-          set -euo pipefail
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          extra=()
-          if [ -n "${{ inputs.per-test-timeout }}" ]; then
-            extra+=(--max-per-test-timeout "${{ inputs.per-test-timeout }}")
-          fi
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}" \
-            "${extra[@]}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
