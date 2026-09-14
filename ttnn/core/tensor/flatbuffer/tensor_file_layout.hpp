@@ -23,7 +23,7 @@ namespace ttnn {
 //
 // Because the padding is folded into `header_size` and every shard records its own offset in the header, a reader
 // derives every position from the file itself. The alignment is a writer-side choice that the format does not
-// encode, so a file with any data-region alignment loads correctly.
+// encode, so a file whose data region is aligned to at least `kMinTensorDataAlignment` loads correctly.
 //
 // `write_tensor_file` below is the only writer; the readers live in `ttnn/core/tensor/serialization.cpp` and
 // `ttnn/core/tensor/overlapped_serialization.cpp`.
