@@ -54,8 +54,8 @@ enum class Sec : std::uint8_t
  *     +-------------------------------+---------+---------+
  *     |                               |  field  |         |
  *     +-------------------------------+---------+---------+
- *                                       mask = 0x000000F0
- *                                             |<-- 4 -->|
+ *                                  mask = 0x000000F0
+ *                                               |<-- 4 -->|
  *                                             shamt0 = shamt(S0) = 4
  *
  * Section one:
@@ -103,12 +103,6 @@ public:
     constexpr std::uint32_t mask(Sec s) const
     { // valid for width <= 32
         return width >= 32 ? 0xffffffffu : (((1u << width) - 1u) << shamt(s));
-    }
-
-    // Number of CFG words occupied by the field in one section.
-    constexpr std::uint32_t words() const
-    {
-        return (shamt0 + width + word_size - 1) / word_size;
     }
 
 private:
