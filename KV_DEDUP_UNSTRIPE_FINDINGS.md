@@ -3,9 +3,11 @@
 Notes for the dense (Kimi) KV-dedup `ag-before` path. Branched off
 `ipotkonjak/kimi-kv-tp-shard-ag-before` at `e01e12abe78`.
 
-**Status: the `reader` arm is correct and is the faster of the two.** The root cause of the long-standing
-PCC failure is found, fixed and measured; what remains is cleanup and wider regression. See
-[Root cause](#root-cause-the-fused-ags-prefix-bound-slices-the-wrong-axis).
+**Status: the `reader` arm is correct, `tp_shard_kv` is trace-safe, and TP dedup is FREE under trace**
+-- 4x less KV cache DRAM for -0.26% of model forward time (noise). The root cause of the long-standing
+PCC failure is found and fixed; the traced path, previously refused outright, now works. What remains is
+cleanup and wider regression. See [Root cause](#root-cause-the-fused-ags-prefix-bound-slices-the-wrong-axis)
+and [Trace safety](#trace-safety-tp_shard_kv-under-a-captured-program).
 
 ## The problem
 
@@ -160,6 +162,101 @@ Full suite in `reader` mode: **8 passed** on `torus-xy-8x4` (all four `sp_only` 
 `sp_only` ones where this change is inert and whose `torus-xy-8x4` twins pass — believed to be the 2x4
 submesh on this 8x4 Galaxy, **not yet verified**.
 
+## Trace safety: `tp_shard_kv` under a captured program
+
+Previously refused outright (`assert metadata is None` in `_chunked_attn`). Two pieces of per-chunk
+state had to reach the device instead of being frozen into the capture.
+
+**Slot.** `high_bw_all_gather` already had `input_batch_index_tensor` plus `batch_slot_num_layers` /
+`batch_slot_layer_idx`, so the gather recomposes `user*layers + layer_idx` on-device exactly as
+`ring_mla`'s readers do. The old refusal blamed the `[B, n_chunks, R, W]` view, which commit
+`0b93b2c1cd8` removed -- the gather reads the cache in place now, so that reason was stale.
+
+**Extent.** `gathered_prefix_tensor` wants the chunk start in the GATHERED dim's units. For the SP-axis
+gathers (the sparse path, `mla.py:2156`) that is global tokens and `metadata[1]` works directly. This
+gather rides the TP axis, so its dim is one SP rank's slab -- `global/sp` -- and the same scalar is
+`sp` times too large. New hashed `gathered_prefix_divisor` (default 1) divides it at the single point
+every extent derivation flows from (`unicast_reader.cpp`, `gathered_dim_size_for_prefix`). Integer
+division is exact enough: it shifts the start by less than one element and the slab is at least one, so
+the round-up to whole slabs is unaffected even on rotated partial chunks.
+
+The alternative -- what the sparse `sp == 1` fallback does (`mla.py:2380`) -- is pinning both extents to
+the full buffer: chunk-invariant and therefore safe to bake, but it moves the whole cache every chunk on
+all 61 layers. Fine for a QuietBox fallback, not for the main 8x4 path.
+
+### `has_metadata()` split, and the two bugs it exposed
+
+`ring_mla` then rejected the batch-1 slab: *"K cache batch=1 must be divisible by
+kv_cache_num_layers=61"*. `has_metadata()` required `slot_id` AND `kv_actual_isl`, conflating two
+independent things -- `kv_actual_isl` is the trace-safe core every captured chunk needs, while the slot
+only matters to a caller that has not already chosen one. A KV-deduped caller spends its slot in the TP
+gather and hands over a batch-1 slab: extent yes, slot no.
+
+Split into `has_metadata()` (extent) and `has_slot_metadata()` (slot). The layer-divisibility check now
+gates on the slot -- it exists only to recompose `slot*layers + idx` -- and validation's
+`has_indexed_kv_cache` uses the same rule as the factory's `slot_from_metadata`, so both describe the
+same program.
+
+That split exposed two places keyed on the wrong flag. **Both HUNG the reader rather than failing it**,
+which is why they cost so much to find:
+
+1. the `kv_actual_isl` **accessor** was appended inside the slot block, so the kernel was compiled
+   expecting an accessor the host never pushed and read misaligned compile args;
+2. the reader's **common runtime args** were pushed only under the slot -- but `kv_actual_isl`'s address
+   is index 4 of that block, read whenever `kv_pad_from_metadata`, so the reader dereferenced garbage.
+
+The writer had it right already, gating on `kv_pad_from_metadata` alone; the reader's nesting was the
+anomaly.
+
+### Test coverage this needed
+
+`use_metadata_tensor` is now an axis on `test_mla_chunked_prefill_tp_shard_kv`. It is the ONLY cover for
+the TP gather's on-device slot select and its divisor extent, and both fail **silently** in a perf job
+(`check_pcc=False`): a baked slot reads another user's KV, a short gather leaves the tail unpopulated.
+`fullchunk-2u` varies the slot (u0 0.99721565, u1 0.99721338), `deep-20k` grows the prefix (0.9985742 at
+`kv_actual=20480`). 4/4 on both `tp_sharded` and `sp_only`.
+
+Note the structural gap that let the batch-1 bug reach a 25-minute L61 run: **the MLA unit test
+allocates one cache layer**, so `1 % 1 == 0` and the layer factor is unreachable there. An L10-scale
+case is the cheapest place it is real.
+
+## Perf: model-level, kimi_k2_7 L61, TRACED (the headline)
+
+`test_kimi_prefill_transformer_chunked_perf`, 11 chunks x 5120, 10 iters, torus-xy-8x4, reader mode.
+A `tp_shard_kv` axis was added to that test -- no Kimi test had one ("tp_sharded has no CI job on either
+side").
+
+| chunk | sp_only | tp_sharded | delta |
+| --- | --- | --- | --- |
+| 0 | 0.422 | 0.421 | -0.001 |
+| 1 | 0.430 | 0.432 | +0.002 |
+| 2 | 0.463 | 0.462 | -0.001 |
+| 3 | 0.489 | 0.489 | 0.000 |
+| 4 | 0.521 | 0.519 | -0.002 |
+| 5 | 0.553 | 0.551 | -0.002 |
+| 6 | 0.581 | 0.579 | -0.002 |
+| 7 | 0.611 | 0.609 | -0.002 |
+| 8 | 0.657 | 0.654 | -0.003 |
+| 9 | 0.693 | 0.691 | -0.002 |
+| 10 | 0.731 | 0.728 | -0.003 |
+| **total** | **6.151 s** | **6.135 s** | **-16 ms, -0.26%** |
+
+**TP dedup is free under trace.** Per-chunk stddev is <= 0.002 s and every delta is <= 0.003 s in both
+directions, so this is "indistinguishable from baseline", not "slightly faster". n=1 per arm.
+
+The one gate FAIL (chunk 1, 0.432 against a band top of 0.431) is not a regression: `sp_only` measured
+0.430 on that same chunk, so both sit on the band edge, and the recorded baselines are `sp_only`-derived
+and do not apply to this arm anyway.
+
+### Do not quote the notrace number
+
+The notrace arm measured **+6.1%** (0.9228 vs 0.8695 s/chunk) and that figure is an artifact. Notrace is
+host-dispatch-bound: chunk time is FLAT at ~0.87 s regardless of KV depth, and ~36% of it is host
+dispatch. A flat per-layer delta there mostly measures dispatching one extra gather op per layer. Traced
+is device-bound -- chunk time rises 0.422 -> 0.731 s as the cache fills -- which is the regime that
+answers the question. The same box fails the notrace gate by ~7% while PASSING the tighter traced gate,
+for the same reason: its host is slow, its devices are on-baseline.
+
 ## Perf: op-level, kimi_k2_7 50k+5k, 8x4
 
 `test_mla_chunked_tp_shard_kv_perf`, whole-forward time:
@@ -186,7 +283,13 @@ to these numbers; they measure the reader path's gather win alone.
   and its `api/debug/dprint.h` include (`dataflow_common.hpp`), and `tests/.../test_tmp_stripe_util.py` /
   `test_tmp_layout_probe.py`.
 - Run the shared-AG regressions: `tests/nightly/tg/ccl/test_ring_attention_all_gather.py` and
-  `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (the `ranks == 1` identity paths).
+  `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (the `ranks == 1` / `divisor == 1` identity
+  paths, plus the GLM sparse path that shares `high_bw_all_gather`).
+- Record a `tp_sharded` perf baseline so that arm gates instead of reporting; today it is compared
+  against `sp_only`-derived numbers.
+- Decide whether the `tp_shard_kv` axis added to `test_kimi_prefill_transformer_chunked_perf` earns a
+  CI job, and revert the `fabric_2d_line` param added to `test_high_bw_all_gather_galaxy_ci_perf` for a
+  one-off torus-vs-line comparison (torus 85.6 GB/s vs line 47.2 GB/s on the shared shape, 1.82x).
 - Verify the `fabric2d-2x4` errors are environmental.
 - Decide whether `reader` becomes the default and `TT_MLA_KV_DEDUP_UNSTRIPE` goes away.
 
