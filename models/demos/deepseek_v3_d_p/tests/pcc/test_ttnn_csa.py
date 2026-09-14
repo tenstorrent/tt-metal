@@ -13,10 +13,14 @@ Every test drives a public forward -- no TtCSA private method is called directly
 Both run on both V4 variants, flash and pro.
 
 Every test here runs in the regime where the indexer can reach EVERY entry the cache holds, so it
-drops nothing and the block mask reduces to plain causality. That is deliberate: outside it the two
+drops nothing and its selection reduces to plain causality. That is deliberate: outside it the two
 indexers rank near-tied bf16 scores differently, they select different entries, and the block's output
 legitimately differs from the reference's by more than numerics -- there is nothing for PCC to say. What
 the top-k itself does is covered by tests/pcc/test_ttnn_csa_indexer.py, on its own overlap metric.
+
+Inside that regime the index list is not just comparable but fully determined, so the chunked test also
+checks it exactly (_audit_index_list) alongside the compressed cache. Those two plus the output PCC
+say WHICH stage a regression is in, which one number over the block cannot.
 
 The mesh list, the chunk-PCC reporter and the reference sliding mask come from test_ttnn_hca.py and
 mesh_configs.py rather than being restated here: CSA and HCA run the same attention body
@@ -47,9 +51,12 @@ _SEED = 42
 # mesh here -- csa_slab_align is compress_rate * TILE_SIZE * sp_factor throughout V4_MESH_CONFIGS, so
 # 640 * sp_factor is a whole number of slabs and prepare_input pads nothing.
 _LOCAL_SHAPES = [640]
-# The stored entries, checked at the end of a chunked run. They are written once and never recomputed,
-# so this holds no matter how deep the run goes.
+# The stored entries, checked after every chunk of a chunked run. They are written once and never
+# recomputed, so this holds no matter how deep the run goes.
 _CACHE_PCC = 0.998
+# sparse_sdpa's "no key here" id, as the index list carries it. _audit_index_list leans on it being the
+# largest uint32, so a sort pushes it past every real row id.
+_SENTINEL = 0xFFFFFFFF
 
 
 def _config(model_config, num_hidden_layers=1, min_index_topk=0):
@@ -122,9 +129,10 @@ _MODEL_CONFIGS_FORWARD = [pytest.param(cfg, fwd, id=name) for name, cfg, _, fwd 
 _CHUNKED_SCENARIOS = [
     ("2chunk-full", 1024, [1024, 1024]),
     ("2chunk-ragged", 1024, [1024, 600]),  # a ragged FINAL chunk, the only place one is allowed
-    # A non-final chunk below chunk_size. Pins the two places real_len and the padded slab width must
-    # not be confused: the carry, and the compressed append offset.
-    ("3chunk-varying", 1024, [512, 1024, 1024]),
+    # Three appends, so chunk 1 is a MIDDLE chunk: neither the first (whose index list is the compacted
+    # one) nor the last. It is the only place a full carry, the identity permutation and a mid-sequence
+    # compressed append all run at once.
+    ("3chunk-ragged", 1024, [1024, 1024, 600]),
 ]
 
 
@@ -173,6 +181,76 @@ def _download(mesh_device, tensor):
     ).squeeze(
         1
     )  # sp -> seq (dim2), tp -> hidden (dim3)
+
+
+def _audit_index_list(mesh_device, tt_model, *, first_chunk, kv_actual, valid, capacity, sliding, compress_rate):
+    """Assert the index list names EXACTLY the keys the reference attends over, for every real query row.
+
+    A golden only inside this file's reach-every-entry regime (see ``_assert_reaches_every_entry``);
+    outside it the indexer legitimately drops entries and there is nothing to compare against. Inside
+    it the list is fully determined by the geometry, which lets this separate four failure modes that a
+    single output PCC cannot tell apart: ids the run LOST, ids it repeated (``sparse_sdpa`` would count
+    the key twice), ids past what was written, and sentinels that are not a contiguous tail -- the
+    reader stops at the first sentinel, so a hole silently truncates the row.
+
+    Padded query rows are skipped: they rank whatever the indexer gives them and nothing reads them."""
+    index = tt_model.index_list(first_chunk=first_chunk)
+    ids = ttnn.to_torch(  # sp -> rows (dim2), tp -> dim1 and replicated, so one replica is the answer
+        index,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(2, 1)),
+    )
+    ttnn.deallocate(index)
+    ids = ids[0, 0, :valid].to(torch.int64) & 0xFFFFFFFF  # a -1 readback is the uint32 sentinel
+    width = ids.shape[1]
+
+    # What each row should hold. ``entries`` is the reference's own causal threshold, (p + 1) // rate on
+    # the GLOBAL position; ``window`` is the sliding keys that exist, which is short only near the start
+    # of the sequence. The sliding ids are affine in the CHUNK-LOCAL row -- see index_tables.
+    row = torch.arange(valid).view(valid, 1)
+    entries = (kv_actual + row + 1) // compress_rate
+    window = (kv_actual + row + 1).clamp(max=sliding)
+    col = torch.arange(width).view(1, width)
+    golden = torch.where(
+        col < entries,
+        col,
+        torch.where(
+            col < entries + window,
+            capacity + sliding + row - window + 1 + (col - entries),
+            torch.full_like(col, _SENTINEL),
+        ),
+    )
+
+    # Sorted, because the row's order is the indexer's business and only the set is a contract. Both
+    # sides pad with the sentinel, which sorts last, so equality covers the counts too.
+    real = ids != _SENTINEL
+    got = ids.sort(-1).values
+    truncated = ((~real[:, :-1]) & real[:, 1:]).any(-1)  # a real id after a sentinel
+    duplicated = ((got[:, :-1] == got[:, 1:]) & (got[:, :-1] != _SENTINEL)).any(-1)
+    mismatched = (got != golden).any(-1)
+
+    if not (truncated.any() or duplicated.any() or mismatched.any()):
+        return
+    bad = int((mismatched | truncated | duplicated).nonzero()[0])
+    want, have = set(golden[bad].tolist()) - {_SENTINEL}, set(got[bad].tolist()) - {_SENTINEL}
+    raise AssertionError(
+        f"index list is wrong at kv_actual={kv_actual}: {int(mismatched.sum())} of {valid} rows name the "
+        f"wrong key set, {int(duplicated.sum())} repeat a key, {int(truncated.sum())} have a sentinel "
+        f"before a real id. First bad row is {bad} (global position {kv_actual + bad}, expecting "
+        f"{int(entries[bad])} entries + {int(window[bad])} sliding): missing {sorted(want - have)}, "
+        f"unexpected {sorted(have - want)}"
+    )
+
+
+def _read_entries(mesh_device, state):
+    """The compressed entries written so far: the leading ``entry_count`` rows of the joint table.
+
+    The rows after them are the carry and this chunk's raw keys, which belong to the sliding path and
+    have no counterpart in ``ref.compressor``. The table is replicated, so one replica is the answer."""
+    table = ttnn.to_torch(
+        state.joint_kv,
+        mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
+    )
+    return table[:, :, : state.entry_count]
 
 
 @pytest.mark.parametrize("local_seq_len", _LOCAL_SHAPES, ids=[f"local{s}" for s in _LOCAL_SHAPES])
@@ -227,7 +305,16 @@ def test_csa_forward_mesh(mesh_device, device_params, topology, local_seq_len, m
 )
 @pytest.mark.parametrize("model_config, chunked_pcc", _MODEL_CONFIGS_CHUNKED)
 def test_csa_chunked_prefill_mesh(
-    mesh_device, device_params, topology, name, chunk_size, iters_valid, model_config, chunked_pcc, tmp_path
+    mesh_device,
+    device_params,
+    topology,
+    name,
+    chunk_size,
+    iters_valid,
+    model_config,
+    chunked_pcc,
+    tmp_path,
+    expect_error,
 ):
     """Chunked prefill with TtCSAState carried across chunks.
 
@@ -247,6 +334,16 @@ def test_csa_chunked_prefill_mesh(
     hidden = torch.randn(batch, total, config.hidden_size)
     out_ref = _golden(ref, hidden, config)
 
+    # The whole prompt's compressed entries, computed once so each chunk can be checked against the
+    # prefix it should have produced. The reference is unchunked here for the same reason the output
+    # reference is: the chunked path has to reproduce plain compression, not agree with a reference that
+    # shares its chunking.
+    position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
+    with torch.no_grad():
+        ref_entries, _ = ref.compressor(
+            hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
+        )
+
     tt_model = TtCSA.from_reference(
         mesh_device, ref, config, sp_axis=0, tp_axis=1, topology=topology, weight_cache_path=tmp_path
     )
@@ -254,9 +351,14 @@ def test_csa_chunked_prefill_mesh(
     _assert_reaches_every_entry(tt_model, len(iters_valid) * chunk_size // compress_rate)
     logger.debug(f"mesh={tuple(mesh_device.shape)} scenario={name} chunk={chunk_size} iters={iters_valid}")
 
+    # The joint table is [compressed | carry | this chunk], so what the other two regions leave is the
+    # compressed capacity -- which is also the row the sliding ids are based at.
+    capacity = state.joint_kv.shape[2] - config.sliding_window - chunk_size
+
     signpost("CSA_START")
     kv_actual = 0
     pccs = []  # (iter, kv_actual, valid, pcc); _report_chunk_pccs judges them after the run
+    cache_pccs = []  # the same, for the compressed entries the chunk appended
     for it, valid in enumerate(iters_valid):
         # Fixed device width every chunk; a short final chunk is padded up to it.
         chunk = torch.zeros(batch, chunk_size, config.hidden_size)
@@ -268,6 +370,29 @@ def test_csa_chunked_prefill_mesh(
         expected = out_ref[:, kv_actual : kv_actual + valid]
         _, pcc = comp_pcc(expected.to(torch.float32), out.to(torch.float32))
         pccs.append((it, kv_actual, valid, pcc))
+
+        # Checked EVERY chunk, and logged as we go rather than after the loop. A chunk's output depends
+        # on the entries it attends over, so when the output regresses the first question is whether
+        # those entries were right -- and judging the output first would abort before answering it.
+        cache = _read_entries(mesh_device, state)
+        _, cache_pcc = comp_pcc(ref_entries[..., : state.entry_count, :].to(torch.float32), cache.to(torch.float32))
+        cache_log = logger.warning if cache_pcc < _CACHE_PCC else logger.info
+        cache_log(f"  iter {it} (entries={state.entry_count}): compressed cache PCC {cache_pcc:.6f}")
+        cache_pccs.append((it, kv_actual, state.entry_count, cache_pcc))
+
+        # Asserted rather than collected: unlike a PCC this is exact, so a failure is a bug and not a
+        # number to weigh against the other chunks.
+        _audit_index_list(
+            mesh_device,
+            tt_model,
+            first_chunk=it == 0,
+            kv_actual=kv_actual,
+            valid=valid,
+            capacity=capacity,
+            sliding=config.sliding_window,
+            compress_rate=compress_rate,
+        )
+
         kv_actual += valid
     signpost("CSA_END")
 
@@ -275,22 +400,18 @@ def test_csa_chunked_prefill_mesh(
     assert state.kv_actual == total
     assert state.entry_count == sum(v // compress_rate for v in iters_valid)
 
-    # The compressed entries the run stored, against the reference's own. Checked separately from the
-    # block output because the cache is what a later chunk and decode inherit.
-    position_ids = torch.arange(total).unsqueeze(0).expand(batch, -1)
-    with torch.no_grad():
-        ref_entries, _ = ref.compressor(
-            hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
-        )
-    # The compressed entries are the leading rows of the joint table; the carry and raw-key regions
-    # after them belong to the sliding path and have no counterpart in ref.compressor.
-    cache = ttnn.to_torch(
-        state.joint_kv,
-        mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
-    )[:, :, : state.entry_count]
-    assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"
-    cache_passed, cache_msg = assert_with_pcc(ref_entries.to(torch.float32), cache.to(torch.float32), pcc=_CACHE_PCC)
-    logger.debug(f"  compressed cache PCC: {cache_msg}")
-    assert cache_passed, f"compressed cache mismatch: {cache_msg}"
+    worst_it, _, _, worst_cache = min(cache_pccs, key=lambda row: row[3])
+    assert (
+        worst_cache >= _CACHE_PCC
+    ), f"worst compressed cache PCC {worst_cache:.6f} (iter {worst_it}) is below the floor {_CACHE_PCC}"
+
+    # The contract the scenarios above are built around: a ragged chunk ends the prefill, because the
+    # indexer's block-cyclic key cache rotates off a mid-slab offset. Driven by moving the state's own
+    # counter rather than by a fourth chunk, so it costs no device work -- the assert is the first thing
+    # forward does. Pinned here because loosening it silently is exactly what a PCC would not catch: the
+    # picks stay plausible and only their positions are wrong.
+    state.kv_actual = chunk_size // 2  # small enough that the max_seq_len check is not what fires
+    with expect_error(AssertionError, "only the final chunk may be ragged"):
+        tt_model(_upload(mesh_device, chunk), seq_len_actual=chunk_size, state=state)
 
     logger.debug(f"PCC test passed! entries={state.entry_count}")
