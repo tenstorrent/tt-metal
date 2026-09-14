@@ -178,8 +178,7 @@ def _pad_overrun_summary(seq_len_cache, overruns):
     )
 
 
-# Per-chunk per-layer threshold; error accumulates with depth, so this matches the single-shot
-# transformer's device-gate trace bar (TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88). Calibrate + tighten.
+# Per-chunk per-layer threshold; error accumulates with depth. Calibrate + tighten.
 LAYER_PCC_THRESHOLD = 0.88
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
 # future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952

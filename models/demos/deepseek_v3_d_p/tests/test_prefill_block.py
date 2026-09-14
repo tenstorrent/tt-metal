@@ -80,8 +80,8 @@ class PrefillBlockThresholds:
 
 DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
-# Mistral runs GPT_DEVICE, and the selector above only special-cases GateComputeMode.DEVICE, so every
-# other device gate lands on `moe_gate_host` -- the same reason Kimi tunes that field rather than
+# Mistral runs GPT_DEVICE, and the selector above only special-cases device gates, so every
+# other gate mode lands on `moe_gate_host` -- the same reason Kimi tunes that field rather than
 # moe_gate_device. Floor set just under the measured 0.990894 (pcc-prompt_5k, mesh-8x4, CHUNK=5120).
 MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.990)
 
@@ -583,13 +583,12 @@ def _ci_unsupported_param_combos(**params):
     [
         ("dense", None),
         ("moe", GateComputeMode.DEVICE),
-        ("moe", GateComputeMode.DEVICE_FP32),
         ("moe", GateComputeMode.HOST_ALL),
     ],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
     # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
-    ids=["dense", "moe-gate_device", "moe-gate_device_fp32", "host_gate_all"],
+    ids=["dense", "moe-gate_device", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
@@ -711,7 +710,7 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
+    [("dense", None), ("moe", GateComputeMode.DEVICE)],
     ids=["dense", "moe_gate_device"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
@@ -1106,7 +1105,7 @@ def test_glm_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
+        gate_fallback_mode=GateComputeMode.DEVICE,
         weight_cache_path=device_cache,
         # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
         # num_layers=layer_num) gets a valid count, not the None default.
