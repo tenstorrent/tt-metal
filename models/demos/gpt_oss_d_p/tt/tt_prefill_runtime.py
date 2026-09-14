@@ -315,6 +315,7 @@ class TtPrefillRuntime:
         chunk_size: Optional[int] = None,  # variable chunk length: which supported size this chunk is
         request_id: int = -1,  # accepted for the common-runner contract; single-request prefill ignores it
         d2h_service=None,  # accepted for the common-runner contract; this runtime uses host-callback LayerAcks
+        metadata_msg=None,  # accepted for the common-runner contract; no trace-metadata path in this runtime
         record_dev=None,  # accepted for the common-runner contract; the D1H record path is unused here
     ) -> Optional[ttnn.Tensor]:
         """Prefill ONE chunk into user ``slot_id``'s slice of the KV cache (self-owned or the engine's
