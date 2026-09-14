@@ -36,6 +36,7 @@ import ttnn
 
 from ....layers.module import Module, Parameter
 from ....utils.conv3d import _FP32_BLOCKINGS, _ntuple, aligned_channels, get_conv3d_config, register_conv3d_configs
+from ....utils.matmul import get_matmul_core_grid
 from ....utils.tensor import local_device_to_torch
 
 # Every conv shape in this encoder misses the fp32 blocking table and falls back to
@@ -223,7 +224,10 @@ class MiniMaxH3CausalConv3d(Module):
             self.out_channels,
             self.kernel_size,
             dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            # HiFi4 over fp32 operands on every Tensix at once is the pipeline's peak current
+            # draw; the grid stays inside the Blackhole Galaxy rail cap for the same reason the
+            # matmuls do.
+            grid_size=get_matmul_core_grid(self.mesh_device),
             h_factor=self.height_factor,
             w_factor=self.width_factor,
         )

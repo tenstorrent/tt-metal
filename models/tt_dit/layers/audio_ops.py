@@ -18,6 +18,7 @@ from ..layers.module import Module, Parameter
 from ..parallel.config import AudioTCParallelConfig, AudioTParallelConfig, ParallelFactor
 from ..parallel.manager import CCLManager
 from ..utils.conv3d import _ntuple, aligned_channels, get_conv3d_config
+from ..utils.matmul import get_matmul_core_grid
 from ..utils.tensor import local_device_to_torch
 
 # Per-mesh cache of constant zeros buffers, keyed by id(mesh_device).
@@ -847,7 +848,9 @@ class Conv2dViaConv3d(Module):
             self.out_channels,
             self.kernel_size,
             dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            # Blackhole takes HiFi4 below whatever the dtype, so every Tensix draws peak current
+            # at once. Stay inside the Galaxy rail cap.
+            grid_size=get_matmul_core_grid(self.mesh_device),
             h_factor=1,
             w_factor=1,
         )
@@ -1030,7 +1033,8 @@ class Conv1dViaConv3d(Module):
             self.out_channels,
             self.kernel_size,
             dtype,
-            grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            # Unconditional HiFi4 with fp32 accumulation below; stay inside the Galaxy rail cap.
+            grid_size=get_matmul_core_grid(self.mesh_device),
             h_factor=1,
             w_factor=1,
         )
@@ -1046,7 +1050,7 @@ class Conv1dViaConv3d(Module):
                 H_out_block=self.conv_config.H_out_block,
                 C_out_block=_pick_c_out_block_shard(full=self.conv_config.C_out_block, shard=self.out_channels_shard),
                 C_in_block=self.conv_config.C_in_block,
-                compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+                compute_with_storage_grid_size=get_matmul_core_grid(self.mesh_device),
             )
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
