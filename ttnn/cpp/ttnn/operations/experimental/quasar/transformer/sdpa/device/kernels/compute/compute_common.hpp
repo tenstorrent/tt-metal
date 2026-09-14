@@ -42,6 +42,23 @@
 #include "experimental/llk_sfpu/ckernel_sfpu_sdpa.h"
 #endif
 
+// Switch the packer output operand to `out_dfb`.
+//
+// Quasar packer quirk: `pack_reconfig_data_format(new)` only updates the pack DATA FORMAT, not the
+// output ring/address, when the pack output OPERAND changes (api/compute/reconfig_data_format.h NOTE
+// ARCH_QUASAR: "call pack_init(new_cb_id) before pack_tile when switching pack output operand"). Without
+// a pack_init the packer keeps writing to the previously-configured ring, so the intended output DFB is
+// never written -> all-zero output, no assert (observed on the emulator; e.g. seq128 sdpa returned an
+// all-zero tensor). Every working Quasar compute kernel (pool_generic / conv2d / binary_ng) calls
+// pack_init at output switches. WH/BH do NOT need this (pack_reconfig alone re-targets correctly there;
+// validated 13/13), so the pack_init is ARCH_QUASAR-gated to leave the validated WH path byte-identical.
+ALWI void pack_reconfig_out(uint32_t out_dfb) {
+    pack_reconfig_data_format(out_dfb);
+#ifdef ARCH_QUASAR
+    pack_init(out_dfb);
+#endif
+}
+
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t dfbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         transpose, true /*transpose within 16x16 face*/, dfbid)));
@@ -201,7 +218,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, bool do_eltwise_max = false) 
 
         tile_regs_commit();
         tile_regs_wait();
-        pack_reconfig_data_format(out_dfb);
+        pack_reconfig_out(out_dfb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t cur_max_dst_idx = i;
             pack_tile<true>(cur_max_dst_idx, out_dfb, (row_start_idx + i));
@@ -243,7 +260,7 @@ void reduce_c(uint32_t out_dfb, uint32_t prev_dfb, uint32_t cols, bool do_eltwis
     dfb_in0.wait_front(num_tiles);
     dfb_out.reserve_back(rows);
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
 
     binary_max_tile_init();
     constexpr uint32_t reduce_dst_idx = 0;
@@ -296,7 +313,7 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_dfb);
     copy_init(in_dfb);
     recip_tile_init();
-    pack_reconfig_data_format(in_dfb);
+    pack_reconfig_out(in_dfb);
 
     dfb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -407,7 +424,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             tile_regs_wait();
 
             if constexpr (write_result_inplace) {
-                pack_reconfig_data_format(in0_dfb);
+                pack_reconfig_out(in0_dfb);
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
                     pack_tile(j, in0_dfb);
                 }
@@ -416,7 +433,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_dfb, uint32_t reduce_dfb, uin
             }
 
             if constexpr (do_reduce) {
-                pack_reconfig_data_format(reduce_dfb);
+                pack_reconfig_out(reduce_dfb);
                 // While we have results in DST, take advantage of L1 accumulation
                 // to reduce row x cols tiles to rows x 1 tiles.
                 if (u > 0) {
@@ -469,7 +486,7 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
     constexpr uint32_t num_tiles = rows * cols;
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
@@ -557,7 +574,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb) {
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(rows);
     for (uint32_t i = 0; i < rows; ++i) {
@@ -635,7 +652,7 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Postcondition: in1_dfb has num_tiles consumed
 
     reconfig_data_format(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     add_init(in0_dfb, in1_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
@@ -671,7 +688,7 @@ void mul_tiles_bcast_cols_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t n
 
     reconfig_data_format(in0_dfb, in1_dfb);
     mul_bcast_cols_init(in0_dfb, in1_dfb);
-    pack_reconfig_data_format(in0_dfb);
+    pack_reconfig_out(in0_dfb);
     dfb_in0.wait_front(num_tiles);
     dfb_in1.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {
@@ -971,7 +988,7 @@ void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offse
     // Pass 1: reserved_running[i] = cur[i].
     reconfig_data_format_srca(dfb_sum);
     copy_init(dfb_sum);
-    pack_reconfig_data_format(dfb_sum);
+    pack_reconfig_out(dfb_sum);
     PACK((llk_pack_reconfig_l1_acc(0)));
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -984,7 +1001,7 @@ void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offse
 
     // Pass 2: reserved_running[i] += prev[i] * bcast(emd[i])  (L1 accumulate onto pass-1 cur[i]).
     reconfig_data_format(dfb_sum, dfb_emd);
-    pack_reconfig_data_format(dfb_sum);
+    pack_reconfig_out(dfb_sum);
     PACK((llk_pack_reconfig_l1_acc(1)));
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
@@ -1003,7 +1020,7 @@ void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offse
     // Re-base: move the running sum (now the ring front) down to the physical front [0,num_tiles) so
     // the next chunk's producer appends [prev|cur] contiguously at rd_ptr==0 (no-wrap addressing).
     reconfig_data_format_srca(dfb_sum);
-    pack_reconfig_data_format(dfb_sum);
+    pack_reconfig_out(dfb_sum);
     move_block<true>(dfb_sum, dfb_sum, num_tiles);
 }
 
@@ -1032,7 +1049,7 @@ void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
 
 void log_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     reconfig_data_format_srca(in_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     DataflowBuffer dfb_in(in_dfb);
     DataflowBuffer dfb_out(out_dfb);
     copy_init(in_dfb);
@@ -1316,7 +1333,7 @@ ALWI void transpose_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles)
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
     transpose_init(in_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         transpose_tile(in_dfb, i, 0);
@@ -1363,7 +1380,7 @@ void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
 
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     dfb_in1.wait_front(N);
     dfb_out.wait_front(M);
 
@@ -1424,7 +1441,7 @@ void apply_padded_mask_lightweight_runtime(
     uint32_t start = num_cols - num_padded;
 
     reconfig_data_format_srca(neginf_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(neginf_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1456,7 +1473,7 @@ void apply_partial_mask_lightweight(
     uint32_t num_rows,
     uint32_t row_base = 0) {  // first out_dfb tile-row of this query band; nonzero when heads span >1 DEST band
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -1494,7 +1511,7 @@ void apply_causal_mask_lightweight(
     uint32_t straddle_col = 0,
     uint32_t straddle_jump = 0) {
     reconfig_data_format_srca(mask_dfb);
-    pack_reconfig_data_format(out_dfb);
+    pack_reconfig_out(out_dfb);
     copy_init(mask_dfb);
     PACK((llk_pack_reconfig_l1_acc(1)));
 
@@ -2000,7 +2017,7 @@ void sdpa_inner_loop(
             // WH validates the same path; the extra kt DFB is offset by the max_A/max_B merge to stay <= 8.
             transpose_block(dfb_k_in, dfb::kt, Sk_chunk_t * DHt);
             reconfig_data_format(dfb::kt, dfb_q_in);
-            pack_reconfig_data_format(dfb_qk_im);
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
                 dfb::kt,
@@ -2168,7 +2185,7 @@ void sdpa_inner_loop(
             // Reconfigure unpackers: srcA (context 0) = dfb_v_in, srcB (context 1) = dfb_qk_im (operands are swapped in
             // matmul)
             reconfig_data_format(dfb_v_in, dfb_qk_im);
-            pack_reconfig_data_format(alias_mm2_cur_out);
+            pack_reconfig_out(alias_mm2_cur_out);
 
             /* OUT_IM = QK @ V_CHUNK */
             matmul_blocks(
@@ -2323,7 +2340,7 @@ void sdpa_inner_loop(
                 mul_block_bcast_cols_inplace<Sq_chunk_t, vDHt>(alias_sub, alias_sig);
                 // dfb_out = dfb_prev_out - alias_sub
                 reconfig_data_format(dfb_prev_out, alias_sub);
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 sub_block(dfb_prev_out, alias_sub, dfb_out, out_chunk_tiles);
                 dfb_prev_out_obj.pop_front(out_chunk_tiles);
                 DataflowBuffer(alias_cur_out).pop_front(out_chunk_tiles);
@@ -2332,7 +2349,7 @@ void sdpa_inner_loop(
                 // alias_sig = sigmoid(dfb_lse_in - alias_cur_lse)
                 // alias_cur_lse = log(alias_sig)
                 // dfb_lse_out = dfb_lse_in - alias_cur_lse
-                pack_reconfig_data_format(alias_sig);
+                pack_reconfig_out(alias_sig);
                 reconfig_data_format(dfb_lse_in, alias_cur_lse);
                 logsigmoid_sub(dfb_lse_in, alias_cur_lse, alias_sig, Sq_chunk_t);
                 sub_block(dfb_lse_in, alias_sig, dfb_lse_out, Sq_chunk_t);
@@ -2340,10 +2357,10 @@ void sdpa_inner_loop(
                 DataflowBuffer(alias_cur_lse).pop_front(Sq_chunk_t);
                 dfb_lse_in_obj.pop_front(Sq_chunk_t);
             } else {
-                pack_reconfig_data_format(dfb_out);
+                pack_reconfig_out(dfb_out);
                 copy_block(alias_mm2_prev_out, dfb_out, out_chunk_tiles);
 
-                pack_reconfig_data_format(dfb_lse_out);
+                pack_reconfig_out(dfb_lse_out);
                 copy_block(alias_prev_max, dfb_lse_out, Sq_chunk_t);
             }
         } else {
@@ -2351,7 +2368,7 @@ void sdpa_inner_loop(
             recip_block_inplace(alias_prev_sum, Sq_chunk_t);
 
             /* dfb_out_accumulate_im *= dfb_cur_sum */
-            pack_reconfig_data_format(dfb_out);
+            pack_reconfig_out(dfb_out);
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, dfb_out);
 
             // free up dfb_prev_max after K chunks
