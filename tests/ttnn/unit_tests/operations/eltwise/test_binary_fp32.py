@@ -677,3 +677,167 @@ def test_logaddexp2_infinities(device, a, b, torch_dtype, ttnn_dtype):
     got = tt_out.flatten()[0].item()
     want = z_torch.flatten()[0].item()
     assert got == want, f"logaddexp2({a}, {b}) returned {got}; the exact result is {want}"
+
+
+# ---------------------------------------------------------------------------------------------
+# logaddexp / logaddexp2: IEEE special values, the scalar and in-place APIs, and broadcasting.
+#
+# Every IEEE case below is checked on both operations and both float dtypes, in both operand
+# orders, against the PyTorch reference:
+#     (+inf, +inf) -> +inf    (-inf, -inf) -> -inf    (+inf, -inf) -> +inf
+#     (+inf, x)    -> +inf    (-inf, x)    -> x       NaN in either operand -> NaN
+# ---------------------------------------------------------------------------------------------
+
+_INF = float("inf")
+_NAN = float("nan")
+
+_LOGADDEXP_OPS = [ttnn.logaddexp, ttnn.logaddexp2]
+_LOGADDEXP_INPLACE_OPS = [(ttnn.logaddexp, ttnn.logaddexp_), (ttnn.logaddexp2, ttnn.logaddexp2_)]
+_LOGADDEXP_DTYPES = [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)]
+
+# (rtol, atol) for finite results. fp32 uses the tolerance of the fp32 overflow tests above,
+# bf16 the one of the bf16 overflow tests: one ULP of bf16 is 1/128 of the magnitude.
+_LOGADDEXP_TOLERANCE = {torch.float32: (1e-5, 1e-5), torch.bfloat16: (1e-2, 1e-2)}
+
+_LOGADDEXP_SPECIAL_PAIRS = [
+    (_INF, _INF),
+    (-_INF, -_INF),
+    (_INF, -_INF),
+    (-_INF, _INF),
+    (_INF, 2.5),
+    (2.5, _INF),
+    (_INF, -150.0),
+    (-150.0, _INF),
+    (-_INF, 2.5),
+    (2.5, -_INF),
+    (-_INF, 150.0),
+    (-150.0, -_INF),
+    (_NAN, 1.0),
+    (1.0, _NAN),
+    (_NAN, _NAN),
+    (_NAN, _INF),
+    (-_INF, _NAN),
+    # A negative NaN: max() orders a NaN by its sign, so this is the case where the NaN
+    # would lose to the finite operand if the kernel did not propagate it explicitly.
+    (-_NAN, 1.0),
+    (1.0, -_NAN),
+]
+
+_LOGADDEXP_FINITE_PAIRS = [
+    (100.0, 0.0),  # past the exp() overflow of the composed form
+    (200.0, -200.0),
+    (1000.0, 999.0),
+    (-1000.0, -1000.0),  # both exponentials underflow in the composed form
+    (5.0, 3.0),
+    (1.0, 1.0),
+    (-0.5, 0.25),
+    (0.0, 0.0),
+]
+
+
+def _assert_logaddexp_matches(got, want, torch_dtype, what):
+    got = got.to(torch.float32).flatten()
+    want = want.to(torch.float32).flatten()
+    assert got.shape == want.shape, f"{what}: shape {tuple(got.shape)} != {tuple(want.shape)}"
+
+    nan_want = torch.isnan(want)
+    if torch_dtype == torch.bfloat16:
+        # A NaN result leaves a bfloat16 tensor as an infinity: the bf16 pack cannot hold it.
+        # test_binary_div_edge_case_ttnn records the same thing for div. What is asserted here
+        # is that the NaN did not turn into a finite value.
+        assert (~torch.isfinite(got[nan_want])).all(), f"{what}: NaN inputs gave finite {got[nan_want].tolist()}"
+    else:
+        assert torch.isnan(got[nan_want]).all(), f"{what}: NaN inputs gave {got[nan_want].tolist()}"
+
+    inf_want = torch.isinf(want)
+    assert torch.equal(
+        got[inf_want], want[inf_want]
+    ), f"{what}: expected {want[inf_want].tolist()}, got {got[inf_want].tolist()}"
+
+    finite = ~(nan_want | inf_want)
+    assert torch.isfinite(got[finite]).all(), f"{what}: finite reference, non-finite result {got[finite].tolist()}"
+    rtol, atol = _LOGADDEXP_TOLERANCE[torch_dtype]
+    torch.testing.assert_close(got[finite], want[finite], rtol=rtol, atol=atol, msg=what)
+
+
+@pytest.mark.parametrize("ttnn_function", _LOGADDEXP_OPS)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", _LOGADDEXP_DTYPES)
+def test_logaddexp_ops_special_values(device, ttnn_function, torch_dtype, ttnn_dtype):
+    pairs = _LOGADDEXP_SPECIAL_PAIRS + _LOGADDEXP_FINITE_PAIRS
+    x_torch = torch.tensor([[a for a, _ in pairs]], dtype=torch_dtype)
+    y_torch = torch.tensor([[b for _, b in pairs]], dtype=torch_dtype)
+    z_torch = ttnn.get_golden_function(ttnn_function)(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, y_tt))
+
+    _assert_logaddexp_matches(tt_out, z_torch, torch_dtype, f"{ttnn_function.__name__} {torch_dtype}")
+
+
+_LOGADDEXP_TENSOR_VALUES = [_INF, -_INF, _NAN, 1000.0, 150.0, 2.5, 0.0, -0.5, -150.0, -1000.0]
+
+
+@pytest.mark.parametrize("ttnn_function, inplace_function", _LOGADDEXP_INPLACE_OPS)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", _LOGADDEXP_DTYPES)
+@pytest.mark.parametrize("scalar", [0.5, 150.0, -150.0, _INF, -_INF, _NAN])
+@pytest.mark.parametrize("api", ["tensor_scalar", "inplace_scalar"])
+def test_logaddexp_ops_scalar_api(device, ttnn_function, inplace_function, torch_dtype, ttnn_dtype, scalar, api):
+    x_torch = torch.tensor([_LOGADDEXP_TENSOR_VALUES], dtype=torch_dtype)
+    z_torch = ttnn.get_golden_function(ttnn_function)(x_torch, torch.full_like(x_torch, scalar))
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    if api == "tensor_scalar":
+        tt_out = ttnn.to_torch(ttnn_function(x_tt, scalar))
+    else:
+        inplace_function(x_tt, scalar)
+        tt_out = ttnn.to_torch(x_tt)
+
+    _assert_logaddexp_matches(
+        tt_out, z_torch, torch_dtype, f"{api} {ttnn_function.__name__}(x, {scalar}) {torch_dtype}"
+    )
+
+
+@pytest.mark.parametrize("ttnn_function, inplace_function", _LOGADDEXP_INPLACE_OPS)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", _LOGADDEXP_DTYPES)
+def test_logaddexp_ops_inplace_tensor(device, ttnn_function, inplace_function, torch_dtype, ttnn_dtype):
+    pairs = _LOGADDEXP_SPECIAL_PAIRS + _LOGADDEXP_FINITE_PAIRS
+    x_torch = torch.tensor([[a for a, _ in pairs]], dtype=torch_dtype)
+    y_torch = torch.tensor([[b for _, b in pairs]], dtype=torch_dtype)
+    z_torch = ttnn.get_golden_function(ttnn_function)(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    inplace_function(x_tt, y_tt)
+
+    _assert_logaddexp_matches(ttnn.to_torch(x_tt), z_torch, torch_dtype, f"{inplace_function.__name__} {torch_dtype}")
+
+
+@pytest.mark.parametrize("ttnn_function", _LOGADDEXP_OPS)
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", _LOGADDEXP_DTYPES)
+@pytest.mark.parametrize(
+    "shape_a, shape_b",
+    [
+        ((1, 3, 32, 32), (1, 3, 32, 32)),  # no broadcast, as a control
+        ((1, 3, 32, 32), (1, 1, 32, 32)),
+        ((2, 3, 16, 16), (2, 3, 1, 16)),
+        ((2, 3, 16, 16), (1, 3, 16, 1)),
+    ],
+)
+def test_logaddexp_ops_broadcast(device, ttnn_function, torch_dtype, ttnn_dtype, shape_a, shape_b):
+    # Finite operands only, drawn wide enough that most pairs are past the 88.7 (logaddexp)
+    # and 128 (logaddexp2) thresholds where the composed form overflowed, with the rest in the
+    # band where the correction term matters. Every result must be finite and match torch.
+    torch.manual_seed(0)
+    x_torch = (torch.rand(shape_a) * 600.0 - 300.0).to(torch_dtype)
+    y_torch = (torch.rand(shape_b) * 600.0 - 300.0).to(torch_dtype)
+    z_torch = ttnn.get_golden_function(ttnn_function)(x_torch, y_torch)
+
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, y_tt))
+
+    assert list(tt_out.shape) == list(z_torch.shape)
+    _assert_logaddexp_matches(
+        tt_out, z_torch, torch_dtype, f"{ttnn_function.__name__} {shape_a} x {shape_b} {torch_dtype}"
+    )
