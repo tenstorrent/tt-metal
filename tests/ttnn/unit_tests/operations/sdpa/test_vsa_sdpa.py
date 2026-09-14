@@ -391,7 +391,9 @@ def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
     tt_counts = ttnn.from_torch(
         counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
     )
-    tt_lse = dev(torch.zeros(1, heads, seq_len, 64))
+    tt_lse = ttnn.from_torch(
+        torch.zeros(1, heads, seq_len, 64), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
+    )
 
     baseline = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True))
     out = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True, lse_out=tt_lse))

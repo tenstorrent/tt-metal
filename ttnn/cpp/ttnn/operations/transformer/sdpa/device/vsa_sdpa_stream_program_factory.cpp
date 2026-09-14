@@ -333,9 +333,13 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t cb_stiles = cb(tile_bytes, 16, bf);                     // cb_stiles
     const uint32_t cb_sumback = cb(tile_bytes, 2 * Sqt, bf);               // cb_sumback
     const uint32_t cb_sacc = cb(((rmax * 64 * 8 + 31) / 32) * 32, 1, bf);  // cb_sacc: int64[rmax][64]
-    // softmax-state handoff (compute -> writer): 2 tiles per sub-row (sum, threshold), double buffered
+    // softmax-state handoff (compute -> writer): 2 tiles per sub-row (sum, threshold), double buffered.
+    // fp32: the threshold is a raw logit in the tens, where bf16 quantizes to ~0.25 and swamps the
+    // merge weight this exists to feed.
     const bool has_lse = t.lse_out.has_value();
-    const uint32_t cb_lse = cb(tile_bytes, 2 * 2 * Sqt, bf);  // cb_lse
+    const tt::DataFormat lse_df = tt::DataFormat::Float32;
+    const uint32_t lse_tile_bytes = tt::tile_size(lse_df);
+    const uint32_t cb_lse = cb(lse_tile_bytes, 2 * 2 * Sqt, lse_df);  // cb_lse
 
     // ---- compile-time args ----
     std::vector<uint32_t> reader_ct = {
@@ -382,6 +386,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     }
     writer_ct.push_back(cb_lse);
     writer_ct.push_back(has_lse ? 1u : 0u);
+    writer_ct.push_back(lse_tile_bytes);
     std::vector<uint32_t> writer_crt;
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer()).append_to(writer_ct, writer_crt);
