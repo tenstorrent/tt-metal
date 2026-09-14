@@ -73,7 +73,7 @@ ZoneCsvConsumer::Row ZoneCsvConsumer::row_for(const api::Core& core) {
 }
 
 void ZoneCsvConsumer::operator()(const Batch& batch) {
-    dropped_ += batch.dropped();
+    dropped_ += batch.dropped_bytes();
     if (freq_mhz_ == 0.0) {
         if (!batch.zones().empty()) {
             freq_mhz_ = batch.zones().front().frequency_ghz() * 1000.0;

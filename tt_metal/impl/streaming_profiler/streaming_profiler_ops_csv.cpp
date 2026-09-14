@@ -26,7 +26,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
         }
         const api::Core c = z.core();
         if (!devices_.contains(c.chip_id)) {
-            devices_.emplace(c.chip_id, DeviceMeta{c.chip_id, z.frequency_ghz()});
+            devices_.emplace(c.chip_id, DeviceMeta{static_cast<uint32_t>(c.chip_id), z.frequency_ghz()});
         }
         const uint32_t risc = static_cast<uint32_t>(c.risc);
         const uint32_t core_key = (static_cast<uint32_t>(c.logical.y) << 16) | static_cast<uint32_t>(c.logical.x);

@@ -360,7 +360,7 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
                 cap.lanes.push_back(experimental::streaming_profiler::Core{
                     .logical = logical,
                     .physical = c.physical,
-                    .chip_id = chip,
+                    .chip_id = static_cast<ChipId>(chip),
                     .risc = static_cast<experimental::streaming_profiler::Risc>(r)});
             }
             ctx.cores.push_back(c);
