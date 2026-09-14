@@ -6,37 +6,38 @@
 Mirrors ``DeepseekV4Attention`` on a ``compressed_sparse_attention`` layer.
 
 CSA compresses every 4 tokens instead of every 128 and runs a Lightning Indexer over the compressed
-entries, so each query attends to at most ``index_topk`` of them. The attention core is HCA's, in
-``v4_attention_base.py``; what is here is the ratio-4 cache append and the block mask, which ANDs the
-indexer's per-query picks into the causal compressed columns.
+entries, so each query attends to its sliding window plus at most ``index_topk`` compressed entries. The
+stems, sinks and output projection are HCA's, in ``v4_attention_base.py``; what is here is the ratio-4
+cache append, the joint key table, and the index list that replaces HCA's dense mask.
 
-The mask route attends densely over the whole compressed cache and lets the mask drop the unpicked
-entries, exactly as the reference does. That costs O(S * S/4) instead of O(S * index_topk), so this is
-the correctness path; long context wants the entries gathered instead, which needs a sparse kernel that
-supports V4's attention sinks.
+One table, one index list
+-------------------------
+The reference attends over ``[carry | sliding | compressed]`` behind an additive 0/-inf mask.
+``sparse_sdpa`` takes a per-query list of key ROWS instead, and it reads a single tensor, so all three
+sources share one persistent ROW_MAJOR table:
 
-Design note: the compressed cache is REPLICATED, not SP-sharded
---------------------------------------------------------------
-``state.compressed_kv`` is allocated with the default replicate mapper and
-``_normalize_rotate_and_gather(gather_sp=True)`` all-gathers the compressed rows, so every chip holds
-the whole cache. Being 4x compressed does not make that cheap, because a replicated footprint does not
-shrink with SP while a sharded one does. At V4-Pro, 55296 tokens, chunk 1024, an 8x4 mesh:
+    [0, capacity)                                  compressed entries, appended at ``entry_count``
+    [capacity, capacity + W)                       the previous chunk's raw-key tail (the carry)
+    [capacity + W, capacity + W + chunk)           this chunk's raw keys, SP-gathered
 
-- capacity is 14080 entries, so ``compressed_kv`` is about 14.4 MB per layer per chip, against about
-  8.0 MB for GLM's SP-sharded KVPE (576-wide, 6912 rows a chip at sp 8). The 4x-compressed cache
-  therefore costs roughly 1.8x MORE per-chip memory than the uncompressed sharded one, and the gap
-  widens with SP.
-- the mask scratch belongs in the same total: ``_mask`` is about 3.9 MB and ``_sel_template`` about
-  4.2 MB per layer per chip, so cache plus scratch is roughly 22 MB a chip per layer.
-- there is a second-order cost too: an SP all-gather of the compressed rows, per layer per chunk.
+with ``W`` the sliding window. A query's row ids into that layout are affine in its position (see
+``_build_index_consts``), so the list is built once in ``alloc_state`` and each chunk overwrites only its
+top-k columns. Attention costs O(S * (W + index_topk)) rather than the mask route's O(S * S/4), and the
+mask, its scratch, and the pad rows that existed only to keep the mask honest are all gone.
 
-Sharding it is blocked, and precisely: it needs an attention read over a sharded or ring-gathered
-compressed cache WITH attention-sink support, which is the same missing kernel the paragraph above
-flags. Until that lands the replicated cache is the only thing the dense mask route can read.
+Design note: the joint table is REPLICATED, not SP-sharded
+----------------------------------------------------------
+``sparse_sdpa`` reads arbitrary rows of one tensor, and a query on any chip may name any row, so every
+chip holds the whole table. Being 4x compressed does not make that free, because a replicated footprint
+does not shrink with SP while a sharded one does. At V4-Pro, 55296 tokens, chunk 1024, an 8x4 mesh:
+capacity is 14080 entries, so the table is about 14.5 MB per layer per chip against about 8.0 MB for
+GLM's SP-sharded KVPE (576-wide, 6912 rows a chip at sp 8). There is a second-order cost too: the
+compressor SP-all-gathers each chunk's compressed rows, per layer per chunk.
 
-Read CSA perf numbers with that in mind. The indexer's top-k is computed every chunk but only used to
-build a mask, so attention still costs O(S * S/4) and the sparsity is not cashed in anywhere -- neither
-the memory nor the time figures are representative of what CSA is meant to cost."""
+Sharding it is blocked on the read, not the write: it needs sparse attention over a sharded or
+ring-gathered table, which is the same kernel gap GLM's KVPE hits and works around by gathering the
+prefix. The memory is the price of the single-tensor contract; the time is now proportional to the
+sparsity, which is what the mask route never was."""
 
 from __future__ import annotations
 
@@ -48,46 +49,47 @@ from models.demos.deepseek_v3_d_p.tt.mla.indexer import TtCsaIndexer
 from models.demos.deepseek_v3_d_p.tt.mla.v4_attention_base import TtV4AttentionBase
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
+_SENTINEL = 0xFFFFFFFF  # sparse_sdpa's "no key here"; the indexer emits it where the reference has -1
+_INDEX_ALIGN = 128  # sparse_sdpa reads the index list in k_chunk_size-wide steps
 
-def block_mask(causal_block, top_k, *, template, zeros, dump: int):
-    """AND a query's indexer picks into its causal compressed columns.
 
-    Both operands are 0 / -inf, so adding them IS the AND: an entry survives only if it is causally
-    visible and the indexer selected it. That AND is also what keeps a ragged final chunk honest -- the
-    indexer scores the padded slab, but every entry a pad window produced sits past the causal threshold
-    of every real query row.
+def index_tables(rows: int, sliding: int, topk: int, capacity: int):
+    """Host halves of the index list: ``(source, first_chunk_permutation, later_permutation)``.
 
-    ``top_k`` arrives as ROW_MAJOR uint32 with ``0xFFFFFFFF`` where the reference has -1. ``template`` is
-    a -inf slab whose width is the next power of two above the cache capacity and ``dump`` that width
-    minus one, so masking a pick with it maps every real entry to itself and every sentinel to the last
-    column -- which is past the capacity, so slicing the mask down drops it.
+    Split out of ``_build_index_consts`` so the arithmetic can be checked against a golden without a
+    device; see ``test_csa_sparse_attention.py``. ``rows`` is the GLOBAL query count of a chunk -- the
+    caller shards the result onto SP.
 
-    The mask with ``dump`` is a bound, not a range check, and it does not need to be one: ``top_k`` comes
-    from ``topk_large_indices``, which emits either an index below its ``valid_length`` or the exact
-    sentinel, and ``valid_length <= capacity < width``. So the only value the mask folds is the sentinel,
-    and even if it ever aliased a real column, that column is still ANDed with causality below.
+    The source is ``[sliding ids | top-k | one sentinel]``. Sliding ids: the raw region is
+    ``[carry | chunk]`` based at ``capacity``, so chunk-local token offset ``d`` (negative inside the
+    carry) sits at row ``capacity + sliding + d``, and query ``i`` wants tokens ``i - sliding + 1 .. i``.
+    That makes the id affine in ``i`` and ``j`` and independent of where the chunk sits, which is what
+    lets it be built once. The top-k block is zeroed here and overwritten per chunk; its ids need no
+    arithmetic, because compressed entries occupy rows ``[0, capacity)`` so an entry id IS its row id.
 
-    The round-trip through TILE is because the bitwise op is an SFPU one, while scatter refuses an index
-    this wide in tiled layout.
+    The permutations exist because ``sparse_sdpa``'s reader finds the first sentinel and treats it as the
+    end of the row, so sentinels must be a contiguous TAIL. Query ``p`` has only ``min(sliding, p + 1)``
+    real sliding keys and they are the LAST slots of its block -- the low ``j`` fall off the front of the
+    sequence. Left alone those holes sit mid-row and every compressed pick after them is dropped. So the
+    first chunk gathers through a permutation that slides the real sliding slots down to 0, abuts the
+    pick block to them, and points the rest at the spare sentinel column. Only positions below
+    ``sliding`` are short and chunks are whole multiples of ``chunk_align``, so every later chunk's carry
+    fills the window and its permutation is the identity, modulo that same tail."""
+    dump = sliding + topk  # the source's spare sentinel column, and the gather's dump target
+    width = -(-dump // _INDEX_ALIGN) * _INDEX_ALIGN
 
-    ``template`` and ``zeros`` are persistent and reused every chunk, so this must not write through
-    either of them -- it relies on ``ttnn.scatter`` being out-of-place (see
-    ``test_csa_block_mask_reuses_one_template``)."""
-    batch, rows, width = causal_block.shape[0], causal_block.shape[2], causal_block.shape[3]
+    i = torch.arange(rows).view(rows, 1)
+    j = torch.arange(sliding).view(1, sliding)
+    sliding_ids = capacity + sliding + (i - sliding + 1 + j)
+    source = torch.cat(
+        [sliding_ids, torch.zeros(rows, topk, dtype=torch.int64), torch.full((rows, 1), _SENTINEL)], dim=-1
+    )
 
-    picks = ttnn.to_layout(top_k, ttnn.TILE_LAYOUT)
-    bounded = ttnn.bitwise_and(picks, dump)
-    ttnn.deallocate(picks)
-    index = ttnn.to_layout(bounded, ttnn.ROW_MAJOR_LAYOUT)
-    ttnn.deallocate(bounded)
-
-    scattered = ttnn.scatter(template, -1, index, zeros)
-    ttnn.deallocate(index)
-    selected = ttnn.slice(scattered, [0, 0, 0, 0], [batch, 1, rows, width])
-    ttnn.deallocate(scattered)
-    block = ttnn.add(causal_block, selected)
-    ttnn.deallocate(selected)
-    return block
+    out = torch.arange(width).view(1, width).expand(rows, width)
+    valid = (i + 1).clamp(max=sliding)  # real sliding keys of the first chunk's row i
+    compacted = torch.where(out < valid, out + (sliding - valid), sliding + (out - valid))
+    compacted = torch.where(out < valid + topk, compacted, torch.full_like(compacted, dump))
+    return source, compacted, out.clamp(max=dump)
 
 
 def _compute_kernel_config(device, *, fp32: bool):
@@ -104,16 +106,18 @@ class TtCSAState:
     """Chunked-prefill state, owned by the caller and passed to ``TtCSA.forward``.
 
     The device tensors keep a FIXED shape for the whole prefill and only their contents advance --
-    that is what lets one compiled program serve every chunk. The counters say how much is real;
-    the attention mask -infs the rest.
+    that is what lets one compiled program serve every chunk. The counters say how much is real; no
+    query's index list names a row past that, so the rest is never read.
 
     One piece of per-prefill state is deliberately NOT here: the indexer runs its own compressor and so
     carries its own overlap state, at ``index_head_dim``, which it keeps privately and advances inside
     ``write_k``. ``alloc_state`` resets it alongside the two below, so both begin at the same position."""
 
-    def __init__(self, compressed_kv, sliding_carry, kv_state, score_state, index_kv_cache, max_seq_len):
-        self.compressed_kv = compressed_kv  # [B, 1, compressed_capacity, head_dim]
-        self.sliding_carry = sliding_carry  # [B, 1, sliding_window, head_dim]
+    def __init__(self, joint_kv, kv_state, score_state, index_kv_cache, max_seq_len):
+        # The single ROW_MAJOR table sparse_sdpa reads, laid out as the module docstring describes. The
+        # carry lives in it too, at a fixed row range, so there is no separate carry tensor: forward
+        # writes the next chunk's carry there once this chunk's attention has already read it.
+        self.joint_kv = joint_kv  # [1, 1, capacity + sliding_window + chunk, head_dim]
         # The overlap the next chunk's first window needs: its predecessor window's Ca slice, in the
         # decode-compatible Blaze layout the compressor op emits and consumes.
         self.kv_state = kv_state  # [B, 1, CSA_STATE_ROWS, head_dim]
@@ -137,9 +141,10 @@ class TtCSA(TtV4AttentionBase):
         self._indexer_settings = self._resolve_indexer_settings(indexer_settings)
         self._indexer = None
         # Everything below comes from alloc_state, which every caller has to run before forward.
-        self._sel_template = None  # persistent -inf slab the picks are scattered into
-        self._sel_zeros = None  # the zeros they scatter
-        self._sel_dump = None
+        self._index_source = None  # persistent [sliding ids | top-k | sentinel] the gather reads
+        self._index_perm = None  # (first-chunk compacting permutation, later-chunk one)
+        self._carry_row = None  # where the carry starts in the joint table
+        self._raw_row = None  # and where this chunk's raw keys do
 
     @staticmethod
     def _resolve_indexer_settings(settings: dict) -> dict:
@@ -203,10 +208,13 @@ class TtCSA(TtV4AttentionBase):
         # Writes are exact-width from a tile-aligned offset, so the last one can reach one slab past the
         # entries themselves.
         capacity = -(-entries // ttnn.TILE_SIZE) * ttnn.TILE_SIZE + width
+        # The joint table's three regions. The index list is built off the same two numbers, so the rows
+        # it names and the rows forward writes cannot drift apart.
+        self._carry_row = capacity
+        self._raw_row = capacity + self.sliding_window
 
         self._build_carry_index(chunk)
-        self._build_masks(chunk, capacity)
-        self.compressor.alloc_tables(max_seq_len, chunk, capacity)
+        self.compressor.alloc_tables(max_seq_len, chunk)
 
         # One rope table per state, so forward only gathers. This one has a row per TOKEN; the compressor
         # builds its own, with a row per ENTRY.
@@ -214,7 +222,7 @@ class TtCSA(TtV4AttentionBase):
         self._slab_index = self.ops.rope_index_base(chunk // self.sp_factor)
 
         index_kv_cache = self._build_indexer(max_seq_len, chunk, index_kv_cache)
-        self._build_selection_consts(batch, chunk // self.sp_factor, capacity)
+        self._build_index_consts(chunk, capacity)
 
         # Two overlap states advance through a prefill, one per compressor: the block's, which lives in
         # the returned TtCSAState and is advanced by forward, and the indexer's, which the indexer keeps
@@ -224,9 +232,14 @@ class TtCSA(TtV4AttentionBase):
         # fresh indexer.
         self._indexer.reset_overlap_state()
         kv_state, score_state = self.compressor.alloc_overlap_state(batch)
+        # ROW_MAJOR and unpadded because sparse_sdpa reads it by row; replicated because any query may
+        # name any row. The carry region starts out zero and the first chunk's index list never points
+        # into it, so nothing reads it before forward writes it.
+        joint_kv = self.ops.from_torch(
+            torch.zeros(batch, 1, self._raw_row + chunk, self.head_dim), layout=ttnn.ROW_MAJOR_LAYOUT
+        )
         return TtCSAState(
-            compressed_kv=self.ops.from_torch(torch.zeros(batch, 1, capacity, self.head_dim)),
-            sliding_carry=self.ops.from_torch(torch.zeros(batch, 1, self.sliding_window, self.head_dim)),
+            joint_kv=joint_kv,
             kv_state=kv_state,
             score_state=score_state,
             index_kv_cache=index_kv_cache,
@@ -305,25 +318,25 @@ class TtCSA(TtV4AttentionBase):
             num_users=slot_num,
         )
 
-    def _build_selection_consts(self, batch: int, rows: int, capacity: int):
-        """The two persistent operands of the block-mask scatter.
+    def _build_index_consts(self, chunk: int, capacity: int):
+        """Upload the index source and the two permutations ``index_tables`` lays out.
 
-        The scratch is the next power of two above the cache capacity, so masking a pick with
-        ``width - 1`` maps every real entry to itself and the ``0xFFFFFFFF`` sentinel to the last
-        column -- past the capacity, so slicing the mask down drops it.
+        Rows are SP-sharded, so each chip gets the ids for its own queries. The sentinel does not fit a
+        signed 32-bit value, so it goes up as -1 and is read back through the uint32 dtype -- same bit
+        pattern, which is all the reader compares."""
+        source, compacted, later = index_tables(chunk, self.sliding_window, self.indexer.index_topk_capacity, capacity)
+        sp_mapper = self.ops.mesh_mapper(sp_dim=2)
 
-        The power-of-two rounding is the price of that bitwise trick, and it was measured rather than
-        assumed: at V4-Pro / 55296 tokens / chunk 1024 on an 8x4 mesh, capacity is 14080 and the width
-        16384, so the template is 128 x 16384 x bf16 = 4.0 MiB against 3.4 MiB for a tile-rounded 14080.
-        That is 576 KiB per layer per chip, 14% of the template and under 3% of the layer's ~22 MiB of
-        compressed cache plus mask scratch. Replacing it means bounding the picks with a compare instead,
-        on the path that gates causality, so the rounding stays until something makes that 576 KiB
-        matter."""
-        k = self.indexer.index_topk_capacity
-        width = 1 << capacity.bit_length()  # strictly greater than capacity, so the last column is spare
-        self._sel_template = self.ops.from_torch(torch.full((batch, 1, rows, width), float("-inf")))
-        self._sel_zeros = self.ops.from_torch(torch.zeros(batch, 1, rows, k))
-        self._sel_dump = width - 1
+        def upload(host):
+            return self.ops.from_torch(
+                host.reshape(1, 1, chunk, -1).to(torch.int32),
+                mesh_mapper=sp_mapper,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+
+        self._index_source = upload(source)
+        self._index_perm = (upload(compacted), upload(later))
 
     @classmethod
     def from_reference(
@@ -385,25 +398,87 @@ class TtCSA(TtV4AttentionBase):
             **kwargs,
         )
 
+    def _write_rows(self, table, rows, start: int):
+        """Write ``rows`` into the joint table at row ``start``. ``rows`` arrives TILE, as every producer
+        here does; the table is ROW_MAJOR, so the conversion happens on the small tensor."""
+        rm = ttnn.to_layout(rows, ttnn.ROW_MAJOR_LAYOUT)
+        end = [rm.shape[0], 1, start + rm.shape[2], rm.shape[3]]
+        ttnn.experimental.slice_write(rm, table, start=[0, 0, start, 0], end=end, step=[1, 1, 1, 1])
+        ttnn.deallocate(rm)
+
     def _write_compressed(self, state, new_entries):
-        """Append this call's entries to the cache at row ``state.entry_count``.
+        """Append this call's entries to the table at row ``state.entry_count``.
 
-        ``chunk_align`` keeps that offset tile-aligned, which is all ``fill_cache_for_user_`` asks of it
-        -- and since it keeps update_idx out of its program hash, the offset rides along as data and one
-        program serves every chunk.
+        The whole padded width is written, not just the real entries, so the width is the same every
+        chunk; no query's index list names an entry past ``total_entries``, because the score op's causal
+        mask already dropped them.
 
-        The whole padded width is written, not just the real entries, so the width is the same for every
-        chunk; the mask -infs everything past ``total_entries`` anyway."""
+        Unlike every other write here the offset moves, and ``slice_write`` takes it as a host value, so
+        chunk ``c`` compiles its own program. That is bounded and shared: the offset is
+        ``c * chunk / rate``, so a prefill of N chunks has N of them, and since the hash is over tensor
+        SPECS rather than buffers, all layers reuse the same N. A single-shot prefill compiles one.
+        Getting to a single program means either a ``slice_write`` whose hash excludes the offset (its
+        ROW_MAJOR factory already rebuilds the runtime args from it, but the tiled factories bake it into
+        shared state, so the hash cannot simply drop it) or a replicated mode for
+        ``update_padded_kv_cache``, whose ``cluster_axis=None`` is block-cyclic over the whole mesh
+        rather than replicated. Both are C++ changes; neither is worth N programs."""
         width = new_entries.shape[2]
-        assert state.entry_count % ttnn.TILE_SIZE == 0, (
-            f"compressed append offset {state.entry_count} is not tile-aligned; a previous chunk was not "
-            f"a multiple of {self.chunk_align} tokens"
-        )
-        assert state.entry_count + width <= state.compressed_kv.shape[2], (
+        assert state.entry_count + width <= self._carry_row, (
             f"compressed cache full: writing rows [{state.entry_count}, {state.entry_count + width}) "
-            f"exceeds capacity {state.compressed_kv.shape[2]}; allocate the state with a larger max_seq_len"
+            f"exceeds capacity {self._carry_row}; allocate the state with a larger max_seq_len"
         )
-        ttnn.kv_cache.fill_cache_for_user_(state.compressed_kv, new_entries, 0, update_idx=state.entry_count)
+        self._write_rows(state.joint_kv, new_entries, state.entry_count)
+
+    def _build_index(self, state, top_k):
+        """This chunk's index list: overwrite the source's top-k block, then gather through the
+        permutation the chunk's position calls for.
+
+        The gather is what compacts; see ``_build_index_consts`` for why only the first chunk needs it.
+        Both operands are persistent, and ``ttnn.gather`` is out-of-place, so neither is written
+        through."""
+        source, rows, k = self._index_source, self._index_source.shape[2], top_k.shape[3]
+        ttnn.experimental.slice_write(
+            top_k,
+            source,
+            start=[0, 0, 0, self.sliding_window],
+            end=[1, 1, rows, self.sliding_window + k],
+            step=[1, 1, 1, 1],
+        )
+        return ttnn.gather(source, -1, self._index_perm[0 if state.kv_actual == 0 else 1])
+
+    def _sparse_attention(self, q, table, index, cos, sin):
+        """One ``sparse_sdpa`` over the joint table, then V's RoPE undone.
+
+        No mask and no causal flag: the index list already says exactly which keys each query sees. The
+        reshard is GLM's (``ttMLA._sparse_mla``) -- when the TP head shard is thinner than the op's
+        32-head minimum, the sharding moves head -> sequence for the duration of attention, and the index
+        list follows it with a local partition rather than a collective, since it is TP-replicated."""
+        reshard = self.needs_head_to_seq_reshard
+        q_attn = self._reshard(q, in_dim=1, out_dim=2) if reshard else q
+        q_rm = ttnn.to_layout(q_attn, ttnn.ROW_MAJOR_LAYOUT)  # the op is ROW_MAJOR-only; q comes in TILE
+        if reshard:
+            ttnn.deallocate(q_attn)
+            index = ttnn.mesh_partition(index, dim=2, cluster_axis=self.tp_axis)
+
+        out = ttnn.transformer.sparse_sdpa(
+            q_rm,
+            table,
+            index,
+            self.head_dim,  # V4 has no RoPE-only tail, so v_dim is the full width
+            kv_format=ttnn.transformer.SparseKVFormat.BF16,
+            scale=self.scaling,
+            k_chunk_size=_INDEX_ALIGN,
+            attention_sink=self._sparse_sinks(),
+        )
+        ttnn.deallocate(q_rm)
+        attn = ttnn.to_layout(out, ttnn.TILE_LAYOUT)  # back to TILE for the un-rope and the projection
+        ttnn.deallocate(out)
+        if reshard:
+            restored = self._reshard(attn, in_dim=2, out_dim=1)
+            ttnn.deallocate(attn)
+            attn = restored
+        # Only now do the rows match cos/sin again, which cover this chip's own queries.
+        return self._unrope(attn, cos, sin)
 
     def forward(
         self,
@@ -453,16 +528,20 @@ class TtCSA(TtV4AttentionBase):
         q = self._q_heads(q_lora, cos, sin)
         sliding_kv = self._kv_stem(hidden_states, cos, sin)
 
-        new_entries, causal_block, kv_state, score_state = self.compressor(
+        new_entries, kv_state, score_state = self.compressor(
             hidden_states,
             state.kv_state,
             state.score_state,
             seq_len_actual=real_len,
             first_window_position=state.entry_count * rate,
         )
-        # Attention then reads the WHOLE cache every chunk, so its shape stays constant and the mask
-        # -infs everything past total_entries.
         self._write_compressed(state, new_entries)
+        ttnn.deallocate(new_entries)
+
+        # The raw keys go in whole: every chip's queries may reach into any of them, and the gather is
+        # what makes that possible. The carry is written after attention, below.
+        sliding_kv = self._gather_sliding(sliding_kv)
+        self._write_rows(state.joint_kv, sliding_kv, self._raw_row)
 
         # The indexer runs its own ratio-4 compressor at index_head_dim over the same windows and writes
         # its own block-cyclic key cache, so it only shares the hidden states and q_lora with us.
@@ -476,29 +555,20 @@ class TtCSA(TtV4AttentionBase):
             index_kv_cache=state.index_kv_cache,
             seq_len_actual=real_len,
         )
-        mask_block = block_mask(
-            causal_block,
-            top_k,
-            template=self._sel_template,
-            zeros=self._sel_zeros,
-            dump=self._sel_dump,
-        )
+        index = self._build_index(state, top_k)
+        ttnn.deallocate(top_k)
+        attn = self._sparse_attention(q, state.joint_kv, index, cos, sin)
+        ttnn.deallocate(index)
 
-        attn, next_carry = self._attention(
-            q,
-            sliding_kv,
-            state.compressed_kv,
-            mask_block,
-            cos,
-            sin,
-            carry=state.sliding_carry,
-            kv_actual=state.kv_actual,
-            real_len=real_len,
-        )
+        # Overwrites the carry this chunk just attended over, so it has to follow the attention. Taken
+        # from the gathered slab, whose last REAL rows are the next chunk's window.
+        next_carry = self._take_carry(sliding_kv, real_len)
+        ttnn.deallocate(sliding_kv)
+        self._write_rows(state.joint_kv, next_carry, self._carry_row)
+        ttnn.deallocate(next_carry)
 
         state.kv_state = self.compressor.terminal_state(kv_state)
         state.score_state = self.compressor.terminal_state(score_state)
         state.entry_count = total_entries
         state.kv_actual += real_len
-        state.sliding_carry = next_carry
         return self._o_proj(attn)

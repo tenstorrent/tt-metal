@@ -139,13 +139,12 @@ def test_csa_compressor_mesh(mesh_device, device_params, topology, local_seq_len
     )
 
     tt_model.alloc_tables(hidden_padded.shape[1], hidden_padded.shape[1])
-    compressed_kv, block_bias, kv_state, score_state = tt_model(
+    compressed_kv, kv_state, score_state = tt_model(
         tt_input,
         tt_initial_kv,
         tt_initial_score,
         seq_len_actual=seq_len_actual,
     )
-    assert block_bias is None
 
     actual = ttnn.to_torch(
         compressed_kv,

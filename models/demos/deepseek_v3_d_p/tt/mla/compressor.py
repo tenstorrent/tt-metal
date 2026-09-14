@@ -584,12 +584,11 @@ class TtCSACompressor(TtCompressorBase):
         ttnn.deallocate(gathered)
         return terminal
 
-    def alloc_tables(self, max_seq_len: int, chunk_tokens: int, mask_width: int | None = None):
-        """``mask_width`` is the compressed-cache capacity the mask columns have to span. The indexer's
-        inner compressor leaves it out: its keys go to a block-cyclic cache the score op masks itself."""
+    def alloc_tables(self, max_seq_len: int, chunk_tokens: int):
+        """No mask constants, unlike the HCA compressor: neither CSA consumer wants a mask. The block
+        hands its entries to sparse attention, which takes an index list, and the indexer's keys go to a
+        block-cyclic cache the score op masks itself."""
         self._alloc_rope_tables(max_seq_len, chunk_tokens)
-        if mask_width is not None:
-            self._mask_consts = self._build_mask_consts(chunk_tokens, mask_width)
 
     @classmethod
     def from_reference(cls, device, reference, config, **kwargs) -> "TtCSACompressor":
@@ -621,8 +620,7 @@ class TtCSACompressor(TtCompressorBase):
         ``gather_sp=False`` keeps the transformed compressed rows local. The CSA
         indexer uses this path to write directly into its block-cyclic key cache.
 
-        Returns ``(compressed_kv, mask_block, kv_state, score_state)``. ``mask_block`` holds the causal
-        compressed-cache mask columns and is None unless ``alloc_tables`` was given a mask width.
+        Returns ``(compressed_kv, kv_state, score_state)``.
         """
         input_shape = tuple(hidden_states.shape)
         if len(input_shape) != 4 or input_shape[1] != 1:
@@ -654,9 +652,4 @@ class TtCSACompressor(TtCompressorBase):
         )
         pooled = ttnn.reshape(pooled, [batch, n_windows, self.head_dim])
         compressed_kv = self._normalize_rotate_and_gather(pooled, first_window_position, gather_sp=gather_sp)
-
-        mask_block = None
-        if self._mask_consts is not None and seq_len_actual > 1 and seq_len_actual // self.compress_rate > 0:
-            mask_block = self._mask_block(seq_len, first_window_position, seq_len_actual)
-
-        return compressed_kv, mask_block, local_kv_state, local_score_state
+        return compressed_kv, local_kv_state, local_score_state
