@@ -655,8 +655,6 @@ class TT_CCL:
     def _prefill_buffer_dtype(self, key):
         if key in ("FF2", "FF2_batched"):
             return self.prefill_mlp_output_dtype
-        if key == "LAYERNORM":
-            return ttnn.bfloat16
         return ttnn.bfloat8_b
 
     def get_prefill_reduce_scatter_buffers(self):
