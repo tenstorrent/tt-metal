@@ -17,6 +17,10 @@ namespace sfpu {
 // Legacy tanh derivative using 1 - tanh²(x) via LUT.
 // WARNING: This has catastrophic cancellation for |x| > ~3.4 (Max ULP = 15,140).
 // Kept for backward compatibility. Use calculate_tanh_derivative_sech2 instead.
+// Nothing in this repository calls it: tanh_derivative_tile dispatches
+// calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx, and the
+// LLK harness runs tt-llk's _calculate_tanh_derivative_ rather than this copy. The table
+// in tanh_derivative_init below is live even though this function is not -- see there.
 template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
 inline void calculate_tanh_derivative() {
     sfpi::vLut8si si0 = l_reg[sfpi::LRegs::LReg0];
@@ -44,10 +48,22 @@ inline void calculate_tanh_derivative() {
 
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
-    // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2. calculate_tanh_derivative computes
-    // 1 - lut(x)^2, so this table IS this kernel's approximation -- independent of tanh_init,
-    // which fits tanh rather than sech^2. UnarySFPUGolden._tanh_derivative_lut mirrors these
-    // three pairs by hand; test_tanh_derivative_lut_consistency.py holds the copies together.
+    // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2, evaluated as 1 - lut(x)^2.
+    //
+    // Its consumer is NOT calculate_tanh_derivative above, which has no callers. It is
+    // tt-llk's _calculate_tanh_derivative_, which the LLK harness pairs with this init under
+    // SfpuType::tanh_derivative_lut (tt-llk/tests/helpers/include/sfpu_operations.h). The
+    // table crosses from here to there in LReg0/1/2, so an init in this repository feeds a
+    // kernel in another and nothing in the build couples them but that register convention.
+    //
+    // This table is therefore the whole of that kernel's approximation, and it is independent
+    // of tanh_init: tanh_init fits tanh, this fits sech^2 through 1 - lut^2, so the
+    // tanh-optimal coefficients are not automatically right here. Retuning it for its own
+    // objective is separate work; these values drop max |1 - lut^2 - sech^2| from 0.241 to
+    // 0.080, both maxima at |x| = 1.
+    //
+    // UnarySFPUGolden._tanh_derivative_lut mirrors these three pairs by hand;
+    // test_tanh_derivative_lut_consistency.py holds all three copies together.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
     sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);

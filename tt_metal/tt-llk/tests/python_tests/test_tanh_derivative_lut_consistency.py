@@ -3,10 +3,15 @@
 
 """The legacy tanh-derivative SFPLUT table is written down in three places.
 
-`calculate_tanh_derivative` computes `1 - lut(x)^2`, so the coefficient table in
-`tanh_derivative_init` *is* that kernel's approximation -- and
-`UnarySFPUGolden._tanh_derivative_lut` models it by hand, deliberately, because
-validating the kernel against an accurate `sech^2` would fail by design. That
+The kernel evaluates `1 - lut(x)^2`, so the coefficient table in
+`tanh_derivative_init` *is* its whole approximation. Which kernel is worth being
+exact about: not the `calculate_tanh_derivative` sitting next to that init, which
+has no callers, but tt-llk's `_calculate_tanh_derivative_`, which the harness pairs
+with this init under `SfpuType::tanh_derivative_lut`. The table crosses between them
+in LReg0/1/2, so the init lives in one repository and the kernel in another.
+
+`UnarySFPUGolden._tanh_derivative_lut` then models that table by hand, deliberately,
+because validating the kernel against an accurate `sech^2` would fail by design. That
 leaves three copies that must agree: the Wormhole header, the Blackhole header,
 and the Python golden. Nothing in the build couples them, and a retune that
 misses one is silent -- the golden would simply describe a kernel that no longer

@@ -216,6 +216,16 @@ inline void tanh_init() {
         // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
         // SGN_RETAIN, so the result is sign(x) * (A*|x| + B) and the kernel stays odd.
         //
+        // Who reaches this branch: only callers passing fast_and_approx. From ttnn that is
+        // ttnn.tanh(fast_and_approximate_mode=True) on MATH, and tanh_tile_pack<true> from
+        // matmul's fused activation on PACK -- the latter is wired but unreachable today,
+        // since the activation string "tanh" maps to param0=false and there is no
+        // "tanh_approx" spelling the way there is for gelu and sigmoid.
+        //
+        // gelu, softcap and situ_glu also call tanh_init, all with APPROXIMATION_MODE=false.
+        // They take the polynomial branch below and never load these registers, so a retune
+        // here cannot reach them.
+        //
         // Fitted to minimise max bfloat16 ULP error rather than max absolute error. The two
         // have different optima, so this is not the table an absolute-error fit would give.
         //
