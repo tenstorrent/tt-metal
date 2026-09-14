@@ -35,9 +35,8 @@ class DeviceConfig:
         # "moe_ep" and is used by sparse_ep (SparseMoEEP).
         self.moe_axis = int(device_config.get("moe_axis", -1))
         self.enable_fsdp = device_config.get("enable_fsdp", False)
-        # Megatron sequence parallelism rides the "tp" axis (it is not a separate mesh
-        # dimension), so it does not affect mesh construction -- it only toggles the
-        # model's sequence-sharded residual path. Requires enable_tp.
+        # Megatron sequence parallelism shares the "tp" axis (requires enable_tp), so it only
+        # toggles the model's sequence-sharded residual path, not mesh construction.
         self.enable_sp = device_config.get("enable_sp", False)
         # Defaults to True: build as deferred metadata -> fully_shard -> materialize already-sharded,
         # so large models (e.g. 32B) never materialize a full replicated copy on one chip.

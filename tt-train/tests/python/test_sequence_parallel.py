@@ -185,7 +185,7 @@ class TestMatchesTensorParallel:
         marked = {name for name, p in sp_model.parameters().items() if is_sequence_parallel(p)}
         per_block = ("attention_norm/gamma", "mlp_norm/gamma", "attention/out_linear/bias")
         expected = {f"Llama/blocks/{i}/{suffix}" for i in range(N_LAYERS) for suffix in per_block}
-        assert marked == expected | {"Llama/ln_fc/gamma"}
+        assert marked == set.union(expected, {"Llama/ln_fc/gamma"})
 
 
 @pytest.mark.requires_device

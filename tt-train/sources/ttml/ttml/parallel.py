@@ -9,6 +9,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
+from ttml.modules.module_base import AbstractModuleBase
+from ttml.modules.parameter import Parameter
+
 # Activations flow as 4-D ``(B, 1, S, H)`` tensors; sequence parallelism shards dim 2 across the tp axis.
 SEQUENCE_DIM = 2
 
@@ -52,9 +55,21 @@ class TPStrategy(Enum):
         return self is TPStrategy.TENSOR_SEQUENCE
 
 
-def mark_sequence_parallel(parameter) -> None:
-    """Flag a parameter that is applied to the sequence-sharded residual stream."""
-    parameter.add_post_materialize_callback(lambda p: setattr(p.tensor, "_sequence_parallel", True))
+def mark_sequence_parallel(target: Parameter | AbstractModuleBase) -> None:
+    """Flag a parameter, or every parameter of a module, as applied to the sequence-sharded stream.
+
+    Each rank sees only its slice of the sequence, so the gradient is partial and
+    :func:`ttml.sync_gradients` sums it over the tp axis. Mark a whole module only when all its
+    parameters are tp-replicated (the norms): a tp-sharded weight must not be summed.
+    """
+    if isinstance(target, Parameter):
+        target.add_post_materialize_callback(lambda p: setattr(p.tensor, "_sequence_parallel", True))
+        return
+    for _, module in target.named_modules():
+        if isinstance(module, AbstractModuleBase):
+            for value in vars(module).values():
+                if isinstance(value, Parameter):
+                    mark_sequence_parallel(value)
 
 
 def is_sequence_parallel(param_tensor: Any) -> bool:

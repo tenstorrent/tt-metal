@@ -33,7 +33,6 @@ class RMSNormLayer(AbstractModuleBase):
         features: int,
         epsilon: float = 1e-5,
         use_composite: bool = False,
-        sequence_parallel: bool = False,
     ) -> None:
         super().__init__()
 
@@ -42,8 +41,6 @@ class RMSNormLayer(AbstractModuleBase):
 
         gamma_shape = (1, 1, 1, features)
         self.gamma = Parameter(ttml.init.ones()(gamma_shape))
-        if sequence_parallel:
-            mark_sequence_parallel(self.gamma)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of RMSNorm.
@@ -169,15 +166,17 @@ class LlamaBlock(AbstractModuleBase):
     ) -> None:
         super().__init__()
 
-        sequence_parallel = tp_strategy.sequence_parallel
         self.mlp = LlamaMLP(
             hidden_size,
             intermediate_size,
             mlp_dropout,
             tp_strategy=tp_strategy,
         )
-        self.attention_norm = RMSNormLayer(hidden_size, sequence_parallel=sequence_parallel)
-        self.mlp_norm = RMSNormLayer(hidden_size, sequence_parallel=sequence_parallel)
+        self.attention_norm = RMSNormLayer(hidden_size)
+        self.mlp_norm = RMSNormLayer(hidden_size)
+        if tp_strategy.sequence_parallel:
+            mark_sequence_parallel(self.attention_norm)
+            mark_sequence_parallel(self.mlp_norm)
         self.attention = GroupedQueryAttention(
             embedding_size=hidden_size,
             num_heads=num_attention_heads,
