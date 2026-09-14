@@ -82,12 +82,12 @@ jobs:
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
         run: |
-          # A selected architecture may have no ops tests; emit [] so it skips cleanly.
+          # Known SKUs may have no ops tests; skip them while still rejecting unknown SKUs.
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "ALL_SKUS_IN_TESTS" \
+            "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml \
-            --sku-allowlist "${{ inputs.enabled-skus }}"
+            --allow-empty-matrix
 
   ops-sanity-tests:
     needs: load-test-matrix

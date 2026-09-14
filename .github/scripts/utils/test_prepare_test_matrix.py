@@ -758,17 +758,15 @@ def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
     assert "No tests selected for enabled SKUs" in result.stdout
 
 
-@pytest.mark.parametrize(
-    "enabled_skus",
-    [
-        "wh_n300_civ2",
-        "sim_wh_n150,sim_bh_p150",
-        "bh_p150b_civ2_viommu",
-        "wh_n300_civ2,bh_p150b_civ2_viommu,sim_wh_n150",
-    ],
-)
-def test_ops_sanity_workflow_filters_available_tests(tmp_path: Path, enabled_skus: str):
-    """The real workflow must skip uncovered SKUs and preserve every matching ops leg."""
+def test_allow_empty_matrix_skips_known_uncovered_skus(tests_yaml: Path):
+    result = _run_with_skus(tests_yaml, "bh_galaxy", "--allow-empty-matrix")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert re.search(r"^matrix=\[\]$", result.stdout, re.M)
+    assert "::warning::No tests selected" in result.stdout
+
+
+def run_ops_sanity_workflow(tmp_path: Path, enabled_skus: str):
+    """Execute the real matrix step with the requested caller input."""
     workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ops-sanity-impl.yaml").read_text())
     job = workflow["jobs"]["load-test-matrix"]
     step = next(step for step in job["steps"] if step.get("id") == "build-matrix")
@@ -782,11 +780,37 @@ def test_ops_sanity_workflow_filters_available_tests(tmp_path: Path, enabled_sku
     result = subprocess.run(
         ["bash", "-e", "-c", command], cwd=REPO_ROOT, env=run_env, capture_output=True, text=True, check=False
     )
+    return result, output
+
+
+@pytest.mark.parametrize(
+    "enabled_skus",
+    [
+        "wh_n300_civ2",
+        "sim_wh_n150,sim_bh_p150",
+        "bh_p150b_civ2_viommu",
+        "wh_n300_civ2,bh_p150b_civ2_viommu,sim_wh_n150",
+    ],
+)
+def test_ops_sanity_workflow_filters_available_tests(tmp_path: Path, enabled_skus: str):
+    """The real workflow must skip uncovered SKUs and preserve every matching ops leg."""
+    result, output = run_ops_sanity_workflow(tmp_path, enabled_skus)
     assert result.returncode == 0, result.stdout + result.stderr
     matrix = json.loads(re.search(r"matrix<<EOF\n(.*)\nEOF", output.read_text()).group(1))
     all_tests = run_matrix(PIPELINE / "ops_sanity_tests.yaml", "ALL_SKUS_IN_TESTS")
     assert matrix == [entry for entry in all_tests if entry["sku"] in enabled_skus.split(",")]
-    assert "sim-libs=[]\n" in output.read_text()
+
+
+@pytest.mark.parametrize(
+    "enabled_skus",
+    ["unknown_sku", "wh_n300_civ2,unknown_sku", "bh_p150b_civ2_viommu,unknown_sku"],
+)
+def test_ops_sanity_workflow_rejects_unknown_skus(tmp_path: Path, enabled_skus: str):
+    """Invalid caller input must fail even when another SKU has valid ops coverage."""
+    result, output = run_ops_sanity_workflow(tmp_path, enabled_skus)
+    assert result.returncode != 0, result.stdout
+    assert "SKU 'unknown_sku' not found in SKU configuration" in result.stdout
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])

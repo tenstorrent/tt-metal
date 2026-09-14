@@ -15,7 +15,7 @@ This script:
 
 Usage:
     python prepare_test_matrix.py <tests_yaml_path> <enabled_skus> <sku_config_yaml_path>
-        [--event EVENT] [--sku-allowlist LIST]
+        [--event EVENT] [--sku-allowlist LIST] [--allow-empty-matrix]
 
 enabled_skus is a comma-separated list, or the literal ALL_SKUS_IN_TESTS to enable every SKU
 key that appears under any test entry's skus mapping in the tests YAML. An empty / placeholder
@@ -26,6 +26,9 @@ rewritten to that concrete prio SKU before runs_on lookup.
 
 --sku-allowlist: omit for no extra filter; empty string skips all tests (matrix=[]
 exit 0); otherwise comma-separated logical SKUs intersected with coverage.
+
+--allow-empty-matrix: permit a selection of known SKUs with no matching tests to
+emit matrix=[] and exit 0. Unknown enabled SKUs still fail validation.
 
 `weights-cache-mode` is an optional per-SKU field in sku_config.yaml; when present,
 it is copied into each output matrix entry.
@@ -214,7 +217,7 @@ def load_tests(tests_yaml_path):
     return tests
 
 
-def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing_cmd=False):
+def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing_cmd=False, allow_empty_matrix=False):
     """
     Filter tests based on enabled SKUs and expand multi-SKU entries into flat matrix entries.
 
@@ -232,6 +235,7 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
         enabled_skus: List of enabled logical SKU strings
         sku_config: Dictionary mapping SKU names to their configuration
         event: Optional GitHub event name (e.g. merge_group)
+        allow_empty_matrix: Permit known enabled SKUs with no matching tests.
 
     Returns:
         Filtered list of flat test dictionaries. Each entry has all keys from the
@@ -311,7 +315,7 @@ def build_test_matrix(tests, enabled_skus, sku_config, event=None, allow_missing
 
     if not tests:
         return []
-    elif not filtered_tests:
+    elif not filtered_tests and not allow_empty_matrix:
         print(f"::error::No tests selected for enabled SKUs '{','.join(enabled_skus)}'.")
         sys.exit(1)
 
@@ -361,6 +365,12 @@ def main(argv=None):
         help="Omit for no filter; empty string skips all; else CSV of logical SKUs",
     )
     parser.add_argument(
+        "--allow-empty-matrix",
+        action="store_true",
+        help="Allow known enabled SKUs with no matching tests to emit an empty matrix. "
+        "Unknown enabled SKUs still fail validation.",
+    )
+    parser.add_argument(
         "--allow-missing-cmd",
         action="store_true",
         help="Allow entries without a `cmd` key (for pipelines that build the command "
@@ -400,11 +410,16 @@ def main(argv=None):
         return 0
 
     filtered_matrix = build_test_matrix(
-        tests, enabled_skus, sku_config, event=args.event, allow_missing_cmd=args.allow_missing_cmd
+        tests,
+        enabled_skus,
+        sku_config,
+        event=args.event,
+        allow_missing_cmd=args.allow_missing_cmd,
+        allow_empty_matrix=args.allow_empty_matrix,
     )
 
     if not filtered_matrix:
-        print(f"::warning::No tests present in test YAML '{args.tests_yaml_path}'.")
+        print(f"::warning::No tests selected from test YAML '{args.tests_yaml_path}'.")
 
     write_matrix_output(filtered_matrix)
     return 0
