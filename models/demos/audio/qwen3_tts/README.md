@@ -18,7 +18,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
 | 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **prefill done**, PCC 0.995 |
-| 5 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
+| 5 | Code Predictor (5 layers, 15 steps per frame) | device | **done**, logits PCC 0.995 |
 | 6 | Codec decoder → waveform | device | not started |
 
 The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
@@ -61,7 +61,7 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoint and, for the device tests, a card. 53 tests, 45 s warm.
+it needs only the checkpoint and, for the device tests, a card. 58 tests, 75 s warm.
 
 ```bash
 pytest models/demos/audio/qwen3_tts/tests/                             # everything
@@ -69,6 +69,7 @@ pytest models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py   # host on
 pytest models/demos/audio/qwen3_tts/tests/test_tokenizer.py            # host only
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker encoder
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_talker_pcc.py       # talker
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_code_predictor_pcc.py  # code predictor
 ```
 
 `test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from
@@ -103,6 +104,19 @@ The input choice is load-bearing. Random embeddings sit far outside the activati
 distribution the weights were trained on, and the same graph scores 0.936 with 71% token
 agreement on them. Raising device tensors to fp32 recovers almost nothing (0.9396), and fp32
 weights change nothing at all, because the compute is bf16-class whatever the tensors say.
+
+`pcc/test_code_predictor_pcc.py` runs a frame the model produced itself: the talker on a real
+prompt, its last hidden state, codebook 0 from `codec_head`, then codebooks 1 to 15 decoded
+greedily by the reference. Teacher-forced blocks hold 0.9965 to 0.99999 and the 15 output
+heads reach 0.9946.
+
+Greedy decode is scored per step, not as a sequence. One flipped token changes the input to
+every later step, so comparing whole sequences measures the cascade rather than the port: the
+device matches 12 of 15 steps but only 8 of 15 codes. Each disagreement is judged by how much
+the reference prefers its own pick over the device's, which is the question worth asking.
+Every one measured is a near-tie, widest gap 0.10 against logits spanning several units, and
+at the single step where the device took the reference's third choice its top three sat within
+0.042 of each other.
 
 `pcc/test_speaker_pcc.py` gates every block and the embedding at **0.999**, not the usual
 0.99. Upstream pads each convolution in reflect mode, which `ttnn.conv1d` cannot do, so this

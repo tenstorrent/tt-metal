@@ -114,3 +114,32 @@ def talker_prompt(text=TALKER_TEXT):
 def codec_head():
     """The projection from hidden states to codec logits, for token-agreement checks."""
     return weights.load_prefixed("talker.codec_head.")["weight"]
+
+
+@functools.lru_cache(maxsize=None)
+def code_predictor_prompt():
+    """A realistic code-predictor input, produced by the model itself.
+
+    Random hidden states and random codes are out of distribution, and the talker showed
+    what that costs: a correct port measured far worse on noise than on real activations.
+    So this chains the real thing. Run the talker on a real prompt, take its last hidden
+    state, read codebook 0 off `codec_head`, then let the reference decode codebooks 1 to
+    15 greedily. The result is a self-consistent frame the model would actually produce.
+
+    Returns (talker_hidden [1, 1, 2048], first_code, codes, embeddings [1, 16, 2048]),
+    where `codes` is codebooks 1 to 15 and `embeddings` teacher-forces all 16 positions.
+    """
+    from models.demos.audio.qwen3_tts.reference.qwen3_code_predictor_ref import (
+        CodePredictorReference,
+        build_input_embeddings,
+    )
+    from models.demos.audio.qwen3_tts.reference.qwen3_talker_ref import TalkerReference
+
+    embeddings, positions = talker_prompt()
+    hidden = TalkerReference(dtype=torch.float32)(embeddings, position_ids=positions)
+    talker_hidden = hidden[:, -1:, :]
+    first_code = int((talker_hidden[0, 0] @ codec_head().T).argmax())
+
+    codes = CodePredictorReference().generate_greedy(talker_hidden, first_code)
+    teacher_forced = build_input_embeddings(talker_hidden, [first_code] + codes[:-1])
+    return talker_hidden, first_code, tuple(codes), teacher_forced
