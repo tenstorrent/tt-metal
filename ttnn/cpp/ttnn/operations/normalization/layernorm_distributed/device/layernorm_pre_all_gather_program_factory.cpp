@@ -14,8 +14,9 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 #include <string>
+#include <cstdint>
 
-using uint32_t = std::uint32_t;
+using std::uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -34,6 +35,8 @@ const m2::DFBSpecName PRE1D_REDUCE{"pre1d_reduce"};
 const m2::DFBSpecName PRE1D_RESIDUAL{"pre1d_residual"};
 const m2::DFBSpecName PRE1D_FUSED{"pre1d_fused"};
 const m2::DFBSpecName PRE1D_X2{"pre1d_x2"};
+const m2::DFBSpecName PRE1D_ACC_X2{"pre1d_acc_x2"};
+const m2::DFBSpecName PRE1D_ACC_X{"pre1d_acc_x"};
 const m2::DFBSpecName PRE1D_OUT{"pre1d_out"};
 
 const m2::TensorParamName PRE1D_INPUT_T{"pre1d_input_t"};
@@ -89,15 +92,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     const auto& b = tensor_args.residual_input_tensor;
     const bool fuse_pre_add = b.has_value();
     const bool is_rmsnorm = operation_attributes.norm_type == LayerNormDistributedType::RMSNORM;
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const std::uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
-    const uint32_t W = shape[-1], H = shape[-2];
-    const uint32_t HW = H * W;
-    const uint32_t NC = a.physical_volume() / HW;
+    const std::uint32_t W = shape[-1], H = shape[-2];
+    const std::uint32_t HW = H * W;
+    const std::uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / tile_width;
-    const uint32_t Ht = H / tile_height;
+    const std::uint32_t Wt = W / tile_width;
+    const std::uint32_t Ht = H / tile_height;
 
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
@@ -105,7 +108,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_tile_rows = NC * Ht;
+    std::uint32_t num_tile_rows = NC * Ht;
 
     log_debug(tt::LogOp, "is_rmsnorm: {}", is_rmsnorm);
     log_debug(tt::LogOp, "W: {}", W);
@@ -114,8 +117,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     log_debug(tt::LogOp, "Wt: {}", Wt);
     log_debug(tt::LogOp, "Ht: {}", Ht);
 
-    uint32_t block_size = 1;
-    uint32_t writer_block_size = 1;
+    std::uint32_t block_size = 1;
+    std::uint32_t writer_block_size = 1;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -128,47 +131,75 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
          !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
+    std::uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
         inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
-    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
+    std::uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    std::uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    std::uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    std::uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
 
     log_debug(tt::LogOp, "in_data_format: {}", in_data_format);
     log_debug(tt::LogOp, "out_data_format: {}", out_data_format);
 
-    const uint32_t double_buffer_constant = 2;
-    const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
-
-    const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
-    uint32_t out0_tiles = 1;
+    const std::uint32_t double_buffer_constant = 2;
+    const std::uint32_t in1_tiles = 1;  // reduce scalar
+    std::uint32_t out0_tiles = 1;
     if (!is_rmsnorm) {
         out0_tiles = 2;
     }
+    const std::uint32_t num_acc_dfbs = is_rmsnorm ? 1 : 2;
+    // The FPU path keeps one running partial per stat (the reload pops before the next pack
+    // pushes); the SFPU path holds every chunk's partial until the epilogue folds them.
+    auto acc_tiles_for_chunk = [&](std::uint32_t chunk) { return unpack_fp32_active ? (Wt + chunk - 1) / chunk : 2u; };
 
+    // Bytes of the width-scaled buffers at a given chunk width (tile-columns).
+    auto width_cb_bytes = [&](std::uint32_t chunk) {
+        std::uint64_t bytes = std::uint64_t(double_buffer_constant) * chunk * (in_single_tile_size + single_tile_size);
+        bytes += std::uint64_t(num_acc_dfbs) * acc_tiles_for_chunk(chunk) * single_tile_size;
+        if (fuse_pre_add) {
+            bytes += std::uint64_t(double_buffer_constant) * chunk * inb_single_tile_size;  // residual
+            bytes += std::uint64_t(chunk) * single_tile_size;                               // fused a + b
+        }
+        return bytes;
+    };
+    const std::uint64_t fixed_cb_bytes =
+        std::uint64_t(in1_tiles) * scaler_tile_size + std::uint64_t(out0_tiles) * out_single_tile_size;
+    // Allocator alignment/padding is not modeled here, so leave headroom below the L1 ceiling.
+    constexpr std::uint64_t l1_margin = 32 * 1024;
+    const std::uint64_t l1_budget =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1) - l1_margin;
+
+    // Full-width buffers when they fit (one chunk, the historical kernel structure). Otherwise halve
+    // the chunk width until the allocation fits and stream each row through a CB-backed running
+    // partial (the CHUNKED path in the compute kernels), keeping L1 usage bounded by chunk_wt.
+    std::uint32_t chunk_wt = Wt;
+    while (chunk_wt > block_size && fixed_cb_bytes + width_cb_bytes(chunk_wt) > l1_budget) {
+        chunk_wt = (chunk_wt + 1) / 2;
+    }
+    chunk_wt = chunk_wt - (chunk_wt % block_size);
+    chunk_wt = chunk_wt < block_size ? block_size : chunk_wt;
+    const bool chunked = chunk_wt < Wt;
     TT_FATAL(
-        W <= tile_width * in0_tiles,
-        "W ({}) exceeds the maximum supported size of tile buffer ({} * {}, kernel limitation right now).",
-        W,
-        tile_width,
-        in0_tiles);
+        fixed_cb_bytes + width_cb_bytes(chunk_wt) <= l1_budget,
+        "layernorm_pre_all_gather buffers do not fit in L1 even at minimum chunk width {} ({} B > {} B budget).",
+        chunk_wt,
+        fixed_cb_bytes + width_cb_bytes(chunk_wt),
+        l1_budget);
     TT_FATAL(
-        in0_tiles % block_size == 0,
-        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        in0_tiles,
+        chunk_wt % block_size == 0 && (Wt % chunk_wt) % block_size == 0,
+        "Chunk width ({}) and the last chunk ({}) must be divisible by the block size ({}).",
+        chunk_wt,
+        Wt % chunk_wt,
         block_size);
-    TT_FATAL(
-        intermed0_tiles % block_size == 0,
-        "Size of buffer ({}) must be divisible by the size of block ({}) used by the reader and compute kernel.",
-        intermed0_tiles,
-        block_size);
+
+    const std::uint32_t in0_tiles = chunk_wt * double_buffer_constant;
+    const std::uint32_t res_tiles = chunk_wt * double_buffer_constant;        // residual b
+    const std::uint32_t fused_tiles = chunk_wt;                               // a + b
+    const std::uint32_t intermed0_tiles = chunk_wt * double_buffer_constant;  // x^2
+    const std::uint32_t acc_tiles = acc_tiles_for_chunk(chunk_wt);
 
     auto
         [num_cores,
@@ -200,6 +231,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     if (fuse_pre_add) {
         fuse_defines.emplace("FUSE_PRE_ADD", "1");
     }
+    // The accumulator buffers exist only on the chunked path, so CHUNKED is emitted like FUSE_PRE_ADD
+    // above: the kernels must not name dfb::acc_* when the host does not bind them.
+    m2::KernelSpec::CompilerOptions::Defines compute_defines = fuse_defines;
+    if (chunked) {
+        compute_defines.emplace("CHUNKED", "1");
+    }
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Dataflow buffers
@@ -215,6 +252,12 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
         dfbs.push_back(make_dfb(PRE1D_FUSED, fused_tiles, single_tile_size, cb_data_format));
     }
     dfbs.push_back(make_dfb(PRE1D_X2, intermed0_tiles, single_tile_size, cb_data_format));
+    if (chunked) {
+        dfbs.push_back(make_dfb(PRE1D_ACC_X2, acc_tiles, single_tile_size, cb_data_format));
+        if (!is_rmsnorm) {
+            dfbs.push_back(make_dfb(PRE1D_ACC_X, acc_tiles, single_tile_size, cb_data_format));
+        }
+    }
     dfbs.push_back(make_dfb(PRE1D_OUT, out0_tiles, out_single_tile_size, out_data_format));
 
     ////////////////////////////////////////////////////////////////////////////
@@ -262,7 +305,7 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelSpec compute{
         .unique_id = PRE1D_COMPUTE,
         .source = compute_kernel_file,
-        .compiler_options = {.defines = fuse_defines, .opt_level = KernelBuildOptLevel::O3},
+        .compiler_options = {.defines = compute_defines, .opt_level = KernelBuildOptLevel::O3},
         .dfb_bindings =
             {
                 m2::DFBBinding{
@@ -277,13 +320,22 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
                     .dfb_spec_name = PRE1D_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
             },
         .compile_time_args =
-            {{"Wt", Wt}, {"blk", block_size}, {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
+            {{"Wt", Wt},
+             {"blk", block_size},
+             {"chunk_wt", chunk_wt},
+             {"unpack_fp32_active", unpack_fp32_active ? 1u : 0u}},
         .runtime_arg_schema = {.runtime_arg_names = {"NCHt"}},
         .hw_config = compute_hw,
     };
     // x^2 and the fused a + b are private to the compute kernel: it packs into them and unpacks them
     // back, so it is the buffer's only endpoint on both sides.
     bind_self_loop(compute, PRE1D_X2, "x2");
+    if (chunked) {
+        bind_self_loop(compute, PRE1D_ACC_X2, "acc_x2");
+        if (!is_rmsnorm) {
+            bind_self_loop(compute, PRE1D_ACC_X, "acc_x");
+        }
+    }
     if (fuse_pre_add) {
         bind_self_loop(compute, PRE1D_FUSED, "fused");
         compute.dfb_bindings.push_back(m2::DFBBinding{
@@ -313,6 +365,15 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
             if (fuse_pre_add) {
                 unpack_operand(PRE1D_FUSED);
             }
+            // The accumulators are only ever read by copy_tile (partial reload and the stats
+            // epilogue); unpacking them into Dest keeps the fp32 running total exact, where SrcA
+            // would truncate it to tf32 at every chunk boundary.
+            if (chunked) {
+                unpack_via_dest(compute_gen1, PRE1D_ACC_X2);
+                if (!is_rmsnorm) {
+                    unpack_via_dest(compute_gen1, PRE1D_ACC_X);
+                }
+            }
         }
         if (fuse_pre_add && inb_data_format == tt::DataFormat::Float32) {
             unpack_operand(PRE1D_RESIDUAL);
@@ -337,11 +398,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
     m2::KernelRunArgs writer_run{.kernel = PRE1D_WRITER};
     m2::KernelRunArgs compute_run{.kernel = PRE1D_COMPUTE};
 
-    uint32_t curr_row = 0;
-    for (uint32_t i = 0; i < num_cores; ++i) {
+    std::uint32_t curr_row = 0;
+    for (std::uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t num_tile_rows_per_core = 0;
+        std::uint32_t num_tile_rows_per_core = 0;
         if (core_group_1.contains(core)) {
             num_tile_rows_per_core = num_tile_rows_per_core_group_1;
         } else if (core_group_2.contains(core)) {
@@ -350,8 +411,8 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGatherProgramFactory::cr
             TT_THROW("Core not in specified core ranges");
         }
 
-        uint32_t in_tile_offset = curr_row * Wt;
-        uint32_t out_tile_offset = curr_row * out0_tiles;
+        std::uint32_t in_tile_offset = curr_row * Wt;
+        std::uint32_t out_tile_offset = curr_row * out0_tiles;
 
         m2::AddRuntimeArgsForNode(
             reader_run.runtime_arg_values,
@@ -400,25 +461,25 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     const auto& a = tensor_args.input;
     const auto& b = tensor_args.residual_input_tensor;
     const bool fuse_pre_add = b.has_value();
-    const uint32_t tile_height = a.tensor_spec().tile().get_height();
-    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const std::uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const std::uint32_t tile_width = a.tensor_spec().tile().get_width();
     const auto& shape = a.padded_shape();
-    const uint32_t W = shape[-1], H = shape[-2];
-    const uint32_t HW = H * W;
-    const uint32_t NC = a.physical_volume() / HW;
+    const std::uint32_t W = shape[-1], H = shape[-2];
+    const std::uint32_t HW = H * W;
+    const std::uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / tile_width;
-    const uint32_t Ht = H / tile_height;
+    const std::uint32_t Wt = W / tile_width;
+    const std::uint32_t Ht = H / tile_height;
 
-    uint32_t num_tile_rows = NC * Ht;
+    std::uint32_t num_tile_rows = NC * Ht;
 
     const auto& input_mesh = a.mesh_tensor();
     const auto& output_mesh = output.mesh_tensor();
 
     IDevice* device = a.device();
 
-    uint32_t block_size = 1;
-    uint32_t writer_block_size = 1;
+    std::uint32_t block_size = 1;
+    std::uint32_t writer_block_size = 1;
 
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -431,24 +492,24 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
         (in_data_format == tt::DataFormat::Float32 && fp32_dest_acc_en &&
          !operation_attributes.fast_and_approximate_mode && device->arch() != tt::ARCH::QUASAR);
     tt::DataFormat inb_data_format = tt::DataFormat::Invalid;
-    uint32_t inb_single_tile_size = 0;
+    std::uint32_t inb_single_tile_size = 0;
     if (fuse_pre_add) {
         inb_data_format = tt::tt_metal::datatype_to_dataformat_converter(b->dtype());
         inb_single_tile_size = tt::tile_size(inb_data_format);
     }
-    uint32_t in_single_tile_size = tt::tile_size(in_data_format);
-    uint32_t out_single_tile_size = tt::tile_size(out_data_format);
-    uint32_t single_tile_size = tt::tile_size(cb_data_format);
-    uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
+    std::uint32_t in_single_tile_size = tt::tile_size(in_data_format);
+    std::uint32_t out_single_tile_size = tt::tile_size(out_data_format);
+    std::uint32_t single_tile_size = tt::tile_size(cb_data_format);
+    std::uint32_t scaler_tile_size = tt::tile_size(scaler_cb_data_format);
 
-    const uint32_t double_buffer_constant = 2;
-    const uint32_t in0_tiles = Wt * double_buffer_constant;
-    const uint32_t in1_tiles = 1;  // reduce scalar
-    const uint32_t res_tiles = Wt * double_buffer_constant;    // residual b
-    const uint32_t fused_tiles = Wt;                           // a + b
+    const std::uint32_t double_buffer_constant = 2;
+    const std::uint32_t in0_tiles = Wt * double_buffer_constant;
+    const std::uint32_t in1_tiles = 1;                            // reduce scalar
+    const std::uint32_t res_tiles = Wt * double_buffer_constant;  // residual b
+    const std::uint32_t fused_tiles = Wt;                         // a + b
 
-    const uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
-    uint32_t out0_tiles = 1;
+    const std::uint32_t intermed0_tiles = Wt * double_buffer_constant;  // x^2
+    std::uint32_t out0_tiles = 1;
 
     TT_FATAL(
         W <= tile_width * in0_tiles,
@@ -469,24 +530,24 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
 
     auto grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t max_cores_y = grid_size.y;
-    uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
+    std::uint32_t max_cores_y = grid_size.y;
+    std::uint32_t cores_x = std::min(max_cores_y, num_tile_rows);
     while (num_tile_rows % cores_x != 0 && cores_x > 1) {
         cores_x--;
     }
-    uint32_t tiles_per_core_x = num_tile_rows / cores_x;
-    uint32_t cores_y = std::min(max_cores_y, Wt);
+    std::uint32_t tiles_per_core_x = num_tile_rows / cores_x;
+    std::uint32_t cores_y = std::min(max_cores_y, Wt);
     while (Wt % cores_y != 0 && cores_y > 1) {
         cores_y--;
     }
-    uint32_t tiles_per_core_y = Wt / cores_y;
+    std::uint32_t tiles_per_core_y = Wt / cores_y;
 
     CoreRange all_cores_range({0, 0}, {cores_x - 1, cores_y - 1});
     CoreRangeSet all_cores = CoreRangeSet(std::vector{all_cores_range});
 
     std::vector<CoreRange> merge_core_ranges_vec;
     merge_core_ranges_vec.reserve(cores_x);
-    for (uint32_t x = 0; x < cores_x; ++x) {
+    for (std::uint32_t x = 0; x < cores_x; ++x) {
         CoreCoord merge_core = {x, 0};
         merge_core_ranges_vec.emplace_back(CoreRange(merge_core, merge_core));
     }
@@ -706,16 +767,16 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
     m2::KernelRunArgs reader_run{.kernel = PRE2D_READER};
     m2::KernelRunArgs writer_run{.kernel = PRE2D_WRITER};
 
-    for (uint32_t x = 0; x < cores_x; ++x) {
-        for (uint32_t y = 0; y < cores_y; ++y) {
+    for (std::uint32_t x = 0; x < cores_x; ++x) {
+        for (std::uint32_t y = 0; y < cores_y; ++y) {
             CoreCoord core = {x, y};
             bool is_merge_core = y == 0;
             const auto merge_core = device->worker_core_from_logical_core({x, 0});
 
-            uint32_t num_tile_rows_per_core = tiles_per_core_x;
+            std::uint32_t num_tile_rows_per_core = tiles_per_core_x;
 
-            uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
-            uint32_t out_tile_offset = x * out0_tiles;
+            std::uint32_t in_tile_offset = (x * Wt) + (y * tiles_per_core_y);
+            std::uint32_t out_tile_offset = x * out0_tiles;
 
             m2::AddRuntimeArgsForNode(
                 reader_run.runtime_arg_values,
@@ -723,9 +784,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormPreAllGather2DProgramFactory::
                 {{"NCHt", tiles_per_core_x},
                  {"Wt", tiles_per_core_y},
                  {"tile_offset", in_tile_offset},
-                 {"is_merge_core", static_cast<uint32_t>(is_merge_core)},
-                 {"reduce_core_noc_x", static_cast<uint32_t>(merge_core.x)},
-                 {"reduce_core_noc_y", static_cast<uint32_t>(merge_core.y)},
+                 {"is_merge_core", static_cast<std::uint32_t>(is_merge_core)},
+                 {"reduce_core_noc_x", static_cast<std::uint32_t>(merge_core.x)},
+                 {"reduce_core_noc_y", static_cast<std::uint32_t>(merge_core.y)},
                  {"y", y}});
             if (is_merge_core) {
                 m2::AddRuntimeArgsForNode(
