@@ -33,6 +33,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
+#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
@@ -58,7 +59,9 @@ autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask,
-    const ttml::metal::AttentionMaskType mask_type) {
+    const ttml::metal::AttentionMaskType mask_type,
+    RingBackwardKind backward_kind,
+    uint32_t rows_per_block_tiles) {
     if (!autograd::ctx().is_parallelism_context_initialized() ||
         !autograd::ctx().get_parallelism_context().is_cp_enabled()) {
         return ttml::ops::scaled_dot_product_attention(query, key, value, mask);
@@ -196,6 +199,8 @@ autograd::TensorPtr ring_attention_sdpa(
                                       ring_size,
                                       cp_axis_value,
                                       mask_type,
+                                      backward_kind,
+                                      rows_per_block_tiles,
                                       mesh_device]() mutable {
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
         const auto& grad_output = out->get_grad();
@@ -212,6 +217,14 @@ autograd::TensorPtr ring_attention_sdpa(
         ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
         ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
         ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
+        // The cyclic op is FP32 in and out, so its step buffers are too. That
+        // is a precision difference between the two paths, in the cyclic
+        // path's favour, and it is the op's own dtype rather than a choice
+        // made here: its gradients are read back and accumulated into on
+        // device, which bf16 would round at every streak start.
+        ttnn::Tensor grad_Q_step_fp32 = ttnn::zeros_like(query_tensor, ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_K_step_fp32 = ttnn::zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_V_step_fp32 = ttnn::zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
 
         // Standard ring-flash-attention backward: every step gets the UNSCALED upstream
         // gradient, the GLOBAL forward output, and the GLOBAL logsumexp. The sdpa_bw
@@ -226,6 +239,24 @@ autograd::TensorPtr ring_attention_sdpa(
         const ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
         const ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
         const ttnn::Tensor zero_V = ttnn::zeros_like(grad_V_step);
+        const ttnn::Tensor zero_Q_fp32 = ttnn::zeros_like(grad_Q_step_fp32);
+        const ttnn::Tensor zero_K_fp32 = ttnn::zeros_like(grad_K_step_fp32);
+        const ttnn::Tensor zero_V_fp32 = ttnn::zeros_like(grad_V_step_fp32);
+
+        // The cyclic backward needs D = rowsum(dO . O), which the two-pass
+        // backward computes for itself inside its dQ pass, once per ring step.
+        // It is global and constant across steps, so it is computed once here.
+        // The product is taken in FP32 rather than the operands' bf16: D is
+        // subtracted from dP, so a rounding here lands directly in dS.
+        ttnn::Tensor row_scalar;
+        if (backward_kind == RingBackwardKind::Cyclic) {
+            row_scalar = pad_lse_to_intermediates_layout(ttml::ttnn_fixed::sum_ttnn(
+                ttnn::multiply(
+                    ttnn::typecast(grad_output, ttnn::DataType::FLOAT32),
+                    ttnn::typecast(attn_output, ttnn::DataType::FLOAT32)),
+                /* dim */ 3,
+                /* keep_dim */ true));
+        }
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -233,10 +264,44 @@ autograd::TensorPtr ring_attention_sdpa(
 
             // Devices skipped by the causal schedule at this step do not run the kernels,
             // so their step buffers must be zeroed to contribute nothing to the accumulators.
-            ttnn::copy(zero_Q, grad_Q_step);
-            ttnn::copy(zero_K, grad_K_step);
-            ttnn::copy(zero_V, grad_V_step);
+            if (backward_kind == RingBackwardKind::Cyclic) {
+                ttnn::copy(zero_Q_fp32, grad_Q_step_fp32);
+                ttnn::copy(zero_K_fp32, grad_K_step_fp32);
+                ttnn::copy(zero_V_fp32, grad_V_step_fp32);
+            } else {
+                ttnn::copy(zero_Q, grad_Q_step);
+                ttnn::copy(zero_K, grad_K_step);
+                ttnn::copy(zero_V, grad_V_step);
+            }
 
+            if (backward_kind == RingBackwardKind::Cyclic) {
+                // The cyclic op returns FP32 and accumulates into whatever the
+                // step buffers hold, so they are zeroed above and the step's
+                // own contribution comes back. Accumulating straight into
+                // grad_*_accum would be one fewer add, but the accumulators are
+                // ring-shifted between steps, so the step buffers keep the two
+                // implementations' driver structure identical.
+                auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_cyclic_sdpa_bw(
+                    query_tensor,
+                    k_current,
+                    v_current,
+                    grad_output,
+                    global_intermediates,
+                    row_scalar,
+                    ring_size,
+                    cp_axis_value,
+                    step_idx,
+                    mask_type,
+                    ttml::metal::RingCyclicDirection::Backward,
+                    rows_per_block_tiles,
+                    /* use_barrier */ false,
+                    grad_Q_step_fp32,
+                    grad_K_step_fp32,
+                    grad_V_step_fp32);
+                grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_result);
+                grad_K_accum = ttnn::add(grad_K_accum, grad_K_result);
+                grad_V_accum = ttnn::add(grad_V_accum, grad_V_result);
+            } else {
             // Use Backward direction (same as forward) since src = (device + step) % ring_size
             auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_sdpa_bw(
                 grad_output,
@@ -259,6 +324,7 @@ autograd::TensorPtr ring_attention_sdpa(
             grad_Q_accum = ttnn::add(grad_Q_accum, ttnn::typecast(grad_Q_result, ttnn::DataType::FLOAT32));
             grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
             grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
+            }
 
             // Ring shift K/V and grad accumulators in FORWARD direction
             // K/V: replays the forward pass in reverse (gets K/V for previous step)

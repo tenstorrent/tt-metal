@@ -1,0 +1,128 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ring_cyclic_sdpa_bw_device_operation.hpp"
+
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+#include "core/tt_tensor_utils.hpp"
+#include "ttnn/device_operation.hpp"
+
+namespace ttml::metal::ops::ring_cyclic_sdpa_bw {
+
+RingCyclicSDPABackwardDeviceOperation::program_factory_t
+RingCyclicSDPABackwardDeviceOperation::select_program_factory(
+    const operation_attributes_t&, const tensor_args_t&) {
+    return RingCyclicSDPABackwardProgramFactory{};
+}
+
+void RingCyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    ops::validate_ring_attributes(args, tensor_args.query);
+    ops::validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
+    ops::validate_output_like_tensor(tensor_args.grad_output, "grad_output", tensor_args.query, tensor_args.value);
+    ops::validate_intermediates_tensor(tensor_args.log_sum_exp, tensor_args.query);
+    ops::validate_intermediates_tensor(tensor_args.row_scalar, tensor_args.query);
+}
+
+void RingCyclicSDPABackwardDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    validate_on_program_cache_miss(args, tensor_args);
+}
+
+RingCyclicSDPABackwardDeviceOperation::spec_return_value_t
+RingCyclicSDPABackwardDeviceOperation::compute_output_specs(
+    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const auto make_spec = [&](const std::optional<ttnn::Tensor>& preallocated) {
+        if (preallocated.has_value()) {
+            return preallocated->tensor_spec();
+        }
+        return tt::tt_metal::TensorSpec(
+            tensor_args.query.logical_shape(),
+            tt::tt_metal::TensorLayout(
+                tt::tt_metal::DataType::FLOAT32,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+                tt::tt_metal::MemoryConfig{}));
+    };
+    return {
+        make_spec(tensor_args.preallocated_grad_query),
+        make_spec(tensor_args.preallocated_grad_key),
+        make_spec(tensor_args.preallocated_grad_value)};
+}
+
+RingCyclicSDPABackwardDeviceOperation::tensor_return_value_t
+RingCyclicSDPABackwardDeviceOperation::create_output_tensors(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto specs = compute_output_specs(args, tensor_args);
+    auto* device = tensor_args.query.device();
+    // Zeroed, for the same reason the single-chip op zeroes: every gradient
+    // here is accumulated into and read back. In the ring that matters twice
+    // over, since the caller passes the running accumulators back in at every
+    // step, and a chip that the causal schedule skips must leave them alone.
+    const auto take = [&](const std::optional<ttnn::Tensor>& preallocated, size_t i) {
+        if (preallocated.has_value()) {
+            return preallocated.value();
+        }
+        return ttml::core::zeros(ttnn::Shape(specs[i].logical_shape()), device, specs[i].data_type());
+    };
+    return {
+        take(tensor_args.preallocated_grad_query, 0U),
+        take(tensor_args.preallocated_grad_key, 1U),
+        take(tensor_args.preallocated_grad_value, 2U)};
+}
+
+ttsl::hash::hash_t RingCyclicSDPABackwardDeviceOperation::compute_program_hash(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // The step is in the hash because it decides, per chip, whether there is a
+    // program at all and which schedule it runs.
+    return tt::tt_metal::operation::hash_operation<RingCyclicSDPABackwardDeviceOperation>(
+        args, tensor_args.query.dtype(), tensor_args.query.logical_shape());
+}
+
+}  // namespace ttml::metal::ops::ring_cyclic_sdpa_bw
+
+namespace ttnn::prim {
+
+ttml::metal::ops::ring_cyclic_sdpa_bw::RingCyclicSDPABackwardDeviceOperation::tensor_return_value_t
+ttml_ring_cyclic_sdpa_bw(
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& grad_output,
+    const ttnn::Tensor& log_sum_exp,
+    const ttnn::Tensor& row_scalar,
+    uint32_t ring_size,
+    uint32_t ring_axis,
+    uint32_t step,
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_cyclic_sdpa_bw::RingDirection ring_direction,
+    uint32_t rows_per_block_tiles,
+    bool use_barrier,
+    const std::optional<ttnn::Tensor>& preallocated_grad_query,
+    const std::optional<ttnn::Tensor>& preallocated_grad_key,
+    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    using OperationType = ttml::metal::ops::ring_cyclic_sdpa_bw::RingCyclicSDPABackwardDeviceOperation;
+
+    auto attrs = OperationType::operation_attributes_t{
+        .ring_size = ring_size,
+        .ring_axis = ring_axis,
+        .step = step,
+        .mask_type = mask_type,
+        .ring_direction = ring_direction,
+        .rows_per_block_tiles = rows_per_block_tiles,
+        .use_barrier = use_barrier};
+    auto tensors = OperationType::tensor_args_t{
+        .query = query,
+        .key = key,
+        .value = value,
+        .grad_output = grad_output,
+        .log_sum_exp = log_sum_exp,
+        .row_scalar = row_scalar,
+        .preallocated_grad_query = preallocated_grad_query,
+        .preallocated_grad_key = preallocated_grad_key,
+        .preallocated_grad_value = preallocated_grad_value};
+
+    return ttnn::device_operation::launch<OperationType>(attrs, tensors);
+}
+
+}  // namespace ttnn::prim

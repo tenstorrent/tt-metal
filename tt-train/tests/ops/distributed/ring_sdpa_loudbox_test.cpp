@@ -383,6 +383,22 @@ TEST_F(LoudboxRingSDPATest, RingShiftAroundTheCpAxis) {
 
 namespace {
 
+//: Fix the random draw for one case, so it does not depend on which tests ran
+//: before it.
+//
+// The fixture seeds once and every test draws from the same generator, so a
+// filtered run and a full run give a case different data -- and a tolerance
+// that holds for one draw can fail on another. Seeding per case from its own
+// shape makes a failure reproducible with a --gtest_filter, which is the only
+// way to chase one.
+void seed_for_case(const std::array<size_t, 5>& shape) {
+    size_t h = 1469598103934665603ULL;
+    for (const size_t v : shape) {
+        h = (h ^ v) * 1099511628211ULL;
+    }
+    ttml::autograd::ctx().set_seed(static_cast<uint32_t>(h & 0x7FFFFFFFULL));
+}
+
 //: Gather a CP-sharded (B, H, S, D) tensor back into one full array.
 xt::xarray<float> gather_cp(
     const std::vector<xt::xarray<float>>& per_device,
@@ -458,6 +474,7 @@ void run_ring_attention(
     const size_t seq_per_device = seq_len / cp_size;
     ASSERT_EQ(seq_per_device % 32U, 0U) << "each device's shard must be a whole number of tiles";
 
+    seed_for_case({batch, num_heads, seq_len, head_dim, test_backward ? 1U : 0U});
     auto& rng = autograd::ctx().get_generator();
     const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
     const xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
@@ -575,6 +592,211 @@ TEST_F(LoudboxRingSDPATest, LargerSequenceCausalBackward) {
 
 TEST_F(LoudboxRingSDPATest, LargerBatchCausalBackward) {
     run_ring_attention(2, 8, seq_for(64), 64, /*test_backward=*/true);
+}
+
+// ------------------------------------------- the two backward implementations
+
+namespace {
+
+// Both per-step backwards, on identical inputs, with their gradients compared
+// against each other and against the dense host reference.
+//
+// This is the comparison the cyclic schedule exists to make. The two paths
+// share the forward, the ring loop, the shift, the skip pattern and the
+// global statistics; they differ only in what an executing chip runs per
+// step. Agreement to rounding is the claim, not bitwise equality: one path
+// recomputes the score stage twice in bf16 and accumulates its steps through
+// bf16 buffers, the other fuses into one kernel and stays in FP32, so they
+// round differently by construction.
+void compare_backward_implementations(
+    const size_t batch,
+    const size_t num_heads,
+    const size_t seq_len,
+    const size_t head_dim,
+    const uint32_t rows_per_block_tiles) {
+    using namespace ttml;
+
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    const size_t seq_per_device = seq_len / cp_size;
+    ASSERT_EQ(seq_len % cp_size, 0U);
+    // The cyclic schedule needs C = n / (2 * Bt * 32) whole cores per chunk.
+    ASSERT_EQ(seq_per_device % (2U * rows_per_block_tiles * 32U), 0U)
+        << "chunk of " << seq_per_device << " rows does not divide into cyclic blocks";
+
+    seed_for_case({batch, num_heads, seq_len, head_dim, rows_per_block_tiles});
+    auto& rng = autograd::ctx().get_generator();
+    const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const xt::xarray<float> query_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> key_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> value_xt = ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+    const xt::xarray<float> grad_output_xt =
+        ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng());
+
+    const auto ref = reference_forward(query_xt, key_xt, value_xt);
+    const auto ref_grads = reference_backward(query_xt, key_xt, value_xt, ref.weights, grad_output_xt, ref.scale);
+
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    const auto to_device = [&](const xt::xarray<float>& x) {
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
+    };
+
+    struct Result {
+        xt::xarray<float> dQ, dK, dV;
+    };
+    const auto run = [&](ops::distributed::RingBackwardKind kind) {
+        auto q = autograd::create_tensor(to_device(query_xt), /* requires_grad */ true);
+        auto k = autograd::create_tensor(to_device(key_xt), /* requires_grad */ true);
+        auto v = autograd::create_tensor(to_device(value_xt), /* requires_grad */ true);
+        auto out = ops::distributed::ring_attention_sdpa(
+            q, k, v, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles);
+        out->set_grad(to_device(grad_output_xt));
+        out->backward();
+        const auto gather = [&](const ttnn::Tensor& t) {
+            return gather_cp(
+                core::to_xtensor<float>(t, core::IdentityComposer{}),
+                batch, num_heads, seq_len, head_dim, seq_per_device);
+        };
+        return Result{gather(q->get_grad()), gather(k->get_grad()), gather(v->get_grad())};
+    };
+
+    const auto two_pass = run(ops::distributed::RingBackwardKind::TwoPass);
+    const auto cyclic = run(ops::distributed::RingBackwardKind::Cyclic);
+
+    // Run the cyclic path again on the same inputs. Its relay has credits,
+    // readiness tags and endpoint counters, and a race in any of them would
+    // show as a result that moves between runs. Bitwise equality says any
+    // difference from the two-pass path is arithmetic, not a protocol bug --
+    // which is the distinction a tolerance can never make.
+    const auto cyclic_again = run(ops::distributed::RingBackwardKind::Cyclic);
+    EXPECT_TRUE(cyclic.dQ == cyclic_again.dQ) << "the cyclic backward is not deterministic in dQ";
+    EXPECT_TRUE(cyclic.dK == cyclic_again.dK) << "the cyclic backward is not deterministic in dK";
+    EXPECT_TRUE(cyclic.dV == cyclic_again.dV) << "the cyclic backward is not deterministic in dV";
+
+    // How these are graded, and why not by a max-error tolerance.
+    //
+    // The inputs are uniform(0, 2), so with d = 64 the scores are large and
+    // positive and the softmax is nearly one-hot. bf16 carries eight mantissa
+    // bits, so a 0.4% error on a score of ~8 moves the exponent by ~0.03 and
+    // the attention weight by several percent; where the backward's
+    // (dP - D) cancellation then bites, individual gradient elements land
+    // percent-level off. Both implementations do this, in different places,
+    // because they round differently.
+    //
+    // A max over ~10^5 elements is therefore a statistic about the unluckiest
+    // element, and it moves by a factor of two on nothing. It is kept here,
+    // graded against each tensor's own largest value, only as a coarse net;
+    // the claims worth making are the two below it.
+    const auto amax = [](const xt::xarray<float>& x) { return xt::amax(xt::abs(x))(); };
+    const auto rms_error = [](const xt::xarray<float>& expected, const xt::xarray<float>& got) {
+        return std::sqrt(xt::mean(xt::square(got - expected))());
+    };
+    const char* names[] = {"dQ", "dK", "dV"};
+    const xt::xarray<float>* refs[] = {&ref_grads.dQ, &ref_grads.dK, &ref_grads.dV};
+    const xt::xarray<float>* tps[] = {&two_pass.dQ, &two_pass.dK, &two_pass.dV};
+    const xt::xarray<float>* cys[] = {&cyclic.dQ, &cyclic.dK, &cyclic.dV};
+
+    for (uint32_t k = 0; k < 3U; ++k) {
+        const float scale = amax(*refs[k]);
+        const float two_pass_max = amax(*refs[k] - *tps[k]);
+        const float cyclic_max = amax(*refs[k] - *cys[k]);
+        EXPECT_LE(two_pass_max, 0.25F * scale) << names[k] << ": two-pass is far from the reference";
+        EXPECT_LE(cyclic_max, 0.25F * scale) << names[k] << ": cyclic is far from the reference";
+
+        // The real accuracy claim. Root-mean-square says whether a whole
+        // tensor is worse rather than one element of it, and it is graded
+        // two ways: against the reference in absolute terms, and against the
+        // other implementation. Measured, the cyclic path is consistently the
+        // more accurate of the two -- it fuses into one kernel where the
+        // two-pass path recomputes the score stage in bf16, and it keeps its
+        // per-step gradients in FP32 where the other rounds them to bf16
+        // before the host accumulates.
+        const float two_pass_rms = rms_error(*refs[k], *tps[k]);
+        const float cyclic_rms = rms_error(*refs[k], *cys[k]);
+        EXPECT_LE(cyclic_rms, 0.05F * scale)
+            << names[k] << ": cyclic rms " << cyclic_rms << " against reference scale " << scale;
+        EXPECT_LE(cyclic_rms, 1.5F * two_pass_rms)
+            << names[k] << ": the cyclic backward is less accurate than the two-pass one over the whole "
+            << "tensor, rms " << cyclic_rms << " against " << two_pass_rms;
+    }
+
+    // Printed so that a cross-check failure can be read: if each path's own
+    // error against the reference is unchanged and only their difference
+    // grows, they are rounding apart, not drifting from the answer.
+    const auto err = [](const xt::xarray<float>& a, const xt::xarray<float>& b) {
+        return xt::amax(xt::abs(a - b))();
+    };
+    // RMS as well as max: a max over half a million elements is one unlucky
+    // element, and says nothing about whether a whole tensor is worse.
+    const auto rms = [](const xt::xarray<float>& a, const xt::xarray<float>& b) {
+        return std::sqrt(xt::mean(xt::square(a - b))());
+    };
+    std::cout << "  N=" << seq_len << " heads=" << num_heads << " Bt=" << rows_per_block_tiles << "\n"
+              << "    vs reference  two-pass dQ " << err(ref_grads.dQ, two_pass.dQ) << " dK "
+              << err(ref_grads.dK, two_pass.dK) << " dV " << err(ref_grads.dV, two_pass.dV) << "\n"
+              << "    vs reference  cyclic   dQ " << err(ref_grads.dQ, cyclic.dQ) << " dK "
+              << err(ref_grads.dK, cyclic.dK) << " dV " << err(ref_grads.dV, cyclic.dV) << "\n"
+              << "    against each other     dQ " << err(two_pass.dQ, cyclic.dQ) << " dK "
+              << err(two_pass.dK, cyclic.dK) << " dV " << err(two_pass.dV, cyclic.dV) << "\n"
+              << "    rms vs reference  two-pass dQ " << rms(ref_grads.dQ, two_pass.dQ) << " dK "
+              << rms(ref_grads.dK, two_pass.dK) << " dV " << rms(ref_grads.dV, two_pass.dV) << "\n"
+              << "    rms vs reference  cyclic   dQ " << rms(ref_grads.dQ, cyclic.dQ) << " dK "
+              << rms(ref_grads.dK, cyclic.dK) << " dV " << rms(ref_grads.dV, cyclic.dV) << "\n";
+
+    // Where the worst element is. Outliers scattered through the tensor are
+    // rounding; outliers clustered on a block boundary, a chunk, or one row
+    // of a tile are a kernel bug wearing rounding's clothes.
+    const auto worst_at = [&](const xt::xarray<float>& expected, const xt::xarray<float>& got) {
+        size_t wb = 0, wh = 0, ws = 0, wd = 0;
+        float worst = -1.0F;
+        uint32_t over_half = 0;
+        const float threshold = 0.5F * xt::amax(xt::abs(got - expected))();
+        for (size_t b = 0; b < batch; ++b) {
+            for (size_t h = 0; h < num_heads; ++h) {
+                for (size_t sq = 0; sq < seq_len; ++sq) {
+                    for (size_t dd = 0; dd < head_dim; ++dd) {
+                        const float e = std::abs(got(b, h, sq, dd) - expected(b, h, sq, dd));
+                        if (e > worst) {
+                            worst = e;
+                            wb = b; wh = h; ws = sq; wd = dd;
+                        }
+                        if (e >= threshold) {
+                            ++over_half;
+                        }
+                    }
+                }
+            }
+        }
+        return "worst " + std::to_string(worst) + " at (b" + std::to_string(wb) + ",h" + std::to_string(wh) +
+               ",s" + std::to_string(ws) + ",d" + std::to_string(wd) + ") chunk " +
+               std::to_string(ws / seq_per_device) + " row-in-chunk " + std::to_string(ws % seq_per_device) +
+               "; " + std::to_string(over_half) + " elements above half of it";
+    };
+    std::cout << "    two-pass dQ " << worst_at(ref_grads.dQ, two_pass.dQ) << "\n"
+              << "    cyclic   dQ " << worst_at(ref_grads.dQ, cyclic.dQ) << "\n";
+}
+
+}  // namespace
+
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgree) {
+    compare_backward_implementations(1, 4, seq_for(64), 64, /* Bt */ 1);
+}
+
+// Same problem as the tall-block case below, one tile per block instead of
+// two: it separates the block height from the problem size, since the two
+// differ only in Bt and hence in the core count the schedule derives.
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeAtTheSameSizeWithShortBlocks) {
+    compare_backward_implementations(1, 4, seq_for(128), 64, /* Bt */ 1);
+}
+
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithTallBlocks) {
+    compare_backward_implementations(1, 4, seq_for(128), 64, /* Bt */ 2);
+}
+
+TEST_F(LoudboxRingSDPATest, BothBackwardsAgreeWithWiderHead) {
+    compare_backward_implementations(1, 2, seq_for(64), 128, /* Bt */ 1);
 }
 
 // ------------------------------------------------------------------ timing
