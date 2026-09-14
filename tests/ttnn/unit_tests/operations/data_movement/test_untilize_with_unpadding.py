@@ -7,8 +7,8 @@ import math
 
 import pytest
 import torch
-
 import ttnn
+
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -990,3 +990,39 @@ def test_untilize_with_unpadding_block_per_node_cb_size(
             assert (
                 device.num_program_cache_entries() == entries
             ), "untilize_with_unpadding must reuse the cached program on a cache hit"
+
+
+# Cropping the WIDTH of a tensor wider than threshold_row_block (32) tiles used to hang the device.
+# Above that threshold the block-interleaved factory splits work over the *input* padded width, so a
+# core can own a block lying entirely at or past the unpadded output width; clamping such a block
+# underflowed into a ~4 GB noc_async_write that never retired. The cases below cover a block wholly
+# inside the unpadded width, one straddling it (partial write), and one wholly past it.
+@pytest.mark.parametrize(
+    "padded_width, out_width",
+    [
+        (1024, 512),  # 32 tiles/row: below the threshold, so a different factory handles it
+        (1056, 1056),  # block factory but no crop: the write is never clamped
+        (1056, 512),  # smallest shape over the threshold that also discards whole blocks
+        (1056, 1050),  # crop lands inside the last block: straddle only, nothing wholly past it
+        (1056, 500),  # straddle plus wholly-discarded blocks: both branches in one program
+        (4128, 2560),  # the shape this was found on (qkv projection of a GDN prefill chunk)
+    ],
+)
+def test_untilize_with_unpadding_width_crop(device, padded_width, out_width):
+    torch.manual_seed(42)
+    height = 128
+    torch_input = torch.randn(1, height, padded_width, dtype=torch.bfloat16)
+
+    tile_tensor = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    untilized = ttnn.untilize_with_unpadding(
+        tile_tensor, [0, height - 1, out_width - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # A bf16 tilize/untilize round trip is an identity, so this is exact.
+    assert_equal(ttnn.to_torch(untilized), torch_input[:, :, :out_width])
