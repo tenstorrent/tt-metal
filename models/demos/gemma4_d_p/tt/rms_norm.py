@@ -29,11 +29,28 @@ class RMSNorm(nn.Module):
                 cache_file_name=get_cache_file_name(tensor_cache_path, "weight"),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # TILE gamma enables the large-tensor RMSNorm path, which bounds L1 usage
+            # for the FP32 intermediate buffers in the 5376-wide prefill norm.
+            flat_weight = ttnn.reshape(self.tt_weight, (1, 1, 1, hf_config.hidden_size))
+            self.tt_weight = ttnn.to_layout(flat_weight, ttnn.TILE_LAYOUT)
         else:
             self.tt_weight = None
 
         self.eps = hf_config.rms_norm_eps
         self.mesh_device = mesh_device
+        # Match the reference's FP32 prefill RMSNorm computation.
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def forward(self, x):
-        return ttnn.rms_norm(x, weight=self.tt_weight, epsilon=self.eps)
+        return ttnn.rms_norm(
+            x,
+            weight=self.tt_weight,
+            epsilon=self.eps,
+            compute_kernel_config=self.compute_kernel_config,
+        )
