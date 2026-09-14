@@ -164,6 +164,11 @@ void bind_slice_descriptor(nb::module_& mod) {
             &ttnn::prim::SliceDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
+
+    // Bound without create_descriptor: the Metal 2.0 factory produces a ProgramSpec, and the
+    // fusion branches that used to drive create_descriptor consume a ProgramDescriptor. The class
+    // stays exposed so those call sites resolve and report the missing method themselves.
+    nb::class_<ttnn::prim::SliceTileProgramFactory>(mod, "SliceTileProgramFactory");
 }
 
 }  // namespace ttnn::operations::data_movement::detail
