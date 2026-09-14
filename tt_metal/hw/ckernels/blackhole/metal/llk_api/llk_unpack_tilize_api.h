@@ -299,6 +299,9 @@ inline void llk_unpack_tilizeA_B_block(
  * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
  * the unpacker.
  *
+ * No tile geometry is restored: the Blackhole teardown reverts the SrcA Y stride its init wrote and
+ * leaves Tile_x_dim_cntx0 alone, because its init never programs it (tt-llk#1161).
+ *
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {

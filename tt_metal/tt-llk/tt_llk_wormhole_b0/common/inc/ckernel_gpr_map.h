@@ -40,7 +40,10 @@ struct p_gpr_unpack
     constexpr static std::uint32_t TILE_SIZE_A             = 36; // Holds tile size for unpacker 0
     constexpr static std::uint32_t TILE_SIZE_B             = 37; // Holds tile size for unpacker 1
     constexpr static std::uint32_t KT_DIM                  = 38; // Holds matmul kt_dim
-    constexpr static std::uint32_t FACE_DIM_16x16          = 40; // Holds face dimension (16x16)
+    // Slot 40 was the FACE_DIM_16x16 GPR. configure_unpack_AB preloaded it and only the tilize
+    // teardowns read it back, to restore a hardcoded 16x16 Tile_x_dim; they now compute
+    // canonical_unpA_tile_x_dim_cntx(face_r_dim) instead, leaving no reader on Wormhole (tt-llk#1161).
+    // Slot is reserved as free until the next unpacker GPR consolidation.
     constexpr static std::uint32_t FACE_DIM_8x16           = 41; // Holds face dimension (8x16)
     constexpr static std::uint32_t FACE_DIM_4x16           = 42; // Holds face dimension (4x16)
     constexpr static std::uint32_t FACE_DIM_2x16           = 43; // Holds face dimension (2x16)

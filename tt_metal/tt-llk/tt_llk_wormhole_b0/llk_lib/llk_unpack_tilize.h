@@ -569,7 +569,8 @@ inline void _llk_unpack_tilize_uninit_(const std::uint32_t unpack_dst_format, co
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
  * Reverts the config @ref _llk_unpack_tilizeA_B_init_ wrote: unpack config word 0 (clearing tilize
- * and haloize mode) and Tile_x_dim_cntx0. x-start/x-end and the MOP are reprogrammed by the next
+ * and haloize mode) and Tile_x_dim_cntx0. It also zeroes the SrcA/SrcB Z/W counters, which belong
+ * to the execute path rather than to init. x-start/x-end and the MOP are reprogrammed by the next
  * operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
