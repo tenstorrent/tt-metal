@@ -25,7 +25,9 @@ struct VsaRingSdpaOperation {
     using tensor_args_t = VsaRingSdpaInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<VsaRingSdpaMeshWorkloadFactory>;
+    using program_factory_t = std::variant<VsaRingSdpaRaMeshWorkloadFactory, VsaRingSdpaMeshWorkloadFactory>;
+
+    static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -56,6 +58,7 @@ Tensor vsa_ring_sdpa(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
+    VsaRingGather gather,
     uint32_t num_workers_per_link,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id);
 

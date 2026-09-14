@@ -12,6 +12,7 @@
 // DRAM-bound.
 
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_stream_descriptor.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -512,6 +513,9 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         if (const char* e = std::getenv("TT_VSA_RING_COARSE"); e != nullptr && e[0] == '1') {
             probe_defines["VSA_RING_COARSE"] = "1";  // A/B: gate per shard (the fused signal) instead of per block
         }
+        if (ring->gather == VsaRingGather::RingAttention) {
+            probe_defines["VSA_RING_SLICE_GATE"] = "1";  // the stock gather signals per shard: gate per shard
+        }
         if (const char* e = std::getenv("TT_VSA_RING_GATE_SLICE"); e != nullptr && e[0] == '1') {
             probe_defines["VSA_RING_GATE_SLICE"] = "1";  // triage: fine block order, per-shard gate
         }
@@ -638,6 +642,11 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         // reader: `if constexpr (topology == Ring && !fuse_op)`), so one chain carries that shard whole:
         // the receiver must not expect a second-half signal.
         ring_signaler->split_forwarding_enabled = false;
+        if (ring->gather == VsaRingGather::RingAttention) {
+            // The stock helper's even-ring gate: the diametric shard arrives split across both chains and the
+            // receiver waits for the second half's signal (RingSDPAOpReceiver).
+            ring_signaler->split_forwarding_enabled = ring->ring_size % 2 == 0 && ring->ring_size > 2;
+        }
         ring_signaler->push_ring_sdpa_fused_op_rt_args(ring_receiver_rt);
         ring->receiver_cores_noc = ring_signaler->fused_op_receiver_cores_noc;
         ring->receiver_semaphores = ring_signaler->fused_op_receiver_signal_semaphores;
@@ -1131,6 +1140,48 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     }
     desc.kernels.push_back(std::move(compute_desc));
     TT_FATAL(desc.kernels.size() == kVsaStreamKernelCount, "vsa_sdpa stream: unexpected kernel count");
+    if (ring_mode && ring->gather == VsaRingGather::RingAttention) {
+        // The stock ring_attention all-gather, unmodified, appended after the VSA kernels (handles == push order):
+        // it forwards each device's K and V shards around the ring into the gathered buffers (rows [s*T_local,
+        // (s+1)*T_local) for shard s; the local shard is NOT copied -- the leaders read it from k/v), one shard per
+        // hop on both chains, and signals the leaders per landed shard with the protocol RingSDPAOpReceiver reads.
+        TT_FATAL(
+            ring->coord.has_value() && ring->ag != nullptr,
+            "vsa_ring_sdpa: the RingAttention gather needs the device coordinate and the all-gather params");
+        std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> ag_signaler =
+            ttnn::experimental::ccl::AllGatherFusedOpSignaler();
+        ag_signaler->init_fused_op(
+            ring_signaler->fused_op_receiver_cores_noc,
+            ring_signaler->fused_op_receiver_signal_semaphores,
+            ring_signaler->fused_op_signaler_mode);
+        std::vector<Tensor> ag_inputs = {t.k, t.v};
+        std::vector<Tensor> ag_outputs = {*ring->gathered_k, *ring->gathered_v};
+        ttnn::ring_attention_all_gather_async_multi_core_with_workers_helper(
+            desc,
+            ag_inputs,
+            *ring->coord,
+            ring->forward_coord,
+            ring->backward_coord,
+            ag_outputs,
+            /*dim=*/2,
+            ring->ag->num_links,
+            ring->ring_size,
+            ring->device_index,
+            ring->ag->topology,
+            ring->ag->semaphore,
+            ring->ag->sub_device_id,
+            ag_signaler,
+            /*core_grid_offset=*/tt::tt_metal::CoreCoord{0, 0},
+            ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+            /*input_batch_slice_idx=*/std::nullopt,
+            /*gather_valid_Ht=*/std::nullopt,
+            /*slot_id=*/std::nullopt,
+            /*kv_actual_isl=*/std::nullopt,
+            /*chunk_local_tiles=*/T_local / tt::constants::TILE_HEIGHT,
+            /*kv_cache_num_layers=*/1,
+            /*kv_cache_layer_idx=*/0,
+            /*split_forwarding_enabled=*/ring_signaler->split_forwarding_enabled);
+    }
     return desc;
 }
 

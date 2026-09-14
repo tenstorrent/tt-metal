@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
@@ -26,8 +27,10 @@ namespace ttnn::transformer {
 //   block_counts                   [1, 1, 1, Wc]                   uint32 ROW_MAJOR, global
 //   persistent_output_buffer_k/v   [1, H, T_local*ring_size, d]    the all-gather ping-pong buffers for k and v
 // multi_device_global_semaphore: two GlobalSemaphores [direction 0, direction 1] for the gather.
-// num_workers_per_link: gather workers per direction per link (behind a fabric MUX when > 1); the senders
-// (2*links*(workers + mux) cores) fill the compute grid's first rows, the VSA engine the rest.
+// gather: "ring_attention" (default) runs the stock ring_attention_all_gather_async helper unmodified (one worker
+// per link per direction) and gates the fine stage per landed shard; "fused_kv" runs the op's own multi-worker
+// token-major gather and gates per block (num_workers_per_link workers per direction per link behind a MUX). The
+// senders fill the compute grid's first row, the VSA engine the rest.
 ttnn::Tensor vsa_ring_sdpa(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
@@ -41,6 +44,7 @@ ttnn::Tensor vsa_ring_sdpa(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
+    const std::string& gather = "ring_attention",  // "ring_attention" (stock helper, per-shard gate) | "fused_kv"
     uint32_t num_workers_per_link = 2,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<float> scale = std::nullopt,

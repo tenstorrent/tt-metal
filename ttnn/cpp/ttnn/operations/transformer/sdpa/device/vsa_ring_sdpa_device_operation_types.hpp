@@ -16,15 +16,24 @@ namespace ttnn::prim {
 // `vsa` is the plain vsa_sdpa contract (raw-selection streaming kernel); `ag` carries the ring geometry
 // (links, topology, cluster axis, the two GlobalSemaphores [direction 0, direction 1]); the gather's sender
 // cores fill the compute grid's first row(s), the VSA engine the rest.
+// Which all-gather forwards K/V around the ring inside the fused program.
+//   RingAttention: the stock ring_attention_all_gather_async helper, unmodified (one worker per link per
+//                  direction, direct fabric connections, per-shard signals incl. the even-ring split of the
+//                  diametric shard). The leaders gate per landed SHARD. The mergeable default.
+//   FusedKv:       the op's own multi-worker (MUX) token-major gather (vsa_kv_gather_*.cpp); the leaders gate per
+//                  BLOCK by polling the workers' landed-tile counters (VSA_RING_SDPA_SPEC.md sections 13-15).
+enum class VsaRingGather : uint32_t { RingAttention = 0, FusedKv = 1 };
+
 struct VsaRingSdpaParams {
     VsaSdpaParams vsa;
     ttnn::experimental::prim::RingAttentionAllGatherAsyncParams ag;  // ring geometry: links, topology, axis, semaphores
-    uint32_t num_workers_per_link = 2;  // gather workers per direction per link (senders = 2*links*(w + mux) cores)
+    VsaRingGather gather = VsaRingGather::RingAttention;
+    uint32_t num_workers_per_link = 2;  // FusedKv only: gather workers per direction per link (+1 MUX core each)
 
     // Explicit reflection: `ag` is not an aggregate (constructor-only), so the framework's automatic
     // member introspection cannot describe this struct; the hash is custom (compute_program_hash).
-    static constexpr auto attribute_names = std::forward_as_tuple("vsa", "ag", "num_workers_per_link");
-    auto attribute_values() const { return std::forward_as_tuple(vsa, ag, num_workers_per_link); }
+    static constexpr auto attribute_names = std::forward_as_tuple("vsa", "ag", "gather", "num_workers_per_link");
+    auto attribute_values() const { return std::forward_as_tuple(vsa, ag, gather, num_workers_per_link); }
 };
 
 struct VsaRingSdpaInputs {
@@ -34,5 +43,15 @@ struct VsaRingSdpaInputs {
     Tensor gathered_k;  // [1, H, T_local*ring_size, d] persistent all-gather buffers (shard s at rows
     Tensor gathered_v;  //   [s*T_local, (s+1)*T_local)); the local shard is never written into them
 };
+
+// Sender cores the gather occupies, placed from (0, 0) row-major: RingAttention one per link per direction; FusedKv
+// two directions of (workers + one MUX core) per link.
+inline uint32_t vsa_ring_sender_cores(const VsaRingSdpaParams& args) {
+    if (args.gather == VsaRingGather::RingAttention) {
+        return 2 * args.ag.num_links;
+    }
+    const uint32_t mux = args.num_workers_per_link == 1 ? 0u : 1u;
+    return args.ag.num_links * 2 * (args.num_workers_per_link + mux);
+}
 
 }  // namespace ttnn::prim

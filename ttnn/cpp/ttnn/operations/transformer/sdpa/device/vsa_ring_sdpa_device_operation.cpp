@@ -76,17 +76,14 @@ void validate_ring(const VsaRingSdpaParams& attrs, const VsaRingSdpaInputs& t) {
     // than time out on the device.
     {
         const auto grid = q.device()->compute_with_storage_grid_size();
-        const uint32_t mux = attrs.num_workers_per_link == 1 ? 0u : 1u;
-        const uint32_t senders = attrs.ag.num_links * 2 * (attrs.num_workers_per_link + mux);
+        const uint32_t senders = vsa_ring_sender_cores(attrs);
         TT_FATAL(
             senders <= grid.x,
-            "vsa_ring_sdpa: {} sender cores ({} links x 2 directions x ({} workers + {} mux)) exceed one grid row of "
-            "{} "
-            "cores; senders spilling into a second row hang (open issue). Reduce num_workers_per_link or num_links.",
+            "vsa_ring_sdpa: {} sender cores ({} links, {} workers/link) exceed one grid row of {} cores; senders "
+            "spilling into a second row hang (open issue). Reduce num_workers_per_link or num_links.",
             senders,
             attrs.ag.num_links,
             attrs.num_workers_per_link,
-            mux,
             grid.x);
     }
     TT_FATAL(attrs.ag.cluster_axis.has_value(), "vsa_ring_sdpa: cluster_axis is required");
@@ -144,6 +141,14 @@ void validate_vsa_contract(const VsaRingSdpaParams& attrs, const VsaRingSdpaInpu
 
 }  // namespace
 
+VsaRingSdpaOperation::program_factory_t VsaRingSdpaOperation::select_program_factory(
+    const VsaRingSdpaParams& attrs, const VsaRingSdpaInputs&) {
+    if (attrs.gather == VsaRingGather::FusedKv) {
+        return VsaRingSdpaMeshWorkloadFactory{};
+    }
+    return VsaRingSdpaRaMeshWorkloadFactory{};
+}
+
 void VsaRingSdpaOperation::validate_on_program_cache_miss(const VsaRingSdpaParams& attrs, const VsaRingSdpaInputs& t) {
     TT_FATAL(tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE, "vsa_ring_sdpa is Blackhole-only");
     TT_FATAL(t.vsa.q.dtype() == DataType::BFLOAT16, "vsa_ring_sdpa: q must be bf16");
@@ -187,6 +192,7 @@ ttsl::hash::hash_t VsaRingSdpaOperation::compute_program_hash(
         t.vsa.dense_row_mask.has_value(),
         a.compute_kernel_config,
         attrs.ag,
+        static_cast<uint32_t>(attrs.gather),
         attrs.num_workers_per_link,
         t.vsa.q.logical_shape(),
         t.vsa.q.dtype(),
@@ -219,6 +225,7 @@ Tensor vsa_ring_sdpa(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
+    VsaRingGather gather,
     uint32_t num_workers_per_link,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
     using OperationType = VsaRingSdpaOperation;
@@ -254,7 +261,7 @@ Tensor vsa_ring_sdpa(
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .vsa = std::move(vsa), .ag = std::move(ag), .num_workers_per_link = num_workers_per_link},
+            .vsa = std::move(vsa), .ag = std::move(ag), .gather = gather, .num_workers_per_link = num_workers_per_link},
         OperationType::tensor_args_t{
             .vsa =
                 VsaSdpaInputs{

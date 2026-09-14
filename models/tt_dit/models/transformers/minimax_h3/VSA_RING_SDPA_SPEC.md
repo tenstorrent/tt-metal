@@ -456,3 +456,42 @@ against the torch reference (passes, PCC 0.9998 vs torch). End to end (real weig
 | 5 s | 0.859 s | 0.816 s | -43 ms (-5.0 %) |
 | 10 s | 1.701 s | 1.568 s | -133 ms (-7.8 %) |
 | 15 s | 2.727 s | 2.569 s | -158 ms (-5.8 %) |
+
+## 17. Mergeable variant: the stock ring_attention gather, per-shard gate (2026-09-14)
+
+`vsa_ring_sdpa(..., gather="ring_attention")` (the default) runs `ring_attention_all_gather_async`'s helper
+unmodified -- one worker per link per direction on direct fabric connections, K and V as its two inputs, per-shard
+signals including the even-ring split of the diametric shard -- appended to the VSA program descriptor exactly as v1
+did (section 11); the descriptor adapter re-binds its buffer addresses on cache hits and the override re-applies its
+GlobalSemaphore addresses. The leaders gate per landed shard through RingSDPAOpReceiver (`VSA_RING_SLICE_GATE`),
+streaming shards in ring-arrival order and blocks ascending within a shard, with everything the compute side learned
+since v1: 18 resident rows, dense rows dealt into pass 0, later passes cost-balanced. `gather="fused_kv"` keeps the
+op's own gather of sections 13-15. `MiniMaxH3VSAConfig.ring_gather` selects it in the model.
+
+Correctness: the 8 unit variants pass with the stock gather (bit-exact replays, PCC 0.9997 vs torch; the odd-blocks
+and dense variants included), the traced block at PCC 100 %.
+
+Performance (15 s, slowest device):
+
+| | two-op | ring_attention gather | fused_kv gather |
+|---|---|---|---|
+| op, standalone (4 dense rows) | 25.44 | 22.70 | 19.89 |
+| op, in the block (tracy) | 27.1 | 26.4 (median 25.0) | 23.5 |
+| op, in the block, gate held open | -- | 21.25 | 22.7 |
+| op, in the block, serialized (gather then compute) | -- | 34.6 | 32.8 |
+| traced block period | 62.30 | 62.5 | 59.48 |
+| denoise / step (8 steps, same-day vsa baseline 2.727) | -- | 2.617 (-4.0 %) | 2.569 (-5.8 %) |
+
+Reading. Serialized, the stock gather takes ~13.3 ms (34.6 - 21.25) and the arrival model of section 16 puts the
+per-shard gate's cost at ~1.6 ms (the wait for the first remote slice); measured, the gate waits 5.1 ms
+(26.4 - 21.25). The difference is contention: the serialized number measures the gather with the VSA idle, while in
+the default mode its store-and-forward hops (each re-reading the landed slice from DRAM before forwarding it, with
+one worker per link) run against 108 cores streaming K/V from DRAM, and its slices land late enough that pass 0
+turns comm-bound and pass 1 is fully exposed. The multi-worker fused gather is less sensitive and its per-block gate
+hides the rest. Note the block test's random-data selection is uniform over shards; the real model's selections are
+front-loaded on the near shards, which is why the e2e gain (-4.0 %) exceeds what the block test shows (none).
+
+Bottom line for the merge: with the stock gather the op is a 2.7 ms/block win standalone and -4.0 % on the denoise
+step; the fused gather adds ~1.8 % on top. The stock path has no remaining lever on the gather side without touching
+the helper (its bandwidth and hop latency are what they are); on the compute side the only lever is L1 for a longer
+pass 0, which does not help once the gather is contention-bound.

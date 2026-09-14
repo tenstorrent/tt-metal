@@ -905,6 +905,27 @@ void kernel_main() {
                 for (uint32_t g = 0; g < Gp; ++g) {
                     bhi[g] = (g + 1 < Gp) ? blo[g + 1] : blocks_per_shard;
                 }
+#if defined(VSA_RING_SLICE_GATE) || defined(VSA_RING_COARSE)
+                // Per-SHARD gate (the stock ring_attention gather signals once per landed shard, plus the even-ring
+                // split second half; RingSDPAOpReceiver waits for both): shards in ring-arrival order, blocks
+                // ascending within a shard (the locality the engine's windows batch on). Later passes take the same
+                // order with the gate open.
+                while (step < ring_size) {
+                    WAYPOINT("LRNG");
+                    uint32_t sigma;
+                    if (ring_gate.active) {
+                        sigma = rx.get_next_ring_id_and_sync();
+                    } else {
+                        sigma = rx.seq.get_next_ring_id([](uint32_t, uint32_t) {});
+                    }
+                    ++step;
+                    const uint32_t b0 = sigma * blocks_per_shard;
+                    for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
+                        stream_block(b);
+                    }
+                }
+            }
+#else
                 while (step < ring_size) {
                     WAYPOINT("LRNG");
                     // one shard from each direction (the sequencer alternates; the last round may have one)
@@ -937,19 +958,6 @@ void kernel_main() {
                         rx.signal_op_semaphore_ids[1],
                         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(rx.signal_op_semaphore_ids[1])));
 #endif
-#ifdef VSA_RING_COARSE  // triage knob (TT_VSA_RING_COARSE=1): the per-shard gate, ascending blocks
-                    for (uint32_t x = 0; x < n; ++x) {
-                        if (ring_gate.active) {
-                            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id[x])) <
-                                   sem_val[x]) {
-                            }
-                        }
-                        const uint32_t b0 = sig[x] * blocks_per_shard;
-                        for (uint32_t b = b0; b < b0 + blocks_per_shard; ++b) {
-                            stream_block(b);
-                        }
-                    }
-#else
                     // landing order at RUN-block granularity: runs of consecutive blocks keep the adjacent-block
                     // locality the engine's windows batch on (real selections list neighbouring blocks), the
                     // round-robin over (shard, worker quarter) follows the arrival front
@@ -975,9 +983,9 @@ void kernel_main() {
                             }
                         }
                     }
-#endif
                 }
             }
+#endif
 #else
             if (order_ptr == nullptr) {
                 for (uint32_t b = 0; b < n_kv_blocks; ++b) {

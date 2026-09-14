@@ -627,6 +627,7 @@ class MiniMaxH3Attention(Module):
                     cluster_axis=self.sp_mesh_axis,
                     mesh_device=self.mesh_device,
                     topology=self.ccl_manager.topology,
+                    gather=self.vsa_config.ring_gather,
                     num_workers_per_link=self.vsa_config.ring_workers_per_link,
                     subdevice_id=self.ccl_manager.ccl_sub_device_id,
                     list_len=self.vsa_stage.k,

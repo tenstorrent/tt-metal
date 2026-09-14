@@ -154,6 +154,7 @@ def _run(
             cluster_axis=sp_axis,
             mesh_device=mesh_device,
             topology=ttnn.Topology.Ring,
+            gather=os.environ.get("VSA_RING_GATHER", "ring_attention"),
             num_workers_per_link=int(os.environ.get("VSA_RING_WORKERS", "2")),
             **common,
         )

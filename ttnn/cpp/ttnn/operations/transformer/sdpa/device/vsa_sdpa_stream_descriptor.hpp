@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include "ttnn/operations/transformer/sdpa/device/vsa_ring_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -33,6 +34,13 @@ inline constexpr uint32_t kVsaComputeKernel = 4;
 inline constexpr uint32_t kVsaStreamKernelCount = 5;
 
 struct VsaRingContext {
+    VsaRingGather gather = VsaRingGather::RingAttention;
+    // RingAttention gather: the stock helper is appended to the descriptor by the builder; it needs the device's
+    // coordinates and the all-gather params (links, topology, semaphores, sub-device).
+    std::optional<MeshCoordinate> coord;
+    std::optional<MeshCoordinate> forward_coord;
+    std::optional<MeshCoordinate> backward_coord;
+    const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams* ag = nullptr;
     uint32_t device_index = 0;  // this device's position (= SP shard) on the ring axis
     uint32_t ring_size = 0;
     uint32_t forward_writes_expected = 0;   // shards arriving over the forward chain

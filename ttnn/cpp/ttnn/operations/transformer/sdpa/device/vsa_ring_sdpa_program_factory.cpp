@@ -9,18 +9,18 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/vsa_sdpa_stream_descriptor.hpp"
 
 namespace ttnn::prim {
 
 namespace {
 
-// Sender cores the gather places from (0, 0) in row-major order: per link, two directions of (workers + MUX)
-// cores. The VSA grid starts below the rows they fill.
+// Sender cores the gather places from (0, 0) in row-major order: the stock ring_attention helper uses one core
+// per link per direction; the fused gather two directions of (workers + MUX) per link. The VSA grid starts below
+// the rows they fill.
 uint32_t sender_rows_for(const VsaRingSdpaParams& args, const tt::tt_metal::CoreCoord& grid) {
-    const uint32_t mux = args.num_workers_per_link == 1 ? 0u : 1u;
-    const uint32_t senders = args.ag.num_links * 2 * (args.num_workers_per_link + mux);
-    return (senders + grid.x - 1) / grid.x;
+    return (vsa_ring_sender_cores(args) + grid.x - 1) / grid.x;
 }
 
 VsaRingContext build_ring_context(
@@ -41,9 +41,17 @@ VsaRingContext build_ring_context(
     ctx.forward_writes_expected = static_cast<uint32_t>(num_targets_forward);
     ctx.backward_writes_expected = static_cast<uint32_t>(num_targets_backward);
     ctx.sender_rows = sender_rows_for(args, tensor_args.vsa.q.device()->compute_with_storage_grid_size());
-    ctx.workers_per_direction = args.ag.num_links * args.num_workers_per_link;
+    ctx.gather = args.gather;
+    ctx.workers_per_direction =
+        args.ag.num_links * (args.gather == VsaRingGather::FusedKv ? args.num_workers_per_link : 1u);
     ctx.gathered_k = &tensor_args.gathered_k;
     ctx.gathered_v = &tensor_args.gathered_v;
+    ctx.coord = coord;
+    ctx.forward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.vsa.q, coord, 1, args.ag.topology, args.ag.cluster_axis);
+    ctx.backward_coord = ttnn::ccl::get_physical_neighbor_from_physical_coord(
+        tensor_args.vsa.q, coord, -1, args.ag.topology, args.ag.cluster_axis);
+    ctx.ag = &args.ag;
     return ctx;
 }
 
@@ -175,6 +183,85 @@ void VsaRingSdpaMeshWorkloadFactory::override_runtime_arguments(
             tensor_args.vsa.v,
             tensor_args.gathered_k,
             tensor_args.gathered_v);
+    }
+}
+
+// ---- the RingAttention gather: descriptor-based factory (the stock helper's kernels ride the descriptor) ----
+
+tt::tt_metal::WorkloadDescriptor VsaRingSdpaRaProgramFactory::create_workload_descriptor(
+    const VsaRingSdpaParams& args,
+    const VsaRingSdpaInputs& tensor_args,
+    Tensor& output,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    tt::tt_metal::WorkloadDescriptor wd;
+    const auto coords = tensor_coords.coords();
+    wd.programs.reserve(coords.size());
+    for (const auto& coord : coords) {
+        VsaRingContext ctx = build_ring_context(args, tensor_args, coord);
+        auto desc = build_vsa_sdpa_stream_descriptor(args.vsa, tensor_args.vsa, output, &ctx);
+        wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
+    }
+    return wd;
+}
+
+VsaRingSdpaRaMeshWorkloadFactory::cached_mesh_workload_t VsaRingSdpaRaMeshWorkloadFactory::create_mesh_workload(
+    const VsaRingSdpaParams& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const VsaRingSdpaInputs& tensor_args,
+    Tensor& output) {
+    auto cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output);
+    for (auto& [range, program] : cached.workload.get_programs()) {
+        patch_ring_addresses(program, args, tensor_args);  // the raw uint32 gathered/semaphore addresses
+    }
+    return cached;
+}
+
+namespace {
+
+// The stock helper's four kernels follow the VSA kernels (handles == push order: reader fwd, writer fwd, reader
+// bwd, writer bwd); their out_ready GlobalSemaphore address slots are the standalone op's kReaderSemaphoreArg /
+// kWriterSemaphoreArg. Forward kernels carry semaphore[kForwardSemaphoreIdx], backward the other. The
+// GlobalSemaphores are excluded from the program hash, so a cache hit with the other ping-pong set must re-apply.
+void patch_ring_attention_semaphores(tt::tt_metal::Program& program, const VsaRingSdpaParams& args) {
+    namespace dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
+    const auto fwd_sem = static_cast<uint32_t>(args.ag.semaphore.at(dyn::kForwardSemaphoreIdx).address());
+    const auto bwd_sem = static_cast<uint32_t>(args.ag.semaphore.at(dyn::kBackwardSemaphoreIdx).address());
+    const auto patch = [&](uint32_t kernel, uint32_t slot, uint32_t sem, uint32_t& counter) {
+        auto& by_core = tt::tt_metal::GetRuntimeArgs(program, kernel);
+        for (auto& by_y : by_core) {
+            for (auto& a : by_y) {
+                if (a.size() > slot) {
+                    a[slot] = sem;
+                    ++counter;
+                }
+            }
+        }
+    };
+    uint32_t readers = 0, writers = 0;
+    patch(kVsaStreamKernelCount + dyn::kReaderForwardKernelIdx, dyn::kReaderSemaphoreArg, fwd_sem, readers);
+    patch(kVsaStreamKernelCount + dyn::kWriterForwardKernelIdx, dyn::kWriterSemaphoreArg, fwd_sem, writers);
+    patch(kVsaStreamKernelCount + dyn::kReaderBackwardKernelIdx, dyn::kReaderSemaphoreArg, bwd_sem, readers);
+    patch(kVsaStreamKernelCount + dyn::kWriterBackwardKernelIdx, dyn::kWriterSemaphoreArg, bwd_sem, writers);
+    TT_FATAL(
+        readers == 2 * args.ag.num_links && writers == 2 * args.ag.num_links,
+        "vsa_ring_sdpa: patched {} all-gather readers and {} writers, expected {} each",
+        readers,
+        writers,
+        2 * args.ag.num_links);
+}
+
+}  // namespace
+
+void VsaRingSdpaRaMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const VsaRingSdpaParams& args,
+    const VsaRingSdpaInputs& tensor_args,
+    Tensor& output) {
+    descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output);  // buffers re-bound
+    for (auto& [range, program] : cached_workload.workload.get_programs()) {
+        patch_vsa_sdpa_stream_runtime_args(program, args.vsa, tensor_args.vsa, output, /*ring=*/true);
+        patch_ring_addresses(program, args, tensor_args);
+        patch_ring_attention_semaphores(program, args);
     }
 }
 

@@ -549,8 +549,11 @@ void bind_sdpa(nb::module_& mod) {
         Keyword args:
             multi_device_global_semaphore: two GlobalSemaphores [direction 0, direction 1] for the gather.
             num_links, cluster_axis, mesh_device, topology (Ring): the ring geometry.
-            num_workers_per_link: gather workers per direction per link (default 2; behind a fabric MUX when
-                > 1; senders = 2*links*(workers + 1) cores from the grid's first rows).
+            gather: "ring_attention" (default) -- the stock ring_attention_all_gather_async helper, unmodified,
+                one worker per link per direction, the fine stage gated per landed shard; "fused_kv" -- the op's
+                own multi-worker token-major gather, gated per block.
+            num_workers_per_link: fused_kv only: gather workers per direction per link (default 2; behind a
+                fabric MUX when > 1; senders = 2*links*(workers + 1) cores from the grid's first row).
             subdevice_id: optional sub-device the sender cores are chosen from.
             scale, block_size, compute_kernel_config, list_len, exempt_ids, dense_row_mask,
             coarse_slots_shift, coarse_real_per_shard, dense_row_hint: as vsa_sdpa.
@@ -572,6 +575,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("cluster_axis"),
         nb::arg("mesh_device"),
         nb::arg("topology"),
+        nb::arg("gather") = "ring_attention",
         nb::arg("num_workers_per_link") = 2,
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("scale") = nb::none(),

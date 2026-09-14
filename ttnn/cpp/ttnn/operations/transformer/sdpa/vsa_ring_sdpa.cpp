@@ -25,6 +25,7 @@ ttnn::Tensor vsa_ring_sdpa(
     uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
+    const std::string& gather,
     uint32_t num_workers_per_link,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<float> scale,
@@ -36,6 +37,14 @@ ttnn::Tensor vsa_ring_sdpa(
     uint32_t coarse_slots_shift,
     uint32_t coarse_real_per_shard,
     std::vector<uint32_t> dense_row_hint) {
+    ttnn::prim::VsaRingGather gather_mode;
+    if (gather == "ring_attention") {
+        gather_mode = ttnn::prim::VsaRingGather::RingAttention;
+    } else if (gather == "fused_kv") {
+        gather_mode = ttnn::prim::VsaRingGather::FusedKv;
+    } else {
+        TT_THROW("vsa_ring_sdpa: gather must be \"ring_attention\" or \"fused_kv\" (got \"{}\")", gather);
+    }
     const uint32_t d = q.logical_shape()[3];
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(d)));
     // Same numerics contract as vsa_sdpa: HiFi2, exact exp (lossless mandate), bf16 accumulation.
@@ -68,6 +77,7 @@ ttnn::Tensor vsa_ring_sdpa(
         cluster_axis,
         mesh_device,
         topology,
+        gather_mode,
         num_workers_per_link,
         subdevice_id);
 }

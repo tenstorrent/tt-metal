@@ -151,6 +151,7 @@ def test_vsa_ring_sdpa_perf(mesh_device, sp_axis, tp_axis, num_links, shape, res
             cluster_axis=sp_axis,
             mesh_device=mesh_device,
             topology=ttnn.Topology.Ring,
+            gather=os.environ.get("VSA_RING_GATHER", "ring_attention"),
             num_workers_per_link=workers,
             **common,
         )
@@ -246,7 +247,7 @@ def test_vsa_ring_sdpa_perf(mesh_device, sp_axis, tp_axis, num_links, shape, res
     print(
         f"\nVSA_RING_PERF shape={shape} concat={ms_cat:.2f} ag={ms_ag:.2f} vsa={ms_vsa:.2f} two_op={ms_two:.2f} ring={ms_ring:.2f} ms "
         f"saving={ms_two - ms_ring - ms_cat:.2f} ms (incl. concat) pcc={pcc:.6f} workers={workers} "
-        f"wait_all={os.environ.get('TT_VSA_RING_WAIT_ALL', '0')} coarse={os.environ.get('TT_VSA_RING_COARSE', '0')} "
+        f"gather={os.environ.get('VSA_RING_GATHER', 'ring_attention')} wait_all={os.environ.get('TT_VSA_RING_WAIT_ALL', '0')} coarse={os.environ.get('TT_VSA_RING_COARSE', '0')} "
         f"rmax={os.environ.get('TT_VSA_RMAX', '-')} depth={os.environ.get('TT_VSA_DEPTH', '-')} dense={n_dense}"
     )
     assert pcc > 0.999
