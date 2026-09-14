@@ -13,6 +13,21 @@ One device-operation, one factory, no bundling. The op directory contains **no k
 
 **Readiness sheet:** *Operations analysis* (Diego), fetched fresh 2026-09-11 via the Drive connector, per `analyses/ttnn_op_porting_readiness.md`. Columns below are quoted by header name and cell value verbatim.
 
+> **2026-09-14 — gate re-run: the sheet was reconciled; this audit is now GREEN.** The `Custom hash
+> (compute_program_hash)` cell for this row reads **`yes`**, matching the code, and `Op Classification`
+> has moved to `PD Op (pointer-patching) + hash` — i.e. the sheet has now absorbed #55495. The derived
+> `Is able to port?` is unchanged at `yes`, which answers the open question below: the verdict did not
+> depend on the stale input. Every other cross-checked column still agrees with the code, and no other
+> cell moved in a way that affects a gate (`TensorParameter relaxation` still `none`, `Porting Target`
+> still `ProgramSpecFactoryConcept`, `Runtime-args update` / `Override runtime args method?` /
+> `Pybind descriptor` still `no`). **Overall: GREEN**, with no change to the op's code required to get
+> there — exactly the outcome the *Result* section predicted. `METAL2_PORT_BRIEF.md` is issued
+> alongside this note and the port proceeds.
+>
+> One informational cell did move and is recorded for completeness: `Diego validation` now reads `no`
+> (it read `yes` on 2026-09-11). It is not among the columns the audit reads or gates on — it appears
+> nowhere in the recipe's *TTNN factory concept prerequisite* — so it is noted, not acted on.
+
 **Config vocabulary used throughout.** Three axes gate the factory's structure, and several findings are per-config:
 
 | axis | values | decided by |
@@ -28,7 +43,7 @@ Six reachable combinations: `TILE·{plain,convert_df}·{dst-L1,dst-DRAM}`, `RM·
 | Field | Value |
 |---|---|
 | **Op directory** | `ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded` |
-| **Overall** | **RED** — one gate fails: the readiness sheet disagrees with the code on a cross-checked primary column (*spreadsheet-broken*). Every other gate is clear. |
+| **Overall** | **GREEN** (as of the 2026-09-14 re-run above). Originally **RED** — one gate failed: the readiness sheet disagreed with the code on a cross-checked primary column (*spreadsheet-broken*). That cell has since been reconciled; every other gate was clear throughout. |
 | **DOps / Factories** | `InterleavedToShardedDeviceOperation` → `InterleavedToShardedProgramFactory` |
 | *Prereqs* — Device 2.0 (every kernel used) | **Yes** — all six kernels are structurally Device 2.0 (`Noc`, `DataflowBuffer`, `TensorAccessor`); no holdovers, only sanctioned CB-index free functions |
 | *Prereqs* — Cross-op escapes | Ok — no ttnn-side donor function calls at all; only `tt_metal` `api/*` includes |
@@ -61,7 +76,9 @@ Nothing else blocks. **Device 2.0 ✓ · Feature compatibility ✓ · Offset bas
 
 Per the recipe's *Red-outcome scoping rule*, I judged this a blocker that **clears elsewhere than the op's code** (readiness-sheet side), so the seven purely-informational subjects were **run in full** rather than deferred — a re-audit will read the same code, and today's detail survives intact. The port-work and heads-up detail below is therefore complete and ready to be lifted into a brief the moment the gate clears.
 
-**No `METAL2_PORT_BRIEF.md` is emitted** — the audit is not fully GREEN.
+**`METAL2_PORT_BRIEF.md` was not emitted on 2026-09-11** — the audit was not fully GREEN then. It is
+emitted now, on the 2026-09-14 re-run, against the reconciled sheet; the port-work detail below is
+what it mirrors.
 
 ## Gate detail
 
@@ -264,7 +281,7 @@ Per the recipe's *Red-outcome scoping rule*, I judged this a blocker that **clea
 
 ## Questions for the user  *(two, both routing rather than technical)*
 
-1. **The failing gate is a sheet cell, not code — who takes it?** The `Custom hash` cell for `data_movement/sharded/interleaved_to_sharded` needs reconciling with #55495 (`device/interleaved_to_sharded_op.cpp:144-162`), and the sheet owner should confirm whether the derived `Is able to port? = yes` depends on that input. If you would rather not block on a spreadsheet round-trip, say so and I will re-run the gate against an owner-confirmed value and issue the brief — every other gate is already clear and the port-work detail above is complete.
+1. ~~**The failing gate is a sheet cell, not code — who takes it?**~~ **Resolved 2026-09-14.** The `Custom hash` cell for `data_movement/sharded/interleaved_to_sharded` now reads `yes`, reconciling it with #55495 (`device/interleaved_to_sharded_op.cpp:144-162`), and `Is able to port?` is unchanged at `yes` — so the derived verdict did not depend on the stale input. No routing needed; the gate was re-run against the live sheet and cleared. See the re-run note at the top.
 2. **Confirm the port scope is i2s-only.** `interleaved_to_sharded_partial` binds all six of the same kernels and is blocked on its own relaxation analysis, so this port takes rung 2 (four new `_metal2` forks beside the originals) rather than converting the shared files in place. If a bundled i2s + i2s_partial port is ever intended, that changes the rung — and it would need the partial op's gate cleared first.
 
 ## Recipe notes
