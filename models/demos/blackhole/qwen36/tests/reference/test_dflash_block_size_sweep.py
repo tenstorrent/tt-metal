@@ -2,6 +2,20 @@
 # SPDX-License-Identifier: Apache-2.0
 """Does a BIGGER speculative block buy throughput, now that the verify forward is traced?
 
+MEASURED 2026-09-14 (T3K, eager verify, 64 new tokens from "The capital of France is"): **no.**
+
+    block 16:  3.65 tok/s  273.6 ms/tok  acceptance 7.00   9 steps
+    block 24:  2.54 tok/s  393.8 ms/tok  acceptance 7.00   9 steps
+    block 32:  2.82 tok/s  354.7 ms/tok  acceptance 6.30  10 steps
+
+Acceptance is FLAT at 7.00 from 16 to 24 and DROPS to 6.30 at 32. The ceiling is the drafter's
+useful horizon -- about 7 tokens -- not the number of slots offered, so the extra slots are drafted
+and thrown away and tok/s falls. The 32-slot regression is the trained-horizon effect predicted
+below: the drafter was trained at "1 anchor + 15 drafted" and asking it for 31 makes the early
+slots worse, not just the late ones. Tokens were identical across all three (greedy), as asserted.
+
+Do not re-run this hoping for a different answer; a bigger block needs a drafter trained for one.
+
 With the verify traced and its readback narrowed, the loop runs at 18.82 tok/s (53 ms/tok) at
 ``block_size=16``, committing 7.000 tokens per target forward. Every other lever on the table saves
 a FIXED amount per step; this one is a MULTIPLIER -- if a 32-slot block still commits ~2x the

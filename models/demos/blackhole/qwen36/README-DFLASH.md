@@ -273,18 +273,34 @@ the 3.18 tok/s figure above, so compare the two rows below, not across tables):
 
 | | tok/s | ms/tok | vs production traced decode |
 | --- | --- | --- | --- |
-| speculative, eager verify | 3.68 | 272 | 0.21x |
-| **speculative, TRACED verify** | **7.21** | **139** | **0.40x** |
+| speculative, eager verify | 3.48 | 288 | 0.19x |
+| speculative, TRACED verify | 18.82 | 53 | 1.05x |
+| **+ narrowed drafter readback** | **21.30** | **47** | **1.19x** |
 | production traced decode | 17.87 | 56.0 | 1.00x |
 
-Tokens are bit-identical between the two and acceptance is unchanged at 7.000 tok/step, as greedy
-speculation requires. **Speculation still loses to simply running the model** — this closes about
-half the gap, not all of it.
+Tokens are bit-identical across all of them and acceptance is unchanged at 7.000 tok/step, as greedy
+speculation requires. **Speculation now beats simply running the model**, by 1.19x.
 
-Remaining, in the order they now matter: the drafter is still eager (~120 ms of a ~970 ms step,
-12 % and rising as the target gets faster, and its KV design currently blocks tracing — see
-`tests/perf/test_dflash_drafter_trace_probe.py`); the 128-row bucket still verifies a 16-token
-block; and ~89 % of steps still pay a second target forward for the rollback. See [DFLASH_DRAFTER_OP_MAPPING.md](DFLASH_DRAFTER_OP_MAPPING.md).
+The last row is `TtTarget.lm_head_device` reading the drafter's logits off ONE device instead of
+gathering all eight and discarding seven — 97.9 → 25.8 ms/step in isolation, ~42 ms/step in the loop
+(`tests/perf/test_dflash_lm_head_readback.py`). It is not gated on tracing.
+
+Remaining, in the order they now matter — and note two things this list used to say that are
+**false**:
+
+- The drafter is still eager. Its share is larger than previously documented: the 120 ms/step in
+  `test_dflash_drafter_wall_time.py` is `project_taps + forward` only, and the readback above was a
+  further ~98 ms on top. Tracing it does **not** need a KV redesign — `slice_write` accepts an
+  arbitrary row offset (`tests/unit/test_drafter_kv_write_primitives.py`), so the recorded
+  "32-row-aligned" blocker was wrong. What it needs is fixed shapes and stable addresses, which
+  `TtDFlashDrafter(ctx_capacity=C)` now provides.
+- The 128-row bucket still verifies a 16-token block. Shrinking it to 64 was measured and **does not
+  work**: exactness is lost at every offset (`tests/reference/test_dflash_anchor64.py`).
+- There is **no** rollback replay on device. `TtTarget.replays_after_rollback` is False and every
+  forward recomputes from the anchor, so a rejected block costs nothing extra. The "~89 % of steps
+  pay a second forward" claim described `HFTarget`, the host reference.
+
+See [DFLASH_DRAFTER_OP_MAPPING.md](DFLASH_DRAFTER_OP_MAPPING.md).
 
 > **Absolutes are soft.** This is a shared machine: `decode_tp` alone has measured 0.93, 1.05, 1.14,
 > 1.64, 2.08 and 2.14 tok/s on identical code as other jobs came and went. Only within-run ratios

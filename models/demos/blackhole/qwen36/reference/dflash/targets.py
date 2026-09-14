@@ -318,12 +318,27 @@ class TtTarget:
         import ttnn
 
         logits = self.model._lm_head(hidden)
+        # Slice on device, then read ONE device's copy -- the same narrowing that took the traced
+        # verify's readback from 486 ms to ~10 ms (Qwen36Model._read_verify_logits). The naive form
+        # here is 8x larger than it needs to be in the mesh dimension alone: ConcatMeshToTensor
+        # gathers the logits from ALL 8 devices and then keeps [0]. The LM head all-gathers its
+        # vocab shards, so every device already holds the full row and device 0 is sufficient.
+        # `keep_rows` trims the other axis: slot 0 of a block is the confirmed anchor, so only the
+        # trailing q_len-1 rows are ever read.
+        keep, sliced = logits, None
+        rows = logits.shape[-2]
+        if keep_rows is not None and keep_rows < rows:
+            sliced = ttnn.slice(logits, (0, 0, rows - keep_rows, 0), (1, 1, rows, logits.shape[-1]))
+            keep = sliced
         if self.model.num_devices > 1:
-            host = ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(self.model.device, dim=0))[0]
+            host = ttnn.to_torch(ttnn.get_device_tensors(keep)[0])
         else:
-            host = ttnn.to_torch(logits)
+            host = ttnn.to_torch(keep)
+        if sliced is not None:
+            ttnn.deallocate(sliced)
         ttnn.deallocate(logits)
         host = host.reshape(-1, host.shape[-1])[:, : self.model.vocab_size].float()
+        # Already trimmed on device when keep_rows applied; the tail slice is now a no-op guard.
         return (host if keep_rows is None else host[-keep_rows:]).unsqueeze(0)
 
     def _run(self, lo: int, hi: int):

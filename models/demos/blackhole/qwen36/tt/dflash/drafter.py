@@ -47,6 +47,15 @@ from models.demos.blackhole.qwen36.tt.dflash.weights import DrafterWeights, load
 _DRAM = ttnn.DRAM_MEMORY_CONFIG
 _L1 = ttnn.L1_MEMORY_CONFIG
 
+#: Additive-mask "invisible" value for the fixed-capacity path. NOT -inf, deliberately.
+#:
+#: The growing-history path uses -inf safely because its masks are causal over a short span, so no
+#: 32-column tile is ever entirely masked. The fixed-capacity path masks the whole unwritten tail of
+#: a C-row buffer, which hands the kernel many ALL-MASKED blocks; a flash-style softmax takes a
+#: per-block max, and for such a block that max is -inf, so it evaluates exp(-inf - -inf). A large
+#: finite sentinel makes the block max finite and the weights underflow to zero instead.
+_MASK_NEG = -1e9
+
 #: Default depth of the resident RoPE tables. The drafter's positions track the target's, so this
 #: caps the sequence a drafter instance can serve; it is host trig once at construction.
 DEFAULT_MAX_SEQ_LEN = 4096
@@ -64,6 +73,7 @@ class TtDFlashDrafter:
         tt_ccl=None,
         cache_path=None,
         max_seq_len=DEFAULT_MAX_SEQ_LEN,
+        ctx_capacity=None,
         **weight_dtypes,
     ):
         """``weight_dtypes`` is passed through to :func:`~.weights.load_drafter_weights`
@@ -95,6 +105,13 @@ class TtDFlashDrafter:
             "nlp_create_qkv_heads(kv_tied=True); _kv_heads would need two split projections again"
         )
         self.max_seq_len = max_seq_len
+        # Fixed-capacity KV mode (opt-in). None keeps the growing-concat history, which is the
+        # reference this mode is validated against; an int C makes every per-step shape constant,
+        # which is what a trace capture requires. See _alloc_ctx_buffers.
+        assert ctx_capacity is None or (
+            ctx_capacity % 32 == 0 and ctx_capacity > 0
+        ), f"ctx_capacity must be a positive multiple of the 32-row tile height, got {ctx_capacity}"
+        self._cap = ctx_capacity
         self.weights: DrafterWeights = load_drafter_weights(
             mesh_device, state_dict, cfg, cache_path=cache_path, **weight_dtypes
         )
@@ -106,6 +123,8 @@ class TtDFlashDrafter:
         self._ctx_k: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_v: list[ttnn.Tensor | None] = [None] * cfg.num_hidden_layers
         self._ctx_len = 0
+        if self._cap is not None:
+            self._alloc_ctx_buffers()
         # Projection matmul program configs, keyed (m_tiles, K, N); see _proj_pc.
         self._mm_pc = {}
 
@@ -137,6 +156,162 @@ class TtDFlashDrafter:
                     ttnn.deallocate(t)
                 store[i] = None
         self._ctx_len = 0
+        if self._cap is not None:
+            self._alloc_ctx_buffers()
+
+    def _replicate(self, t, layout=ttnn.TILE_LAYOUT):
+        """Upload a host tensor, replicated across the mesh (the drafter runs every head everywhere)."""
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=self.device,
+            memory_config=_DRAM,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+        )
+
+    def _alloc_ctx_buffers(self) -> None:
+        """Allocate the PERSISTENT per-layer K/V history, once, at a fixed [1, nkv, C, hd].
+
+        This is the change that makes the drafter capturable. The default path rebinds
+        ``self._ctx_k[i]`` to a freshly concatenated tensor every step, so both its shape and its
+        address move; a trace bakes both. Here the buffer is allocated once and only ever written
+        THROUGH -- ``ttnn.experimental.slice_write`` into the live tensor -- so the address a capture
+        records stays valid for every replay.
+
+        Rows past ``_ctx_len`` are zero and are masked out rather than trusted (see _fixed_masks):
+        a zero K row is not a no-op under softmax, it is a key that scores 0 against every query.
+        """
+        zeros = torch.zeros(1, self.nkv, self._cap, self.hd, dtype=torch.bfloat16)
+        for i in range(self.cfg.num_hidden_layers):
+            self._ctx_k[i] = self._replicate(zeros)
+            self._ctx_v[i] = self._replicate(zeros)
+
+    # ---- staged step inputs (what a capture reads instead of freshly-built tensors) ----------
+
+    def alloc_step_buffers(self, q_len=None, ctx_pad=16):
+        """Allocate the PERSISTENT per-step inputs a traced drafter step reads.
+
+        A capture bakes buffer addresses, so every tensor a step consumes has to live at a fixed
+        address and be refilled in place before each replay. Today ``forward`` builds its rope
+        slices and masks fresh every step (``ttnn.from_torch`` -- a host upload, illegal inside a
+        capture) and takes the tap projection as whatever tensor ``project_taps`` just returned.
+        These buffers are the fixed-address stand-ins; :meth:`stage_step` and :meth:`stage_taps`
+        refill them, both OUTSIDE the capture.
+
+        Requires fixed-capacity KV (``ctx_capacity``), since the mask width is ``C + ctx_pad +
+        q_len`` and C has to exist for that to be a constant.
+        """
+        assert self._cap is not None, "staged step buffers need ctx_capacity; see _alloc_ctx_buffers"
+        q_len = self.cfg.block_size if q_len is None else q_len
+        kv_len = self._cap + ctx_pad + q_len
+        self._sb = {
+            "q_len": q_len,
+            "ctx_pad": ctx_pad,
+            "cos": self._replicate(torch.zeros(1, 1, ctx_pad + q_len, self.hd, dtype=torch.bfloat16)),
+            "sin": self._replicate(torch.zeros(1, 1, ctx_pad + q_len, self.hd, dtype=torch.bfloat16)),
+            "q_cos": self._replicate(torch.zeros(1, 1, q_len, self.hd, dtype=torch.bfloat16)),
+            "q_sin": self._replicate(torch.zeros(1, 1, q_len, self.hd, dtype=torch.bfloat16)),
+            "mask": self._replicate(torch.zeros(1, 1, q_len, kv_len, dtype=torch.bfloat16)),
+            "mask_full": self._replicate(torch.zeros(1, 1, q_len, kv_len, dtype=torch.bfloat16)),
+            "ctx": self._replicate(torch.zeros(1, 1, ctx_pad, self.cfg.hidden_size, dtype=torch.bfloat16)),
+        }
+        return self._sb
+
+    def _stage_host(self, t, dst, layout=ttnn.TILE_LAYOUT):
+        """DMA one host tensor into a persistent device buffer. Outside capture."""
+        host = ttnn.from_torch(
+            t,
+            dtype=ttnn.bfloat16,
+            layout=layout,
+            device=None,
+            **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
+        )
+        ttnn.copy_host_to_device_tensor(host, dst)
+
+    def stage_step(self, start: int, new_ctx: int):
+        """Refill the rope and mask buffers for this step. **Outside** trace capture.
+
+        This is where the step's variability goes. ``start`` and ``new_ctx`` change every step and
+        both used to reach the device as op ATTRIBUTES -- a ``ttnn.slice`` offset for rope, a tensor
+        shape for the mask -- which is exactly what bakes at capture. Here they become tensor
+        CONTENTS instead, and one capture then serves every (start, new_ctx) the loop produces.
+        """
+        sb = self._sb
+        q_len, ctx_pad = sb["q_len"], sb["ctx_pad"]
+        span = torch.arange(start - ctx_pad, start + q_len).clamp_min(0)
+        blk = torch.arange(start, start + q_len)
+        self._stage_host(self._cos_host[:, :, span, :], sb["cos"])
+        self._stage_host(self._sin_host[:, :, span, :], sb["sin"])
+        self._stage_host(self._cos_host[:, :, blk, :], sb["q_cos"])
+        self._stage_host(self._sin_host[:, :, blk, :], sb["q_sin"])
+        mask, mask_full = self._fixed_mask_tensors(q_len, new_ctx, ctx_pad)
+        self._stage_host(mask, sb["mask"])
+        self._stage_host(mask_full, sb["mask_full"])
+
+    def stage_taps(self, kv_source, new_ctx: int):
+        """Copy this step's tap projection into the fixed context buffer, LEFT-padded.
+
+        Device-to-device: ``project_taps`` produces a fresh tensor at a fresh address every step,
+        and a replay has to read one address. Left-padding matches the position map the masks are
+        built for -- row ``i`` of the context region is absolute position ``start - ctx_pad + i``.
+        """
+        sb = self._sb
+        ctx_pad = sb["ctx_pad"]
+        assert 0 <= new_ctx <= ctx_pad, f"staged context holds {ctx_pad} rows, got {new_ctx}"
+        # Clear, then write the real rows into the tail. The clear matters: rows the mask marks
+        # invalid are still PROJECTED, and a previous step's values left in those rows would be
+        # projected too -- masked out of the attention, but not out of the K/V the step commits.
+        self._stage_host(torch.zeros(1, 1, ctx_pad, self.cfg.hidden_size, dtype=torch.bfloat16), sb["ctx"])
+        if new_ctx:
+            ttnn.experimental.slice_write(
+                kv_source,
+                sb["ctx"],
+                (0, 0, ctx_pad - new_ctx, 0),
+                (1, 1, ctx_pad, self.cfg.hidden_size),
+                (1, 1, 1, 1),
+            )
+        return sb["ctx"]
+
+    def _fixed_mask_tensors(self, q_len: int, new_ctx: int, ctx_pad: int):
+        """The two additive masks the fixed-capacity path needs, at a constant ``[1, 1, q_len, C+32]``.
+
+        Key columns are laid out ``[ history(C) | padded context(16) | block(q_len) ]``:
+
+        * ``history`` is the persistent buffer; column ``j`` is absolute position ``j`` and is real
+          only while ``j < _ctx_len``.
+        * ``padded context`` is this step's newly accepted rows, LEFT-padded to a constant 16 so the
+          fused kv_proj's M stops varying. Left-padding is what makes the position map uniform:
+          row ``i`` of the 32-row kv_src is absolute position ``start - 16 + i``, contiguous across
+          both regions. The pad rows duplicate positions that are ALREADY in the history buffer, so
+          masking them is not an approximation -- those positions are still attended, once, via
+          ``history``.
+        * ``block`` is the drafted slots at ``[start, start + q_len)``.
+
+        Two masks because the layers disagree: the four sliding layers want validity AND causality
+        AND the window, while the bidirectional layer takes no mask at all today. Handing it a
+        validity-only mask reproduces that exactly -- today every row it sees is real, so "no mask"
+        and "mask nothing real" are the same function.
+        """
+        C, start = self._cap, self._ctx_len + new_ctx
+        kv_len = C + ctx_pad + q_len
+        k_pos = torch.empty(kv_len, dtype=torch.long)
+        k_real = torch.zeros(kv_len, dtype=torch.bool)
+        k_pos[:C] = torch.arange(C)
+        k_real[:C] = torch.arange(C) < self._ctx_len
+        k_pos[C : C + ctx_pad] = torch.arange(start - ctx_pad, start)
+        k_real[C : C + ctx_pad] = torch.arange(ctx_pad) >= (ctx_pad - new_ctx)
+        k_pos[C + ctx_pad :] = torch.arange(start, start + q_len)
+        k_real[C + ctx_pad :] = True
+
+        q_pos = torch.arange(start, start + q_len).unsqueeze(1)
+        k_pos, k_real = k_pos.unsqueeze(0), k_real.unsqueeze(0)
+        causal = (k_pos <= q_pos) & ((q_pos - k_pos) < self.cfg.sliding_window)
+
+        def _host(visible):
+            return torch.where(visible, 0.0, _MASK_NEG).reshape(1, 1, q_len, kv_len).to(torch.bfloat16)
+
+        return _host(k_real & causal), _host(k_real.expand(q_len, kv_len))
 
     # ---- setup -----------------------------------------------------------------------------
 
@@ -162,7 +337,37 @@ class TtDFlashDrafter:
                 **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
             )
 
+        # Keep the HOST trig too: the fixed-capacity path gathers rows from it (see _fixed_rope)
+        # rather than slicing the device table, because a ttnn.slice offset is an operation
+        # attribute and would bake at capture. bfloat16 and the same cast as the upload, so the
+        # gathered rows are bit-identical to the sliced ones.
+        self._cos_host = emb.cos().reshape(1, 1, self.max_seq_len, rope_dim).to(torch.bfloat16)
+        self._sin_host = emb.sin().reshape(1, 1, self.max_seq_len, rope_dim).to(torch.bfloat16)
         return _upload(emb.cos()), _upload(emb.sin())
+
+    def _fixed_rope(self, start: int, q_len: int, ctx_pad: int):
+        """cos/sin for the fixed 32-row kv_src span and for the block's own queries.
+
+        The kv_src span is ``[start - 16, start + q_len)`` -- the left-padded context then the
+        block. ``start`` can be smaller than 16 on the first speculative step (the prompt may be
+        shorter), which would ask for negative positions; those rows are pad and are masked out, so
+        the index is clamped to 0 and they take position 0's rotation. Clamping cannot touch a real
+        row: the real context occupies the LAST ``new_ctx`` of the 16, at positions
+        ``[start - new_ctx, start)``, all non-negative.
+        """
+        span = torch.arange(start - ctx_pad, start + q_len).clamp_min(0)
+        blk = torch.arange(start, start + q_len)
+        assert start + q_len <= self.max_seq_len, (
+            f"positions [{start}, {start + q_len}) exceed the drafter's {self.max_seq_len}-row RoPE "
+            "tables; raise max_seq_len"
+        )
+        g = lambda tbl, idx: self._replicate(tbl[:, :, idx, :])  # noqa: E731
+        return (
+            g(self._cos_host, span),
+            g(self._sin_host, span),
+            g(self._cos_host, blk),
+            g(self._sin_host, blk),
+        )
 
     def _rope_slice(self, pos0: int, span: int):
         """cos/sin for absolute positions ``[pos0, pos0 + span)``, sliced on device."""
@@ -312,7 +517,23 @@ class TtDFlashDrafter:
             **(dict(mesh_mapper=ttnn.ReplicateTensorToMesh(self.device)) if self.multi else {}),
         )
 
-    def _layer_attention(self, layer_idx, lw, hidden, ctx_rm, cos, sin, q_cos, q_sin, mask, *, hist_len):
+    def _layer_attention(
+        self,
+        layer_idx,
+        lw,
+        hidden,
+        ctx_rm,
+        cos,
+        sin,
+        q_cos,
+        q_sin,
+        mask,
+        *,
+        hist_len,
+        mask_full=None,
+        real_ctx=None,
+        ctx_pad=16,
+    ):
         """One layer's attention. Q from ``hidden`` (the block); K/V from ``[ctx_rm, hidden]``.
 
         ``ctx_rm`` arrives **ROW_MAJOR** and ``q_cos``/``q_sin`` arrive already sliced, both because
@@ -379,25 +600,46 @@ class TtDFlashDrafter:
         k = apply_partial_rope_prefill(k, cos, sin, self.nkv, self.hd)
         q = apply_partial_rope_prefill(q, q_cos, q_sin, self.nh, self.hd)
 
-        # Prepend this layer's committed history, then commit the newly accepted rows.
         hist_k, hist_v = self._ctx_k[layer_idx], self._ctx_v[layer_idx]
-        full_k = ttnn.concat([hist_k, k], dim=-2, memory_config=_DRAM) if hist_k is not None else k
-        full_v = ttnn.concat([hist_v, v], dim=-2, memory_config=_DRAM) if hist_v is not None else v
+        if self._cap is not None:
+            # Fixed-capacity: the buffer is persistent, so commit by writing THROUGH it rather than
+            # by rebinding to a fresh concat. The real rows are the LAST `real_ctx` of the 16-row
+            # padded context region (left-padded; see _fixed_masks), and they land at `hist_len` --
+            # the length BEFORE this step, which is also why the mask still marks them invalid in
+            # the history region and valid in the context region. Written once, counted once.
+            if real_ctx:
+                end = hist_len + real_ctx
+                for src, dst in ((k, hist_k), (v, hist_v)):
+                    rows = ttnn.slice(
+                        src, (0, 0, ctx_pad - real_ctx, 0), (1, self.nkv, ctx_pad, self.hd), memory_config=_DRAM
+                    )
+                    ttnn.experimental.slice_write(
+                        rows, dst, (0, 0, hist_len, 0), (1, self.nkv, end, self.hd), (1, 1, 1, 1)
+                    )
+                    ttnn.deallocate(rows)
+            full_k = ttnn.concat([hist_k, k], dim=-2, memory_config=_DRAM)
+            full_v = ttnn.concat([hist_v, v], dim=-2, memory_config=_DRAM)
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        else:
+            # Prepend this layer's committed history, then commit the newly accepted rows.
+            full_k = ttnn.concat([hist_k, k], dim=-2, memory_config=_DRAM) if hist_k is not None else k
+            full_v = ttnn.concat([hist_v, v], dim=-2, memory_config=_DRAM) if hist_v is not None else v
 
-        if new_ctx:
-            keep = hist_len + new_ctx
-            new_hist_k = ttnn.slice(full_k, (0, 0, 0, 0), (1, self.nkv, keep, self.hd), memory_config=_DRAM)
-            new_hist_v = ttnn.slice(full_v, (0, 0, 0, 0), (1, self.nkv, keep, self.hd), memory_config=_DRAM)
-            if hist_k is not None:
-                ttnn.deallocate(hist_k)
-                ttnn.deallocate(hist_v)
-            self._ctx_k[layer_idx], self._ctx_v[layer_idx] = new_hist_k, new_hist_v
+            if new_ctx:
+                keep = hist_len + new_ctx
+                new_hist_k = ttnn.slice(full_k, (0, 0, 0, 0), (1, self.nkv, keep, self.hd), memory_config=_DRAM)
+                new_hist_v = ttnn.slice(full_v, (0, 0, 0, 0), (1, self.nkv, keep, self.hd), memory_config=_DRAM)
+                if hist_k is not None:
+                    ttnn.deallocate(hist_k)
+                    ttnn.deallocate(hist_v)
+                self._ctx_k[layer_idx], self._ctx_v[layer_idx] = new_hist_k, new_hist_v
 
         attn = ttnn.transformer.scaled_dot_product_attention(
             q,
             full_k,
             full_v,
-            attn_mask=mask if self.cfg.is_sliding(layer_idx) else None,
+            attn_mask=mask if self.cfg.is_sliding(layer_idx) else mask_full,
             is_causal=False,  # Q is the block only, so SDPA's own causal alignment would be wrong.
             scale=self.scale,
             memory_config=_DRAM,
@@ -509,6 +751,75 @@ class TtDFlashDrafter:
             f"drafter context is at {hist_len} + {new_ctx} new rows but the block starts at {start}; "
             "the loop must hand over every accepted token's taps exactly once"
         )
+
+        fixed = self._cap is not None
+        if fixed:
+            assert hist_len + new_ctx <= self._cap, (
+                f"drafter context would reach {hist_len + new_ctx} rows, past its {self._cap}-row "
+                "fixed capacity; raise ctx_capacity or fall back to the growing-history path"
+            )
+            # Context pads UP to a multiple of 16. In the steady state new_ctx is the accept count
+            # (1..block_size) so this is a constant 16 and every shape is constant -- which is what a
+            # capture needs. The ONE step that exceeds it is the first, where dflash_generate hands
+            # over the whole prompt's taps at once; that step is a one-off outside the traced steady
+            # state, so letting its shape grow costs nothing and beats refusing the prompt.
+            ctx_pad = max(16, -(-new_ctx // 16) * 16)
+            # Everything per-step is a CONSTANT shape here: 16 padded context rows + q_len block
+            # rows for kv_src, a [1,1,q_len,C+16+q_len] mask pair, and a persistent [1,nkv,C,hd]
+            # history. Only tensor CONTENTS vary, which is what a capture can tolerate.
+            cos, sin, q_cos, q_sin = self._fixed_rope(start, q_len, ctx_pad)
+            mask, mask_full = (self._replicate(t) for t in self._fixed_mask_tensors(q_len, new_ctx, ctx_pad))
+            ctx_rm = ttnn.to_layout(kv_source, ttnn.ROW_MAJOR_LAYOUT) if new_ctx else None
+            if new_ctx < ctx_pad:
+                pad = self._replicate(
+                    # noise, not kv_source: the very first step has no accepted context at all
+                    # (kv_source is None) and both carry the same hidden width.
+                    torch.zeros(1, 1, ctx_pad - new_ctx, noise.shape[-1], dtype=torch.bfloat16),
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                parts = [pad, ctx_rm] if ctx_rm is not None else [pad]
+                ctx_rm = ttnn.concat(parts, dim=-2, memory_config=_DRAM) if len(parts) > 1 else pad
+            x = noise
+            for i, lw in enumerate(self.weights.layers):
+                residual = x
+                normed = self._rms(x, lw.input_layernorm, memory_config=_DRAM)
+                attn = self._layer_attention(
+                    i,
+                    lw,
+                    normed,
+                    ctx_rm,
+                    cos,
+                    sin,
+                    q_cos,
+                    q_sin,
+                    mask,
+                    hist_len=hist_len,
+                    mask_full=mask_full,
+                    real_ctx=new_ctx,
+                    ctx_pad=ctx_pad,
+                )
+                ttnn.deallocate(normed)
+                x = ttnn.add(residual, attn, memory_config=_DRAM)
+                ttnn.deallocate(attn)
+                if residual is not noise:
+                    ttnn.deallocate(residual)
+
+                residual = x
+                normed = self._rms(x, lw.post_attention_layernorm, memory_config=_DRAM)
+                mlp = self._layer_mlp(lw, normed)
+                ttnn.deallocate(normed)
+                x = ttnn.add(residual, mlp, memory_config=_DRAM)
+                ttnn.deallocate(mlp)
+                ttnn.deallocate(residual)
+
+            for t in (cos, sin, q_cos, q_sin, mask, mask_full, ctx_rm):
+                if t is not None:
+                    ttnn.deallocate(t)
+            self._ctx_len = hist_len + new_ctx
+            out = self._rms(x, self.weights.norm, memory_config=_DRAM)
+            if x is not noise:
+                ttnn.deallocate(x)
+            return out
 
         # cos/sin cover [start - new_ctx, start + q_len): the new context rows then the block, which
         # is exactly the span K sees.
