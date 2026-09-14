@@ -18,13 +18,6 @@ namespace ttnn::prim {
 namespace {
 constexpr uint32_t kQChunkTokens = 64;  // one query tile = 64 tokens = one index row (fixed by the VSA contract)
 
-tt::tt_metal::CoreCoord vsa_worker_grid(const VsaSdpaParams& attrs, tt::tt_metal::IDevice* device) {
-    const tt::tt_metal::CoreCoord full = device->compute_with_storage_grid_size();
-    return {
-        attrs.grid_x ? std::min<uint32_t>(attrs.grid_x, full.x) : full.x,
-        attrs.grid_y ? std::min<uint32_t>(attrs.grid_y, full.y) : full.y};
-}
-
 void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
     const auto& q = t.q;
     const auto& k = t.k;
@@ -131,6 +124,13 @@ void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
         n_kv_blocks);
 }
 }  // namespace
+
+tt::tt_metal::CoreCoord vsa_worker_grid(const VsaSdpaParams& attrs, tt::tt_metal::IDevice* device) {
+    const tt::tt_metal::CoreCoord full = device->compute_with_storage_grid_size();
+    return {
+        attrs.grid_x ? std::min<uint32_t>(attrs.grid_x, full.x) : full.x,
+        attrs.grid_y ? std::min<uint32_t>(attrs.grid_y, full.y) : full.y};
+}
 
 void VsaSdpaOperation::validate_on_program_cache_hit(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
     validate_common(attrs, t);
