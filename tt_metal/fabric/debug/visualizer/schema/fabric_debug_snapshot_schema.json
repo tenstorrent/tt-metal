@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_snapshot_schema.json",
+  "title": "Fabric debug snapshot",
+  "description": "Live fabric-router values captured by ttexalens on one host.",
+  "type": "object",
+  "required": ["snapshot_version", "kind", "captured_at", "manifest", "samples"],
+  "properties": {
+    "snapshot_version": {
+      "description": "Incremented on breaking changes.",
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "fabric_debug_snapshot"
+    },
+    "captured_at": {
+      "description": "Time at which creation of this snapshot file began.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "manifest": {
+      "$ref": "#/$defs/manifest_reference"
+    },
+    "samples": {
+      "description": "One sample in v1. An array is used so later polling support is additive.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sample"
+      }
+    }
+  },
+  "$defs": {
+    "manifest_reference": {
+      "type": "object",
+      "description": "Identifies the manifest used for target selection. The path is informational only and must not be used to merge files after they have been copied.",
+      "required": ["path", "manifest_version", "run"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "manifest_version": {
+          "type": "integer",
+          "const": 1
+        },
+        "run": {
+          "$ref": "#/$defs/run_identity"
+        }
+      }
+    },
+    "run_identity": {
+      "type": "object",
+      "required": ["arch", "fabric_config", "host_rank", "mpi_rank", "world_size"],
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "fabric_config": {
+          "type": "string"
+        },
+        "host_rank": {
+          "description": "Mesh-graph host rank. This is not necessarily the MPI process rank.",
+          "type": "integer"
+        },
+        "mpi_rank": {
+          "description": "MPI process rank copied from the manifest. Used to identify this host's files after they are copied and renamed.",
+          "type": "integer"
+        },
+        "world_size": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "description": "Globally stable identity of one fabric-router ERISC: one ethernet tile and physical cable endpoint.",
+      "required": ["mesh_id", "chip_id", "eth_chan"],
+      "properties": {
+        "mesh_id": {
+          "type": "integer"
+        },
+        "chip_id": {
+          "type": "integer"
+        },
+        "eth_chan": {
+          "type": "integer"
+        }
+      }
+    },
+    "sample": {
+      "type": "object",
+      "required": ["capture_time", "routers"],
+      "properties": {
+        "capture_time": {
+          "description": "Time at which this sample began.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "routers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/router_sample"
+          }
+        }
+      }
+    },
+    "router_sample": {
+      "type": "object",
+      "description": "Live values read from one fabric-router ERISC.",
+      "required": ["id", "physical_chip_id", "ok", "error", "health", "streams"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/endpoint"
+        },
+        "physical_chip_id": {
+          "description": "ttexalens device id on the host that performed this capture.",
+          "type": "integer"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "error": {
+          "description": "Null on success; otherwise a description of why this intended router could not be read.",
+          "type": ["string", "null"]
+        },
+        "health": {
+          "$ref": "#/$defs/health"
+        },
+        "streams": {
+          "description": "Raw overlay values keyed by numeric stream id encoded as a JSON string. Stream names are deliberately deferred to the per-router ABI.",
+          "type": "object",
+          "patternProperties": {
+            "^(?:[0-9]|[12][0-9]|3[01])$": {
+              "$ref": "#/$defs/stream_sample"
+            }
+          },
+          "additionalProperties": false
+        }
+      }
+    },
+    "health": {
+      "type": "object",
+      "required": ["reset", "wall_clock"],
+      "properties": {
+        "reset": {
+          "description": "Raw ETH_RISC_RESET register value, or null if unreadable.",
+          "type": ["integer", "null"]
+        },
+        "wall_clock": {
+          "description": "64-bit wall clock assembled as high << 32 | low, or null if unreadable.",
+          "type": ["integer", "null"]
+        }
+      }
+    },
+    "stream_sample": {
+      "type": "object",
+      "required": ["buf_space_available"],
+      "properties": {
+        "buf_space_available": {
+          "description": "Masked REMOTE_DEST_BUF_SPACE_AVAILABLE value. Without per-router ABI, stream ids are opaque: current conventional polarity is high-is-healthy for streams 14-29 and low-is-healthy for streams 0-13.",
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
