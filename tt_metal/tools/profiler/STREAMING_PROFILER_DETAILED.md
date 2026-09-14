@@ -223,7 +223,7 @@ auto h = RegisterCallback("my-tool", [](const Batch<RecordType::Zones>& b) { /* 
 
 Register any time — before the device opens, mid-capture, or between captures; the callback
 persists until `UnregisterCallback`. It runs on its own thread; if you're slow you drop only your
-own records (`b.dropped()`), never anyone else's. A batch's spans and a `TimestampedData`'s
+own records (`b.dropped_bytes()`), never anyone else's. A batch's spans and a `TimestampedData`'s
 `payload()` are valid only during the call; everything else about a record is the record's own, so
 copy the 48-byte values out and post-process them whenever you like. Callbacks live on the process-wide
 `streaming_profiler::Service`; each capture's receiver attaches to it as a producer, so one callback
@@ -248,7 +248,7 @@ class Record {  // what every kind carries
     uint32_t runtime_id() const;  // host id of the program on the core, 0 = none yet
     double frequency_ghz() const;
 };
-class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == kStallZoneName)
+class Zone : public Record {  // a closed DeviceZoneScopedN scope, or a stall (site().name == STALL_ZONE_NAME)
     uint64_t start_timestamp() const;  // device ticks
     uint64_t end_timestamp() const;
     std::chrono::nanoseconds duration() const;
@@ -346,7 +346,7 @@ consumers — every consumer thread reads handles, has the receiver fetch the fr
     (§1.4), the Tracy sink (opt-in), ops / zone CSV. The fetch keeps only frames the device cannot have reached
     since -- everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap --
     so a lagging consumer loses whole frames, from the handle ring or from that check, and reports the bytes in
-    `dropped()`; every frame carries each lane's timer high word and runtime id in its control block, so the
+    `dropped_bytes()`; every frame carries each lane's timer high word and runtime id in its control block, so the
     decoder reseeds exactly at the next frame and drops only what it cannot place (ZONE_S until the lane's next
     absolute zone), never a wrong record.
 ```
@@ -413,7 +413,7 @@ Host files live in `tt_metal/impl/streaming_profiler/`.
   `BroadcastRing<uint64_t>`, and returns the socket's credits at once; it copies nothing. A consumer reads handles and
   has the receiver `fetch` the frames' bytes out of the FIFO, keeping only those the device cannot have reached since:
   everything it has landed lies below `bytes_sent + SPSC_NOTIFY_CAP_BYTES`, the relay's notify cap, and a frame is
-  overwritten only by writes one FIFO past it. Both losses are whole frames, counted in `Batch::dropped()` bytes.
+  overwritten only by writes one FIFO past it. Both losses are whole frames, counted in `Batch::dropped_bytes()`.
   Decode lives in the consumers (`streaming_profiler_decode.hpp`, one `StreamDecoder` per consumer per stream): it
   recovers from a gap by reseeding lane state from the frame's control words (the producer's per-RISC state
   slots, written after its tail so a frame never carries a value its words do not) and re-anchoring at the next

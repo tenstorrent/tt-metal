@@ -18,8 +18,11 @@
 #include <utility>
 
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device_types.hpp>
 
 // Streaming profiler host API: a callback registered here receives the records device kernels emit.
+//
+// This API is experimental and may change or be removed without notice.
 //
 //     auto handle = RegisterCallback("my-tool", [](const Batch<RecordType::Zones>& b) {
 //         for (const Zone& z : b.zones()) {
@@ -56,12 +59,12 @@ struct Site {
 struct Core {
     CoreCoord logical;
     CoreCoord physical;
-    uint32_t chip_id = 0;
+    ChipId chip_id = 0;
     Risc risc = Risc::BRISC;
 };
 
 /** @brief Site name of a stall zone. */
-inline constexpr std::string_view kStallZoneName = "PROFILER-STALL";
+inline constexpr std::string_view STALL_ZONE_NAME = "PROFILER-STALL";
 
 /** @brief Record types a callback can subscribe to; combine with `|`. */
 enum class RecordType : uint32_t {
@@ -88,49 +91,43 @@ constexpr bool covers(RecordType set, RecordType subset) {
     return (static_cast<uint32_t>(set) & static_cast<uint32_t>(subset)) == static_cast<uint32_t>(subset);
 }
 
-inline constexpr uint32_t kZoneLocalBits = 14;
-inline constexpr uint32_t kZoneTuCount = 1u << (27 - kZoneLocalBits);
+inline constexpr uint32_t ZONE_ID_BITS = 27;
+inline constexpr uint32_t ZONE_LOCAL_BITS = 14;
+inline constexpr uint32_t ZONE_TU_COUNT = 1u << (ZONE_ID_BITS - ZONE_LOCAL_BITS);
 
 struct SiteTu {
     std::span<const Site* const> sites;
 };
-extern std::atomic<const SiteTu*> g_site_tus[kZoneTuCount];
-inline constexpr Site kUnnamedSite{};
+struct SiteRegistry {
+    static std::atomic<const SiteTu*> tus[ZONE_TU_COUNT];
+};
+inline constexpr Site UNNAMED_SITE{};
 
 inline const Site& site_of(uint32_t zone_id) {
-    const SiteTu* tu = g_site_tus[zone_id >> kZoneLocalBits].load(std::memory_order_acquire);
-    const uint32_t local = zone_id & ((1u << kZoneLocalBits) - 1u);
+    const SiteTu* tu = SiteRegistry::tus[zone_id >> ZONE_LOCAL_BITS].load(std::memory_order_acquire);
+    const uint32_t local = zone_id & ((1u << ZONE_LOCAL_BITS) - 1u);
     const Site* s = tu != nullptr && local < tu->sites.size() ? tu->sites[local] : nullptr;
-    return s != nullptr ? *s : kUnnamedSite;
+    return s != nullptr ? *s : UNNAMED_SITE;
 }
 
 CallbackHandle register_callback(std::string name, std::function<void(const Batch<RecordType::All>&)> callback);
 
-template <typename T>
-inline constexpr bool is_batch = false;
-template <RecordType K>
-inline constexpr bool is_batch<Batch<K>> = true;
-template <typename R, typename A>
-auto param(R (*)(A)) -> A;
-template <typename R, typename A>
-auto param(R (*)(A) noexcept) -> A;
-template <typename R, typename C, typename A>
-auto param(R (C::*)(A)) -> A;
-template <typename R, typename C, typename A>
-auto param(R (C::*)(A) const) -> A;
-template <typename R, typename C, typename A>
-auto param(R (C::*)(A) noexcept) -> A;
-template <typename R, typename C, typename A>
-auto param(R (C::*)(A) const noexcept) -> A;
+template <typename Signature>
+inline constexpr RecordType batch_arg = RecordType{};
+template <typename R, RecordType K>
+inline constexpr RecordType batch_arg<std::function<R(const Batch<K>&)>> = K;
+template <typename R, RecordType K>
+inline constexpr RecordType batch_arg<std::function<R(Batch<K>)>> = K;
+
 template <typename F>
-auto callback_param(int) -> decltype(param(&F::operator()));
-template <typename F>
-    requires std::is_pointer_v<F>
-auto callback_param(long) -> decltype(param(std::declval<F>()));
-template <typename F>
-using callback_param_t = decltype(callback_param<F>(0));
-template <typename F>
-concept batch_callback = is_batch<std::remove_cvref_t<callback_param_t<F>>>;
+constexpr RecordType accepted_batch() {
+    using G = std::remove_reference_t<std::unwrap_ref_decay_t<F>>;
+    if constexpr (requires { std::function{std::declval<G>()}; }) {
+        return batch_arg<decltype(std::function{std::declval<G>()})>;
+    } else {
+        return RecordType{};
+    }
+}
 }  // namespace detail
 
 /** @brief Base class of every record: its site, core, program id and clock. */
@@ -180,7 +177,7 @@ static_assert(sizeof(Record) == 48);
  * @brief One closed DeviceZoneScopedN scope.
  *
  * A stall, the time a core spent waiting for the profiler to drain its records, is delivered as a Zone with site name
- * kStallZoneName.
+ * STALL_ZONE_NAME.
  */
 class Zone : public Record {
 public:
@@ -204,6 +201,7 @@ static_assert(sizeof(Zone) == 48 && std::is_standard_layout_v<Zone>);
  */
 class TimestampedData : public Record {
 public:
+    TimestampedData() = default;
     TimestampedData(const TimestampedData&) = delete;
     TimestampedData& operator=(const TimestampedData&) = delete;
     /** @brief When the marker was recorded, in device clock ticks. */
@@ -296,7 +294,7 @@ public:
      *
      * Raising TT_METAL_STREAMING_PROFILER_FIFO_MB lets a callback fall further behind before it loses data.
      */
-    uint64_t dropped() const { return dropped_; }
+    uint64_t dropped_bytes() const { return dropped_; }
     /**
      * @brief Stalls on any core since the previous batch: times a core waited for the profiler to drain its records.
      */
@@ -319,22 +317,19 @@ private:
  * The callable takes `const Batch<K>&`; K selects the record types delivered. Multiple callbacks can be registered;
  * each runs on its own thread, one invocation at a time. If a callback shares a resource with other callbacks, access
  * it in a thread-safe way (e.g. with a lock). Callbacks that are too slow to keep up with incoming data miss records;
- * this is reported by Batch::dropped. May be called before, during or between captures.
+ * this is reported by Batch::dropped_bytes. May be called before, during or between captures.
  *
  * @param name Appears in the profiler's logs and thread names.
  * @return A handle that can be passed to UnregisterCallback() to remove the callback.
  */
 template <typename F>
 [[nodiscard]] CallbackHandle RegisterCallback(std::string name, F callback) {
-    using G = std::remove_reference_t<std::unwrap_reference_t<std::decay_t<F>>>;
-    static_assert(detail::batch_callback<G>, "the callback must take one Batch<K> parameter");
-    static_assert(std::is_copy_constructible_v<std::decay_t<F>>, "the callback must be copy-constructible");
-    using A = detail::callback_param_t<G>;
+    constexpr RecordType K = detail::accepted_batch<F>();
+    static_assert(K != RecordType{}, "the callback must take one Batch<K> parameter");
+    static_assert(std::is_copy_constructible_v<F>, "the callback must be copy-constructible");
     return detail::register_callback(
-        std::move(name), [cb = std::move(callback)](const Batch<RecordType::All>& full) mutable {
-            std::remove_cvref_t<A> batch(full);
-            cb(std::forward<A>(batch));
-        });
+        std::move(name),
+        [cb = std::move(callback)](const Batch<RecordType::All>& full) mutable { cb(Batch<K>(full)); });
 }
 
 /**
@@ -344,7 +339,7 @@ template <typename F>
  * The callable takes `const Batch<K>&`; K selects the record types delivered. Multiple callbacks can be registered;
  * each runs on its own thread, one invocation at a time. If a callback shares a resource with other callbacks, access
  * it in a thread-safe way (e.g. with a lock). Callbacks that are too slow to keep up with incoming data miss records;
- * this is reported by Batch::dropped. May be called before, during or between captures.
+ * this is reported by Batch::dropped_bytes. May be called before, during or between captures.
  *
  * @return A handle that can be passed to UnregisterCallback() to remove the callback.
  */

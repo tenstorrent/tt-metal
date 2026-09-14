@@ -100,7 +100,7 @@ void TracySink::on_batch(const Batch& batch, uint64_t capture) {
             z.site().name,
             ns_since_epoch(z.start_time()),
             ns_since_epoch(z.end_time()),
-            z.site().name == api::kStallZoneName ? kStallColor : 0);
+            z.site().name == api::STALL_ZONE_NAME ? kStallColor : 0);
     }
     for (const api::TimestampedData& d : batch.timestamped_data()) {
         push_marker(d.core(), d.site().name, ns_since_epoch(d.time()), d.runtime_id(), d.payload());

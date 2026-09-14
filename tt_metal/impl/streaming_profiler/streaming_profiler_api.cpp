@@ -26,9 +26,10 @@
 namespace api = tt::tt_metal::experimental::streaming_profiler;
 
 namespace tt::tt_metal::experimental::streaming_profiler::detail {
-static_assert(kZoneLocalBits == TT_ZONE_LOCAL_BITS);
-static_assert(kZoneTuCount == TT_ZONE_TU_COUNT);
-std::atomic<const SiteTu*> g_site_tus[kZoneTuCount];
+static_assert(ZONE_ID_BITS == TT_ZONE_ID_BITS);
+static_assert(ZONE_LOCAL_BITS == TT_ZONE_LOCAL_BITS);
+static_assert(ZONE_TU_COUNT == TT_ZONE_TU_COUNT);
+std::atomic<const SiteTu*> SiteRegistry::tus[ZONE_TU_COUNT];
 }  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
@@ -37,7 +38,7 @@ namespace {
 
 static_assert(TT_ZONE_STALL_ID == (TT_ZONE_RESERVED_TU << TT_ZONE_LOCAL_BITS));
 
-constexpr api::Site kStallSite{.name = api::kStallZoneName};
+constexpr api::Site kStallSite{.name = api::STALL_ZONE_NAME};
 constexpr const api::Site* kStallSites[1] = {&kStallSite};
 constexpr api::detail::SiteTu kStallTu{kStallSites};
 
@@ -52,7 +53,8 @@ public:
             const uint32_t tu = TT_ZONE_TU_OF(e->zone_id), local = TT_ZONE_LOCAL_OF(e->zone_id);
             auto [it, fresh] = grown.try_emplace(tu);
             if (fresh) {
-                if (const api::detail::SiteTu* cur = api::detail::g_site_tus[tu].load(std::memory_order_relaxed)) {
+                if (const api::detail::SiteTu* cur =
+                        api::detail::SiteRegistry::tus[tu].load(std::memory_order_relaxed)) {
                     it->second.assign(cur->sites.begin(), cur->sites.end());
                 }
             }
@@ -69,7 +71,7 @@ public:
             std::copy(v.begin(), v.end(), arr.get());
             auto t = std::make_unique<api::detail::SiteTu>(
                 api::detail::SiteTu{std::span<const api::Site* const>(arr.get(), v.size())});
-            api::detail::g_site_tus[tu].store(t.get(), std::memory_order_release);
+            api::detail::SiteRegistry::tus[tu].store(t.get(), std::memory_order_release);
             arrays_.push_back(std::move(arr));
             tus_.push_back(std::move(t));
         }
@@ -87,7 +89,7 @@ private:
 void init_site_registry() {
     static std::once_flag once;
     std::call_once(once, [] {
-        api::detail::g_site_tus[TT_ZONE_RESERVED_TU].store(&kStallTu, std::memory_order_release);
+        api::detail::SiteRegistry::tus[TT_ZONE_RESERVED_TU].store(&kStallTu, std::memory_order_release);
         static ttsl::Indestructible<SiteTables> tables;
         tt::llrt::ZoneMetaRegistry::instance().set_listener(
             [](std::span<const tt::llrt::ZoneMetaEntry* const> entries) { tables.get().add(entries); });
@@ -100,7 +102,8 @@ namespace tt::tt_metal::experimental::streaming_profiler {
 
 namespace internal = tt::tt_metal::streaming_profiler;
 
-CallbackHandle detail::register_callback(std::string name, std::function<void(const Batch<RecordType::All>&)> callback) {
+CallbackHandle detail::register_callback(
+    std::string name, std::function<void(const Batch<RecordType::All>&)> callback) {
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
