@@ -1211,22 +1211,27 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
             "complete mesh");
 
         const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+        // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
+        TT_FATAL(
+            tt::tt_fabric::is_2d_fabric_config(fabric_config),
+            "ring_mla cluster_axis=None requires a 2D fabric config (FABRIC_2D or FABRIC_2D_TORUS_X/Y/XY), got {}",
+            fabric_config);
         std::array<tt::tt_fabric::Topology, 2> axis_topology{
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 0),
             ttnn::ccl::get_axis_topology(input_tensor_q, fabric_config, 1)};
-        const auto plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
             input_tensor_q, std::nullopt, num_links, axis_topology, true, "ring_mla");
-        TT_FATAL(plan.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh snake ring");
+        TT_FATAL(route.has_value(), "ring_mla could not resolve a direct-neighbor full-mesh snake ring");
         TT_FATAL(
-            plan->ring_size <= std::numeric_limits<uint32_t>::digits,
+            route->plan.ring_size <= std::numeric_limits<uint32_t>::digits,
             "ring_mla supports at most {} full-mesh ranks, got {}",
             std::numeric_limits<uint32_t>::digits,
-            plan->ring_size);
-        snake_orientation = plan->orientation;
-        mesh_rows = plan->mesh_rows;
-        mesh_cols = plan->mesh_cols;
-        route_plan_hash = plan->route_plan_hash;
-        num_devices = plan->ring_size;
+            route->plan.ring_size);
+        snake_orientation = route->plan.orientation;
+        mesh_rows = route->plan.mesh_rows;
+        mesh_cols = route->plan.mesh_cols;
+        route_plan_hash = route->plan.route_plan_hash;
+        num_devices = route->plan.ring_size;
     } else {
         TT_FATAL(
             *cluster_axis < mesh_shape.dims(),

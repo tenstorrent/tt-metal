@@ -25,6 +25,7 @@
       timeout: 15
   owner_id: U03BJ1L3LUQ # Mo Memarian
   team: ttnn
+  budget_type: sanity
 
 - name: Host IO fast unit test (viommu only)
   cmd: TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
@@ -33,6 +34,7 @@
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sanity
 
 - name: TTNN multi-device CCL, SDPA PERF, and indexer tests (QB2 only)
   cmd: |
@@ -45,3 +47,4 @@
       timeout: 30
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: sanity
