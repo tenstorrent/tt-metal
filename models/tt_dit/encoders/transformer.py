@@ -454,6 +454,12 @@ class TransformerEncoder(Module):
             )
             cos, sin = self.pos_embedding.forward(positions, dtype=self.token_embedding.weight.dtype)
 
+        if self._decode_trace is not None:
+            warnings.warn(
+                f"caching position embeddings {cache_key} while a decode trace is live"
+                stacklevel=2,
+            )
+
         self._cached_position_embeddings[cache_key] = (cos, sin)
         return cos, sin
 
