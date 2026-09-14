@@ -396,9 +396,10 @@ class TransformerEncoder(Module):
 
         return x[:, index - block]
 
-    def _get_decode_trace(self, *, batch_size: int, size: int) -> _DecodeTrace:
+    def _get_decode_trace(self, *, batch_size: int, size: int, masked: bool) -> _DecodeTrace:
         """Returns the decode trace for these shapes, building it when the kept one differs."""
-        key = (batch_size, size)
+        # A trace fixes whether the step takes an attention bias, so `masked` is part of the key.
+        key = (batch_size, size, masked)
         if self._decode_trace is not None and self._decode_trace.key == key:
             return self._decode_trace
 
@@ -594,7 +595,7 @@ class TransformerEncoder(Module):
             return_logits: Returns the logits of every step, of shape (batch, steps, vocab).
             guide: Token ids of shape (batch, max_length) to take the generated tokens from
                 instead of sampling, for teacher forcing.
-            traced: Replays the decode step as a trace, which excludes `mask`.
+            traced: Replays the decode step as a trace.
         """
         # The original Llama implementation starts generation after the shortest input, thereby
         # overwriting any padding tokens that are on the right, resuing that space. We use a
@@ -607,10 +608,6 @@ class TransformerEncoder(Module):
                 "call torch.set_num_threads(1)",
                 stacklevel=2,
             )
-
-        if traced and mask is not None:
-            msg = "traced generation does not currently support an attention mask"
-            raise NotImplementedError(msg)
 
         if self.final_linear is None:
             msg = "generation needs the language-model head"
@@ -641,7 +638,7 @@ class TransformerEncoder(Module):
         logits = [] if return_logits else None
 
         if traced:
-            trace = self._get_decode_trace(batch_size=batch_size, size=padded_seq_len)
+            trace = self._get_decode_trace(batch_size=batch_size, size=padded_seq_len, masked=mask is not None)
             cache = trace.cache
             decode_step = trace.tracer
         else:
@@ -1338,7 +1335,7 @@ class Cache:
 
 @dataclass
 class _DecodeTrace:
-    key: tuple[int, int]  # [batch size, cache size]
+    key: tuple[int, int, bool]  # [batch size, cache size, masked]
     tracer: Tracer
     cache: Cache
 

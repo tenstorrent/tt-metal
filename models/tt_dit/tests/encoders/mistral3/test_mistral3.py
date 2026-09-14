@@ -169,9 +169,6 @@ def test_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: b
     [pytest.param(False, id="untraced"), pytest.param(True, id="traced")],
 )
 def test_guided_generation(*, mesh_device: ttnn.MeshDevice, skip_layers: int, masked: bool, traced: bool) -> None:
-    if traced and masked:
-        pytest.skip("traced generation does not support an attention mask")
-
     torch.set_num_threads(1)
     torch.manual_seed(0)
 
