@@ -13,7 +13,7 @@
 # Logical SKUs only; merge_group prio routing is via sku_config merge_queue_sku.
 
 # Non-nightly merge gate tests
-# TODO: Split into two groups due to inconsistent durations: https://github.com/tenstorrent/tt-metal/issues/50449
+# Three shards keep each merge-gate leg within the 15-minute per-test ceiling.
 - name: tt-train cpp merge gate tests (id 0)
   cmd: |
     export GTEST_TOTAL_SHARDS=3
