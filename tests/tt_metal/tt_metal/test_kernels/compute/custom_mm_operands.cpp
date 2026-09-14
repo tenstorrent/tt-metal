@@ -18,6 +18,8 @@ void kernel_main() {
     constexpr std::uint32_t rows = get_compile_time_arg_val(1);
     constexpr bool mixed = get_compile_time_arg_val(2);
     constexpr std::uint32_t mode = get_compile_time_arg_val(3);  // plain, compressed, DEST reuse
+    constexpr std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
+    constexpr std::uint32_t producer_ct = mode == 2 ? 2 : 1;
     constexpr auto weight_format = mode == 1 ? DataFormat::Bfp8_b : DataFormat::Float16_b;
     using Activation = experimental::LLKOperand<DataFormat::Float16_b, TensorShape{rows, 16, 1, 2}>;
     using Weight = experimental::LLKOperand<weight_format, TensorShape{16, 16, 2, 2}>;
@@ -28,9 +30,9 @@ void kernel_main() {
     // Full init must run once, before tile-register traffic. The input addresses
     // are unused until execution; only their static format/geometry matter here.
     if constexpr (mixed) {
-        custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16);
+        custom_mm_block_init<false, false, true>(tt::CBIndex::c_0, Weight(0), tt::CBIndex::c_16, producer_ct);
     } else {
-        custom_mm_block_init<false, false, true>(Activation(0), Weight(0), tt::CBIndex::c_16);
+        custom_mm_block_init<false, false, true>(Activation(0), Weight(0), tt::CBIndex::c_16, producer_ct);
     }
     pack_block_contiguous_init(tt::CBIndex::c_16);
 
@@ -39,8 +41,8 @@ void kernel_main() {
     alignas(16) const std::uint32_t metadata[4] = {0xfc, 0, 0, 0};
     const auto metadata_address = reinterpret_cast<std::uint32_t>(metadata);
     for (std::uint32_t block = 0; block < blocks; ++block) {
-        activation.wait_front(3);
-        weight.wait_front(3);
+        activation.wait_front(input_block_tiles);
+        weight.wait_front(input_block_tiles);
         output.reserve_back(1);
         tile_regs_acquire();
 
@@ -66,22 +68,23 @@ void kernel_main() {
             }
         } else {
             if constexpr (mixed) {
-                custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base));
-                custom_mm_block<false>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2);
+                custom_mm_block_init_short<false, false, true>(tt::CBIndex::c_0, Weight(b_base), producer_ct);
+                custom_mm_block<false>(tt::CBIndex::c_0, Weight(b_base), 1, 1, 0, 2, producer_ct);
             } else {
-                custom_mm_block_init_short<false, false, true>(Activation(a_base), Weight(b_base));
-                custom_mm_block<false>(Activation(a_base), Weight(b_base), 1, 1, 0, 2);
+                custom_mm_block_init_short<false, false, true>(Activation(a_base), Weight(b_base), producer_ct);
+                custom_mm_block<false>(Activation(a_base), Weight(b_base), 1, 1, 0, 2, producer_ct);
             }
             if constexpr (mode == 2) {
-                // The third input weight tile is 2*I. Use a nonzero weight index
-                // and a disjoint DEST accumulator; both replay-init modes run.
+                // The reuse unpacker processes two K tiles per MOP iteration.
+                // Consume both producer tiles at DEST rows 0 and 32, weighted
+                // by 2*I and I (input indices 2 and 4), into a disjoint accumulator.
                 if (block % 2 == 0) {
                     custom_mm_reuse_dest_srcb_block_init_short(Weight(b_base), 1);
                 } else {
                     custom_mm_reuse_dest_srcb_replay_init();
                     custom_mm_reuse_dest_srcb_block_init_short<false>(Weight(b_base), 1);
                 }
-                custom_mm_reuse_dest_srcb_block<rows>(Weight(b_base), 2, 0, 64, 1, 1, 1);
+                custom_mm_reuse_dest_srcb_block<rows>(Weight(b_base), 2, 0, 64, 2, 1, 2);
                 custom_mm_reuse_dest_srcb_pack_init();
             }
         }
@@ -90,8 +93,8 @@ void kernel_main() {
         pack_block_contiguous(mode == 2 ? 4 : 0, tt::CBIndex::c_16, 1);
         tile_regs_release();
         output.push_back(1);
-        activation.pop_front(mode == 1 && mixed ? 2 : 3);
-        weight.pop_front(3);
+        activation.pop_front(mode == 1 && mixed ? input_block_tiles - 1 : input_block_tiles);
+        weight.pop_front(input_block_tiles);
         if constexpr (mode == 2) {
             custom_mm_reuse_dest_srcb_pack_uninit();
         }

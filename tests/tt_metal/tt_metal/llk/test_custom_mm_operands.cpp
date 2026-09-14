@@ -20,7 +20,8 @@ namespace {
 void run_custom_mm_operands(
     distributed::MeshDevice& mesh, std::uint32_t rows, bool mixed, std::uint32_t mode, bool full_sync) {
     constexpr std::uint32_t blocks = 3;
-    constexpr std::uint32_t input_tiles = blocks * 3;
+    const std::uint32_t input_block_tiles = mode == 2 ? 5 : 3;
+    const std::uint32_t input_tiles = blocks * input_block_tiles;
     const Tile tiny({rows, 32});
     const Tile full;
     const auto activation_format = tt::DataFormat::Float16_b;
@@ -49,8 +50,8 @@ void run_custom_mm_operands(
     };
     // Two blocks of capacity force successive executions to use different L1
     // bases, then wrap the CB. Static input metadata stays unchanged.
-    make_cb(tt::CBIndex::c_0, activation_format, tiny, 6);
-    make_cb(tt::CBIndex::c_1, weight_format, full, 6);
+    make_cb(tt::CBIndex::c_0, activation_format, tiny, 2 * input_block_tiles);
+    make_cb(tt::CBIndex::c_1, weight_format, full, 2 * input_block_tiles);
     make_cb(tt::CBIndex::c_16, activation_format, tiny, 2);
     auto reader = CreateKernel(
         program,
@@ -77,23 +78,29 @@ void run_custom_mm_operands(
     std::vector<bfloat16> weights(input_tiles * 1024, bfloat16(0.0f));
     std::vector<bfloat16> golden(blocks * rows * 32);
     for (std::uint32_t block = 0; block < blocks; ++block) {
-        for (std::uint32_t tile = 0; tile < 3; ++tile) {
+        for (std::uint32_t tile = 0; tile < input_block_tiles; ++tile) {
             for (std::uint32_t row = 0; row < rows; ++row) {
                 for (std::uint32_t col = 0; col < 32; ++col) {
-                    const auto index = (block * 3 + tile) * rows * 32 + (col / 16) * rows * 16 + row * 16 + col % 16;
-                    const float value = tile == 0 ? 64.0f : static_cast<float>(block + row + col % 7 + tile) / 8.0f;
+                    const auto index =
+                        (block * input_block_tiles + tile) * rows * 32 + (col / 16) * rows * 16 + row * 16 + col % 16;
+                    const float value =
+                        tile == 1 || tile == 2 ? static_cast<float>(block + row + col % 7 + tile) / 8.0f : 64.0f;
                     activations[index] = bfloat16(value);
                 }
             }
             for (std::uint32_t d = 0; d < 32; ++d) {
-                const auto index = (block * 3 + tile) * 1024 + (d / 16) * 3 * 256 + (d % 16) * 17;
-                weights[index] = bfloat16(tile == 0 ? 32.0f : static_cast<float>(tile));
+                const auto index = (block * input_block_tiles + tile) * 1024 + (d / 16) * 3 * 256 + (d % 16) * 17;
+                // The two-column producer uses [I, 2I; 2I, I]. The reuse
+                // consumer reads weight tiles 2 and 4, exercising a K stride of 2.
+                weights[index] = bfloat16(tile == 0 ? 32.0f : (tile == 1 || tile == 4 ? 1.0f : 2.0f));
             }
         }
         for (std::uint32_t i = 0; i < rows * 32; ++i) {
-            const auto a0 = static_cast<float>(activations[(block * 3 + 1) * rows * 32 + i]);
-            const auto a1 = static_cast<float>(activations[(block * 3 + 2) * rows * 32 + i]);
-            golden[block * rows * 32 + i] = bfloat16((a0 + 2.0f * a1) * (mode == 2 ? 2.0f : 1.0f));
+            const auto a0 = static_cast<float>(activations[(block * input_block_tiles + 1) * rows * 32 + i]);
+            const auto a1 = static_cast<float>(activations[(block * input_block_tiles + 2) * rows * 32 + i]);
+            // Reuse consumes both populated DEST tiles:
+            // 2 * (a0 + 2*a1) + (2*a0 + a1) = 4*a0 + 5*a1.
+            golden[block * rows * 32 + i] = bfloat16(mode == 2 ? 4.0f * a0 + 5.0f * a1 : a0 + 2.0f * a1);
         }
     }
     auto& cq = mesh.mesh_command_queue();
