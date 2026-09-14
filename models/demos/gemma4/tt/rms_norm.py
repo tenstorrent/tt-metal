@@ -26,6 +26,56 @@ def norm_keep_sharded_enabled() -> bool:
     return os.environ.get("GEMMA4_NORM_KEEP_SHARDED", "1").lower() not in ("0", "false", "no")
 
 
+def prefill_sharded_norm_enabled() -> bool:
+    """Width-shard the short-prefill RMSNorm without keeping its output sharded. Default OFF.
+
+    Prefill norm sharding has until now been reachable only through the island
+    (``forward`` requires ``keep_sharded``), so defaulting the island off for
+    accuracy also put every short-prefill norm back on the un-sharded DRAM path.
+    A Tracy profile of 12B / T3K put the cost at 20% of replay device time: the
+    [1, 1, 128, 3840] norm runs DRAM-interleaved on 4 cores, 66.7 us x 193
+    calls = 12.9 ms, while the matmuls beside it get 32-60 cores.
+
+    This knob decouples the two: shard the norm for the reduce, then hand the
+    output back interleaved. It is not free -- it adds an interleaved->sharded
+    before and a sharded->interleaved after -- and measured, that round trip is
+    what decides the sign. Default OFF because it is a batch-1 win and a
+    batch-32 loss. All paired, two reps per arm, T3K:
+
+        12B batch-1  TTFT  71.95 -> 64.75 ms   -10.0%
+        31B batch-1  TTFT 122.4  -> 114.2  ms   -6.7%
+        12B batch-32 TTFT 11080  -> 12328   ms  +11.3%   <-- do not enable
+        12B 4k / 32k TTFT ....................  flat
+        decode ms/tok, both models ...........  flat
+
+    The round trip scales with user count, so what pays for itself on one user
+    does not on 32. Enable it per-run for latency-sensitive single-user serving;
+    leave it off for batched throughput. Gating it automatically needs the
+    batch-32 firing path pinned down first: activation_physical_height folds
+    batch in (B*S), so a truly batched prefill should exceed the height cap and
+    never reach this branch -- yet batch-32 measurably does. Unexplained, so not
+    auto-gated.
+
+    Accuracy is not the constraint here. At the band this actually touches,
+    test_layer_forward prefill_128, sharded is slightly BETTER, identically at
+    every mesh:
+
+        1x2  0.9986009 vs 0.9983615     1x4  0.9986277 vs 0.9983875
+        1x8  0.9986316 vs 0.9983922     (ON vs OFF, +0.00024 each)
+
+    test_full_model cannot see this change at all -- its 5-token prompt pads to
+    height 32, which takes the padded_height == TILE_SIZE branch above and
+    shards either way. It returns bit-identical PCC for both arms. Do not read
+    that as a pass.
+
+    Narrow by construction: heights <= _PREFILL_ISLAND_MAX_HEIGHT only. Auto-
+    sharding every prefill <= 1024 hung T3K at ISL=128, which is why ``forward``
+    never did this implicitly. With this knob on, 12B batch-8, batch-32 and 32k
+    all ran clean, so the <=128 restriction holds that hazard off.
+    """
+    return os.environ.get("GEMMA4_PREFILL_SHARDED_NORM", "0").lower() not in ("0", "false", "no")
+
+
 def prefill_mlp_island_enabled(padded_height: int, *, batch_size: int = 1, enable_moe: bool = False) -> bool:
     """Width-sharded AR→LN island for short prefill (M<=128).
 
@@ -282,7 +332,7 @@ class RMSNorm(nn.Module):
             # at ISL=128.
             padded_height = activation_physical_height(x.shape) if len(x.shape) == 4 else 0
             use_sharded_norm = padded_height == ttnn.TILE_SIZE or (
-                keep_sharded and 1 <= padded_height <= _PREFILL_ISLAND_MAX_HEIGHT
+                (keep_sharded or prefill_sharded_norm_enabled()) and 1 <= padded_height <= _PREFILL_ISLAND_MAX_HEIGHT
             )
             if (
                 sharded_norm_enabled()
