@@ -55,9 +55,10 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
 /**
  * @brief Initialize the unpacker for a tilize operation.
  *
- * Disables face transpose, configures the unpacker into tileize mode (throttle, shift amount,
- * per-tile X/Z dims) for the given block column dimension, decides whether 32-bit datums must be
- * unpacked to dest, and programs the tilize MOP.
+ * Disables face transpose, configures the unpacker into tileize mode (throttle mode, and the
+ * shift amount that carries the block column dimension), sets Tile_x_dim_cntx0 to the 1x16 face
+ * dim, decides whether 32-bit datums must be unpacked to dest, and programs the tilize MOP. It
+ * writes no tile-descriptor state at all -- see @ref _llk_unpack_tilize_uninit_.
  *
  * @param unpack_src_format: Source data format of the operand in L1.
  * @param unpack_dst_format: Destination data format the operand is converted to.
@@ -361,9 +362,11 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
 /**
  * @brief Initialize the unpacker to tilize operand A while unpacking operand B.
  *
- * Programs the column stride used to advance SrcA's L1 address (via the CFGSHIFTMASK scratch
- * register), sets per-unpacker datum counts (one row for SrcA, full face for SrcB) and SrcA's Y
- * stride, disables face transpose, and programs the tilize-A-B MOP.
+ * Disables face transpose, sets both unpackers' per-instruction datum counts to a full face,
+ * configures the unpacker into tileize mode (throttle mode, and the shift amount that carries the
+ * block column stride used to advance SrcA's L1 address), sets Tile_x_dim_cntx0 to the 1x16 face
+ * dim, and programs the tilize-A-B MOP. Unlike the Blackhole implementation it uses no
+ * CFGSHIFTMASK scratch register and programs no SrcA Y stride.
  *
  * @tparam neginf_srcA: Clear SrcA to negative infinity before unpacking (e.g. for max-reduce).
  * @tparam reload_srcB: Reload SrcB once rather than incrementing its face each step.
