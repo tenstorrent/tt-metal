@@ -243,7 +243,7 @@ zone-name registry, which lives as long as the process:
 
 ```cpp
 class Record {  // what every kind carries
-    const Site& site() const;   // name and source location
+    const MarkerSite& site() const;   // name and source location
     Core core() const;          // chip, logical and physical (NoC 0) coordinates, RISC
     uint32_t runtime_id() const;  // host id of the program on the core, 0 = none yet
     double frequency_ghz() const;

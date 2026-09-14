@@ -93,17 +93,10 @@ run_realtime_profiler_test() {
 
 run_streaming_profiler_test() {
     remove_default_log_locations
-    # Blackhole only: the streaming profiler drains the per-RISC L1 rings with a resident kernel on the DRISC
-    # (DRAM) cores, which Wormhole does not have. The pipeline matrix gates this to the bh_* SKUs; the tests
-    # additionally self-skip if the relays do not come up, so a mis-targeted runner reports skip, not failure.
-    # Host-only unit tests first: they open no device, finish instantly, and cover the 32-bit wall-clock wrap
-    # repair and the ring-overwrite frame walk that a device run cannot provoke on demand. Both exit non-zero
-    # on failure, and set -e fails the job.
+    # Blackhole only: the streaming profiler relay is a resident kernel on the DRISC (DRAM) cores; the pytests self-skip elsewhere.
+    # Host-only unit tests first, then the on-device workload and Tracy capture.
     ./build/test/tt_metal/tools/profiler/test_streaming_profiler_decode
     ./build/test/tt_metal/tools/profiler/test_streaming_profiler_fetch
-    # Then on silicon: the programming-example workload still streams losslessly (no Tracy, so a capture-tool
-    # problem cannot mask a profiler one), and a real Tracy capture carries named device zones plus the
-    # event/timestamped-data markers.
     pytest tests/ttnn/tracy/test_streaming_profiler.py tests/ttnn/tracy/test_streaming_profiler_ops_csv.py
 }
 
