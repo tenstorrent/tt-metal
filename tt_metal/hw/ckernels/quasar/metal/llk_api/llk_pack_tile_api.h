@@ -42,57 +42,25 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
 
 /**
  *
- * @brief Gets the output L1 tile index where the tile will be packed out to, determined by out_of_order_output
- *
- * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
- * the user in `output_tile_index`, set false for pack to operate sequentially: write to the next tile index
- * starting from index 0, and ignore the `output_tile_index` parameter
- * @tparam untilize: Selects pack or pack untilizem
- * @param output_id The output DataFlow Buffer identifier
- * @param output_tile_index: The index in the output CB to write to
- *
- * This function packs tiles from the destination register to the output DataFlow Buffer.
- *
- */
-template <bool out_of_order_output, bool untilize>
-inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t output_tile_index) {
-    std::uint32_t l1_tile_index;
-    LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
-    if constexpr (out_of_order_output) {
-        // Use the write tile index to track position within DFB
-        l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
-    } else {
-        if constexpr (untilize) {
-            // TODO: uplift this option from BBE
-        } else {
-            // In-order packing: use fifo_wr_tile_ptr as the incrementing tile offset
-            l1_tile_index = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx +
-                            local_dfb_interface.wr_entry_ptr;
-            local_dfb_interface.wr_entry_ptr++;
-        }
-    }
-    return l1_tile_index;
-}
-
-/**
- *
  * @brief Packs tiles from the destination register to L1 memory
  *
- * @tparam out_of_order_output: Set true to write the output tile to the tile index specified by
- * the user in `output_tile_index`, set false for pack to operqate sequentially: write to the next tile index
- * starting from index 0, and ignore the `output_tile_index` parameter
  * @param tile_idx: The tile index into the math destination register from where the packer can start packing from
  * @param pack_output The output DataFlow Buffer identifier
  * @param output_tile_index: The index in the output CB to write to
  *
  * This function packs tiles from the destination register to the output DataFlow Buffer, packer0 is used.
+ *
+ * Addressing is always out-of-order (absolute): the tile lands at `output_tile_index` relative to the DFB's
+ * current write entry, and no internal write pointer is advanced. Callers packing more than one tile into a
+ * reserved region must therefore pass a distinct `output_tile_index` per tile.
  */
-template <bool out_of_order_output = false>
 inline void llk_pack(
     const std::uint32_t tile_index, const std::uint32_t pack_output, const std::uint32_t output_tile_index = 0) {
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     const std::uint8_t output_id = get_output_id(pack_output);
-    const std::uint32_t l1_tile_index = get_output_tile_index<out_of_order_output, false>(output_id, output_tile_index);
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    const std::uint32_t l1_tile_index =
+        local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx + output_tile_index;
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     _llk_pack_(tile_index, l1_tile_index, tensor_shape);
@@ -150,11 +118,14 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t pack_ou
     LLK_TDMA_GUARD_NOTE_TDMA(pack_output);  // TEN-4746: real pack (PACR) disarms this dfb
     std::uint8_t output_id = get_output_id(pack_output);
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
+    // Out-of-order (absolute) addressing: tile i of the block lands at output tile index i of the
+    // reserved region, i.e. at wr_entry_idx + i. wr_entry_idx is loop-invariant -- packing does not
+    // advance it (only push_back, via dfb_advance_slot, does).
+    const LocalDFBInterface& local_dfb_interface = get_local_dfb_interface(output_id);
+    const std::uint32_t wr_entry_idx = local_dfb_interface.tc_slots[local_dfb_interface.tc_idx].wr_entry_idx;
 
+    std::uint32_t l1_tile_index = wr_entry_idx;
     for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
-        std::uint32_t l1_tile_index = get_output_tile_index<false /* out_of_order_output */, false /* untilize */>(
-            output_id, 0 /* output_tile_index */);
-
-        _llk_pack_(tile_index, l1_tile_index, tensor_shape);
+        _llk_pack_(tile_index, l1_tile_index++, tensor_shape);
     }
 }

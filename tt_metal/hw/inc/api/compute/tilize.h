@@ -164,7 +164,7 @@ ALWI void tilize_block(
         PACK((llk_pack<is_fp32_dest_acc_en, true, PackMode::Default>(0 /*tile index*/, ocb, t + output_tile_index)));
 #else
         MATH((llk_math_eltwise_unary_datacopy(0 /*dst index*/, icb)));
-        PACK((llk_pack<true /*out_of_order*/>(0 /*tile index*/, ocb, t + output_tile_index)));
+        PACK((llk_pack(0 /*tile index*/, ocb, t + output_tile_index)));  // always out-of-order on Quasar
 #endif
         // Release dest
         MATH((llk_math_dest_section_done<is_fp32_dest_acc_en>()));

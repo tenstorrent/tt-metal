@@ -35,7 +35,7 @@ extern overlay::RemapperAPI g_remapper_configurator;
 
 // ring_size is uint32 L1-aligned units so a DFB can span full Quasar L1 (~4 MB).
 // Cursor byte-offset is not stored: it is derived from wr_entry_idx (advances in lockstep
-// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==89 so
+// with stride_size / stride_size_tiles). That keeps sizeof(LocalDFBInterface)==87 so
 // g_dfb_interface[16] + logical map fit in pack TLS (2048) with the required 256B stack.
 struct DFBTCSlot {
     uint32_t base_addr;
@@ -49,7 +49,6 @@ struct LocalDFBInterface {
     uint16_t entry_size;
     uint16_t stride_size;
     uint16_t num_entries;
-    uint16_t wr_entry_ptr;
     uint8_t stride_size_tiles;
     uint8_t num_tcs_to_rr;
     uint8_t tc_idx;
@@ -57,7 +56,7 @@ struct LocalDFBInterface {
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 13, "DFBTCSlot (pack TRISC) size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 89, "LocalDFBInterface (pack TRISC) size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 87, "LocalDFBInterface (pack TRISC) size is incorrect");
 
 #elif defined(COMPILE_FOR_TRISC)
 

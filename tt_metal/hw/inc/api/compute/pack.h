@@ -70,6 +70,11 @@ ALWI void pack_init(std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE(
  * this mode, each call to `pack_tile` advances the internal write pointer for
  * the reserved region, which is reset after `cb_push_back` function.
  *
+ * NOTE (Quasar): the in-order mode does not exist on Quasar. `out_of_order_output`
+ * is ignored there and `pack_tile` always behaves as if it were true, so packing
+ * more than one tile into a reserved region requires an explicit, distinct
+ * `output_tile_index` per call.
+ *
  * NOTE: pack_tile doesn't need explicit initialization function prior to its call. Other op-specific
  * initialization functions (such as `tilize_init`, `reduce_init`, etc.) ensure proper initialization
  * of the packer. The reason for this stems from the fact that MATH and PACK threads need to be explicitly
@@ -92,7 +97,9 @@ ALWI void pack_tile(std::uint32_t ifrom_dst, std::uint32_t icb, std::uint32_t ou
 #ifndef ARCH_QUASAR
     PACK((llk_pack<is_fp32_dest_acc_en, out_of_order_output, PackMode::Default>(ifrom_dst, icb, output_tile_index)));
 #else
-    PACK((llk_pack<out_of_order_output>(ifrom_dst, icb, output_tile_index)));
+    // Quasar has no in-order pack path: addressing is always out-of-order (absolute), so
+    // `out_of_order_output` is not forwarded and `output_tile_index` is always honoured.
+    PACK((llk_pack(ifrom_dst, icb, output_tile_index)));
 #endif
 }
 

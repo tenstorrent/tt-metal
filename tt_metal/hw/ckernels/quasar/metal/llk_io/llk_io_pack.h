@@ -44,6 +44,5 @@ inline void llk_push_tiles(const std::int32_t dfb_id, const std::int32_t num_til
     // Update the tile counters values
     TT_PUSH_TILES(PACK_SEL, num_tiles, tc_id);
 
-    local_dfb_interface.wr_entry_ptr = 0;
     dfb_advance_slot(local_dfb_interface, slot, num_tiles);
 }

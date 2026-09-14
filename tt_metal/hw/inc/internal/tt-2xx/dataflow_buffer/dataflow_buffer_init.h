@@ -798,9 +798,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         // Host precomputes stride in tile units: (entry_size >> shift) * stride_in_entries.
         iface.stride_size       = static_cast<uint16_t>(eh.stride_size_precomp);
         iface.stride_size_tiles = eh.stride_size_tiles;
-#if defined(UCK_CHLKC_PACK)
-        iface.wr_entry_ptr = 0;
-#else  // unpack TRISC
+#if !defined(UCK_CHLKC_PACK)  // unpack TRISC
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
 #endif
         iface.num_entries = eh.num_entries;

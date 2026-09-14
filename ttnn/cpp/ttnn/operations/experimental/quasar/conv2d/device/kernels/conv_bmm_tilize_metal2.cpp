@@ -40,7 +40,7 @@
 //
 // On WH/BH that is a save/restore of the partials CB's fifo_rd_ptr/fifo_wr_ptr. Quasar compute has no
 // cb_interface (it tracks DFB state in g_dfb_interface), so the equivalent position is the DFB ring
-// state: tc_slots[].wr_entry_idx/wr_offset + wr_entry_ptr for the packer, tc_slots[].rd_entry_idx/
+// state: tc_slots[].wr_entry_idx/wr_offset for the packer, tc_slots[].rd_entry_idx/
 // rd_offset for the unpacker. Those advance only via dfb_advance_slot() on push_back/pop_front, so
 // snapshotting and restoring them reproduces the rewind exactly. The PARTIALS_* macros below abstract
 // the two arches; the *_WR/_RD variants are only ever expanded inside PACK()/UNPACK(), so the wr_*/rd_*
@@ -49,7 +49,6 @@
 struct QsrDfbRingPos {
     uint16_t entry_idx[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
     uint16_t offset[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
-    uint16_t entry_ptr;  // packer in-order tile offset (wr_entry_ptr); unused on the read side
     uint8_t tc_idx;
 };
 using PartialsRingPos = QsrDfbRingPos;
@@ -65,7 +64,6 @@ using PartialsRingPos = QsrDfbRingPos;
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
             (pos).entry_idx[_qi] = _qd.tc_slots[_qi].wr_entry_idx;        \
         }                                                                 \
-        (pos).entry_ptr = _qd.wr_entry_ptr;                               \
         (pos).tc_idx = _qd.tc_idx;                                        \
     } while (0)
 #define QSR_RESTORE_WR(pos, dfb)                                          \
@@ -74,7 +72,6 @@ using PartialsRingPos = QsrDfbRingPos;
         for (uint8_t _qi = 0; _qi < _qd.num_tcs_to_rr; ++_qi) {           \
             _qd.tc_slots[_qi].wr_entry_idx = (pos).entry_idx[_qi];        \
         }                                                                 \
-        _qd.wr_entry_ptr = (pos).entry_ptr;                               \
         _qd.tc_idx = (pos).tc_idx;                                        \
     } while (0)
 #define QSR_SNAPSHOT_RD(pos, dfb)                                         \

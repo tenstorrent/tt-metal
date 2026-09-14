@@ -841,15 +841,16 @@ R≠C≠W (both `C ≥ W` and `C < W`), not only at equal thread counts.
 
 **`num_tiles_per_cycle` stays 1, and this is now a hard constraint, not a simplification.**
 `stride_in_entries = max(R,C)`, but the kernel's intra-chunk tile indices step by **1** (unpack
-`rd_entry_idx + tile_index`, pack `wr_entry_idx + wr_entry_ptr++`) while the slot advance is
+`rd_entry_idx + tile_index`, pack `wr_entry_idx + output_tile_index`) while the slot advance is
 `num_tiles × stride_size_tiles`. At `n > 1` with `stride > 1`, tiles 1..n-1 are read from and written into
 **other threads' slots** — silent corruption, no hang. It works today only because everything is
 single-threaded. `stride_in_entries` is computed **per DFB** from that DFB's own endpoints (`dataflow_buffer.cpp:1140`), so
 `out`'s stride is `max(C,W)` — the guard must therefore be **`n > 1 ⇒ max(R,C) == 1 AND max(C,W) == 1`**.
 Naming only `max(R,C)` admits `R=1, C=1, W=2, n=8`, which packs tiles 1..7 into writer-thread-1's slots; that
 is F3 (sharded, the phase that wants `n=8`) crossed with any `W>1`. Alternatively pass a `STRIDE_TILES` CTA
-and index `i * STRIDE_TILES` — but that requires the **`out_of_order_output = true`** pack template
-(`pack.h:88-89`); the default `false` overload *ignores* `output_tile_index` (`llk_pack_tile_api.h:66-72`). (DST capacity is not the limit: bf16 `DEST_NUM_TILES_FP16_HALF == 8`.)
+and index `i * STRIDE_TILES` — which Quasar's pack already supports unconditionally: in-order packing has
+been removed, so `pack_tile` always honours `output_tile_index` regardless of the `out_of_order_output`
+template argument. (DST capacity is not the limit: bf16 `DEST_NUM_TILES_FP16_HALF == 8`.)
 
 ### 4.4 Depth limits
 
