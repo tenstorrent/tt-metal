@@ -23,8 +23,9 @@ duration, shape and adapter:
 |---|---|---|
 | 15 s / 1344x768 / 24 fps + audio | **6.612 s** | **19.9 s** (denoise 13.4 / VAE 4.8 / audio 1.4) |
 
-A 3x hardware-and-engine gap, not an 11x algorithm gap. Nothing in this plan closes 3x; the items
-below are worth ~1.0-1.5 s in aggregate plus a quality result we currently cannot measure at all.
+A 3x hardware-and-engine gap, not an 11x algorithm gap. Nothing in this plan closes 3x. S1 is now
+measured at 0.41 s; what is left is a few hundred ms of cleanup plus a fidelity result we currently
+cannot measure at all.
 
 ## The six Sol techniques, against this tree
 
@@ -35,11 +36,11 @@ below are worth ~1.0-1.5 s in aggregate plus a quality result we currently canno
 | Parallel VAE decoding (tile · batch · compile) | **Done.** 196 work units over waves of 32 (`vae_minimax_h3.py`). Sol's "batch" step is our wave batching; the leftover is O10 (repack the padded last wave). |
 | Exact-KV sink + dense prefix query rows | **Done, under another name.** Sol's `sink_start`/`sink_tokens` plus dense recompute of prefix query rows is our `exempt_prefix` / `exempt_ids` / `dense_row_mask`. Same mechanism, same 64-token granularity. |
 | Sparse setup fusion (1.206 -> 0.285 ms) | **Not done**, and the same diagnosis as O3's remainder. See S3 below. |
-| INT8 QKV / FP8 output transport on the Ulysses all-to-all | **Not done.** See S1 below - the largest item here. |
+| INT8 QKV / FP8 output transport on the Ulysses all-to-all | **Landed as `bfloat8_b` K/V, measured -3.7% of the block.** See S1. |
 
 Five of six already exist, several measured further than Sol's. The port that matters is narrow.
 
-## S1 - Compress the collectives (landed, unmeasured)
+## S1 - Compress the collectives (landed, measured: -3.7% of the block)
 
 `OPTIMIZATIONS.md` O6 establishes that the VSA K/V all-gather is link-bound: a device receives
 7 x 51.8 MB = 363 MB per gather and the best of every swept configuration moves it at 87-93 GB/s,
@@ -65,43 +66,53 @@ plus two tests, not a one-line dtype change.
 * `tests/ttnn/unit_tests/operations/sdpa/test_vsa_sdpa.py::test_vsa_sdpa_bfp8_kv` - op-level, both
   kernels, reference built from the *dequantized* K/V so the PCC measures kernel error and not input
   quantization.
-* `test_vsa_attention_production_shape` parametrized on `gather_dtype` with its own PCC floor
-  (`_GATHER_DTYPE_PCC`: bf16 0.985, bfp8_b 0.97 - the bf16 floor is selection noise across the
-  bf16/fp32 boundary, so a narrowed gather should move the residual and not the selection).
+* `test_vsa_attention_production_shape` parametrized on `gather_dtype`, both arms held to the same
+  0.985 floor (`_GATHER_DTYPE_PCC`) once the measurement showed they do not separate.
 * `VSA_GATHER_DTYPE` env knob on the block-perf, e2e-perf and pipeline paths for A/B without edits.
 
-### What is predicted, and what has to be measured
+### Measured
 
-Predicted: `AllGatherAsync` 8.40 ms/block = 1.68 s of the run -> ~0.74 s at half the payload, plus a
-share of O1's four fused-collective matmuls (2.96 s) whose device time includes ~116 MB/device of
-all-gather over 2 links. Against that, two `ttnn.typecast` calls per block each read the bf16 K or V
-and write the bfp8 copy - DRAM-bound and *not* free; at ~10 heads/device x 14400 x 128 that is
-~37 MB read + ~20 MB written per tensor per block.
+Jobs 223-226 on `c46d3176990`, 4x8 BH Galaxy. Op level (job 223): 4/4 pass, PCC >= 0.999 against the
+dequantized reference on both kernels -- the permissive dtype gate is real and the reader honours the
+bfp8 tile size. Fidelity (job 224, `39f_1280x768`, zero gate): **99.3249 % against a 99.3308 %
+control**, 0.006 pp apart, so the narrowing does not separate from the selection-noise floor.
 
-**The typecast cost is the risk in this item.** If it eats the gather saving the whole lever is dead,
-and that is decided by measurement, not by argument. Run in order:
+Block profile, jobs 225/226, `test_minimax_h3_vsa_block_perf -k 15s_768p`, Tracy signpost window,
+32-device merge:
 
-1. `pytest tests/ttnn/unit_tests/operations/sdpa/test_vsa_sdpa.py -k bfp8` - single device. Proves
-   the reader honours the bfp8 tile size. **If this fails the item stops here** and becomes kernel work.
-2. `test_vsa_attention_production_shape -k "15s_768p and zero and bfloat8_b"` - Galaxy. Confirms
-   selection is unchanged and fixes the real PCC (the 0.97 floor is a guess until this runs).
-3. `VSA_GATHER_DTYPE=bfloat8_b scripts/run_safe_pytest.sh --profile .../test_vsa_performance_minimax_h3.py -k 15s_768p`,
-   Tracy, signpost window, 32-device merge. Read `AllGatherAsync` and the new `Typecast` rows
-   directly. This is the number that decides the lever - the block profile resolves ~2.7 ms deltas
-   that a single e2e run cannot.
-4. Only then `VSA_GATHER_DTYPE=bfloat8_b test_vsa_e2e_perf_minimax_h3.py`, against job 886's 19.9 s.
-   Run-to-run variance at fixed shape and seed is **+-8%** (~1.6 s), so a single e2e run cannot
-   establish anything under ~1.6 s. Do not report an e2e delta from one pair of runs.
+| row | bf16 control | bfp8_b | delta |
+|---|---|---|---|
+| K/V `AllGatherAsync` (the two large ones) | 4,029 + 4,071 = 8,100 us | 2,854 + 2,853 = 5,707 us | **-2,393 us (-29.5%)** |
+| pooled coarse gathers (two) | 158 + 136 us | 159 + 137 us | unchanged, as intended |
+| `Typecast` BF16 -> BFP8 (two, new) | - | 203 + 203 = 406 us | **+406 us** |
+| `VsaSdpaOperation` | 17,821 us | 17,753 us | -68 us (noise) |
+| `AllGatherMinimalMatmulAsyncOp` x4 | 14,588 us | 14,568 us | -20 us (noise) |
+| **block device time** | **55,640 us** | **53,585 us** | **-2,055 us (-3.7%)** |
+
+Scaled `x50 blocks x4 forwards`: **-0.41 s of the 19.9 s run (-2.1%)**. Take the lever -- it is free of
+fidelity cost and costs nothing to keep -- but it is **half the predicted 0.74 s**, and 0.41 s sits
+far under the +-8% (~1.6 s) single-run e2e resolution. **Do not run an e2e A/B to "confirm" it**; one
+pair of runs cannot see 0.41 s, and the block profile is the more precise instrument. This is the
+same situation `OPTIMIZATIONS.md` records for the VSA port: real in Tracy, invisible in one generation.
+
+**The open question this raised.** 56% of the bytes bought only 70.5% of the time. O6 frames the
+gather as link-bound at 87-93 GB/s, ~90% of line rate; if that were the whole story, halving the
+payload would have halved the time. ~14 percentage points are unaccounted for. Candidates: bfp8 page
+handling in the CCL dataflow kernels, or a fixed per-chunk sync cost that does not scale with
+payload. **Unresolved** -- and worth resolving, because it caps every future payload-narrowing lever
+including the AGMM arm below.
 
 ### Follow-ons once S1 is proven
 
-* **Kill the typecast.** The QKV projection writes K/V in bf16 because QK-norm, RoPE and the coarse
-  pooling all consume them. If the fine stage is the only consumer of the *gathered* copy, the
-  narrowing can move into the gather's own output dtype (persistent buffer allocated bfp8_b, input
-  bf16) if `all_gather_async` will accept a dtype change - check; if not, this is the op request that
-  makes S1 strictly free.
-* **The four AGMMs (O1).** `all_gather_minimal_matmul_async` fuses the TP gather into the matmul, so
-  its input dtype is the lever on the same 2.96 s O1 already flags as `SLOW` for a different reason
+* **Kill the typecast**, worth the measured **406 us/block (0.08 s)**. The QKV projection writes K/V
+  in bf16 because QK-norm, RoPE and the coarse pooling all consume them. If the fine stage is the only
+  consumer of the *gathered* copy, the narrowing can move into the gather's own output dtype
+  (persistent buffer allocated bfp8_b, input bf16) if `all_gather_async` will accept a dtype change -
+  check; if not, this is the op request that makes S1 strictly free.
+* **The four AGMMs (O1).** Measured **14,568 us/block, 27.2% of the block** and completely untouched
+  by this change - the largest remaining row after the SDPA. `all_gather_minimal_matmul_async` fuses
+  the TP gather into the matmul, so its input dtype is the lever on the same 2.96 s O1 already flags
+  as `SLOW` for a different reason
   (`DEV_0_DRAM_INTERLEAVED` input 0, no `program_config`). Do the dtype arm *after* the
   `program_config` arm so the two are attributable separately.
 * **The pooled coarse gathers.** Already tiny (`[heads, head_dim, n_tiles]`); leave bf16.
@@ -230,7 +241,9 @@ on it.
 
 ## Order
 
-1. **S1** measurement chain, steps 1-4. Code has landed; the numbers have not.
+1. **S1** is done: -3.7% of the block, no fidelity cost, no e2e run warranted. What is left of it is
+   the typecast removal (0.08 s) and the unexplained 14 pp of gather time that does not scale with
+   payload - settle that before spending effort on the AGMM dtype arm.
 2. **S4** quality gate. Unblocks S2, O5 and O2's block-size question.
 3. **S2** step 1 (host oracle, no device time) - can run in parallel with S4.
 4. **S1** follow-ons: kill the typecast, then the AGMM dtype arm after O1's `program_config` arm.

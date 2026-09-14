@@ -164,7 +164,13 @@ who know to ask.
 
 ### O6 — Overlap the VSA K/V all-gather: blocked by sub-device ownership
 
-**1.68 s of the run (8.4%). Tuning is settled — it is link-bound; only overlap is left.**
+**1.68 s of the run (8.4%). Tuning is settled — but "only overlap is left" was wrong: payload was
+left.** Narrowing the gather to `bfp8_b` takes the two large K/V gathers from 8,100 to 5,707 µs/block
+and the block from 55,640 to 53,585 µs (**-3.7%, ~0.41 s of the run**) at no measurable fidelity cost
+(attention PCC 99.3249% against a 99.3308% control). Landed behind `MiniMaxH3VSAConfig.gather_dtype`;
+see `PLAN_SOL.md` S1 for the jobs and the open question — 56% of the bytes bought only 70.5% of the
+time, so this axis is *not* purely payload-bound and the remaining ~14 pp is unexplained. The rest of
+this entry is the overlap analysis, which stands.
 
 `AllGatherAsyncDeviceOperation`, 8.40 ms/block. `VSA_STREAM_DESIGN.md` section 5a swept every
 `all_gather_async` configuration (Ring/Linear, persistent vs barrier semaphores, chunks_per_sync,
