@@ -108,3 +108,45 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
             .compile_args = compile_time_args,
             .defines = defines});
 }
+
+/**
+ * Walk the cores that `tt::tt_metal::split_work_to_cores` handed work to, in the order tt-train
+ * readers/writers assume (core i -> {i / num_cores_y, i % num_cores_y}). Calls
+ * `fn(core, num_units_for_core, num_units_before_core)` once per core; the last argument is the running
+ * offset, i.e. how many work units (rows, blocks, tiles) earlier cores received.
+ */
+template <typename Fn>
+inline void for_each_core_with_work(
+    uint32_t num_cores,
+    uint32_t num_cores_y,
+    const tt::tt_metal::CoreRangeSet& core_group_1,
+    const tt::tt_metal::CoreRangeSet& core_group_2,
+    uint32_t num_units_per_core_group_1,
+    uint32_t num_units_per_core_group_2,
+    Fn&& fn) {
+    uint32_t num_units_written = 0U;
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        uint32_t num_units = 0U;
+        if (core_group_1.contains(core)) {
+            num_units = num_units_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            num_units = num_units_per_core_group_2;
+        } else {
+            TT_FATAL(false, "Core {} is in neither work group", core.str());
+        }
+        fn(core, num_units, num_units_written);
+        num_units_written += num_units;
+    }
+}
+
+/**
+ * The same core walk without the work lookup, for override_runtime_arguments where only buffer addresses
+ * change and every core keeps the work it was given in create().
+ */
+template <typename Fn>
+inline void for_each_core(uint32_t num_cores, uint32_t num_cores_y, Fn&& fn) {
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        fn(tt::tt_metal::CoreCoord{i / num_cores_y, i % num_cores_y});
+    }
+}
