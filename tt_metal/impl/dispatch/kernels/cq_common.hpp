@@ -118,6 +118,67 @@ FORCE_INLINE uint64_t cq_mcast_noc_addr(uint32_t packed_rect, uint64_t offset) {
 #endif
 }
 
+#if defined(NOC_ATT_ENABLED)
+// CQ bank-typed helpers. They live here, not in noc_nonblocking_api_v3.h, because they
+// need the noc_address_backend alias (bank_address names the firmware bank tables), which
+// firmware translation units only have after dataflow_api_addrgen.h; cq_common.hpp is
+// included by every CQ kernel after api/dataflow/dataflow_api.h.
+// Offset-free source base for a DRAM or L1 bank id, resolved through the typed
+// backend. noc_v3_cq_packed_base resolves a packed host coordinate, which works
+// for L1/worker banks but traps on a DRAM bank: a DRAM tile's node id is in
+// neither inverse table, so it must go through Address::dram. bank_address<true>
+// takes that typed path (bank_address<false> is the same frame-corrected worker
+// lookup noc_v3_cq_packed_base would do), so this is correct for both. On the XY
+// backend bank_address is the packed composition, so it is identical there.
+template <bool is_dram>
+inline __attribute__((always_inline)) uint64_t noc_v3_cq_bank_base(uint32_t bank, uint8_t noc) {
+    return noc_address_backend::bank_address<is_dram>(bank, 0, noc);
+}
+
+// Bank-typed split read: the source is a DRAM or L1 bank id, not a packed host
+// coordinate. Identical to the split-source overload above except the NOC-flag
+// base comes from noc_v3_cq_bank_base<is_dram>(bank) (the typed backend) instead
+// of noc_v3_cq_packed_base(coord) - a DRAM bank's node id is in neither inverse
+// table, so the packed path would trap. Same per-issue register writes, so the
+// walker's per-page coordinate-only reprogramming is preserved.
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    bool is_dram,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state_bank(
+    uint32_t noc, uint32_t bank, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
+
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        noc_v3_cq_src_local[cmd_buf] = src_addr;
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        noc_v3_cq_src_base[cmd_buf] = noc_v3_cq_bank_base<is_dram>(bank, noc);
+    }
+    if constexpr (flags & (CQ_NOC_FLAG_SRC | CQ_NOC_FLAG_NOC)) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf,
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8,
+            noc_v3_cq_src_base[cmd_buf] | noc_v3_cq_src_local[cmd_buf]);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, noc_v3_local_operand(dst_addr));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        __builtin_riscv_ttrocc_cmdbuf_wr_reg(
+            cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, size);
+    }
+    if constexpr (send) {
+        __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+#endif  // NOC_ATT_ENABLED
+
 template <
     enum CQNocFlags flags,
     enum CQNocWait wait = CQ_NOC_WAIT,

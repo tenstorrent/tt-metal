@@ -585,7 +585,10 @@ void kernel_main() {
     noc_v3_cq_state_reset();  // kernel .bss is not zeroed on Quasar; make the CQ latch state deterministic
 #endif
     set_l1_data_cache<true>();
-    DPRINT("dispatch_s : start\n");
+#if !defined(CQ_ID)
+#define CQ_ID 0  // stand-alone builds do not tag the banner with a CQ
+#endif
+    DPRINT("dispatch_s cq{}: start\n", (uint32_t)CQ_ID);
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();

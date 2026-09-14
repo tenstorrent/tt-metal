@@ -653,9 +653,12 @@ __attribute__((noinline)) void process_write_paged() {
             noc_write_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_WAIT, false>(
                 noc_index, 0, 0, page_size);
             do {
-                uint64_t dst = get_noc_addr_helper(
-                    interleaved_addr_gen::get_noc_xy<is_dram>(walk_bank, noc_index),
-                    walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank));
+                // Typed bank operand: a DRAM bank's node id is in neither ATT inverse table, so the
+                // packed get_noc_xy path traps under ATT. bank_address routes DRAM through Address::dram
+                // (L1 through the frame-corrected worker lookup); on the XY backend it is the identical
+                // packed composition get_noc_addr_helper(get_noc_xy<is_dram>(bank), ...) produced.
+                uint64_t dst = noc_address_backend::bank_address<is_dram>(
+                    walk_bank, walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank), noc_index);
                 ASSERT(dst == addr_gen.get_noc_addr(page_id, 0));
                 cq_noc_async_write_with_state<CQ_NOC_SNDl, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
                     static_cast<uint32_t>(data_ptr), dst, page_size);
@@ -676,9 +679,12 @@ __attribute__((noinline)) void process_write_paged() {
         // Cap the transfer size to the NOC packet size - use of One Packet NOC API (better performance
         // than writing a generic amount of data)
         xfer_size = xfer_size > NOC_MAX_BURST_SIZE ? NOC_MAX_BURST_SIZE : xfer_size;
-        uint64_t dst = get_noc_addr_helper(
-            interleaved_addr_gen::get_noc_xy<is_dram>(walk_bank, noc_index),
-            walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank) + dst_addr_offset);
+        // Typed bank operand (see the folded-run note above): identical packed composition on XY,
+        // the Address::dram / frame-corrected worker path under ATT.
+        uint64_t dst = noc_address_backend::bank_address<is_dram>(
+            walk_bank,
+            walk_row_addr + interleaved_addr_gen::get_bank_offset<is_dram>(walk_bank) + dst_addr_offset,
+            noc_index);
         ASSERT(dst == addr_gen.get_noc_addr(page_id, dst_addr_offset));
 
         cq_noc_async_write_with_state<CQ_NOC_SNDL, CQ_NOC_WAIT, CQ_NOC_SEND, NCRISC_WR_CMD_BUF, true>(
@@ -1591,10 +1597,18 @@ void kernel_main() {
     noc_v3_cq_state_reset();  // kernel .bss is not zeroed on Quasar; make the CQ latch state deterministic
 #endif
     set_l1_data_cache<true>();
+#if !defined(CQ_ID)
+#define CQ_ID 0  // stand-alone builds (dispatch microbenchmarks) do not tag the banner with a CQ
+#endif
 #if defined(FABRIC_RELAY)
-    DPRINT("dispatch_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
+    DPRINT(
+        "dispatch_{}{} cq{}: start (fabric relay. 2d = {})\n",
+        is_h_variant,
+        is_d_variant,
+        (uint32_t)CQ_ID,
+        is_2d_fabric);
 #else
-    DPRINT("dispatch_{}{}: start\n", is_h_variant, is_d_variant);
+    DPRINT("dispatch_{}{} cq{}: start\n", is_h_variant, is_d_variant, (uint32_t)CQ_ID);
 #endif
     // Get runtime args
     my_dev_id = get_arg_val<uint32_t>(OFFSETOF_MY_DEV_ID);

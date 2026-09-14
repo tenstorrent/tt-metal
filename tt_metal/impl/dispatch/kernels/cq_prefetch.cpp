@@ -1147,6 +1147,11 @@ public:
 
     FORCE_INLINE uint32_t coord() const { return interleaved_addr_gen::get_noc_xy<is_dram>(bank_, noc_index); }
 
+    // The current page's bank id. The read path resolves this through the typed backend
+    // (noc_address_backend::bank_address<is_dram>) so a DRAM bank - whose node id is in neither ATT
+    // inverse table - never goes through the packed coordinate path, which would trap under ATT.
+    FORCE_INLINE uint32_t bank() const { return bank_; }
+
     template <bool folded>
     FORCE_INLINE uint32_t local_addr() const {
         if constexpr (folded) {
@@ -1191,7 +1196,11 @@ public:
     // address generation gets wrong rather than silently reading the wrong pages.
     template <bool folded, typename AddrGen>
     FORCE_INLINE bool matches(const AddrGen& addr_gen) const {
-        return get_noc_addr_helper(coord(), local_addr<folded>()) == addr_gen.get_noc_addr(page_id_);
+        // Typed bank operand, so this cross-check does not itself trap on a DRAM bank under ATT; on the
+        // XY backend it is the identical packed composition. addr_gen.get_noc_addr routes through the
+        // same typed path under ATT, so the two agree.
+        return noc_address_backend::bank_address<is_dram>(bank_, local_addr<folded>(), noc_index) ==
+               addr_gen.get_noc_addr(page_id_);
     }
 #endif
 
@@ -1228,15 +1237,33 @@ FORCE_INLINE void assert_walker_matches(
 // there the count runs low, where noc_async_read would have counted per packet. Nothing depends on the difference:
 // v2 answers ncrisc_noc_reads_flushed() from the hardware's outstanding-transaction count, so the barrier waits on
 // the responses themselves rather than on noc_reads_num_issued.
-template <enum CQNocFlags flags>
-FORCE_INLINE void issue_page_read(uint32_t coord, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
+template <enum CQNocFlags flags, bool is_dram>
+FORCE_INLINE void issue_page_read(uint32_t bank, uint32_t local_addr, uint32_t dst_addr, uint32_t page_size) {
     // Keep the reads visible to watcher and to noc tracing, both of which noc_async_read would have done. Both
-    // compile out of a release build.
+    // compile out of a release build (so the typed operand is composed inline, not hoisted, to avoid an unused
+    // local there). The typed bank operand is the identical packed composition on the XY backend and the
+    // Address::dram / frame-corrected worker path under ATT (so a DRAM bank does not trap in these helpers).
     RECORD_NOC_EVENT_WITH_ADDR(
-        NocEventType::READ, dst_addr, get_noc_addr_helper(coord, local_addr), page_size, -1, false, noc_index);
-    DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc_index, get_noc_addr_helper(coord, local_addr), dst_addr, page_size);
+        NocEventType::READ,
+        dst_addr,
+        noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index),
+        page_size,
+        -1,
+        false,
+        noc_index);
+    DEBUG_SANITIZE_NOC_READ_TRANSACTION(
+        noc_index, noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), dst_addr, page_size);
+#if defined(NOC_ATT_ENABLED)
+    // Latch the source base from the bank id through the typed backend: the packed coordinate the
+    // split-state path would resolve is in neither ATT inverse table for a DRAM bank and traps.
+    noc_read_with_state_bank<DM_DEDICATED_NOC, read_cmd_buf, flags, is_dram, CQ_NOC_SEND, CQ_NOC_WAIT>(
+        noc_index, bank, local_addr, dst_addr, 0);
+#else
+    // XY backend: unchanged split-state read against the packed bank coordinate (object-code identical
+    // to the pre-conversion call).
     noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, flags, CQ_NOC_SEND, CQ_NOC_WAIT>(
-        noc_index, coord, local_addr, dst_addr, 0);
+        noc_index, interleaved_addr_gen::get_noc_xy<is_dram>(bank, noc_index), local_addr, dst_addr, 0);
+#endif
 }
 
 // Issues the reads that fill one scratch buffer with whole pages, advancing the walker past them and returning the
@@ -1269,12 +1296,12 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         while (run_bytes <= amt_to_read) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             for (uint32_t left = run_pages - 1; left != 0; left--) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
             }
@@ -1290,14 +1317,14 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
         if (amt_to_read >= page_size) {
             const uint32_t local_addr = walker.template local_addr<true>();
             assert_walker_matches<true>(walker, addr_gen);
-            issue_page_read<CQ_NOC_SNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
             walker.advance_within_row();
             scratch_read_addr += page_size;
             amt_to_read -= page_size;
             amt_read += page_size;
             while (amt_to_read >= page_size) {
                 assert_walker_matches<true>(walker, addr_gen);
-                issue_page_read<CQ_NOC_sNDl>(walker.coord(), local_addr, scratch_read_addr, page_size);
+                issue_page_read<CQ_NOC_sNDl, is_dram>(walker.bank(), local_addr, scratch_read_addr, page_size);
                 walker.advance_within_row();
                 scratch_read_addr += page_size;
                 amt_to_read -= page_size;
@@ -1312,12 +1339,15 @@ FORCE_INLINE uint32_t read_pages_into_scratch(
     // noc_async_read.
     while (amt_to_read >= page_size) {
         assert_walker_matches<false>(walker, addr_gen);
-        const uint32_t coord = walker.coord();
+        const uint32_t bank = walker.bank();
         const uint32_t local_addr = walker.template local_addr<false>();
         if constexpr (single_read) {
-            issue_page_read<CQ_NOC_SNDl>(coord, local_addr, scratch_read_addr, page_size);
+            issue_page_read<CQ_NOC_SNDl, is_dram>(bank, local_addr, scratch_read_addr, page_size);
         } else {
-            noc_async_read(get_noc_addr_helper(coord, local_addr), scratch_read_addr, page_size);
+            // Typed bank operand: identical packed composition on XY, Address::dram / frame-corrected
+            // worker path under ATT (get_noc_addr_helper(coord, ...) would trap on a DRAM bank there).
+            noc_async_read(
+                noc_address_backend::bank_address<is_dram>(bank, local_addr, noc_index), scratch_read_addr, page_size);
         }
         walker.advance();
         scratch_read_addr += page_size;
@@ -3115,6 +3145,9 @@ void kernel_main_d() {
 }
 
 void kernel_main_hd() {
+#if defined(NOC_ATT_ENABLED)
+    noc_v3_cq_state_reset();  // kernel .bss is not zeroed on Quasar; make the CQ latch state deterministic
+#endif
     uintptr_t cmd_ptr = cmddat_q_base;
     uintptr_t fence = cmddat_q_base;
     bool done = false;
@@ -3142,10 +3175,18 @@ void kernel_main_hd() {
 
 void kernel_main() {
     set_l1_data_cache<true>();
+#if !defined(CQ_ID)
+#define CQ_ID 0  // stand-alone builds (dispatch microbenchmarks) do not tag the banner with a CQ
+#endif
 #if defined(FABRIC_RELAY)
-    DPRINT("prefetcher_{}{}: start (fabric relay. 2d = {})\n", is_h_variant, is_d_variant, is_2d_fabric);
+    DPRINT(
+        "prefetcher_{}{} cq{}: start (fabric relay. 2d = {})\n",
+        is_h_variant,
+        is_d_variant,
+        (uint32_t)CQ_ID,
+        is_2d_fabric);
 #else
-    DPRINT("prefetcher_{}{}: start\n", is_h_variant, is_d_variant);
+    DPRINT("prefetcher_{}{} cq{}: start\n", is_h_variant, is_d_variant, (uint32_t)CQ_ID);
 #endif
 
     // Get runtime args
