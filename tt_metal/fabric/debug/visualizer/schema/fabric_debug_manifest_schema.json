@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest.schema.json",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest_schema.json",
   "title": "Fabric debug manifest",
   "description": "Frozen description of one fabric instance's topology, written by ControlPlane at fabric init. Consumed by the fabric debug capture layer (ttexalens) and the visualizer. This schema is the stability boundary between the tt-metal fabric internals and the debug tooling. Consumers depend on manifest_version and the shapes below, never on ControlPlane signatures.",
   "type": "object",
