@@ -876,6 +876,32 @@
   team: models
   budget_type: unit
 
+- name: Qwen3-TTS unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
+    export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    # Host-only today: config and weight-layout checks, 5 s on a warm cache. The timeout
+    # covers the first run, which pulls the 3.6 GB checkpoint into the shared cache.
+    # Revisit it (down) once the cache is primed, and up as device tests land.
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+  model: qwen3-tts-1.7b-base
+  model_family: Qwen3-TTS
+  skus:
+    wh_n150:
+      timeout: 5
+      tier: 3
+    # Blackhole single-chip. Bring-up runs on Blackhole, so this leg is the one that will
+    # exercise the dev architecture once device code lands. P150 rather than P300 or
+    # QuietBox 2: the model is single-device at batch 1, and P150 uses the standard
+    # cloud-mlperf cache mount, while P300 runs LFC mode and would need its own wget.
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U09LNK7BT1Q # Andrija Cicovic
+  team: models
+  budget_type: unit
+
 - name: QwQ-32B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
