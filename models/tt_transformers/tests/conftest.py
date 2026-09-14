@@ -48,35 +48,6 @@ def pytest_addoption(parser):
         help="Provide a JSON file defining per-decoder precision and fidelity settings",
     )
     parser.addoption(
-        "--accuracy",
-        action="store_true",
-        default=False,
-        help="Run test_long_context as a token-accuracy test instead of a performance test. "
-        "Teacher-forces the model through a precomputed full-precision reference and reports "
-        "top-1/top-5 agreement instead of tokens per second. Requires a reference sized for the "
-        "context under test (see --accuracy_ref); disables Metal trace, which teacher forcing "
-        "is incompatible with.",
-    )
-    parser.addoption(
-        "--accuracy_ref",
-        action="store",
-        default=None,
-        help="Path to the .refpt reference for --accuracy. Defaults to "
-        "models/tt_transformers/tests/reference_outputs/<model>_<ctx label>.refpt, e.g. "
-        "Qwen3-8B_32k.refpt, so each context length gets its own reference.",
-    )
-    parser.addoption(
-        "--tracy_decode",
-        action="store_true",
-        default=False,
-        help="Configure the run for Tracy profiling of the decode phase: disables Metal "
-        "trace and caps generation at 2 tokens. Both are required -- trace replay under "
-        "the profiler raises 'Device data mismatch', and a long decode loop overflows the "
-        "device marker buffer. Slice the report to decode with `tt-perf-report "
-        "--start-signpost DECODE_START`. Not for measurement: the decode average degrades to "
-        "one sample.",
-    )
-    parser.addoption(
         "--use_hf_rope",
         action="store_true",
         default=False,

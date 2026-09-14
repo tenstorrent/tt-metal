@@ -11,7 +11,7 @@ This is a stripped-down equivalent of
 with every configuration knob resolved to a constant. Run it with:
 
     TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
-    pytest models/tt_transformers/tests/test_long_context.py -s
+    pytest models/tt_transformers/demo/long_context_demo.py -s
 
 Every context length in CONTEXT_CONFIGS is run at every batch size in BATCH_SIZES, giving
 ids like `32k-b2`. Select a subset with -k:
@@ -90,12 +90,14 @@ OPTIMIZATIONS = DecodersPrecision.performance
 # long-context workloads on this hardware; it is not a change we can make on their behalf.
 PAGE_BLOCK_SIZE = 256
 
-# (label, max_seq_len, page_blocks_per_user)
+# (label, max_seq_len)
 #
 # max_seq_len - MAX_GENERATED_TOKENS is the prompt budget: preprocess_inputs_prefill
 # left-clips any longer prompt to exactly that (tt/common.py:283).
-# page_blocks_per_user * PAGE_BLOCK_SIZE must cover ONE user's prompt + generated:
-#   256 * 129 = 33024   and   256 * 257 = 65792
+# Blocks per user are derived in the test as max_seq_len // page_block_size, so the block
+# size can be changed with --page_block_size without editing this table. Both lengths are
+# multiples of 256, so every power-of-two block size from 32 to 256 divides them exactly:
+#   33024 = 129 * 256   and   65792 = 257 * 256
 #
 # The device pool is page_blocks_per_user * batch_size. PagedAttentionConfig sizes one
 # SHARED pool -- attention.py:396 allocates [max_num_blocks, kv_heads, block_size, head_dim],
@@ -108,8 +110,8 @@ PAGE_BLOCK_SIZE = 256
 # is not skipped -- `_extend_context_with_yarn` below stretches the RoPE frequencies with
 # YaRN so it runs. The summary's `rope` column records which rows were extended.
 CONTEXT_CONFIGS = [
-    ("32k", 33024, 129),  # 33024 - 256 = 32768 prompt tokens per user
-    ("64k", 65792, 257),  # 65792 - 256 = 65536 prompt tokens per user
+    ("32k", 33024),  # 33024 - 256 = 32768 prompt tokens per user
+    ("64k", 65792),  # 65792 - 256 = 65536 prompt tokens per user
 ]
 
 # Each parametrization appends a dict here and fills it in as it progresses, so a run
@@ -238,7 +240,7 @@ def _benchmark_summary():
 
     show_acc = any("top1" in r for r in _RESULTS)
     header = (
-        f"{'ctx':<6}{'users':>6}{'prompt tok':>11}{'build s':>9}{'TTFT ms':>11}"
+        f"{'ctx':<6}{'users':>6}{'block':>6}{'prompt tok':>11}{'build s':>9}{'TTFT ms':>11}"
         f"{'compile ms':>12}{'decode ms':>11}{'tok/s/u':>9}{'tok/s':>8}"
         + (f"{'scored':>8}{'top-1 %':>9}{'top-5 %':>9}" if show_acc else "")
         + f"  {'rope':<12}{'mode':<7}status"
@@ -249,6 +251,7 @@ def _benchmark_summary():
         lines.append(
             f"{row['label']:<6}"
             f"{cell(row, 'batch', 'd'):>6}"
+            f"{cell(row, 'block', 'd'):>6}"
             f"{cell(row, 'prompt_tokens', 'd'):>11}"
             f"{cell(row, 'build_s', '.1f'):>9}"
             f"{cell(row, 'ttft_ms', '.2f'):>11}"
@@ -296,7 +299,11 @@ TRACY_MAX_GENERATED_TOKENS = 2
 # directory use (generate_reference_outputs.py:49). preprocess_inputs_prefill
 # left-clips it to each parametrization's max_seq_len - MAX_GENERATED_TOKENS, accounting
 # for chat-template overhead itself.
-_CORPUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tale-of-two-cities.txt.bz2")
+# The corpus and the stored references live under ../tests/, shared with
+# generate_reference_outputs.py and every other model's reference. This file moved to demo/
+# to mark it as a supported entry point; the shared data did not move with it.
+_SHARED_TEST_DATA = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "tests"))
+_CORPUS = os.path.join(_SHARED_TEST_DATA, "tale-of-two-cities.txt.bz2")
 with bz2.open(_CORPUS, "rt", encoding="utf-8") as _f:
     PROMPT = _f.read()
 
@@ -478,14 +485,26 @@ if os.environ.get("HOST_STAGE_TIMING") == "1":
 # "32k-b2" rather than "b2-32k". `-k 32k` still selects every batch at that context.
 @pytest.mark.parametrize("batch_size", BATCH_SIZES, ids=[f"b{b}" for b in BATCH_SIZES])
 @pytest.mark.parametrize(
-    "label, max_seq_len, page_blocks_per_user",
+    "label, max_seq_len",
     CONTEXT_CONFIGS,
     ids=[c[0] for c in CONTEXT_CONFIGS],
 )
-def test_text_demo(
-    mesh_device, reset_seeds, monkeypatch, request, label, max_seq_len, page_blocks_per_user, batch_size
-):
+def test_text_demo(mesh_device, reset_seeds, monkeypatch, request, label, max_seq_len, batch_size):
     assert os.getenv("HF_MODEL"), "Set HF_MODEL, e.g. export HF_MODEL=Qwen/Qwen3-8B"
+
+    # KV-cache tokens per block. PAGE_BLOCK_SIZE (256) is the measured default; --page_block_size
+    # overrides it for deployments with different memory trade-offs (see the note on
+    # PAGE_BLOCK_SIZE above). Blocks per user follow from it, so the pool always covers exactly
+    # max_seq_len positions for each user whatever the block size.
+    page_block_size = request.config.getoption("--page_block_size") or PAGE_BLOCK_SIZE
+    assert (
+        page_block_size > 0 and page_block_size % ttnn.TILE_SIZE == 0
+    ), f"--page_block_size must be a positive multiple of {ttnn.TILE_SIZE}, got {page_block_size}"
+    assert max_seq_len % page_block_size == 0, (
+        f"--page_block_size {page_block_size} does not divide this row's max_seq_len {max_seq_len}; "
+        f"pick a power of two up to 256"
+    )
+    page_blocks_per_user = max_seq_len // page_block_size
     prompt_budget = max_seq_len - MAX_GENERATED_TOKENS
     logger.info(f"[{label}-b{batch_size}] target prompt {prompt_budget} tokens, max_seq_len {max_seq_len}")
 
@@ -504,7 +523,7 @@ def test_text_demo(
 
     # Registered up front so a failure still shows up in the end-of-run summary.
     # `stage` advances through the test; if we raise, it names where we stopped.
-    row = {"label": label, "batch": batch_size, "status": "FAILED", "stage": "setup"}
+    row = {"label": label, "batch": batch_size, "block": page_block_size, "status": "FAILED", "stage": "setup"}
     _RESULTS.append(row)
 
     # --tracy_decode sets BOTH settings a profiling run needs. Half of it is worse than
@@ -528,7 +547,7 @@ def test_text_demo(
     token_acc = None
     if accuracy:
         ref_path = request.config.getoption("--accuracy_ref") or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
+            _SHARED_TEST_DATA,
             "reference_outputs",
             f"{os.environ['HF_MODEL'].split('/')[-1]}_{label}.refpt",
         )
@@ -565,7 +584,7 @@ def test_text_demo(
     # than one contiguous buffer per user. This object just carries the two
     # numbers that define the pool; nothing is allocated yet.
     paged_attention_config = PagedAttentionConfig(
-        block_size=PAGE_BLOCK_SIZE,
+        block_size=page_block_size,
         max_num_blocks=page_blocks_per_user * batch_size,
     )
 
@@ -677,16 +696,16 @@ def test_text_demo(
     ), f"prompt ({max(decoding_pos)}) + generated ({max_generated_tokens}) must fit in max_seq_len ({max_seq_len})"
 
     # The same budget again, against the KV cache one user actually owns rather than against
-    # the declared context length. Redundant while page_blocks_per_user * PAGE_BLOCK_SIZE
+    # the declared context length. Redundant while page_blocks_per_user * page_block_size
     # equals max_seq_len, and no longer redundant the moment the pool is a product: an error
     # in that multiplication is exactly what this catches, and without it the failure is users
     # overwriting one another's cache blocks and returning wrong tokens rather than raising.
     # Mirrors simple_text_demo.py:1172-1178, which checks the same thing per user.
-    per_user_cache_tokens = PAGE_BLOCK_SIZE * page_blocks_per_user
+    per_user_cache_tokens = page_block_size * page_blocks_per_user
     assert max_generated_tokens + max(decoding_pos) <= per_user_cache_tokens, (
         f"prompt ({max(decoding_pos)}) + generated ({max_generated_tokens}) exceeds the "
         f"{per_user_cache_tokens} tokens of KV cache each of the {batch_size} user(s) owns "
-        f"({page_blocks_per_user} blocks x {PAGE_BLOCK_SIZE} tokens)"
+        f"({page_blocks_per_user} blocks x {page_block_size} tokens)"
     )
 
     # -- Step 6: decide where sampling runs ----------------------------------

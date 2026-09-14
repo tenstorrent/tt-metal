@@ -26,7 +26,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
         # https://huggingface.co/Qwen/Qwen2.5-7B-Instruct#processing-long-texts
         native = getattr(getattr(config, "text_config", config), "max_position_embeddings", 32768)
         if "Qwen" in hf_model_name and total_length > native:
-            # factor derived, not hardcoded. test_long_context stretches the model's rotary
+            # factor derived, not hardcoded. long_context_demo stretches the model's rotary
             # frequencies by `max_seq_len / native` (1.606 at its 64k row: 65792 / 40960), so a
             # reference built with a fixed 4.0 would encode positions differently from the model
             # under test and every disagreement would be charged to whatever else changed.
