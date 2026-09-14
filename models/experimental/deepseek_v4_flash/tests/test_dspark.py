@@ -18,6 +18,9 @@ from models.experimental.deepseek_v4_flash.dspark import (
     DSparkConfig,
     DSparkModel,
     dspark_block_mask,
+    fuse_flash_mtp_pack,
+    markov_bias,
+    ngram_continuation,
     prefix_survival,
     truncate_prefix,
 )
@@ -231,6 +234,43 @@ def test_mtp_module_layout_matches_checkpoint_namespaces():
     # Intermediate stages have no fusion / heads.
     assert "mtp.1.main_proj.weight" not in names
     assert "mtp.0.markov_head.markov_w1.weight" not in names
+
+
+@torch.no_grad()
+def test_draft_markov_ids_is_greedy_chain():
+    model = _model()
+    anchor = torch.tensor([3, 5])
+    drafts = model.draft_markov_ids(anchor, gamma=4)
+    assert drafts.shape == (2, 4)
+    prev = anchor
+    for k in range(4):
+        expect = model.markov_head.bias(prev).argmax(dim=-1)
+        torch.testing.assert_close(drafts[:, k], expect)
+        prev = expect
+
+
+@torch.no_grad()
+def test_fuse_flash_mtp_pack_shape():
+    torch.manual_seed(0)
+    batch, layers, hc, hidden = 2, 3, 4, 8
+    pack = torch.randn(batch, layers, hc, hidden)
+    proj = torch.randn(hidden, layers * hidden)
+    norm = torch.ones(hidden)
+    fused = fuse_flash_mtp_pack(pack, proj, norm, 1e-6)
+    assert fused.shape == (batch, 1, hidden)
+
+
+@torch.no_grad()
+def test_markov_bias_matches_head():
+    model = _model()
+    ids = torch.tensor([1, 4, 7])
+    got = markov_bias(ids, model.markov_head.markov_w1.weight, model.markov_head.markov_w2.weight)
+    torch.testing.assert_close(got, model.markov_head.bias(ids).float())
+
+
+def test_ngram_continuation_copies_earlier_span():
+    tokens = [1, 2, 3, 9, 1, 2, 3]
+    assert ngram_continuation(tokens, gamma=2) == [9, 1]
 
 
 def test_flash_0731_config_knobs():
