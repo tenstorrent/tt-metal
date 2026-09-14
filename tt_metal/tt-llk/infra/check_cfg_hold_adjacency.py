@@ -9,13 +9,19 @@ example a move whose SrcA format flips between TF32 and FP32 and so writes 16-bi
 Dst addresses instead of 32-bit ones.
 
 Address-shaping config (ADDR_MOD_*, DEST_REGW_BASE_Base, DEST_TARGET_REG_CFG_MATH_Offset,
-FIDELITY_BASE_Phase, ADDR_MOD_SET_Base) is NOT flagged, and the reason is narrower than it looks.
-It is not immune: the addresses an instruction forms are fixed only when the instruction is accepted
-out of the issue stage, so a write to this group landing earlier in a hold changes what it takes.
-What makes it out of scope here is reachability plus evidence -- no Wormhole caller writes
-DEST_REGW_BASE_Base at all, the numeric group is the one measured to corrupt on silicon, and the
-address group has never been measured. Do not read this exclusion as a hardware guarantee; if a
-writer of one of these fields appears next to a held reader, the question is open, not settled.
+FIDELITY_BASE_Phase, ADDR_MOD_SET_Base) is deliberately NOT flagged, and the reason is structural
+rather than a margin. An instruction accepted out of the issue stage carries its formed addresses
+forward as VALUES, and its address-counter update is applied on that acceptance; it does not carry
+the numeric control, only the owning thread's identity, with the control fetched live further down.
+So a write issued after that instruction has nothing left to change about its addresses, while it
+can still change the control the instruction computes with. That asymmetry -- values carried
+forward versus an identity carried forward and the value fetched late -- is the whole reason this
+check covers one group and not the other.
+Measured on n150: at the site this check's baseline records, a numeric write in the slot after a
+held reader corrupts and an ordering stall closes it, while a Dest-address-base write and an
+address-mod section write in that same slot leave the result clean -- each with a clean no-hold
+control and a liveness arm (the same write placed before acceptance) that fails, so the negatives
+are real and not dead detectors.
 
 The guard is an ORDERING stall, not a delay:
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);

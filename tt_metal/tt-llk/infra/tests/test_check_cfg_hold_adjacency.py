@@ -94,12 +94,13 @@ def test_window_matches_the_measured_dose_response(wh, fillers, flagged):
 
 
 def test_address_shaping_config_is_not_flagged(wh):
-    """ADDR_MOD_* is out of scope here -- by reachability and evidence, NOT by immunity.
+    """ADDR_MOD_* is out of scope structurally, not by a timing margin.
 
-    The addresses an instruction forms are fixed only when it is accepted out of the issue stage, so
-    a write to this group during a hold does reach it. It is excluded because no Wormhole caller
-    writes these fields next to a held reader, and because the numeric group is the one measured to
-    corrupt on silicon while this one has never been measured. If that changes, so does this test.
+    An instruction carries its formed addresses forward as values when it is accepted out of the
+    issue stage, so a write issued after it has nothing left to change about them -- unlike the
+    numeric control, which it does not carry and which is fetched live later. Measured on n150: an
+    address-mod section write in the earliest slot after a held reader leaves the result clean,
+    with a clean no-hold control and a failing liveness arm.
     """
     r = run(
         wh,
