@@ -8,8 +8,9 @@
 // vector register 11 with TTI_SFPCONFIG. p_sfpu::LCONST_neg1 is that same register, and
 // it is a core-wide constant every other SFPU kernel reads as -1.0. The file's own
 // comment states the constraint ("this clobbers the HW -1.0 constant") but scopes it to
-// sinkhorn's own row-norm body; nothing takes the mask down when sinkhorn returns, and
-// sinkhorn is the only site in the tree that writes register 11 at all.
+// sinkhorn's own row-norm body; nothing takes the mask down when sinkhorn returns.
+// Sinkhorn is the only site in the tree that programs register 11 without restoring it --
+// ckernel_sfpu_softmax_k.h programs it too, and puts -1.0 back before it returns.
 //
 // This driver composes two ops the public compute API exposes side by side, in the order
 // a kernel would call them, and checks only the SECOND one:
@@ -105,7 +106,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_eltwise_unary_sfpu_params_(
         ckernel::sfpu::
             _sinkhorn_4x4_<1 /* NUM_FACES_USED */, 1 /* ITERS */, 0x35890000 /* EPS_BITS */, false /* SINGLE_SUBMAT */, 32 /* VALID_H */, 32 /* VALID_W */>,
-        0 /* input_index */,
+        0 /* dst_index */,
         VectorMode::RC_custom);
 
     // floor on the untouched second tile. ITERATIONS=8 at VectorMode::RC is what
