@@ -58,6 +58,13 @@ void kernel_main() {
     fill_dfb_with_padding_value<padding_value_num_bytes, padded_stick_bytes>(pad, padding_value_as_u32);
     uint32_t padding_value_base_addr = pad.get_base_address();
 
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC below sources the scratchpad from
+    // TL1 directly. Flush the filled stick so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(padding_value_base_addr), static_cast<size_t>(padded_stick_bytes));
+#endif
+
     CoreLocalMem<uint32_t> pad_src(padding_value_base_addr);
     uint32_t output_stick_addr = output_shard_base_addr;
     for (uint32_t h = 0; h < padded_shard_height; h++) {
