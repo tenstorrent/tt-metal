@@ -97,7 +97,7 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
     actual_finals = _sp_carries(final_tt, mesh_device, sp_axis, tensor_parallel_axis)
 
-    expected_entries = [external]
+    expected_entries = [qkv[:, local_sequence - history : local_sequence]]
     for sp_rank in range(1, sp_size):
         predecessor_end = sp_rank * local_sequence
         expected_entries.append(qkv[:, predecessor_end - history : predecessor_end])
@@ -109,6 +109,6 @@ def test_exchange_convolution_carry_preserves_causal_carries(
         assert_equal(expected_final, actual_finals[sp_rank], name=f"halo final rank {sp_rank}")
     assert all(marker.item() == 0 for marker in mismatch_markers), "halo output is not bit-identical across runs"
     print(
-        f"tp_axis={tensor_parallel_axis}: rank0 external carry, {sp_size - 1} neighbor carries, "
+        f"tp_axis={tensor_parallel_axis}: rank0 placeholder, {sp_size - 1} neighbor carries, "
         "and all replicated final carries are exact"
     )

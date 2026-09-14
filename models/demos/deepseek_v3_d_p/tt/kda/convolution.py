@@ -13,11 +13,12 @@ def exchange_convolution_carry(
     *,
     sequence_parallel_axis: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Return partition entry carries and the replicated final stream carry.
+    """Return predecessor carries and the replicated final stream carry.
 
     Both outputs have shape ``[B, history, Q_local + K_local + V_local]`` in
-    row-major DRAM. ``partition_carry`` differs by SP rank: rank zero receives
-    ``initial_carry`` and every later rank receives its predecessor tail.
+    row-major DRAM. ``predecessor_carry`` differs by SP rank: rank zero receives
+    an unused placeholder and every later rank receives its predecessor tail.
+    The convolution kernel reads ``initial_carry`` directly on rank zero.
     ``final_carry`` is the global stream tail replicated across SP. Channels
     remain sharded across TP.
     """
@@ -47,13 +48,7 @@ def exchange_convolution_carry(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    initial_entry = ttnn.slice(
-        initial_carry,
-        (0, 0, 0),
-        (batch, history, channels),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    entry_carries = [initial_entry]
+    predecessor_carries = []
     for rank in range(sp_size - 1):
         tiled_rank_tail = ttnn.slice(
             gathered_tails,
@@ -62,7 +57,7 @@ def exchange_convolution_carry(
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         rank_tail = ttnn.to_layout(tiled_rank_tail, ttnn.ROW_MAJOR_LAYOUT)
-        entry_carries.append(
+        predecessor_carries.append(
             ttnn.slice(
                 rank_tail,
                 (0, 0, 0),
@@ -70,9 +65,13 @@ def exchange_convolution_carry(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         )
-    replicated_entries = ttnn.concat(entry_carries, dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    partition_carry = ttnn.mesh_partition(
-        replicated_entries,
+    # Rank zero never reads this tensor, so reuse rank zero's tail as its
+    # placeholder instead of materializing the ND initial cache in interleaved DRAM.
+    replicated_predecessors = ttnn.concat(
+        [predecessor_carries[0], *predecessor_carries], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    predecessor_carry = ttnn.mesh_partition(
+        replicated_predecessors,
         dim=1,
         cluster_axis=sequence_parallel_axis,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -91,4 +90,4 @@ def exchange_convolution_carry(
         (batch, history, channels),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    return partition_carry, replicated_final
+    return predecessor_carry, replicated_final

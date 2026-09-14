@@ -255,32 +255,33 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.sequence_parallel_size > 1:
-            convolution_history, state_source = exchange_convolution_carry(
+            predecessor_history, state_source = exchange_convolution_carry(
                 qkv_row_major,
                 convolution_state,
                 sequence_parallel_axis=self.sequence_parallel_axis,
             )
         else:
-            convolution_history = convolution_state
             local_tail = ttnn.slice(
                 qkv_row_major,
                 (0, sequence - (config.conv_kernel_size - 1), 0),
                 (qkv_row_major.shape[0], sequence, channels),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            predecessor_history = local_tail
             state_source = local_tail
         # The replacement state is BF16 row-major ND DRAM [B, K - 1, Q_local + K_local + V_local],
         # channel-sharded across TP and replicated across SP.
         q, k, v, new_state = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
-            convolution_history,
-            convolution_history,
+            convolution_state,
+            predecessor_history,
             state_source,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
+            history_sequence_parallel_axis=(self.sequence_parallel_axis if self.sequence_parallel_size > 1 else None),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             state_memory_config=self.convolution_state_memory_config,
         )

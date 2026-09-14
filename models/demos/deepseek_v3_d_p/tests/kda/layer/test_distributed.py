@@ -294,7 +294,11 @@ def test_sp_minimal_group_matches_reference_and_is_deterministic(
         state = layer.allocate_state(batch_size=1)
         with ttnn.manage_config("throw_exception_on_fallback", True):
             output_tt, state = layer.forward(hidden_tt, state)
-        return output_tt, state.recurrent, state.convolution
+        # Generic ttnn.ne cannot allocate a row-major ND output whose physical
+        # shard height is the three-row convolution history. Convert only the
+        # test copy so the device-side determinism marker remains usable.
+        convolution_for_comparison = ttnn.to_memory_config(state.convolution, ttnn.DRAM_MEMORY_CONFIG)
+        return output_tt, state.recurrent, convolution_for_comparison
 
     (output_tt, recurrent_tt, convolution_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tensor_parallel_axis, tp_dim=2, sp_dim=1)
