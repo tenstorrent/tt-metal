@@ -144,8 +144,9 @@ def logical_statements(lines):
     the check would silently pass over it."""
     out, buf, start = [], "", None
     for i, l in enumerate(lines):
-        t = l.strip()
-        if not t or t.startswith(("//", "*", "/*", "#")):
+        # A trailing `// ...` would otherwise hide the `;` and glue this instruction to the next.
+        t = re.sub(r"//.*", "", l).strip()
+        if not t or t.startswith(("*", "/*", "#")):
             if buf:
                 out.append((start, buf))
                 buf, start = "", None
@@ -167,11 +168,12 @@ def scan(path):
     lines = open(path, errors="ignore").read().split("\n")
     # instruction stream: anything that emits a Tensix instruction, guards included -- a guard that
     # is invisible to the stream makes a guarded site look unguarded.
+    # Whole statements, not raw lines: a STALLWAIT split over three lines is the same guard as
+    # the one-line spelling, and matching per line reports the site it protects as unguarded.
     stream = [
         (i, l)
-        for i, l in enumerate(lines)
-        if (INSTR.search(l) or CFG_WRITE.search(l))
-        and not l.strip().startswith(("//", "*", "/*"))
+        for i, l in logical_statements(lines)
+        if INSTR.search(l) or CFG_WRITE.search(l)
     ]
     for a, (ia, la) in enumerate(stream):
         if not (CFG_WRITE.search(la) and NUMERIC_CFG.search(la)):
