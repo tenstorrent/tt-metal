@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+// SPDX-License-Identifier: Apache-2.0
+
 #ifndef TTNOP_ELF32_H
 #define TTNOP_ELF32_H
 
