@@ -259,7 +259,14 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     };
-    const bool share_out_interm_buffer = interm0_data_format == output_data_format;
+    // Sharing storage with the output requires intermed0 to be sized like the output shard, but
+    // packer L1 accumulation adds into intermed0 in place and only lands on the same addresses each
+    // inner-dim block if the buffer holds exactly one block of output tiles, so that the FIFO wraps
+    // once per block. A shard holding more than one batch is a whole multiple of that, so successive
+    // blocks pack into different slots and only every batches-per-core'th block reaches the slot the
+    // final reload reads. Keep the two separate in that case; intermed0 is then sized per block.
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_num_entries == interm0_num_entries);
     DataflowBufferSpec intermed0_dfb_spec{
         .unique_id = INTERMED0_DFB,
         .entry_size = interm0_single_tile_size,

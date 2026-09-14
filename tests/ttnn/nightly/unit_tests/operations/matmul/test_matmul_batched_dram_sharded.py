@@ -121,37 +121,13 @@ def test_matmul_batched_dram_sharded_intermediate_buffer(
     )
 
 
-# Deep inner-dim blocking. Four of these ten cells are the first thing in CI to exercise more than
-# two accumulation passes, and two of them do not currently produce a correct result -- see the
-# xfail reason below. The cells are listed explicitly rather than as a cross product so the two
-# broken ones can be marked individually.
-K_BLOCKING_BROKEN = (
-    "Packer L1 accumulation into an intermed0 buffer aliased onto the output is wrong for more than "
-    "two inner-dim blocks: PCC degrades to ~0.86 at 4 blocks and ~0.79 at 8. Needs all three of "
-    "(intermed0 aliased onto out) + (PACKER_L1_ACC on) + (num_blocks >= 4) -- drop any one and the "
-    "result is correct, which is why no committed test has ever hit it. Reproduces identically on "
-    "the pre-port factory, so it is pre-existing and not a Metal 2.0 porting defect."
-)
-
-K_BLOCKING_CASES = [
-    pytest.param(1, False, id="k_blocks_1-fp32_acc_off"),
-    pytest.param(2, False, id="k_blocks_2-fp32_acc_off"),
-    pytest.param(
-        4, False, id="k_blocks_4-fp32_acc_off", marks=pytest.mark.xfail(reason=K_BLOCKING_BROKEN, strict=True)
-    ),
-    pytest.param(
-        8, False, id="k_blocks_8-fp32_acc_off", marks=pytest.mark.xfail(reason=K_BLOCKING_BROKEN, strict=True)
-    ),
-    # fp32 dest accumulation moves intermed0 to float32, which un-aliases it from the bfloat16
-    # output and takes the broken path out of play -- these accumulate correctly at every depth.
-    pytest.param(1, True, id="k_blocks_1-fp32_acc_on"),
-    pytest.param(2, True, id="k_blocks_2-fp32_acc_on"),
-    pytest.param(4, True, id="k_blocks_4-fp32_acc_on"),
-    pytest.param(8, True, id="k_blocks_8-fp32_acc_on"),
-]
-
-
-@pytest.mark.parametrize("num_k_blocks, fp32_dest_acc_en", K_BLOCKING_CASES)
+# Deep inner-dim blocking. These are the only cells in CI that exercise more than two accumulation
+# passes. Four of them used to be wrong: packer L1 accumulation adds into intermed0 in place, which
+# only lands on the same addresses each block when that buffer holds exactly one block of output
+# tiles, and sharing storage with a multi-batch output shard made it a whole multiple of that. The
+# factory no longer shares the two buffers in that case.
+@pytest.mark.parametrize("num_k_blocks", [1, 2, 4, 8], ids=["k_blocks_1", "k_blocks_2", "k_blocks_4", "k_blocks_8"])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True], ids=["fp32_acc_off", "fp32_acc_on"])
 def test_matmul_batched_dram_sharded_k_blocking(device, num_k_blocks, fp32_dest_acc_en):
     """Deep inner-dim blocking, where the accumulation loop actually accumulates.
 
