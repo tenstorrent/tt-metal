@@ -4,6 +4,7 @@
 
 #include "risc_firmware_initializer.hpp"
 
+#include <cstddef>
 #include <algorithm>
 #include <cstdint>
 #include <chrono>
@@ -413,6 +414,63 @@ void RiscFirmwareInitializer::assert_dram_cores(tt::ChipId device_id) {
         for (const auto& virtual_core : soc_d.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             cluster_.assert_risc_reset_at_core(tt_cxy_pair(device_id, virtual_core), tt::umd::RiscType::BRISC);
         }
+    }
+}
+
+// Bring-up triage for dispatch-engine (DE) tiles that never signal RUN_MSG_INIT -> DONE: read back the words the
+// boot path depends on and log them per engine, so the log alone tells whether the firmware image and the L1[0]
+// startup jump landed, whether hart 0 ran its crt init (fw_shared_globals_ready[0]), how many subordinate harts
+// reached signal_subordinate_completion() (subordinate_sync map bytes), and the DM waypoints on a watcher build.
+void RiscFirmwareInitializer::dump_dispatch_engine_boot_state(
+    tt::ChipId device_id, const std::unordered_set<CoreCoord>& dispatch_cores) {
+    constexpr auto core_type = HalProgrammableCoreType::DISPATCH;
+    const uint64_t mailbox_addr = hal_.get_dev_addr(core_type, HalL1MemAddrType::MAILBOX);
+    const uint32_t mailbox_size = hal_.get_dev_size(core_type, HalL1MemAddrType::MAILBOX);
+    const uint32_t core_type_idx = hal_.get_programmable_core_type_index(core_type);
+    const auto& jit_build_config = hal_.get_jit_build_config(core_type_idx, 0, 0);
+    auto factory = hal_.get_dev_msgs_factory(core_type);
+    for (const CoreCoord& core : dispatch_cores) {
+        const tt_cxy_pair cxy(device_id, core);
+        std::vector<uint32_t> mbox(mailbox_size / sizeof(uint32_t), 0);
+        cluster_.read_core(mbox.data(), mailbox_size, cxy, mailbox_addr);
+        auto view = factory.create_view<dev_msgs::mailboxes_t>(reinterpret_cast<std::byte*>(mbox.data()));
+        uint32_t l1_zero = 0;
+        cluster_.read_core(&l1_zero, sizeof(l1_zero), cxy, jit_build_config.fw_launch_addr);
+        std::vector<uint32_t> fw_head(4, 0);
+        cluster_.read_core(fw_head.data(), fw_head.size() * sizeof(uint32_t), cxy, jit_build_config.fw_base_addr);
+        std::string ready, sync, waypoints;
+        for (uint32_t i = 0; i < view.fw_shared_globals_ready().size(); ++i) {
+            ready += fmt::format("{}{:x}", i ? "," : "", view.fw_shared_globals_ready()[i]);
+        }
+        for (uint32_t i = 0; i < view.subordinate_sync().map().size(); ++i) {
+            sync += fmt::format("{}{:x}", i ? "," : "", view.subordinate_sync().map()[i]);
+        }
+        for (uint32_t i = 0; i < view.watcher().debug_waypoint().size(); ++i) {
+            std::string wp;
+            for (uint32_t b = 0; b < 4; ++b) {
+                const char c = static_cast<char>(view.watcher().debug_waypoint()[i].waypoint()[b]);
+                wp += (c >= 0x20 && c < 0x7f) ? c : '.';
+            }
+            waypoints += fmt::format("{}{}", i ? " " : "", wp);
+        }
+        log_warning(
+            LogDevice,
+            "DE {} boot state: L1[fw_launch 0x{:x}]=0x{:08x} (expected 0x{:08x}) fw[0x{:x}..]={:08x} {:08x} {:08x} {:08x} "
+            "go[0].signal=0x{:x} launch_rd_ptr={} fw_shared_globals_ready=[{}] subordinate_sync=[{}] waypoints=[{}]",
+            core.str(),
+            jit_build_config.fw_launch_addr,
+            l1_zero,
+            jit_build_config.fw_launch_addr_value,
+            jit_build_config.fw_base_addr,
+            fw_head[0],
+            fw_head[1],
+            fw_head[2],
+            fw_head[3],
+            view.go_messages()[0].signal(),
+            view.launch_msg_rd_ptr(),
+            ready,
+            sync,
+            waypoints);
     }
 }
 
@@ -1555,9 +1613,17 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
 
     if (!dispatch_not_done_cores.empty()) {
         log_info(LogDevice, "Waiting for dispatch-engine firmware init complete ({} cores)", dispatch_not_done_cores.size());
+        // Bring-up knob: bound the (otherwise infinite on RTL backends) wait so a dispatch engine that never
+        // reports in fails fast, and dump each engine's mailbox so the boot can be triaged from the log.
+        int de_timeout_ms = timeout_ms;
+        if (const char* env = std::getenv("TT_METAL_DISPATCH_ENGINE_INIT_TIMEOUT_MS"); env != nullptr) {
+            de_timeout_ms = std::atoi(env);
+        }
         try {
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, timeout_ms);
+            llrt::internal_::wait_until_cores_done(
+                device_id, dev_msgs::RUN_MSG_INIT, dispatch_not_done_cores, de_timeout_ms);
         } catch (std::runtime_error&) {
+            dump_dispatch_engine_boot_state(device_id, dispatch_not_done_cores);
             TT_THROW("Device {} init: failed to initialize dispatch-engine FW!", device_id);
         }
         log_info(LogDevice, "Dispatch-engine firmware init complete");

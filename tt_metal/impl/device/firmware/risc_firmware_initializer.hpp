@@ -56,6 +56,7 @@ private:
     void assert_inactive_ethernet_cores(tt::ChipId device_id);
     void assert_dram_cores(tt::ChipId device_id);
     void assert_dispatch_cores(tt::ChipId device_id);
+    void dump_dispatch_engine_boot_state(tt::ChipId device_id, const std::unordered_set<CoreCoord>& dispatch_cores);
 
     CoreCoord virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord);
     void generate_device_bank_to_noc_tables(tt::ChipId device_id);
