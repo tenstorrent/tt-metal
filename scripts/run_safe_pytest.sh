@@ -112,10 +112,16 @@ TT_TIMING_TEST_PATH=""
 # The post-run attribution block below overwrites these from the plugin's log lines.
 TT_TIMING_PRECOMPILE_MODE="off"
 TT_TIMING_PRECOMPILE_REASON="disabled"
+# Seconds the session spent precompiling: collect pass + compile step (the plugin's collect_s +
+# compile_s). 0 when precompile did not run.
 TT_TIMING_PRECOMPILE_S=0
 # Distinct programs the collect pass gathered (includes ones already in the on-disk cache).
 # -1 = not attempted / no collector RESULT line.
 TT_TIMING_PRECOMPILE_PROGRAMS=-1
+# Programs the parallel compile step processed (collected minus the ones already compiled
+# in-process during collect). On-disk JIT cache hits are included -- the runtime does not report
+# hit vs miss -- so precompile_s, not this count, is the cost signal. -1 = unknown.
+TT_TIMING_PRECOMPILE_BUILT=-1
 
 _emit_device_timing() {
     local ec=$?
@@ -129,10 +135,10 @@ _emit_device_timing() {
         # JSON-escape test_path: backslash first, then double-quote.
         esc_path="${TT_TIMING_TEST_PATH//\\/\\\\}"
         esc_path="${esc_path//\"/\\\"}"
-        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d}\n' \
+        printf '{"source":"%s","pid":%d,"started_at_ms":%s,"wait_ms":%d,"run_ms":%d,"test_path":"%s","exit_code":%d,"precompile_mode":"%s","precompile_reason":"%s","precompile_s":%d,"precompile_programs":%d,"precompile_built":%d}\n' \
             "$TT_TIMING_SOURCE" "$$" "$TT_TIMING_ENTRY_MS" "$wait_ms" "$run_ms" "$esc_path" "$ec" \
             "$TT_TIMING_PRECOMPILE_MODE" "$TT_TIMING_PRECOMPILE_REASON" "$TT_TIMING_PRECOMPILE_S" \
-            "$TT_TIMING_PRECOMPILE_PROGRAMS" \
+            "$TT_TIMING_PRECOMPILE_PROGRAMS" "$TT_TIMING_PRECOMPILE_BUILT" \
             >> "$TT_DEVICE_TIMING_LOG" 2>/dev/null || true
     fi
     return $ec
@@ -718,17 +724,24 @@ echo "========================================"
 # The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
-# Precompile attribution: the plugin's RESULT and ROUTE lines live in the session's stdout.
-# Best-effort, for the device-timing record only; a missing line degrades the reason, never the run.
+# Precompile attribution: the plugin's RESULT line (one line of key=value fields) lives in the
+# session's stdout. Best-effort, for the device-timing record only; a missing line degrades the
+# reason, never the run.
 if [[ "$PRECOMPILE" == true ]]; then
     _iline=$(grep -a '^UP_FRONT_COLLECT_RESULT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 || true)
-    _iroute=$(grep -a '^UP_FRONT_INLINE_ROUTE:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 | awk '{print $2}' || true)
-    _ireason=""; _iprogs=""
+    _ireason=""; _iprogs=""; _ibuilt=""; _iroute=""; _icollect_s=""; _icompile_s=""
     [[ "$_iline" =~ reason=([^[:space:]]+) ]] && _ireason="${BASH_REMATCH[1]}"
     [[ "$_iline" =~ programs=([0-9]+) ]] && _iprogs="${BASH_REMATCH[1]}"
+    [[ "$_iline" =~ built=([0-9]+) ]] && _ibuilt="${BASH_REMATCH[1]}"
+    [[ "$_iline" =~ route=([^[:space:]]+) ]] && _iroute="${BASH_REMATCH[1]}"
+    [[ "$_iline" =~ collect_s=([0-9]+(\.[0-9]+)?) ]] && _icollect_s="${BASH_REMATCH[1]}"
+    [[ "$_iline" =~ compile_s=([0-9]+(\.[0-9]+)?) ]] && _icompile_s="${BASH_REMATCH[1]}"
     TT_TIMING_PRECOMPILE_MODE="inline_${_iroute:-local}"
     TT_TIMING_PRECOMPILE_REASON="${_ireason:-no_result_line}"
     TT_TIMING_PRECOMPILE_PROGRAMS="${_iprogs:--1}"
+    TT_TIMING_PRECOMPILE_BUILT="${_ibuilt:--1}"
+    # Integer seconds, rounded, of collect pass + compile step.
+    TT_TIMING_PRECOMPILE_S=$(awk -v a="${_icollect_s:-0}" -v b="${_icompile_s:-0}" 'BEGIN{printf "%d", a+b+0.5}')
     grep -a '^UP_FRONT_INLINE:\|^UP_FRONT_COLLECT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | sed 's/^/PRECOMPILE: /' >&2
 fi
 
