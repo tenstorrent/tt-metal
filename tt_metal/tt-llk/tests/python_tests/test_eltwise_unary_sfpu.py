@@ -457,10 +457,8 @@ _EDGE_KNOWN_DIVERGENCES.update(
 
 
 # The cat-A twin of _cat_b_divergences, for the -0.0 that now arrives at a *registered zero
-# pole* rather than through FLOAT_SPECIALS. The distinction matters: a cat-B probe is gated on
-# specials_safe() as well, and an op reached only through its pole may not be in
-# SPECIALS_READY_OPS at all -- its -0.0 comes from boundary_probes() and is gated on delivery
-# alone.
+# pole* rather than through FLOAT_SPECIALS: a cat-B probe is gated on specials_safe() too,
+# while a pole probe is gated on delivery alone.
 def _signed_zero_pole_divergences():
     return signed_zero_pole_cells(
         input_output_formats([DataFormat.Float16_b, DataFormat.Float32]),
@@ -468,21 +466,12 @@ def _signed_zero_pole_divergences():
     )
 
 
-# Sqrt and Rsqrt are registered here rather than through _cat_b_divergences, and the move is a
-# bug fix, not a tidy-up. Both diverge on a -0.0, and while cat B was that value's only source
-# the two derivations picked the same cells and the marker could be gated on `specials`. Adding
-# the cat-G probe took the -0.0 out of cat B's hands: boundary_probes() now emits it at their
-# registered zero pole whenever delivery allows, gated on nothing else.
-#
-# The gap that opened is _gate_unspecified_nan_sign(). On Wormhole at Float32->Float16_b /
-# dest_acc=Yes it withdraws cat B for Rsqrt -- its NaN result would reach L1 as an infinity
-# whose sign SFPMAD leaves open -- so `specials` went False, the marker was withheld, and the
-# -0.0 went in anyway and failed. Measured: rsqrt(-0.0) comes back as +inf there against the
-# golden's -inf, the same kernel NaN the fp32-dest cell shows, substituted by the pack. Sqrt
-# and Reciprocal survive the same gate on that cell, which is why Rsqrt was the only red.
-#
-# Derived from delivery alone now, so the registration matches where the probe comes from. The
-# assert underneath pins that this did not change which cells are excused.
+# Sqrt and Rsqrt moved here from _cat_b_divergences, and the move is a bug fix. The cat-G probe
+# took the -0.0 out of cat B's hands, and the gap that opened is _gate_unspecified_nan_sign():
+# on Wormhole at Float32->Float16_b / dest_acc=Yes it withdraws cat B for Rsqrt, so `specials`
+# went False and the marker was withheld while the -0.0 went in anyway and failed -- measured
+# there, rsqrt(-0.0) returns +inf against the golden's -inf. The assert underneath pins that
+# the move did not change which cells are excused.
 _EDGE_KNOWN_DIVERGENCES[MathOperation.Sqrt] = _signed_zero_pole_divergences()
 _EDGE_KNOWN_DIVERGENCES[MathOperation.Rsqrt] = _signed_zero_pole_divergences()
 
@@ -492,24 +481,14 @@ assert _signed_zero_pole_divergences() == _cat_b_divergences(negative_zero_deliv
     "before trusting either set"
 )
 
-# RsqrtCompat is the one op the signed-zero pole probe found. Measured on a Blackhole p150 at
-# Float32->Float32, dest_acc=Yes: rsqrt_compat(-0.0) returns +inf where IEEE and the golden
-# give -inf. Recorded on its own rather than folded in with Rsqrt, because the two do *not*
-# agree: Rsqrt(-0.0) returns NaN and this returns a wrongly-signed infinity, so one entry
-# covering both would be a claim about the hardware that is false of one of them.
-#
-# The other five ops with a zero pole that the probe newly reaches all agree with their
-# goldens: ReciprocalCompat(-0.0) = -inf, Log(-0.0) = -inf, LogWithBase, Rdiv and SqrtCustom
-# likewise. That is the headline result of driving it -- the divergence is the exception.
+# RsqrtCompat is the one op the signed-zero pole probe found: on a Blackhole p150 at
+# Float32->Float32 dest_acc=Yes, rsqrt_compat(-0.0) returns +inf against -inf. On its own
+# rather than folded in with Rsqrt, which returns NaN for the same input. The other five ops
+# the probe newly reaches all agree, which is the headline result.
 _EDGE_KNOWN_DIVERGENCES[MathOperation.RsqrtCompat] = _signed_zero_pole_divergences()
 
-# The two whose divergence needs the cat-B probe to be sent: 1/NaN and sqrt_custom(-inf),
-# which only the specials set carries. Their xfails are conditional on specials surviving the
-# NaN-sign gate; see where the marker is applied.
-#
-# Sqrt and Rsqrt were in here and are not any more. Their probe is the -0.0 boundary_probes()
-# emits at a registered pole, so the gate can withdraw cat B without withdrawing the stimulus,
-# and conditioning the marker on `specials` left one cell failing -- see the note above.
+# The two whose divergence needs the cat-B probe to be sent: 1/NaN and sqrt_custom(-inf).
+# Their xfails are conditional on specials surviving the NaN-sign gate.
 _CAT_B_DERIVED_DIVERGENCES = frozenset(
     {MathOperation.Reciprocal, MathOperation.SqrtCustom}
 )
@@ -682,17 +661,9 @@ def test_eltwise_unary_sfpu_edges(
 # Format extremes and the subnormal band (cat F)
 #
 # The registry's widest domain is +/-1000, so the sweeps above jump from ~10 straight to
-# infinity with nothing in the thirty-odd decades between or in the band just above zero. That
-# band is not decoration: the goldens model flush-to-zero carefully (_FTZ_THRESHOLD,
-# _apply_ftz) and stimuli_generator's _format_elem_min_magnitude() exists to keep random draws
-# away from denormals, yet until this nothing drove an input that reached either.
-#
-# Its own variant rather than a flag on test_eltwise_unary_sfpu_edges: one failure class per
-# variant, a saturation failure at the ceiling and a signed-zero failure at a pole being
-# unrelated. Two independent gates, as everywhere -- EXTREMES_READY_OPS says the op's *golden*
-# defines an answer at a format extreme, extremes_safe() says the *pipeline* delivers one, and
-# it is not specials_safe() because the breakers that stop a NaN reaching the SFPU say nothing
-# about a finite datum with an extreme exponent.
+# infinity with nothing in the thirty-odd decades between or in the band just above zero -- yet
+# the goldens model flush-to-zero carefully. Its own variant, for one failure class per
+# variant; extremes_safe() is not specials_safe(), whose breakers are about non-finites.
 # ─────────────────────────────────────────────────────────────────────────────
 
 _EXTREME_SWEEP_OPS = sorted(
@@ -715,12 +686,8 @@ _EXTREME_CELLS = tuple(
 def _extremes_generate_nan(mathop, formats, dest_acc):
     """Does the golden answer NaN at any cat-F probe on this pipeline?
 
-    The probes are finite, so the question is not whether one is a NaN but whether the op
-    *makes* one out of them -- acos and asin at either ceiling, acosh and atanh, log1p at the
-    negative one. No property of the format axis predicts it, so it is evaluated rather than
-    tabulated. UnarySFPUGolden is instantiated directly rather than through
-    get_golden_generator: the --compile-producer stub has no `ops` mapping.
-    """
+    Evaluated rather than tabulated, no property of the format axis predicting it, and
+    instantiated directly because the --compile-producer stub has no `ops` mapping."""
     golden = UnarySFPUGolden()
     golden.data_format = formats.output_format
     golden.dst_format = formats.output_format
@@ -732,20 +699,11 @@ def _extremes_generate_nan(mathop, formats, dest_acc):
     return False
 
 
-# What keeps this sweep's assertions sound where the golden's NaN becomes an observable
-# infinity. On six of the eight cells nan_survives_to_l1() is False, so a NaN the op invents is
-# packed to an infinity and its *sign* becomes the result; the golden canonicalises that NaN
-# positive, so the sweep asserts a sign bit -- and Wormhole's SFPMAD.md says of a generated NaN
-# that the sign "might or might not be set". The edge sweep answers this with
-# _gate_unspecified_nan_sign(); cat F needs the equivalent and cannot simply reuse
-# GENERATED_NAN_SIGN_OPS, whose members are largely ops that do not produce a NaN from a finite
-# extreme at all.
-#
-# The gate is in the test body. What makes the ops below safe today is not that gate -- none is
-# in GENERATED_NAN_SIGN_OPS -- but the cat-B measurement that put them outside it: driving the
-# specials set through every enrolled op on a Wormhole n300 found their generated NaN
-# sign-clear. That is a real dependency of this sweep on another one's measurement and it was
-# nowhere recorded, so it is asserted here.
+# What keeps this sweep sound where the golden's NaN becomes an observable infinity: on six of
+# the eight cells a NaN the op invents is packed to an infinity and its *sign* becomes the
+# result, which the golden canonicalises positive, while Wormhole's SFPMAD.md says that sign
+# "might or might not be set". What makes the ops below safe is the cat-B measurement that
+# found their generated NaN sign-clear on an n300 -- nowhere recorded, so asserted here.
 _EXTREMES_NAN_OPS = frozenset(
     mathop
     for mathop in _EXTREME_SWEEP_OPS
@@ -795,9 +753,8 @@ def test_eltwise_unary_sfpu_extremes(
         )
 
     # See _EXTREMES_NAN_OPS. Inert while no NaN-inventing cat-F op is in
-    # GENERATED_NAN_SIGN_OPS, which is the state the assertion there pins; it exists so that
-    # adding one withdraws the variant instead of turning the sweep red against a sign the ISA
-    # declines to promise.
+    # GENERATED_NAN_SIGN_OPS; it exists so adding one withdraws the variant instead of turning
+    # the sweep red against a sign the ISA declines to promise.
     if (
         TestConfig.CHIP_ARCH == ChipArchitecture.WORMHOLE
         and nan_sign_is_unspecified(
@@ -822,8 +779,7 @@ def test_eltwise_unary_sfpu_extremes(
         FastMode.No,
         input_dimensions,
         # dest_acc decides whether the subnormal probe is sent at all: on the datacopy path
-        # the LREG holds +0.0, and a probe there would blame the kernel for a datum it never
-        # received. See sfpu_domains.subnormal_delivered().
+        # the LREG holds +0.0. See sfpu_domains.subnormal_delivered().
         spec_A=StimuliSpec.custom(
             values=extreme_values(
                 formats.input_format, formats.output_format, dest_acc
@@ -836,39 +792,22 @@ def test_eltwise_unary_sfpu_extremes(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Overflow saturation
-#
-# The cat-F tranche above is deliberately the ops that *cannot* overflow, so its ceiling probe
-# asks only whether the pipeline delivered the datum. This is the other half -- the ops whose
-# *result* leaves the format -- and its own sweep because that failure is invisible to
-# everything else here: the convert from the SFPU's fp32 to a narrower output must saturate to
-# +/-inf, and one that wrapped would keep every cat-B probe green (a non-finite *input* still
-# comes out right) while every large finite input silently returned a tiny wrong value.
-#
-# Every probe is exact in every format this runs on -- powers of two for Square, integers below
-# 256 for the rest, which bfloat16's 8 mantissa bits hold exactly. A decimal near a threshold
-# is the trap: 88.7 is 88.5 in bfloat16, so the test would pin a threshold other than the one
-# it names. The overflowing probes also stay clear of the band between bfloat16's ceiling and
-# fp32's, where a value is finite on one output format and infinite on the other.
-#
-# Underflow is absent: same convert, opposite end, but a result flushed to zero is the
-# subnormal question cat F already covers, and one tensor would give one xfail two causes.
-# ─────────────────────────────────────────────────────────────────────────────
+# Overflow saturation. The cat-F tranche above is deliberately the ops that *cannot*
+# overflow. This is the other half -- the ops whose *result* leaves the format -- and its
+# own sweep because that failure is invisible to everything else here: the convert from
+# fp32 to a narrower output must saturate to +/-inf, and one that wrapped would keep every
+# cat-B probe green while every large finite input returned a tiny wrong value. Every
+# probe is exact in every format this runs on, a decimal near a threshold being the trap
+# (88.7 is 88.5 in bfloat16), and the overflowing ones stay clear of the band between
+# bfloat16's ceiling and fp32's.
 
 
 @dataclass(frozen=True)
 class _SaturationProbe:
     """Magnitudes that straddle an op's overflow point, either side of it.
 
-    *finite* are the controls -- large enough that a wrapped result would be obvious, small
-    enough that the answer is still representable. *overflowing* must saturate. Both are
-    needed: a list with no finite half asserts saturation with nothing to compare it to, and
-    one with no overflowing half asserts ordinary arithmetic.
-
-    *signed* emits the negation of every magnitude as well. Set it where the sign reaches the
-    result -- Square and Cosh are even, Sinh is odd -- since a sign-handling defect at the
-    ceiling would otherwise only be visible on half the domain.
+    Both halves are needed: no finite half asserts saturation with nothing to compare against,
+    no overflowing half asserts ordinary arithmetic. *signed* emits the negations too.
     """
 
     finite: tuple
@@ -914,15 +853,9 @@ _SATURATION_FORMATS = [DataFormat.Float16_b, DataFormat.Float32]
 def _assert_saturation_probes_straddle_the_ceiling():
     """Every op's finite probes must stay under the ceiling and its overflowing ones exceed it.
 
-    Without this the probe list is literals that stay plausible while the thing they straddle
-    moves: a wider ceiling makes every probe finite and the sweep asserts ordinary arithmetic,
-    a narrower one makes every probe overflow and it asserts saturation with no control. Both
-    still pass, which is what earns an assert.
-
-    Classified by the *golden*, so nothing here restates what each op computes -- only where
-    its overflow point is. `math.isfinite` alone will not do it, since the goldens evaluate in
-    fp64 and Square(2**64) is finite there and above every ceiling this runs on.
-    """
+    Without this the list is literals that stay plausible while the thing they straddle moves.
+    Classified by the *golden*; `math.isfinite` alone will not do, the goldens evaluating in
+    fp64 where Square(2**64) is finite and above every ceiling this runs on."""
     golden = UnarySFPUGolden()
     for fmt in _SATURATION_FORMATS:
         golden.data_format = fmt
@@ -982,35 +915,21 @@ def test_eltwise_unary_sfpu_saturation(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Mixed-magnitude block-float blocks
-#
-# The stimulus is sfpu_domains.block_spread_spec(), shared with the ternary suite so the two
-# cannot come to model the same quantization differently; its shape and the decades it walks
-# are argued for there. What the block does is measured here: in Bfp8_b, 0, 1792 and 2816 of
-# 4096 elements flush to zero at 2**-4, 2**-12 and 2**-24 -- 2**-4 leaves the block intact and
-# is the control -- while Bfp4_b takes 2048, 3328 and 3584 and Bfp2_b collapses fifteen of
-# every sixteen at every spread. Those nine counts are pinned by test_sfpu_domains, so this
-# paragraph cannot drift away from the stimulus. Measured against Abs on a Blackhole p150
-# first, with zero mismatching lanes: the host quantizer models a mixed block the way the
-# unpacker does, so a failure here is the op.
-#
-# Two variants, because the questions are independent -- whether an op survives a block with
-# its small elements quantized away, and whether each format quantizes as modelled
-# (op-independent, so one pass-through op is the instrument). On a Bfp4_b or Bfp2_b output this
-# is also the only path that reaches `_bfp_block_aware_compare`'s lattice.
-# ─────────────────────────────────────────────────────────────────────────────
+# Mixed-magnitude block-float blocks. The stimulus is sfpu_domains.block_spread_spec(),
+# shared with the ternary suite; its shape is argued for there. What the block does is
+# measured here: in Bfp8_b, 0, 1792 and 2816 of 4096 elements flush to zero at 2**-4,
+# 2**-12 and 2**-24, while Bfp4_b takes 2048, 3328 and 3584 and Bfp2_b collapses fifteen
+# of every sixteen. Those counts are pinned by test_sfpu_domains. Two variants, the
+# questions being independent -- whether an op survives a block with its small elements
+# quantized away, and whether each format quantizes as modelled. On a Bfp4_b or Bfp2_b
+# output this is also the only path that reaches `_bfp_block_aware_compare`'s lattice.
 
 
 def _block_spread_ops():
     """The broad-profile ops whose registered domain contains the whole spread.
 
-    Derived rather than listed, so an op joins by having a domain wide enough to take it. The
-    ones it leaves out -- Atanh, Acosh, Log, Reciprocal, Rsqrt -- are excluded because the
-    spread would leave their domain, not because of anything about block floats: driving
-    Reciprocal at an element the block flushed to zero would be a pole probe wearing a
-    quantization probe's clothes, and the pole is cat A's job.
-    """
+    Derived rather than listed. The ones left out -- Atanh, Acosh, Log, Reciprocal, Rsqrt --
+    go because the spread would leave their domain, not because of block floats."""
     floor = BLOCK_SPREAD_HIGH * 2.0 ** -max(BLOCK_SPREAD_DECADES)
     selected = []
     for mathop in BROAD_SWEEP_OPS:
@@ -1089,9 +1008,8 @@ def test_eltwise_unary_sfpu_block_spread_formats(
     decades: int,
 ):
     """Each block-float format's shared exponent, against a block that actually spans one."""
-    # Abs is in BROAD_SWEEP_OPS, which the coverage build excludes wholesale, and this variant
-    # is nightly -- the same job that runs the sweep above. Without the guard it fails the
-    # coverage job at build time instead of skipping.
+    # Abs is in BROAD_SWEEP_OPS, which the coverage build excludes wholesale; without the
+    # guard this fails the coverage job at build time instead of skipping.
     _skip_coverage_unsupported(mathop)
 
     eltwise_unary_sfpu(
@@ -1373,16 +1291,10 @@ def test_eltwise_unary_sfpu_int(
     )
 
 
-# Cat C for the unary integer ops. Its own sweep because test_eltwise_unary_sfpu_int above
-# cannot reach these values: its shifts draw from [0, 1e6], eleven binades short of INT32_MAX,
-# and its max/min straddle a scalar with a spread over [0, 2000], twenty short. Until this
-# existed the coverage floor credited all six _INT_UNARY_OPS with cat C and no collected
-# variant delivered it.
-#
-# INT32_MIN is out for every op and is not a gap: sign-magnitude Dst reads 0x80000000 as
-# "negative zero" and cannot round-trip it, which the binary suite records the same way and
-# covers with a dedicated xfail. INT32_MIN + 1 stands in. Every enrolment below is a
-# measurement on a Wormhole n300, not a reading of the kernel.
+# Cat C for the unary integer ops. Its own sweep because test_eltwise_unary_sfpu_int cannot
+# reach these values: its shifts draw from [0, 1e6], eleven binades short of INT32_MAX. INT32_MIN
+# is out for every op and is not a gap -- sign-magnitude Dst cannot round-trip it -- so
+# INT32_MIN + 1 stands in. Every enrolment below is a measurement on a Wormhole n300.
 _INT32_MIN = -(2**31)
 
 _INT_UNARY_EXTREME_OPS = [
@@ -1393,40 +1305,33 @@ _INT_UNARY_EXTREME_OPS = [
     MathOperation.UnaryMinUint32,
 ]
 
-# Driven at the *non-negative* extremes only, for the kernel's reason rather than the golden's.
-# Measured: at the full signed set the right shift diverges on both negative values --
-# `(INT32_MIN + 1) >> 3` comes back unshifted and `-1 >> 3` as 0x90000000, against -268435456
-# and -1 from the two's-complement golden. That is the sign-magnitude Dst limitation
-# SFPU_INT32_SHIFT.md documents and the binary suite already xfails, reached here through a
-# magnitude rather than through INT32_MIN. Restricting the probe keeps the op covered at the
-# extreme it can answer rather than recording a second copy of someone else's divergence.
+# Driven at the *non-negative* extremes only. Measured: at the full signed set the right shift
+# diverges on both negative values -- `(INT32_MIN + 1) >> 3` comes back unshifted and
+# `-1 >> 3` as 0x90000000. That is the sign-magnitude Dst limitation SFPU_INT32_SHIFT.md
+# documents and the binary suite already xfails, so restricting the probe keeps the op covered
+# at the extreme it can answer rather than recording a second copy of it.
 _INT_UNARY_EXTREMES_NON_NEGATIVE = frozenset({MathOperation.RightShift})
 
-# The one op with no answer at its extreme, recorded rather than driven or silently dropped.
-# The exclusion is the *golden's*: with the fixed shift of 3 that sfpu_operations.h emits,
-# `INT32_MAX << 3` does not fit in int32 and torch refuses the conversion, so there is no
-# reference answer and the run errors before reaching the device. The largest input the op can
-# be driven at is (2**31 - 1) >> 3, which is not a format extreme; even at shift amount 1 the
-# ceiling is one binade below INT32_MAX.
+# The one op with no answer at its extreme, and the exclusion is the *golden's*: with the
+# fixed shift of 3 sfpu_operations.h emits, `INT32_MAX << 3` does not fit in int32 and torch
+# refuses the conversion, so the run errors before reaching the device. Even at shift amount 1
+# the reachable ceiling is a binade short of a format extreme.
 _INT_UNARY_EXTREMES_NO_ANSWER = {
     MathOperation.LeftShift: "INT32_MAX << 3 overflows int32 and the golden cannot represent "
     "it, so the extreme has no reference answer; the op's reachable ceiling is INT32_MAX >> 3, "
     "which is not a format extreme",
 }
 
-# The ops already driven at their extremes by a sweep of their own, so an entry here is
-# "covered elsewhere" rather than "not covered". ReluMin's is
-# test_eltwise_unary_sfpu_relu_min_int_threshold, which drives both int32 extremes twice over:
-# _RELU_MIN_INT_THRESHOLDS carries them as the compile-time threshold, and
-# _relu_min_int_stimuli_spec() puts -/+INT32_MAX in the stimulus of every threshold variant.
+# Ops already driven at their extremes by a sweep of their own, so an entry here is "covered
+# elsewhere" rather than "not covered". ReluMin's is
+# test_eltwise_unary_sfpu_relu_min_int_threshold, which drives both int32 extremes twice over.
 _INT_UNARY_EXTREMES_ELSEWHERE = {
     MathOperation.ReluMin: "driven at both int32 extremes by "
     "test_eltwise_unary_sfpu_relu_min_int_threshold, as the threshold and as the stimulus",
 }
 
-# Totality: every op the int sweep drives is either enrolled at its extremes, covered by
-# another sweep, or carries a recorded reason. Without this an op could join _INT_UNARY_OPS
-# and be credited by none of the three.
+# Totality: every op the int sweep drives is enrolled at its extremes, covered by another
+# sweep, or carries a recorded reason.
 _INT_UNARY_EXTREMES_VERDICTS = (
     set(_INT_UNARY_EXTREME_OPS)
     | set(_INT_UNARY_EXTREMES_NO_ANSWER)
@@ -1467,14 +1372,9 @@ def test_eltwise_unary_sfpu_int_extremes(
 ):
     """The int32/uint32 extremes through the unary integer kernels (cat C).
 
-    In the standard profile rather than nightly, matching test_eltwise_unary_sfpu_int, which
-    drives these ops through the same driver at the same one cell: five variants, and splitting
-    the profile would only make the class harder to see than the sweep it belongs to.
-
-    cycle=True rather than custom()'s zero-fill: the list is three to five values long, so a
-    zero-filled face would drive the probe on a handful of lanes and an ordinary zero on the
-    other ~250 -- and for max/min a zero is a below-scalar value the base sweep already covers.
-    """
+    Standard profile, matching test_eltwise_unary_sfpu_int. cycle=True because the list is
+    three to five values long, so a zero-filled face would drive an ordinary zero on ~250
+    lanes."""
     int_format, vals = _int_unary_extreme_values(mathop)
     assert vals, f"{mathop.name} is enrolled for cat C but has no extreme left to drive"
 
