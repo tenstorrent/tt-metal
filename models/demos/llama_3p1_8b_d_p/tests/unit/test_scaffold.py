@@ -87,3 +87,38 @@ def test_bundled_hf_config_matches_the_dim_ssot():
     assert raw["rope_scaling"]["rope_type"] == "llama3"
     assert raw["rope_scaling"]["factor"] == 8.0
     assert raw["rope_theta"] == 500000.0
+
+
+def test_mesh_config_rejects_bad_axes_before_deriving(expect_error):
+    """Axis validation must happen at the API boundary, not surface later as wrong sharding.
+
+    `tp_axis=-1` is the case worth pinning: it indexes `mesh_shape` fine and satisfies the
+    "TP spans the whole axis" check, so without an explicit guard it would construct a config whose
+    SP axis is wrong rather than raising.
+    """
+    from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
+
+    with expect_error(ValueError, "tp_axis"):
+        MeshConfig((4, 8), tp=8, tp_axis=-1)
+    with expect_error(ValueError, "tp_axis"):
+        MeshConfig((4, 8), tp=8, tp_axis=2)
+    with expect_error(ValueError, "mesh_shape must be 2-D"):
+        MeshConfig((4, 8, 2), tp=8)
+    # TP must span the whole axis; a smaller TP would disagree with the mapper.
+    with expect_error(ValueError, "must equal"):
+        MeshConfig((4, 8), tp=4, tp_axis=1)
+
+
+def test_mesh_config_axes_are_complementary():
+    """SP and TP must never resolve to the same axis, on either orientation."""
+    from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
+
+    cfg = MeshConfig((4, 8), tp=8, tp_axis=1)  # the target: TP on cols, SP on rows
+    assert (cfg.tp_axis, cfg.sp_axis) == (1, 0)
+    assert (cfg.tp, cfg.sp) == (8, 4)
+    assert cfg.total_devices == 32
+    assert cfg.shard_size(14336) == 1792 and cfg.shard_size(4096) == 512
+
+    flipped = MeshConfig((8, 4), tp=8, tp_axis=0)  # TP on rows, SP on cols
+    assert (flipped.tp_axis, flipped.sp_axis) == (0, 1)
+    assert (flipped.tp, flipped.sp) == (8, 4)

@@ -17,7 +17,7 @@ safe to name at class-definition time because it is a pure constants class with 
 
 Scaffold status (tt-blaze#4143): the two self-contained methods are live; ``allocate_kv_cache`` and
 ``build_runtime`` raise until their dependencies land. Registration in ``ADAPTER_PATHS`` is
-deliberately NOT part of this change — it lands with tt-blaze#4149, so a half-built model is not reachable
+deliberately NOT part of this change — it lands with #4149, so a half-built model is not reachable
 by name from the runner.
 """
 
@@ -125,7 +125,7 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
         """
         raise NotImplementedError(
             "Llama-3.1-8B prefill runtime lands with tt-blaze#4148 (prefill: Prefill model) and "
-            "tt-blaze#4149 (prefill: Runner integration)."
+            "#4149 (prefill: Runner integration)."
         )
 
     # ------------------------------------------------------------------

@@ -20,7 +20,7 @@ by the adapter's ``hf_model_default`` (no mount, no network), while the **weight
 checkpoint named here. Keeping them separate is what lets ``load_hf_config`` run in the H2D producer
 and in device-free tests.
 
-Scaffold status: the weight-loading body lands with tt-blaze#4149 (runner integration); the path resolution
+Scaffold status: the weight-loading body lands with #4149 (runner integration); the path resolution
 and the dim cross-check are live now so later ops can import this module.
 """
 
@@ -77,7 +77,7 @@ class ModelArgs:
     """Llama-3.1-8B ModelArgs.
 
     Scaffold: carries the resolved weights path. Weight loading (``load_state_dict``) lands with
-    tt-blaze#4149.
+    #4149.
     """
 
     def __init__(self, mesh_device=None, max_seq_len: int = 2048):
@@ -90,7 +90,7 @@ class ModelArgs:
     def load_state_dict(weights_path, convert_to_meta_format: bool = True):
         """Load the bf16 safetensors and convert q/k to Meta format.
 
-        Lands with tt-blaze#4149. See the module docstring for why ``convert_to_meta_format`` must stay on:
+        Lands with #4149. See the module docstring for why ``convert_to_meta_format`` must stay on:
         the frame has to match what blaze decode writes, or migration silently permutes K.
         """
         raise NotImplementedError(
