@@ -420,7 +420,7 @@ constexpr uint32_t to_u32(Dst s) noexcept;
 // 3. Block size — `IterationShape::block_size` semantics
 // =============================================================================
 //
-// Op-struct template-param enums (Approx / Legacy) live in op_params.hpp — they
+// Op-struct template-param enums (Approx) live in op_params.hpp — they
 // are an op-helper concern, not part of the chain mechanics, so they are not defined here.
 
 /// Block size. Configured with `IterationShape::tiles(n).block_size(blk)` or

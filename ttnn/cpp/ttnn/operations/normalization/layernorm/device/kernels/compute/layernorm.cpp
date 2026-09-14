@@ -42,7 +42,6 @@ void kernel_main() {
     constexpr auto do_beta = get_arg(args::do_beta);
     constexpr bool FLOAT32_DTYPE = get_arg(args::fp32_dest_acc_en) == 1;
     constexpr bool FLOAT32_REDUCTION = get_arg(args::float32_reduction) == 1;
-    constexpr bool LEGACY_RSQRT = get_arg(args::legacy_rsqrt) == 1;
     constexpr auto W = get_arg(args::W);
     constexpr auto tile_width = get_arg(args::tile_width);
 
@@ -297,8 +296,8 @@ void kernel_main() {
         tile_regs_acquire();
         add_init(dfb_ex2_id, dfb_eps_id);
         add_tiles(dfb_ex2_id, dfb_eps_id, 0, 0, dst0);
-        rsqrt_tile_init<LEGACY_RSQRT>();
-        rsqrt_tile<LEGACY_RSQRT>(dst0);
+        rsqrt_tile_init();
+        rsqrt_tile(dst0);
         tile_regs_commit();
 
         dfb_ex2.pop_front(1);
