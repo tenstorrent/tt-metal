@@ -215,33 +215,17 @@ inline void tanh_init() {
     if constexpr (APPROXIMATION_MODE) {
         // 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1.0, 1.5, 2.0, 3.0.
         // SGN_RETAIN, so the result is sign(x) * (A*|x| + B) and the kernel stays odd.
+        // Reached only by callers passing fast_and_approx; gelu, softcap and situ_glu call
+        // tanh_init with APPROXIMATION_MODE=false and never load these registers.
         //
-        // Who reaches this branch: only callers passing fast_and_approx. From ttnn that is
-        // ttnn.tanh(fast_and_approximate_mode=True) on MATH, and tanh_tile_pack<true> from
-        // matmul's fused activation on PACK -- the latter is wired but unreachable today,
-        // since the activation string "tanh" maps to param0=false and there is no
-        // "tanh_approx" spelling the way there is for gelu and sigmoid.
-        //
-        // gelu, softcap and situ_glu also call tanh_init, all with APPROXIMATION_MODE=false.
-        // They take the polynomial branch below and never load these registers, so a retune
-        // here cannot reach them.
-        //
-        // Fitted to minimise max bfloat16 ULP error rather than max absolute error. The two
-        // have different optima, so this is not the table an absolute-error fit would give.
-        //
-        // Four properties to preserve if you retune. Segment 0's intercept must stay 0:
-        // SGN_RETAIN would otherwise put a jump across the origin, and ULP error diverges as
-        // x -> 0, since ulp(tanh x) shrinks with x while the intercept does not. The last
-        // segment must stay exactly (0, 1.0), so the kernel saturates to 1.0. No segment may
-        // exceed 1.0 anywhere inside its own range -- unlike the polynomial path below, this
-        // one has no min(result, 1.0f) to fall back on, and a segment that crosses 1.0 before
-        // its breakpoint returns |tanh| > 1 for fp32 DEST values in that window even when no
-        // bfloat16 input lands there. And the segments must stay continuous at the breakpoints
-        // to within the fp16 coefficient grid: exact continuity is not reachable once the
-        // coefficients are rounded, so what has to hold is that no step down at a breakpoint
-        // exceeds a bfloat16 ulp, which is what keeps the result monotone in bfloat16. The
-        // steps this table leaves are +1.2e-4 at 0.5, -1.2e-4 at 1.0, +2.1e-4 at 1.5 and
-        // -1.2e-4 at 2.0, all far below the 2e-3 ulp of a bfloat16 near those values.
+        // Fitted to minimise max bfloat16 ULP error, not max absolute error. To retune, keep:
+        //  - segment 0's intercept at 0, else SGN_RETAIN puts a jump across the origin;
+        //  - the last segment at exactly (0, 1.0), so the kernel saturates to 1.0;
+        //  - every segment <= 1.0 over its own range -- unlike the polynomial path below, this
+        //    one has no min(result, 1.0f) to fall back on;
+        //  - no step down at a breakpoint larger than a bfloat16 ulp, which is what keeps the
+        //    result monotone. This table steps +1.2e-4, -1.2e-4, +2.1e-4 and -1.2e-4 at the
+        //    four interior breakpoints, well under the ~2e-3 ulp there.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.19299316f);
 
