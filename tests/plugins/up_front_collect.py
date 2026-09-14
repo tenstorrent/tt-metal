@@ -114,19 +114,30 @@ class CollectStats:
 _STATS = CollectStats()
 
 
-def _emit_result(status, reason, *, unique, programs, errors, pytest_exit):
-    """Emit the machine-readable warm-pass verdict consumed by run_safe_pytest.sh.
+def _emit_result(status, reason, *, unique, programs, errors, pytest_exit, **extra):
+    """Emit the machine-readable precompile verdict consumed by run_safe_pytest.sh and
+    eval_test_runner.sh: ONE line of space-separated key=value fields, no prose.
 
     Best-effort ATTRIBUTION only. The warm/cold decision is carried by the process exit
     status, which this plugin owns (see pytest_sessionfinish) -- so a missing or malformed
     line here degrades the reported reason, never the decision.
+
+    ``extra`` adds telemetry fields to the line: ``built`` (programs the parallel compile step
+    processed = collected minus the ones already compiled in-process during the collect pass;
+    on-disk JIT cache hits ARE included, the runtime does not report hit vs miss, so
+    ``compile_s`` is the cost signal), ``compile_s`` (compile step, device open to close),
+    ``collect_s`` (collect pass; inline mode only) and ``route`` (farm | local; inline only).
+    Floats are printed with one decimal. Consumers key on field names, so new fields are
+    always appended and never renamed.
     """
-    print(
-        f"UP_FRONT_COLLECT_RESULT: status={status} reason={reason} "
-        f"unique={unique} programs={programs} errors={errors} pytest_exit={int(pytest_exit)} "
-        f"xpass_strict={_STATS.xpass_strict} other_failures={_STATS.other_failures}",
-        flush=True,
+    fields = (
+        f"status={status} reason={reason} unique={unique} programs={programs} errors={errors} "
+        f"pytest_exit={int(pytest_exit)} xpass_strict={_STATS.xpass_strict} "
+        f"other_failures={_STATS.other_failures}"
     )
+    for k, v in extra.items():
+        fields += f" {k}={v:.1f}" if isinstance(v, float) else f" {k}={v}"
+    print(f"UP_FRONT_COLLECT_RESULT: {fields}", flush=True)
 
 
 def _torch_to_ttnn_dtype(torch_dtype):
@@ -561,9 +572,11 @@ def pytest_runtest_logreport(report):
         _STATS.other_failures += 1
 
 
-def _compile_collected(exitstatus):
+def _compile_collected(exitstatus, **extra):
     """Print the collect summary, compile the deduped set in parallel on a freshly opened device,
-    emit the RESULT line. Returns result_status ("ok" | "failed" | "skipped")."""
+    emit the RESULT line (with ``built`` / ``compile_s`` plus any ``extra`` fields the caller
+    passes, e.g. inline mode's ``collect_s`` / ``route``). Returns result_status
+    ("ok" | "failed" | "skipped")."""
     import ttnn
 
     n_unique = ttnn.graph.up_front_num_unique()
@@ -584,18 +597,40 @@ def _compile_collected(exitstatus):
         # and claiming success here would report a warm cache that does not exist. Let pytest's
         # status (e.g. 5 = no tests collected, 2 = collection error) stand.
         print("UP_FRONT_COLLECT: nothing to compile", flush=True)
-        _emit_result("ok", "nothing_to_compile", unique=0, programs=0, errors=0, pytest_exit=exitstatus)
+        _emit_result(
+            "ok",
+            "nothing_to_compile",
+            unique=0,
+            programs=0,
+            errors=0,
+            pytest_exit=exitstatus,
+            built=0,
+            compile_s=0.0,
+            **extra,
+        )
         return "skipped"
     if _NO_COMPILE:
         print(f"UP_FRONT_COLLECT: NO_COMPILE set — collected {n_unique}, skipping compile", flush=True)
-        _emit_result("skipped", "no_compile", unique=n_unique, programs=0, errors=0, pytest_exit=exitstatus)
+        _emit_result(
+            "skipped",
+            "no_compile",
+            unique=n_unique,
+            programs=0,
+            errors=0,
+            pytest_exit=exitstatus,
+            built=0,
+            compile_s=0.0,
+            **extra,
+        )
         return "skipped"
 
     device = None
     n_prog = 0
     n_err = 0
+    n_built = 0
     result_status = "failed"
     result_reason = "exception"
+    t_compile0 = _time.monotonic()
     try:
         device = ttnn.CreateDevice(device_id=_DEVICE_ID)
         try:
@@ -641,6 +676,9 @@ def _compile_collected(exitstatus):
         programs=n_prog,
         errors=n_err,
         pytest_exit=exitstatus,
+        built=n_built,
+        compile_s=_time.monotonic() - t_compile0,
+        **extra,
     )
     return result_status
 
@@ -684,21 +722,21 @@ def pytest_runtestloop(session):
     # compile call, so we raise it only around this step and pass 2's on-demand compiles stay local.
     # The server is worth its per-kernel round trips only above a program-count threshold
     # (UP_FRONT_INLINE_FARM_MIN_PROGRAMS, default 10; measured +2.5s at 1 program, -3.4s at 24),
-    # so a small session compiles locally even when a server is configured. The route taken is
-    # printed for the harness's device-timing record.
+    # so a small session compiles locally even when a server is configured. The route taken and
+    # the collect-pass seconds go into the RESULT line for the harness's device-timing record.
     import ttnn
 
     _n_unique = ttnn.graph.up_front_num_unique()
     _farm_min = int(os.environ.get("UP_FRONT_INLINE_FARM_MIN_PROGRAMS", "10"))
     _farm = os.environ.get("UP_FRONT_INLINE_JIT_SERVER") == "1" and _n_unique >= _farm_min
     print(
-        f"UP_FRONT_INLINE_ROUTE: {'farm' if _farm else 'local'} programs={_n_unique} farm_min={_farm_min}",
+        f"UP_FRONT_INLINE: compile route {'farm' if _farm else 'local'} (programs={_n_unique}, farm_min={_farm_min})",
         flush=True,
     )
     if _farm:
         os.environ["TT_METAL_JIT_SERVER_ENABLE"] = "1"
     try:
-        _compile_collected(0)
+        _compile_collected(0, collect_s=t1 - t0, route="farm" if _farm else "local")
     finally:
         if _farm:
             os.environ.pop("TT_METAL_JIT_SERVER_ENABLE", None)
