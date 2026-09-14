@@ -110,7 +110,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -123,7 +124,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_v,
         std::nullopt,        // attn_mask
         page_table_tensor,   // page_table
-        std::nullopt,        // attention_sink
+        attention_sink,
         /*is_causal=*/true,  // Always causal for chunked version
         scale,
         std::nullopt,  // sliding_window_size (not supported yet)
@@ -151,7 +152,8 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    const std::optional<ttnn::Tensor>& attention_sink) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -164,7 +166,7 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         input_tensor_v,
         std::nullopt,       // attn_mask
         page_table_tensor,  // page_table
-        std::nullopt,       // attention_sink
+        attention_sink,
         /*is_causal=*/true,
         scale,
         std::nullopt,  // sliding_window_size

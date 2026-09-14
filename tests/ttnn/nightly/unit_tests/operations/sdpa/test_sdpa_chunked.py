@@ -378,6 +378,104 @@ def test_chunked_sdpa_legacy_scalar_chunk_start_idx_program_cache_key(device):
         device.enable_program_cache()
 
 
+@pytest.mark.parametrize("flexible", [False, True], ids=["scalar", "device-offset"])
+def test_chunked_sdpa_attention_sink(device, flexible):
+    """Both public chunk-offset overloads preserve the learned sink semantic."""
+
+    torch.manual_seed(0)
+    b, nh, nkv, s, d = 1, 4, 2, 256, 64
+    chunk_size = 128
+    q = torch.randn(b, nh, s, d, dtype=torch.bfloat16).float()
+    k = torch.randn(b, nkv, s, d, dtype=torch.bfloat16).float()
+    v = torch.randn(b, nkv, s, d, dtype=torch.bfloat16).float()
+    sinks = torch.full((1, nh, 1, 1), 3.0, dtype=torch.bfloat16)
+    k_repeated = k.repeat_interleave(nh // nkv, dim=1)
+    v_repeated = v.repeat_interleave(nh // nkv, dim=1)
+
+    tt_k = ttnn.from_torch(
+        k.reshape(b, nkv, 2, chunk_size, d).transpose(1, 2).reshape(2, nkv, chunk_size, d),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_v = ttnn.from_torch(
+        v.reshape(b, nkv, 2, chunk_size, d).transpose(1, 2).reshape(2, nkv, chunk_size, d),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    tt_page_table = ttnn.from_torch(
+        torch.tensor([[0, 1, 0, 0, 0, 0, 0, 0]], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+    )
+    tt_sinks = ttnn.from_torch(
+        sinks,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=128,
+        exp_approx_mode=False,
+    )
+
+    scale = d**-0.5
+    key_positions = torch.arange(s)
+    for start in (0, chunk_size):
+        q_chunk = q[:, :, start : start + chunk_size]
+        scores = torch.matmul(q_chunk, k_repeated.transpose(-2, -1)) * scale
+        query_positions = start + torch.arange(chunk_size)
+        scores = scores.masked_fill(
+            key_positions.reshape(1, 1, 1, s)
+            > query_positions.reshape(1, 1, chunk_size, 1),
+            float("-inf"),
+        )
+        sink_logits = sinks.float().expand(b, nh, chunk_size, 1) * scale
+        probabilities = torch.softmax(torch.cat((scores, sink_logits), dim=-1), dim=-1)
+        reference = torch.matmul(probabilities[..., :s], v_repeated)
+
+        tt_q = ttnn.from_torch(
+            q_chunk,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        if flexible:
+            actual = ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                tt_page_table,
+                chunk_start_idx_tensor=ttnn.from_torch(
+                    torch.tensor([start], dtype=torch.int32),
+                    dtype=ttnn.int32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                ),
+                attention_sink=tt_sinks,
+                scale=scale,
+                program_config=program_config,
+            )
+        else:
+            actual = ttnn.transformer.chunked_scaled_dot_product_attention(
+                tt_q,
+                tt_k,
+                tt_v,
+                tt_page_table,
+                start,
+                attention_sink=tt_sinks,
+                scale=scale,
+                program_config=program_config,
+            )
+        actual = ttnn.to_torch(actual)
+        passed, pcc = comp_pcc(reference, actual, 0.998)
+        assert passed, pcc
+
+
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("q_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("k_dtype", [ttnn.bfloat8_b])
