@@ -727,9 +727,8 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    const auto umbrella = fs::path(env_.root_) / jit_build::PCH_UMBRELLA;
     return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
-           !jit_build::dependencies_up_to_date(out_dir, obj, fs::exists(umbrella) ? umbrella.string() : "");
+           !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(

@@ -121,17 +121,19 @@ TEST_F(JitBuildDependencyTests, ExplicitPchDependency) {
 
     tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path);
     EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
-    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
-
-    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
-    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    // Existing records without the umbrella remain reusable when it changes.
     std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n";
-    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
 
     tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
-    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+    std::ofstream{umbrella} << "#include <array>\n#include <tuple>\n#include <utility>\n";
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
+
+    tt::jit_build::write_dependency_hashes(out_dir_.string(), obj, hash_path, umbrella);
+    EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
     std::filesystem::remove(umbrella);
-    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj, umbrella));
+    EXPECT_FALSE(tt::jit_build::dependencies_up_to_date(out_dir_.string(), obj));
 }
 
 TEST_F(JitBuildDependencyTests, DependencyHashesNotFound) {

@@ -156,8 +156,8 @@ void build_failure(
         fmt::format("{} {} failure -- cmd: {} (log file {} not found)", target, op, cmd, log_file));
 }
 
-bool need_compile(const std::string& out_dir, const std::string& obj, const std::string& umbrella) {
-    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj, umbrella);
+bool need_compile(const std::string& out_dir, const std::string& obj) {
+    return !fs::exists(out_dir + obj) || !tt::jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 bool need_link(const std::string& out_dir, const std::string& target_name) {
@@ -327,11 +327,9 @@ void build_target(
     }
 
     const std::string source_root = find_target_pch_root(target, out_dir);
-    const std::string umbrella =
-        source_root.empty() ? "" : (fs::path(source_root) / tt::jit_build::PCH_UMBRELLA).string();
     std::vector<bool> compiled(num_objs, false);
     for (size_t i = 0; i < num_objs; ++i) {
-        if (need_compile(out_dir, target.objs[i], fs::path(target.srcs[i]).extension() == ".ii" ? "" : umbrella)) {
+        if (need_compile(out_dir, target.objs[i])) {
             compiled[i] = true;
         }
     }

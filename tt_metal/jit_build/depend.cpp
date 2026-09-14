@@ -237,12 +237,10 @@ void write_dependency_hashes(
     }
 }
 
-bool dependencies_up_to_date(std::istream& hash_file, const std::string& required_dependency) {
+bool dependencies_up_to_date(std::istream& hash_file) {
     size_t count = 0;
-    bool found_required = required_dependency.empty();
     std::filesystem::path dep;
     while (hash_file >> dep) {
-        found_required |= dep == required_dependency;
         uint64_t recorded_hash{};
         hash_file >> recorded_hash;
         if (hash_file.fail()) {
@@ -275,11 +273,10 @@ bool dependencies_up_to_date(std::istream& hash_file, const std::string& require
         return false;
     }
     // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
-    return count > 0 && found_required;
+    return count > 0;
 }
 
-bool dependencies_up_to_date(
-    const std::string& out_dir, const std::string& obj, const std::string& required_dependency) {
+bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj) {
     auto t0 = std::chrono::steady_clock::now();
     std::filesystem::path hash_path = std::filesystem::path(out_dir) / (obj + ".dephash");
     std::ifstream hash_file(hash_path);
@@ -288,8 +285,7 @@ bool dependencies_up_to_date(
         return false;
     }
 
-    auto up_to_date = dependencies_up_to_date(
-        hash_file, required_dependency.empty() ? "" : (std::filesystem::path(out_dir) / required_dependency).string());
+    auto up_to_date = dependencies_up_to_date(hash_file);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
