@@ -21,7 +21,7 @@
 # Publish:          tt-model push    build/gemma-4-12b-it-p150 --public --publish
 
 schema: "5.1"
-repo: stisi/gemma-4-12B-it-p150
+repo: stisiTT/gemma-4-12b-it-p150
 name: gemma-4-12b-it-p150
 kind: vllm-plugin
 arch: blackhole
@@ -131,12 +131,19 @@ card:
   quickstart: |
     ### Serve
     ```bash
-    tt-model pull  stisi/gemma-4-12B-it-p150 --with-weights
-    tt-model serve stisi/gemma-4-12B-it-p150            # default profile: p150-eval
-    tt-model serve stisi/gemma-4-12B-it-p150 --profile p150-smoke   # 4k smoke
+    tt-model pull  stisiTT/gemma-4-12b-it-p150 --with-weights
+    tt-model serve stisiTT/gemma-4-12b-it-p150            # default profile: p150-eval
+    tt-model serve stisiTT/gemma-4-12b-it-p150 --profile p150-smoke   # 4k smoke
     ```
     First serve compiles kernels for your device (several minutes) and is ready
     when it logs `Application startup complete`. The endpoint is OpenAI-compatible.
+
+    ### Shutting down
+    ```bash
+    tt-model stop stisiTT/gemma-4-12b-it-p150
+    ```
+    This releases the device cleanly. Avoid `docker kill` / `docker rm -f`: a hard kill leaves the
+    card unable to load a model until the **host is rebooted**, and a card reset is not enough.
 
     ### Note on this SKU
     This bundle targets one Blackhole P150 die (1x1 mesh), fabric disabled. On a
