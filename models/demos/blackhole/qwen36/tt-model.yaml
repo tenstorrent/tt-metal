@@ -2,9 +2,8 @@
 # serving WITH the DFlash2 block-diffusion speculative-decode drafter (models/demos/blackhole/qwen36/tt/dflash2*.py,
 # qwen36_vllm_dflash.py) through the Tenstorrent vLLM plugin's block-output contracts. Built for small batches
 # (1-8 users): profiles `batch8-dflash2` (default: eight speculative slots in two verify buckets -- K=7 at 1-4 live
-# users, K=3 at 5-8, switched at runtime with no recapture; ragged widths), `single-user-dflash2` (one slot, fastest
-# for exactly one request) and `batch32` (plain decode fallback). For 8+ users with full sampling use
-# changh95/qwen3.8-27b-p300x2.
+# users, K=3 at 5-8, switched at runtime with no recapture; ragged widths) and `single-user-dflash2` (one slot, fastest
+# for exactly one request). For 8+ users or sampled output use changh95/qwen3.8-27b-p300x2 (plain decode, 32 users).
 #
 #   tt-model package --container models/demos/blackhole/qwen36/tt-model.yaml --out <builds>
 #   tt-model serve   <builds>/qwen3.8-27b-dflash2-p300x2/tt_kernel_manifest.json
@@ -71,7 +70,7 @@ serve:
     # DFlash2 speculative decoding (incoai/Qwen3.8-27B-DFlash2, block 8 -> 7 drafts per verify, lossless greedy).
     # The drafter is a second checkpoint the single `weights` pointer cannot carry: it is resolved from the HF cache
     # mounted at /hf, so run `hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4`
-    # once before `tt-model serve` (quickstart below). QWEN36_DRAFTER=mtp turns speculation off (batch32 profile).
+    # once before `tt-model serve` (quickstart below). QWEN36_DRAFTER=mtp turns speculation off (plain decode; not exposed as a profile here).
     DFLASH_WEIGHTS: incoai/Qwen3.8-27B-DFlash2@dedf8df68adfb1afeaf7b7480c0a0243108177b4
     QWEN36_DFLASH_BLOCK: "8"
     QWEN36_DFLASH_MAX_PROMPT: "2048"     # prompts up to this take the single masked-bucket prefill; longer ones the
@@ -104,11 +103,6 @@ serve_profiles:
     args:
       - [--max-num-batched-tokens, "262144"]
       - --no-async-scheduling           # the plugin's block-output contract is synchronous
-  - name: batch32
-    description: Plain decode, up to 32 concurrent users (no speculation).
-    max_num_seqs: 32
-    env:
-      QWEN36_DRAFTER: mtp
 default_profile: batch8-dflash2
 
 verify:
@@ -129,104 +123,59 @@ verify:
 
 card:
   description: |
-    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (2× P300 = 4 Blackhole chips, 4-way tensor parallel) through vLLM WITH lossless DFlash2 speculative decoding (drafter [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)) — built for small batches, 1 to 8 concurrent users: 54 t/s/u at one user vs 32 plain (1.7×; 62 on the single-user profile), 177 t/s at four users vs 103 plain (1.7×), 267 t/s at eight users vs 188 plain (1.4×), with a fused speculative-verify kernel and a verify geometry that switches at runtime with the number of live requests. For more users or full sampling support, refer to [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) (plain decode, up to 32 users).
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (4 Blackhole chips, 4-way tensor parallel) through vLLM with lossless DFlash2 speculative decoding: 1.4 to 1.9× plain decode for 1 to 8 concurrent users. For more users or sampled output use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
   quickstart: |
-    ### Drafter weights (one extra download, before the first `serve`)
+    ### Drafter weights (once, before the first `serve`)
 
     ```bash
     hf download incoai/Qwen3.8-27B-DFlash2 --revision dedf8df68adfb1afeaf7b7480c0a0243108177b4
     ```
 
-    ### How to query
+    ### Query
 
-    The server speaks the OpenAI API on port 20000 (model id `Qwen/Qwen3.8-27B`):
+    OpenAI-compatible API on port 20000, model id `Qwen/Qwen3.8-27B`:
 
     ```bash
-    curl -s http://localhost:20000/v1/chat/completions \
-      -H 'Content-Type: application/json' \
+    curl -s http://localhost:20000/v1/chat/completions -H 'Content-Type: application/json' \
       -d '{"model": "Qwen/Qwen3.8-27B", "messages": [{"role": "user", "content": "Write a Python function that merges two sorted lists."}], "max_tokens": 512}'
     ```
 
-    Streaming, tool calls (`qwen3_coder` parser) and reasoning content (`qwen3` parser) work as in vLLM.
+    ### Profiles
 
-    ### At a glance
-
-    * Model: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) at revision `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`; drafter [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2) (block 8 → 7 drafts verified per step).
-    * Hardware: P300x2, mesh `P150x4`, tensor parallel over 4 chips.
-    * Profiles: `batch8-dflash2` (default) — eight speculative slots; the verify runs 7 drafts per step while up to 4 requests are live and 3 drafts per step at 5 to 8, switching geometry at runtime without a recapture and without changing any output; `single-user-dflash2` — one slot, fastest when exactly one request is in flight (62 t/s/u vs 54 on the default profile); `batch32` — plain decode fallback, same as [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2). Pick one with `tt-model serve --profile <name> …`.
-    * Batch range: 1 to 8 concurrent users on the default profile (one speculative slot per request); above eight users use the plain package.
-    * Output: lossless greedy — the speculative loop reproduces the target model's own greedy trajectory, so `temperature`/`top_p` only affect the first token (`logprobs`, structured outputs, `min_p`/`logit_bias` and multimodal prompts are rejected or neutralised on the speculative profiles). Use `batch32` or the plain package when sampling must be honoured.
-    * Knobs (container env): `QWEN36_DFLASH_SERVE_BLOCK` (32) tokens reserved per vLLM step; `QWEN36_DFLASH_MAX_PROMPT` (2048) longest prompt on the one-shot prefill; `QWEN36_DRAFTER=mtp` speculation off.
-    * Source: tt-metal branch `qwen36-dflash-batch` + vllm-tt-plugin `dflash2-spec-decode`; packaged with tt-model-manager.
+    * `batch8-dflash2` (default): up to 8 concurrent requests. 7 drafts per step while up to 4 are live, 3 at 5 to 8; the switch happens at runtime and does not change any output.
+    * `single-user-dflash2`: one request at a time; fastest for a single user.
+    * Output is the target model's greedy trajectory: `temperature`/`top_p` affect only the first token; `logprobs`, structured outputs and images are not supported. For sampling or more than 8 users use [changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2).
 
     ## Benchmarks
 
-    * Box: one P300x2 (4 Blackhole chips, TP=4). Client: tt-inference-server's `vllm bench serve` (random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming), measured 2026-09-13 to 15. Plain-decode figures are the same box with speculation off ([changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) has plain decode up to 32 users).
-    * `t/s` = aggregate output tokens per second; `t/s/u` = tokens per second per user (= OSL / mean end-to-end latency); TTFT = mean time to first token (for speculative profiles, the first streamed block).
-    * Random-token prompts are the hardest case for a drafter (2 to 2.5 of 7 drafts accepted per step). On real chat and code the speculative profiles gain more: ~45 t/s/u on prose and ~90 t/s/u on code at one user vs 33 plain.
+    One P300x2 (4 Blackhole chips, TP=4); tt-inference-server's `vllm bench serve` with random prompts of exactly ISL tokens, `ignore_eos`, greedy, streaming; measured 2026-09-13 to 15. `t/s` = aggregate output tokens per second, `(t/s/u)` = per user; plain = the same box without speculation. Random prompts are the drafter's hardest case: real chat and code accept more drafts (about 45 and 90 t/s/u at one user vs 33 plain).
 
-    ### `batch8-dflash2` (default) by concurrent users (t/s, with t/s/u in parentheses)
+    ### `batch8-dflash2` (default), t/s (t/s/u)
 
-    | ISL / OSL | 1 user | 2 | 4 | 8 | plain 1 / 4 / 8 users (t/s) |
+    | ISL / OSL | 1 user | 2 | 4 | 8 | plain 1 / 8 users |
     |---|---|---|---|---|---|
-    | 128 / 128 | 54 (54.1) | 99 (51.7) | 177 (46.6) | 267 (34.9) | 32 / 103 / 188 |
-    | 2,048 / 128 | 51 (51.4) | 87 (44.8) | 131 (34.7) | 194 (24.9) | 31 / 90 / 151 |
-    | 8,192 / 128 | 36 (35.8) | 56 (28.0) | 69 (17.7) | 81 (10.4) | 26 / 58 / 79 |
-    | 128 / 1,024 | 51 (51.3) | 73 (50.8) | 139 (42.7) | 259 (42.3) | 33 / 119 / 230 |
-    | 2,048 / 1,024 | 47 (47.4) | 89 (46.5) | 163 (42.1) | 228 (33.4) | 32 / 116 / 219 |
-    | 8,192 / 1,024 | 35 (34.8) | 63 (33.3) | 126 (36.4) | 198 (30.1) | 31 / 104 / 183 |
+    | 128 / 128 | 54 (54.1) | 99 (51.7) | 177 (46.6) | 267 (34.9) | 32 / 188 |
+    | 2,048 / 128 | 51 (51.4) | 87 (44.8) | 131 (34.7) | 194 (24.9) | 31 / 151 |
+    | 8,192 / 128 | 36 (35.8) | 56 (28.0) | 69 (17.7) | 81 (10.4) | 26 / 79 |
+    | 128 / 1,024 | 51 (51.3) | 73 (50.8) | 139 (42.7) | 259 (42.3) | 33 / 230 |
+    | 2,048 / 1,024 | 47 (47.4) | 89 (46.5) | 163 (42.1) | 228 (33.4) | 32 / 219 |
+    | 8,192 / 1,024 | 35 (34.8) | 63 (33.3) | 126 (36.4) | 198 (30.1) | 31 / 183 |
 
-    * Every request has its own speculative slot up to 8 users. The verify runs in one of two geometries and switches at runtime, losslessly: 7 drafts per step while up to 4 requests are live, 3 drafts per step at 5 to 8 (the 32-row verify tile bounds users × drafts).
+    ### `single-user-dflash2`, one user, t/s/u
 
-    ### `single-user-dflash2` vs plain, one user (t/s/u, TTFT ms in brackets)
+    | OSL | ISL 128 | ISL 1,024 | ISL 2,048 | ISL 4,096 | ISL 8,192 | ISL 16,384 |
+    |---|---|---|---|---|---|---|
+    | 128 | 62.1 | 63.8 | 54.8 | 45.5 | 39.4 | 27.3 |
+    | 1,024 | 82.0 | 77.7 | 52.0 | 45.6 | 40.4 | 48.9 |
+    | plain, OSL 128 | 32.3 | 31.0 | 30.8 | 28.8 | 25.8 | 21.1 |
 
-    | ISL / OSL | single-user-dflash2 | plain |
-    |---|---|---|
-    | 128 / 128 | 62.1 [133] | 32.3 [95] |
-    | 1,024 / 128 | 63.8 [184] | 31.0 [182] |
-    | 2,048 / 128 | 54.8 [301] | 30.8 [256] |
-    | 4,096 / 128 | 45.5 [593] | 28.8 [511] |
-    | 8,192 / 128 | 39.4 [1,193] | 25.8 [1,017] |
-    | 16,384 / 128 | 27.3 [2,452] | 21.1 [2,095] |
-    | 128 / 1,024 | 82.0 [135] | 32.6 [97] |
-    | 1,024 / 1,024 | 77.7 [181] | 32.3 [185] |
-    | 2,048 / 1,024 | 52.0 [297] | 32.3 [271] |
-    | 4,096 / 1,024 | 45.6 [596] | 31.9 [514] |
-    | 8,192 / 1,024 | 40.4 [1,207] | 31.2 [1,013] |
-    | 16,384 / 1,024 | 48.9 [2,459] | 30.1 [2,073] |
+    ### Long prompts (`batch8-dflash2`, tt-inference-server `--workflow benchmarks`, OSL 128), t/s (t/s/u)
 
-    ### tt-inference-server `--workflow benchmarks`
-
-    `single-user-dflash2`, one user:
-
-    | ISL | OSL | TTFT ms | TPOT ms | t/s/u | plain t/s/u |
-    |---|---|---|---|---|---|
-    | 128 | 128 | 134 | 15.0 | 62.7 | 32.3 |
-    | 1,024 | 128 | 183 | 14.2 | 64.3 | 31.3 |
-    | 2,048 | 128 | 304 | 16.0 | 54.9 | 30.7 |
-    | 4,096 | 128 | 594 | 17.5 | 45.4 | 28.8 |
-    | 8,192 | 128 | 1,187 | 16.1 | 39.6 | 25.9 |
-    | 16,384 | 128 | 2,460 | 17.0 | 27.7 | 21.2 |
-    | 32,768 | 128 | 5,073 | 21.2 | 16.5 | 15.1 |
-    | 65,536 | 128 | 11,163 | 20.8 | 9.3 | 9.2 |
-    | 131,072 | 128 | 26,055 | 12.1 | 4.6 | 4.6 |
-    | 128 | 1024 | 135 | 12.1 | 82.1 | 32.6 |
-    | 8,192 | 1024 | 1,197 | 17.9 | 52.5 | 31.1 |
-    | 10,000 | 1024 | 1,515 | 14.3 | 63.6 | 30.9 |
-
-    `batch8-dflash2` (default) at 1 and 8 users (t/s, with t/s/u in parentheses; the 128k row ran at 4 users, the most the KV pool seats at that length):
-
-    | ISL | OSL | 1 user | 8 users | plain 1 user (t/s) |
-    |---|---|---|---|---|
-    | 128 | 128 | 55.9 (55.9) | 271.7 (34.9) | 32.3 |
-    | 1,024 | 128 | 53.6 (53.6) | 244.3 (31.4) | 31.3 |
-    | 2,048 | 128 | 51.2 (51.2) | 193.8 (24.9) | 30.7 |
-    | 4,096 | 128 | 45.8 (45.8) | 135.1 (17.1) | 28.8 |
-    | 8,192 | 128 | 34.8 (34.8) | 80.6 (10.4) | 25.9 |
-    | 16,384 | 128 | 26.1 (26.1) | 45.4 (5.7) | 21.2 |
-    | 32,768 | 128 | 16.3 (16.3) | 23.4 (2.9) | 15.1 |
-    | 65,536 | 128 | 9.7 (9.7) | 9.9 (1.3) | 9.2 |
-    | 131,072 | 128 | 4.4 (4.4) | 4.7 (1.2) at 4 users | 4.6 |
-    | 128 | 1024 | 51.4 (51.4) | 296.6 (41.7) | 32.6 |
-    | 8,192 | 1024 | 57.5 (57.5) | 198.4 (30.1) | 31.1 |
-    | 10,000 | 1024 | 58.5 (58.5) | 186.1 (26.4) | 30.9 |
+    | ISL | 1 user | 8 users | plain 1 user |
+    |---|---|---|---|
+    | 1,024 | 53.6 (53.6) | 244.3 (31.4) | 31.3 |
+    | 4,096 | 45.8 (45.8) | 135.1 (17.1) | 28.8 |
+    | 16,384 | 26.1 (26.1) | 45.4 (5.7) | 21.2 |
+    | 32,768 | 16.3 (16.3) | 23.4 (2.9) | 15.1 |
+    | 65,536 | 9.7 (9.7) | 9.9 (1.3) | 9.2 |
+    | 131,072 | 4.4 (4.4) | 4.7 (1.2), 4 users (KV-pool limit) | 4.6 |
