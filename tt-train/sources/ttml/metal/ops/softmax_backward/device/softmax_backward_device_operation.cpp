@@ -4,6 +4,7 @@
 
 #include "softmax_backward_device_operation.hpp"
 
+#include "metal/common/tensor_validation.hpp"
 #include "tt_stl/assert.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -20,14 +21,12 @@ void SoftmaxBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         softmax_output.logical_shape() == upstream_grad.logical_shape(),
         "Softmax output and upstream gradient tensors must have the same shape");
-    TT_FATAL(
-        softmax_output.dtype() == DataType::BFLOAT16 || softmax_output.dtype() == DataType::FLOAT32,
-        "Softmax backward only supports BFLOAT16 and FLOAT32");
+    check_device_tensor(softmax_output, "SoftmaxBackward", "softmax_output", {DataType::BFLOAT16, DataType::FLOAT32});
+    check_device_tensor(upstream_grad, "SoftmaxBackward", "upstream_grad", {DataType::BFLOAT16, DataType::FLOAT32});
+    check_same_device(upstream_grad, softmax_output, "SoftmaxBackward", "upstream_grad", "softmax_output");
     TT_FATAL(
         upstream_grad.dtype() == softmax_output.dtype(),
         "Softmax output and upstream gradient must have the same dtype");
-    TT_FATAL(softmax_output.layout() == Layout::TILE, "Softmax backward requires TILE layout");
-    TT_FATAL(upstream_grad.layout() == Layout::TILE, "Softmax backward requires TILE layout");
     const auto rank = softmax_output.logical_shape().rank();
     TT_FATAL(
         attributes.dim == rank - 1,
