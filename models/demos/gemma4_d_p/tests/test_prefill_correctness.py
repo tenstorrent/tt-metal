@@ -164,18 +164,27 @@ def _run_device_prefill(mesh_device, tokens, *, traced):
     model.set_prefill_rope_positions(ttnn.to_device(positions, device=mesh_device))
     model._ring_metadata_external = traced
 
+    def stage_trace_state():
+        model.ccl_manager.set_ring_metadata(slot_idx=0, kv_actual_global=0)
+        for semaphore in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+            ttnn.reset_global_semaphore_value(semaphore, 0)
+
     def forward():
         embeds = model.transform_and_embed_prefill_inputs_device(device_tokens)
         return model(hidden_states=embeds, chunk_start_idx=0, user_id=0)
 
     if traced:
-        forward()
+        stage_trace_state()
+        warmup = forward()
         ttnn.synchronize_device(mesh_device)
+        warmup.deallocate(True)
+        stage_trace_state()
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         try:
             hidden_states = forward()
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
             ttnn.synchronize_device(mesh_device)
+            stage_trace_state()
             ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
             hidden_states = model.process_logits_after_prefill_trace(hidden_states, chunk_size - 1)
         finally:
@@ -326,7 +335,9 @@ def test_device_prefill_matches_hf(mesh_device, hf_prefill_reference):
     tokens = _get_prefill_tokens(_model_path(), chunk_size, hf_prefill_reference.config.vocab_size, source="random")
     device_logits, model_args = _run_device_prefill(mesh_device, tokens, traced=False)
     with torch.no_grad():
-        reference_logits = hf_prefill_reference(tokens.long()).logits[0, -1, : model_args.vocab_size].float()
+        reference_logits = (
+            hf_prefill_reference(tokens.long(), logits_to_keep=1).logits[0, -1, : model_args.vocab_size].float()
+        )
 
     pcc = _pcc(device_logits[0], reference_logits)
     assert pcc >= 0.99, f"Gemma4 D/P final-token logits diverged from HF: PCC={pcc:.5f}"
@@ -371,7 +382,9 @@ def test_device_chunk_boundary_matches_hf(mesh_device, hf_prefill_reference):
     tokens = _get_prefill_tokens(_model_path(), context_len, hf_prefill_reference.config.vocab_size, source="random")
     device_logits, model_args = _run_chunked_device_prefill(mesh_device, tokens, chunk_size=8192, traced=False)
     with torch.no_grad():
-        reference_logits = hf_prefill_reference(tokens.long()).logits[0, -1, : model_args.vocab_size].float()
+        reference_logits = (
+            hf_prefill_reference(tokens.long(), logits_to_keep=1).logits[0, -1, : model_args.vocab_size].float()
+        )
 
     pcc = _pcc(device_logits[0], reference_logits)
     assert pcc >= 0.99, f"16K chunked Gemma4 D/P logits diverged from HF: PCC={pcc:.5f}"
