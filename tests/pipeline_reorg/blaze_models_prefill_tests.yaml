@@ -854,7 +854,7 @@
 # restricts itself to the supported CP8/TP4 Galaxy layout and exercises both the HF reference
 # comparison and traced-vs-eager replay. The checkpoint and tilized D/P cache are staged on /mnt/models.
 - name: "(Gemma4-31B-it) D/P prefill accuracy 8k"
-  fabric_profile: torus_xy
+  fabric_profile: 1d
   cmd: |
     export HF_HUB_OFFLINE=1
     export HF_HOME=/mnt/models/huggingface
@@ -867,8 +867,8 @@
         -k "device_prefill_matches_hf or device_traced_prefill_matches_eager or device_multi_chunk_traced_prefill_matches_eager or device_chunk_boundary_matches_hf" \
         -vv --tb=short --timeout=3600
     '
-  test_type: gemma4_dp
-  test_tags: [gemma4_dp, transformer]
+  test_type: gemma4_d_p
+  test_tags: [gemma4_d_p, transformer]
   test_group: module
   budget_type: demo
   skus:
