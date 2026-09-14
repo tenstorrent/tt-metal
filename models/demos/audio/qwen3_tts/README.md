@@ -16,7 +16,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 0 | Checkpoint access (`weights.py`) | host | **done** |
 | 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
-| 3 | BPE tokenizer and prompt assembly | host | not started |
+| 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
 | 4 | Talker (28 layers, hidden 2048, MRoPE) | device | not started |
 | 5 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
 | 6 | Codec decoder → waveform | device | not started |
@@ -61,11 +61,12 @@ work never materialises the talker.
 ## Tests
 
 The suite is self-contained: references are computed live in-process from the checkpoint, so
-it needs only the checkpoint and, for the device tests, a card. 16 tests, 9 s warm.
+it needs only the checkpoint and, for the device tests, a card. 47 tests, 25 s warm.
 
 ```bash
-pytest models/demos/audio/qwen3_tts/tests/                       # everything
+pytest models/demos/audio/qwen3_tts/tests/                             # everything
 pytest models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py   # host only
+pytest models/demos/audio/qwen3_tts/tests/test_tokenizer.py            # host only
 pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker encoder
 ```
 
@@ -73,6 +74,13 @@ pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker
 `config.json` and checks them against the file, so a checkpoint that stops matching its own
 config fails there rather than surfacing later as a PCC miss. Nothing is skipped when the
 checkpoint is missing: a skip would turn an unreachable checkpoint into a green run.
+
+`test_tokenizer.py` pins the ids for a phrase in each of the ten languages and checks the
+prompt scaffolding has the shape the model was trained on: the text prompt leaves a turn
+open for the model to continue, a reference transcript closes its turn, and a VoiceDesign
+instruction speaks as the user. It also pins the seam that is easiest to get wrong later:
+language never enters the text stream, and every language id falls inside the talker's
+3072-entry codec vocabulary rather than the 151k text one.
 
 `pcc/test_speaker_pcc.py` gates every block and the embedding at **0.999**, not the usual
 0.99. Upstream pads each convolution in reflect mode, which `ttnn.conv1d` cannot do, so this
@@ -101,6 +109,7 @@ duplicate these tests or claim coverage that does not exist.
 | Path | Role |
 |---|---|
 | `weights.py` | checkpoint resolution and the speaker-encoder weight reader |
+| `frontend.py` | host text path: tokenizer, prompt wrappers, language resolution |
 | `tt/` | TTNN blocks |
 | `reference/` | CPU references (PCC oracles); `reference/qwen/` is vendored upstream, Apache-2.0 |
 | `tests/` | host tests, `tests/pcc/` for device correctness |

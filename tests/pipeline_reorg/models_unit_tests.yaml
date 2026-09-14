@@ -881,10 +881,12 @@
     export TT_METAL_WATCHER=30
     export HF_HUB_OFFLINE=0 HF_HOME=/mnt/MLPerf/huggingface HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub
     export HF_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-Base TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-TTS-12Hz-1.7B-Base
-    # 14 s wall on a warm cache (checkpoint layout on host, speaker encoder on device).
-    # The timeout covers a first run, which pays both a 3.6 GB checkpoint download into
-    # the shared cache and a cold kernel build. Revisit it downward once both are primed.
+    # 25 s wall on a warm cache (checkpoint layout and text front-end on host, speaker
+    # encoder on device). The timeout covers a first run, which pays both a 3.6 GB
+    # checkpoint download into the shared cache and a cold kernel build. Revisit it
+    # downward once both are primed.
     pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+    pytest --timeout 300 models/demos/audio/qwen3_tts/tests/test_tokenizer.py
     pytest --timeout 600 models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py
   model: qwen3-tts-1.7b-base
   model_family: Qwen3-TTS
