@@ -90,6 +90,45 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
+// Mechanism for the credits dispatch and dispatch_s return to prefetch. A cached AMO reaches only the
+// local L1's pool row, so every accessor must be a DM on the semaphore's own node;
+// expand_quasar_dispatch_engine_pool_for_fd_assignment gives FD that by putting all three stages on one
+// dispatch-engine core. Emule models no cached pool.
+#if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
+constexpr SemScope fd_upstream_sem_scope = SemScope::DM_LOCAL_CACHED;
+#else
+constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
+#endif
+
+// Semaphore over a plain id and an explicit mechanism; the token is synthesized because the token
+// constructor is the only one accepting a scope other than LOCAL_NONATOMIC.
+//
+// Build at the point of use, never store: non-cached scopes resolve through sem_l1_base, which
+// firmware does not populate until firmware_config_init() runs.
+template <uint32_t sem_id, SemScope scope>
+FORCE_INLINE auto fd_semaphore() {
+    return Semaphore<programmable_core_type, scope>(SemaphoreBindingToken<sem_id, scope>{});
+}
+
+// Copy a cached semaphore's host-written init value into its pool row: the pool sits outside the
+// kernel config buffer, so the host's init write lands only in the ordinary semaphore slot.
+//
+// A plain store, running while the consumer kernels are already live, so it must not race their
+// increments. Ordering is by data dependency, not timing: a consumer returns credits only after
+// consuming a command, which prefetch can only have sent after seeding. Releasing credits before
+// consuming one would break this silently.
+template <uint32_t sem_id>
+FORCE_INLINE void fd_seed_upstream_sem() {
+    if constexpr (fd_upstream_sem_scope == SemScope::DM_LOCAL_CACHED) {
+#if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
+        static_assert(
+            sem_id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW, "semaphore id has no row in the cached pool");
+        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + sem_id * MEM_DM_CACHED_SEM_ROW) =
+            *uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
+#endif
+    }
+}
+
 #ifdef ARCH_QUASAR
 // Returns a pointer to the L1 worker completion counter for `stream`. Workers signal completion
 // into L1 (DISPATCH_MESSAGE_ADDR) on Quasar rather than NOC stream registers. `completion_counter_offset`
@@ -328,6 +367,8 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPD");
 }
 
+// my_sem_scope applies only to my_sem_id, the credits a consumer returns here; downstream_sem_id is
+// always reached over the NoC.
 template <
     uint32_t my_sem_id,
     uint8_t noc_idx,
@@ -335,21 +376,20 @@ template <
     uint32_t downstream_sem_id,
     uint32_t buffer_base = 0,
     uint32_t buffer_end = 0,
-    uint32_t buffer_page_size = 0>
+    uint32_t buffer_page_size = 0,
+    SemScope my_sem_scope = SemScope::LOCAL_NONATOMIC>
 class CBWriter {
 public:
     FORCE_INLINE void acquire_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         WAYPOINT("DAPW");
         // Use a wrapping compare here to compare distance
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        } while (wrap_gt(n, additional_count + *sem_addr));
+        } while (wrap_gt(n, additional_count + my_sem.value()));
         WAYPOINT("DAPD");
         additional_count -= n;
     }
@@ -357,17 +397,15 @@ public:
     // Wait for all n pages to be available. If the consumer is using blocks, it may never return all pages at once
     // unless it calls release_all_pages to return partially-consumed blocks.
     FORCE_INLINE void wait_all_pages(uint32_t n) {
-        volatile tt_l1_ptr uint32_t* sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-            l1_uncached_addr(get_semaphore<programmable_core_type>(my_sem_id)));
+        auto my_sem = fd_semaphore<my_sem_id, my_sem_scope>();
 
         // Downstream component sets the MSB as a terminate bit
         // Mask that off to avoid a race between the sem count and terminate
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        do {
-            invalidate_l1_cache();
-        } while (((additional_count + *sem_addr) & 0x7fffffff) != n);  // mask off terminate bit
+        while (((additional_count + my_sem.value()) & 0x7fffffff) != n) {  // mask off terminate bit
+        }
         WAYPOINT("TAPD");
     }
 

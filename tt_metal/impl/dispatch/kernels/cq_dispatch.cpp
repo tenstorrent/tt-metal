@@ -191,10 +191,12 @@ RelayClientType relay_client;
 
 // Release policies are TU-local so we can use the local relay_client instance
 struct NocReleasePolicy {
+    // Ordered after prefetch's pool-row seeding only by the caller having consumed a command; see
+    // fd_seed_upstream_sem.
     template <uint8_t noc_idx, uint32_t noc_xy, uint32_t sem_id>
     static FORCE_INLINE void release(uint32_t pages) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(sem_id).up(pages);
+        fd_semaphore<sem_id, fd_upstream_sem_scope>().up(pages);
 #else
         uint32_t sem_addr = get_semaphore<programmable_core_type>(sem_id);
         noc_semaphore_inc(get_noc_addr_helper(noc_xy, sem_addr), pages, noc_idx);
@@ -428,6 +430,7 @@ void process_exec_buf_end_h() {
     cmd_ptr += sizeof(CQDispatchCmd);
 }
 
+// Default mechanism rather than fd_upstream_sem_scope: dispatch_h's upstream stage is on another core.
 CBWriter<my_downstream_cb_sem_id, 0, 0, 0> dispatch_h_cb_writer{};
 
 // Relay, potentially through the mux/dmux/tunneller path
@@ -1151,7 +1154,7 @@ static void process_wait() {
     }
     if (notify_prefetch) {
 #ifdef ARCH_QUASAR
-        Semaphore<programmable_core_type>(upstream_sync_sem).up(1);
+        fd_semaphore<upstream_sync_sem, fd_upstream_sem_scope>().up(1);
 #else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<programmable_core_type>(upstream_sync_sem)),

@@ -334,10 +334,12 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
     num_pages_acquired += n;
 }
 
+// Ordered after prefetch's pool-row seeding only by the caller having consumed a command; see
+// fd_seed_upstream_sem.
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
-    Semaphore<programmable_core_type>(sem_id).up(n);
+    fd_semaphore<sem_id, fd_upstream_sem_scope>().up(n);
 #else
     dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
