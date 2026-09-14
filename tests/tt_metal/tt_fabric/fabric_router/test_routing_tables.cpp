@@ -9,11 +9,15 @@
 #include <filesystem>
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
+#include <map>
 #include <optional>
 #include <set>
+#include <string>
 #include <string_view>
 #include <unordered_set>
 #include <utility>
+#include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include "fabric_fixture.hpp"
@@ -335,6 +339,109 @@ TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
 
     check_asic_mapping_against_golden("TestT3kControlPlaneInit", "ControlPlaneFixture_T3k");
+}
+
+// Tests the fabric debug manifest serialization and parsing, using the T3K MGD. 
+// 
+// The fabric debug manifest is consumed by out-of-tree tooling (the ttexalens capture layer and the viewer),
+// so the JSON shape is a contract, so we simply assert the invariants those consumers rely on.
+TEST_F(ControlPlaneFixture, TestT3kFabricDebugManifest) {
+    // --SETUP--
+    const std::filesystem::path t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.textproto";
+    auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
+
+    const std::filesystem::path manifest_path =
+        std::filesystem::temp_directory_path() / "fabric_debug_manifest_t3k_test.json";
+
+    // Delete any existing manifest file to ensure we check the one written by the test's ControlPlane
+    std::filesystem::remove(manifest_path);
+
+    // --SERIALIZATION--
+
+    // Serialize the manifest
+    serialize_fabric_debug_manifest_to_file(*control_plane, manifest_path);
+    // Assert that the serialized manifest file exists
+    ASSERT_TRUE(std::filesystem::exists(manifest_path));
+
+    // ---MANIFEST PARSING AND VALIDATION---
+
+    std::ifstream manifest_stream(manifest_path);
+    const nlohmann::json manifest = nlohmann::json::parse(manifest_stream);
+
+    EXPECT_EQ(manifest["manifest_version"], FABRIC_DEBUG_MANIFEST_VERSION);
+    EXPECT_EQ(manifest["kind"], "fabric_debug_manifest");
+    EXPECT_EQ(manifest["run"]["arch"], "WORMHOLE_B0");
+
+    // T3K is a single 2x4 mesh, and FABRIC_2D on T3K resolves to MESH, so neither axis wraps.
+    ASSERT_EQ(manifest["meshes"].size(), 1u);
+    const auto& mesh = manifest["meshes"][0];
+    EXPECT_EQ(mesh["shape"], nlohmann::json::array({2, 4}));
+    EXPECT_FALSE(mesh["torus"]["x"].get<bool>());
+    EXPECT_FALSE(mesh["torus"]["y"].get<bool>());
+    ASSERT_EQ(mesh["chips"].size(), 8u);
+
+    using RouterKey = std::pair<int, int>;  // (fabric_chip_id, eth_chan)
+    std::set<std::pair<int, int>> chip_coords;
+    std::set<RouterKey> routers;
+    std::map<int, std::pair<int, int>> coord_of_chip;
+    size_t declared_routers = 0;
+
+    // Chip metadata validation
+    for (const auto& chip : mesh["chips"]) {
+        const int chip_id = chip["fabric_chip_id"].get<int>();
+        // Single-host T3K: every chip must be mappable, otherwise capture has nothing to peek.
+        EXPECT_TRUE(chip["is_local"].get<bool>()) << "chip " << chip_id << " is not local";
+        EXPECT_FALSE(chip["physical_chip_id"].is_null()) << "chip " << chip_id << " has no physical id";
+        const std::pair<int, int> coord{chip["mesh_coord"][0].get<int>(), chip["mesh_coord"][1].get<int>()};
+        chip_coords.insert(coord);
+        coord_of_chip[chip_id] = coord;
+        EXPECT_GT(chip["routers"].size(), 0u) << "chip " << chip_id << " hosts no fabric router";
+        for (const auto& router : chip["routers"]) {
+            routers.emplace(chip_id, router["eth_chan"].get<int>());
+            ++declared_routers;
+        }
+    }
+    EXPECT_EQ(chip_coords.size(), 8u) << "chip coordinates must be distinct and cover the 2x4 grid";
+    EXPECT_EQ(routers.size(), declared_routers) << "(chip, channel) must uniquely identify a router";
+
+    // Physical link validation
+    ASSERT_EQ(manifest["links"].size(), declared_routers);
+    std::map<RouterKey, const nlohmann::json*> link_by_src;
+    for (const auto& link : manifest["links"]) {
+        link_by_src.emplace(RouterKey{link["src"]["chip_id"].get<int>(), link["src"]["eth_chan"].get<int>()}, &link);
+    }
+    ASSERT_EQ(link_by_src.size(), manifest["links"].size()) << "duplicate link source";
+
+    const std::map<std::string, std::string> opposite{{"E", "W"}, {"W", "E"}, {"N", "S"}, {"S", "N"}};
+    const std::map<std::string, std::pair<int, int>> expected_delta{
+        {"E", {0, 1}}, {"W", {0, -1}}, {"S", {1, 0}}, {"N", {-1, 0}}};
+    for (const auto& link : manifest["links"]) {
+        const auto direction = link["direction"].get<std::string>();
+        ASSERT_FALSE(link["dst"].is_null()) << "single-host T3K link has an unresolved peer";
+        const RouterKey dst{link["dst"]["chip_id"].get<int>(), link["dst"]["eth_chan"].get<int>()};
+        const RouterKey src{link["src"]["chip_id"].get<int>(), link["src"]["eth_chan"].get<int>()};
+        EXPECT_TRUE(routers.count(dst) > 0) << "link peer is not itself a declared router";
+        EXPECT_FALSE(link["wrap"].get<bool>()) << "a MESH topology has no wrap edges";
+
+        // Every hop has a matching reverse hop, facing the opposite way on the same routing plane.
+        const auto reverse = link_by_src.find(dst);
+        ASSERT_NE(reverse, link_by_src.end()) << "no reverse link for peer";
+        const nlohmann::json& back = *reverse->second;
+        EXPECT_EQ(back["dst"]["chip_id"].get<int>(), src.first);
+        EXPECT_EQ(back["dst"]["eth_chan"].get<int>(), src.second);
+        EXPECT_EQ(back["direction"].get<std::string>(), opposite.at(direction));
+        EXPECT_EQ(back["routing_plane"], link["routing_plane"]);
+
+        // The direction label must agree with the mesh geometry, which is what the viewer lays out on.
+        const auto& from = coord_of_chip.at(src.first);
+        const auto& to = coord_of_chip.at(dst.first);
+        const std::pair<int, int> delta{to.first - from.first, to.second - from.second};
+        EXPECT_EQ(delta, expected_delta.at(direction)) << "direction " << direction << " disagrees with geometry";
+    }
+
+    std::filesystem::remove(manifest_path);
 }
 
 TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {

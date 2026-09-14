@@ -136,6 +136,20 @@ void serialize_intermesh_port_assignment_to_file(
         intermesh_chan_to_peer,
     const std::filesystem::path& output_file_path);
 
+// Version of the fabric debug manifest schema emitted below.
+// Schema: tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest.schema.json
+constexpr int FABRIC_DEBUG_MANIFEST_VERSION = 1;
+
+// Serialize this fabric instance's topology to a JSON file for fabric debug tooling.
+//
+// This captures state that is frozen for the run, including fabric config, meshes, chip coordinates, and the set of
+// ethernet cores actually running fabric routers.
+//
+// This should be called after the router port map is final, i.e. at the end of configure_routing_tables_for_fabric_ethernet_channels(),
+// otherwise the manifest would contain no routers.
+void serialize_fabric_debug_manifest_to_file(
+    const ControlPlane& control_plane, const std::filesystem::path& output_file_path);
+
 }  // namespace tt::tt_fabric
 
 namespace tt::tt_metal {

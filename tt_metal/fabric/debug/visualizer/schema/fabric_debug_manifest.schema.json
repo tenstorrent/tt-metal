@@ -1,0 +1,200 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest.schema.json",
+  "title": "Fabric debug manifest",
+  "description": "Frozen description of one fabric instance's topology, written by ControlPlane at fabric init. Consumed by the fabric debug capture layer (ttexalens) and the visualizer. This schema is the stability boundary between the tt-metal fabric internals and the debug tooling. Consumers depend on manifest_version and the shapes below, never on ControlPlane signatures.",
+  "type": "object",
+  "required": ["manifest_version", "kind", "run", "meshes", "links"],
+  "properties": {
+    "manifest_version": {
+      "description": "Incremented on breaking changes.",
+      "type": "integer",
+      "const": 1
+    },
+    "kind": {
+      "type": "string",
+      "const": "fabric_debug_manifest"
+    },
+    "run": {
+      "$ref": "#/$defs/run"
+    },
+    "meshes": {
+      "description": "Sorted by mesh_id. Output is deterministic so the artifact can serve as a test golden.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/mesh" }
+    },
+    "links": {
+      "description": "Flat edge list, what the viewer draws. Emitted once per directed source channel, so a physical cable appears twice (once from each end); each direction carries its own credit state and is coloured independently. Sorted by src.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/link" }
+    }
+  },
+  "$defs": {
+    "run": {
+      "type": "object",
+      "description": "Identity of the run, used to match a snapshot to this manifest.",
+      "required": ["arch", "fabric_config", "fabric_type", "host_rank", "world_size"],
+      "properties": {
+        "arch": {
+          "description": "tt::ARCH as string, e.g. WORMHOLE_B0 / BLACKHOLE. Selects architecture-specific overlay register indices on the capture side.",
+          "type": "string"
+        },
+        "fabric_config": {
+          "description": "tt_fabric::FabricConfig as string, e.g. FABRIC_1D, FABRIC_1D_RING, FABRIC_2D, FABRIC_2D_TORUS_XY. Selects the viewer layout engine.",
+          "type": "string"
+        },
+        "fabric_type": {
+          "description": "tt_fabric::FabricType as string (MESH / TORUS_X / TORUS_Y / TORUS_XY), as resolved by get_fabric_type() including galaxy adjustment.",
+          "type": "string"
+        },
+        "reliability_mode": { "type": "string" },
+        "tensix_config": {
+          "description": "FabricTensixConfig as string (DISABLED / MUX / UDM). Tensix extension cores are not fabric routers and are not listed in this manifest.",
+          "type": "string"
+        },
+        "udm_mode": { "type": "string" },
+        "host_rank": {
+          "description": "This rank's MeshHostRankId. Each rank writes its own manifest file.",
+          "type": "integer"
+        },
+        "world_size": { "type": "integer" },
+        "local_mesh_ids": {
+          "description": "Meshes bound to this host. Chips outside these meshes appear with is_local false and cannot be peeked by this rank.",
+          "type": "array",
+          "items": { "type": "integer" }
+        }
+      }
+    },
+    "mesh": {
+      "type": "object",
+      "required": ["mesh_id", "shape", "chips"],
+      "properties": {
+        "mesh_id": { "type": "integer" },
+        "shape": {
+          "description": "MeshShape dims, row-major. Axis 0 is north/south, axis 1 is east/west.",
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "torus": {
+          "description": "Per-axis realized wrap, from has_genuine_torus_axis(): declared torus flag AND a dimension large enough to form a distinct wrap edge. Absent for non-2D meshes, where the query is undefined. Note a declared torus axis of extent <= 2 reports false here.",
+          "type": "object",
+          "properties": {
+            "y": { "description": "Axis 0 (north/south) wrap.", "type": "boolean" },
+            "x": { "description": "Axis 1 (east/west) wrap.", "type": "boolean" }
+          }
+        },
+        "chips": {
+          "description": "Sorted by fabric_chip_id.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/chip" }
+        }
+      }
+    },
+    "chip": {
+      "type": "object",
+      "required": ["fabric_chip_id", "mesh_coord", "is_local", "routers"],
+      "properties": {
+        "fabric_chip_id": {
+          "description": "Chip id within the mesh (FabricNodeId.chip_id).",
+          "type": "integer"
+        },
+        "mesh_coord": {
+          "description": "Position in the mesh, matching the order of mesh.shape.",
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "physical_chip_id": {
+          "description": "UMD chip id, which equals ttexalens device.id. Null for chips owned by another host, which this rank cannot map or peek.",
+          "type": ["integer", "null"]
+        },
+        "asic_id": {
+          "description": "ASIC unique id as a hex string. String rather than number because the value exceeds the range JSON numbers represent exactly.",
+          "type": ["string", "null"]
+        },
+        "is_local": {
+          "description": "Whether this chip is owned by this host rank. Capture must skip non-local chips.",
+          "type": "boolean"
+        },
+        "routers": {
+          "description": "Ethernet cores running a fabric router on this chip, sorted by eth_chan. This is the capture layer's peek target list. It is deliberately narrower than every ethernet tile: it contains only channels that are link-up AND assigned EthRouterMode::FABRIC_ROUTER AND survived routing-plane trimming. Do not substitute ttexalens active/idle classification, which misses cross-host links. Empty for non-local chips.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/router" }
+        }
+      }
+    },
+    "router": {
+      "type": "object",
+      "description": "One fabric router (one ERISC ethernet core). Future revisions add 'l1' (static L1 addresses) and 'abi' (stream ids, VC counts, credit transport, compile-time flags from the EDM builder) without changing existing keys.",
+      "required": ["eth_chan", "direction"],
+      "properties": {
+        "eth_chan": {
+          "description": "Ethernet channel id. Primary key for a router within a chip, and the index ttexalens uses into its eth block locations.",
+          "type": "integer"
+        },
+        "direction": {
+          "description": "Routing direction this port faces.",
+          "type": "string",
+          "enum": ["E", "W", "N", "S", "Z", "C", "NONE"]
+        },
+        "routing_plane": { "type": ["integer", "null"] },
+        "link_class": {
+          "description": "Whether this port faces another mesh (intermesh, the Z / exit-node case) or a chip within this mesh.",
+          "type": "string",
+          "enum": ["intramesh", "intermesh", "unknown"]
+        },
+        "logical_core": {
+          "description": "Logical eth core coordinate [x, y], equal to ttexalens loc.to('logical').",
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "virtual_core": {
+          "description": "Virtual (NOC-addressable) eth core coordinate [x, y], for peeking. This is tt-metal's 'virtual' coordinate space, which is the coordinate system ttexalens calls 'translated'. It equals loc.to('translated'), not loc.to('noc0').",
+          "type": "array",
+          "items": { "type": "integer" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "description": "Stable node/edge identity, also used as the key space for snapshot values.",
+      "required": ["mesh_id", "chip_id", "eth_chan"],
+      "properties": {
+        "mesh_id": { "type": "integer" },
+        "chip_id": { "type": "integer" },
+        "eth_chan": { "type": "integer" }
+      }
+    },
+    "link": {
+      "type": "object",
+      "required": ["src", "direction"],
+      "properties": {
+        "src": { "$ref": "#/$defs/endpoint" },
+        "dst": {
+          "description": "Peer endpoint of this physical hop. Null when the peer is not resolvable from this rank.",
+          "oneOf": [{ "$ref": "#/$defs/endpoint" }, { "type": "null" }]
+        },
+        "direction": {
+          "type": "string",
+          "enum": ["E", "W", "N", "S", "Z", "C", "NONE"]
+        },
+        "routing_plane": { "type": ["integer", "null"] },
+        "link_class": {
+          "type": "string",
+          "enum": ["intramesh", "intermesh", "unknown"]
+        },
+        "wrap": {
+          "description": "Torus wrap edge, computed by the emitter rather than inferred by the viewer: an intra-mesh link on a genuine torus axis whose coordinate delta along that axis spans the mesh. The viewer draws these as arcs and must not re-derive topology itself.",
+          "type": "boolean"
+        },
+        "cross_host": {
+          "description": "Link crosses a host boundary. These are live fabric hops that ttexalens classifies as idle, which is why the manifest rather than ttexalens defines the router set.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

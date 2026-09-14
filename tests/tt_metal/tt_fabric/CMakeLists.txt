@@ -15,6 +15,7 @@ target_link_libraries(
         # those symbols are hidden in libtt_metal.so (see tools/scaleout/CMakeLists.txt), so link explicitly.
         TT::ScaleoutTools
         test_common_libs
+        nlohmann_json::nlohmann_json
         yaml-cpp::yaml-cpp
         protobuf::libprotobuf
         cadical::cadical

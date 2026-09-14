@@ -25,7 +25,10 @@
 #include <unordered_set>
 #include <filesystem>
 #include <fstream>
+#include <type_traits>
+#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 #include <yaml-cpp/yaml.h>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -56,6 +59,29 @@ HostName hostname_for_mapping_export(const HostName& hostname) {
         }
     }
     return hostname.substr(0, pos + cluster_desc_suffix.size());
+}
+
+// Retruns a string representation of the enum value. 
+// 
+// enchantum::to_string yields an empty view for a value that is not a named enumerator, which happens for
+// bitmask combinations of FabricType such as MESH|TORUS_X, so in those cases we fall back to the numeric value.
+template <typename E>
+std::string enum_name(E value) {
+    const auto name = enchantum::to_string(value);
+    if (name.empty()) {
+        return std::to_string(static_cast<std::underlying_type_t<E>>(value));
+    }
+    return std::string(name);
+}
+
+// (mesh, chip, channel) is the stable identity for a fabric router. The debug snapshot artifact keys its
+// live values on the same triple, so the viewer can join a snapshot onto a manifest.
+nlohmann::ordered_json fabric_debug_endpoint_json(const FabricNodeId& node, chan_id_t chan) {
+    nlohmann::ordered_json endpoint;
+    endpoint["mesh_id"] = *node.mesh_id;
+    endpoint["chip_id"] = node.chip_id;
+    endpoint["eth_chan"] = chan;
+    return endpoint;
 }
 
 }  // namespace
@@ -506,6 +532,175 @@ void serialize_intermesh_port_assignment_to_file(
     out_file.close();
 
     log_debug(tt::LogFabric, "Serialized inter-mesh port assignment to file: {}", output_file_path.string());
+}
+
+void serialize_fabric_debug_manifest_to_file(
+    const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
+    using json = nlohmann::ordered_json;
+
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& mesh_graph = control_plane.get_mesh_graph();
+    const auto fabric_config = control_plane.get_fabric_config();
+    const FabricType fabric_type = get_fabric_type(fabric_config, cluster.is_ubb_galaxy());
+
+    json manifest;
+    manifest["manifest_version"] = FABRIC_DEBUG_MANIFEST_VERSION;
+    manifest["kind"] = "fabric_debug_manifest";
+
+    {
+        const auto& distributed_context =
+            tt_metal::distributed::multihost::DistributedContext::get_current_world();
+        json run;
+        run["arch"] = enum_name(cluster.arch());
+        run["fabric_config"] = enum_name(fabric_config);
+        run["fabric_type"] = enum_name(fabric_type);
+        run["reliability_mode"] = enum_name(control_plane.get_fabric_reliability_mode());
+        run["tensix_config"] = enum_name(control_plane.get_fabric_tensix_config());
+        run["udm_mode"] = enum_name(control_plane.get_fabric_udm_mode());
+        run["host_rank"] = *control_plane.get_local_host_rank_id_binding();
+        run["world_size"] = *distributed_context->size();
+        json local_mesh_ids = json::array();
+        for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            local_mesh_ids.push_back(*mesh_id);
+        }
+        run["local_mesh_ids"] = std::move(local_mesh_ids);
+        manifest["run"] = std::move(run);
+    }
+
+    // Chips and their routers describe what to peek; links describe what to draw. Both key on
+    // (mesh, chip, channel) so a snapshot can be joined onto either.
+    json meshes = json::array();
+    json links = json::array();
+
+    auto mesh_ids = mesh_graph.get_all_mesh_ids();
+    std::sort(mesh_ids.begin(), mesh_ids.end(), [](const MeshId& lhs, const MeshId& rhs) { return *lhs < *rhs; });
+
+    for (const auto& mesh_id : mesh_ids) {
+        const MeshShape mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
+        const bool is_2d_mesh = mesh_shape.dims() == 2;
+
+        json mesh;
+        mesh["mesh_id"] = *mesh_id;
+        json shape = json::array();
+        for (size_t dim = 0; dim < mesh_shape.dims(); ++dim) {
+            shape.push_back(mesh_shape[dim]);
+        }
+        mesh["shape"] = std::move(shape);
+
+        // has_genuine_torus_axis() is defined only for a 2D shape, and deliberately reports false for a
+        // declared torus axis whose extent is too small to realize a distinct wrap edge.
+        if (is_2d_mesh) {
+            json torus;
+            torus["y"] = has_genuine_torus_axis(fabric_type, mesh_shape, 0);
+            torus["x"] = has_genuine_torus_axis(fabric_type, mesh_shape, 1);
+            mesh["torus"] = std::move(torus);
+        }
+
+        json chips = json::array();
+        for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
+            const FabricNodeId node(mesh_id, fabric_chip_id);
+            const MeshCoordinate mesh_coord = mesh_graph.chip_to_coordinate(mesh_id, fabric_chip_id);
+            const auto physical_chip_id = control_plane.try_get_physical_chip_id_from_fabric_node_id(node);
+            // A chip this rank cannot map to a physical device is a chip it cannot peek, so resolvability is
+            // the practical definition of locality. Non-local chips still appear, so the viewer can draw the
+            // whole mesh and show the host boundary.
+            const bool is_local = physical_chip_id.has_value();
+
+            json chip;
+            chip["fabric_chip_id"] = fabric_chip_id;
+            json coord = json::array();
+            for (size_t dim = 0; dim < mesh_coord.dims(); ++dim) {
+                coord.push_back(mesh_coord[dim]);
+            }
+            chip["mesh_coord"] = std::move(coord);
+            if (is_local) {
+                chip["physical_chip_id"] = *physical_chip_id;
+                // Hex string: the value exceeds what JSON numbers represent exactly.
+                chip["asic_id"] = fmt::format("0x{:016x}", *control_plane.get_asic_id_from_fabric_node_id(node));
+            } else {
+                chip["physical_chip_id"] = json(nullptr);
+                chip["asic_id"] = json(nullptr);
+            }
+            chip["is_local"] = is_local;
+
+            json routers = json::array();
+            if (is_local) {
+                const auto intermesh_chan_list = control_plane.get_intermesh_facing_eth_chans(node);
+                const std::set<chan_id_t> intermesh_chans(intermesh_chan_list.begin(), intermesh_chan_list.end());
+                const auto& soc_desc = cluster.get_soc_desc(*physical_chip_id);
+
+                // get_active_fabric_eth_channels() is the narrow router set (link up, assigned
+                // EthRouterMode::FABRIC_ROUTER, survived routing-plane trimming) and is a std::set keyed on
+                // channel, so iteration is already sorted.
+                for (const auto& [chan, eth_direction] : control_plane.get_active_fabric_eth_channels(node)) {
+                    const RoutingDirection direction = control_plane.eth_direction_to_routing_direction(eth_direction);
+                    const char* link_class = intermesh_chans.contains(chan) ? "intermesh" : "intramesh";
+                    const auto routing_plane = control_plane.get_routing_plane_id(node, chan);
+                    const auto peer = control_plane.try_get_connected_mesh_chip_chan_ids(node, chan);
+
+                    json router;
+                    router["eth_chan"] = chan;
+                    router["direction"] = enum_name(direction);
+                    router["routing_plane"] = routing_plane;
+                    router["link_class"] = link_class;
+                    const auto logical_core = soc_desc.get_eth_core_for_channel(chan, CoordSystem::LOGICAL);
+                    router["logical_core"] = json::array({logical_core.x, logical_core.y});
+                    const auto virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+                        *physical_chip_id, tt::tt_metal::CoreCoord(logical_core.x, logical_core.y), CoreType::ETH);
+                    router["virtual_core"] = json::array({virtual_core.x, virtual_core.y});
+                    routers.push_back(std::move(router));
+
+                    // Wrap edges are resolved here rather than inferred by the viewer: a link wraps when its
+                    // axis genuinely closes and its coordinate delta spans the mesh.
+                    const bool is_east_west =
+                        direction == RoutingDirection::E || direction == RoutingDirection::W;
+                    const bool is_north_south =
+                        direction == RoutingDirection::N || direction == RoutingDirection::S;
+                    bool wrap = false;
+                    if (is_2d_mesh && peer.has_value() && peer->first.mesh_id == mesh_id &&
+                        (is_east_west || is_north_south)) {
+                        const uint32_t axis = is_east_west ? 1 : 0;
+                        if (has_genuine_torus_axis(fabric_type, mesh_shape, axis)) {
+                            const auto peer_coord = mesh_graph.chip_to_coordinate(mesh_id, peer->first.chip_id);
+                            const uint32_t here = mesh_coord[axis];
+                            const uint32_t there = peer_coord[axis];
+                            const uint32_t delta = here > there ? here - there : there - here;
+                            wrap = delta == mesh_shape[axis] - 1;
+                        }
+                    }
+
+                    json link;
+                    link["src"] = fabric_debug_endpoint_json(node, chan);
+                    link["dst"] =
+                        peer.has_value() ? fabric_debug_endpoint_json(peer->first, peer->second) : json(nullptr);
+                    link["direction"] = enum_name(direction);
+                    link["routing_plane"] = routing_plane;
+                    link["link_class"] = link_class;
+                    link["wrap"] = wrap;
+                    link["cross_host"] = control_plane.is_cross_host_eth_link(*physical_chip_id, chan);
+                    links.push_back(std::move(link));
+                }
+            }
+            chip["routers"] = std::move(routers);
+            chips.push_back(std::move(chip));
+        }
+        mesh["chips"] = std::move(chips);
+        meshes.push_back(std::move(mesh));
+    }
+
+    manifest["meshes"] = std::move(meshes);
+    manifest["links"] = std::move(links);
+
+    std::filesystem::create_directories(output_file_path.parent_path());
+
+    std::ofstream out_file(output_file_path);
+    if (!out_file.is_open()) {
+        TT_THROW("Failed to open output file: {}", output_file_path.string());
+    }
+    out_file << manifest.dump(2) << std::endl;
+    out_file.close();
+
+    log_debug(tt::LogFabric, "Serialized fabric debug manifest to file: {}", output_file_path.string());
 }
 
 }  // namespace tt::tt_fabric
