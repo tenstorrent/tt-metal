@@ -65,7 +65,8 @@ struct p_unpacr
     // UNPACR_NOP Nop_type field. The values differ from Blackhole, which numbers this
     // field for a nine-operand instruction carrying two pop flavours as well; Quasar has
     // no pop flavour, puts the clear at 0, and adds a set-data-valid with no clear.
-    // Src_ClrVal_Ctrl, Bank_Clr_Ctrl and Stall_Cntrl are honoured only by UNP_CLRSRC.
+    // Src_ClrVal_Ctrl and Bank_Clr_Ctrl are honoured only by UNP_CLRSRC; Stall_Cntrl is
+    // honoured by UNP_CLRSRC and UNP_NOP_SETDVALID.
     constexpr static std::uint32_t UNP_CLRSRC        = 0x0;
     constexpr static std::uint32_t UNP_NOP           = 0x1;
     constexpr static std::uint32_t UNP_NOP_SETDVALID = 0x2;
