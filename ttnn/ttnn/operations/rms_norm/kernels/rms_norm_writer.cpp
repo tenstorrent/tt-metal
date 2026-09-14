@@ -46,6 +46,7 @@ void kernel_main() {
     constexpr bool sharded = get_named_compile_time_arg_val("SHARDED") != 0;
     constexpr uint32_t num_w_splits = get_named_compile_time_arg_val("NUM_W_SPLITS");
     constexpr uint32_t sem_gather = get_named_compile_time_arg_val("SEM_GATHER");
+    constexpr uint32_t out_page_bytes = get_named_compile_time_arg_val("OUT_PAGE_BYTES");  // tile (TILE) or stick (RM)
     constexpr uint32_t out_tile_bytes = get_named_compile_time_arg_val("OUT_TILE_BYTES");
     constexpr uint32_t out_elem_bytes = get_named_compile_time_arg_val("OUT_ELEM_BYTES");
     constexpr uint32_t partial_tile_bytes = get_named_compile_time_arg_val("P32_BYTES");
@@ -72,7 +73,7 @@ void kernel_main() {
     const uint32_t root_y = get_arg_val<uint32_t>(12);
     const uint32_t num_partials_expected = get_arg_val<uint32_t>(13);
 
-    const auto output_acc = TensorAccessor(output_args, output_addr, out_tile_bytes);
+    const auto output_acc = TensorAccessor(output_args, output_addr, out_page_bytes);
 
     // store_block: this core's rows*Wc output tiles (or 32*rows stick chunks) -> DRAM. R3: nothing.
     const auto store_block = [&](uint32_t block_row_tile_start, uint32_t rows) {

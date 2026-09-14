@@ -578,7 +578,12 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
         core_ranges=all_cores,
         compile_time_args=writer_ct,
-        named_compile_time_args=named_common + [("MCAST_CT_BASE", 0), ("MCAST_RT_BASE", 14)],
+        named_compile_time_args=named_common
+        + [
+            ("OUT_PAGE_BYTES", output_tensor.buffer_page_size()),
+            ("MCAST_CT_BASE", 0),
+            ("MCAST_RT_BASE", 14),
+        ],
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),
     )
