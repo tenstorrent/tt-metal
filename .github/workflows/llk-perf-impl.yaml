@@ -137,6 +137,7 @@ jobs:
         working-directory: ${{ env.LLK_PATH }}
         env:
           SPEED_OF_LIGHT: ${{ inputs.speed-of-light }}
+          TT_LLK_DISABLE_ASSERTS: "1"
         run: |
           ${{ matrix.test-group.cmd }}
 
