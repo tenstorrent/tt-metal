@@ -2103,7 +2103,9 @@
   model_family: XTTS
   skus:
     bh_p150b_civ2:
-      timeout: 45
+      # Measured 21m03s on a cold JIT cache (0/3829 kernel-cache hits), run 34484668114.
+      # 26 min leaves ~5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 26
       tier: 3
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
