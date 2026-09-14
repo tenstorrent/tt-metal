@@ -35,7 +35,7 @@ FORCE_INLINE void test_stale_commit_after_resize(
     // stale-epoch rejection only.
     dfb.resize_sender_interface<false>(new_entry_size, noc_index);
     volatile tt_l1_ptr uint32_t* config = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(iface.config_ptr);
-    config[PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE] = iface.fifo_page_size;
+    store_prefetcher_pipe_config_word(config, PREFETCHER_PIPE_CFG_APPLIED_ENTRY_SIZE, iface.fifo_page_size);
 
     // Move this receiver's stored cursor -- what commit() persists -- to a distinct, valid slot,
     // so a stale commit that got through would be visible in word[4].

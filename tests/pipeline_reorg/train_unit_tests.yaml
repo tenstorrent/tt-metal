@@ -23,6 +23,7 @@
       timeout: 40
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit
 
 # Non-nightly unit tests
 - name: tt-train cpp non-nightly unit tests
@@ -37,6 +38,7 @@
     # bh_p150b_civ2 is used for merge gate test
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit
 
 - name: tt-train python unit tests
   cmd: python -m pytest tt-train/tests/python
@@ -47,3 +49,4 @@
       timeout: 20
   owner_id: U07K00A281X # Kevin Wu
   team: train
+  budget_type: unit

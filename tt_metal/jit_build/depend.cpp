@@ -281,7 +281,7 @@ bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj)
     auto up_to_date = dependencies_up_to_date(hash_file);
 
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("dependencies_up_to_date");
+    static auto& tok = tt::tt_metal::BuildCacheTelemetry::inst().get_or_register_metric("dependencies_up_to_date");
     tok.record(elapsed_ms);
 
     return up_to_date;

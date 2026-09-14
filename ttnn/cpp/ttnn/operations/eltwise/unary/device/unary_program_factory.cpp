@@ -23,17 +23,6 @@ using namespace ttnn::operations::unary::utils;
 using ttnn::operations::unary::EltwiseUnaryWithParam;
 using ttnn::operations::unary::UnaryOpType;
 
-void apply_input_dtype_defines(DataType dtype, std::map<std::string, std::string>& defines) {
-    if (dtype == DataType::FLOAT32) {
-        defines["INP_FLOAT32"] = "1";
-    } else if (dtype == DataType::INT32) {
-        defines["INP_INT32"] = "1";
-    } else if (dtype == DataType::UINT32) {
-        defines["INP_UINT32"] = "1";
-    } else {
-        defines["INP_FLOAT"] = "1";
-    }
-}
 
 bool pack_first_op_scalars(
     const EltwiseUnaryWithParam& op, DataType input_dtype, uint32_t& packed_scalar1, uint32_t& packed_scalar2) {
@@ -416,7 +405,7 @@ tt::tt_metal::ProgramDescriptor UnaryDeviceOperation::ProgramFactory::create_des
 
     const bool math_approx_mode = false;
     std::map<std::string, std::string> unary_defines = get_block_defines(ops_chain, "0", "0", input.dtype());
-    CMAKE_UNIQUE_NAMESPACE::apply_input_dtype_defines(input.dtype(), unary_defines);
+    add_input_dtype_defines(input.dtype(), unary_defines);
     const bool logit_clamp_enabled =
         CMAKE_UNIQUE_NAMESPACE::pack_first_op_scalars(ops_chain[0], input.dtype(), packed_scalar1, packed_scalar2);
 
