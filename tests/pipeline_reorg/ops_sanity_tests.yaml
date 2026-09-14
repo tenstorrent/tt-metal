@@ -20,6 +20,7 @@
       timeout: 5
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
+  budget_type: sanity
   slow_dispatch: false
 
 - name: blackhole deepseek blitz op tests (slow dispatch)
@@ -29,6 +30,7 @@
       timeout: 60
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: true
 
 - name: blackhole deepseek blitz op tests (fast dispatch)
@@ -38,6 +40,7 @@
       timeout: 30
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: false
 
 - name: blackhole deepseek per-core allocation tests (slow dispatch)
@@ -47,6 +50,7 @@
       timeout: 10
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: true
 
 - name: blackhole deepseek per-core allocation tests (fast dispatch)
@@ -56,4 +60,5 @@
       timeout: 10
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
+  budget_type: sanity
   slow_dispatch: false

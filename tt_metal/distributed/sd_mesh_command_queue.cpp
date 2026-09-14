@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <tt_stl/fmt.hpp>
 #include <mutex>
 #include "sd_mesh_command_queue.hpp"
@@ -122,7 +123,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
-    auto shard_view = device_buffer->view(region_value);
+    auto shard_view = device_buffer->impl().view(*device_buffer, region_value);
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
@@ -156,7 +157,8 @@ void SDMeshCommandQueue::read_shard_from_device(
     drain_emule_run(mesh_device_, get_target_device_type());
     wait_for_cores_idle();
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto shard_view =
+        device_buffer->impl().view(*device_buffer, region.value_or(BufferRegion(0, device_buffer->size())));
 
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");
     if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
