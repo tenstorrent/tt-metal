@@ -103,7 +103,7 @@ card:
     * Hardware: P300x2, mesh `P150x4`, tensor parallel over 4 chips; one box serves 1 to 32 users.
     * Decode: ~32 t/s/u at one user, ~490 t/s aggregate at 32 users on short prompts (739 t/s on 1,024-token outputs).
     * Sampling: temperature, top-p/top-k, penalties, structured outputs, streaming — full vLLM support (no speculative decoding on this package).
-    * Faster single-user / small-batch decode: [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2) — the same model with DFlash2 speculative decoding, 1.2 to 1.5× the t/s/u at 1 to 4 users (greedy output).
+    * Faster single-user / small-batch decode: [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2) — the same model with DFlash2 speculative decoding, 1.4 to 1.9× the tokens/s at 1 to 8 users (greedy output).
     * Source: tt-metal branch `qwen36-prefill-opt` (prefill optimizations on by default); packaged with tt-model-manager.
 
     ## Benchmarks
