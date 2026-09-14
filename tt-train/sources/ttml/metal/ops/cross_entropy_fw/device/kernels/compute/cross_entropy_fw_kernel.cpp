@@ -201,8 +201,8 @@ void calculate_sum_exp_x() {
     tile_regs_acquire();
 
     const uint32_t max_value_register = 3U;
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    reconfig_data_format(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    rearm_dest_sync(cb_exp_sum_before_reduction);
     unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);
@@ -263,8 +263,8 @@ void calculate_sum_exp_x() {
     tile_regs_acquire();
 
     const uint32_t max_value_register = 3U;
-    // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-    compute_kernel_hw_startup(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    reconfig_data_format(cb_max_value_after_reduction, cb_max_value_after_reduction);
+    rearm_dest_sync(cb_exp_sum_before_reduction);
     unary_bcast_init<BroadcastType::COL>(cb_max_value_after_reduction);
     unary_bcast<BroadcastType::COL>(
         cb_max_value_after_reduction, /* tile idx */ 0, /* reg tile idx */ max_value_register);

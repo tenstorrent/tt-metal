@@ -198,8 +198,10 @@ void emit_output_for_row() {
             tile_regs_acquire();
 
             // Seed the accumulator with coeff2 (cubic branch) and load x once.
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(cb_weighted_coeffs, cb_weighted_coeffs);
+            // unary_bcast<COL> unpacks into SrcB, which reduce_sum_pows_to_inv_rms_triplet leaves
+            // pointing at cb_sum_pows (Float32), so this cannot be dropped.
+            reconfig_data_format_srcb(cb_weighted_coeffs);
+            rearm_dest_sync(cb_output);
             unary_bcast_init<BroadcastType::COL>(cb_weighted_coeffs);
             unary_bcast<BroadcastType::COL>(cb_weighted_coeffs, /*tile_idx=*/2U, reg_acc);
             copy_init(cb_input_pass_2);
