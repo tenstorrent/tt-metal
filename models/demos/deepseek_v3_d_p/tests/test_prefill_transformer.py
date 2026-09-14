@@ -105,7 +105,6 @@ def _threshold_for(label: str, th: PrefillTransformerThresholds) -> tuple[float,
 PCC_THRESHOLD = 0.99
 TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
-TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
 # Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
 DETERMINISM_PCC_THRESHOLD = 1.0
@@ -651,9 +650,7 @@ def run_model(
 
         # --- Determine threshold based on reference source ---
         if trace is not None:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
-                threshold = TRACE_PCC_THRESHOLD_DEVICE_BF16
-            elif gate_fallback_mode == GateComputeMode.DEVICE_FP32:
+            if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
                 threshold = TRACE_PCC_THRESHOLD_DEVICE_FP32
             elif gate_fallback_mode == GateComputeMode.HOST_ALL:
                 threshold = TRACE_PCC_THRESHOLD_HOST
@@ -1074,8 +1071,8 @@ def test_ds_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(384, GateComputeMode.DEVICE)],
-    ids=["e384_device"],
+    [(384, GateComputeMode.DEVICE_FP32)],
+    ids=["e384_device_fp32"],
 )
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
 @pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
@@ -1178,8 +1175,8 @@ def test_kimi_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(256, GateComputeMode.DEVICE)],
-    ids=["e256_device"],
+    [(256, GateComputeMode.DEVICE_FP32)],
+    ids=["e256_device_fp32"],
 )
 @pytest.mark.parametrize("determinism_check", [False], ids=["no_determinism"])
 @pytest.mark.parametrize("num_iterations", [1], ids=["iter1"])
