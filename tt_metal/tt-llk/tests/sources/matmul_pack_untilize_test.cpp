@@ -35,7 +35,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_unpack_AB_matmul_init_<>();
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
-        _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, face_size, face_size);
+        _llk_unpack_AB_matmul_<>(
+            L1_ADDRESS(params.buffer_A[0]),
+            L1_ADDRESS(params.buffer_B[0]),
+            0,
+            0,
+            formats.unpack_B_src /* operand A -> SrcB */,
+            formats.unpack_A_src /* operand B -> SrcA */);
     }
 }
 

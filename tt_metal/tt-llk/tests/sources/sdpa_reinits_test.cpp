@@ -45,7 +45,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
-                _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A0[0]), L1_ADDRESS(buffer_B0[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
+                _llk_unpack_AB_matmul_<>(
+                    L1_ADDRESS(buffer_A0[0]),
+                    L1_ADDRESS(buffer_B0[0]),
+                    mt * 1 + kt,
+                    kt * 1,
+                    unpack_b_src_format0 /* operand A -> SrcB */,
+                    unpack_a_src_format0 /* operand B -> SrcA */,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    false,
+                    false,
+                    1,
+                    1,
+                    1);
             }
         }
     }
@@ -103,7 +116,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
             const std::uint32_t mt = batch;
             for (std::uint32_t kt = 0; kt < 1; ++kt)
             {
-                _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A3[0]), L1_ADDRESS(buffer_B3[0]), mt * 1 + kt, kt * 1, 128, 128, false, false, 1, 1, 1);
+                _llk_unpack_AB_matmul_<>(
+                    L1_ADDRESS(buffer_A3[0]),
+                    L1_ADDRESS(buffer_B3[0]),
+                    mt * 1 + kt,
+                    kt * 1,
+                    unpack_b_src_format3 /* operand A -> SrcB */,
+                    unpack_a_src_format3 /* operand B -> SrcA */,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    ckernel::DEFAULT_TENSOR_SHAPE,
+                    false,
+                    false,
+                    1,
+                    1,
+                    1);
             }
         }
     }

@@ -123,7 +123,15 @@ void run_kernel(RUNTIME_PARAMETERS params)
             mm_num_faces);
     }
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, tile_size, tile_size);
+    _llk_unpack_AB_matmul_<>(
+        L1_ADDRESS(params.buffer_A[0]),
+        L1_ADDRESS(params.buffer_B[0]),
+        0,
+        0,
+        formats_array[run].unpack_B_src /* operand A -> SrcB */,
+        formats_array[run].unpack_A_src /* operand B -> SrcA */,
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, mm_num_faces),
+        ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, mm_num_faces));
 }
 
 #endif

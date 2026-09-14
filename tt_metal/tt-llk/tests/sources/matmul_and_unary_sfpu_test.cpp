@@ -43,7 +43,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         4 /* num_faces */,
         4 /* num_faces */);
     _llk_unpack_AB_matmul_init_<>();
-    _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, params.TILE_SIZE_UNPACK_A, params.TILE_SIZE_UNPACK_B);
+    _llk_unpack_AB_matmul_<>(
+        L1_ADDRESS(params.buffer_A[0]),
+        L1_ADDRESS(params.buffer_B[0]),
+        0,
+        0,
+        formats_array[run].unpack_B_src /* operand A -> SrcB */,
+        formats_array[run].unpack_A_src /* operand B -> SrcA */);
 
     t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);
     t6_semaphore_get<>(semaphore::PACK_DONE);

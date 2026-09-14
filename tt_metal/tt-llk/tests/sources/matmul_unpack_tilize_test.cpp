@@ -105,7 +105,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (int block = 0; block < params.NUM_BLOCKS; ++block)
     {
         const std::uint32_t offset = block * intermediate_tile_stride;
-        _llk_unpack_AB_matmul_<>(L1_ADDRESS(buffer_A_tilized + offset), L1_ADDRESS(buffer_B_tilized + offset), 0, 0, tile_size, tile_size);
+        _llk_unpack_AB_matmul_<>(
+            L1_ADDRESS(buffer_A_tilized + offset),
+            L1_ADDRESS(buffer_B_tilized + offset),
+            0,
+            0,
+            formats_array[run].unpack_B_src /* operand A -> SrcB */,
+            formats_array[run].unpack_A_src /* operand B -> SrcA */);
     }
 }
 

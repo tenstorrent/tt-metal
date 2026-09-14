@@ -14,6 +14,8 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
+#include "tensor_shape_coverage_unpack.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -297,6 +299,8 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * Iterates over the reused dimension, computing per-tile L1 addresses (with optional kernel-
  * broadcast wraparound and kt_dim striding), and unpacks operand A to SrcB / operand B to SrcA
  * for each step while synchronizing through the unpack semaphore and config-context switching.
+ * The per-tile L1 strides are derived from the source formats and tile shapes via
+ * @ref _llk_unpack_tile_size_, matching the TILE_SIZE_A/B GPRs the unpack MOP steps with.
  *
  * @tparam kernel_broadcast_a: Tile count to wrap operand A around for kernel broadcast (0 = disabled).
  * @tparam kernel_broadcast_b: Tile count to wrap operand B around for kernel broadcast (0 = disabled).
@@ -304,8 +308,10 @@ inline void _llk_unpack_AB_matmul_uninit_()
  * @param base_address_b: L1 base address of operand B's tile buffer.
  * @param tile_index_a: Starting tile index into operand A.
  * @param tile_index_b: Starting tile index into operand B.
- * @param tile_size_a: Size of one operand A tile, used to compute per-tile offsets.
- * @param tile_size_b: Size of one operand B tile, used to compute per-tile offsets.
+ * @param unpack_src_format_a: Source data format of operand A in L1, used to size its tile.
+ * @param unpack_src_format_b: Source data format of operand B in L1, used to size its tile.
+ * @param tensor_shape_a: Tile shape of operand A (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
+ * @param tensor_shape_b: Tile shape of operand B (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim).
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  * @param ct_dim: Number of column tiles in the output block.
@@ -321,16 +327,26 @@ inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_b,
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
-    const std::uint32_t tile_size_a,
-    const std::uint32_t tile_size_b,
-    const bool unpA_partial_face = false,
-    const bool unpB_partial_face = false,
-    std::uint32_t ct_dim         = 1,
-    const std::uint32_t rt_dim   = 1,
-    const std::uint32_t kt_dim   = 1)
+    const std::uint32_t unpack_src_format_a,
+    const std::uint32_t unpack_src_format_b,
+    const ckernel::TensorShape tensor_shape_a = ckernel::DEFAULT_TENSOR_SHAPE,
+    const ckernel::TensorShape tensor_shape_b = ckernel::DEFAULT_TENSOR_SHAPE,
+    const bool unpA_partial_face              = false,
+    const bool unpB_partial_face              = false,
+    std::uint32_t ct_dim                      = 1,
+    const std::uint32_t rt_dim                = 1,
+    const std::uint32_t kt_dim                = 1)
 {
     // In0/InA -> srcB (supports partial face)
     // In1/InB -> srcA
+
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", tensor_shape_a);
+    LLK_VALIDATE_TENSOR_SHAPE_UNPACK("_llk_unpack_AB_matmul_", tensor_shape_b);
+
+    // Operand A feeds SrcB (TILE_SIZE_B GPR) and operand B feeds SrcA (TILE_SIZE_A GPR); derive both
+    // strides the same way those GPRs were derived so the CPU-side offsets and the MOP walk agree.
+    const std::uint32_t tile_size_a = _llk_unpack_tile_size_(unpack_src_format_a, tensor_shape_a.face_r_dim, tensor_shape_a.total_num_faces());
+    const std::uint32_t tile_size_b = _llk_unpack_tile_size_(unpack_src_format_b, tensor_shape_b.face_r_dim, tensor_shape_b.total_num_faces());
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 

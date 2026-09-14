@@ -11,6 +11,7 @@ from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
 from fuser.tile_loop import LoopBlock, TileLoop
+from helpers.tile_shape import cpp_tensor_shape
 
 
 class MatmulUnpacker(Unpacker):
@@ -90,8 +91,10 @@ class MatmulUnpacker(Unpacker):
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
-        unpack_tile_size_a = compute_unit.src_a.tile_size
-        unpack_tile_size_b = compute_unit.src_b.tile_size
+        src_format_a = compute_unit.src_a.data_format.cpp_underlying_value
+        src_format_b = compute_unit.src_b.data_format.cpp_underlying_value
+        tensor_shape_a = cpp_tensor_shape(compute_unit.src_a.tile_shape)
+        tensor_shape_b = cpp_tensor_shape(compute_unit.src_b.tile_shape)
         full_ct_dim = (
             compute_unit.src_b.dimensions[1]
             // compute_unit.src_b.tile_shape.total_col_dim()
@@ -112,7 +115,8 @@ class MatmulUnpacker(Unpacker):
             f"            _llk_unpack_AB_matmul_<>(\n"
             f"                L1_ADDRESS({buffer_a}[0]), L1_ADDRESS({buffer_b}[0]),\n"
             f"                srca_tile_idx, srcb_tile_idx,\n"
-            f"                {unpack_tile_size_a}, {unpack_tile_size_b},\n"
+            f"                {src_format_a}, {src_format_b},\n"
+            f"                {tensor_shape_a}, {tensor_shape_b},\n"
             f"                {src_a_partial_face}, {src_b_partial_face},\n"
             f"                {ct_dim}, {rt_dim}, {kt_dim}\n"
             f"            );\n"
