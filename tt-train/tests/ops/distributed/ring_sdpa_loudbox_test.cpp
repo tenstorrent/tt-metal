@@ -23,30 +23,32 @@
  * that, `enable_fabric(8)` defaults to the T3000 descriptor, which is a
  * Wormhole part.
  *
- * Why the ring is 4 and not 8. The context-parallel ring runs along one mesh
- * axis, and the mesh is 2 x 4, so the longest axis gives `cp_size = 4` with
- * `seq_len / 4` rows per device. The physical row is a line, so the ring's
- * wraparound hop (device 3 back to device 0) is routed over three fabric
- * hops rather than one; that is a cost, not a correctness problem, and it is
- * paid identically by anything else measured on this fixture. A ring of 8
- * would need a 1 x 8 mesh laid along the Hamiltonian cycle
- * 0-3-4-7-6-5-2-1-0, which the stock descriptor does not describe.
+ * Two ways to use it, chosen by TTML_LOUDBOX_RING8, because the ring runs
+ * along one mesh axis and the axis lengths differ.
  *
- * The remaining axis (extent 2) is given to DDP, which is what makes the
- * parallelism context hand CP the axis of extent 4: for a 2-D mesh it assigns
- * axes in the order DDP, CP, TP. Tensors are therefore replicated across the
- * two rows and sharded along the four columns, and both rows compute the same
- * thing. That is deliberate: it keeps every board busy and it means a
- * disagreement between the rows would show up as a mismatch against the
- * reference.
+ * Default, `cp_size = 4`. The stock 2 x 4 descriptor, CP on the axis of
+ * extent 4 and DDP on the axis of extent 2 -- the parallelism context assigns
+ * axes in the order DDP, CP, TP, and a 2-D mesh needs exactly two enabled.
+ * Tensors are replicated across the two rows, so both rows compute the same
+ * thing and a disagreement between them is checked for directly. The physical
+ * row is a line, so the ring's wraparound (device 3 back to device 0) is
+ * routed over three fabric hops.
  *
- * For timing rather than correctness, note that this runs two independent
- * rings side by side, which share the fabric and the host's dispatch. That is
- * fair between two implementations measured the same way, but it is not the
- * cleanest absolute number; a `MeshShape(1, 4)` opened over one row with CP
- * as the only parallelism would isolate a single ring, at the cost of leaving
- * four boards idle. The parallelism context is a process-wide singleton, so
- * the two cannot coexist in one binary run.
+ * `TTML_LOUDBOX_RING8=1`, `cp_size = 8`. The cabling contains the Hamiltonian
+ * cycle 0-3-4-7-6-5-2-1-0, so every edge a ring of eight needs is a physical
+ * link; p150_x8_ring_mesh_graph_descriptor.textproto declares the mesh as
+ * 1 x 8 with a RING dim type, and fabric comes up as FABRIC_2D_TORUS_X, so
+ * the wraparound here is a real link rather than three hops. The cost is that
+ * a mesh with an axis of extent 1 is a line topology, where exactly one
+ * parallelism may be enabled: no DDP, hence no replica to cross-check, and
+ * one ring rather than two.
+ *
+ * Which to measure on. The 8-ring is the more meaningful shape -- a longer
+ * ring, a real wraparound, one ring using the whole machine. The 4-ring runs
+ * two independent rings side by side that share fabric and host dispatch,
+ * which is fair between two implementations measured the same way but is not
+ * a clean absolute number. Both are legal for any comparison provided both
+ * sides use the same one.
  *
  * Correctness is against a dense host reference in float32, the same
  * convention as the Galaxy file: scale 1/sqrt(head_dim), causal mask, softmax
@@ -82,8 +84,49 @@ namespace {
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
 
 constexpr uint32_t kExpectedChips = 8U;
-constexpr uint32_t kMeshRows = 2U;
-constexpr uint32_t kMeshCols = 4U;
+
+// Two ways to lay the eight boards out, selected by TTML_LOUDBOX_RING8.
+//
+// Default, the 2 x 4 mesh the stock descriptor declares: CP gets the axis of
+// extent 4 and DDP the axis of extent 2, so the ring is four chips and the
+// two rows are replicas.
+//
+// With TTML_LOUDBOX_RING8=1, a 1 x 8 ring. The cabling contains the
+// Hamiltonian cycle 0-3-4-7-6-5-2-1-0, so every edge a ring of eight needs is
+// a physical link, and p150_x8_ring_mesh_graph_descriptor.textproto declares
+// it that way. The ring is then eight chips, which is the more interesting
+// shape for context parallelism -- at the cost that a mesh with an axis of
+// extent 1 is a line topology, where the parallelism context allows exactly
+// one parallelism, so there is no DDP replica to check against.
+struct Topology {
+    uint32_t rows;
+    uint32_t cols;
+    const char* descriptor;
+    ttml::autograd::DistributedConfig parallelism;
+    bool has_replicas;  // more than one row, so each CP index appears twice
+};
+
+bool want_ring_of_eight() {
+    const char* v = std::getenv("TTML_LOUDBOX_RING8");
+    return v != nullptr && v[0] == '1';
+}
+
+Topology topology() {
+    if (want_ring_of_eight()) {
+        return {
+            1U,
+            8U,
+            "p150_x8_ring_mesh_graph_descriptor.textproto",
+            {.enable_ddp = false, .enable_tp = false, .enable_cp = true},
+            false};
+    }
+    return {
+        2U,
+        4U,
+        "p150_x8_mesh_graph_descriptor.textproto",
+        {.enable_ddp = true, .enable_tp = false, .enable_cp = true},
+        true};
+}
 
 //: Eight Blackhole chips, i.e. the machine this fixture is written for.
 bool is_eight_chip_blackhole() {
@@ -104,17 +147,17 @@ bool is_eight_chip_blackhole() {
     }
 }
 
-// The 2 x 4 Blackhole descriptor, found under whichever root this build uses.
+// This topology's Blackhole descriptor, under whichever root this build uses.
 // Returns nullopt if it cannot be located, in which case the fixture skips
 // rather than letting enable_fabric() fall back to the Wormhole T3000 file.
-std::optional<std::string> p150_x8_descriptor_path() {
+std::optional<std::string> descriptor_path() {
     const char* const roots[] = {std::getenv("TT_METAL_RUNTIME_ROOT"), std::getenv("TT_METAL_HOME")};
     for (const char* root : roots) {
         if (root == nullptr) {
             continue;
         }
         std::string path =
-            std::string(root) + "/tt_metal/fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.textproto";
+            std::string(root) + "/tt_metal/fabric/mesh_graph_descriptors/" + topology().descriptor;
         if (std::filesystem::exists(path)) {
             return path;
         }
@@ -123,7 +166,7 @@ std::optional<std::string> p150_x8_descriptor_path() {
 }
 
 bool loudbox_available() {
-    return is_eight_chip_blackhole() && p150_x8_descriptor_path().has_value();
+    return is_eight_chip_blackhole() && descriptor_path().has_value();
 }
 
 // ---------------------------------------------------------------- reference
@@ -240,7 +283,7 @@ public:
         }
         // Before enable_fabric(), which otherwise picks the T3000 descriptor
         // for a device count of 8. Do not overwrite a path the caller set.
-        setenv("TT_MESH_GRAPH_DESC_PATH", p150_x8_descriptor_path()->c_str(), /* overwrite */ 0);
+        setenv("TT_MESH_GRAPH_DESC_PATH", descriptor_path()->c_str(), /* overwrite */ 0);
 
         // Any suite that touched the device before this one reached it through
         // AutoContext::get_device(), which opens a default 1x1 mesh lazily and
@@ -260,7 +303,8 @@ public:
             // Already initialized. Nothing to do.
         }
         ttml::ttnn_fixed::distributed::enable_fabric(kExpectedChips);
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(kMeshRows, kMeshCols));
+        ttml::autograd::ctx().open_device(
+            tt::tt_metal::distributed::MeshShape(topology().rows, topology().cols));
         ttml::autograd::ctx().set_seed(42);
         ttml::autograd::ctx().initialize_socket_manager(ttnn::distributed::SocketType::FABRIC);
 
@@ -270,8 +314,7 @@ public:
         // It is built from the open device, so it comes after open_device();
         // there is no API to replace one, hence the guard.
         if (!ttml::autograd::ctx().is_parallelism_context_initialized()) {
-            ttml::autograd::ctx().initialize_parallelism_context(
-                {.enable_ddp = true, .enable_tp = false, .enable_cp = true});
+            ttml::autograd::ctx().initialize_parallelism_context(topology().parallelism);
         }
     }
 
@@ -309,7 +352,7 @@ TEST_F(LoudboxRingSDPATest, RingShiftAroundTheCpAxis) {
     const uint32_t cp_axis = pctx.get_cp_axis().value();
     const uint32_t cp_size = pctx.get_cp_size();
     ASSERT_EQ(cp_axis, 1U);
-    ASSERT_EQ(cp_size, kMeshCols);
+    ASSERT_EQ(cp_size, topology().cols);
 
     auto& rng = autograd::ctx().get_generator();
     const xt::xarray<float> full = ttml::test_utils::make_uniform_xarray<float>(
@@ -325,10 +368,11 @@ TEST_F(LoudboxRingSDPATest, RingShiftAroundTheCpAxis) {
     const auto after = core::to_xtensor<float>(shifted->get_value(), core::IdentityComposer{});
 
     // Backward shift: device i receives what device (i + 1) mod cp_size held.
-    for (uint32_t row = 0; row < kMeshRows; ++row) {
-        for (uint32_t col = 0; col < kMeshCols; ++col) {
-            const size_t dst = row * kMeshCols + col;
-            const size_t src = row * kMeshCols + ((col + 1U) % kMeshCols);
+    const uint32_t cols = topology().cols;
+    for (uint32_t row = 0; row < topology().rows; ++row) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            const size_t dst = row * cols + col;
+            const size_t src = row * cols + ((col + 1U) % cols);
             EXPECT_TRUE(xt::allclose(before[src], after[dst], 1e-3F, 1e-5F))
                 << "device " << dst << " should hold what device " << src << " had";
         }
@@ -351,7 +395,7 @@ xt::xarray<float> gather_cp(
     for (size_t dev = 0; dev < per_device.size(); ++dev) {
         // CP is axis 1, so the column index within the row is the CP index;
         // the two rows are replicas and write the same values.
-        const size_t cp_idx = dev % kMeshCols;
+        const size_t cp_idx = dev % topology().cols;
         const size_t seq_start = cp_idx * seq_per_device;
         for (size_t b = 0; b < batch; ++b) {
             for (size_t h = 0; h < num_heads; ++h) {
@@ -442,9 +486,12 @@ void run_ring_attention(
     // The two mesh rows are replicas of one another. Checking them against
     // each other catches a divergence that gathering would otherwise hide,
     // since the second row's values overwrite the first's.
-    for (uint32_t col = 0; col < kMeshCols; ++col) {
-        EXPECT_TRUE(xt::allclose(per_device_output[col], per_device_output[kMeshCols + col], 1e-5F, 1e-6F))
-            << "the two replica rows disagree at CP index " << col;
+    if (topology().has_replicas) {
+        for (uint32_t col = 0; col < topology().cols; ++col) {
+            EXPECT_TRUE(
+                xt::allclose(per_device_output[col], per_device_output[topology().cols + col], 1e-5F, 1e-6F))
+                << "the two replica rows disagree at CP index " << col;
+        }
     }
 
     const auto gathered_output =
@@ -506,18 +553,96 @@ void run_ring_attention(
 
 }  // namespace
 
+// Shapes are given as rows *per device* rather than as a sequence length, so
+// the same case is legal whether the ring is four chips or eight: the shard
+// must be a whole number of 32-row tiles, which a fixed sequence length stops
+// being as soon as the ring grows.
+size_t seq_for(const size_t rows_per_device) {
+    return rows_per_device * ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+}
+
 TEST_F(LoudboxRingSDPATest, CausalForward) {
-    run_ring_attention(/*batch=*/1, /*num_heads=*/4, /*seq_len=*/128, /*head_dim=*/64, /*test_backward=*/false);
+    run_ring_attention(1, 4, seq_for(32), 64, /*test_backward=*/false);
 }
 
 TEST_F(LoudboxRingSDPATest, CausalBackward) {
-    run_ring_attention(/*batch=*/1, /*num_heads=*/4, /*seq_len=*/128, /*head_dim=*/64, /*test_backward=*/true);
+    run_ring_attention(1, 4, seq_for(32), 64, /*test_backward=*/true);
 }
 
 TEST_F(LoudboxRingSDPATest, LargerSequenceCausalBackward) {
-    run_ring_attention(/*batch=*/1, /*num_heads=*/4, /*seq_len=*/512, /*head_dim=*/64, /*test_backward=*/true);
+    run_ring_attention(1, 4, seq_for(128), 64, /*test_backward=*/true);
 }
 
 TEST_F(LoudboxRingSDPATest, LargerBatchCausalBackward) {
-    run_ring_attention(/*batch=*/2, /*num_heads=*/8, /*seq_len=*/256, /*head_dim=*/64, /*test_backward=*/true);
+    run_ring_attention(2, 8, seq_for(64), 64, /*test_backward=*/true);
+}
+
+// ------------------------------------------------------------------ timing
+
+namespace {
+
+//: Median wall clock of one full backward through the ring, host side.
+//
+// This is the baseline any replacement of the per-step op is measured
+// against. It times the whole backward -- every ring step, the host-side
+// accumulation and the shifts -- because that is what a caller pays; a
+// per-step kernel number would flatter whichever implementation moves its
+// cost into the driver.
+double time_ring_backward(const size_t batch, const size_t num_heads, const size_t seq_len, const size_t head_dim) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
+    auto& rng = autograd::ctx().get_generator();
+
+    const std::array<std::size_t, 4> qkv_shape{batch, num_heads, seq_len, head_dim};
+    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+    const auto to_device = [&](const xt::xarray<float>& x) {
+        return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
+    };
+
+    const auto sample = [&]() {
+        auto query = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+        auto key = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+        auto value = autograd::create_tensor(
+            to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
+        auto out = ops::distributed::ring_attention_sdpa(
+            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal);
+        out->set_grad(to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())));
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+
+        const auto start = std::chrono::steady_clock::now();
+        out->backward();
+        tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    };
+
+    sample();  // warm the program cache and the kernel build
+    std::vector<double> samples;
+    for (uint32_t k = 0; k < 5; ++k) {
+        samples.push_back(sample());
+    }
+    std::sort(samples.begin(), samples.end());
+    return samples[samples.size() / 2];
+}
+
+}  // namespace
+
+// Disabled by default: it is a measurement, not an assertion, and it costs a
+// few seconds per shape. Run with --gtest_also_run_disabled_tests.
+TEST_F(LoudboxRingSDPATest, DISABLED_TimeTheBaselineBackward) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring backward, " << cp_size << " chips, ttml::metal::sdpa_bw per step\n";
+    for (const auto [batch, heads, seq_len, head_dim] :
+         std::vector<std::array<size_t, 4>>{
+             {1, 4, 128 * cp_size, 64},
+             {1, 4, 256 * cp_size, 64},
+             {1, 8, 256 * cp_size, 64},
+             {1, 4, 512 * cp_size, 64},
+             {1, 4, 256 * cp_size, 128}}) {
+        const double seconds = time_ring_backward(batch, heads, seq_len, head_dim);
+        std::cout << "  batch=" << batch << " heads=" << heads << " N=" << seq_len << " d=" << head_dim
+                  << " (" << seq_len / cp_size << " rows per chip): " << seconds * 1e3 << " ms\n";
+    }
 }
