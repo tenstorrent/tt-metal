@@ -758,6 +758,37 @@ def test_tests_present_but_no_enabled_sku_is_fatal(tests_yaml: Path):
     assert "No tests selected for enabled SKUs" in result.stdout
 
 
+@pytest.mark.parametrize(
+    "enabled_skus",
+    [
+        "wh_n300_civ2",
+        "sim_wh_n150,sim_bh_p150",
+        "bh_p150b_civ2_viommu",
+        "wh_n300_civ2,bh_p150b_civ2_viommu,sim_wh_n150",
+    ],
+)
+def test_ops_sanity_workflow_filters_available_tests(tmp_path: Path, enabled_skus: str):
+    """The real workflow must skip uncovered SKUs and preserve every matching ops leg."""
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/ops-sanity-impl.yaml").read_text())
+    job = workflow["jobs"]["load-test-matrix"]
+    step = next(step for step in job["steps"] if step.get("id") == "build-matrix")
+    command = step["run"].replace("${{ env.TESTS_YAML_PATH }}", job["env"]["TESTS_YAML_PATH"])
+    command = command.replace("${{ inputs.enabled-skus }}", enabled_skus)
+    output = tmp_path / "github_output"
+    run_env = os.environ.copy()
+    run_env.pop("MATRIX_EVENT_NAME", None)
+    run_env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + run_env.get("PATH", "")
+    run_env["GITHUB_OUTPUT"] = str(output)
+    result = subprocess.run(
+        ["bash", "-e", "-c", command], cwd=REPO_ROOT, env=run_env, capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    matrix = json.loads(re.search(r"matrix<<EOF\n(.*)\nEOF", output.read_text()).group(1))
+    all_tests = run_matrix(PIPELINE / "ops_sanity_tests.yaml", "ALL_SKUS_IN_TESTS")
+    assert matrix == [entry for entry in all_tests if entry["sku"] in enabled_skus.split(",")]
+    assert "sim-libs=[]\n" in output.read_text()
+
+
 @pytest.mark.parametrize("body", ["", "# placeholder, no tests yet\n"])
 @pytest.mark.parametrize("enabled", ["wh_n150_civ2", "ALL_SKUS_IN_TESTS"])
 def test_no_tests_in_yaml_warns_and_passes(tmp_path: Path, body: str, enabled: str):
