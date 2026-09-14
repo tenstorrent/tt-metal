@@ -514,6 +514,18 @@ FORCE_INLINE uint64_t get_noc_addr(
 template <bool DRAM>
 FORCE_INLINE uint64_t
 get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_t noc = noc_index) {
+#if defined(NOC_ATT_ENABLED)
+    // Typed resolution: the host's dram_bank_to_noc_xy words name DRAM tiles
+    // whose node ids are in none of the map's inverse tables, so a DRAM bank
+    // goes through Address::dram (interleaved bank id == channel == selector);
+    // an L1 bank's packed word resolves through the frame-corrected worker
+    // lookup inside bank_address<false>.
+    if constexpr (DRAM) {
+        return noc_address_backend::bank_address<true>(bank_id, bank_address_offset + bank_to_dram_offset[bank_id], noc);
+    } else {
+        return noc_address_backend::bank_address<false>(bank_id, bank_address_offset, noc);
+    }
+#else
     // Look up the bank destination before the DRAM offset add, matching the
     // load order (and object code) of the pre-backend implementation.
     const uint32_t packed_xy = interleaved_addr_gen::get_noc_xy<DRAM>(bank_id, noc);
@@ -521,6 +533,7 @@ get_noc_addr_from_bank_id(uint32_t bank_id, uint32_t bank_address_offset, uint8_
         bank_address_offset += bank_to_dram_offset[bank_id];
     }
     return noc_address_backend::packed_worker_address(packed_xy, bank_address_offset);
+#endif
 }
 
 template <bool DRAM, uint32_t page_size>

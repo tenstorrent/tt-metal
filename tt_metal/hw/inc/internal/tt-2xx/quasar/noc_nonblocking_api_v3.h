@@ -100,7 +100,28 @@ inline uint64_t noc_v3_inline_write_state_base = 0;
 // callers that pass a state address with a nonzero offset (the existing
 // dataflow wrappers do) behave identically to V2 instead of leaking stale
 // base bits into base | local.
+// The bare-offset diversion in noc_v3_state_base_of and noc_v3_cq_local_of below
+// is structural: a real ATT operand always has bits >= 32 set, because every
+// window those walks could match has a compare >= 2^32. The one deliberately
+// unmatched window is LoopbackScratch (compare 0x100000, 20 mask bits), whose
+// absolute aperture [1 MiB, 2 MiB) a bare 32-bit CQ offset would otherwise fall
+// into and lose its bits above the aperture. Pin the assumption for the active
+// map so a future window with a sub-2^32 compare cannot silently re-break this.
+static_assert(
+    noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Worker).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::Dram).compare >= (uint64_t{1} << 32) &&
+        noc_att::map_window(ACTIVE_ATT_MAP, noc_att::WindowClass::FullTile).compare >= (uint64_t{1} << 32),
+    "ATT CQ walk assumes only LoopbackScratch has compare < 2^32; a bare CQ offset would otherwise "
+    "match a real window and lose its high bits");
+
 inline __attribute__((always_inline)) uint64_t noc_v3_state_base_of(uint64_t noc_addr) {
+    // A bare 32-bit offset (a completion-queue pointer, a packed/large-write
+    // tail) is < 2^32 and is not a windowed operand: return it whole so the
+    // LoopbackScratch aperture cannot swallow bit 20+ of it. See the
+    // static_assert above for why < 2^32 is exactly the not-an-operand test.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     constexpr noc_att::WindowClass candidates[] = {
         noc_att::WindowClass::Worker,
         noc_att::WindowClass::Dram,
@@ -822,6 +843,12 @@ inline constexpr uint64_t NOC_V3_CQ_MCAST_LOCAL_MASK = noc_att::DESCRIPTOR_LOCAL
 // contributes that window's local field; anything else IS a bare local
 // offset already (completion-queue pointers, packed-write offsets).
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_addr) {
+    // A bare 32-bit CQ offset (< 2^32) is already a local offset, not a windowed
+    // operand: return it unchanged so the LoopbackScratch aperture cannot match
+    // it and drop the bits above the 1 MiB window. See the static_assert above.
+    if (noc_addr < (uint64_t{1} << 32)) {
+        return noc_addr;
+    }
     constexpr noc_att::WindowClass candidates[] = {
         noc_att::WindowClass::Worker,
         noc_att::WindowClass::Dram,
@@ -837,16 +864,22 @@ inline __attribute__((always_inline)) uint64_t noc_v3_cq_local_of(uint64_t noc_a
 }
 
 // Resolve a host-packed unicast coordinate word ((y << NOC_ADDR_NODE_ID_BITS)
-// | x) to its offset-free operand base: worker table first, then the
-// full-tile table (DRAM/perimeter tiles), like the backend's
-// packed_worker_address.
+// | x) to its offset-free operand base, exactly like the backend's
+// packed_worker_address: the word is in the kernel-visible frame, so the
+// map's frame offset is applied, then the worker table is searched, then the
+// full-tile table (dispatch/perimeter tiles). An unresolved word traps rather
+// than indexing past the window array with WindowClass::Invalid.
 inline __attribute__((always_inline)) uint64_t noc_v3_cq_packed_base(uint32_t packed_xy) {
     constexpr uint32_t node_mask = (1u << NOC_ADDR_NODE_ID_BITS) - 1;
-    const noc_att::ResolvedTile tile = noc_att::resolve_current(
+    const noc_att::ResolvedTile tile = noc_att::resolve_host_coordinate(
         ACTIVE_ATT_MAP, packed_xy & node_mask, (packed_xy >> NOC_ADDR_NODE_ID_BITS) & node_mask);
     ASSERT(tile.valid);
+    if (!tile.valid) {
+        __builtin_trap();
+    }
     return noc_att::map_window(ACTIVE_ATT_MAP, tile.window).make_address(tile.selector, 0);
 }
+
 
 // Unpack a host NOC_MULTICAST_ENCODING word (x_start << 2n | y_start << 3n |
 // x_end | y_end << n, n = NOC_ADDR_NODE_ID_BITS) into an offset-free

@@ -12,6 +12,8 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
+#include <optional>
+#include <string>
 
 #include "internal/tt-2xx/quasar/noc/att/att_address.h"
 #include "internal/tt-2xx/quasar/noc/att/configs/grendel_qsr1_att_config.h"
@@ -106,9 +108,66 @@ TEST(QuasarAttUmdAgreement, PerimeterConfigAddressesMatch) {
     EXPECT_EQ(compared, METAL_MAP.full_tile_endpoint_words.size() - METAL_MAP.worker_endpoint_words.size());
 }
 
-// UMD resolves DRAM through the GDDR window; tt-metal's qsr.s1 map declares no logical DRAM binding,
-// so there is nothing to agree with yet. This fails once one is added, as the signal to extend the
-// comparison above rather than leave the window uncompared.
-TEST(QuasarAttUmdAgreement, DramHasNoMetalBindingToCompareAgainst) {
-    EXPECT_TRUE(METAL_MAP.dram_selectors.empty());
+// Both sides offset the descriptor frame to the package frame the endpoint words are in. The
+// kernels' inverse lookups (packed bank words, CQ coordinate words, is_local_bank) apply tt-metal's
+// copy of that offset, so it must be the one UMD uses for the same map.
+TEST(QuasarAttUmdAgreement, FrameOffsetsMatch) {
+    EXPECT_EQ(METAL_MAP.node_id_offset_x, UMD_MAP.package_offset_x);
+    EXPECT_EQ(METAL_MAP.node_id_offset_y, UMD_MAP.package_offset_y);
+}
+
+// A dispatch entry is keyed by the descriptor coordinate the host publishes. Its selector must be
+// the row UMD's table holds for that tile in the same window, and the operand must be the one UMD
+// builds for a host access to the same core.
+TEST(QuasarAttUmdAgreement, DispatchEntriesMatchUmd) {
+    const tt::umd::att::Resolver umd_resolver(UMD_MAP);
+    ASSERT_FALSE(METAL_MAP.dispatch_entries.empty());
+
+    for (std::uint32_t i = 0; i < METAL_MAP.dispatch_entries.size(); ++i) {
+        const noc_att::MapData::DispatchEntry& entry = METAL_MAP.dispatch_entries[i];
+        SCOPED_TRACE("dispatch (" + std::to_string(entry.x) + ", " + std::to_string(entry.y) + ")");
+
+        const bool tensix_hosted = entry.window == noc_att::WindowClass::Worker;
+        ASSERT_TRUE(tensix_hosted || entry.window == noc_att::WindowClass::FullTile);
+        const tt::umd::att::Table<std::uint16_t>& umd_words = UMD_MAP.endpoint_words[static_cast<std::size_t>(
+            tensix_hosted ? tt::umd::att::WindowClass::Worker : tt::umd::att::WindowClass::FullTile)];
+        ASSERT_LT(entry.selector, umd_words.size());
+        const std::uint16_t package_word = static_cast<std::uint16_t>(
+            ((entry.y + UMD_MAP.package_offset_y) << 6) | (entry.x + UMD_MAP.package_offset_x));
+        EXPECT_EQ(umd_words[entry.selector], package_word);
+
+        const std::optional<noc_att::NocAddress> metal_address =
+            noc_att::Address::dispatch(entry.x, entry.y, TEST_OFFSET).encode<METAL_MAP>(TEST_SIZE);
+        ASSERT_TRUE(metal_address.has_value());
+        // UMD picks the window from the core type: a Tensix-hosted dispatch tile is a worker, a DE
+        // tile is reached through its config aperture like every non-Tensix core.
+        const tt::CoreType core_type = tensix_hosted ? tt::CoreType::TENSIX : tt::CoreType::DISPATCH;
+        EXPECT_EQ(
+            umd_resolver.resolve(tt_xy_pair(entry.x, entry.y), core_type, TEST_OFFSET, TEST_SIZE), *metal_address);
+    }
+}
+
+// UMD resolves DRAM through the GDDR window by the channel tile's descriptor coordinate; tt-metal by
+// logical bank (one interleaved bank per channel, so bank N is channel N). Both must land on the
+// same selector for every one of the four boot-programmed channels.
+TEST(QuasarAttUmdAgreement, DramAddressesMatch) {
+    const tt::umd::att::Resolver umd_resolver(UMD_MAP);
+    const tt::umd::att::Table<std::uint16_t>& umd_dram_words =
+        UMD_MAP.endpoint_words[static_cast<std::size_t>(tt::umd::att::WindowClass::Dram)];
+    ASSERT_EQ(METAL_MAP.dram_selectors.size(), 4u);
+
+    for (std::uint32_t bank = 0; bank < METAL_MAP.dram_selectors.size(); ++bank) {
+        SCOPED_TRACE("dram bank " + std::to_string(bank));
+        const std::uint32_t selector = METAL_MAP.dram_selectors[bank];
+        ASSERT_LT(selector, umd_dram_words.size());
+        const std::uint16_t package_word = umd_dram_words[selector];
+        ASSERT_NE(package_word, tt::umd::att::ENDPOINT_UNPOPULATED);
+
+        const std::optional<noc_att::NocAddress> metal_address =
+            noc_att::Address::dram(bank, TEST_OFFSET).encode<METAL_MAP>(TEST_SIZE);
+        ASSERT_TRUE(metal_address.has_value());
+
+        const tt_xy_pair channel_core(descriptor_x(package_word), descriptor_y(package_word));
+        EXPECT_EQ(umd_resolver.resolve(channel_core, tt::CoreType::DRAM, TEST_OFFSET, TEST_SIZE), *metal_address);
+    }
 }
