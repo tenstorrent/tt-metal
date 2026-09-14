@@ -11,7 +11,7 @@
 # and at session end the best (highest TFLOP/s) config per (dtype column, M, N, K) is written to
 #   $TT_METAL_HOME/generated/minimal_matmul_best_blocking.json
 # and logged as a Python literal ready to paste into BEST_BLOCKING in test_minimal_matmul_benchmark.py
-# (phase 2, the partner-facing script).
+# (phase 2, the partner-facing script). Shared definitions live in minimal_matmul_gemm_common.py.
 #
 # Sheet data-type column -> ttnn mapping (fidelity = number of passes through the 5x7-bit multiplier):
 #   BF16 -> ttnn.bfloat16,  HiFi2 (2 passes), bf16 dest accumulation
@@ -59,77 +59,45 @@ import json
 import math
 import os
 import threading
-import time
 from itertools import product
 from pathlib import Path
 
-import numpy as np
 import pytest
-import torch
 import ttnn
 from loguru import logger
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
-from tracy.common import PROFILER_DEVICE_SIDE_LOG, PROFILER_LOGS_DIR, rm
-from tracy.device_post_proc_config import default_setup
-from tracy.process_device_log import import_log_run_stats
 
-profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
-GEMM_FLOPS_BENCHMARK_ENV = "TTNN_RUN_GEMM_FLOPS_BENCHMARK"
+from tests.ttnn.unit_tests.benchmarks.minimal_matmul_gemm_common import (
+    DEVICE_METRIC_COLUMNS,
+    DEVICE_PARAMS,
+    DTYPE_COLUMNS,
+    GEMM_FLOPS_BENCHMARK_ENV,
+    SHEET_SHAPES,
+    SWEPT_COLUMNS,
+    check_rows_pcc,
+    compute_metrics,
+    default_block_config,
+    device_metric_fields,
+    fmt,
+    get_profiler_build_enabled,
+    is_skippable_benchmark_runtime_error,
+    make_compute_kernel_config,
+    make_inputs,
+    make_matmul_config,
+    minimal_matmul_fn,
+    resolve_grid,
+    run_measurement,
+    runtime_error_reason,
+    shape_id,
+)
+
 BLOCK_SIZES_ENV = "TTNN_MINIMAL_MATMUL_BLOCK_SIZES"
 SWEEP_RESET_ENV = "TTNN_MINIMAL_MATMUL_SWEEP_RESET"
 NUM_CHIPS_ENV = "TTNN_MINIMAL_MATMUL_NUM_CHIPS"
 MAX_PARALLEL_CHIPS = 16  # dI/dt guidance from the meeting notes: at most ~16 chips launching GEMMs at once
+TRACE_EXECUTIONS = 3  # timed executions of the captured trace per config; the minimum is reported
 
 SWEEP_CSV_NAME = "minimal_matmul_block_sweep.csv"
 BEST_BLOCKING_JSON_NAME = "minimal_matmul_best_blocking.json"
-
-DEVICE_PARAMS = {"l1_small_size": 24576, "trace_region_size": 8388608}
-TRACE_EXECUTIONS = 3  # timed executions of the captured trace per config; the minimum is reported
-
-SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS = (
-    "beyond max l1 size",
-    "circular buffer",
-    "clash with l1 buffers",
-    "does not fit",
-    "failed to allocate",
-    "insufficient",
-    "invalid",
-    "l1 memory",
-    "not enough l1",
-    "out of memory",
-    "unable to find subblock",
-    "unsupported",
-    "validation",
-)
-
-# ---------------------------------------------------------------------------
-# Sheet definition
-# ---------------------------------------------------------------------------
-
-# Partner sheet rows, column order (M, N, K): input is [M, K], weight is [K, N].
-SHEET_SHAPES = [
-    (8192, 4096, 1536),
-    (8192, 4096, 12288),
-    (8192, 5120, 25600),
-    (8192, 8192, 8192),
-    (8192, 16384, 16384),
-    (8192, 24576, 4096),
-    (8192, 32768, 16384),
-    (16384, 16384, 16384),
-    (32, 2048, 2048),
-    (32, 4096, 4096),
-]
-
-# Sheet data-type column -> how it is run. "passes" is the fidelity pass count used in the peak formula.
-DTYPE_COLUMNS = {
-    "BF16": dict(dtype=ttnn.bfloat16, fidelity=ttnn.MathFidelity.HiFi2, passes=2, fp32_acc=False),
-    "FP32": dict(dtype=ttnn.float32, fidelity=ttnn.MathFidelity.HiFi4, passes=4, fp32_acc=True),
-    "FP8": dict(dtype=ttnn.bfloat8_b, fidelity=ttnn.MathFidelity.LoFi, passes=1, fp32_acc=False),
-    "FP4": dict(dtype=ttnn.bfloat4_b, fidelity=ttnn.MathFidelity.LoFi, passes=1, fp32_acc=False),
-}
-SWEPT_COLUMNS = ["BF16", "FP32", "FP8", "FP4"]  # TF32 shares the FP32 run; FP16 has no tensor dtype
-
-TORCH_INPUT_DTYPE = {ttnn.float32: torch.float32}  # everything else is generated as torch.bfloat16
 
 # Candidate block sizes (tiles). Sub-block candidates are derived per (M_block, N_block): every divisor
 # pair whose area fits the dest register count (8 tiles with bf16 accumulation, 4 with fp32, see
@@ -152,13 +120,6 @@ def get_num_chips():
     n = int(os.getenv(NUM_CHIPS_ENV, "1"))
     assert 1 <= n <= MAX_PARALLEL_CHIPS, f"{NUM_CHIPS_ENV} must be in [1, {MAX_PARALLEL_CHIPS}], got {n}"
     return n
-
-
-def default_block_config(M, N, fp32_acc):
-    """Mirror determine_default_block_sizes in minimal_matmul_program_descriptor.cpp (config=None path)."""
-    if fp32_acc:
-        return (8, 8, 8, 2, 2)
-    return (8, 8, 8, 2, 4) if N >= M else (8, 8, 8, 4, 2)
 
 
 def iter_subblocks(Mb, Nb, dest_regs):
@@ -185,165 +146,6 @@ def iter_block_configs(M, N, grid_x, grid_y, fp32_acc):
             continue
         for sh, sw in iter_subblocks(Mb, Nb, DEST_REGS[fp32_acc]):
             yield (Mb, Kb, Nb, sh, sw)
-
-
-# ---------------------------------------------------------------------------
-# Utility functions (adapted from test_benchmark.py)
-# ---------------------------------------------------------------------------
-
-
-def get_device_frequency_hz():
-    """Nominal device clock. Replaced by the profiler-reported clock when a profiler build is used."""
-    if is_wormhole_b0():
-        return 1.0e9
-    if is_blackhole():
-        return 1.35e9
-    raise RuntimeError("Unknown architecture: cannot derive the theoretical peak")
-
-
-def get_profiler_build_enabled():
-    return os.getenv("TT_METAL_DEVICE_PROFILER") is not None
-
-
-def get_profiler_data():
-    """Import profiler log and return device freq [MHz] + average TRISC1 kernel duration [cycles]."""
-    setup = default_setup()
-    setup.deviceInputLog = profiler_log_path
-    device_data = import_log_run_stats(setup)
-    return {
-        "device_freq": device_data["deviceInfo"]["freq"],
-        "trisc1_kernel_duration": device_data["devices"][0]["cores"]["DEVICE"]["analysis"][
-            "device_trisc1_kernel_duration"
-        ]["stats"]["Average"],
-    }
-
-
-def is_skippable_benchmark_runtime_error(error):
-    """Return whether a config failed because it is not runnable for this shape/device (L1, validation)."""
-    message = str(error).lower()
-    return any(substring in message for substring in SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS)
-
-
-def theoretical_tflops(num_cores, freq_hz, passes):
-    return num_cores * freq_hz * FLOP_PER_CORE_PER_CYCLE / passes / 1e12
-
-
-def pcc(a, b):
-    a = a.flatten().double()
-    b = b.flatten().double()
-    a = a - a.mean()
-    b = b - b.mean()
-    denom = a.norm() * b.norm()
-    return float((a @ b) / denom) if denom > 0 else 0.0
-
-
-def check_rows_pcc(in0, in1, out_t, num_rows=32):
-    """Cheap correctness check: PCC of a random row slice of the output against torch. A full reference
-    for 16384^3 on CPU is impractical."""
-    M = in0.shape[0]
-    rows = torch.randperm(M)[: min(num_rows, M)]
-    reference = in0[rows].float() @ in1.float()
-    actual = ttnn.to_torch(out_t)[rows].float()
-    return pcc(reference, actual)
-
-
-def run_measurement(
-    device, in0_t, in1_t, op_fn, num_warmup_iterations, num_measurement_iterations, calc_device_utilization
-):
-    """Compile, warm up, capture num_measurement_iterations ops in a trace and time one execution of it.
-    Returns (inference_time_avg_s, trisc1_kernel_duration_cycles or None, device_freq_hz or None, output)."""
-    output_t = op_fn(in0_t, in1_t)
-    for _ in range(num_warmup_iterations):
-        output_t = op_fn(in0_t, in1_t)
-
-    if calc_device_utilization:
-        ttnn.ReadDeviceProfiler(device)
-        rm(profiler_log_path)
-
-    ttnn.synchronize_device(device)
-
-    tid = None
-    trace_capture_ended = False
-    try:
-        tid = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(num_measurement_iterations):
-            output_t = op_fn(in0_t, in1_t)
-        ttnn.end_trace_capture(device, tid, cq_id=0)
-        trace_capture_ended = True
-
-        # Execute the trace a few times and keep the fastest: with several chips driven from one process, a
-        # kernel compile on another thread can delay this chip's launch, which can only inflate a timing.
-        elapsed = math.inf
-        for _ in range(TRACE_EXECUTIONS):
-            t0 = time.perf_counter()
-            ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-            ttnn.synchronize_device(device)
-            elapsed = min(elapsed, time.perf_counter() - t0)
-    finally:
-        if tid is not None:
-            try:
-                if not trace_capture_ended:
-                    ttnn.end_trace_capture(device, tid, cq_id=0)
-            finally:
-                ttnn.release_trace(device, tid)
-
-    trisc1_kernel_duration = None
-    device_freq_hz = None
-    if calc_device_utilization:
-        ttnn.ReadDeviceProfiler(device)
-        profiler_data = get_profiler_data()
-        trisc1_kernel_duration = float(np.mean(profiler_data["trisc1_kernel_duration"]))
-        device_freq_hz = float(profiler_data["device_freq"]) * 1e6
-
-    return elapsed / num_measurement_iterations, trisc1_kernel_duration, device_freq_hz, output_t
-
-
-def compute_metrics(M, N, K, passes, num_cores, inference_time_avg, trisc1_kernel_duration, device_freq_hz):
-    flops = 2 * M * N * K
-    freq_hz = device_freq_hz if device_freq_hz else get_device_frequency_hz()
-    peak = theoretical_tflops(num_cores, freq_hz, passes)
-    tflops = flops / inference_time_avg / 1e12
-    metrics = {
-        "flops": flops,
-        "time_avg_ms": inference_time_avg * 1e3,
-        "tflops": tflops,
-        "theoretical_tflops": peak,
-        "utilization_pct": tflops / peak * 100.0,
-    }
-    if trisc1_kernel_duration is not None:
-        device_time_s = trisc1_kernel_duration / freq_hz
-        device_tflops = flops / device_time_s / 1e12
-        metrics["device_time_ms"] = device_time_s * 1e3
-        metrics["device_tflops"] = device_tflops
-        metrics["device_utilization_pct"] = device_tflops / peak * 100.0
-    return metrics
-
-
-def resolve_grid(device, grid_size):
-    """grid_size is the conftest --grid-size fixture value read as (x, y), as in test_benchmark.py."""
-    compute_grid_size = device.compute_with_storage_grid_size()
-    if grid_size is None:
-        grid_size = (compute_grid_size.x, compute_grid_size.y)
-    if compute_grid_size.x < grid_size[0] or compute_grid_size.y < grid_size[1]:
-        pytest.skip(f"Requested grid {grid_size} exceeds available compute grid {compute_grid_size}")
-    return grid_size
-
-
-def make_inputs(device, M, N, K, dtype):
-    torch_dtype = TORCH_INPUT_DTYPE.get(dtype, torch.bfloat16)
-    in0 = torch.randn((M, K), dtype=torch_dtype)
-    in1 = torch.randn((K, N), dtype=torch_dtype)
-    in0_t = ttnn.from_torch(
-        in0, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    in1_t = ttnn.from_torch(
-        in1, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-    return in0, in1, in0_t, in1_t
-
-
-def shape_id(shape):
-    return "x".join(str(d) for d in shape)
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +176,6 @@ BASE_COLUMNS = [
     "utilization_pct",
     "pcc",
 ]
-DEVICE_COLUMNS = ["device_time_ms", "device_tflops", "device_utilization_pct"]
 
 
 def device_utilization_enabled():
@@ -384,7 +185,7 @@ def device_utilization_enabled():
 
 
 def csv_columns():
-    return BASE_COLUMNS + (DEVICE_COLUMNS if device_utilization_enabled() else [])
+    return BASE_COLUMNS + (DEVICE_METRIC_COLUMNS if device_utilization_enabled() else [])
 
 
 def summarize_best_blocking(sweep_csv_path, best_json_path):
@@ -479,22 +280,8 @@ def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
     in0, in1, in0_t, in1_t = make_inputs(chip, M, N, K, dtype)
     try:
         for mode, blocking, recorded_blocking, num_cores, grid_str in candidates:
-            config = None
-            if blocking is not None:
-                Mb, Kb, Nb, sh, sw = blocking
-                config = ttnn.MinimalMatmulConfig(
-                    M_block_size=Mb,
-                    K_block_size=Kb,
-                    N_block_size=Nb,
-                    subblock_h=sh,
-                    subblock_w=sw,
-                    compute_with_storage_grid_size=ctx["core_grid"],
-                )
-
-            def op_fn(a, b, config=config):
-                return ttnn.experimental.minimal_matmul(
-                    a, b, config=config, compute_kernel_config=ctx["compute_kernel_config"]
-                )
+            config = make_matmul_config(blocking, ctx["core_grid"]) if blocking is not None else None
+            op_fn = minimal_matmul_fn(config, ctx["compute_kernel_config"])
 
             output_t = None
             try:
@@ -503,9 +290,11 @@ def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
                     in0_t,
                     in1_t,
                     op_fn,
+                    True,
                     ctx["num_warmup_iterations"],
                     ctx["num_measurement_iterations"],
                     ctx["calc_device_utilization"],
+                    trace_executions=TRACE_EXECUTIONS,
                 )
                 metrics = compute_metrics(M, N, K, passes, num_cores, inference_time_avg, trisc1_dur, device_freq_hz)
                 row_pcc = check_rows_pcc(in0, in1, output_t) if mode == "oob" else ""
@@ -514,7 +303,7 @@ def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
                     raise
                 logger.warning(
                     f"chip {chip_index}: skipping {dtype_column} {shape_id((M, N, K))} {mode} {recorded_blocking}: "
-                    f"{str(e).splitlines()[0]}"
+                    f"{runtime_error_reason(e)}"
                 )
                 continue
             finally:
@@ -540,15 +329,13 @@ def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
                 N_block=Nb,
                 subblock_h=sh,
                 subblock_w=sw,
-                time_avg_ms=f"{metrics['time_avg_ms']:.4f}",
-                tflops=f"{metrics['tflops']:.2f}",
-                theoretical_tflops=f"{metrics['theoretical_tflops']:.2f}",
-                utilization_pct=f"{metrics['utilization_pct']:.2f}",
-                pcc=f"{row_pcc:.5f}" if row_pcc != "" else "",
+                time_avg_ms=fmt(metrics["time_avg_ms"], 4),
+                tflops=fmt(metrics["measured_tflops"], 2),
+                theoretical_tflops=fmt(metrics["theoretical_tflops"], 2),
+                utilization_pct=fmt(metrics["utilization_pct"], 2),
+                pcc=fmt(row_pcc, 5),
+                **device_metric_fields(metrics),
             )
-            for c in DEVICE_COLUMNS:
-                if c in metrics:
-                    row[c] = f"{metrics[c]:.4f}" if c == "device_time_ms" else f"{metrics[c]:.2f}"
             report(row)
 
             device_str = (
@@ -556,11 +343,11 @@ def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
             )
             logger.info(
                 f"chip {chip_index} [{mode}] {dtype_column} {shape_id((M, N, K))} blocks {Mb}/{Kb}/{Nb} sub {sh}x{sw} "
-                f"grid {grid_str}: {metrics['time_avg_ms']:.3f} ms, {metrics['tflops']:.1f} TFLOP/s, "
+                f"grid {grid_str}: {metrics['time_avg_ms']:.3f} ms, {metrics['measured_tflops']:.1f} TFLOP/s, "
                 f"{metrics['utilization_pct']:.1f}% of {metrics['theoretical_tflops']:.0f}{device_str}"
                 + (f", pcc {row_pcc:.4f}" if row_pcc != "" else "")
             )
-            results.append((metrics["tflops"], mode, recorded_blocking))
+            results.append((metrics["measured_tflops"], mode, recorded_blocking))
     finally:
         ttnn.deallocate(in0_t)
         ttnn.deallocate(in1_t)
@@ -602,13 +389,7 @@ def test_minimal_matmul_block_sweep(
         dtype_column=dtype_column,
         spec=spec,
         core_grid=ttnn.CoreCoord(grid_x, grid_y),
-        compute_kernel_config=ttnn.init_device_compute_kernel_config(
-            chips[0].arch(),
-            math_fidelity=spec["fidelity"],
-            math_approx_mode=True,
-            fp32_dest_acc_en=spec["fp32_acc"],
-            packer_l1_acc=True,
-        ),
+        compute_kernel_config=make_compute_kernel_config(chips[0], spec),
         num_warmup_iterations=num_warmup_iterations,
         num_measurement_iterations=num_measurement_iterations,
         calc_device_utilization=device_utilization_enabled(),
