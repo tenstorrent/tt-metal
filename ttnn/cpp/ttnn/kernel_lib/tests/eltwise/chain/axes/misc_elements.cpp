@@ -5,7 +5,7 @@
 // Small element scenarios that do not justify separate kernel files:
 //   0: ternary Where over three input CBs;
 //   1: one ReLU pack plus one unmodified pack.
-//   2: int32 CopyDest from D0 to D1.
+//   2: int32 CopyDest from D0 to D1 (host must enable fp32 dest-acc).
 //
 // CT args: [n, mode].
 
