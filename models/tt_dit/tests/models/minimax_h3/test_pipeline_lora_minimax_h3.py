@@ -48,7 +48,10 @@ from .common_av import (
 # schedulers keep their base shifts (video 12, audio 3) -- FastVideo's own pipeline asserts on that
 # -- so this goes through the native `set_timesteps`, not an explicit sigma list. The manifest's
 # `base_timesteps` are DMD2 training provenance and are not an inference schedule.
-NUM_INFERENCE_STEPS = 5
+# Adapters distilled elsewhere publish their own step count -- the community turbo LoRAs are tuned
+# across 4 to 8 forwards and recommend the upper half -- so the grid point count is a knob, but one
+# whose default stays the in-house manifest's.
+NUM_INFERENCE_STEPS = int(os.environ.get("MINIMAX_H3_NUM_STEPS", 5))
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
 
 SEED = 0
