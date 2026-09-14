@@ -302,6 +302,11 @@ class TTSpatialCrossAttention:
         # Every encoder layer in a forward shares one plan; building it here is the standalone path.
         if rebatch_plan is None:
             rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
+        else:
+            assert bev_mask.shape[0] == self.num_cams, (
+                f"rebatch_plan built for num_cams={bev_mask.shape[0]} but this SCA is configured with "
+                f"num_cams={self.num_cams}"
+            )
 
         if rebatch_plan.is_empty:
             if ENABLE_LOGGING:
