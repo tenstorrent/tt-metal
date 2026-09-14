@@ -596,8 +596,10 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
 
     // Quasar's MPSC head lives in a semaphore register rather than the mailbox. Read it here with the
     // rest of the snapshot.
+    // Skipped when the ring buffer is disabled: nothing initialises or posts the semaphore then, and on the
+    // qsr.s1 model touching semaphore 31 has coincided with GLOBAL_SEMAPHORES/GET_UNDERFLOW faults.
     uint32_t sem_head = 0;
-    if (hal.get_arch() == tt::ARCH::QUASAR) {
+    if (hal.get_arch() == tt::ARCH::QUASAR && !rtoptions.watcher_ring_buffer_disabled()) {
         reader.env.get_cluster().read_core(
             &sem_head,
             sizeof(sem_head),
@@ -708,9 +710,21 @@ void WatcherDeviceReader::Core::Dump() const {
 }
 
 void WatcherDeviceReader::Core::DumpL1Status() const {
+    const auto& hal = reader_.env.get_hal();
+    // The L1[0] canary checks that the master-RISC reset jump (generate_risc_startup_addr, which the
+    // firmware initializer writes to L1[0]==MEM_L1_BASE) still sits at L1[0]. That mechanism is the
+    // tt-1xx pattern for parts with "no reset PC register" (see generate_risc_startup_addr in hal.cpp):
+    // the jump at L1[0] IS the reset vector there, so it must survive. The Quasar simulator instead
+    // boots the DM core from the tile-reset shadow register, so the L1[0] word is not the live reset
+    // vector, and the running DM firmware (whose data/globals start at MEM_L1_BASE=0 and whose .bss is
+    // not zeroed) is free to overwrite it. It reads 0 on a perfectly healthy qsr.s1 run, so the canary
+    // is a false positive there and would self-abort the very watcher that ATT fast-dispatch bring-up
+    // depends on. Skip it on the Quasar simulator; keep it on every other target.
+    if (hal.get_arch() == tt::ARCH::QUASAR && reader_.env.get_rtoptions().get_simulator_enabled()) {
+        return;
+    }
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    const auto& hal = reader_.env.get_hal();
     const auto l1_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::BASE);
     data = reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, l1_base, sizeof(uint32_t));
     TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
@@ -831,9 +845,24 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     auto assert_status = mbox_data_.watcher().assert_status();
+    // On the qsr.s1 model the DM firmware's record travels through the cached L1 alias and arrives
+    // partially / mangled (line_num lands, tripped/which/claim do not, or claim reads 0xDEADC000). Report
+    // what we saw and keep polling: a hart that really asserted is stuck at its waypoint, which the
+    // regular dump shows every interval. Elsewhere the record is authoritative and we stop the run.
+    const bool tolerant_record = reader_.env.get_hal().get_arch() == tt::ARCH::QUASAR &&
+                                 reader_.env.get_rtoptions().get_simulator_enabled();
     if (assert_status.tripped() == dev_msgs::DebugAssertOK) {
         if (assert_status.line_num() != DEBUG_SANITIZE_SENTINEL_OK_16 ||
             assert_status.which() != DEBUG_SANITIZE_SENTINEL_OK_8) {
+            if (tolerant_record) {
+                log_warning(
+                    tt::LogMetal,
+                    "Watcher assert record on {} reported OK with non-sentinel fields (which={} line=0x{:x}); ignoring (Quasar simulator)",
+                    core_str_,
+                    assert_status.which(),
+                    assert_status.line_num());
+                return;
+            }
             TT_THROW(
                 "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
                 virtual_coord_.str(),
@@ -842,6 +871,17 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         }
         return;  // no assert tripped, nothing to do
     }
+    // Raw record for bring-up triage: on Quasar the firmware claims the record (claim == 0xDEADBEEF) before
+    // filling it, so a tripped record without the claim was not written by assert_and_hang().
+    log_warning(
+        tt::LogMetal,
+        "Watcher assert record on {}: tripped={} which={} line_num=0x{:x} claim=0x{:x} hw_fault_info=0x{:016x}",
+        core_str_,
+        assert_status.tripped(),
+        assert_status.which(),
+        assert_status.line_num(),
+        assert_status.claim(),
+        assert_status.hw_fault_info());
     std::string error_msg = fmt::format(
         "{}: {} ", core_str_, get_riscv_name(reader_.env.get_hal(), programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
@@ -850,6 +890,16 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
         assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
+        if (tolerant_record) {
+            log_warning(
+                tt::LogMetal,
+                "Watcher assert record on {} has unknown failure code {} (mangled record); ignoring (Quasar simulator)",
+                core_str_,
+                assert_status.tripped());
+            DumpWaypoints(true);
+            DumpRingBuffer(true);
+            return;
+        }
         TT_THROW(
             "Watcher data corruption, noc assert state on core {} unknown failure code: {}.\n",
             virtual_coord_.str(),
@@ -862,6 +912,10 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     DumpWaypoints(true);
     DumpRingBuffer(true);
     LogRunningKernels();
+    if (tolerant_record) {
+        log_warning(tt::LogMetal, "Watcher assert record on {} noted; continuing to poll (Quasar simulator)", core_str_);
+        return;
+    }
     reader_.watcher_server.set_exception_message(error_msg);
     TT_THROW("Watcher detected tripped assert and stopped device.");
 }
