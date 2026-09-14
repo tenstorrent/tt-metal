@@ -240,6 +240,18 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_relu_, (ITERATIONS), dst_index, VectorMode::RC);
     }
+    else if constexpr (OPERATION == SfpuType::lrelu)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _calculate_lrelu_, (ITERATIONS), dst_index, VectorMode::RC, 0x3dcccccdu /* 0.1f */);
+    }
+    else if constexpr (OPERATION == SfpuType::relu_min)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _relu_min_, (ITERATIONS), dst_index, VectorMode::RC, 0x40A00000u /* 5.0f */);
+    }
+    else if constexpr (OPERATION == SfpuType::relu_max)
+    {
+        SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, _relu_max_, (ITERATIONS), dst_index, VectorMode::RC, 0x40A00000u /* 5.0f */);
+    }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
         SFPU_UNARY_CALL(DST_SYNC, is_fp32_dest_acc_en, calculate_reciprocal, (APPROX, is_fp32_dest_acc_en, ITERATIONS), dst_index, VectorMode::RC);

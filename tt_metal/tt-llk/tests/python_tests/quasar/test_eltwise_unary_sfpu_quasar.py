@@ -34,6 +34,10 @@ from helpers.param_config import (
     select_perf_input_dimensions,
 )
 from helpers.perf.core import create_test_or_perf_config
+from helpers.sfpu_dispatch_constants import (
+    RELU_MAX_THRESHOLD,
+    RELU_MIN_THRESHOLD,
+)
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -101,6 +105,19 @@ COMP_OPS = [
     MathOperation.LessThanEqualZero,
     MathOperation.GreaterThanEqualZero,
 ]
+
+RELU_CC_OPS = [
+    MathOperation.Lrelu,
+    MathOperation.ReluMin,
+    MathOperation.ReluMax,
+]
+
+
+def _quasar_relu_min(x, threshold=RELU_MIN_THRESHOLD):
+    """x if x > threshold else 0 (not max(x, threshold))."""
+    xf = float(x)
+    return xf if xf > float(threshold) else 0.0
+
 
 # Extra (integer) formats only the comp family sweeps. Int32/Int16/Int8 (signed) and UInt8
 # (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
@@ -260,6 +277,21 @@ def prepare_inputs_for_operation(
         finfo = torch.finfo(torch_format)
         min_val = finfo.min / 2  # Use half range to avoid extremes
         max_val = finfo.max / 2
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.Lrelu:
+        min_val = -5.0
+        max_val = 5.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.ReluMin:
+        min_val = -5.0
+        max_val = 2.0 * RELU_MIN_THRESHOLD
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop == MathOperation.ReluMax:
+        min_val = -5.0
+        max_val = 2.0 * RELU_MAX_THRESHOLD
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop == MathOperation.Sqrt:
@@ -683,6 +715,10 @@ OP_CONFIGS = [
     OpConfig(MathOperation.Exp, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Gelu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Relu, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in RELU_CC_OPS
+    ],
     OpConfig(MathOperation.Reciprocal, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Sqrt, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
     OpConfig(MathOperation.Tanh, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True),
@@ -793,10 +829,11 @@ def test_eltwise_unary_sfpu_quasar(
 ):
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
-    variant (abs, exp, gelu, relu, reciprocal, sqrt, tanh, sigmoid, silu, rsqrt,
-    square, cumsum, typecast, and the six compare-to-zero modes), validated against
-    the UnarySFPUGolden reference. Typecast sweeps explicit (src, dst) format pairs;
-    every other op sweeps the shared format matrix.
+    variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
+    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast, and the six
+    compare-to-zero modes), validated against the UnarySFPUGolden reference.
+    Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
+    shared format matrix.
     """
     (
         mathop,
@@ -842,14 +879,22 @@ def test_eltwise_unary_sfpu_quasar(
     if not is_perf:
         if format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
-            golden_tensor = generate_golden(
-                mathop,
-                src_A,
-                formats.output_format,
-                dest_acc,
-                formats.input_format,
-                input_dimensions,
-            )
+            orig_relu_min = None
+            if mathop == MathOperation.ReluMin:
+                orig_relu_min = generate_golden.ops[MathOperation.ReluMin]
+                generate_golden.ops[MathOperation.ReluMin] = _quasar_relu_min
+            try:
+                golden_tensor = generate_golden(
+                    mathop,
+                    src_A,
+                    formats.output_format,
+                    dest_acc,
+                    formats.input_format,
+                    input_dimensions,
+                )
+            finally:
+                if orig_relu_min is not None:
+                    generate_golden.ops[MathOperation.ReluMin] = orig_relu_min
         else:
             # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
             # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
