@@ -8,10 +8,11 @@
 #include <type_traits>
 
 #include "access_types.h"
-#include "ckernel.h" // cfg_read, get_cfg_pointer, cfg_rmw, RDCFG, SETC16
+#include "ckernel.h" // RDCFG, SETC16
 #include "composition.h"
 #include "detail/gpr_operand.h"
 #include "detail/mmio_read.h"
+#include "detail/state_bank.h"
 #include "detail/write_backend.h"
 #include "registers.h"
 
@@ -103,7 +104,7 @@ inline __attribute__((always_inline)) std::uint32_t read()
     else
     {
         static_assert(Target == ThreadTarget::Current, "ThreadTarget applies only to thread CFG reads");
-        return (ckernel::cfg_read(F.addr32(S)) & F.mask(S)) >> F.shamt(S);
+        return (detail::read_state_word_mmio(F.addr32(S)) & F.mask(S)) >> F.shamt(S);
     }
 }
 
@@ -128,7 +129,7 @@ inline __attribute__((always_inline)) std::uint32_t read_word()
     else
     {
         static_assert(Target == ThreadTarget::Current, "ThreadTarget applies only to thread CFG reads");
-        return ckernel::cfg_read(F.addr32(S) + WordOffset);
+        return detail::read_state_word_mmio(F.addr32(S) + WordOffset);
     }
 }
 
@@ -232,7 +233,7 @@ inline __attribute__((always_inline)) void write(const hal::Gpr<GprIndex> source
  * @tparam A: Access path, values = <MMIO>.
  * @tparam First: First field-assignment type returned by @ref set.
  * @tparam Rest: Remaining field-assignment types returned by @ref set.
- * @param cfg: Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param cfg: Active CFG bank returned by `detail::state_cfg_bank()`.
  * @param first: First field assignment.
  * @param rest: Remaining field assignments.
  */
@@ -258,7 +259,7 @@ inline __attribute__((always_inline)) void write(volatile std::uint32_t* tt_reg_
  * @tparam Anchor: Field identifying the containing physical word.
  * @tparam S: Repeated descriptor section; compilation fails when it is outside Anchor.count.
  * @tparam WordOffset: Physical word offset from the anchor.
- * @param cfg: Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param cfg: Active CFG bank returned by `detail::state_cfg_bank()`.
  * @param value: Complete 32-bit word replacing the destination.
  */
 template <Access A, const Field& Anchor, Sec S, std::uint32_t WordOffset = 0>
@@ -287,7 +288,7 @@ public:
         static_assert(A != Access::TensixScalarUnit, "Access::TensixScalarUnit supports only GPR-backed cfg::write");
         if constexpr (A == Access::MMIO)
         {
-            cfg_ = ckernel::get_cfg_pointer();
+            cfg_ = detail::state_cfg_bank();
         }
     }
 
@@ -376,7 +377,7 @@ inline __attribute__((always_inline)) void write(Configure&& configure)
  *
  * @tparam A Access path, values = <MMIO>.
  * @tparam Configure Callable accepting a @ref WriteBatch.
- * @param cfg Active CFG bank returned by `ckernel::get_cfg_pointer()`.
+ * @param cfg Active CFG bank returned by `detail::state_cfg_bank()`.
  * @param configure Callable receiving a @ref WriteBatch.
  */
 template <Access A, typename Configure, std::enable_if_t<std::is_invocable_v<Configure, WriteBatch<A>&>, int> = 0>
@@ -394,7 +395,7 @@ template <Access A, const Field& F, Sec S, std::uint32_t Count, std::size_t Arra
 inline __attribute__((always_inline)) void write(const std::uint32_t (&values)[ArrayCount])
 {
     static_assert(A == Access::MMIO, "array writes require Access::MMIO");
-    detail::write_array_mmio<F, S, Count>(ckernel::get_cfg_pointer(), values);
+    detail::write_array_mmio<F, S, Count>(detail::state_cfg_bank(), values);
 }
 
 /**
@@ -477,32 +478,31 @@ inline __attribute__((always_inline)) void write(const std::uint32_t value)
     static_assert(F.width <= 32, "field wider than 32b cannot be written through a single value");
     static_assert(static_cast<std::uint32_t>(S) < F.count, "section index out of range for this register");
 
-    const std::uint32_t a = F.addr32(S);
-
-    constexpr std::uint32_t max_value = F.width >= 32 ? 0xffffffffu : ((std::uint32_t {1} << F.width) - 1u);
+    constexpr std::uint32_t cfg_word_addr = F.addr32(S);
+    constexpr std::uint32_t max_value     = F.width == 32 ? 0xffffffffu : ((std::uint32_t {1} << F.width) - 1u);
     LLK_ASSERT(value <= max_value, "value exceeds field width");
 
     if constexpr (A == Access::MMIO)
     {
         static_assert(F.scope == RegisterScope::State, "RISC writes target state CFG; use Access::TensixCfgUnit for thread CFG");
-        if constexpr (F.width >= 32)
+        if constexpr (F.width == 32)
         {
-            ckernel::get_cfg_pointer()[a] = value; // whole 32-bit word
+            detail::state_cfg_bank()[cfg_word_addr] = value; // whole 32-bit word
         }
         else
         {
-            ckernel::cfg_rmw(a, F.shamt(S), F.mask(S), value); // read-modify-write
+            detail::rmw_state_word_mmio(cfg_word_addr, F.shamt(S), F.mask(S), value); // read-modify-write
         }
     }
     else // Access::TensixCfgUnit
     {
         if constexpr (F.scope == RegisterScope::Thread)
         {
-            TT_SETC16(a, (value << F.shamt(S)) & 0xffffu);
+            TT_SETC16(cfg_word_addr, (value << F.shamt(S)) & 0xffffu);
         }
         else
         {
-            detail::cfg_reg_rmw_tensix<F.addr32(S), F.shamt(S), F.mask(S)>(value);
+            detail::cfg_reg_rmw_tensix<cfg_word_addr, F.shamt(S), F.mask(S)>(value);
         }
     }
 }

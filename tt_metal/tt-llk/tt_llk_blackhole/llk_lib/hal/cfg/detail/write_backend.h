@@ -14,6 +14,7 @@
 #include "../composition.h"
 #include "ckernel.h"
 #include "gpr_operand.h"
+#include "state_bank.h"
 
 namespace hal::cfg::detail
 {
@@ -85,7 +86,7 @@ inline __attribute__((always_inline)) void write_word(const ConfigWord<Scope, Ad
         "composed CFG writes require Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
     if constexpr (A == Access::MMIO)
     {
-        write_word_mmio(word, ckernel::get_cfg_pointer());
+        write_word_mmio(word, state_cfg_bank());
     }
     else if constexpr (Scope == RegisterScope::Thread)
     {
@@ -109,7 +110,7 @@ inline __attribute__((always_inline)) void write_word(const SingleFieldWord<Assi
         "composed CFG writes require Access::MMIO or Access::TensixCfgUnit; Access::TensixScalarUnit requires a GPR operand");
     if constexpr (A == Access::MMIO)
     {
-        write_word_mmio(word, ckernel::get_cfg_pointer());
+        write_word_mmio(word, state_cfg_bank());
     }
     else if constexpr (Assignment::scope == RegisterScope::Thread)
     {
@@ -281,7 +282,7 @@ inline __attribute__((always_inline)) void write_assignments(const Assignments&.
     volatile std::uint32_t* tt_reg_ptr cfg = nullptr;
     if constexpr (A == Access::MMIO)
     {
-        cfg = ckernel::get_cfg_pointer();
+        cfg = state_cfg_bank();
     }
     write_assignment_groups<A, 0u>(cfg, assignment_tuple);
 }
