@@ -73,7 +73,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 class PrefillBlockThresholds:
     dense: float = 0.996
     moe_gate_host: float = 0.996
-    moe_gate_device: float = 0.992
+    moe_gate_device_fp32: float = 0.992
     kvpe_kv: float = 0.999
     kvpe_pe: float = 0.999
 
@@ -82,7 +82,7 @@ DSV3_THRESHOLDS = PrefillBlockThresholds()
 KIMI_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.950)
 # Mistral runs GPT_DEVICE, and the selector above only special-cases device gates, so every
 # other gate mode lands on `moe_gate_host` -- the same reason Kimi tunes that field rather than
-# moe_gate_device. Floor set just under the measured 0.990894 (pcc-prompt_5k, mesh-8x4, CHUNK=5120).
+# moe_gate_device_fp32. Floor set just under the measured 0.990894 (pcc-prompt_5k, mesh-8x4, CHUNK=5120).
 MISTRAL4_THRESHOLDS = PrefillBlockThresholds(moe_gate_host=0.990)
 
 # Determinism: every iteration must be bit-identical to the iter-0 baseline (strict).
@@ -476,7 +476,7 @@ def run_model(
             pcc_threshold = thresholds.dense
         else:
             if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
-                pcc_threshold = thresholds.moe_gate_device
+                pcc_threshold = thresholds.moe_gate_device_fp32
             else:
                 pcc_threshold = thresholds.moe_gate_host
 

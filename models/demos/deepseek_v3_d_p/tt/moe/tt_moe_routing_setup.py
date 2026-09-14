@@ -207,7 +207,7 @@ class TtMoERoutingSetup(LightweightModule):
                 mesh_mapper=mesh_mapper,
             )
 
-        # The device gate (DEVICE / DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
+        # The device gate (DEVICE_FP32 / HASH_DEVICE) emits TILE indices, so this is a no-op
         # on the perf-critical path. The host-fallback gates (HOST_ALL / HASH_HOST) emit ROW_MAJOR
         # indices; the tilize only ever runs on the (non-perf) host path.
         if ttnn_top_k_experts_indices.layout != ttnn.TILE_LAYOUT:
