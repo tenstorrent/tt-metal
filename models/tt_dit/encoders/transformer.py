@@ -175,7 +175,6 @@ class TransformerEncoder(Module):
         self._sp_factor = device.shape[ctx.sp_axis] if ctx.sp_axis is not None else 1
         self._ccl_manager = ctx.ccl_manager
         self._cached_position_embeddings = {}
-        self._cached_causal_cond = {}  # (max_seq_len,) -> [1, 1, max_seq_len, max_seq_len] 0/1 tensor
         self._decode_trace: _DecodeTrace | None = None
 
     # TODO: Remove the mask buffer generation from the function to prevent trace assertion errors.
@@ -430,7 +429,6 @@ class TransformerEncoder(Module):
     def deallocate_weights(self) -> None:
         self._release_decode_trace()
         self._cached_position_embeddings.clear()
-        self._cached_causal_cond.clear()
         super().deallocate_weights()
 
     def _get_pos_embeds(
@@ -517,21 +515,6 @@ class TransformerEncoder(Module):
 
         return index, mask
 
-    def _get_causal_cond(self, max_seq_len: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
-        """Return a [1, 1, max_seq_len, max_seq_len] bfloat4_b 0/1 tensor (1 = keep).
-
-        Built once per max_seq_len and cached; avoids calling ttnn.tril inside a trace.
-        Entry [q, k] is 1 when k <= q (standard lower-triangular causal mask).
-        """
-        if max_seq_len not in self._cached_causal_cond:
-            local_seq_len = max_seq_len // self._sp_factor
-            col = _make_positions(start=0, sequence_length=max_seq_len, device=device)
-            col = ttnn.reshape(col, [1, 1, 1, max_seq_len])
-            row = _make_positions(start=0, sequence_length=max_seq_len, device=device, sp_axis=self._sp_axis)
-            row = ttnn.reshape(row, [1, 1, local_seq_len, 1])
-            self._cached_causal_cond[max_seq_len] = ttnn.typecast(ttnn.le(col, row), ttnn.bfloat4_b)
-        return self._cached_causal_cond[max_seq_len]
-
     def _prepare_attn_bias(
         self,
         mask: ttnn.Tensor,
@@ -541,11 +524,7 @@ class TransformerEncoder(Module):
         kv_length: int,
         device: ttnn.MeshDevice,
     ) -> ttnn.Tensor:
-        """Build the additive attention bias from a padding mask without using ttnn.tril.
-
-        Uses a pre-built causal condition tensor (cached on self) so that no dynamic allocation
-        happens inside a captured trace on subsequent calls.
-        """
+        """Build the additive attention bias from a padding mask."""
         batch_size = mask.shape[0]
 
         # Reshape padding mask to [batch, 1, 1, kv_length]
@@ -555,17 +534,18 @@ class TransformerEncoder(Module):
         # Broadcast to [batch, 1, query_length, kv_length]
         mask = ttnn.expand(mask, [batch_size, 1, query_length, kv_length])
 
-        # Slice the pre-built causal cond to [1, 1, query_length, kv_length],
-        # offsetting columns by query_pos (key positions 0..query_pos-1 are always visible).
-        max_len = max(query_length + query_pos, kv_length)
-        causal = self._get_causal_cond(max_len, device)
+        col = _make_positions(start=0, sequence_length=kv_length, device=device)
+        row = _make_positions(
+            start=query_pos,
+            sequence_length=query_length * self._sp_factor,
+            device=device,
+            sp_axis=self._sp_axis,
+        )
 
-        # ttnn.pad does not take bfloat4_b, and ttnn.slice does not at unaligned positions.
-        causal = ttnn.typecast(causal, ttnn.bfloat16)
+        col = ttnn.reshape(col, [1, 1, 1, kv_length])
+        row = ttnn.reshape(row, [1, 1, query_length, 1])
 
-        # rows q=0..query_length-1, cols k=0..kv_length-1, diagonal shifted by query_pos
-        # i.e. keep k <= q + query_pos  →  use rows [query_pos : query_pos+query_length]
-        causal = causal[:, :, query_pos : query_pos + query_length, :kv_length]
+        causal = ttnn.typecast(ttnn.le(col, row), ttnn.bfloat16)
 
         return (causal * mask - 1.0) * math.inf
 
@@ -1401,7 +1381,7 @@ def _norm_in_dram(
 def _make_positions(
     *, start: int, sequence_length: int, device: ttnn.MeshDevice, sp_axis: int | None = None
 ) -> ttnn.Tensor:
-    pos = ttnn.arange(start, start + sequence_length, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    pos = tensor.arange(start, start + sequence_length, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     pos = ttnn.unsqueeze(pos, 0)
 
     # If the attention mask had holes, i.e., contained zeros between ones, this would have to be
