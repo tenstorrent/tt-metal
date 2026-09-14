@@ -354,3 +354,10 @@ Final stage-owned source/docs `pre-commit run --files ...` exits0 (`precommit_cl
 ### Independent review and local checkpoint
 
 The fresh xhigh `$stage-review` subagent returns **clean-pass**, no required work (`stage_review.md`). It independently read all serving outputs, compared controls and token streams, recomputed metrics, checked source/artifact hashes, and reviewed cache/trace/sampling/shutdown changes. Findings were fixed or resolved with controlled evidence and rereviewed; limits are retained in its anomaly ledger. Local stage-owned commits follow this review; no push is authorized or performed.
+
+Local source/evidence checkpoints (no push):
+
+- tt-metal: branch `mvasiljevic/qwen38-full-bringup`, commit `7a294fe0171a4260d037c24059540c597067d914`.
+- vllm: branch `mvasiljevic/qwen38-full-bringup`, commit `5dfd818f4f0f5444533331d85f4711c43f8f2f2b`.
+
+The tt-metal commit hook ran normal precommit plus the operator artifact guard successfully, preserving/restoring unrelated unstaged edits. Only stage-owned Python/shell/Markdown and the model ignore entry are committed. Raw generated evidence remains persistent and ignored. A documentation-only follow-up records these SHAs; its final SHA is recorded in `readiness_vllm/local_commits.json` to avoid self-referential commit hashing.
