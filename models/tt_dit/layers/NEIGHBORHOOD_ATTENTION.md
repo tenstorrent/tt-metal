@@ -262,6 +262,7 @@ Small named helpers shared by reader and writer, so the two cannot decode a chun
 | `models/tt_dit/tests/unit/test_neighborhood_reference.py` | the torch reference itself       |
 | `models/tt_dit/tests/unit/test_neighborhood_sdpa.py`      | the op vs torch — 26 cases       |
 | `models/tt_dit/tests/unit/test_neighborhood_sdpa_perf.py` | scale timing, no correctness     |
+| `models/tt_dit/tests/models/vae/test_diffvae_rope.py`     | the three RoPE encodings vs one torch oracle and each other, lane level, float32 |
 
 
 The op test's parametrisation is where the coverage lives:
@@ -346,7 +347,7 @@ Decisions taken on the way, still in force:
 - Stage 1 (index 0) stays on the replicated linear-order backend: W=60 does not divide the size-8
   mesh axis.
 
-The gate baseline (`tests/models/vae/diffvae_gate_baseline.json`) carries all 15 gates, bricked
+The gate baseline (`tests/models/vae/diffvae_gate_baseline.json`) carries all 20 gates, bricked
 included. A full `run_diffvae_gates.sh` takes about 15 min: the w480_h272 production-width row
 alone is ~8 min, most of it the ltx_core reference on the host, and it carries its own 1800 s
 pytest timeout. On the device broker, whose jobs cap at 1500 s, split the run with `-k` and merge

@@ -62,14 +62,22 @@ def _captured(names: tuple[str, ...]) -> tuple[torch.Tensor, ...]:
         return tuple(handle.get_tensor(name).float() for name in names)
 
 
+@pytest.mark.parametrize("fused", [False, True], ids=["halves", "fused_rope"])
 @pytest.mark.parametrize("block_index", [0, 1])
 @pytest.mark.diffvae_gate
-def test_na_block_matches_upstream(*, device, block_index):
-    """One deterministic NA block, real weights, real activations."""
+def test_na_block_matches_upstream(*, device, block_index, fused, monkeypatch):
+    """One deterministic NA block, real weights, real activations.
+
+    ``fused_rope`` is the rotation the W-sharded stages run in production: fused qkv, whose TILE
+    output is what ``rotary_embedding_hf`` needs, then that op instead of the halves form. Both flags
+    are read at construction, and they travel together here as they do in the pipeline scripts.
+    """
     if not CAPTURE.exists():
         pytest.skip(f"missing {CAPTURE}; run capture_stages.py first")
     if not CHECKPOINT.exists():
         pytest.skip(f"missing {CHECKPOINT}")
+    monkeypatch.setenv("DIFFVAE_DET_FUSED_QKV", "1" if fused else "0")
+    monkeypatch.setenv("DIFFVAE_DET_FUSED_ROPE", "1" if fused else "0")
 
     source = "stage0.conv_in" if block_index == 0 else f"det0.block{block_index - 1}"
     hidden, expected = _captured((source, f"det0.block{block_index}"))
