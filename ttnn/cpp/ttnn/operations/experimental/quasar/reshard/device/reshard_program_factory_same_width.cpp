@@ -227,14 +227,21 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
         /*is_reader=*/0);
 
     // Borrowed DFB size is checked against TensorSpec packed bytes (no Buffer at spec time), so
-    // clamp entry count rather than advertising the full padded shard.
+    // clamp advertised bytes rather than the full padded shard. The DFB is only an address source.
+    // If packed < one padded row, shrink entry_size so num_entries stays >= 1 (ProgramSpec rejects 0).
     const uint32_t shard_dfb_bytes = local_units_per_shard * local_unit_size_padded;
     const uint32_t local_packed_bytes =
         static_cast<uint32_t>(local_tensor.tensor_spec().compute_packed_buffer_size_bytes());
+    uint32_t shard_dfb_entry_size = local_unit_size_padded;
+    uint32_t shard_dfb_num_entries = std::min(shard_dfb_bytes, local_packed_bytes) / shard_dfb_entry_size;
+    if (shard_dfb_num_entries == 0 && local_packed_bytes > 0) {
+        shard_dfb_entry_size = local_packed_bytes;
+        shard_dfb_num_entries = 1;
+    }
     DataflowBufferSpec shard_dfb{
         .unique_id = DFBSpecName{kSWShardDfbName},
-        .entry_size = local_unit_size_padded,
-        .num_entries = std::min(shard_dfb_bytes, local_packed_bytes) / local_unit_size_padded,
+        .entry_size = shard_dfb_entry_size,
+        .num_entries = shard_dfb_num_entries,
         .data_format_metadata = data_format,
         .borrowed_from = TensorParamName{kSWLocalTensorParam},
     };
