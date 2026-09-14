@@ -12,15 +12,17 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
-    constexpr auto mc = McastArgs</*CT=*/2, /*RT=*/2>();              // mcast config (CT 2..) + dest rect (RT 2..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // Right after the prepared CT block
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();  // mcast config (CT 2..) + dest rect (RT 2..)
+    constexpr uint32_t SCALARS = 2;
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);

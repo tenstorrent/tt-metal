@@ -3,11 +3,13 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 using namespace dataflow_kernel_lib;
 void kernel_main() {
-    constexpr auto mc = McastArgs<0, 4>();
-    constexpr uint32_t base = mc.next_compile_time_args_offset();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t base = 0;
     constexpr uint32_t rounds = get_compile_time_arg_val(base);
     constexpr bool alternating = get_compile_time_arg_val(base + 1);
     constexpr bool caller_managed = get_compile_time_arg_val(base + 2);

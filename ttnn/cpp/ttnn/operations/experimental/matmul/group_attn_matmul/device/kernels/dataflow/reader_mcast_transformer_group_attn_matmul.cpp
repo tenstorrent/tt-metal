@@ -10,7 +10,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -51,7 +51,9 @@ void kernel_main() {
     constexpr bool row_major = (bool)get_compile_time_arg_val(1);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(2);
     constexpr auto in1_args = TensorAccessorArgs<3>();
-    using In1McastArgs = McastArgs<in1_args.next_compile_time_args_offset(), 20>;
+    using In1McastArgs = McastArgs<
+        get_named_compile_time_arg_val("in1_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_mcast_rt_offset")>;
     constexpr In1McastArgs in1_mcast_args;
 
     constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
@@ -60,14 +62,8 @@ void kernel_main() {
     Noc noc;
     CircularBuffer cb_in1_obj(cb_id_in1);
     CircularBuffer cb_in2_obj(cb_id_in2);
-    std::optional<In1McastArgs::SenderPipe> in1_sender_pipe;
-    std::optional<In1McastArgs::ReceiverPipe> in1_receiver_pipe;
-    if (in1_mcast_args.can_send()) {
-        in1_sender_pipe.emplace(in1_mcast_args.sender(noc));
-    }
-    if (in1_mcast_args.can_receive()) {
-        in1_receiver_pipe.emplace(in1_mcast_args.receiver(noc));
-    }
+    auto in1_sender_pipe = in1_mcast_args.optional_sender(noc);
+    auto in1_receiver_pipe = in1_mcast_args.optional_receiver(noc);
 
     constexpr uint32_t num_rows_in_one_tile = 32;
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);

@@ -16,7 +16,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_pipe.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -64,8 +64,8 @@ void kernel_main() {
         get_arg_val<uint32_t>(6),
         get_arg_val<uint32_t>(7),
         consumer_ack_count,
-        static_cast<SenderTransferMode>(get_arg_val<uint32_t>(8))};
-    // The raw surface uses TransferModeUnknown and validates the host's concrete transfer mode in debug
+        static_cast<SenderMcastMode>(get_arg_val<uint32_t>(8))};
+    // The raw surface uses Unknown and validates the host's concrete transfer mode in debug
     // builds.
     SenderPipe<noc_index, data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, DataReadySignal::Flag> pipe(
         noc, runtime_args);

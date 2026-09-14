@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from tests.ttnn.unit_tests.kernel_lib.mcast_test_utils import attach_for_inspection
 
 
 def _cores(coords):
@@ -23,6 +24,11 @@ def test_non_worker_gap_preserves_worker_holes(device, noc, counter, chain_link)
     _run(device, [(receivers, [(2, 0)])], noc=noc, counter=counter, chain_link=chain_link, min_rectangles=3)
 
 
+@pytest.mark.parametrize("noc", [0, 1])
+def test_caller_managed_multicast_receiver(device, noc):
+    _run(device, [([(0, 0), (1, 0)], [(0, 0)])], noc=noc, receiver_caller_managed=True)
+
+
 def _run(
     device,
     specs,
@@ -31,6 +37,7 @@ def _run(
     counter=False,
     control=False,
     caller_managed=False,
+    receiver_caller_managed=False,
     dynamic=True,
     handshake=True,
     rounds=6,
@@ -41,6 +48,7 @@ def _run(
     mixed_events=False,
     delayed=False,
     min_rectangles=None,
+    typed_bindings=False,
 ):
     # specs are (exact logical receivers, ordered logical senders).
     all_coords = {c for receivers, senders in specs for c in receivers + senders}
@@ -51,41 +59,31 @@ def _run(
         pytest.skip("requires a larger worker grid")
     dispatch = [(x, y) for y in range(height) for x in range(width)]
     participants = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(width - 1, height - 1))])
+    chained = chain_link and any(
+        len(receivers)
+        != (max(x for x, _ in receivers) - min(x for x, _ in receivers) + 1)
+        * (max(y for _, y in receivers) - min(y for _, y in receivers) + 1)
+        for receivers, _ in specs
+    )
+    semaphore_count = (2 if handshake else 1) + int(chained)
     config = ttnn.McastConfig(
         noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
         ack_count_override=0 if zero_ack else None,
-        sem_ids=[0, 1] if adopted else None,
+        sem_ids=list(range(semaphore_count)) if adopted else None,
+        irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
     )
-    groups = [
-        ttnn.McastGroup(_cores(receivers), senders=[ttnn.CoreCoord(*c) for c in senders])
-        for receivers, senders in specs
-    ]
-    family = ttnn.McastFamily(
-        device,
-        groups,
-        config,
-        ttnn.IrregularReceiverSetMode.ChainLink if chain_link else ttnn.IrregularReceiverSetMode.MultipleMcast,
-    )
-    if chain_link:
-        chained = any(family.num_rectangles(ttnn.CoreCoord(*senders[0])) > 1 for _, senders in specs)
-        assert (family.compile_time_args()[5] >> 3) & 3 == int(chained)
-        if chained:
-            assert family.rectangle_capacity() == 0
-        for _, senders in specs:
-            sender = ttnn.CoreCoord(*senders[0])
-            fanout = family.num_receivers(sender)
-            assert family.ack_count(sender) == (int(fanout > 0) if chained else fanout)
-    if min_rectangles is not None:
-        # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
-        for receivers, senders in specs:
-            assert family.num_rectangles(ttnn.CoreCoord(*senders[0])) >= min_rectangles
+    family = ttnn.McastFamily(device, config)
+    for receivers, senders in specs:
+        family.add_group(_cores(receivers), [ttnn.CoreCoord(*c) for c in senders])
+    family.prepare_arguments()
     barrier = ttnn.McastFamily(
         device,
-        [ttnn.McastGroup(participants, [ttnn.CoreCoord(0, 0)])],
-        ttnn.McastConfig(noc=config.noc, base_sem_id=2 if adopted else family.next_base_sem_id()),
+        ttnn.McastConfig(noc=config.noc),
     )
+    barrier.add_group(participants, [ttnn.CoreCoord(0, 0)])
+    barrier.prepare_arguments()
     max_pages = 20 if large else 2
     payload = (
         torch.arange(1, len(specs) * rounds * max_pages + 1, dtype=torch.bfloat16)
@@ -102,8 +100,16 @@ def _run(
         device,
         ttnn.DRAM_MEMORY_CONFIG,
     )
-    ct = list(family.compile_time_args()) + [0] + list(barrier.compile_time_args())
-    ct += [rounds, int(control), int(caller_managed), int(dynamic), max_pages, int(mixed_events), int(delayed)]
+    ct = [
+        rounds,
+        int(control),
+        int(caller_managed),
+        int(dynamic),
+        max_pages,
+        int(mixed_events),
+        int(delayed),
+        int(receiver_caller_managed),
+    ]
     ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     rt = ttnn.RuntimeArgs()
@@ -118,24 +124,22 @@ def _run(
             int(inside),
             int(group_index is None),
         ]
-        rt[x][y] = (
-            list(rt[x][y])
-            + list(family.runtime_args(ttnn.CoreCoord(x, y)))
-            + list(barrier.runtime_args(ttnn.CoreCoord(x, y)))
-        )
     kernels = []
     faces = [True, False] if zero_ack else [None]
+    sender_cores = {core for _, senders in specs for core in senders}
     for sending in faces:
-        selected = [c for c in dispatch if sending is None or family.is_sender(ttnn.CoreCoord(*c)) == sending]
+        selected = [c for c in dispatch if sending is None or (c in sender_cores) == sending]
         face_rt = ttnn.RuntimeArgs()
         for x, y in selected:
             face_rt[x][y] = list(rt[x][y])
         face_ct = list(ct)
-        if sending is False:
-            face_ct[5] &= ~1  # Receivers do not ack an explicit-zero sender; start barrier protects initialization.
         kernels.append(
             ttnn.KernelDescriptor(
-                kernel_source="tests/ttnn/unit_tests/kernel_lib/kernels/pipe_family.cpp",
+                kernel_source=(
+                    "tests/ttnn/unit_tests/kernel_lib/kernels/pipe_family_typed.cpp"
+                    if typed_bindings
+                    else "tests/ttnn/unit_tests/kernel_lib/kernels/pipe_family.cpp"
+                ),
                 source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
                 core_ranges=_cores(selected),
                 compile_time_args=face_ct,
@@ -143,12 +147,50 @@ def _run(
                 config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
             )
         )
-    semaphores = family.owned_semaphores()
-    if adopted:
-        assert not semaphores
-        semaphores = [
-            ttnn.SemaphoreDescriptor(id=i, core_ranges=family.participating_cores(), initial_value=0) for i in (0, 1)
+    semaphores = (
+        [
+            ttnn.SemaphoreDescriptor(id=i, core_ranges=family.participating_cores(), initial_value=0)
+            for i in range(semaphore_count)
         ]
+        if adopted
+        else []
+    )
+    descriptor = ttnn.ProgramDescriptor(semaphores=semaphores)
+    family.attach(descriptor, "mcast", kernels[:1] if zero_ack else kernels)
+    mcast_ct = dict(kernels[0].named_compile_time_args)["mcast_ct_offset"]
+    mcast_rt = dict(kernels[0].named_compile_time_args)["mcast_rt_offset"]
+    attached_ct = kernels[0].compile_time_args[mcast_ct:]
+    if zero_ack:
+        passive = ttnn.McastFamily(
+            device,
+            ttnn.McastConfig(noc=config.noc, handshake=False, data_ready=config.data_ready, sem_ids=[attached_ct[2]]),
+        )
+        for receivers, senders in specs:
+            passive.add_group(_cores(receivers), [ttnn.CoreCoord(*c) for c in senders])
+        passive.prepare_arguments()
+        passive.attach(descriptor, "mcast", kernels[1:])
+    if chain_link:
+        assert (attached_ct[5] >> 3) & 3 == int(chained)
+        if chained:
+            assert attached_ct[10:] == [0, 2]
+        for receivers, senders in specs:
+            sender = ttnn.CoreCoord(*senders[0])
+            fanout = len(receivers) - int(senders[0] in receivers)
+            assert kernels[0].runtime_args[sender.x][sender.y][mcast_rt:][1] == (int(fanout > 0) if chained else fanout)
+    if min_rectangles is not None:
+        # Guard cases whose point is an irregular mapping: they must not degrade into dense sets on this grid.
+        # Chain arguments omit rectangles; inspect the same geometry in multicast mode.
+        geometry_family = ttnn.McastFamily(device, ttnn.McastConfig(noc=config.noc))
+        for receivers, senders in specs:
+            geometry_family.add_group(_cores(receivers), [ttnn.CoreCoord(*c) for c in senders])
+        geometry_family.prepare_arguments()
+        _, geometry_kernel = attach_for_inspection(geometry_family, participants, config.noc)
+        for _, senders in specs:
+            x, y = senders[0]
+            assert geometry_kernel.runtime_args[x][y][0] >= min_rectangles
+    for kernel in kernels:
+        ttnn.attach_absent(kernel, "absent_mcast")
+    barrier.attach(descriptor, "barrier_mcast", kernels)
     cbs = [
         ttnn.CBDescriptor(
             total_size=4096 * max_pages,
@@ -157,9 +199,11 @@ def _run(
         )
         for i in (0, 1)
     ]
+    descriptor.cbs = cbs
+    descriptor.kernels = kernels
     output = ttnn.generic_op(
         [input_tensor, output_tensor],
-        ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores + barrier.owned_semaphores()),
+        descriptor,
     )
     actual = ttnn.to_torch(output).reshape(len(dispatch), stride, 1, 32, 32)
     for index, coord in enumerate(dispatch):

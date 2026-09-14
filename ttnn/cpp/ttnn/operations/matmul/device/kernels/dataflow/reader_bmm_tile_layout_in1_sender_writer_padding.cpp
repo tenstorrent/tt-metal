@@ -15,7 +15,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -128,9 +128,6 @@ void kernel_main() {
     rt_args_idx += 2;  // Skip over placeholders
 #endif  // FUSE_BIAS
 
-    constexpr dataflow_kernel_lib::McastArgs<29, 16> in1_mcast_args;
-    rt_args_idx = in1_mcast_args.next_runtime_args_offset();
-
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif  // OUT_SHARDED
@@ -138,7 +135,7 @@ void kernel_main() {
     constexpr bool fuse_op_all_gather = static_cast<bool>(get_compile_time_arg_val(26));
     constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(27));
 
-    constexpr auto in1_args = TensorAccessorArgs<in1_mcast_args.next_compile_time_args_offset()>();
+    constexpr auto in1_args = TensorAccessorArgs<29>();
     constexpr auto sparsity_args = TensorAccessorArgs<decltype(in1_args)::next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<decltype(sparsity_args)::next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
@@ -238,6 +235,12 @@ void kernel_main() {
     constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in1_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_mcast_rt_offset")>
+        in1_mcast_args;
 
     auto weights_bias_pipe = in1_mcast_args.optional_sender(noc);
 

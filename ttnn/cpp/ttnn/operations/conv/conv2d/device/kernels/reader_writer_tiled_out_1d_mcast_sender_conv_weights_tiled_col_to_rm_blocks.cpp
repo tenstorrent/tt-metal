@@ -4,7 +4,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     // This writer is for output tensor in tile format
@@ -56,7 +56,6 @@ void kernel_main() {
 
     constexpr auto s_weight_args = TensorAccessorArgs<39>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
-    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
@@ -66,9 +65,9 @@ void kernel_main() {
     const uint32_t bias_tile_offset = get_arg_val<uint32_t>(i++);
     const uint32_t remaining_tiles_to_push = get_arg_val<uint32_t>(i++);
 
-    constexpr uint32_t operation_runtime_args_end = 5;
-    constexpr auto weights_mcast_args =
-        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
+    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weights_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
 
     // Experimental API objects
     Noc noc;

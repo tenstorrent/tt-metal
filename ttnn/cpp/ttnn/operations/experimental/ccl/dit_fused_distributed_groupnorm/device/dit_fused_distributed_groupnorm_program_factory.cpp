@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <set>
 #include <tuple>
@@ -40,6 +41,63 @@ uint32_t float_to_u32(float v) {
     uint32_t out;
     std::memcpy(&out, &v, sizeof(float));
     return out;
+}
+
+// Preserve the distributed kernels' existing first/middle/last rectangle argument layout.
+bool is_distributed_gn_rectangle_grid(const std::vector<tt::tt_metal::CoreCoord>& core_coords) {
+    if (core_coords.empty()) {
+        return true;
+    }
+
+    int min_x = std::numeric_limits<int>::max();
+    int max_x = std::numeric_limits<int>::min();
+    int min_y = std::numeric_limits<int>::max();
+    int max_y = std::numeric_limits<int>::min();
+
+    for (const auto& coord : core_coords) {
+        min_x = std::min(min_x, static_cast<int>(coord.x));
+        max_x = std::max(max_x, static_cast<int>(coord.x));
+        min_y = std::min(min_y, static_cast<int>(coord.y));
+        max_y = std::max(max_y, static_cast<int>(coord.y));
+    }
+
+    return ((max_x - min_x + 1) * (max_y - min_y + 1)) == static_cast<int>(core_coords.size());
+}
+
+void split_distributed_gn_rectangle_grids(
+    std::vector<tt::tt_metal::CoreCoord>& group,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_first,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_mid,
+    std::vector<tt::tt_metal::CoreCoord>& mcast_group_last) {
+    size_t remove_front = 0;
+    size_t remove_back = 0;
+    size_t min_total_removal = group.size();
+
+    for (size_t front = 0; front <= group.size(); ++front) {
+        for (size_t back = 0; front + back <= group.size(); ++back) {
+            if (is_distributed_gn_rectangle_grid(
+                    std::vector<tt::tt_metal::CoreCoord>(group.begin() + front, group.end() - back))) {
+                size_t total_removal = front + back;
+                if (total_removal < min_total_removal) {
+                    min_total_removal = total_removal;
+                    remove_front = front;
+                    remove_back = back;
+                }
+            }
+        }
+    }
+
+    // Pop and push the front outliers
+    for (size_t i = 0; i < remove_front; ++i) {
+        mcast_group_first.push_back(mcast_group_mid.front());
+        mcast_group_mid.erase(mcast_group_mid.begin());
+    }
+
+    // Pop and push the back outliers
+    for (size_t i = 0; i < remove_back; ++i) {
+        mcast_group_last.push_back(mcast_group_mid.back());
+        mcast_group_mid.pop_back();
+    }
 }
 
 }  // namespace
@@ -452,8 +510,8 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             device,
             mcast_groups,
             ttnn::kernel_lib::host::McastConfig{
-                .noc = reader_noc,
-                .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}}));
+                .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}}));
+        reduction_family->append_semaphores(program);
     }
 
     // Kernels are the stock welford GroupNorm kernels plus the shared fused-norm CCL forwarder. The
@@ -534,10 +592,11 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     TensorAccessorArgs(input_tensor.buffer()).append_to(sender_reader_ct);
     TensorAccessorArgs(use_mux ? stats_dram_buffer : output_tensor.buffer()).append_to(sender_reader_ct);
     if (!use_mux) {
-        reduction_family->append_compile_time_args_to(sender_reader_ct, /*pre_handshake=*/false);
+        sender_reader_named_ct.emplace("reduction_mcast_ct_offset", sender_reader_ct.size());
+        sender_reader_named_ct.emplace("reduction_mcast_rt_offset", 5 + 2 * num_cores_per_mcast_group);
+        reduction_family->append_compile_time_args_to(sender_reader_ct);
     }
-
-    KernelHandle sender_reader_kernel_id = CreateKernel(
+    const auto sender_reader_kernel_id = CreateKernel(
         program,
         gn_kernel_base + "dataflow/welford_reader_mcast_sender_unary_gn.cpp",
         mcast_sender_cores,
@@ -548,15 +607,18 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     if (has_receivers) {
         std::vector<uint32_t> receiver_reader_ct;
         TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_ct);
+        auto receiver_named_ct = reader_named_ct;
         if (!use_mux) {
             TensorAccessorArgs(output_tensor.buffer()).append_to(receiver_reader_ct);
-            reduction_family->append_compile_time_args_to(receiver_reader_ct, /*pre_handshake=*/true);
+            receiver_named_ct.emplace("reduction_mcast_ct_offset", receiver_reader_ct.size());
+            receiver_named_ct.emplace("reduction_mcast_rt_offset", 5);
+            reduction_family->append_compile_time_args_to(receiver_reader_ct);
         }
         receiver_reader_kernel_id = CreateKernel(
             program,
             gn_kernel_base + "dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
             mcast_receiver_cores,
-            ReaderDataMovementConfig(receiver_reader_ct, reader_defines, reader_named_ct));
+            ReaderDataMovementConfig(receiver_reader_ct, reader_defines, receiver_named_ct));
     }
 
     // ------------------------------------------------------------------------
@@ -713,7 +775,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     for (size_t i = 0; i < mcast_groups.size(); ++i) {
         std::vector<CoreCoord> group = mcast_groups[i];  // non-const: split_and_form_rectangle_grids mutates it
         const auto& virtual_group = mcast_virtual_groups[i];
-        const bool rectangle_grid = ttnn::prim::is_rectangle_grid(group);
+        const bool rectangle_grid = is_distributed_gn_rectangle_grid(group);
 
         for (size_t j = 0; j < group.size(); ++j) {
             const CoreCoord core = group[j];
@@ -731,6 +793,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                     for (const auto& peer : group) {
                         rt.push_back(device->worker_core_from_logical_core(peer).y);
                     }
+                    TT_FATAL(
+                        rt.size() == 5 + 2 * num_cores_per_mcast_group,
+                        "Local GroupNorm sender runtime prefix differs from its multicast offset");
                     reduction_family->append_runtime_args_to(rt, core);
                     SetRuntimeArgs(program, sender_reader_kernel_id, core, rt);
                     continue;
@@ -739,8 +804,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                 std::vector<CoreCoord> mcast_group_mid(group);
                 std::vector<CoreCoord> mcast_group_last;
                 if (!rectangle_grid) {
-                    ttnn::prim::split_and_form_rectangle_grids(
-                        group, mcast_group_first, mcast_group_mid, mcast_group_last);
+                    split_distributed_gn_rectangle_grids(group, mcast_group_first, mcast_group_mid, mcast_group_last);
                 }
 
                 CoreCoord mcast_start = device->worker_core_from_logical_core(mcast_group_mid.front());
@@ -828,10 +892,11 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
                     const CoreCoord sender_virtual = device->worker_core_from_logical_core(group.front());
                     rt.push_back(static_cast<uint32_t>(sender_virtual.x));
                     rt.push_back(static_cast<uint32_t>(sender_virtual.y));
+                    SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
                 } else {
                     reduction_family->append_runtime_args_to(rt, core);
+                    SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
                 }
-                SetRuntimeArgs(program, receiver_reader_kernel_id, core, rt);
             }
         }
     }

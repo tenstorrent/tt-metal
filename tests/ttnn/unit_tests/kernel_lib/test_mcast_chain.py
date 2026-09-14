@@ -15,9 +15,9 @@ CASES = [
         [([(0, 0), (1, 0), (2, 0)], [(0, 0)]), ([(0, 2), (2, 2), (4, 2)], [(2, 2)]), ([(6, 0)], [(6, 0)])],
     ),
     ("concurrent", [([(0, 0), (2, 0), (0, 2)], [(2, 0)]), ([(4, 0), (6, 0), (4, 2)], [(4, 2)])]),
-    ("mapped-gap", [([(x, 0) for x in range(9)], [(0, 0)])]),
-    ("dense-chain", [([(0, 0), (1, 0), (2, 0)], [(0, 0)])]),
-    ("self-only", [([(0, 0)], [(0, 0)])]),
+    ("mapped-gap", [([(x, 0) for x in range(9)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
+    ("dense-chain", [([(0, 0), (1, 0), (2, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
+    ("self-only", [([(0, 0)], [(0, 0)]), ([(0, 2), (2, 2)], [(0, 2)])]),
 ]
 
 
@@ -61,6 +61,23 @@ def test_chain_large_payload_and_backpressure(device, noc, counter, mixed_events
         counter=counter,
         large=True,
         mixed_events=mixed_events,
+        delayed=True,
+        rounds=12,
+    )
+
+
+@pytest.mark.parametrize("noc", [0, 1])
+@pytest.mark.parametrize("counter", [False, True], ids=["flag", "counter"])
+def test_chain_caller_managed_receiver(device, noc, counter):
+    _run(
+        device,
+        CASES[3][1],
+        chain_link=True,
+        noc=noc,
+        counter=counter,
+        caller_managed=True,
+        receiver_caller_managed=True,
+        large=True,
         delayed=True,
         rounds=12,
     )

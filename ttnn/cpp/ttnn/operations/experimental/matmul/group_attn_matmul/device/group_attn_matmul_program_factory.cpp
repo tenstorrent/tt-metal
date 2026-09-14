@@ -2,13 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "group_attn_matmul_program_factory.hpp"
+#include <array>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -131,11 +133,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             .sender_grid = mcast_sender_cores,
             .sender_order = operation_attributes.row_major ? ttnn::kernel_lib::host::Mcast2DSenderOrder::RowMajor
                                                            : ttnn::kernel_lib::host::Mcast2DSenderOrder::ColumnMajor},
-        ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc, .base_sem_id = 0, .ack_count_override = in1_mcast_ack_count_override});
-    for (const auto& sem : in1_mcast.owned_semaphores()) {
-        desc.semaphores.push_back(sem);
-    }
+        ttnn::kernel_lib::host::McastConfig{.noc = reader_noc, .ack_count_override = in1_mcast_ack_count_override});
 
     // ---- Circular buffers (sharded variants use CBDescriptor::buffer so the
     // framework patches the dynamic address on cache hit; CB total_size and
@@ -236,7 +234,6 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         operation_attributes.out_subblock_w,
     };
     tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
-    in1_mcast.append_compile_time_args_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         static_cast<uint32_t>(output_cb_index),
@@ -357,7 +354,6 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
             in1_last_block_w_tile_read_bytes,
             in1_last_block_addr_skip,
         };
-        in1_mcast.append_runtime_args_to(reader_runtime_args, core);
         reader_desc.emplace_runtime_args(core, reader_runtime_args);
 
         writer_desc.emplace_runtime_args(
@@ -407,6 +403,7 @@ tt::tt_metal::ProgramDescriptor GroupAttnMatmulProgramFactory::create_descriptor
         num_blocks_written += num_output_blocks_per_core;
     }
 
+    in1_mcast.attach(desc, "in1_mcast", reader_desc);
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(writer_desc));
     desc.kernels.push_back(std::move(compute_desc));

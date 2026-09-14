@@ -6,6 +6,7 @@
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -21,8 +22,9 @@
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/matmul/shared_with_host/activation_type.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
+using ttnn::operations::matmul::utilities::create_mcast_dataflow_kernel;
 using ttnn::operations::unary::UnaryOpType;
 using ttnn::operations::unary::UnaryWithParam;
 
@@ -282,7 +284,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
                                                  : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
     const ttnn::kernel_lib::host::Mcast1D in0_mcast = [&]() {
-        const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .base_sem_id = 0};
+        const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc};
         if (in0_block_sharded) {
             return ttnn::kernel_lib::host::Mcast1D(
                 device,
@@ -304,7 +306,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
+        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc});
     const CoreRangeSet all_cores = in0_mcast.participating_cores();
     const CoreRangeSet in0_mcast_cores_without_work = in0_mcast.sender_only_cores();
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, true);
@@ -403,7 +405,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
-    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -452,7 +453,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
-    in1_mcast.append_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -483,7 +483,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         (std::uint32_t)B,     // batch
         (std::uint32_t)false  // get_batch_from_reader
     };
-    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
+
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
         // in1 block args
@@ -516,7 +516,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
-    in1_mcast.append_compile_time_args_to(in1_receiver_writer_compile_time_args);
+
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -1045,14 +1045,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    //                      Semaphore Descriptors
-    ////////////////////////////////////////////////////////////////////////////
-    const auto in0_mcast_semaphores = in0_mcast.owned_semaphores();
-    desc.semaphores.insert(desc.semaphores.end(), in0_mcast_semaphores.begin(), in0_mcast_semaphores.end());
-    const auto in1_mcast_semaphores = in1_mcast.owned_semaphores();
-    desc.semaphores.insert(desc.semaphores.end(), in1_mcast_semaphores.begin(), in1_mcast_semaphores.end());
-
-    ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)
     ////////////////////////////////////////////////////////////////////////////
     // Parameters for last row, col, or block
@@ -1095,7 +1087,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         // in0 sender
         if (in0_block_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {in1_idx};
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
+
             if (in1_idx < num_blocks_x) {
                 in0_sender_kernel_desc.runtime_args.emplace_back(core, mm_in0_sender_args);
             } else {
@@ -1108,7 +1100,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,  // in0_tensor_start_tile_id
                 (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),
                 (std::uint32_t)0};  // sparsity_addr
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
+
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
@@ -1123,7 +1115,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
             // in0 receiver
         } else {
             std::vector<uint32_t> mm_in0_receiver_args;
-            in0_mcast.append_runtime_args_to(mm_in0_receiver_args, core);
             // left half
             if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
                 in0_receiver_kernel_desc.runtime_args.emplace_back(core, mm_in0_receiver_args);
@@ -1188,7 +1179,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_sender_writer_args.push_back(0u);
                     mm_in1_sender_writer_args.push_back(0u);
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
+
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                         mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
@@ -1332,7 +1323,7 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
                     mm_in1_receiver_writer_args.push_back(0u);
                     mm_in1_receiver_writer_args.push_back(0u);
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
+
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx and
                         in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -1372,7 +1363,27 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      Push Kernels to Descriptor
     ////////////////////////////////////////////////////////////////////////////
-    // Order matters — determines kernel handle indices
+    std::vector<std::reference_wrapper<KernelDescriptor>> in0_kernels{in0_sender_kernel_desc};
+    std::vector<std::reference_wrapper<KernelDescriptor>> in1_kernels{in1_sender_writer_kernel_desc};
+    if (has_in0_mcast_no_work_kernel) {
+        in0_kernels.push_back(in0_mcast_no_work_kernel_desc);
+    }
+    if (has_in0_receiver_kernel) {
+        in0_kernels.push_back(in0_receiver_kernel_desc);
+    }
+    if (has_in0_receiver_other_kernel) {
+        in0_kernels.push_back(in0_receiver_other_kernel_desc);
+    }
+    if (has_in1_receiver_writer_kernel) {
+        in1_kernels.push_back(in1_receiver_writer_kernel_desc);
+    }
+    if (has_in1_receiver_writer_other_kernel) {
+        in1_kernels.push_back(in1_receiver_writer_other_kernel_desc);
+    }
+    in0_mcast.attach(desc, "in0_mcast", in0_kernels);
+    in1_mcast.attach(desc, "in1_mcast", in1_kernels);
+
+    // Preserve descriptor order for native buffer patching.
     desc.kernels.push_back(std::move(in0_sender_kernel_desc));
     if (has_in0_mcast_no_work_kernel) {
         desc.kernels.push_back(std::move(in0_mcast_no_work_kernel_desc));
@@ -1391,7 +1402,6 @@ static ProgramDescriptor create_program_mcast_in0_in1_descriptor(
         desc.kernels.push_back(std::move(in0_receiver_other_kernel_desc));
     }
     desc.kernels.push_back(std::move(compute_kernel_desc));
-
     return desc;
 }
 
@@ -1647,8 +1657,8 @@ create_program_mcast_in0_in1(
     const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     const auto in0_mcast_shape = transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerColumn
                                                  : ttnn::kernel_lib::host::Mcast1DShape::PerRow;
-    const ttnn::kernel_lib::host::Mcast1D in0_mcast = [&]() {
-        const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc, .base_sem_id = 0};
+    ttnn::kernel_lib::host::Mcast1D in0_mcast = [&]() {
+        const auto mcast_config = ttnn::kernel_lib::host::McastConfig{.noc = in0_noc};
         if (in0_block_sharded) {
             return ttnn::kernel_lib::host::Mcast1D(
                 device,
@@ -1664,21 +1674,13 @@ create_program_mcast_in0_in1(
             ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
             mcast_config);
     }();
-    for (const auto& semaphore : in0_mcast.owned_semaphores()) {
-        const uint32_t created_id = tt_metal::CreateSemaphore(program, semaphore.core_ranges, semaphore.initial_value);
-        TT_FATAL(created_id == semaphore.id, "Expected multicast semaphore id {}, got {}", semaphore.id, created_id);
-    }
-    const ttnn::kernel_lib::host::Mcast1D in1_mcast(
+    ttnn::kernel_lib::host::Mcast1D in1_mcast(
         device,
         output_work_grid,
         transpose_mcast ? ttnn::kernel_lib::host::Mcast1DShape::PerRow
                         : ttnn::kernel_lib::host::Mcast1DShape::PerColumn,
         ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
-        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc, .base_sem_id = in0_mcast.next_base_sem_id()});
-    for (const auto& semaphore : in1_mcast.owned_semaphores()) {
-        const uint32_t created_id = tt_metal::CreateSemaphore(program, semaphore.core_ranges, semaphore.initial_value);
-        TT_FATAL(created_id == semaphore.id, "Expected multicast semaphore id {}, got {}", semaphore.id, created_id);
-    }
+        ttnn::kernel_lib::host::McastConfig{.noc = in1_noc});
     const CoreRangeSet all_cores = in0_mcast.participating_cores();
     const CoreRangeSet in0_mcast_cores_without_work = in0_mcast.sender_only_cores();
     const auto& cores = corerange_to_cores(all_cores, std::nullopt, true);
@@ -1777,7 +1779,6 @@ create_program_mcast_in0_in1(
         tt::tt_metal::TensorAccessorArgs().append_to(in0_sender_compile_time_args);  // placeholder for sparsity
         in0_sender_compile_time_args.push_back((std::uint32_t)0);  // num_batch_compute (unused, sparsity disabled)
     }
-    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -1826,7 +1827,6 @@ create_program_mcast_in0_in1(
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
     in1_sender_writer_compile_time_args.push_back((std::uint32_t)false);  // compact_output
-    in1_mcast.append_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(in1_tensor).append_to(in1_sender_writer_compile_time_args);
@@ -1857,7 +1857,6 @@ create_program_mcast_in0_in1(
         (std::uint32_t)B,     // batch
         (std::uint32_t)false  // get_batch_from_reader
     };
-    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER
         // in1 block args
@@ -1890,7 +1889,6 @@ create_program_mcast_in0_in1(
         in1_receiver_writer_compile_time_args.push_back(0);  // Placeholder; not used
     }
     in1_receiver_writer_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_reduce_scatter()));
-    in1_mcast.append_compile_time_args_to(in1_receiver_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(out_tensor).append_to(in1_receiver_writer_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -1976,156 +1974,25 @@ create_program_mcast_in0_in1(
     tt_metal::NOC in0_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
     tt_metal::NOC in1_split_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
-    tt::tt_metal::KernelHandle mm_kernel_in0_sender_id = 0;
-    tt::tt_metal::KernelHandle mm_kernel_in0_mcast_cores_without_work_id = 0;
-    if (in0_block_sharded) {
-        mm_kernel_in0_sender_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-            all_cores_with_work,  // in0_mcast_cores_with_work_and_in_receiver_grid
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-                .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_sharded_defines,
-                .named_compile_args = {
-                    {"cb_in0", tt::CBIndex::c_0},
-                    {"cb_in0_sharded", tt::CBIndex::c_2},
-                    {"cb_l1_array", tt::CBIndex::c_6},
-                }});
-        if (in0_mcast_cores_without_work.num_cores() > 0) {
-            in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
-            mm_kernel_in0_mcast_cores_without_work_id = tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
-                in0_mcast_cores_without_work,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = in0_noc,
-                    .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_sharded_defines,
-                    .named_compile_args = {
-                        {"cb_in0", tt::CBIndex::c_0},
-                        {"cb_in0_sharded", tt::CBIndex::c_2},
-                        {"cb_l1_array", tt::CBIndex::c_6},
-                    }});
+    if (fuse_op && !in0_block_sharded) {
+        if (fused_op_signaler->is_all_gather()) {
+            // Create semaphores
+            fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
+        } else if (fused_op_signaler->is_reduce_scatter()) {
+            fused_op_signaler->init_fused_op(program, device, output_work_grid.bounding_box(), cores);
+        } else {
+            TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
         }
-    } else {
-        if (fuse_op) {
-            if (fused_op_signaler->is_all_gather()) {
-                // Create semaphores
-                fused_op_signaler->init_fused_op(program, device, in0_sender_interleaved);
-            } else if (fused_op_signaler->is_reduce_scatter()) {
-                fused_op_signaler->init_fused_op(program, device, output_work_grid.bounding_box(), cores);
-            } else {
-                TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
-            }
-        }
-
-        mm_kernel_in0_sender_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
-            in0_sender_interleaved,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-                .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_interleaved_defines,
-                .named_compile_args = {
-                    {"cb_in0", tt::CBIndex::c_0},
-                    {"cb_in0_sharded", tt::CBIndex::c_2},
-                    {"cb_sparsity", tt::CBIndex::c_6},
-                    {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-                }});
     }
 
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
-        in1_sender,
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = in1_noc,
-            .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines,
-            .named_compile_args = {
-                {"cb_in1", tt::CBIndex::c_1},
-                {"cb_bias", tt::CBIndex::c_3},
-                {"cb_out", tt::CBIndex::c_4},
-                {"cb_sparsity", tt::CBIndex::c_7},
-                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
-            }});
-
-    tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
-    if (in1_receiver.num_cores() > 0) {
-        mm_kernel_in1_receiver_writer_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            /* in0_sender_in1_receiver, // If not using half-half noc setup */
-            in1_receiver,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = in1_noc,
-                .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines,
-                .named_compile_args = {
-                    {"cb_in1", tt::CBIndex::c_1},
-                    {"cb_bias", tt::CBIndex::c_3},
-                    {"cb_out", tt::CBIndex::c_4},
-                }});
-    }
-
-    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
-    if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
-        mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            /* in0_receiver_in1_sender, // If not using half-half noc setup */
-            in0_receiver_interleaved,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args,
-                .named_compile_args = {
-                    {"cb_in0", tt::CBIndex::c_0},
-                }});
-    }
-
-    tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
-    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_other_noc_setup_id = mm_kernel_in0_receiver_id;
-
-    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
-        mm_kernel_in1_receiver_writer_other_noc_setup_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
-            in0_receiver_in1_receiver_interleaved_other_cores.value(),
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = in1_split_noc,
-                .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
-                .named_compile_args = {
-                    {"cb_in1", tt::CBIndex::c_1},
-                    {"cb_bias", tt::CBIndex::c_3},
-                    {"cb_out", tt::CBIndex::c_4},
-                }});
-
-        mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
-            program,
-            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
-            in0_receiver_in1_receiver_interleaved_other_cores.value(),
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1,
-                .noc = in0_split_noc,
-                .compile_args = in0_receiver_compile_time_args,
-                .named_compile_args = {
-                    {"cb_in0", tt::CBIndex::c_0},
-                }});
-    }
+    // Assemble operation RT prefixes before fixing each kernel's multicast base.
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in0_sender_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in0_mcast_cores_without_work_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in1_sender_writer_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in1_receiver_writer_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in0_receiver_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in1_receiver_writer_other_noc_setup_runtime_args;
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> mm_kernel_in0_receiver_other_noc_setup_runtime_args;
 
     // Compute kernel compile time args
 
@@ -2441,13 +2308,11 @@ create_program_mcast_in0_in1(
         // in0 sender
         if (in0_block_sharded) {
             std::vector<uint32_t> mm_in0_sender_args = {in1_idx};
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (in1_idx < num_blocks_x) {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
+                mm_kernel_in0_sender_runtime_args.emplace_back(core, std::move(mm_in0_sender_args));  // RISCV_0_default
             } else {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_kernel_in0_mcast_cores_without_work_id, core, mm_in0_sender_args);  // RISCV_0_default
+                mm_kernel_in0_mcast_cores_without_work_runtime_args.emplace_back(
+                    core, std::move(mm_in0_sender_args));  // RISCV_0_default
             }
         } else if (in1_idx == 0) {
             std::vector<uint32_t> mm_in0_sender_args = {
@@ -2456,25 +2321,22 @@ create_program_mcast_in0_in1(
                 (std::uint32_t)in0_tensor_start_tile_id_stride * in0_idx,                  // in0_tensor_start_tile_id
                 (std::uint32_t)(in0_idx == in0_end_idx ? last_out_block_h : out_block_h),  // last_block_h
                 (std::uint32_t)0};                                                         // sparsity_addr
-            in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
             if (fuse_op && fused_op_signaler->is_all_gather()) {
                 fused_op_signaler->push_matmul_fused_op_rt_args(mm_in0_sender_args, false);
             }
 
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_sender_id, core, mm_in0_sender_args);  // RISCV_0_default
+            mm_kernel_in0_sender_runtime_args.emplace_back(core, std::move(mm_in0_sender_args));  // RISCV_0_default
 
             // in0 receiver
         } else {
             std::vector<uint32_t> mm_in0_receiver_args;
-            in0_mcast.append_runtime_args_to(mm_in0_receiver_args, core);
             // left half
             if ((core.x - start_core_x) <= half_core || (!transpose_mcast and core.y == start_core_y)) {
-                tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
+                mm_kernel_in0_receiver_runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
             }
             // right half
             else {
-                tt_metal::SetRuntimeArgs(
-                    program, mm_kernel_in0_receiver_other_noc_setup_id, core, mm_in0_receiver_args);
+                mm_kernel_in0_receiver_other_noc_setup_runtime_args.emplace_back(core, std::move(mm_in0_receiver_args));
             }
         }
 
@@ -2530,7 +2392,6 @@ create_program_mcast_in0_in1(
                         : 0);
                 mm_in1_sender_writer_args.push_back(
                     bias_mesh.has_value() ? (std::uint32_t)per_core_N * in1_idx : 0);  // in1_tensor_start_tile_id
-                in1_mcast.append_runtime_args_to(mm_in1_sender_writer_args, core);
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx) {  // right cores when no transpose_mcast
                         mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
@@ -2614,8 +2475,8 @@ create_program_mcast_in0_in1(
                         TT_FATAL(false, "Fused operation must be either all_gather or reduce_scatter.");
                     }
                 }
-                tt_metal::SetRuntimeArgs(
-                    program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_1_default
+                mm_kernel_in1_sender_writer_runtime_args.emplace_back(
+                    core, std::move(mm_in1_sender_writer_args));  // RISCV_1_default
 
                 // in1 receiver
             } else {
@@ -2671,7 +2532,6 @@ create_program_mcast_in0_in1(
                     mm_in1_receiver_writer_args.push_back(0);
                     mm_in1_receiver_writer_args.push_back(0);
                 }
-                in1_mcast.append_runtime_args_to(mm_in1_receiver_writer_args, core);
                 if (!output_is_sharded) {
                     if (in1_idx == in1_end_idx and
                         in0_idx == in0_end_idx) {  // bottom-right core when no transpose_mcast
@@ -2695,16 +2555,184 @@ create_program_mcast_in0_in1(
 
                 // left half
                 if ((core.x - start_core_x) <= half_core || (transpose_mcast and core.y == start_core_y)) {
-                    tt_metal::SetRuntimeArgs(
-                        program, mm_kernel_in1_receiver_writer_id, core, mm_in1_receiver_writer_args);
+                    mm_kernel_in1_receiver_writer_runtime_args.emplace_back(
+                        core, std::move(mm_in1_receiver_writer_args));
                 }
                 // right half
                 else {
-                    tt_metal::SetRuntimeArgs(
-                        program, mm_kernel_in1_receiver_writer_other_noc_setup_id, core, mm_in1_receiver_writer_args);
+                    mm_kernel_in1_receiver_writer_other_noc_setup_runtime_args.emplace_back(
+                        core, std::move(mm_in1_receiver_writer_args));
                 }
             }
         }
+    }
+
+    // All operation resources and variable RT lists now exist. Bind once, then
+    // append helper arguments before CreateKernel and the initial SetRuntimeArgs.
+    in0_mcast.append_semaphores(program);
+    in1_mcast.append_semaphores(program);
+
+    tt_metal::KernelHandle mm_kernel_in0_sender_id;
+    if (in0_block_sharded) {
+        mm_kernel_in0_sender_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+            program,
+            &in0_mcast,
+            "in0_mcast",
+            mm_kernel_in0_sender_runtime_args,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+            all_cores_with_work,  // in0_mcast_cores_with_work_and_in_receiver_grid
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_sender_compile_time_args,
+                .defines = mm_kernel_in0_sender_sharded_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_l1_array", tt::CBIndex::c_6},
+                }});
+        if (in0_mcast_cores_without_work.num_cores() > 0) {
+            in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
+            create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+                program,
+                &in0_mcast,
+                "in0_mcast",
+                mm_kernel_in0_mcast_cores_without_work_runtime_args,
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
+                in0_mcast_cores_without_work,
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                    .noc = in0_noc,
+                    .compile_args = in0_sender_compile_time_args,
+                    .defines = mm_kernel_in0_sender_sharded_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
+        }
+    } else {
+        mm_kernel_in0_sender_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+            program,
+            &in0_mcast,
+            "in0_mcast",
+            mm_kernel_in0_sender_runtime_args,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
+            in0_sender_interleaved,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_sender_compile_time_args,
+                .defines = mm_kernel_in0_sender_interleaved_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_sparsity", tt::CBIndex::c_6},
+                    {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
+                }});
+    }
+
+    auto mm_kernel_in1_sender_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+        program,
+        &in1_mcast,
+        "in1_mcast",
+        mm_kernel_in1_sender_writer_runtime_args,
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        in1_sender,
+        tt_metal::DataMovementConfig{
+            .processor = tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = in1_noc,
+            .compile_args = in1_sender_writer_compile_time_args,
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"num_active", 0},  // indexed/gather mode: sparse_matmul only (0 = disabled)
+            }});
+
+    // Placeholder handle is unused when there are no receiver cores.
+    tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = mm_kernel_in0_sender_id;
+    if (in1_receiver.num_cores() > 0) {
+        mm_kernel_in1_receiver_writer_id = create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+            program,
+            &in1_mcast,
+            "in1_mcast",
+            mm_kernel_in1_receiver_writer_runtime_args,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+            "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+            /* in0_sender_in1_receiver, // If not using half-half noc setup */
+            in1_receiver,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = in1_noc,
+                .compile_args = in1_receiver_writer_compile_time_args,
+                .defines = mm_kernel_in1_receiver_writer_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
+    }
+
+    if (!in0_block_sharded and in0_receiver_interleaved.num_cores() > 0) {
+        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+            program,
+            &in0_mcast,
+            "in0_mcast",
+            mm_kernel_in0_receiver_runtime_args,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            /* in0_receiver_in1_sender, // If not using half-half noc setup */
+            in0_receiver_interleaved,
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_noc,
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
+    }
+
+    tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
+
+    if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+        mm_kernel_in1_receiver_writer_other_noc_setup_id =
+            create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+                program,
+                &in1_mcast,
+                "in1_mcast",
+                mm_kernel_in1_receiver_writer_other_noc_setup_runtime_args,
+                "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
+                "reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
+                in0_receiver_in1_receiver_interleaved_other_cores.value(),
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                    .noc = in1_split_noc,
+                    .compile_args = in1_receiver_writer_compile_time_args,
+                    .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
+                    .named_compile_args = {
+                        {"cb_in1", tt::CBIndex::c_1},
+                        {"cb_bias", tt::CBIndex::c_3},
+                        {"cb_out", tt::CBIndex::c_4},
+                    }});
+
+        create_mcast_dataflow_kernel<ttnn::kernel_lib::host::Mcast1D>(
+            program,
+            &in0_mcast,
+            "in0_mcast",
+            mm_kernel_in0_receiver_other_noc_setup_runtime_args,
+            "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
+            in0_receiver_in1_receiver_interleaved_other_cores.value(),
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_1,
+                .noc = in0_split_noc,
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     return {

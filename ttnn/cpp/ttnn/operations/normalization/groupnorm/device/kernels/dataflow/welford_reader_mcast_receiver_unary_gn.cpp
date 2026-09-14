@@ -12,7 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
 #ifdef GN_DISTRIBUTED_AG
@@ -74,11 +74,14 @@ void kernel_main() {
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
 #else
-    constexpr uint32_t operation_rt_args_end = 5;
-    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")>
         reduction_mcast_args;
 
     const Noc noc;
+    constexpr uint32_t partial_ready_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    Semaphore<> partial_ready_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.receiver(noc);
 #endif
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
@@ -198,6 +201,8 @@ void kernel_main() {
             p_global_vars[0] = local_result.variance;
 
 #ifndef GN_DISTRIBUTED_AG
+            // Publish partials before the sender gathers them; receive only waits for the result.
+            partial_ready_sem.up(noc, reduction_mcast_args.sender_x(), reduction_mcast_args.sender_y(), 1);
             reduction_pipe.receive();
 #endif
 

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -56,8 +57,8 @@ void kernel_main() {
     const uint32_t num_tiles_to_read = is_last_all_to_all_worker ? num_tiles_per_worker_last : num_tiles_per_worker;
 
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
+    constexpr auto reduction_ready = MCAST_SPEC_ARGS(reduction_ready);
+    auto reduction_ready_pipe = reduction_ready.optional_receiver(noc);
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     const UnicastEndpoint remote_ep;
 
@@ -144,9 +145,7 @@ void kernel_main() {
 
         dfb_partial_obj.wait_front(static_cast<uint16_t>(num_tiles_per_partial_result * block_h));
 
-        reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        reduction_ready_pipe->receive_signal();
 
         if constexpr (is_all_to_all_worker) {
             uint32_t l1_read_addr_ex_par = dfb_partial_obj.get_read_ptr();

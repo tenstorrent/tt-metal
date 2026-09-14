@@ -5,7 +5,19 @@ import torch
 import ttnn
 
 
-def _run(device, width, senders, rotating, noc, counter, control, alternating, caller_managed, handshake=True):
+def _run(
+    device,
+    width,
+    senders,
+    rotating,
+    noc,
+    counter,
+    control,
+    alternating,
+    caller_managed,
+    handshake=True,
+    typed_bindings=False,
+):
     rounds = 4 if handshake else 1
     if device.compute_with_storage_grid_size().x < max(width, max(senders) + 1):
         pytest.skip("requires more worker columns")
@@ -38,14 +50,12 @@ def _run(device, width, senders, rotating, noc, counter, control, alternating, c
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([width * rounds, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
-    ct = list(mc.compile_time_args()) + [rounds, int(alternating), int(caller_managed), int(control)]
+    ct = [rounds, int(alternating), int(caller_managed), int(control)]
     ct += list(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     ct += list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     rt = ttnn.RuntimeArgs()
     for x in range(participant_width):
-        rt[x][0] = [input_tensor.buffer_address(), output_tensor.buffer_address(), x * rounds, int(x < width)] + list(
-            mc.runtime_args(ttnn.CoreCoord(x, 0))
-        )
+        rt[x][0] = [input_tensor.buffer_address(), output_tensor.buffer_address(), x * rounds, int(x < width)]
     cbs = [
         ttnn.CBDescriptor(
             total_size=2048,
@@ -55,16 +65,23 @@ def _run(device, width, senders, rotating, noc, counter, control, alternating, c
         for i in [0, 1]
     ]
     kernel = ttnn.KernelDescriptor(
-        kernel_source="tests/ttnn/unit_tests/kernel_lib/kernels/pipe_prepared_matrix.cpp",
+        kernel_source=(
+            "tests/ttnn/unit_tests/kernel_lib/kernels/pipe_prepared_typed.cpp"
+            if typed_bindings
+            else "tests/ttnn/unit_tests/kernel_lib/kernels/pipe_prepared_matrix.cpp"
+        ),
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=participants,
         compile_time_args=ct,
         runtime_args=rt,
         config=ttnn.WriterConfigDescriptor() if noc else ttnn.ReaderConfigDescriptor(),
     )
+    descriptor = ttnn.ProgramDescriptor(cbs=cbs)
+    mc.attach(descriptor, "mcast", [kernel])
+    descriptor.kernels = [kernel]
     result = ttnn.generic_op(
         [input_tensor, output_tensor],
-        ttnn.ProgramDescriptor(kernels=[kernel], cbs=cbs, semaphores=mc.owned_semaphores()),
+        descriptor,
     )
     actual = ttnn.to_torch(result).reshape(width, rounds, 1, 32, 32)
     for core in range(width):

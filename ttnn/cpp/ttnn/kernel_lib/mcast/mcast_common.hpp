@@ -11,10 +11,10 @@ namespace dataflow_kernel_lib {
 inline constexpr uint32_t MAX_MCAST_RECTANGLES = 3;
 
 // How a family delivers payloads after the host resolves its receiver-set policy.
-enum class McastMode : uint32_t { Multicast = 0, ChainUnicast = 1 };
+enum class TransferMode : uint32_t { Multicast = 0, ChainUnicast = 1 };
 
 // Flag is cleared between events; Counter is monotonic and uses absolute work rounds.
-enum class DataReadySignal { Flag, Counter };
+enum class DataReadySignal : uint32_t { Flag = 0, Counter = 1 };
 
 // Guard protects source L1 before returning. CallerManaged lets the caller provide that
 // protection; modes may still need completion barriers for data-before-ready ordering.
@@ -32,8 +32,8 @@ struct ChainRuntimeArguments {
     bool includes_sender = false;
 };
 
-// Internal host/device encodings selecting the sender's transfer path.
-enum class SenderTransferMode : uint32_t {
+// Internal host/device encodings selecting the sender's per-rectangle multicast path.
+enum class SenderMcastMode : uint32_t {
     Invalid = 0,
     LocalCopy = 1,
     MulticastExcludeSource = 2,
@@ -41,7 +41,7 @@ enum class SenderTransferMode : uint32_t {
     MulticastIncludeSource = 3,
     // Use when the mode is unknown at compile time: the shared binary reads each
     // rectangle's concrete mode from its prepared record. Never valid in those records.
-    TransferModeUnknown = 4,
+    Unknown = 4,
 };
 
 struct NocBounds {
@@ -53,7 +53,7 @@ struct RectangleRuntimeArguments {
     NocBounds bounds;
     uint32_t remote_count;
     uint32_t loopback_count;
-    SenderTransferMode transfer_mode;
+    SenderMcastMode sender_mcast_mode;
 };
 
 // Owning, capacity-sized values, independent of the serialized runtime-argument layout.
@@ -68,8 +68,8 @@ struct SenderRuntimeArgumentsFor {
 
     // Preserve existing direct single-rectangle initialization.
     constexpr SenderRuntimeArgumentsFor(
-        NocBounds bounds, uint32_t remote, uint32_t loopback, uint32_t ack, SenderTransferMode mode) :
-        rectangles{{{bounds, remote, loopback, mode}}}, num_rectangles(1), ack_count(ack) {
+        NocBounds bounds, uint32_t remote, uint32_t loopback, uint32_t ack, SenderMcastMode sender_mcast_mode) :
+        rectangles{{{bounds, remote, loopback, sender_mcast_mode}}}, num_rectangles(1), ack_count(ack) {
         static_assert(Capacity == 1, "Single-rectangle initialization requires capacity one");
     }
 };
@@ -77,6 +77,18 @@ struct SenderRuntimeArgumentsFor {
 using SenderRuntimeArguments = SenderRuntimeArgumentsFor<1>;
 
 namespace mcast_wire {
+// Resource-neutral topology and protocol metadata shared by both argument frontends.
+struct FamilyMetadata {
+    uint32_t rotating_span = 0;
+    uint32_t rectangle_capacity = 0;
+    uint32_t ack_count = 0;
+    uint32_t uniform_remote_count = 0;
+    uint32_t uniform_loopback_count = 0;
+    dataflow_kernel_lib::SenderMcastMode sender_mcast_mode = dataflow_kernel_lib::SenderMcastMode::Unknown;
+    bool has_remote_receivers = false;
+    uint32_t flags = 0;
+};
+
 constexpr uint32_t ABSENT = 0;
 constexpr uint32_t FAMILY = 1;
 constexpr uint32_t NO_SENDER_ROUND = 0xFFFFFFFFu;
@@ -85,10 +97,10 @@ constexpr uint32_t CAN_RECEIVE = 1u << 1;
 constexpr uint32_t PRE_HANDSHAKE = 1u << 0;
 constexpr uint32_t COUNTER_SIGNAL = 1u << 1;
 constexpr uint32_t NOC1 = 1u << 2;
-constexpr uint32_t MCAST_MODE_SHIFT = 3;
-constexpr uint32_t MCAST_MODE_MASK = 3u << MCAST_MODE_SHIFT;
-constexpr McastMode mcast_mode(uint32_t flags) {
-    return static_cast<McastMode>((flags & MCAST_MODE_MASK) >> MCAST_MODE_SHIFT);
+constexpr uint32_t TRANSFER_MODE_SHIFT = 3;
+constexpr uint32_t TRANSFER_MODE_MASK = 3u << TRANSFER_MODE_SHIFT;
+constexpr TransferMode transfer_mode(uint32_t flags) {
+    return static_cast<TransferMode>((flags & TRANSFER_MODE_MASK) >> TRANSFER_MODE_SHIFT);
 }
 
 enum CT : uint32_t {
@@ -99,23 +111,29 @@ enum CT : uint32_t {
     ACK_COUNT,
     FLAGS,
     ROTATING_SPAN,
-    TRANSFER_MODE,
+    SENDER_MCAST_MODE,
     REMOTE_COUNT,
     LOOPBACK_COUNT,
     RECTANGLE_CAPACITY,
     CT_WORDS
 };
+// Chain families append a signal-source semaphore to the common header.
+constexpr uint32_t SIGNAL_SOURCE = CT_WORDS;
+constexpr uint32_t CHAIN_CT_WORDS = CT_WORDS + 1;
+constexpr uint32_t compile_time_words(TransferMode mode) {
+    return mode == TransferMode::ChainUnicast ? CHAIN_CT_WORDS : CT_WORDS;
+}
+static_assert(compile_time_words(TransferMode::Multicast) == 11);
+static_assert(compile_time_words(TransferMode::ChainUnicast) == 12);
 // Every sender descriptor has the same layout, independently of mode/count uniformity.
-enum RectOffset : uint32_t { SX = 0, SY, EX, EY, REMOTE, LOOPBACK, MODE, RECT_WORDS };
+enum RectOffset : uint32_t { SX = 0, SY, EX, EY, REMOTE, LOOPBACK, RECT_SENDER_MCAST_MODE, RECT_WORDS };
 enum RuntimeOffset : uint32_t { NUM_RECTANGLES = 0, ACK, HEADER_WORDS };
-constexpr uint32_t FIXED_SENDER_X = HEADER_WORDS;
-constexpr uint32_t FIXED_SENDER_Y = HEADER_WORDS + 1;
-constexpr uint32_t ROLE_WORDS = 2;
-constexpr uint32_t ROLE_FROM_END = 2;
-constexpr uint32_t PHASE_FROM_END = 1;
+enum SenderCoordOffset : uint32_t { SENDER_X = 0, SENDER_Y, SENDER_COORD_WORDS };
+enum RoleOffset : uint32_t { ROLES = 0, SENDER_ROUND, ROLE_WORDS };
+constexpr uint32_t ABSENT_CT_WORDS = TAG + 1;
 constexpr uint32_t sender_coords_offset(uint32_t) { return HEADER_WORDS; }
 constexpr uint32_t rectangles_offset(uint32_t rotating_span) {
-    return HEADER_WORDS + 2u * (rotating_span ? rotating_span : 1u);
+    return sender_coords_offset(rotating_span) + SENDER_COORD_WORDS * (rotating_span ? rotating_span : 1u);
 }
 enum ChainOffset : uint32_t {
     PREDECESSOR_X = 0,
@@ -128,29 +146,30 @@ enum ChainOffset : uint32_t {
 constexpr uint32_t chain_offset(uint32_t rotating_span, uint32_t rectangle_capacity) {
     return rectangles_offset(rotating_span) + RECT_WORDS * rectangle_capacity;
 }
-// Every layout query takes the multicast mode explicitly: multicast blocks end after the
+// Every layout query takes the family transfer mode explicitly: multicast blocks end after the
 // rectangles, while chain-unicast blocks carry CHAIN_WORDS of neighbor metadata.
-constexpr uint32_t roles_offset(uint32_t rotating_span, uint32_t rectangle_capacity, McastMode mode) {
-    return chain_offset(rotating_span, rectangle_capacity) + (mode == McastMode::Multicast ? 0u : CHAIN_WORDS);
+constexpr uint32_t roles_offset(uint32_t rotating_span, uint32_t rectangle_capacity, TransferMode transfer_mode) {
+    return chain_offset(rotating_span, rectangle_capacity) +
+           (transfer_mode == TransferMode::Multicast ? 0u : CHAIN_WORDS);
 }
-constexpr uint32_t runtime_words(uint32_t rotating_span, uint32_t rectangle_capacity, McastMode mode) {
-    return roles_offset(rotating_span, rectangle_capacity, mode) + ROLE_WORDS;
+constexpr uint32_t runtime_words(uint32_t rotating_span, uint32_t rectangle_capacity, TransferMode transfer_mode) {
+    return roles_offset(rotating_span, rectangle_capacity, transfer_mode) + ROLE_WORDS;
 }
-constexpr SenderTransferMode classify(uint32_t remote_count, bool includes_sender) {
-    return remote_count == 0 ? SenderTransferMode::LocalCopy
-           : includes_sender ? SenderTransferMode::MulticastIncludeSource
-                             : SenderTransferMode::MulticastExcludeSource;
+constexpr SenderMcastMode classify(uint32_t remote_count, bool includes_sender) {
+    return remote_count == 0 ? SenderMcastMode::LocalCopy
+           : includes_sender ? SenderMcastMode::MulticastIncludeSource
+                             : SenderMcastMode::MulticastExcludeSource;
 }
-constexpr bool concrete(SenderTransferMode transfer_mode) {
-    return transfer_mode == SenderTransferMode::LocalCopy ||
-           transfer_mode == SenderTransferMode::MulticastExcludeSource ||
-           transfer_mode == SenderTransferMode::MulticastIncludeSource;
+constexpr bool concrete(SenderMcastMode sender_mcast_mode) {
+    return sender_mcast_mode == SenderMcastMode::LocalCopy ||
+           sender_mcast_mode == SenderMcastMode::MulticastExcludeSource ||
+           sender_mcast_mode == SenderMcastMode::MulticastIncludeSource;
 }
 static_assert(CT_WORDS == 11 && RECT_WORDS == 7 && HEADER_WORDS == 2);
-static_assert(runtime_words(0, 1, McastMode::Multicast) == 13);
-static_assert(runtime_words(0, 3, McastMode::Multicast) == 27);
-static_assert(runtime_words(3, 2, McastMode::Multicast) == 24);
-static_assert(CHAIN_WORDS == 5 && runtime_words(0, 0, McastMode::ChainUnicast) == 11);
+static_assert(runtime_words(0, 1, TransferMode::Multicast) == 13);
+static_assert(runtime_words(0, 3, TransferMode::Multicast) == 27);
+static_assert(runtime_words(3, 2, TransferMode::Multicast) == 24);
+static_assert(CHAIN_WORDS == 5 && runtime_words(0, 0, TransferMode::ChainUnicast) == 11);
 static_assert(sizeof(RectangleRuntimeArguments) == RECT_WORDS * sizeof(uint32_t));
 }  // namespace mcast_wire
 }  // namespace dataflow_kernel_lib

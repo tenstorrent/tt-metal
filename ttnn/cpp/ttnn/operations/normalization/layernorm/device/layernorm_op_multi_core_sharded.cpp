@@ -394,7 +394,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .is_post_all_gather = is_post_all_gather,
         .writes_back = writes_back,
         .num_distributed_devices = num_distributed_devices,
-        .reader_noc = reader_noc,
         .storage_core_noc_x = std::move(storage_core_noc_x),
         .storage_core_noc_y = std::move(storage_core_noc_y),
         .num_storage_cores = (uint32_t)all_storage_cores.num_cores()};
@@ -402,8 +401,9 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // The write-back segment block's length is measured per node while the run args are built, and
     // the kernel specs declare it, so the run args come first.
     auto [run_args, writer_num_varargs] =
-        build_run_args(cores, rt_ctx, config, device, a, b, gamma, beta, stats, recip_tensor, output);
+        build_run_args(cores, rt_ctx, config, a, b, gamma, beta, stats, recip_tensor, output);
     add_kernel_and_work_unit_specs(spec, core_ranges, workers, grid, config, writer_num_varargs);
+    attach_multicast(spec, run_args, device, core_ranges, grid, config);
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

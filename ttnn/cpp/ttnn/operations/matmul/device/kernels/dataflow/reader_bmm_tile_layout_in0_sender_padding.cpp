@@ -17,7 +17,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 void kernel_main() {
     // COMPILE TIME ARGS
     // in0 tensor args
@@ -72,7 +72,6 @@ void kernel_main() {
     // See https://github.com/tenstorrent/tt-metal/issues/45943.
     [[maybe_unused]] constexpr uint32_t num_batch_compute =
         get_compile_time_arg_val(decltype(sparsity_args)::next_compile_time_args_offset());
-    constexpr uint32_t operation_ct_args_end = decltype(sparsity_args)::next_compile_time_args_offset() + 1;
     uint32_t rt_args_idx = 0;
     // in0 tensor args
     const uint32_t in0_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
@@ -81,9 +80,6 @@ void kernel_main() {
     const uint32_t last_block_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // sparsity args
     const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
-
-    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 4> in0_mcast_args;
-    rt_args_idx = in0_mcast_args.next_runtime_args_offset();
 
     // 0 is used to specify "INVALID" state, i.e. when the multicasted data has not been received by the receiver.
     // 0x1 is used to specify "VALID" state, i.e. when the batch is valid.
@@ -153,6 +149,12 @@ void kernel_main() {
     constexpr uint32_t dfb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
     DataflowBuffer dfb_sparsity(dfb_id_sparsity);
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
+
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
 
     auto in0_pipe = in0_mcast_args.optional_sender(noc);
 #ifdef IN0_SHARDED

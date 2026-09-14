@@ -9,7 +9,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
 #include <tt-metalium/hal.hpp>
@@ -282,15 +282,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     }
 
     const auto in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-    const ttnn::kernel_lib::host::Mcast2D in0_mcast(
+    ttnn::kernel_lib::host::Mcast2D in0_mcast(
         device,
         CoreRangeSet(in0_mcast_receiver_cores_bounding_box),
         ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = start_core},
         ttnn::kernel_lib::host::McastConfig{.noc = in0_noc});
-    for (const auto& semaphore : in0_mcast.owned_semaphores()) {
-        const uint32_t created_id = tt_metal::CreateSemaphore(program, semaphore.core_ranges, semaphore.initial_value);
-        TT_FATAL(created_id == semaphore.id, "Expected multicast semaphore id {}, got {}", semaphore.id, created_id);
-    }
     const auto in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     uint32_t num_batch_compute = use_indices ? num_active : nnz.value_or(sparsity.logical_volume());
@@ -362,7 +358,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
     // count_nonzero(sparsity) matches the loop count baked into the receiver/compute kernels, failing
     // loudly instead of deadlocking. See https://github.com/tenstorrent/tt-metal/issues/45943.
     in0_sender_compile_time_args.push_back((std::uint32_t)num_batch_compute);
-    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
         // READER
@@ -407,7 +402,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)false,                              // fuse_op
         (std::uint32_t)false,                              // fuse_op_reduce_scatter
         (std::uint32_t)compact_output};
-    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in1_sender_writer_compile_time_args);
 
     // Append TensorAccessorArgs
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
@@ -426,7 +420,6 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         (std::uint32_t)num_batch_compute,      // batch
         (std::uint32_t)get_batch_from_reader,  // get_batch_from_reader
     };
-    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
 
     std::map<std::string, std::string> mm_kernel_defines;
     std::map<std::string, std::string> mm_kernel_in0_sender_writer_defines;
@@ -448,7 +441,14 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
-    auto mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id = tt_metal::CreateKernel(
+    in0_mcast.append_semaphores(program);
+    const uint32_t in0_sender_mcast_ct_offset = in0_sender_compile_time_args.size();
+    const uint32_t in0_receiver_mcast_ct_offset = in0_receiver_compile_time_args.size();
+    const uint32_t in1_mcast_ct_offset = in1_sender_writer_compile_time_args.size();
+    in0_mcast.append_compile_time_args_to(in0_sender_compile_time_args);
+    in0_mcast.append_compile_time_args_to(in0_receiver_compile_time_args);
+    ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(in1_sender_writer_compile_time_args);
+    const auto in0_sender_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp",
         in0_mcast_sender_cores,
@@ -461,12 +461,11 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_in0", tt::CBIndex::c_0},
                 {"cb_in0_sharded", tt::CBIndex::c_2},
                 {"cb_sparsity", tt::CBIndex::c_6},
-                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
-            }});
-
-    tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
+                {"num_active", num_active},
+                {"in0_mcast_ct_offset", in0_sender_mcast_ct_offset},
+                {"in0_mcast_rt_offset", 4}}});
     if (in0_mcast_receivers.num_cores() > 0) {
-        mm_kernel_in0_receiver_id = tt_metal::CreateKernel(
+        const auto in0_receiver_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
             in0_mcast_receivers,
@@ -476,13 +475,17 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 .compile_args = in0_receiver_compile_time_args,
                 .named_compile_args = {
                     {"cb_in0", tt::CBIndex::c_0},
-                }});
+                    {"in0_mcast_ct_offset", in0_receiver_mcast_ct_offset},
+                    {"in0_mcast_rt_offset", 0}}});
+        for (const auto& core : corerange_to_cores(in0_mcast_receivers)) {
+            std::vector<uint32_t> args;
+            in0_mcast.append_runtime_args_to(args, core);
+            tt_metal::SetRuntimeArgs(program, in0_receiver_id, core, args);
+        }
     }
-
-    auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
+    const auto in1_writer_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/"
-        "reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
+        "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
         all_cores_with_work,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
@@ -494,8 +497,9 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 {"cb_bias", tt::CBIndex::c_3},
                 {"cb_out", tt::CBIndex::c_4},
                 {"cb_sparsity", tt::CBIndex::c_7},
-                {"num_active", num_active},  // indexed/gather mode loop count (0 = not indexed)
-            }});
+                {"num_active", num_active},
+                {"in1_mcast_ct_offset", in1_mcast_ct_offset},
+                {"in1_mcast_rt_offset", 0}}});
 
     // Compute kernel compile time args
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
@@ -685,18 +689,7 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
                 (std::uint32_t)out_block_h,                     // last_block_h
                 (std::uint32_t)sparsity_buffer->address()};     // sparsity_addr
             in0_mcast.append_runtime_args_to(mm_in0_sender_args, core);
-
-            tt_metal::SetRuntimeArgs(
-                program,
-                mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id,
-                core,
-                mm_in0_sender_args);  // RISCV_0_default
-        }
-        // in0 receiver and in 1 sender
-        else {
-            std::vector<uint32_t> mm_in0_receiver_args;
-            in0_mcast.append_runtime_args_to(mm_in0_receiver_args, core);
-            tt_metal::SetRuntimeArgs(program, mm_kernel_in0_receiver_id, core, mm_in0_receiver_args);
+            tt_metal::SetRuntimeArgs(program, in0_sender_id, core, mm_in0_sender_args);
         }
         if (i < num_cores_with_work) {
             std::vector<uint32_t> mm_in1_sender_writer_args = {
@@ -756,13 +749,12 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
             mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
             mm_in1_sender_writer_args.push_back(0);
-            tt_metal::SetRuntimeArgs(
-                program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
+            tt_metal::SetRuntimeArgs(program, in1_writer_id, core, mm_in1_sender_writer_args);
         }
     }
 
     auto shared_vars = SparseMatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t{
-        {mm_kernel_in0_mcast_cores_with_work_and_in_receiver_grid_id, mm_kernel_in1_sender_writer_id},
+        {in0_sender_id, in1_writer_id},
         {cb_src1, cb_src2, cb_output},
         false,
         start_core,

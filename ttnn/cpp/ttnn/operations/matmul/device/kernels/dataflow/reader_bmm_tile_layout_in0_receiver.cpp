@@ -11,7 +11,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 void kernel_main() {
     // COMPILE TIME ARGS
     // in0 block args
@@ -26,9 +26,12 @@ void kernel_main() {
     // This boolean is set when the number of batches is only known at runtime, typically based on a sparsity tensor.
     constexpr bool get_batch_from_reader = static_cast<bool>(get_compile_time_arg_val(5));
 
-    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<6, 0>();
-
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr auto in0_mcast_args = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>();
 
     const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);

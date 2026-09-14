@@ -7,7 +7,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     // Compile time args
@@ -16,7 +16,10 @@ void kernel_main() {
     constexpr uint32_t Wt_final = get_compile_time_arg_val(2);
     constexpr uint32_t final_values_dfb_index = get_compile_time_arg_val(3);
     constexpr uint32_t final_indices_dfb_index = get_compile_time_arg_val(4);
-    constexpr dataflow_kernel_lib::McastArgs<5, 0> readiness_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("readiness_mcast_ct_offset"),
+        get_named_compile_time_arg_val("readiness_mcast_rt_offset")>
+        readiness_mcast_args;
 
     const Noc noc;
     auto readiness_pipe = readiness_mcast_args.sender(noc);
@@ -31,7 +34,7 @@ void kernel_main() {
         final_indices_dfb.reserve_back(Wt_final);  // Space for all TopK indices
 
         // The arrival counter remains operation-owned and is reset only after the prior round's
-        // exact wait completed. Readiness is a helper-owned monotone Counter, so it is never reset.
+        // exact wait completed. The multicast helper signals that the destination buffers are ready.
         arrival_counter_sem.set(INVALID);
         readiness_pipe.send_signal();
 

@@ -11,7 +11,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     constexpr uint32_t num_batches = get_compile_time_arg_val(0);
@@ -29,8 +29,10 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_compile_time_arg_val(9) != 0;
 
-    constexpr uint32_t operation_ct_args_end = 10;
-    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 0> reduction_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")>
+        reduction_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_global_id = tt::CBIndex::c_15;
@@ -40,6 +42,8 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     const Noc noc;
+    constexpr uint32_t partial_ready_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    Semaphore<> partial_ready_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.receiver(noc);
 
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
@@ -105,6 +109,8 @@ void kernel_main() {
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
+            // Publish partials before the sender gathers them; receive only waits for the result.
+            partial_ready_sem.up(noc, reduction_mcast_args.sender_x(), reduction_mcast_args.sender_y(), 1);
             reduction_pipe.receive();
 
             local_means_ptr += local_stride_per_group;

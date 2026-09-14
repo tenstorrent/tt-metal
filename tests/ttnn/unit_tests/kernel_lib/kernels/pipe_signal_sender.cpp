@@ -9,14 +9,16 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
-    constexpr auto mc = McastArgs</*CT=*/0, /*RT=*/0>();
-    constexpr uint32_t num_iters = get_compile_time_arg_val(mc.next_compile_time_args_offset());
-    constexpr uint32_t control_value = get_compile_time_arg_val(mc.next_compile_time_args_offset() + 1);
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t num_iters = get_compile_time_arg_val(0);
+    constexpr uint32_t control_value = get_compile_time_arg_val(0 + 1);
 
     Noc noc;
     auto pipe = mc.sender(noc);

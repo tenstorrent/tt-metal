@@ -167,8 +167,7 @@ kernel_lib::host::McastFamily make_group_norm_mcast_family(
     tt::tt_metal::IDevice* device,
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& groups,
     const kernel_lib::host::McastConfig& config) {
-    std::vector<kernel_lib::host::McastGroup> reduction_groups;
-    reduction_groups.reserve(groups.size());
+    kernel_lib::host::McastFamily family(device, config);
     for (const auto& group : groups) {
         TT_FATAL(!group.empty(), "GroupNorm reduction group must not be empty");
         std::vector<tt::tt_metal::CoreRange> receivers;
@@ -176,10 +175,11 @@ kernel_lib::host::McastFamily make_group_norm_mcast_family(
         for (const auto& core : group) {
             receivers.emplace_back(core, core);
         }
-        reduction_groups.emplace_back(
+        family.add_group(
             tt::tt_metal::CoreRangeSet(std::move(receivers)), std::vector<tt::tt_metal::CoreCoord>{group.front()});
     }
-    return kernel_lib::host::McastFamily(device, std::move(reduction_groups), config);
+    family.prepare_arguments();
+    return family;
 }
 
 std::pair<uint32_t, uint32_t> find_max_tile_span(uint32_t W, uint32_t group_size, uint32_t tile_width) {

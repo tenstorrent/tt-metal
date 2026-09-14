@@ -4,7 +4,7 @@
 
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -75,7 +75,6 @@ void kernel_main() {
     constexpr uint32_t ct_arg_idx = 36;
     constexpr auto s_weight_args = TensorAccessorArgs<ct_arg_idx>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
-    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
     uint32_t i = 0;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i++);
     // Bias arg. Unused if bias fusion is not enabled.
@@ -85,9 +84,9 @@ void kernel_main() {
     const bool has_sharded_input = get_arg_val<uint32_t>(i++) > 0;
     const bool skip_work = get_arg_val<uint32_t>(i++) > 0;
 
-    constexpr uint32_t operation_runtime_args_end = 6;
-    constexpr auto weights_mcast_args =
-        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
+    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weights_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
 
     // Experimental API objects
     Noc noc;

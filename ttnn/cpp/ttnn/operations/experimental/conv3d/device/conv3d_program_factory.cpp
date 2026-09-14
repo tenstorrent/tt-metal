@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "conv3d_program_factory.hpp"
 #include "conv3d_device_operation_types.hpp"
 #include "kernels/conv3d_gather_tuning.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
@@ -14,6 +15,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <array>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <hostdevcommon/common_values.hpp>
@@ -925,7 +927,13 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
     auto cores = corerange_to_cores(core_grid, num_cores, true);
     auto* device = input_tensor.device();
     std::vector<CoreWork> core_work;
-    std::vector<mcast::McastGroup> weights_mcast_groups;
+    std::optional<mcast::McastFamily> weights_mcast_family;
+    mcast::McastConfig weight_config;
+    if (share_weights) {
+        weight_config.noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+        weight_config.irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::ChainUnicast;
+        weights_mcast_family.emplace(device, weight_config);
+    }
 
     auto compute_block_ranges = [&](CoreWork& cw) {
         cw.c_in_block_start = cw.c_in_idx * c_in_per_core;
@@ -1007,7 +1015,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             for (uint32_t cid : members) {
                 receivers.emplace_back(cores.at(cid), cores.at(cid));
             }
-            weights_mcast_groups.emplace_back(
+            weights_mcast_family->add_group(
                 CoreRangeSet(std::move(receivers)), std::vector<CoreCoord>{cores.at(members.front())});
         }
     } else if (place_in_rectangles) {
@@ -1080,7 +1088,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
             const auto sender_phys = device->worker_core_from_logical_core(CoreCoord{sender_x_log, sender_y_log});
             used_sender_phys_xs.push_back((uint32_t)sender_phys.x);
 
-            weights_mcast_groups.emplace_back(
+            weights_mcast_family->add_group(
                 CoreRangeSet(CoreRange({0, bbox_y_start_log}, {bbox_x_end_log, bbox_y_end_log})),
                 std::vector<CoreCoord>{{sender_x_log, sender_y_log}},
                 num_members - 1);  // Only active receivers acknowledge; the sender is an active member.
@@ -1113,19 +1121,8 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         }
     }
 
-    std::optional<mcast::McastFamily> weights_mcast_family;
     if (share_weights) {
-        mcast::McastConfig weight_config;
-        weight_config.noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
-        weight_config.base_sem_id = desc.semaphores.size();
-        weights_mcast_family.emplace(
-            device, std::move(weights_mcast_groups), weight_config, mcast::IrregularReceiverSetMode::ChainLink);
-        for (const auto& semaphore : weights_mcast_family->owned_semaphores()) {
-            desc.semaphores.push_back(semaphore);
-        }
-        weights_mcast_family->append_compile_time_args_to(writer_desc.compile_time_args);
-    } else {
-        mcast::append_absent_mcast_compile_time_args_to(writer_desc.compile_time_args);
+        weights_mcast_family->prepare_arguments();
     }
 
     // Build reduction groups from logical reduction keys (c_out_idx, t_out_idx, h_out_idx, w_out_idx).
@@ -1234,9 +1231,7 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         // Writer pos[0..2] are the output, weight, and bias buffer addresses. nullptr bias becomes
         // an embedded 0 so the kernel-side address is still well-defined.
         KernelDescriptor::RTArgList writer_args;
-        writer_args.reserve(
-            15 + (weights_mcast_family ? weights_mcast_family->runtime_args(core).size() : 0) +
-            (num_workers > 0 ? 2 + 2 * num_workers : 0));
+        writer_args.reserve(15 + (num_workers > 0 ? 2 + 2 * num_workers : 0));
         writer_args.push_back(out_buffer);
         writer_args.push_back(weight_buffer);
         if (bias_buffer != nullptr) {
@@ -1256,10 +1251,6 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
         writer_args.push_back(cw.w_out_end);
         writer_args.push_back((uint32_t)cw.is_reducer);
         writer_args.push_back(num_workers);
-        if (weights_mcast_family) {
-            weights_mcast_family->append_runtime_args_to(writer_args, core);
-        }
-
         if (num_workers > 0) {
             writer_args.push_back(reducer_core_physical_xs[group_id]);
             writer_args.push_back(reducer_core_physical_ys[group_id]);
@@ -1289,6 +1280,11 @@ tt::tt_metal::ProgramDescriptor Conv3dProgramFactory::create_descriptor(
 
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(compute_desc));
+    if (weights_mcast_family) {
+        weights_mcast_family->attach(desc, "weights_mcast", writer_desc);
+    } else {
+        mcast::attach_absent(writer_desc, "weights_mcast");
+    }
     desc.kernels.push_back(std::move(writer_desc));
 
     return desc;

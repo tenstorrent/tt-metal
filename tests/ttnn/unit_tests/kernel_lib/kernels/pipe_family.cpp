@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 using namespace dataflow_kernel_lib;
 
 template <typename Pipe, typename = void>
@@ -18,15 +18,25 @@ struct HasRoundOnlyReceive<Pipe, std::void_t<decltype(std::declval<Pipe&>().rece
 template <typename Pipe, typename = void>
 struct HasReceiveAndForward : std::false_type {};
 template <typename Pipe>
-struct HasReceiveAndForward<Pipe, std::void_t<decltype(std::declval<Pipe&>().receive_and_forward(0u, 2048u, 0u))>>
+struct HasReceiveAndForward<
+    Pipe,
+    std::void_t<
+        decltype(std::declval<Pipe&>().receive_and_forward(0u, 2048u, 0u)),
+        decltype(std::declval<Pipe&>().template receive_and_forward<SourceL1Guard::CallerManaged>(0u, 2048u, 0u))>>
     : std::true_type {};
 
 void kernel_main() {
-    constexpr auto mc = McastArgs<0, 6>();
-    constexpr auto absent = McastArgs<mc.next_compile_time_args_offset(), mc.next_runtime_args_offset()>();
-    constexpr auto barrier = McastArgs<absent.next_compile_time_args_offset(), absent.next_runtime_args_offset()>();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr auto absent = McastArgs<
+        get_named_compile_time_arg_val("absent_mcast_ct_offset"),
+        get_named_compile_time_arg_val("absent_mcast_rt_offset")>();
+    constexpr auto barrier = McastArgs<
+        get_named_compile_time_arg_val("barrier_mcast_ct_offset"),
+        get_named_compile_time_arg_val("barrier_mcast_rt_offset")>();
     static_assert(!absent.active);
-    constexpr uint32_t base = barrier.next_compile_time_args_offset();
+    constexpr uint32_t base = 0;
     constexpr uint32_t rounds = get_compile_time_arg_val(base);
     constexpr bool control = get_compile_time_arg_val(base + 1);
     constexpr bool caller_managed = get_compile_time_arg_val(base + 2);
@@ -34,11 +44,13 @@ void kernel_main() {
     constexpr uint32_t max_pages = get_compile_time_arg_val(base + 4);
     constexpr bool mixed_events = get_compile_time_arg_val(base + 5);
     constexpr bool delayed = get_compile_time_arg_val(base + 6);
-    constexpr auto input_args = TensorAccessorArgs<base + 7>();
+    constexpr bool receiver_caller_managed = get_compile_time_arg_val(base + 7);
+    constexpr auto input_args = TensorAccessorArgs<base + 8>();
     static_assert(
         HasRoundOnlyReceive<decltype(mc.receiver(std::declval<const Noc&>()))>::value ==
-        (mc.mcast_mode == McastMode::Multicast));
+        (mc.transfer_mode == TransferMode::Multicast));
     static_assert(HasReceiveAndForward<decltype(mc.receiver(std::declval<const Noc&>()))>::value);
+    static_assert(HasReceiveAndForward<detail::InactiveReceiverPipe>::value);
     static_assert(
         std::is_same_v<
             decltype(absent.optional_sender(std::declval<const Noc&>())),
@@ -117,7 +129,15 @@ void kernel_main() {
             if (control_event) {
                 *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst) = receiver->receive_signal(r);
             } else {
-                receiver->receive_and_forward(dst, 2048 * pages, r);
+                if constexpr (receiver_caller_managed) {
+                    receiver->receive_and_forward<SourceL1Guard::CallerManaged>(dst, 2048 * pages, r);
+                    for (uint32_t i = 0; i < 64; ++i) {
+                        asm volatile("nop");
+                    }
+                    noc.async_writes_flushed();
+                } else {
+                    receiver->receive_and_forward(dst, 2048 * pages, r);
+                }
             }
         }
         if (inside) {

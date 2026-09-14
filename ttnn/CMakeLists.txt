@@ -4,6 +4,16 @@
 
 include(sources.cmake)
 
+# Keep new helper backends from reshuffling unrelated unity translation units.
+set_source_files_properties(
+    cpp/ttnn/kernel_lib/mcast/host/mcast_resources.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_descriptor.cpp
+    cpp/ttnn/kernel_lib/mcast/host/mcast_spec.cpp
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            ON
+)
+
 add_compile_options("$<$<CXX_COMPILER_ID:Clang>:-Wunused-parameter>")
 
 # FIXME: Many lambda functions in ttnn capture variables and don't use them.
@@ -245,6 +255,15 @@ target_include_directories(
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
         # FIXME: decide what to do about this dir. Device includes complicate matters.
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/cpp>"
+)
+
+# Local fused multicast builders inspect live semaphore occupancy before descriptor append.
+target_include_directories(
+    ttnncpp
+    PRIVATE
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
+        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
 )
 
 target_link_libraries(

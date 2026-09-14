@@ -6,6 +6,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "layernorm_dataflow_utils.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
@@ -88,8 +89,11 @@ void kernel_main() {
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
+    constexpr auto reduction_ready = MCAST_SPEC_ARGS(reduction_ready);
+    auto reduction_ready_pipe = reduction_ready.optional_receiver(noc);
+    constexpr auto final_statistics = MCAST_SPEC_ARGS(final_statistics);
+    auto final_statistics_pipe = final_statistics.optional_receiver(noc);
     Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     const UnicastEndpoint remote_ep;
 
@@ -134,6 +138,7 @@ void kernel_main() {
     // Waits on partial reduction, syncs with coordinator, reads
     // from other cores, signals when combine is done, receives multicast
     // ============================================================================
+    uint32_t statistics_round = 0;
     const auto& global_reduce_receiver = [&](const uint32_t dfb_partial_id,
                                              const uint32_t dfb_external_id,
                                              const uint32_t dfb_ex_id,
@@ -152,9 +157,7 @@ void kernel_main() {
 
         dfb_partial_obj.wait_front(static_cast<uint16_t>(block_h * num_tiles_scaler));
 
-        reduce_sender_sem.set(INVALID);
-        reduce_receiver_sem.up(noc, in0_remote_noc_x[0], in0_remote_noc_y[0], 1);
-        reduce_sender_sem.wait(VALID);
+        reduction_ready_pipe->receive_signal();
 
         // ============================================================================
         // Combine partial results
@@ -256,7 +259,7 @@ void kernel_main() {
             const uint32_t num_tiles =
                 block == num_all_to_all_workers - 1 ? num_tiles_per_worker_last : num_tiles_per_worker;
             dfb_ex_global_obj.reserve_back(static_cast<uint16_t>(num_tiles * num_tiles_scaler));
-            reduce_sender_sem.wait_min(block + 2);
+            final_statistics_pipe->receive(statistics_round++);
             dfb_ex_global_obj.push_back(static_cast<uint16_t>(num_tiles * num_tiles_scaler));
         }
 

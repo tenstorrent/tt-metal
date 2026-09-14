@@ -11,14 +11,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_result = get_compile_time_arg_val(0);
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/2>();
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t SCALARS = 1;
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS);
     constexpr uint32_t control_value = get_compile_time_arg_val(SCALARS + 1);
     constexpr auto out_args = TensorAccessorArgs<SCALARS + 2>();

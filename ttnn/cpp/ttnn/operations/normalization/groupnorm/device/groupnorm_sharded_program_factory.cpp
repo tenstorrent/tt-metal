@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
 
@@ -15,7 +16,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/math.hpp"
 
 using uint32_t = std::uint32_t;
@@ -493,8 +494,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         device,
         mcast_groups,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc,
-            .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}});
+            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}});
 
     // reader defines
     std::map<std::string, std::string> reader_mcast_sender_defines;
@@ -548,8 +548,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_compile_time_args.push_back(tile_width);
         reader_mcast_receiver_compile_time_args.push_back(static_cast<uint32_t>(stats_is_fp32));
     }
-    reduction_family.append_compile_time_args_to(reader_mcast_sender_compile_time_args, /*pre_handshake=*/false);
-    reduction_family.append_compile_time_args_to(reader_mcast_receiver_compile_time_args, /*pre_handshake=*/true);
 
     // reader sender kernel
     KernelDescriptor reader_mcast_sender_desc;
@@ -561,6 +559,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     reader_mcast_sender_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_mcast_sender_desc.core_ranges = mcast_sender_cores;
     reader_mcast_sender_desc.compile_time_args = reader_mcast_sender_compile_time_args;
+    reader_mcast_sender_desc.named_compile_time_args = {{"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id}};
     reader_mcast_sender_desc.defines =
         KernelDescriptor::Defines(reader_mcast_sender_defines.begin(), reader_mcast_sender_defines.end());
     reader_mcast_sender_desc.config = DataMovementConfigDescriptor{
@@ -580,6 +579,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         reader_mcast_receiver_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
         reader_mcast_receiver_desc.core_ranges = mcast_receiver_cores;
         reader_mcast_receiver_desc.compile_time_args = reader_mcast_receiver_compile_time_args;
+        reader_mcast_receiver_desc.named_compile_time_args = {
+            {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id}};
         reader_mcast_receiver_desc.defines =
             KernelDescriptor::Defines(reader_mcast_receiver_defines.begin(), reader_mcast_receiver_defines.end());
         reader_mcast_receiver_desc.config = DataMovementConfigDescriptor{
@@ -1226,7 +1227,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     reader_mcast_args.push_back(coord.y);
                 }
             }
-            reduction_family.append_runtime_args_to(reader_mcast_args, core);
             if (j == 0) {  // mcast sender
                 reader_mcast_sender_desc.runtime_args.emplace_back(core, std::move(reader_mcast_args));
 
@@ -1299,6 +1299,12 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         }
     }
 
+    // Partial-statistics readiness is consumed before gathering; this family delivers the result.
+    std::vector<std::reference_wrapper<KernelDescriptor>> reduction_kernels{reader_mcast_sender_desc};
+    if (has_receiver_kernel) {
+        reduction_kernels.emplace_back(reader_mcast_receiver_desc);
+    }
+    reduction_family.attach(desc, "reduction_mcast", reduction_kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));
     if (has_receiver_kernel) {
         desc.kernels.push_back(std::move(reader_mcast_receiver_desc));
