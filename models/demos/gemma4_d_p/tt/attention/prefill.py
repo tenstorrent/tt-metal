@@ -62,7 +62,7 @@ def prefill_forward(
         kv_tied=kv_tied,
     )
 
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc)
+    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True)
 
     packed_global_ring = weights.is_global and isinstance(ring_kv_cache, PackedRingKVCache)
     packed_sliding_ring = config.is_sliding and ring_kv_cache is not None
@@ -71,13 +71,13 @@ def prefill_forward(
         # gamma: this entire 512-wide result is V. K branches from this value;
         # packed-only serving transforms just its active rotary quarter below.
         tt_k.deallocate(True)
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True)
         tt_k = None
     else:
         tt_k = apply_per_head_norm(
-            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc
+            tt_k, weights.k_norm_weight, config.rms_norm_eps, with_scale=True, memory_config=act_mc, fp32_accumulate=True
         )
-        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc)
+        tt_v = apply_per_head_norm(tt_v, None, config.rms_norm_eps, with_scale=False, memory_config=act_mc, fp32_accumulate=True)
 
     # Apply RoPE to Q and the rotary part of K.
     if packed_global_ring:
