@@ -20,6 +20,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
     RingCyclicDirection ring_direction,
     uint32_t rows_per_block_tiles,
     bool use_barrier,
+    bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
@@ -37,6 +38,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
         ring_direction,
         rows_per_block_tiles,
         use_barrier,
+        accumulate_into_outputs,
         preallocated_grad_query,
         preallocated_grad_key,
         preallocated_grad_value);

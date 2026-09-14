@@ -63,6 +63,7 @@
 #include <cmath>
 #include <core/xtensor_utils.hpp>
 #include <cstdlib>
+#include <functional>
 #include <optional>
 #include <string>
 #include <tt-metalium/distributed_context.hpp>
@@ -665,6 +666,20 @@ void compare_backward_implementations(
     const auto two_pass = run(ops::distributed::RingBackwardKind::TwoPass);
     const auto cyclic = run(ops::distributed::RingBackwardKind::Cyclic);
 
+    // The in-place variant runs the same kernels with the step's contribution
+    // added into the running accumulator on device instead of on the host. It
+    // is not bitwise equal to Cyclic, for two reasons that are both rounding:
+    // the sum runs in a different order (incoming accumulator first, then the
+    // step's terms, where Cyclic sums the terms from zero and adds once), and
+    // a seeded column gradient passes through the Src registers on its way
+    // into the accumulator, which carry about ten mantissa bits, once per
+    // column per step. What it must not be is contribution-sized: a first
+    // visit that overwrote instead of adding would drop a whole step's worth,
+    // which is orders of magnitude above either effect. So it is graded by
+    // RMS against the reference, allowed a small factor over Cyclic for the
+    // truncations, and the max difference to Cyclic is printed.
+    const auto in_place = run(ops::distributed::RingBackwardKind::CyclicInPlace);
+
     // Run the cyclic path again on the same inputs. Its relay has credits,
     // readiness tags and endpoint counters, and a race in any of them would
     // show as a result that moves between runs. Bitwise equality says any
@@ -720,6 +735,18 @@ void compare_backward_implementations(
         EXPECT_LE(cyclic_rms, 1.5F * two_pass_rms)
             << names[k] << ": the cyclic backward is less accurate than the two-pass one over the whole "
             << "tensor, rms " << cyclic_rms << " against " << two_pass_rms;
+
+        const xt::xarray<float>* ips[] = {&in_place.dQ, &in_place.dK, &in_place.dV};
+        const float in_place_rms = rms_error(*refs[k], *ips[k]);
+        const float in_place_vs_cyclic = amax(*cys[k] - *ips[k]);
+        EXPECT_LE(in_place_rms, 1.25F * cyclic_rms)
+            << names[k] << ": in-place accumulation is less accurate than accumulating on the host, rms "
+            << in_place_rms << " against " << cyclic_rms;
+        EXPECT_LE(in_place_vs_cyclic, 0.05F * scale)
+            << names[k] << ": in-place differs from Cyclic by " << in_place_vs_cyclic << " on scale " << scale
+            << ", which is a dropped or doubled contribution, not rounding";
+        std::cout << "    in-place " << names[k] << ": rms vs ref " << in_place_rms << " (cyclic " << cyclic_rms
+                  << "), max |in-place - cyclic| " << in_place_vs_cyclic << " on scale " << scale << "\n";
     }
 
     // Printed so that a cross-check failure can be read: if each path's own
@@ -810,7 +837,13 @@ namespace {
 // accumulation and the shifts -- because that is what a caller pays; a
 // per-step kernel number would flatter whichever implementation moves its
 // cost into the driver.
-double time_ring_backward(const size_t batch, const size_t num_heads, const size_t seq_len, const size_t head_dim) {
+double time_ring_backward(
+    const size_t batch,
+    const size_t num_heads,
+    const size_t seq_len,
+    const size_t head_dim,
+    ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
+    uint32_t rows_per_block_tiles = 1U) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -830,7 +863,7 @@ double time_ring_backward(const size_t batch, const size_t num_heads, const size
         auto value = autograd::create_tensor(
             to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
         auto out = ops::distributed::ring_attention_sdpa(
-            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal);
+            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles);
         out->set_grad(to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())));
         tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
 
@@ -850,6 +883,140 @@ double time_ring_backward(const size_t batch, const size_t num_heads, const size
 }
 
 }  // namespace
+
+// The two implementations timed against each other, whole backward, median of
+// five. The whole backward and not the kernel, because that is what a caller
+// pays: a per-step kernel number would flatter whichever implementation moves
+// its cost into the driver, and these two move different amounts there.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring backward on " << cp_size << " chips, median of five\n";
+    for (const auto& cfg : std::vector<std::array<size_t, 5>>{
+             // batch, heads, rows per chip, head dim, Bt
+             {1, 4, 128, 64, 1},
+             {1, 4, 256, 64, 1},
+             {1, 4, 256, 64, 2},
+             {1, 8, 256, 64, 2},
+             {1, 4, 512, 64, 2},
+             {1, 4, 512, 64, 4},
+             {1, 4, 256, 128, 2},
+         }) {
+        const size_t rows_per_chip = cfg[2];
+        const auto Bt = static_cast<uint32_t>(cfg[4]);
+        const size_t seq_len = rows_per_chip * cp_size;
+        if (rows_per_chip % (2U * Bt * 32U) != 0U) {
+            continue;  // the cyclic schedule needs whole cores per chunk
+        }
+        using Kind = ttml::ops::distributed::RingBackwardKind;
+        const double two_pass = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::TwoPass, Bt);
+        const double cyclic = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::Cyclic, Bt);
+        const double in_place = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::CyclicInPlace, Bt);
+        std::cout << "  batch=" << cfg[0] << " heads=" << cfg[1] << " N=" << seq_len << " d=" << cfg[3]
+                  << " Bt=" << Bt << " (" << rows_per_chip << " rows/chip, C=" << rows_per_chip / (2U * Bt * 32U)
+                  << "): two-pass " << two_pass * 1e3 << " ms, cyclic " << cyclic * 1e3 << " ms ("
+                  << two_pass / cyclic << "x), cyclic in-place " << in_place * 1e3 << " ms (" << two_pass / in_place
+                  << "x)\n";
+    }
+}
+
+// Where a ring step's time goes. The whole-backward numbers above barely move
+// with the shape or with the kernel, which says the kernel is not what is
+// being paid for. This times each component of one step in isolation: the
+// per-step op of each implementation, one ring shift, one zeroing copy, one
+// accumulate. Multiplied out over the steps and the tensors, they should
+// account for the whole; whatever they do not is dispatch between them.
+TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    auto& rng = autograd::ctx().get_generator();
+
+    const auto median = [&](const std::function<void()>& f) {
+        f();
+        std::vector<double> samples;
+        for (uint32_t k = 0; k < 7; ++k) {
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            const auto start = std::chrono::steady_clock::now();
+            f();
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2] * 1e6;  // us
+    };
+
+    for (const auto& cfg : std::vector<std::array<size_t, 4>>{{1, 4, 128, 64}, {1, 4, 512, 64}}) {
+        const size_t batch = cfg[0], heads = cfg[1], rows_per_chip = cfg[2], head_dim = cfg[3];
+        const size_t seq_len = rows_per_chip * cp_size;
+        const std::array<std::size_t, 4> shape{batch, heads, seq_len, head_dim};
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+        const auto bf16 = [&](const xt::xarray<float>& x) {
+            return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
+        };
+        const auto q = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto k = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto v = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto dO = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto O = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const ttnn::Tensor lse = ttnn::full(
+            ttnn::Shape{batch, heads, rows_per_chip, 32U}, 4.0F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE,
+            std::ref(*device));
+        const ttnn::Tensor D = ttnn::full(
+            ttnn::Shape{batch, heads, rows_per_chip, 32U}, 0.5F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE,
+            std::ref(*device));
+        ttnn::Tensor acc = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+        ttnn::Tensor step_bf16 = ttnn::zeros_like(q);
+        ttnn::Tensor step_fp32 = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+        const ttnn::Tensor zero_bf16 = ttnn::zeros_like(q);
+        const ttnn::Tensor zero_fp32 = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+
+        std::cout << "one ring step, " << cp_size << " chips, " << rows_per_chip << " rows/chip, heads=" << heads
+                  << " d=" << head_dim << " (us, median of 7)\n";
+
+        const double shift = median([&]() {
+            (void)ttnn_fixed::distributed::ring_shift(k, cp_axis, RingShiftDirection::Forward);
+        });
+        std::cout << "  ring_shift of one K-sized bf16 tensor       " << shift << "\n";
+        const double shift32 = median([&]() {
+            (void)ttnn_fixed::distributed::ring_shift(acc, cp_axis, RingShiftDirection::Forward);
+        });
+        std::cout << "  ring_shift of one accumulator (fp32)        " << shift32 << "\n";
+        const double zero = median([&]() { ttnn::copy(zero_bf16, step_bf16); });
+        std::cout << "  zero one step buffer (copy)                 " << zero << "\n";
+        const double add = median([&]() {
+            acc = ttnn::add(acc, ttnn::typecast(step_bf16, ttnn::DataType::FLOAT32));
+        });
+        std::cout << "  typecast + add into accumulator             " << add << "\n";
+        const double add32 = median([&]() { acc = ttnn::add(acc, step_fp32); });
+        std::cout << "  add fp32 into accumulator                   " << add32 << "\n";
+        // Step 0 is the diagonal (causal) step on every chip; no chip skips it.
+        const double two_pass = median([&]() {
+            (void)ttml::metal::ring_sdpa_bw(
+                dO, O, q, k, v, lse, cp_size, cp_axis, /* step */ 0, ttml::metal::AttentionMaskType::Causal,
+                ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward, step_bf16, step_bf16, step_bf16);
+        });
+        std::cout << "  ring_sdpa_bw, one step (Q pass + KV pass)   " << two_pass << "\n";
+        for (const uint32_t Bt : {1u, 2u}) {
+            if (rows_per_chip % (2u * Bt * 32u) != 0u) {
+                continue;
+            }
+            const double cyclic = median([&]() {
+                ttnn::copy(zero_fp32, step_fp32);
+                (void)ttml::metal::ring_cyclic_sdpa_bw(
+                    q, k, v, dO, lse, D, cp_size, cp_axis, /* step */ 0, ttml::metal::AttentionMaskType::Causal,
+                    ttml::metal::RingCyclicDirection::Backward, Bt, false, /* accumulate */ false, step_fp32, step_fp32, step_fp32);
+            });
+            std::cout << "  ring_cyclic_sdpa_bw, one step, Bt=" << Bt << " (+zero) " << cyclic << "\n";
+        }
+        // The per-step host-side total each driver pays besides its op:
+        // 3 zeroes, 3 accumulates, 4 shifts (2 tensors + 2 accumulators).
+        std::cout << "  => per-step glue: 3 zero + 3 add + 4 shift ~ "
+                  << 3 * zero + 3 * add + 2 * shift + 2 * shift32 << " us, x" << cp_size << " steps ~ "
+                  << (3 * zero + 3 * add + 2 * shift + 2 * shift32) * cp_size / 1e3 << " ms\n";
+    }
+}
 
 // Disabled by default: it is a measurement, not an assertion, and it costs a
 // few seconds per shape. Run with --gtest_also_run_disabled_tests.

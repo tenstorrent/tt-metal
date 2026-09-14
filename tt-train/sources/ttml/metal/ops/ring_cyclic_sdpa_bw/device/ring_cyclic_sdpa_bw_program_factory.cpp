@@ -35,7 +35,8 @@ cyclic::operation_attributes_t cyclic_attrs(const operation_attributes_t& args, 
     return cyclic::operation_attributes_t{
         .rows_per_block_tiles = args.rows_per_block_tiles,
         .mask_type = mask_type,
-        .use_barrier = args.use_barrier};
+        .use_barrier = args.use_barrier,
+        .accumulate_into_outputs = args.accumulate_into_outputs};
 }
 
 cyclic::tensor_args_t cyclic_tensors(const tensor_args_t& t, tensor_return_value_t& out) {

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <tuple>
 
 #include "metal/common/const_utils.hpp"
@@ -37,7 +38,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     const ttnn::Tensor& row_scalar,
     uint32_t rows_per_block_tiles = 1U,
     bool use_barrier = false,
-    AttentionMaskType mask_type = AttentionMaskType::Causal);
+    AttentionMaskType mask_type = AttentionMaskType::Causal,
+    bool accumulate_into_outputs = false,
+    const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
 
 // The same thing, taking what a forward pass actually hands back.
 //

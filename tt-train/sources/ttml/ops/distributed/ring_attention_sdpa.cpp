@@ -248,8 +248,11 @@ autograd::TensorPtr ring_attention_sdpa(
         // It is global and constant across steps, so it is computed once here.
         // The product is taken in FP32 rather than the operands' bf16: D is
         // subtracted from dP, so a rounding here lands directly in dS.
+        const bool cyclic =
+            backward_kind == RingBackwardKind::Cyclic || backward_kind == RingBackwardKind::CyclicInPlace;
+        const bool in_place = backward_kind == RingBackwardKind::CyclicInPlace;
         ttnn::Tensor row_scalar;
-        if (backward_kind == RingBackwardKind::Cyclic) {
+        if (cyclic) {
             row_scalar = pad_lse_to_intermediates_layout(ttml::ttnn_fixed::sum_ttnn(
                 ttnn::multiply(
                     ttnn::typecast(grad_output, ttnn::DataType::FLOAT32),
@@ -264,7 +267,9 @@ autograd::TensorPtr ring_attention_sdpa(
 
             // Devices skipped by the causal schedule at this step do not run the kernels,
             // so their step buffers must be zeroed to contribute nothing to the accumulators.
-            if (backward_kind == RingBackwardKind::Cyclic) {
+            if (in_place) {
+                // Nothing to zero: the accumulators are the outputs.
+            } else if (cyclic) {
                 ttnn::copy(zero_Q_fp32, grad_Q_step_fp32);
                 ttnn::copy(zero_K_fp32, grad_K_step_fp32);
                 ttnn::copy(zero_V_fp32, grad_V_step_fp32);
@@ -274,13 +279,38 @@ autograd::TensorPtr ring_attention_sdpa(
                 ttnn::copy(zero_V, grad_V_step);
             }
 
-            if (backward_kind == RingBackwardKind::Cyclic) {
+            if (in_place) {
+                // The step's contribution lands in the accumulators themselves.
+                // A chip the causal schedule skips has no program this step
+                // and leaves them as they are. The shifted accumulators carry
+                // their sums with them, as before.
+                auto [gq, gk, gv] = ttml::metal::ring_cyclic_sdpa_bw(
+                    query_tensor,
+                    k_current,
+                    v_current,
+                    grad_output,
+                    global_intermediates,
+                    row_scalar,
+                    ring_size,
+                    cp_axis_value,
+                    step_idx,
+                    mask_type,
+                    ttml::metal::RingCyclicDirection::Backward,
+                    rows_per_block_tiles,
+                    /* use_barrier */ false,
+                    /* accumulate_into_outputs */ true,
+                    grad_Q_accum,
+                    grad_K_accum,
+                    grad_V_accum);
+                grad_Q_accum = gq;
+                grad_K_accum = gk;
+                grad_V_accum = gv;
+            } else if (cyclic) {
                 // The cyclic op returns FP32 and accumulates into whatever the
                 // step buffers hold, so they are zeroed above and the step's
-                // own contribution comes back. Accumulating straight into
-                // grad_*_accum would be one fewer add, but the accumulators are
-                // ring-shifted between steps, so the step buffers keep the two
-                // implementations' driver structure identical.
+                // own contribution comes back; the host then adds it, as the
+                // two-pass driver does, so the two drivers stay identical in
+                // structure. CyclicInPlace is the version without this.
                 auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_cyclic_sdpa_bw(
                     query_tensor,
                     k_current,
@@ -295,6 +325,7 @@ autograd::TensorPtr ring_attention_sdpa(
                     ttml::metal::RingCyclicDirection::Backward,
                     rows_per_block_tiles,
                     /* use_barrier */ false,
+                    /* accumulate_into_outputs */ false,
                     grad_Q_step_fp32,
                     grad_K_step_fp32,
                     grad_V_step_fp32);

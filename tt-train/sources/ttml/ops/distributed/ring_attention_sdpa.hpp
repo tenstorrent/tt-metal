@@ -56,9 +56,16 @@ namespace ttml::ops::distributed {
 // schedule, the causal one on the diagonal chunk pair and the dense one on an
 // earlier chunk. It skips exactly the same (chip, step) pairs, from the same
 // helper, so the two compute the same work and only differ in how.
+//
+// CyclicInPlace is the same kernels with the step's contribution added
+// straight into the running accumulators on device, which removes the
+// zeroing copy and the host-side add per gradient per step -- six dispatches
+// a step. It exists separately from Cyclic so that a measurement can
+// attribute that saving to the driver rather than to the kernel.
 enum class RingBackwardKind {
     TwoPass,
     Cyclic,
+    CyclicInPlace,
 };
 
 autograd::TensorPtr ring_attention_sdpa(

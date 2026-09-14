@@ -47,6 +47,7 @@ ttml_ring_cyclic_sdpa_bw(
     ttml::metal::ops::ring_cyclic_sdpa_bw::RingDirection ring_direction,
     uint32_t rows_per_block_tiles,
     bool use_barrier,
+    bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);

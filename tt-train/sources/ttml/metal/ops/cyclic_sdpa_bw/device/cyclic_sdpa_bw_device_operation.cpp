@@ -60,6 +60,13 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(t->dtype()));
     }
 
+    if (args.accumulate_into_outputs) {
+        TT_FATAL(
+            tensor_args.preallocated_grad_query.has_value() && tensor_args.preallocated_grad_key.has_value() &&
+                tensor_args.preallocated_grad_value.has_value(),
+            "cyclic_sdpa_bw: accumulate_into_outputs needs all three gradients preallocated, since they are "
+            "what is accumulated into");
+    }
     TT_FATAL(
         args.mask_type != ttml::metal::AttentionMaskType::Arbitrary,
         "cyclic_sdpa_bw has no mask-tensor path: use Causal for the triangle or None for a full block");
@@ -153,13 +160,17 @@ ttml_cyclic_sdpa_bw(
     uint32_t rows_per_block_tiles,
     bool use_barrier,
     ttml::metal::AttentionMaskType mask_type,
+    bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_bw::device::CyclicSDPABackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .rows_per_block_tiles = rows_per_block_tiles, .mask_type = mask_type, .use_barrier = use_barrier};
+        .rows_per_block_tiles = rows_per_block_tiles,
+        .mask_type = mask_type,
+        .use_barrier = use_barrier,
+        .accumulate_into_outputs = accumulate_into_outputs};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,

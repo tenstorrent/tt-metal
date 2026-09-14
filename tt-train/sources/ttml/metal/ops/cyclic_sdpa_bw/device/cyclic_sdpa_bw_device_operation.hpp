@@ -44,6 +44,7 @@ ttml_cyclic_sdpa_bw(
     uint32_t rows_per_block_tiles = 1U,
     bool use_barrier = false,
     ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    bool accumulate_into_outputs = false,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);

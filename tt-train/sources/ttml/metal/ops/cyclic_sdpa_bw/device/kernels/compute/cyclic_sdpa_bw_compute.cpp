@@ -109,6 +109,20 @@
 #define FOLD_SCALE_INTO_KEY 0
 #endif
 
+// SEED_COLUMN_GRADIENTS: start every column's gradients from what is in DRAM,
+// not only on a revisit. A first visit then reads dK_j, dV_j and adds to
+// them rather than overwriting, so the op accumulates into its outputs.
+//
+// This is what a ring step wants: the caller passes its running accumulators
+// as the outputs and the kernels add this step's contribution in place, which
+// removes a zeroing copy and an add per gradient per step from the host --
+// six dispatches a step, each costing more than the kernel does. dQ already
+// works this way (it is seeded from DRAM at every streak start); this makes
+// the column gradients match.
+#ifndef SEED_COLUMN_GRADIENTS
+#define SEED_COLUMN_GRADIENTS 0
+#endif
+
 // DENSE_MODE selects the unmasked schedule: every block pair is live, which
 // is what a ring-attention step needs when the visiting key/value chunk is
 // earlier in the sequence than the local query chunk. It changes the schedule
@@ -421,8 +435,10 @@ void kernel_main() {
         }
 #endif
         if (column_changed) {
-            if (visited[owned_slot]) {
-                // A revisit: the interval starts from what is in DRAM.
+            if (visited[owned_slot] || SEED_COLUMN_GRADIENTS) {
+                // A revisit, or every visit when accumulating into the
+                // outputs: the interval starts from what is in DRAM.
+                visited[owned_slot] = true;
 #if FOLD_SCALE_INTO_KEY
                 pack_tiles_scaled(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt, inv_scaler_bits);
 #else
