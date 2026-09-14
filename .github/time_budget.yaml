@@ -190,6 +190,7 @@ shield:
     bh_p150: 2
   device_perf:
     wh_n150: 100
+    wh_n300_civ2: 10
     bh_p150: 60
   demo:
     bh_sc4: 50
@@ -339,7 +340,6 @@ models:
     wh_galaxy_merge_gate: 5
   sanity:
     wh_galaxy_perf: 8
-    wh_n300_civ2: 5
     bh_p150b_civ2_viommu: 110
     bh_p300: 10
   stress:
