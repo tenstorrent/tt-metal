@@ -180,9 +180,9 @@ def vision_pos_embeds(
 ) -> torch.Tensor:
     """The `(total_patches, hidden_size)` position embedding to add after the patch embedding.
 
-    Computed on the host and uploaded, the way [`create_rope_tensors`] supplies the decoder's rotary
-    tensors: this is a pure function of `grid_thw` and the position table -- no pixels enter -- so
-    there is nothing for the device to do that host arithmetic does not already settle.
+    Computed on the host and uploaded: this is a pure function of `grid_thw` and the position
+    table -- no pixels enter -- so there is nothing for the device to do that host arithmetic does
+    not already settle.
     """
     indices, weights = vision_bilinear_indices_and_weights(
         grid_thw, num_grid_per_side=num_grid_per_side, spatial_merge_size=spatial_merge_size
@@ -851,7 +851,7 @@ class Qwen3VlVisionModel(Module):
     def _gather_tokens(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """Reassemble merged tokens across the SP axis.
 
-        The decoder consumes these through `_scatter_rows`, which walks `vision_runs` over the whole
+        The decoder gathers these by the row numbering it builds from `vision_mask` over the whole
         token sequence, so the tower must hand back every token on every device -- SP ends here. Safe as
         a plain concatenation only because a single attention block means device order equals token
         order; the multi-block layout that `Qwen3VlVisionAttention` rejects would need a permutation.
@@ -861,7 +861,7 @@ class Qwen3VlVisionModel(Module):
         `(tokens, out_hidden_size)` shape -- so they share one buffer. Deepstack features are retained
         across the remaining blocks while later mergers gather into that buffer, so without the clone
         they are silently overwritten (a feature reads PCC 0.009% while the output tokens read
-        99.99%). Cloning moves the result out of the buffer, as `Qwen3VlTextEncoder.forward` does for
+        99.99%). Cloning moves the result out of the buffer, as `TransformerEncoder.forward` does for
         its embedding gather.
         """
         if not (self._p.sp or self._p.tp):

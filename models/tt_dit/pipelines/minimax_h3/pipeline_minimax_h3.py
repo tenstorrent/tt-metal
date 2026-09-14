@@ -61,7 +61,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
     build_minimax_h3_vision_tower,
     load_minimax_h3_text_state_dict,
 )
-from ...encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
+from ...encoders.qwen3vl.model_qwen3vl import mrope_position_ids
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
@@ -346,8 +346,12 @@ class MiniMaxH3Pipeline:
             sequence_parallel=ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor),
             cfg_parallel=None,
         )
+        # The conditioner runs once per prompt, outside the denoise loop, so the per-layer weight
+        # gather of sharding its weights over the SP axis costs nothing that matters, while it takes
+        # the resident weights from ~12.5 GB/device at TP=4 to ~1.6 GB/device across a 4x8 mesh.
         self.encoder_parallel_config = EncoderParallelConfig(
-            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor)
+            tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=self.tp_factor),
+            fsdp=ParallelFactor(mesh_axis=sp_axis, factor=self.sp_factor),
         )
         # Both VAEs are data-parallel over work units with *replicated* weights -- no tensor
         # parallelism at all -- so their cache key carries factor 1. Recording it as a config rather
@@ -614,7 +618,7 @@ class MiniMaxH3Pipeline:
 
         Returns `(input_ids [1, L], token_tags [L], mm_token_type_ids [1, L], pixel_values, grid_thw)`,
         with the vision inputs concatenated in **presentation order** -- which is the whole reason this
-        is not two separate tower calls. `_scatter_rows` consumes the tower's merged rows *in run
+        is not two separate tower calls. The encoder consumes the tower's merged rows *in sequence
         order*, so image and video patches batched separately (images first, then videos) would land in
         the wrong rows for any request whose video reference precedes an image. Concatenating both here,
         in reference order, makes the tower's output already correct and removes the reordering step
@@ -779,7 +783,6 @@ class MiniMaxH3Pipeline:
                 mesh_device=self.mesh_device,
                 parallel_config=self.encoder_parallel_config,
                 ccl_manager=self.ccl_manager,
-                is_fsdp=True,
                 load_weights=False,
             )
             cache.load_model(
@@ -789,12 +792,10 @@ class MiniMaxH3Pipeline:
                 parallel_config=self.encoder_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
-                is_fsdp=True,
                 get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(
                     self.weights_dir / "text_encoder", num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER
                 ),
             )
-        config = self._text_config
 
         # The vision tower, and the two ways its output enters the decoder. Run before the rope tables
         # so a tower failure surfaces before any decoder work.
@@ -815,33 +816,22 @@ class MiniMaxH3Pipeline:
                 # replicated (sp_factor 1), per `vision_qwen3vl.py`.
                 cu_seqlens=vision_cu_seqlens(grid_thw),
             )
-            # Both pad ids, in sequence order. `_scatter_rows` consumes the tower's rows in run
-            # order and the patches were concatenated in presentation order, so the two match.
-            pad_ids = [self.tokenizer.convert_tokens_to_ids(token) for token in ("<|image_pad|>", "<|video_pad|>")]
-            runs = vision_token_runs(input_ids, pad_ids)
-            # One run per image and one per merged frame pair of a video, i.e. one per grid
-            # entry once `t` is expanded. A mismatch scatters one reference's tokens into
-            # another's rows.
-            expected_runs = int(sum(int(grid[0]) for grid in grid_thw))
-            assert (
-                len(runs) == expected_runs
-            ), f"expected {expected_runs} vision run(s) in the presentation, found {len(runs)}"
-            covered = sum(length for _, length in runs)
+            # The tower emits its tokens in presentation order, one row per vision-tagged token.
+            vision_rows = int((type_ids > 0).sum())
             merged_rows = merged.shape[-2]
-            assert covered == merged_rows, f"vision runs cover {covered} rows but the tower emitted {merged_rows}"
+            assert vision_rows == merged_rows, f"{vision_rows} vision tokens but the tower emitted {merged_rows} rows"
             # merged tokens REPLACE the `<|image_pad|>` row embeddings; deepstack features are ADDED to
             # those same rows after the first three decoder layers. Not interchangeable.
-            vision_kwargs = {"vision_embeds": merged, "vision_runs": runs, "deepstack_embeds": deepstack}
+            vision_kwargs = {
+                "vision_embeds": merged,
+                "vision_mask": bf16_tensor((type_ids > 0).float(), device=self.mesh_device),
+                "deepstack_embeds": deepstack,
+            }
 
-        # With a vision run the three mRoPE axes diverge, so `mrope_interleaved` stops being a no-op
-        # and the chunked section split is wrong. t2va keeps the default (shared `arange`) path, where
-        # the two layouts are bit-identical -- measured.
-        rope_scaling = config["rope_scaling"]
-        position_ids = None
+        # With a vision run the three mRoPE axes diverge; t2va keeps the encoder's default positions,
+        # where they agree.
+        positions = None
         if has_vision:
-            if not rope_scaling.get("mrope_interleaved"):
-                raise ValueError("this checkpoint does not declare mrope_interleaved; the vision rope path assumes it")
-
             # Qwen3-VL walks the sequence per modality run and pulls from the matching grid
             # iterator, so the two go in separately, each in the order its own runs appear.
             def grids_of(kind: str):
@@ -854,30 +844,18 @@ class MiniMaxH3Pipeline:
                 video_grid_thw=grids_of("video"),
                 spatial_merge_size=self._vision_config["spatial_merge_size"],
             )
-        cos, sin = create_rope_tensors(
-            1,
-            seq_len,
-            None,
-            config["head_dim"],
-            rope_scaling.get("rope_theta", config["rope_theta"]),
-            rope_scaling["mrope_section"],
-            position_ids=position_ids,
-            interleaved=has_vision,
-        )
+            positions = from_torch(position_ids.float(), device=self.mesh_device, dtype=ttnn.float32)
+
         tt_ids = ttnn.from_torch(
             input_ids,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=self.mesh_device,
         )
-        # Causal, and a single un-padded presentation, so no mask is needed.
-        taps = self._text_encoder.forward(
-            tt_ids,
-            attention_mask=None,
-            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
-            **vision_kwargs,
-        )
-        embeds = local_device_to_torch(taps[0]).float()
+        # Causal, and a single un-padded presentation, so no mask is needed. The raw output of the
+        # last built layer is hidden_states[MINIMAX_H3_TEXT_ENCODER_LAYER] of the full model.
+        out = self._text_encoder.forward(tt_ids, positions=positions, **vision_kwargs)
+        embeds = local_device_to_torch(out).float()
 
         return embeds, tags
 

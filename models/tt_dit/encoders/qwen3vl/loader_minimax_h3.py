@@ -5,25 +5,16 @@
 """MiniMax-H3's Qwen3-VL text conditioner: config, truncated depth, and weight loading.
 
 H3 conditions on ``hidden_states[50]`` of a 64-layer Qwen3-VL, which is the *raw* output of
-decoder layer 49 -- not the post-norm final state. So only 50 layers are built and the tap is
-taken with ``activation_layers``, which returns hidden states without the final norm. Truncating
-the stack to 50 layers and reading its normalized output instead would be a different tensor;
-the diffusers reference raises rather than allow that, and
-``test_text_encoder_minimax_h3.py::test_minimax_h3_text_conditioner`` asserts the tap differs
-from the post-norm state (by O(10^4), not by rounding).
+decoder layer 49 -- not the post-norm final state. So only 50 layers are built, without the
+final norm. Truncating the stack to 50 layers and reading its normalized
+output instead would be a different tensor; the diffusers reference raises rather than allow
+that, and ``test_text_encoder_minimax_h3.py::test_minimax_h3_text_conditioner`` asserts the tap
+differs from the post-norm state (by O(10^4), not by rounding).
 
-T2VA is text-only, so none of the vision tower (``model.visual.*``, 27 blocks) is built or read,
-and mRoPE degenerates: all three position axes carry the same ``arange``, which makes the
-checkpoint's ``mrope_interleaved: true`` indistinguishable from the chunked section split
-``create_rope_tensors`` implements. That is measured, not assumed --
-``test_mrope_is_permutation_invariant_for_text_only``.
-
-FL2VA needs the tower, and **that degeneracy is void the moment an image enters the prompt**: a
-vision block carries genuinely different t/h/w positions, so ``mrope_interleaved`` becomes
-load-bearing and callers must pass ``position_ids=mrope_position_ids(...), interleaved=True``.
-``build_minimax_h3_vision_tower`` and ``load_minimax_h3_vision_state_dict`` below serve that path;
-the tower is ~595 M parameters against the conditioner's 32 B, and is replicated rather than
-tensor-parallel.
+T2VA is text-only, so none of the vision tower (``model.visual.*``, 27 blocks) is built or read.
+FL2VA needs the tower: ``build_minimax_h3_vision_tower`` and ``load_minimax_h3_vision_state_dict``
+below serve that path; the tower is ~595 M parameters against the conditioner's 32 B, and is
+replicated rather than tensor-parallel.
 """
 
 from __future__ import annotations
@@ -37,12 +28,15 @@ import torch
 from loguru import logger
 from safetensors import safe_open
 
+from ...blocks.rope import RopeConfig
+from ...parallel.config import EncoderParallelConfig
 from ...parallel.manager import CCLManager
-from .model_qwen3vl import Qwen3VlTextEncoder
+from ..transformer import TransformerEncoderConfig
+from .model_qwen3vl import Qwen3VlEncoder
 from .vision_qwen3vl import Qwen3VlVisionModel
 
 # H3 reads `hidden_states[50]`; `hidden_states[0]` is the embedding output, so index 50 is the
-# output of decoder layer 49 and a 50-layer stack tapped at its last layer is exactly that.
+# output of decoder layer 49 and a 50-layer stack read before its final norm is exactly that.
 MINIMAX_H3_TEXT_ENCODER_LAYER = 50
 
 _CHECKPOINT_PREFIX = "model.language_model."
@@ -66,14 +60,45 @@ def minimax_h3_text_config(weights_dir: str | os.PathLike) -> dict:
     return config
 
 
-def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layers: int) -> dict[str, torch.Tensor]:
-    """The `model.language_model.*` sub-tree, layers `[0, num_layers)`, prefix stripped.
+def minimax_h3_encoder_config(config: dict, *, num_layers: int) -> TransformerEncoderConfig:
+    """The conditioner's architecture from the checkpoint's `text_config`, truncated to `num_layers`.
 
-    Reads only the shards that hold wanted tensors, so the vision tower and `lm_head` are never
-    materialized -- with 50 of 64 layers that is ~50 GB of the checkpoint's 63 GB. `norm.weight`
-    *is* kept even though the tap bypasses the final norm: the module owns that parameter and the
-    load is strict, so dropping it would fail as a missing key rather than save anything
-    meaningful (one 5120-element vector).
+    Without the language-model head, which the checkpoint loader never reads.
+    """
+    rope = config.get("rope_scaling") or config.get("rope_parameters") or {}
+
+    return TransformerEncoderConfig(
+        vocab_size=config["vocab_size"],
+        # Not hidden_size // num_attention_heads for this checkpoint: 5120 / 64 = 80, but the real
+        # head_dim is 128 and q_proj is [8192, 5120].
+        head_size=config["head_dim"],
+        embed_size=config["hidden_size"],
+        ff_size=config["intermediate_size"],
+        num_layers=num_layers,
+        num_heads=config["num_attention_heads"],
+        num_kv_heads=config["num_key_value_heads"],
+        norm_eps=config["rms_norm_eps"],
+        attn_qkv_bias=config.get("attention_bias", False),
+        attn_out_bias=False,
+        attn_qk_norm=True,
+        rope_config=RopeConfig(
+            # transformers >= 4.57 keeps rope_theta at the top of text_config; older layouts put it
+            # inside rope_scaling. Accept both.
+            theta=rope.get("rope_theta", config.get("rope_theta")),
+            mrope_section=list(rope["mrope_section"]),
+            mrope_interleaved=True,
+        ),
+        final_norm=False,
+        final_linear=False,
+    )
+
+
+def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layers: int) -> dict[str, torch.Tensor]:
+    """The `model.language_model.*` sub-tree, layers `[0, num_layers)`, in the encoder's keys.
+
+    Reads only the shards that hold wanted tensors, so the vision tower, `lm_head` and the final
+    `norm` the encoder is built without are never materialized -- with 50 of 64 layers that is
+    ~50 GB of the checkpoint's 63 GB.
     """
     directory = Path(weights_dir)
     index_path = directory / "model.safetensors.index.json"
@@ -86,6 +111,8 @@ def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layer
     for key, shard in weight_map.items():
         if not key.startswith(_CHECKPOINT_PREFIX):
             continue  # model.visual.* and lm_head.weight
+        if key == f"{_CHECKPOINT_PREFIX}norm.weight":
+            continue  # the tap is the raw output of the last layer
         match = layer_re.match(key)
         if match is not None and int(match.group(1)) >= num_layers:
             continue  # layers 50..63 are never evaluated
@@ -99,64 +126,37 @@ def load_minimax_h3_text_state_dict(weights_dir: str | os.PathLike, *, num_layer
     for shard, keys in sorted(by_shard.items()):
         with safe_open(str(directory / shard), framework="pt", device="cpu") as handle:
             for key in keys:
-                state[key[len(_CHECKPOINT_PREFIX) :]] = handle.get_tensor(key)
+                state[key] = handle.get_tensor(key)
     logger.info(
         f"MiniMax-H3 text encoder: {len(state)} tensors from {len(by_shard)} of "
         f"{len(set(weight_map.values()))} shards, {sum(t.numel() for t in state.values()) * 2 / 1e9:.1f} GB bf16"
     )
-    return state
+    return Qwen3VlEncoder.convert_state(state)
 
 
 def build_minimax_h3_text_encoder(
     weights_dir: str | os.PathLike,
     *,
     mesh_device,
-    parallel_config,
+    parallel_config: EncoderParallelConfig,
     ccl_manager: CCLManager,
-    is_fsdp: bool = True,
     num_layers: int = MINIMAX_H3_TEXT_ENCODER_LAYER,
     load_weights: bool = True,
-) -> tuple[Qwen3VlTextEncoder, dict]:
-    """Build the conditioner at truncated depth, tapped at its last layer, and load its weights.
+) -> tuple[Qwen3VlEncoder, dict]:
+    """Build the conditioner at truncated depth and load its weights.
 
-    `is_fsdp` defaults on: the encoder runs once per prompt, outside the denoise loop, so the
-    per-layer weight gather costs nothing that matters, while sharding over the non-TP axis takes
-    the resident weights from ~12.5 GB/device at TP=4 to ~1.6 GB/device across a 4x8 mesh. It
-    self-disables when the non-TP axis is size 1.
+    It ends without the final norm, so its output is the raw output of its last layer, i.e.
+    `hidden_states[num_layers]` of the full model.
 
-    Returns `(encoder, text_config)`; the config carries `head_dim`, `rope_theta` and
-    `mrope_section`, which the caller needs to build the rope tables at the matching width.
+    Returns `(encoder, text_config)`.
     """
     config = minimax_h3_text_config(weights_dir)
-    rope_scaling = config.get("rope_scaling") or {}
 
-    encoder = Qwen3VlTextEncoder(
-        vocab_size=config["vocab_size"],
-        hidden_size=config["hidden_size"],
-        intermediate_size=config["intermediate_size"],
-        hidden_act=config.get("hidden_act", "silu"),
-        num_hidden_layers=num_layers,
-        num_attention_heads=config["num_attention_heads"],
-        num_key_value_heads=config["num_key_value_heads"],
-        rms_norm_eps=config["rms_norm_eps"],
-        # transformers >= 4.57 keeps rope_theta at the top of text_config; older layouts put it
-        # inside rope_scaling. Accept both, as the Ideogram-4 pipeline does.
-        rope_theta=rope_scaling.get("rope_theta", config["rope_theta"]),
-        mrope_section=rope_scaling["mrope_section"],
-        # Not hidden_size // num_attention_heads for this checkpoint: 5120 / 64 = 80, but the
-        # real head_dim is 128 and q_proj is [8192, 5120].
-        head_dim=config["head_dim"],
-        # The raw output of the last built layer, i.e. hidden_states[50], with no final norm.
-        activation_layers=(num_layers - 1,),
+    encoder = Qwen3VlEncoder(
+        minimax_h3_encoder_config(config, num_layers=num_layers),
         device=mesh_device,
         parallel_config=parallel_config,
         ccl_manager=ccl_manager,
-        is_fsdp=is_fsdp,
-        # HiFi4 decoder linears, unconditionally: measured on the fl2va conditioner at production
-        # shape and content, they take the fused-conditioner PCC from 70.89 % to 85.82 % and recover
-        # massive-activation rows 102 and 128, at no measurable cost (1184.2 vs 1183.2 ms/forward).
-        # Scoped here so other Qwen3-VL users (Ideogram-4) keep the tt_dit-wide default.
-        high_fidelity_linears=True,
     )
 
     if load_weights:

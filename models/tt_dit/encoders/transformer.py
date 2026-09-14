@@ -64,6 +64,9 @@ class TransformerEncoderConfig:
     vocab_size: int
     rope_config: RopeConfig
     nope_layer_indices: Sequence[int] = ()
+    attn_qk_norm: bool = False
+    final_norm: bool = True
+    final_linear: bool = True
 
 
 class TransformerEncoder(Module):
@@ -139,22 +142,29 @@ class TransformerEncoder(Module):
                 norm_eps=config.norm_eps,
                 attn_qkv_bias=config.attn_qkv_bias,
                 attn_out_bias=config.attn_out_bias,
+                attn_qk_norm=config.attn_qk_norm,
                 cache_id=i,
                 ctx=ctx,
             )
             for i in range(config.num_layers)
         )
 
-        self.final_norm = TransformerRmsNorm(config.embed_size, eps=config.norm_eps, ctx=ctx)
+        self.final_norm = (
+            TransformerRmsNorm(config.embed_size, eps=config.norm_eps, ctx=ctx) if config.final_norm else None
+        )
 
         # vocab_size is much greater than embed_size
-        self.final_linear = ColParallelLinear(
-            config.embed_size,
-            config.vocab_size,
-            bias=False,
-            mesh_device=ctx.device,
-            mesh_axis=ctx.tp_axis,
-            dtype=LINEAR_DTYPE,
+        self.final_linear = (
+            ColParallelLinear(
+                config.embed_size,
+                config.vocab_size,
+                bias=False,
+                mesh_device=ctx.device,
+                mesh_axis=ctx.tp_axis,
+                dtype=LINEAR_DTYPE,
+            )
+            if config.final_linear
+            else None
         )
 
         self.config = config
@@ -175,15 +185,52 @@ class TransformerEncoder(Module):
         tokens: ttnn.Tensor,
         *,
         mask: ttnn.Tensor | None = None,
+        positions: ttnn.Tensor | None = None,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor] | None = None,
+        vision_embeds: ttnn.Tensor | None = None,
+        vision_mask: ttnn.Tensor | None = None,
+        deepstack_embeds: Sequence[ttnn.Tensor] = (),
         cache: Cache | None = None,
         skip_final_linear: bool = False,
         output_hidden_states: bool = False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
+        """Run the stack over `tokens`, filling `cache` for decoding when given.
+
+        Args:
+            tokens: Token ids of shape (batch, sequence).
+            mask: Attention mask of shape (batch, sequence), 1 where a token may be attended to.
+            positions: float32 rope positions of shape (batch, sequence), or (axes, batch,
+                sequence) with one row per multimodal rope axis.
+            pos_embeds: The cos and sin of the rope for every token, in place of `positions`.
+            cache: The k/v cache to fill with the sequence, for `generate`'s decode steps.
+            vision_embeds: Embeddings of shape (num_vision_tokens, embed_size) that replace the
+                token embeddings of the rows `vision_mask` marks, in sequence order.
+            vision_mask: Mask of shape (batch, sequence) marking the vision rows with 1; like
+                `mask` it covers the whole sequence.
+            deepstack_embeds: One tensor like `vision_embeds` per leading layer, added to the
+                vision rows after that layer.
+            skip_final_linear: Leaves out the language-model head, returning the final states.
+            output_hidden_states: Returns the input of every layer followed by the outputs of the
+                final norm and, unless skipped, the head.
+        """
         if cache is not None:
             cache.reset()
 
         batch_size, seq_len = tokens.shape
+
+        if (vision_embeds is None) != (vision_mask is None):
+            msg = "vision_embeds and vision_mask must be passed together"
+            raise ValueError(msg)
+        if deepstack_embeds and vision_mask is None:
+            msg = "deepstack_embeds needs vision_mask"
+            raise ValueError(msg)
+        if vision_mask is not None:
+            if cache is not None:
+                msg = "the cache path does not support vision tokens"
+                raise ValueError(msg)
+            if batch_size != 1:
+                msg = "vision tokens are supported for a single sequence only"
+                raise ValueError(msg)
 
         if self._sp_axis is not None:
             if cache is not None:
@@ -210,8 +257,7 @@ class TransformerEncoder(Module):
                 device=device,
             )
 
-        if pos_embeds is None:
-            pos_embeds = self._get_pos_embeds(start=0, sequence_length=seq_len)
+        pos_embeds = self._prepare_pos_embeds(positions, pos_embeds, batch_size=batch_size, seq_len=seq_len)
 
         # padding is only required by `ttnn.transformer.scaled_dot_product_attention` when
         # using an attention mask
@@ -245,6 +291,10 @@ class TransformerEncoder(Module):
             # clone to move out of persistent buffer
             x = ttnn.clone(x)
 
+        if vision_mask is not None:
+            vision_index, vision_row_mask = self._vision_rows(vision_mask, padded_seq_len=padded_seq_len)
+            x = x + (ttnn.embedding(vision_index, vision_embeds, layout=ttnn.TILE_LAYOUT) - x) * vision_row_mask
+
         hidden_states = []
 
         for i, decoder_layer in enumerate(self.layers):
@@ -258,6 +308,9 @@ class TransformerEncoder(Module):
                 cache=cache,
             )
 
+            if i < len(deepstack_embeds):
+                x = x + ttnn.embedding(vision_index, deepstack_embeds[i], layout=ttnn.TILE_LAYOUT) * vision_row_mask
+
             if (i + 1) % 10 == 0:
                 ttnn.ReadDeviceProfiler(self._device)
 
@@ -268,12 +321,13 @@ class TransformerEncoder(Module):
             x = x[:, :seq_len, :]
             hidden_states = [h[:, :seq_len, :] for h in hidden_states]
 
-        x = self.final_norm.forward(x)
+        if self.final_norm is not None:
+            x = self.final_norm.forward(x)
 
         if output_hidden_states:
             hidden_states.append(x)
 
-        if not skip_final_linear:
+        if not skip_final_linear and self.final_linear is not None:
             x = self.final_linear.forward(x)
 
             if output_hidden_states:
@@ -313,7 +367,9 @@ class TransformerEncoder(Module):
             if (i + 1) % 10 == 0:
                 ttnn.ReadDeviceProfiler(self._device)
 
-        x = self.final_norm.forward(x, decode=True)
+        if self.final_norm is not None:
+            x = self.final_norm.forward(x, decode=True)
+
         x = self.final_linear.forward(x)
 
         # Reading the logits shards one by one costs the host more than a decode step, and a
@@ -405,6 +461,64 @@ class TransformerEncoder(Module):
         self._cached_position_embeddings[cache_key] = (cos, sin)
         return cos, sin
 
+    def _prepare_pos_embeds(
+        self,
+        positions: ttnn.Tensor | None,
+        pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor] | None,
+        *,
+        batch_size: int,
+        seq_len: int,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Returns cos and sin for `positions`, for the given `pos_embeds`, or for a range from zero."""
+        if positions is None:
+            return pos_embeds if pos_embeds is not None else self._get_pos_embeds(start=0, sequence_length=seq_len)
+
+        if pos_embeds is not None:
+            msg = "positions and pos_embeds are mutually exclusive"
+            raise ValueError(msg)
+
+        section = self.config.rope_config.mrope_section
+        expected_shape = (batch_size, seq_len * self._sp_factor)
+        if section is not None:
+            expected_shape = (len(section), *expected_shape)
+        if tuple(positions.shape) != expected_shape:
+            msg = f"positions must have shape {expected_shape}, got {tuple(positions.shape)}"
+            raise ValueError(msg)
+        if positions.dtype != ttnn.float32:
+            msg = f"positions must be float32, got {positions.dtype}"
+            raise ValueError(msg)
+
+        axes = [positions] if section is None else [positions[i] for i in range(len(section))]
+        if self._sp_axis is not None:
+            axes = [ttnn.mesh_partition(p, dim=1, cluster_axis=self._sp_axis) for p in axes]
+
+        return self.pos_embedding.forward(
+            axes[0] if section is None else axes,
+            dtype=self.token_embedding.weight.dtype,
+        )
+
+    def _vision_rows(self, mask: ttnn.Tensor, *, padded_seq_len: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Numbers the vision rows of the sequence."""
+        _, full_len = mask.shape
+
+        mask = ttnn.typecast(mask, ttnn.int32)
+        mask = ttnn.pad(mask, [(0, padded_seq_len * self._sp_factor - full_len)], value=0)
+
+        index = ttnn.cumsum(mask, dim=1) - 1
+
+        if self._sp_axis is not None:
+            mask = ttnn.mesh_partition(mask, dim=1, cluster_axis=self._sp_axis)
+            index = ttnn.mesh_partition(index, dim=1, cluster_axis=self._sp_axis)
+
+        index = ttnn.relu(index)
+        index = ttnn.typecast(index, ttnn.uint32)
+        index = ttnn.to_layout(index, ttnn.ROW_MAJOR_LAYOUT)
+
+        mask = ttnn.typecast(mask, self.token_embedding.weight.dtype)
+        mask = ttnn.unsqueeze(mask, 2)
+
+        return index, mask
+
     def _get_causal_cond(self, max_seq_len: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
         """Return a [1, 1, max_seq_len, max_seq_len] bfloat4_b 0/1 tensor (1 = keep).
 
@@ -486,6 +600,10 @@ class TransformerEncoder(Module):
         if traced and mask is not None:
             msg = "traced generation does not currently support an attention mask"
             raise NotImplementedError(msg)
+
+        if self.final_linear is None:
+            msg = "generation needs the language-model head"
+            raise ValueError(msg)
 
         batch_size, input_length = tokens.shape
         device = self._device
@@ -604,6 +722,7 @@ class TransformerEncoderLayer(Module):
         norm_eps: float,
         attn_qkv_bias: bool,
         attn_out_bias: bool,
+        attn_qk_norm: bool,
         cache_id: Hashable,
         ctx: TransformerContext,
     ) -> None:
@@ -616,6 +735,8 @@ class TransformerEncoderLayer(Module):
             num_kv_heads=num_kv_heads,
             qkv_bias=attn_qkv_bias,
             out_bias=attn_out_bias,
+            qk_norm=attn_qk_norm,
+            norm_eps=norm_eps,
             cache_id=cache_id,
             ctx=ctx,
         )
@@ -661,6 +782,8 @@ class Attention(Module):
         num_kv_heads: int,
         qkv_bias: bool,
         out_bias: bool,
+        qk_norm: bool,
+        norm_eps: float,
         cache_id: Hashable,
         ctx: TransformerContext,
     ) -> None:
@@ -704,6 +827,11 @@ class Attention(Module):
             fp32_dest_acc_en=True,
             # packer_l1_acc=True,
         )
+
+        # Plain RMSNorm: TransformerRmsNorm's decode path width-shards over the embedding size and
+        # expects an interleaved input, but the decode q and k are head-sharded with a head_size width.
+        self.q_norm = RMSNorm(head_size, norm_eps=norm_eps, bias=False, mesh_device=ctx.device) if qk_norm else None
+        self.k_norm = RMSNorm(head_size, norm_eps=norm_eps, bias=False, mesh_device=ctx.device) if qk_norm else None
 
         self._head_size = head_size
         self._group_count = group_count
@@ -807,6 +935,11 @@ class Attention(Module):
         # k shape: batch_size num_local_kv_heads padded_q_seq_len head_size
         # v shape: batch_size num_local_kv_heads padded_q_seq_len head_size
 
+        if self.q_norm is not None:
+            q = self.q_norm.forward(q, compute_kernel_config=self._sdpa_compute_kernel_config)
+        if self.k_norm is not None:
+            k = self.k_norm.forward(k, compute_kernel_config=self._sdpa_compute_kernel_config)
+
         if pos_embeds is not None:
             cos, sin = pos_embeds
             q = _apply_rope(q, cos, sin)
@@ -886,6 +1019,11 @@ class Attention(Module):
         # q shape: 1 batch_size num_local_heads    head_size
         # k shape: 1 batch_size num_local_kv_heads head_size
         # v shape: 1 batch_size num_local_kv_heads head_size
+
+        if self.q_norm is not None:
+            q = _norm_in_dram(self.q_norm, q, compute_kernel_config=self._sdpa_compute_kernel_config)
+        if self.k_norm is not None:
+            k = _norm_in_dram(self.k_norm, k, compute_kernel_config=self._sdpa_compute_kernel_config)
 
         if pos_embeds is not None:
             cos, sin = pos_embeds
@@ -1197,6 +1335,15 @@ def _rotate_half(x: ttnn.Tensor) -> ttnn.Tensor:
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+
+def _norm_in_dram(
+    norm: RMSNorm, x: ttnn.Tensor, *, compute_kernel_config: ttnn.DeviceComputeKernelConfig
+) -> ttnn.Tensor:
+    memory_config = x.memory_config()
+    x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+    x = norm.forward(x, compute_kernel_config=compute_kernel_config)
+    return ttnn.to_memory_config(x, memory_config)
 
 
 def _make_positions(
