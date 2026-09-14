@@ -57,16 +57,20 @@ switches on by itself for Qwen3-8B. What you must set is only about *your machin
 | Flag | Required? | What it does |
 |---|---|---|
 | `HF_MODEL=Qwen/Qwen3-8B` | **Yes** | Selects the model. |
-| `PYTHONPATH=/path/to/tt-metal` | Yes, unless your shell is inside the repository | Lets Python find `models/`. |
+| `PYTHONPATH=<tt-metal-dir>` | Yes, unless your shell is inside the repository | Lets Python find `models/`. |
 | `TT_VISIBLE_DEVICES=0` | Only if the host has more than one board | Pins the run to one n300. Without it, a multi-card host spreads the model over every chip. Harmless on a single-card host. |
 | `--page_block_size N` | No (default 256) | KV-cache tokens per block. 256 measured fastest for long prompts; smaller values save memory on many short conversations at no measured speed cost (64 vs 256: 28.71 vs 28.75 ms/token). Multiple of 32, power of two up to 256. |
 
 ## Run the long-context demos
 
+Everywhere below, replace `<tt-metal-dir>` with the directory you cloned the repository into
+— for example `/localdev/jerrywang/tt-metal`. It is a placeholder, not a real path; copying
+it literally gives `No such file or directory`.
+
 From inside the repository:
 
 ```bash
-cd /path/to/tt-metal && export PYTHONPATH=$(pwd)
+cd <tt-metal-dir> && export PYTHONPATH=$(pwd)
 
 # 32k prompt, all three user counts (1, 2, 4) — about 4 minutes
 TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
@@ -81,9 +85,9 @@ From anywhere else, give the full path instead; `pytest` finds the repository's 
 from it:
 
 ```bash
-export PYTHONPATH=/path/to/tt-metal
+export PYTHONPATH=<tt-metal-dir>
 TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
-  pytest /path/to/tt-metal/models/tt_transformers/demo/long_context_demo.py -s -k 32k
+  pytest <tt-metal-dir>/models/tt_transformers/demo/long_context_demo.py -s -k 32k
 ```
 
 To run a single row, name it. `b` is the number of concurrent users:
