@@ -337,7 +337,6 @@ class Gemma4Model:
                     on_layer_complete(i)
         return hidden_states
 
-
     def embed_tokens(self, tokens):
         """Embed input tokens and scale by sqrt(hidden_size).
 
