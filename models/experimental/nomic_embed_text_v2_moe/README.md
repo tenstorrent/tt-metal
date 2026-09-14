@@ -78,7 +78,33 @@ tests/
 tt/
   model_config.py             dtypes, layout and compute kernel configs, bound to a device
   common.py                   weight reorientation, rotary tables, attention mask, reshapes
+  embeddings.py               word lookup, token-type embedding folded into the table
+  attention.py                fused QKV, rotary, bidirectional SDPA, output projection
+  mlp.py                      dense FFN, even-numbered layers
+  router.py                   fp32 softmax, top-k, dense routing weights
+  experts.py                  all experts as two broadcast-batch matmuls, gate and reduce
+  moe.py                      router plus experts, odd-numbered layers
+  block.py                    one encoder block, post-norm with fused residual adds
+  encoder.py                  the 12 blocks in sequence
+  pooling.py                  mean pool, Matryoshka truncation, L2 normalize
 ```
+
+Modules take the full state dict plus a prefix and move their weights to device once at
+construction, following `models/tt_transformers`. One class per reference class, same order:
+`TtNomicBertEmbeddings` to `NomicBertEmbeddings`, and so on.
+
+### Activation layout
+
+Blocks pass `(B, 1, S, H)`. Attention mixes tokens along S and pooling reduces along it, so
+flattening the batch away would let one text attend to another and would pool one mean per batch
+rather than one per text.
+
+The expert matmuls need the opposite: `ttnn.matmul` broadcasts a weight's batch dims only when
+every batch dim of the activation is 1, so `(1, 1, T, H)` against `(1, E, H, F)` gives
+`(1, E, T, F)` while `(B, 1, S, H)` raises. `tt/moe.py` therefore flattens on entry and
+unflattens on exit, at the same point the reference does its own `x.view(-1, H)`, and nothing
+else in the encoder reshapes. The round trip is exact, and free only when B is 1 or S is a
+multiple of 32.
 
 ## Documentation
 
@@ -122,6 +148,16 @@ Blackhole device.
 | `test_ttnn_operators.py` | embedding, layer norm, the four projections, GELU, typecast, reshape, pooling, Matryoshka, L2 normalize | device, weights for the embedding and projections |
 | `test_ttnn_operators_attention.py` | QKV head split, rotary, SDPA masked, unmasked and causal, head concat | device |
 | `test_ttnn_operators_moe.py` | router linear, softmax, topk, scatter, both expert matmuls, gate multiply, expert reduce, shared bias | device, weights for the expert tensors |
+| `test_ttnn_embeddings.py` | word lookup, token-type fold exactness, the trained `<pad>` row | device, weights |
+| `test_ttnn_attention.py` | unmasked and 25%-padded attention, rotary probes, the causal and interleaved controls | device, weights |
+| `test_ttnn_mlp.py` | dense FFN, and the approximate-GELU control | device, weights |
+| `test_ttnn_router.py` | probabilities, expert-set agreement with near-tie margins, dense weights, no renormalization | device, weights |
+| `test_ttnn_experts.py` | injected-routing expert chain, the reduce's token coverage, shared-bias placement, the w2 shape control | device, weights |
+| `test_ttnn_moe.py` | router and experts composed, plus the renormalization and bias-placement controls | device, weights |
+| `test_ttnn_block.py` | one dense and one MoE block, padded and not, post-norm statistics, the dropped-residual control | device, weights |
+| `test_ttnn_encoder.py` | all 12 blocks, the per-layer ladder, routing agreement at depth | device, weights |
+
+`module_common.py` is shared scaffolding for the nine module files, not a test file.
 
 The three TTNN files need a Blackhole device and skip elsewhere. Do not set
 `TT_VISIBLE_DEVICES`; on a p300c it fails with `Custom fabric mesh graph descriptor path must
