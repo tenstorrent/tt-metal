@@ -5,7 +5,6 @@
 #include "matmul_config_registry.hpp"
 
 #include <algorithm>
-#include <atomic>
 #include <bit>
 #include <limits>
 #include <utility>
@@ -14,9 +13,6 @@
 
 namespace ttnn::operations::matmul::registry {
 namespace {
-
-constexpr std::uint8_t kModeUninitialized = 0xff;
-std::atomic<std::uint8_t> frozen_mode{kModeUninitialized};
 
 ExecutionAction execution_action(const Mode mode, const Resolution& resolution) noexcept {
     if (resolution.reason != ResolutionReason::CertifiedMatch) {
@@ -430,24 +426,10 @@ Resolution resolve_with_compact_table_for_testing(
 }
 
 Mode current_mode() noexcept {
-    const auto frozen = frozen_mode.load(std::memory_order_acquire);
-    if (frozen != kModeUninitialized) {
-        return static_cast<Mode>(frozen);
-    }
     const auto configured = ttnn::CONFIG.get<"matmul_registry_mode">();
     const auto configured_value = static_cast<std::uint8_t>(configured);
-    const auto safe_value = configured_value <= static_cast<std::uint8_t>(Mode::On)
-                                ? configured_value
-                                : static_cast<std::uint8_t>(Mode::Off);
-    auto expected = kModeUninitialized;
-    if (frozen_mode.compare_exchange_strong(
-            expected, safe_value, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return static_cast<Mode>(safe_value);
-    }
-    return static_cast<Mode>(expected);
+    return configured_value <= static_cast<std::uint8_t>(Mode::On) ? configured : Mode::Off;
 }
-
-void reset_startup_mode_for_testing() noexcept { frozen_mode.store(kModeUninitialized, std::memory_order_release); }
 
 std::optional<MatmulProgramConfig> materialize_registry_program_config(
     const compact::KeyDescriptor& key,

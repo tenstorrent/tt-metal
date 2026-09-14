@@ -110,12 +110,7 @@ Resolution invalid_materialization_resolution(
 struct RuntimeStateReset {
     MatmulRegistryMode original_mode = ttnn::CONFIG.get<"matmul_registry_mode">();
 
-    RuntimeStateReset() { reset_startup_mode_for_testing(); }
-
-    ~RuntimeStateReset() {
-        ttnn::CONFIG.set<"matmul_registry_mode">(original_mode);
-        reset_startup_mode_for_testing();
-    }
+    ~RuntimeStateReset() { ttnn::CONFIG.set<"matmul_registry_mode">(original_mode); }
 };
 
 compact::ProgramConfigDescriptor multicast_1d_program() {
@@ -353,16 +348,15 @@ TEST(MatmulConfigRegistry, EveryExplicitTuningAxisBypassesBeforeLookup) {
     }
 }
 
-TEST(MatmulConfigRegistry, StartupModeDefaultsOffAndFreezesOnFirstUse) {
+TEST(MatmulConfigRegistry, CurrentModeTracksRuntimeConfiguration) {
     RuntimeStateReset reset;
     ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Off);
     EXPECT_EQ(current_mode(), Mode::Off);
 
-    reset_startup_mode_for_testing();
     ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Shadow);
     EXPECT_EQ(current_mode(), Mode::Shadow);
     ttnn::CONFIG.set<"matmul_registry_mode">(Mode::On);
-    EXPECT_EQ(current_mode(), Mode::Shadow);
+    EXPECT_EQ(current_mode(), Mode::On);
 }
 
 TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationContracts) {

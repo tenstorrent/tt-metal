@@ -266,9 +266,7 @@ Resolution resolve_with_compact_table_for_testing(
     const Eligibility& eligibility,
     std::span<const compact::ProgramConfigExactEntry> exact_entries = {}) noexcept;
 
-// CONFIG is read exactly once at first dispatch. The test reset is not a
-// production control and must only be used while no registry call is active.
+// One runtime switch controls both local dense and distributed AGMM tables.
 Mode current_mode() noexcept;
-void reset_startup_mode_for_testing() noexcept;
 
 }  // namespace ttnn::operations::matmul::registry
