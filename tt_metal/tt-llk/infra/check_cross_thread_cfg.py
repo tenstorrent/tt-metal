@@ -47,9 +47,14 @@ def load_defs(path):
 #   WRCFG(.., REG + 1)  a literal offset the address pattern must not drop
 #   WRCFG_128b          writes FOUR consecutive words, not one
 # Offsets are parsed as expressions; a non-literal offset is reported UNRESOLVED, never assumed.
+# The mode argument is the wr128b bit: spelled p_cfg::WRCFG_32b/WRCFG_128b at most sites and as
+# the bare literal at the rest. TT_OP_WRCFG builds a MOP word, which executes a WRCFG when the MOP
+# runs, so it is a write like any other -- the macro definitions in ckernel_ops.h pass the mode
+# through as `wr128b` and so do not match.
 WRCFG_ANY = re.compile(
-    r"\bTTI?_WRCFG\s*\(\s*[^,]+,\s*p_cfg::(WRCFG_32b|WRCFG_128b)\s*,\s*([^)]+)\)"
+    r"\b(?:TTI?|TT_OP)_WRCFG\s*\(\s*[^,]+,\s*(?:p_cfg::)?(WRCFG_32b|WRCFG_128b|0|1)\s*,\s*([^)]+)\)"
 )
+WRCFG_WIDE = ("WRCFG_128b", "1")
 CFG_INDEX = re.compile(r"\bcfg\s*\[([^\]]+)\]\s*=")
 ADDR_EXPR = re.compile(r"^\s*([A-Za-z_0-9]+)_ADDR32\s*(?:\+\s*(.+?))?\s*$")
 
@@ -102,9 +107,11 @@ def resolve_mask(name, text, defs, depth=0, seen=None):
     seen.add(name)
     if name in defs:
         return defs[name][2]
-    for m in MASK_CONST.finditer(text):
-        if m.group(1) != name:
-            continue
+    # `text` runs from the top of the file to the write being resolved, and a name like
+    # `config_mask` is redeclared in sibling functions with different bits. The definition that
+    # governs is the nearest one above the write, which is the LAST match, not the first.
+    hits = [m for m in MASK_CONST.finditer(text) if m.group(1) == name]
+    for m in hits[-1:]:
         bits, ok = 0, False
         for ref in re.findall(r"\b(\w+)\b", m.group(2)):
             # defs is keyed on the FIELD name; the source writes `<FIELD>_MASK`. Strip the
@@ -216,7 +223,7 @@ def writes_in(path, defs):
             if word is not None:
                 hit = True
                 # WRCFG_128b writes an aligned group of FOUR words.
-                span = 4 if m.group(1) == "WRCFG_128b" else 1
+                span = 4 if m.group(1) in WRCFG_WIDE else 1
                 for k in range(span):
                     yield i + 1, th, "whole-word" if ok else "addr-unresolved", m.group(
                         2

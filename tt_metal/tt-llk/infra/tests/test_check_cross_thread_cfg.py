@@ -34,6 +34,9 @@ DEFINES = """
 #define ALU_FORMAT_SPEC_REG0_SrcAUnsigned_ADDR32 1
 #define ALU_FORMAT_SPEC_REG0_SrcAUnsigned_SHAMT 15
 #define ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK 0x8000
+#define WIDE_BASE_Word0_ADDR32 0
+#define WIDE_BASE_Word0_SHAMT 0
+#define WIDE_BASE_Word0_MASK 0xf
 """
 
 
@@ -226,3 +229,142 @@ def test_vacuous_zero_refused_when_write_api_unrecognised(tree):
     )
     r = run(tmp)
     assert r.returncode == 2 and "REFUSING" in r.stdout, r.stdout
+
+
+# --- addressing: the three pitfalls the module docstring calls out -------------------------------
+
+
+def _math_owns_word(d, field="ALU_FORMAT_SPEC_REG0_SrcA"):
+    write(
+        d,
+        "llk_math_owner.h",
+        f"""
+        inline void _llk_math_owner_() {{
+            cfg_reg_rmw_tensix<{field}_RMW>(v);
+        }}
+        """,
+    )
+
+
+def test_wrcfg_128b_spans_four_words(tree):
+    """WRCFG_128b writes an aligned group of FOUR words; a 32b write to the same base writes one."""
+    tmp, d = tree
+    # Word 2 is MATH-owned; the 128b write is based at word 0, so its span reaches it.
+    _math_owns_word(d, "ALU_ACC_CTRL_Zero_Flag_disabled_src")
+    write(
+        d,
+        "llk_pack_wide.h",
+        """
+        inline void _llk_pack_wide_() {
+            TTI_WRCFG(p_gpr::TMP0, p_cfg::WRCFG_128b, WIDE_BASE_Word0_ADDR32);
+        }
+        """,
+    )
+    assert "CLOBBER" in run(tmp).stdout, "the 128b span must reach word 2"
+
+    (d / "llk_pack_wide.h").unlink()
+    write(
+        d,
+        "llk_pack_narrow.h",
+        """
+        inline void _llk_pack_narrow_() {
+            TTI_WRCFG(p_gpr::TMP0, p_cfg::WRCFG_32b, WIDE_BASE_Word0_ADDR32);
+        }
+        """,
+    )
+    r = run(tmp)
+    assert (
+        r.returncode == 0
+    ), f"a 32b write at word 0 must not reach word 2:\n{r.stdout}"
+
+
+def test_literal_offset_is_added_to_the_base_word(tree):
+    """`cfg[BASE + 1]` targets the next word, not the base and not 'unresolved'."""
+    tmp, d = tree
+    _math_owns_word(d)  # owns bits in word 1
+    write(
+        d,
+        "llk_pack_off.h",
+        """
+        inline void _llk_pack_off_() {
+            cfg[WIDE_BASE_Word0_ADDR32 + 1] = v;
+        }
+        """,
+    )
+    r = run(tmp)
+    assert "CLOBBER" in r.stdout, f"BASE + 1 must resolve to word 1:\n{r.stdout}"
+    assert "UNRESOLVED" not in r.stdout, r.stdout
+
+
+def test_variable_offset_is_reported_unresolved(tree):
+    """`cfg[BASE + i]` is not statically known: report it, never silently treat it as safe."""
+    tmp, d = tree
+    _math_owns_word(d, "WIDE_BASE_Word0")  # owns bits in word 0
+    write(
+        d,
+        "llk_pack_var.h",
+        """
+        inline void _llk_pack_var_() {
+            cfg[WIDE_BASE_Word0_ADDR32 + i] = v;
+        }
+        """,
+    )
+    r = run(tmp)
+    assert "UNRESOLVED" in r.stdout, f"a variable offset must be reported:\n{r.stdout}"
+
+
+# --- write mechanisms ----------------------------------------------------------------------------
+
+
+def test_literal_mode_and_mop_word_wrcfg_are_seen(tree):
+    """The mode is spelled as a bare bit at many sites, and TT_OP_WRCFG builds an executing MOP word."""
+    tmp, d = tree
+    _math_owns_word(d, "ALU_ACC_CTRL_Zero_Flag_disabled_src")  # word 2
+    write(
+        d,
+        "llk_pack_literal.h",
+        """
+        inline void _llk_pack_literal_() {
+            TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, STACC_RELU_ApplyRelu_ADDR32);
+        }
+        """,
+    )
+    assert "CLOBBER" in run(tmp).stdout, "literal mode 0 is WRCFG_32b"
+
+    (d / "llk_pack_literal.h").unlink()
+    write(
+        d,
+        "llk_pack_mop.h",
+        """
+        inline void _llk_pack_mop_() {
+            static constexpr std::uint32_t w =
+                TT_OP_WRCFG(p_gpr_pack::TMP0, p_cfg::WRCFG_32b, STACC_RELU_ApplyRelu_ADDR32);
+        }
+        """,
+    )
+    assert "CLOBBER" in run(tmp).stdout, "a WRCFG built into a MOP word still executes"
+
+
+def test_mask_resolves_to_the_nearest_preceding_definition(tree):
+    """`config_mask` is redeclared per function; the one above the write governs, not the file's first."""
+    tmp, d = tree
+    _math_owns_word(d)  # MATH masks the SrcA bits of word 1
+    write(
+        d,
+        "llk_unpack_masks.h",
+        """
+        inline void _llk_unpack_first_() {
+            const std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcAUnsigned_MASK;
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, SH, config_mask>(v);
+        }
+
+        inline void _llk_unpack_second_() {
+            const std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK;
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, SH, config_mask>(v);
+        }
+        """,
+    )
+    r = run(tmp)
+    # Resolving the second write against the first function's mask reads it as the disjoint
+    # Unsigned bit and the SAME-FIELD race disappears.
+    assert "SAME-FIELD" in r.stdout, r.stdout
