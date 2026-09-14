@@ -566,6 +566,42 @@ bool DPrintServer::Impl::poll_print_buffer(
         // Clear stall bit to get actual wpos value
         wpos = wpos & ~DEVICE_PRINT_WRITE_STALL_FLAG;
 
+        // Both pointers are word offsets into the ring; anything else is a corrupted header (seen on the
+        // Quasar simulator: wpos=2/3 with rpos=0). Skip the poll instead of issuing a ~4 GiB read or a sub-word
+        // read the transport cannot serve. Logged once per core, with the raw header + first data words, and the
+        // poll backs off so a permanently bad header does not starve the device link with 60 reads/s.
+        if (wpos >= print_buffer_size || rpos >= print_buffer_size || ((wpos | rpos) & 3) != 0) {
+            static std::mutex bad_header_mutex;
+            static std::set<std::pair<ChipId, uint32_t>> bad_header_logged;
+            const auto key = std::make_pair(device_id, (virtual_core.x << 16) | virtual_core.y);
+            bool first = false;
+            {
+                std::lock_guard<std::mutex> guard(bad_header_mutex);
+                first = bad_header_logged.insert(key).second;
+            }
+            if (first) {
+                auto raw = cluster.read_core(device_id, virtual_core, read_write_pointer_address, 64);
+                std::string hex;
+                for (auto w : raw) {
+                    hex += fmt::format("{:08x} ", w);
+                }
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT buffer header out of range on device {} virtual core {}: wpos={} rpos={} size={} (raw wpos=0x{:x}); "
+                    "skipping this buffer. First 64 B at 0x{:x}: {}",
+                    device_id,
+                    virtual_core.str(),
+                    wpos,
+                    rpos,
+                    print_buffer_size,
+                    from_dev[0],
+                    read_write_pointer_address,
+                    hex);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return false;
+        }
+
         if (rpos > wpos) {
             // Read until end of buffer and then from beginning until wpos
             auto data =
@@ -1203,8 +1239,12 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     }
     log_info(tt::LogMetal, "DPRINT Server attached device {}", device_id);
 
-    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled).
-    if (!context_->get_dispatch_query_manager().dispatch_s_enabled()) {
+    // Set up dispatch_s DRAM aggregation for this device (when dispatch_s is enabled and the
+    // aggregation knob is on). With TT_METAL_DPRINT_DISPATCH_AGGREGATION=0 dispatch_s is built with
+    // DEVICE_PRINT_DISPATCH_ENABLED=0, so no DRAM ring is registered and poll_device_print_data
+    // goes straight to per-core L1 polling.
+    if (!context_->get_dispatch_query_manager().dispatch_s_enabled() ||
+        !env_.get_rtoptions().get_dprint_dispatch_aggregation_enabled()) {
         return;
     }
 
