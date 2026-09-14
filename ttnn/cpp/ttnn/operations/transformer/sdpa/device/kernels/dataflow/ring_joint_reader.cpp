@@ -340,10 +340,15 @@ void kernel_main() {
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
     // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
     // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
-    // read silently returned 0). Appended right after slot's when kv_pad_from_metadata; otherwise fall back
-    // to a VALID accessor offset so the unconditional TensorAccessorArgs<> never names a non-accessor arg.
-    constexpr uint32_t kv_meta_args_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    // read silently returned 0). It follows the slot accessor when there IS one, and otherwise sits first,
+    // directly after the tensor accessors -- a KV-deduped caller supplies the extent with no slot, so the
+    // two are independent. Keying it off meta_args unconditionally would, in that case, index past the
+    // DUMMY accessor meta_args_offset falls back to (q's, at slot 48) and land inside the tensor block.
+    // Falls back to a VALID accessor offset when absent, so the unconditional TensorAccessorArgs<> never
+    // names a non-accessor arg. Must mirror the factory's append order exactly.
+    constexpr uint32_t kv_meta_base_offset =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
+    constexpr uint32_t kv_meta_args_offset = kv_pad_from_metadata ? kv_meta_base_offset : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;

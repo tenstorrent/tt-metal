@@ -95,7 +95,11 @@ void kernel_main() {
     constexpr uint32_t ext_output_chunk_size = get_compile_time_arg_val(ext_base + 12);
     constexpr uint32_t ext_packet_size = get_compile_time_arg_val(ext_base + 13);
     constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_base + 14);
-    constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 16 : 0>();
+    // Divides the start the prefix tensor holds, for a gather whose gathered dim is narrower than the
+    // units that scalar is kept in (a TP-axis gather: the scalar is global tokens, the dim is global/sp).
+    // 1 for every other caller, so the derivation below is unchanged for them.
+    constexpr uint32_t ext_prefix_divisor = get_compile_time_arg_val(ext_base + 15);
+    constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 17 : 0>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
@@ -178,8 +182,11 @@ void kernel_main() {
         // so one CB serves as both the NoC landing slot and the reader->writer mailbox.
         const uint32_t prefix_start = trace_metadata::read_metadata_scalar_u32(
             noc, gathered_prefix_meta_args, gathered_prefix_meta_addr, writer_meta_l1);
-        const uint32_t gathered =
-            part::gathered_dim_size_for_prefix(prefix_start + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
+        // Integer division is exact enough: it moves the start by less than one gathered-dim element, and
+        // the slab is at least one, so the round-up to whole slabs below lands on the same slab either way.
+        const uint32_t prefix_start_local = ext_prefix_divisor > 1 ? prefix_start / ext_prefix_divisor : prefix_start;
+        const uint32_t gathered = part::gathered_dim_size_for_prefix(
+            prefix_start_local + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
         const uint32_t active_pages = part::active_num_input_pages(gathered, ext_slab_global, ext_pages_per_slab);
         const auto sched = part::worker_schedule(
             active_pages,

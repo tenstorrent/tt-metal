@@ -96,6 +96,13 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
+                gathered_prefix_divisor: Divides the start held by ``gathered_prefix_tensor`` before the
+                    extent is derived, for a gather whose gathered dim is NARROWER than the units that
+                    scalar is kept in. A TP-axis gather is the case: the tensor holds actual_start in
+                    GLOBAL tokens (what the SP-axis gathers and ring_mla's readers consume) while the
+                    output spans one SP rank's slab, i.e. global/sp. Pass ``sp_factor`` there and
+                    ``gathered_slab_global`` in the same SP-local units. Structural, so it is hashed;
+                    1 (every existing caller) leaves the derivation untouched.
                 input_stripe_size: Extent along ``dim`` of ONE stripe, when a device's shard is several
                     stripes of a larger sequence rather than one contiguous run. Defaults to the whole
                     dim (one stripe, the ordinary shard). With ``n = shape[dim] / input_stripe_size``
@@ -124,6 +131,7 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
         nb::arg("gathered_slab_global") = 0,
+        nb::arg("gathered_prefix_divisor") = 1,
         nb::arg("input_stripe_size") = nb::none());
 }
 

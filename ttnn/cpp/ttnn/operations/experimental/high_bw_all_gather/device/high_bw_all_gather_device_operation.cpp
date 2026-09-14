@@ -97,6 +97,7 @@ ttsl::hash::hash_t HighBwAllGatherDeviceOperation::compute_program_hash(
         // hashed -- it is structural (chunk_local * sp), identical for every chunk and layer.
         tensor_args.has_gathered_prefix_metadata(),
         args.gathered_slab_global,
+        args.gathered_prefix_divisor,
         tensor_args);
 }
 
@@ -147,6 +148,9 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
         TT_FATAL(
             args.gathered_slab_global == 0,
             "high_bw_all_gather gathered_slab_global is only meaningful with gathered_prefix_tensor");
+        TT_FATAL(
+            args.gathered_prefix_divisor == 1,
+            "high_bw_all_gather gathered_prefix_divisor is only meaningful with gathered_prefix_tensor");
         return;
     }
     TT_FATAL(
@@ -157,6 +161,10 @@ void validate_gathered_prefix_metadata(const HighBwAllGatherParams& args, const 
         args.gathered_slab_global > 0,
         "high_bw_all_gather gathered_prefix_tensor requires gathered_slab_global > 0 (the block-cyclic slab "
         "width in gathered-dim elements); the reader rounds the populated prefix up to whole slabs");
+    TT_FATAL(
+        args.gathered_prefix_divisor > 0,
+        "high_bw_all_gather gathered_prefix_divisor must be > 0, got {}",
+        args.gathered_prefix_divisor);
     TT_FATAL(
         args.gathered_slab_global % args.num_devices == 0,
         "high_bw_all_gather gathered_slab_global {} must divide evenly across {} devices",
@@ -505,6 +513,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_prefix_divisor,
     std::optional<uint32_t> input_stripe_size) {
     // Query the machine and Fabric setup info.
     // This info is also effectively part of CCL args and hence should be in the program-cache hash,
@@ -659,7 +668,8 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .input_stripe_size = input_stripe_size,
             .batch_slot_num_layers = batch_slot_num_layers,
             .batch_slot_layer_idx = batch_slot_layer_idx,
-            .gathered_slab_global = gathered_slab_global},
+            .gathered_slab_global = gathered_slab_global,
+            .gathered_prefix_divisor = gathered_prefix_divisor},
         HighBwAllGatherInputs{
             .input_tensor = input_tensor,
             .output_tensor = output_tensor,
@@ -686,6 +696,7 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_prefix_divisor,
     std::optional<uint32_t> input_stripe_size) {
     auto [params, inputs] = ttnn::operations::experimental::high_bw_all_gather::high_bw_all_gather_build_operation_args(
         input_tensor,
@@ -702,6 +713,7 @@ Tensor high_bw_all_gather(
         batch_slot_layer_idx,
         gathered_prefix_tensor,
         gathered_slab_global,
+        gathered_prefix_divisor,
         input_stripe_size);
     return ttnn::device_operation::launch<
         ttnn::operations::experimental::high_bw_all_gather::HighBwAllGatherDeviceOperation>(params, inputs);

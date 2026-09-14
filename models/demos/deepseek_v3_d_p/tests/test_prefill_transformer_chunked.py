@@ -2281,6 +2281,10 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 # The nopcc x {trace, notrace} pair is what CI runs: it times the real path and passes on
 # completion, with no golden dependency. Renamed from *_no_pcc now that PCC is optional, so the
 # name no longer contradicts the flag.
+# TP-dedup axis, same ids as the GLM chunked tests. tp_sharded shards the KVPE cache over SP*TP
+# (4x less cache DRAM on an 8x4) and rebuilds one SP rank's slab with a TP all-gather before ring_mla.
+# The recorded baselines are sp_only, so tp_sharded is record-only until it has its own.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
@@ -2325,8 +2329,13 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 )
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi_k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+# TT_ALLOW_LOW_POWER_PERF=1 bypasses the power gate. is_high_power() reads SMBus telemetry and has been
+# observed returning False spuriously on a genuinely high-power galaxy (sampled right after a crashed
+# run), which silently turns a perf job into a skip. The gate stays on by default so CI still guards the
+# exabox.tenstorrent.com/power=14kw label; the override is for local measurement, where a skipped run is
+# worse than a run whose power state the operator has confirmed.
 @pytest.mark.skipif(
-    not is_high_power(),
+    not is_high_power() and os.getenv("TT_ALLOW_LOW_POWER_PERF") != "1",
     reason="perf job requires a high-power (>=130W TDP) galaxy; guards the exabox.tenstorrent.com/power=14kw label",
 )
 @pytest.mark.timeout(0)
@@ -2343,6 +2352,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     perf_margin,
     use_trace,
     preload_isl,
+    tp_shard_kv,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2370,6 +2380,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
+        tp_shard_kv=tp_shard_kv,
     )
 
 

@@ -990,7 +990,13 @@ class ttMLA:
         }
 
     def _gather_kvpe_tp_to_sp(
-        self, kvpe_cache: MlaKvCache, cache_batch_idx: int, seq_len_local: int, populated_global: int
+        self,
+        kvpe_cache: MlaKvCache,
+        cache_batch_idx: int,
+        seq_len_local: int,
+        populated_global: int,
+        metadata=None,
+        cache_layer_idx: int = 0,
     ) -> ttnn.Tensor:
         """Rebuild one SP rank's KVPE slab from its tp stripes, for a TP-deduped dense cache.
 
@@ -1015,17 +1021,42 @@ class ttMLA:
         )
         # Whole slabs: the gather moves whole stripes, and ring_mla reads the cache in whole chunks.
         active_chunks = min(self._kv_dedup_chunks, -(-populated_global // chunk_global))
+        if metadata is not None:
+            # Trace-safe on both axes of per-chunk state.
+            #
+            # Slot: metadata[0] holds the USER id; the reader recomposes user*layers + layer_idx on-device,
+            # exactly as ring_mla's readers do, so a replay reads THIS chunk's (user, layer) slot rather
+            # than the one live at capture.
+            #
+            # Extent: metadata[1] is actual_start in GLOBAL tokens, but this gather rides the TP axis, so
+            # its gathered dim is one SP rank's slab -- global/sp. gathered_prefix_divisor closes that gap
+            # on-device, letting the same scalar every other consumer reads drive a real prefix bound here.
+            # Pinning to the full slab would also be trace-safe (it is what the sparse sp==1 fallback does)
+            # but it would move the whole cache every chunk on all 61 layers.
+            slot_kwargs = {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_layer_idx,
+                "gathered_prefix_tensor": metadata[1],
+                # SP-local units, matching the divided start: one chunk of this SP rank's slab.
+                "gathered_slab_global": self.tp_factor * rows_dev,
+                "gathered_prefix_divisor": self.sp_factor,
+            }
+        else:
+            slot_kwargs = {
+                "input_batch_index": cache_batch_idx if storage.shape[0] > 1 else 0,
+                "gathered_dim_size": active_chunks * self.tp_factor * rows_dev,
+            }
         return ttnn.experimental.high_bw_all_gather(
             storage,
             dim=2,
             output_tensor=self._kvpe_tp_gather_buffer,
             num_links=self.ccl_num_links,
             cluster_axis=self.tp_axis,
-            input_batch_index=cache_batch_idx if storage.shape[0] > 1 else 0,
             # "reader" mode leaves the shards concatenated rank-major so the gather keeps its bank-owned
             # schedule; ring_mla's reader un-stripes instead (see KV_DEDUP_UNSTRIPE_MODE).
             **({"input_stripe_size": rows_dev} if KV_DEDUP_UNSTRIPE_MODE == "gather" else {}),
-            gathered_dim_size=active_chunks * self.tp_factor * rows_dev,
+            **slot_kwargs,
         )
 
     def _chunked_attn(
@@ -1092,15 +1123,18 @@ class ttMLA:
         # also split across TP. One TP gather rebuilds this SP rank's slab first and hands the op the
         # same block-cyclic layout it consumes without dedup -- batch-1, so the slot select is spent here.
         if self._kv_dedup:
-            # The gather's slot select is a host runtime argument, so a captured trace would replay this
-            # chunk's slot. The write op takes its slot from metadata[0] on-device and is trace-safe; this
-            # gather would need input_batch_index_tensor, which the [B, n_chunks, R, W] view does not yet
-            # support. Refuse rather than replay a trace pinned to one user.
-            assert metadata is None, (
-                "tp_shard_kv on the dense path is not trace-safe: the TP gather selects the cache slot "
-                "with a host-side input_batch_index, which a capture would bake. Run PREFILL_USE_TRACE=0."
+            # Trace-safe now, on both pieces of per-chunk state the gather needs: the slot comes from
+            # metadata[0] (recomposed per (user, layer) on-device) and the extent from metadata[1] via
+            # gathered_prefix_divisor. Previously refused -- the old [B, n_chunks, R, W] view could carry
+            # neither, but the gather reads the cache in place now. See _gather_kvpe_tp_to_sp.
+            ring_kv = self._gather_kvpe_tp_to_sp(
+                kvpe_cache,
+                cache_batch_idx,
+                seq_len_local,
+                ring_logical_n,
+                metadata=metadata,
+                cache_layer_idx=cache_layer_idx,
             )
-            ring_kv = self._gather_kvpe_tp_to_sp(kvpe_cache, cache_batch_idx, seq_len_local, ring_logical_n)
             ring_cache_batch_idx = 0
         else:
             ring_kv = kvpe_cache.storage
@@ -1117,12 +1151,19 @@ class ttMLA:
         # the per-layer factor (kv_cache_num_layers/kv_cache_layer_idx) so the readers recompute the full
         # (user, layer) slot on-device -- otherwise every layer would read layer 0's KV cache.
         if metadata is not None:
-            meta_slot_kwargs = {
-                "slot_id": metadata[0],
-                "kv_actual_isl_tensor": metadata[1],
-                "kv_cache_num_layers": self.layer_num,
-                "kv_cache_layer_idx": cache_layer_idx,
-            }
+            # KV dedup spends the slot select in the TP gather, which hands ring_mla a BATCH-1 slab: there
+            # is no slot left to choose here. Passing the layer factor anyway makes the op try to recompose
+            # a (user, layer) index inside a one-batch tensor and it refuses -- "K cache batch=1 must be
+            # divisible by kv_cache_num_layers=61". The op is built for this: its all-gather reader guards
+            # the slot block separately from the extent block, so metadata without a slot is a valid call.
+            # (The MLA unit test cannot catch the mismatch: it allocates one cache layer, so 1 % 1 == 0.)
+            meta_slot_kwargs = {"kv_actual_isl_tensor": metadata[1]}
+            if not self._kv_dedup:
+                meta_slot_kwargs |= {
+                    "slot_id": metadata[0],
+                    "kv_cache_num_layers": self.layer_num,
+                    "kv_cache_layer_idx": cache_layer_idx,
+                }
         else:
             meta_slot_kwargs = {"kv_cache_batch_idx": ring_cache_batch_idx, "kv_actual_isl": kv_actual_isl}
         attn_out, _ = ttnn.transformer.ring_mla(

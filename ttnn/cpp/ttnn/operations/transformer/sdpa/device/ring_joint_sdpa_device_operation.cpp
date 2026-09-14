@@ -220,10 +220,12 @@ void validate_ring_joint_all_gather_on_program_cache_miss(
 
 void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
     TT_FATAL(
-        tensor_args.slot_id.has_value() == tensor_args.kv_actual_isl.has_value(),
-        "metadata tensors slot_id and kv_actual_isl_tensor must be supplied together, or neither supplied");
+        !tensor_args.slot_id.has_value() || tensor_args.kv_actual_isl.has_value(),
+        "metadata tensor slot_id requires kv_actual_isl_tensor: the slot alone cannot drive a captured "
+        "chunk. kv_actual_isl_tensor WITHOUT slot_id is valid -- a KV-deduped caller hands this op a "
+        "batch-1 slab whose slot was already selected by its own gather.");
 
-    if (!tensor_args.slot_id.has_value()) {
+    if (!tensor_args.kv_actual_isl.has_value()) {
         return;
     }
 
@@ -237,7 +239,9 @@ void validate_metadata_tensors(const RingJointSDPAInputs& tensor_args) {
         TT_FATAL(tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "{} must be stored in DRAM", name);
     };
 
-    validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
+    if (tensor_args.slot_id.has_value()) {
+        validate_metadata_tensor(tensor_args.slot_id.value(), "slot_id");
+    }
     validate_metadata_tensor(tensor_args.kv_actual_isl.value(), "kv_actual_isl_tensor");
 }
 
@@ -345,7 +349,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
 
     validate_metadata_tensors(tensor_args);
-    if (tensor_args.has_metadata()) {
+    // Gated on the SLOT, not on metadata: kv_cache_num_layers exists only to recompose
+    // slot_id * num_layers + layer_idx. Without a slot there is nothing to recompose, and a batch-1
+    // deduped slab would fail the divisibility check for no reason.
+    if (tensor_args.has_slot_metadata()) {
         TT_FATAL(args.kv_cache_num_layers > 0, "kv_cache_num_layers must be greater than zero");
         TT_FATAL(
             args.kv_cache_layer_idx < args.kv_cache_num_layers,
@@ -463,7 +470,10 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     validate_ring_joint_all_gather_on_program_cache_miss(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
-        args.has_indexed_kv_cache() || tensor_args.has_metadata(),
+        // Indexed == a slot is actually selected. Extent-only metadata (KV-deduped batch-1 slab)
+        // indexes nothing; this must match the factory's slot_from_metadata or the AG is
+        // validated against a different program than the one built.
+        args.has_indexed_kv_cache() || tensor_args.has_slot_metadata(),
         compact_gather_dim_minimum);
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
@@ -489,7 +499,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_q_shape = has_joint_tensors ? tensor_args.joint_q.value().logical_shape() : q_shape;
     const auto joint_k_shape = has_joint_tensors ? tensor_args.joint_k.value().logical_shape() : q_shape;
     const auto joint_v_shape = has_joint_tensors ? tensor_args.joint_v.value().logical_shape() : q_shape;
-    const bool has_indexed_kv_cache = args.has_indexed_kv_cache() || tensor_args.has_metadata();
+    const bool has_indexed_kv_cache = args.has_indexed_kv_cache() || tensor_args.has_slot_metadata();
     const uint32_t NVH = tensor_args.v_num_heads();
     const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
 

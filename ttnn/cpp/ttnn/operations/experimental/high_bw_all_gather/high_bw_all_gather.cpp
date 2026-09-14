@@ -23,6 +23,7 @@ Tensor high_bw_all_gather(
     uint32_t batch_slot_layer_idx,
     const std::optional<Tensor>& gathered_prefix_tensor,
     uint32_t gathered_slab_global,
+    uint32_t gathered_prefix_divisor,
     std::optional<uint32_t> input_stripe_size) {
     return ttnn::prim::high_bw_all_gather(
         input_tensor,
@@ -39,6 +40,7 @@ Tensor high_bw_all_gather(
         batch_slot_layer_idx,
         gathered_prefix_tensor,
         gathered_slab_global,
+        gathered_prefix_divisor,
         input_stripe_size);
 }
 

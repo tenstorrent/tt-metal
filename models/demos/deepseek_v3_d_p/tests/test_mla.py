@@ -512,6 +512,12 @@ ROTATED_VALID_IDS = ["aligned_min", "midchip_straddle", "lastchip", "rot_partial
 # Determinism gate, same contract as test_prefill_block / test_prefill_transformer: repeats must be
 # bit-identical, so the threshold is exactly 1.0. Rep 0 is the baseline, hence >= 2.
 DETERMINISM_PCC_THRESHOLD = 1.0
+# Per-stripe output PCC for the block-cyclic KV decode (TT_MLA_KV_DEDUP_UNSTRIPE=reader).
+# 1 = derive the stripe from chunk_size_global/(sp*tp); >1 = that many tokens; 0/unset = off.
+STRIPE_PCC_PARTITION = int(os.environ.get("TT_MLA_STRIPE_PCC", "0"))
+# Collect per-iteration output PCC instead of asserting on the first failure, so one run shows how the
+# error moves with active_chunks. Diagnostic only: the run still fails at the end if any iter is below.
+PCC_SOFT = os.environ.get("TT_MLA_PCC_SOFT") == "1"
 DETERMINISM_REPS = 3
 
 # Realtime ("lightweight") profiler perf gate: in-process device program records, so no Tracy
@@ -534,6 +540,27 @@ def _rt_profile_forward_ns(mesh_device, run_fn):
         duration_ns = float(record["duration_ns"])
         per_program[runtime_id] = max(per_program.get(runtime_id, 0.0), duration_ns)
     return result, sum(per_program.values())
+
+
+def _log_stripe_partition_pcc(ref, dev, *, base, part, tp, chunk_size_global, tag):
+    """Per-stripe PCC across the measured span, for localizing a block-cyclic KV decode fault.
+
+    The TP-deduped KVPE slab is block-cyclic over sp*tp, so one (chunk, sp, tp) stripe is
+    `chunk_size_global / (sp*tp)` tokens. Attention is causal, so output tokens in partition p see
+    exactly stripes 0..p: if stripe s is decoded from the wrong address, every partition from s on
+    degrades and the first drop names s. A uniform drop across all partitions means the fault is not
+    stripe-local and the block-cyclic decode is the wrong suspect.
+    """
+    n = ref.shape[-2]
+    logger.info(f"  [stripe-pcc] {tag}: {n} tokens in {(n + part - 1) // part} x {part}-token partitions")
+    for start in range(0, n, part):
+        end = min(start + part, n)
+        _, pcc = comp_pcc(ref[..., start:end, :].float(), dev[..., start:end, :].float())
+        g = base + start  # global token index
+        chunk, slot = g // chunk_size_global, (g % chunk_size_global) // part
+        s_rank, t_rank = divmod(slot, tp)
+        flag = "" if pcc >= 0.98 else "   <-- BAD"
+        logger.info(f"    [{g:>7}:{base + end:>7}) chunk {chunk} sp {s_rank} tp {t_rank}: PCC {pcc:.6f}{flag}")
 
 
 def _run_chunked_prefill(
@@ -785,6 +812,7 @@ def _run_chunked_prefill(
 
     # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
     det_failures = []
+    soft_pcc_failures = []
     profiled_ns = 0.0
     n_iters = max(len(u["group"]) for u in users)
     logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
@@ -903,16 +931,33 @@ def _run_chunked_prefill(
             out_accum[u][0, 0, dst, :] = out_flat[src, :]
 
             if users[u]["ref_out"] is not None:
-                _, msg = assert_with_pcc(
-                    users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
-                    out_accum[u][:, :, kv_actual:valid_end, :],
-                    0.98,
-                )
+                ref_span = users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size)
+                dev_span = out_accum[u][:, :, kv_actual:valid_end, :]
+                # Runs BEFORE the assert, which raises and would otherwise abort the run before the
+                # per-stripe table is emitted. Off unless asked for.
+                if STRIPE_PCC_PARTITION:
+                    _log_stripe_partition_pcc(
+                        ref_span,
+                        dev_span,
+                        base=kv_actual,
+                        part=STRIPE_PCC_PARTITION if STRIPE_PCC_PARTITION > 1 else chunk_size_global // (sp * tp),
+                        tp=tp,
+                        chunk_size_global=chunk_size_global,
+                        tag=f"user {u} iter {i}",
+                    )
+                if PCC_SOFT:
+                    ok, msg = comp_pcc(ref_span.float(), dev_span.float(), 0.98)
+                    if not ok:
+                        soft_pcc_failures.append((u, i, msg))
+                else:
+                    _, msg = assert_with_pcc(ref_span, dev_span, 0.98)
                 rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"
                 logger.info(f"  user {u} iter {i} (kv_actual={kv_actual} isl={isl} {rot}): out PCC {msg}")
         ttnn.synchronize_device(mesh_device)
         ttnn.distributed_context_barrier()
 
+    if soft_pcc_failures:
+        pytest.fail("out PCC below 0.98: " + "; ".join(f"user {u} iter {i}: {m}" for u, i, m in soft_pcc_failures))
     if profile:
         return profiled_ns
 
@@ -1482,10 +1527,17 @@ def test_mla_chunked_prefill(
     ids=["fullchunk-1u", "maxedge-1u", "fullchunk-2u", "deep-20k"],
 )
 @pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
+# The metadata arm is the trace-safe route, and under tp_shard_kv it is the ONLY cover for the TP gather's
+# on-device slot select and its gathered_prefix_divisor extent. Both fail silently in a perf job
+# (check_pcc=False): a baked slot reads another user's KV, a short gather leaves the tail unpopulated.
+# fullchunk-2u varies the slot and deep-20k grows the prefix, so this pair is what actually catches them.
+@pytest.mark.parametrize("use_metadata_tensor", [False, True], ids=["scalar", "metadata"])
 @pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["k2_7"])
 @pytest.mark.skipif(not is_blackhole(), reason="kimi_k2_7 is validated on Blackhole only")
 @pytest.mark.timeout(0)
-def test_mla_chunked_prefill_tp_shard_kv(request, mesh_device, kwargs, device_params, variant, tp_shard_kv):
+def test_mla_chunked_prefill_tp_shard_kv(
+    request, mesh_device, kwargs, device_params, variant, tp_shard_kv, use_metadata_tensor
+):
     """Dense chunked prefill with the KVPE cache ALSO sharded across TP (1/(sp*tp) per chip).
 
     ring_mla rings the SP axis alone and cannot read a cache split across TP, so _chunked_attn rebuilds
@@ -1501,6 +1553,7 @@ def test_mla_chunked_prefill_tp_shard_kv(request, mesh_device, kwargs, device_pa
         reference="cpu",
         topology=per_axis_topology(device_params["fabric_config"]),
         tp_shard_kv=tp_shard_kv,
+        use_metadata_tensor=use_metadata_tensor,
         **kwargs,
     )
 

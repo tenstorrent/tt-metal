@@ -99,6 +99,12 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+    // Divides the start held by ``gathered_prefix_tensor`` before the extent is derived, for a gather whose gathered
+    // dim is NARROWER than the units that scalar is kept in. A TP-axis gather is the case: the tensor holds
+    // actual_start in GLOBAL tokens (what the SP-axis gathers and ring_mla's readers consume), while this output spans
+    // one SP rank's slab, i.e. global/sp. Structural, so it is hashed; 1 (every existing caller) leaves the derivation
+    // untouched.
+    uint32_t gathered_prefix_divisor = 1;
 };
 
 struct HighBwAllGatherInputs {

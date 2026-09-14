@@ -114,6 +114,40 @@ inline LinkPageRange compute_link_page_range(uint32_t valid_pages, uint32_t num_
 // gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, where logical_nt is the padded
 // chunk extent clamped to the cache capacity and chunk_global_tiles = chunk_local_tiles * ring_size.
 // TILE_HEIGHT is 32.
+// Seq-row remap for a slab whose rows are BLOCK-CYCLIC over `ranks` rather than in natural order.
+//
+// A TP-deduped KVPE slab gathered rank-major holds rank t's whole block at [t*stride, (t+1)*stride);
+// within that block the chunks are in order, so the populated chunks of rank t are [t*stride, t*stride+seg).
+// The active set is therefore `ranks` runs of `seg` rows at pitch `stride`, NOT the single contiguous
+// prefix compute_gather_valid_Ht assumes. Bounding that slab by a prefix ships whole ranks 0..A-1 and
+// drops ranks A..ranks-1 entirely, which the consumer then reads as unwritten tiles.
+//
+// The transferred ROW COUNT is unchanged (`ranks * seg == gather_valid_Ht`), so the link split and the
+// producer/consumer page-count protocol are untouched -- only the row positions move. The map is
+// piecewise contiguous in runs of `seg`, so a walk crossing no run boundary costs one divide.
+//
+// Ranks <= 1 (every caller but dense MLA's TP-deduped gather) folds to the identity.
+struct BlockCyclicRowMap {
+    uint32_t seg = 0;     // rows transferred per rank    (gather_valid_Ht / ranks)
+    uint32_t stride = 0;  // rank block pitch, in rows    (cache_local_tile_rows / ranks)
+
+    // `ranks` is the TP fan-in the slab was gathered over; gather_valid_Ht the prefix-shaped extent
+    // compute_gather_valid_Ht produced; cache_local_tile_rows the full per-device slab height.
+    static BlockCyclicRowMap make(uint32_t ranks, uint32_t gather_valid_Ht, uint32_t cache_local_tile_rows) {
+        if (ranks <= 1) {
+            return {};
+        }
+        return {gather_valid_Ht / ranks, cache_local_tile_rows / ranks};
+    }
+
+    uint32_t physical_row(uint32_t logical_row) const {
+        if (seg == 0) {
+            return logical_row;
+        }
+        return (logical_row / seg) * stride + (logical_row % seg);
+    }
+};
+
 inline uint32_t compute_gather_valid_Ht(
     uint32_t kv_actual_isl, uint32_t chunk_local_tiles, uint32_t ring_size, uint32_t cache_local_tile_rows) {
     const uint32_t chunk_global_tiles = chunk_local_tiles * ring_size;

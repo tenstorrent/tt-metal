@@ -186,7 +186,13 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
-    bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+    // kv_actual_isl is the trace-safe core: it drives logical_nt, the q-mapping and the ring masks, and
+    // every captured chunk needs it. slot_id is SEPARATE and optional, because a KV-deduped caller spends
+    // the slot select in its own TP gather and hands this op a rebuilt BATCH-1 slab -- there is no slot
+    // left to choose, and asking for one makes the op recompose a (user, layer) index inside a one-batch
+    // tensor. The all-gather reader already guards its slot block independently of its extent block.
+    bool has_metadata() const { return kv_actual_isl.has_value(); }
+    bool has_slot_metadata() const { return slot_id.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

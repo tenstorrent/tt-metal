@@ -1108,7 +1108,12 @@ def _run_high_bw_all_gather_ci_perf(
 
 @run_for_blackhole("Blackhole Galaxy perf gate requires Blackhole")
 @pytest.mark.skipif(os.getenv("MESH_DEVICE") != "TG", reason="Blackhole Galaxy perf gate requires MESH_DEVICE=TG")
-@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
+# Both fabrics: the 8-rank axis ring is a RING under torus_xy and a LINE under plain FABRIC_2D, so the
+# pair measures what the wrap links are worth on this shape. The gate floor is tuned for torus, so the
+# line arm is expected to sit below it -- run it for the number, not the verdict.
+@pytest.mark.parametrize(
+    "device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS, _FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True
+)
 @pytest.mark.parametrize("mesh_device", [(8, 4)], indirect=True)
 def test_high_bw_all_gather_galaxy_ci_perf(mesh_device):
     """Blackhole Galaxy gate: initialize the full 8x4 2D torus and run one 8-rank KV ring."""

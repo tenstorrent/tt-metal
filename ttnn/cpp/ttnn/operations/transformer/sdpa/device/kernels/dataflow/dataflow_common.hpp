@@ -1551,7 +1551,7 @@ struct BlockCyclicPaddedAddrGenerator {
             }
             if constexpr (BlockCyclic) {
                 // TEMP probe -- remove. Only the first two blocks of the slab, to avoid flooding.
-                if (true) {  // TEMP: all frames, deduped host-side
+                if (false) {  // TEMP: all frames, deduped host-side (off: stripe-PCC run needs no addresses)
                     DPRINT(
                         "BCP d2={} row={} run={} phys={} R={} S={} N={} vr={}\n",
                         d2_start,

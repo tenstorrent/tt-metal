@@ -874,6 +874,7 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         reader_compile_args.push_back(output_chunk_size);
         reader_compile_args.push_back(static_cast<uint32_t>(packet_size));
         reader_compile_args.push_back(cb_meta_writer_id);
+        reader_compile_args.push_back(operation_attributes.gathered_prefix_divisor);
         if (extent_from_metadata) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.gathered_prefix_tensor->buffer())
                 .append_to(reader_compile_args);

@@ -227,7 +227,12 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     // Opt-in two-stage fused readiness: every received shard signals once at its row midpoint and
     // once when complete. Only consumers that interpret the doubled semaphore protocol may enable it.
     bool partial_readiness_enabled = false,
-    RingAttentionRankMapping rank_mapping = {});
+    RingAttentionRankMapping rank_mapping = {},
+    // TP fan-in when the gathered slab is BLOCK-CYCLIC (rank-major) rather than in natural order:
+    // rank t's whole block sits at [t*Ht/ranks, ...), so the populated rows are `ranks` runs of
+    // Ht_valid/ranks, not one prefix. 1 (every caller but dense MLA's TP-deduped KV gather) is the
+    // identity and leaves addressing bit-identical.
+    uint32_t kv_block_cyclic_ranks = 1);
 
 void ring_attention_neighbor_halo_exchange_helper(
     tt::tt_metal::ProgramDescriptor& desc,
