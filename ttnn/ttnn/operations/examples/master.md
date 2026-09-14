@@ -64,6 +64,24 @@ and size each CB to `2 * block` tiles (double-buffered). Small sweet spot (~4–
 Use the smallest dtype your accuracy allows. Skip all of it if you're already bandwidth-bound (enough
 cores) or compute-bound.
 
+## ⭐⭐ T2 — [`handshake_elision`](handshake_elision/README.md)
+**Concept:** the reader → CB → compute → CB → writer **credit protocol** as a fixed cost, measured on a path
+where no byte is in flight — and the one legal way to skip it. One compile-time constant in the compute
+kernel (`no_handshake` = 0 / 1) selects the three-kernel skeleton with the per-tile-row protocol, or a
+single compute kernel with no CB calls at all.
+**Situation:** a same-spec, fully L1-resident op (input and output shards alias the CBs, so the reader and
+writer only publish/retire pages that are already there) with a few tiles of work per core.
+**Measured win (Blackhole, resident-L1 bf16 tilize, 1 and 4 cores agree):** **~70–125 ns per launch** =
+1.18× at 2 tiles/core, 1.11× at 8, 1.04× at 64, vanishing under the ~50 ns/tile tilize LLK. In steady
+state (20 in-kernel iters) the protocol costs **~55–65 ns per iteration** independent of shard size
+(1.49× at 2 tiles/core, 1.03× at 64): with a CB one shard deep, every iteration is a dependent round
+through the credits.
+**Gist:** where BOTH CBs are exactly one resident shard deep and nothing moves through the NoC, issue no
+`cb_*` call at all and address tile-rows by index — `tilize_block(cb_in, Wt, cb_out, r*Wt, r*Wt)` off base
+pointers that never advance — so the program is one compute kernel with no reader and no writer. It pays
+only when work per core is small. Anywhere a dataflow kernel has to move bytes, the protocol is
+load-bearing — keep it.
+
 ## ⭐⭐ T2 — [`tile_reorder`](tile_reorder/README.md)
 **Concept:** transfer coalescing on a DRAM-bandwidth-bound move.
 **Situation:** a whole-tile relocation (permute / transpose-of-tiles) written the generic way —
