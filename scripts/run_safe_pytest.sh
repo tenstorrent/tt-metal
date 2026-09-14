@@ -18,7 +18,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Wrapper flags below are position-independent: they may appear before or after the test path and
 # may be interleaved with pytest args. Everything the wrapper does not recognize (the test path,
@@ -42,17 +42,23 @@
 #                    Pass 1 to serialize (e.g. when DPRINT ordering matters or
 #                    you suspect cross-worker contention). Errors out if used
 #                    outside sim mode.
-#   --precompile     Force-on: before the real run, transparently warm the JIT cache on the real
-#                    device and in parallel (no env vars, no second command), so kernels
-#                    compile up-front in parallel instead of inline & serial. ALWAYS falls
-#                    back to a normal cold run if anything goes wrong — it can only make a
-#                    run slower, never broken or wrong. Prints a one-line diagnostic. Hardware
-#                    only. Tune parallelism with --precompile-workers N (default: nproc).
-#   --no-precompile  Force-off: skip the warm pass even on a broad run.
-#                    AUTO-ROUTING (default, neither flag given): decided from argv alone (free, no
-#                    collect pre-pass). BROAD (a whole directory or a whole test_*.py file, with no
-#                    ::nodeid and no -k) -> warm pass pays -> ON. NARROW (::nodeid, -k filter, or a
-#                    --dev repro) -> few kernels -> left cold. Explicit flags win. Sim always off.
+#   --precompile     Force-on. Precompile = the tests/plugins/up_front_collect.py plugin loaded
+#                    INTO the real pytest session: a collect pass runs every selected body under
+#                    NO_DISPATCH to gather the distinct programs, compiles them once in parallel,
+#                    then the real pass runs warm. One process, one import, one collection, one
+#                    device open. Hardware only. Tune parallelism with --precompile-workers N
+#                    (default: nproc).
+#   --no-precompile  Force-off: plain pytest, kernels compile on demand (inline & serial).
+#                    AUTO (neither flag given): decided from argv alone, no pre-pass. A whole
+#                    directory or whole test file -> ON. NARROW (a ::nodeid or a -k filter) -> a
+#                    handful of programs, the collect pass cannot pay for itself -> OFF. Sim: OFF.
+#   --jit-server[=host:port] / --no-jit-server
+#                    Route the precompile COMPILE STEP to a remote JIT server (default endpoint:
+#                    $TT_METAL_JIT_SERVER_ENDPOINT). Used only when the collected program count is
+#                    at least --farm-min-programs N (default 10, or $PRECOMPILE_FARM_MIN_PROGRAMS):
+#                    below that the per-kernel round trips cost more than they save (+2.5s on a
+#                    1-program session, -3.4s at 24, -47s at 401). The real pass always compiles
+#                    locally. A configured-but-unreachable server aborts loudly (exit 4).
 #
 # Modes:
 #   default  - Dispatch timeout only. Lean, no debug overhead.
@@ -68,8 +74,8 @@
 # Total runtime:
 #   Always prints SAFE_PYTEST_TOTAL_RUNTIME as the very last line (on every exit path).
 #   It is the wall-clock time from "device lock acquired" (idle lock-wait queueing is
-#   deliberately excluded) to script exit, so it covers the whole run — device reset,
-#   precompile warm phase, and the pytest run itself — not just pytest. Under simulator
+#   deliberately excluded) to script exit, so it covers the whole run — device reset and
+#   the pytest run itself (incl. the precompile passes inside it). Under simulator
 #   there is no lock, so the clock starts at the equivalent point.
 
 set -o pipefail
@@ -97,18 +103,18 @@ TT_TIMING_ENTRY_MS=$(date +%s%3N)
 TT_TIMING_LOCK_ACQUIRED_MS=0
 TT_TIMING_SOURCE="run_safe_pytest"
 TT_TIMING_TEST_PATH=""
-# Precompile (JIT warm-pass) outcome, recorded in the device-timing record so a silent fall-back
-# to cold/inline compilation is observable downstream instead of being invisible. Modes:
-#   farm  - warm pass compiled on the remote JIT server (intended, healthy)
-#   local - warm pass compiled locally (no server configured)
-#   cold  - warm pass unusable; the real run compiles cache misses inline & serial
-#   off   - not attempted (--no-precompile, or sim)
-# precompile_warm() overwrites these; the defaults cover the not-attempted case.
+# Precompile outcome, recorded in the device-timing record so the route a session took is
+# observable downstream. Modes:
+#   inline_farm  - compile step ran on the remote JIT server
+#   inline_local - compile step ran locally (no server, or fewer programs than the farm threshold)
+#   off          - not attempted; REASON says why: disabled (--no-precompile), narrow (::nodeid /
+#                  -k selection), sim
+# The post-run attribution block below overwrites these from the plugin's log lines.
 TT_TIMING_PRECOMPILE_MODE="off"
 TT_TIMING_PRECOMPILE_REASON="disabled"
 TT_TIMING_PRECOMPILE_S=0
-# How many programs the warm pass actually compiled. -1 = not attempted / no
-# collector RESULT line; 0 alongside a `cold` mode = warmed NOTHING.
+# Distinct programs the collect pass gathered (includes ones already in the on-disk cache).
+# -1 = not attempted / no collector RESULT line.
 TT_TIMING_PRECOMPILE_PROGRAMS=-1
 
 _emit_device_timing() {
@@ -155,25 +161,27 @@ FAIL_FAST=true
 PROFILE_MODE=false
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
-# Precompile (parallel JIT warm pass) is ON by default. Broad runs are the common case and benefit;
-# a narrow single-case run pays only a small fixed warm tax (a 2nd device-open + collect) and the
-# warm pass degrades gracefully to a cold run on any failure. For tight single-case iteration use
-# tt-probe (always inline) or --no-precompile.
-PRECOMPILE=true
-# --inline-precompile (PoC): fold the warm pass INTO the real pytest session (tests/plugins/
-# up_front_collect.py UP_FRONT_INLINE=1): collect pass -> parallel compile -> real pass, one process.
-# Saves the second interpreter + torch/ttnn import + collection (~8s per invocation).
-PRECOMPILE_INLINE=false
+# Precompile runs INSIDE the real pytest session (tests/plugins/up_front_collect.py with
+# UP_FRONT_INLINE=1): collect pass -> parallel compile -> real pass, one process. There is no
+# separate warm-pass process any more: measured on a 1-program session it cost ~8s (a second
+# interpreter, torch/ttnn import, collection and device open) to save ~2s of compile, and most
+# agent sessions are that small. AUTO (default) turns it on for broad selections and off for
+# narrow ones (::nodeid / -k); the decision is made from argv below, after parsing.
+PRECOMPILE=auto
 PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
+# Farm threshold: route the compile step to the JIT server only when the collect pass gathered at
+# least this many distinct programs. Below it the per-kernel round trips cost more than the
+# parallelism saves (measured: +2.5s at 1 program, -3.4s at 24). Overridable per run.
+PRECOMPILE_FARM_MIN_PROGRAMS="${PRECOMPILE_FARM_MIN_PROGRAMS:-10}"
 
-# JIT compile server is WARM-PASS-ONLY. The endpoint (if configured) is used ONLY inside the
-# precompile warm pass; the real run and every inline / on-demand compile is ALWAYS local. Passive
-# endpoint comes from $TT_METAL_JIT_SERVER_ENDPOINT; override with --jit-server[=host:port] /
-# --no-jit-server. A configured-but-unreachable server aborts loudly (see precompile_warm).
+# JIT compile server is COMPILE-STEP-ONLY. The endpoint (if configured) is used only by the
+# plugin's compile step between the two passes; the real pass and every on-demand compile is
+# ALWAYS local. Passive endpoint comes from $TT_METAL_JIT_SERVER_ENDPOINT; override with
+# --jit-server[=host:port] / --no-jit-server. A configured-but-unreachable server aborts loudly.
 JIT_SERVER_ENDPOINT="${TT_METAL_JIT_SERVER_ENDPOINT:-}"
 JIT_SERVER_DISABLED=false
-# Defensive: the server-enable bit must never leak into the real run / inline path from the ambient
-# environment. precompile_warm is the ONLY place that turns it on, scoped to the warm-pass subprocess.
+# Defensive: the server-enable bit must never leak in from the ambient environment. The plugin
+# raises it only around its compile step, and only when told to (UP_FRONT_INLINE_JIT_SERVER=1).
 unset TT_METAL_JIT_SERVER_ENABLE
 
 # Wrapper flags are POSITION-INDEPENDENT: they may appear anywhere in argv, before or after the
@@ -209,13 +217,12 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --precompile)
-            # Force-on (the default). Transparently warm the JIT cache (real-device, parallel)
-            # before the real run, so kernels compile up-front in parallel instead of inline.
+            # Force-on, even for a narrow selection.
             PRECOMPILE=true
             shift
             ;;
         --no-precompile)
-            # Force-off: skip the warm pass; the real run compiles kernels inline & local on demand.
+            # Force-off: plain pytest; kernels compile on demand, inline & serial.
             PRECOMPILE=false
             shift
             ;;
@@ -227,13 +234,17 @@ while [[ $# -gt 0 ]]; do
             PRECOMPILE_WORKERS="$2"
             shift 2
             ;;
-        --inline-precompile)
-            PRECOMPILE_INLINE=true
-            shift
+        --farm-min-programs)
+            if [[ $# -lt 2 ]] || ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo "SAFE_PYTEST_ERROR: --farm-min-programs requires a non-negative integer argument"
+                exit 3
+            fi
+            PRECOMPILE_FARM_MIN_PROGRAMS="$2"
+            shift 2
             ;;
         --jit-server)
-            # Route the warm-pass compile to a remote JIT server at host:port (warm-pass only;
-            # the real run stays local). Unreachable => abort loudly.
+            # Route the precompile compile step to a remote JIT server at host:port (the real
+            # pass stays local). Unreachable => abort loudly.
             if [[ $# -lt 2 ]]; then
                 echo "SAFE_PYTEST_ERROR: --jit-server requires a host:port argument"
                 exit 3
@@ -248,7 +259,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --no-jit-server)
-            # Force the warm pass to compile locally even if an endpoint is configured.
+            # Compile locally even if an endpoint is configured.
             JIT_SERVER_DISABLED=true
             shift
             ;;
@@ -279,7 +290,7 @@ fi
 # --- Argument validation ---
 if [[ ${#PYTEST_ARGS[@]} -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--profile] [--sim-workers N] [--precompile|--no-precompile] [--farm-min-programs N] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -308,147 +319,40 @@ if [[ -z "$TEST_PATH" ]]; then
 fi
 TT_TIMING_TEST_PATH="$TEST_PATH"
 
-# Precompile is ON by default for every run (no breadth heuristic) — see the PRECOMPILE default
-# above. --no-precompile forces inline; tt-probe is the always-inline path for tight iteration.
+# --- Precompile AUTO decision (argv only, no pre-pass) ---
+# A ::nodeid or a -k filter selects a handful of programs. For those the collect pass costs more
+# than the parallel compile saves (the compile is ~2s for one program, cold), so leave them plain.
+# Explicit --precompile / --no-precompile always win.
+PRECOMPILE_NARROW=false
+if [[ "$TEST_PATH" == *"::"* ]]; then
+    PRECOMPILE_NARROW=true
+else
+    for _arg in "${PYTEST_ARGS[@]}"; do
+        if [[ "$_arg" == "-k" || "$_arg" == -k=* || "$_arg" == "--keyword" ]]; then
+            PRECOMPILE_NARROW=true
+            break
+        fi
+    done
+fi
+if [[ "$PRECOMPILE" == auto ]]; then
+    if [[ "$PRECOMPILE_NARROW" == true ]]; then
+        PRECOMPILE=false
+        TT_TIMING_PRECOMPILE_REASON="narrow"
+    else
+        PRECOMPILE=true
+    fi
+fi
+if [[ "$PRECOMPILE" == true && "$SIM_MODE" == true ]]; then
+    # No warm benefit on the simulator (compile is not the bottleneck at kHz clocks).
+    PRECOMPILE=false
+    TT_TIMING_PRECOMPILE_REASON="sim"
+fi
 
 # Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
-# default) — both the warm-collect and the real run inherit the same value (incl. ccache state), so
-# they share it and a pre-warmed cache is transparently reused. We never override it.
+# default): the collect pass, the compile step and the real pass are one process, so they share it
+# (incl. ccache state) by construction. We never override it.
 PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 
-# ============================================================================
-# Precompile (opt-in --precompile): warm the JIT cache on the REAL device, then
-# let the normal run below hit it. We open the same device the tests use, so the
-# build_key matches by construction — no mock / fingerprint / pre-flight needed.
-# Every failure path degrades to a normal cold run — slower at worst, never wrong.
-# ============================================================================
-
-precompile_warm() {
-    # JIT server routing (WARM-PASS-ONLY). If an endpoint is configured and not disabled, the warm
-    # pass compiles on the remote farm; the real run below is unaffected (server-enable is never
-    # exported globally — only into this subprocess via SRV_ENV). A configured-but-unreachable
-    # server is a setup error -> abort loudly (don't silently fall back to a slow local compile).
-    local -a SRV_ENV=()
-    # Where the warm pass compiled, recorded in the device-timing record. Default: no server
-    # configured -> local warm pass.
-    local _pc_route="local"
-    if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
-        local _h="${JIT_SERVER_ENDPOINT%:*}" _p="${JIT_SERVER_ENDPOINT##*:}"
-        if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
-            TT_TIMING_PRECOMPILE_MODE="off"; TT_TIMING_PRECOMPILE_REASON="jit_unreachable"
-            echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
-            echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile the warm pass locally." >&2
-            exit 4
-        fi
-        _pc_route="farm"
-        SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
-                 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
-        echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
-    fi
-    [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
-    echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
-    # Real-device collect over the SAME selection -> warms the shared cache. We open the same device the
-    # real run uses, so the DEVICE half of the build_key matches by construction (no mock / fingerprint /
-    # pre-flight needed). The RUNTIME-OPTIONS half still has to be matched by hand -- see PROF_ENV below.
-    # SINGLE-PROCESS by design: the heavy kernel COMPILE is parallelized by the plugin's in-process C++
-    # thread pool via ttnn.graph.up_front_compile(device, UP_FRONT_COLLECT_WORKERS=N). xdist (-n) would
-    # only parallelize the cheap COLLECT body-run and, measured, LOSES ~half the cache (concurrent writers
-    # + per-worker dedup: full conv2d 47.6% xdist vs 99.8% single-process). FAST collect (default) keeps
-    # real torch tensors with cheap host stand-ins + a SHAPE-ONLY ttnn.from_torch (skips the weight-prep
-    # tilize/convert) — works on model tests where storage-free collect collapses on weight prep. REAL_ALLOC
-    # gives real buffer addresses so address-baked kernels (pool/move/conv) warm too. ccache state is
-    # INHERITED (untouched) so it matches the real run below — a mismatch would silently miss the warm cache.
-    local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
-    echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: $(printf '%q ' "${PYTEST_ARGS[@]}")" >&2
-    t0=$(date +%s)
-    # Under --profile the real run executes inside `python -m tracy`, which sets
-    # TT_METAL_DEVICE_PROFILER=1 in the child env. That flag moves the kernel build_key, so a warm pass
-    # WITHOUT it lands in a different cache tree and the profiled run reuses nothing at all (measured:
-    # 0/16 hits, i.e. the whole warm pass wasted). Set it here so both passes share one build_key.
-    # Only this one var is needed: TT_METAL_DEVICE_PROFILER=1 alone reproduces the tracy run's key
-    # exactly, and the profiler DUMP vars have no build-key effect. eval_test_runner.sh keeps the same
-    # var set across its warm pass for this exact reason.
-    local -a PROF_ENV=()
-    if [[ "$PROFILE_MODE" == true ]]; then
-        PROF_ENV=(TT_METAL_DEVICE_PROFILER=1)
-    fi
-    # PYTHONPATH: PREPEND the plugin dir rather than replacing the inherited value.
-    # Overwriting it broke any suite whose imports live outside the repo root (the
-    # eval golden tests, for one): the warm pass failed to import, exited non-zero,
-    # and the fallback below silently ran the whole suite COLD.
-    #
-    # -o addopts=...: the warm pass discards its own output -- $clog is only grepped
-    # for the UP_FRONT_COLLECT_RESULT line -- so it should not inherit this repo's
-    # -vvs/-rA/--durations/--junitxml. Beyond the wasted work, -rA makes pytest
-    # rescan every report in the session once per passed test, which on a large
-    # parametrized suite is minutes of pure list scanning.
-    # SRV_ENV (server-enable + preprocess + keepalive) is scoped to THIS subprocess only — it is the
-    # sole place the server is ever enabled, so the real run / inline path can never hit it.
-    env "${SRV_ENV[@]}" "${PROF_ENV[@]}" \
-        UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
-        LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
-        pytest "${PYTEST_ARGS[@]}" -p tests.plugins.up_front_collect \
-            -o addopts=--import-mode=importlib -q > "$clog" 2>&1
-    cstatus=$?
-    t1=$(date +%s)
-    TT_TIMING_PRECOMPILE_S=$((t1-t0))
-    # The exit status is authoritative because up_front_collect OWNS it: on a genuine compile
-    # (every collected program built, zero errors) the plugin overrides pytest's status to 0, since
-    # under NO_DISPATCH every test verdict is meaningless -- a swallowed strict-xfail becomes
-    # XPASS(strict) and pytest exits 1 with a perfectly warm cache. So a non-zero status here means
-    # the warm pass ACTUALLY broke (collection error, no tests collected, plugin failure, compile
-    # errors, crash). No exit-code whitelist: whitelisting benign codes one at a time just defers
-    # the bug to the next benign code.
-    #
-    # The RESULT line is parsed for ATTRIBUTION ONLY (which reason to record) and is best-effort:
-    # if it is absent or malformed the reason degrades to a generic one, never the decision.
-    local rline rstatus="" rreason="" rprogs="" rother="" rpyexit=""
-    rline=$(grep '^UP_FRONT_COLLECT_RESULT:' "$clog" 2>/dev/null | tail -1 || true)
-    [[ "$rline" =~ status=([^[:space:]]+) ]] && rstatus="${BASH_REMATCH[1]}"
-    [[ "$rline" =~ reason=([^[:space:]]+) ]] && rreason="${BASH_REMATCH[1]}"
-    [[ "$rline" =~ programs=([0-9]+) ]] && rprogs="${BASH_REMATCH[1]}"
-    [[ "$rline" =~ other_failures=([0-9]+) ]] && rother="${BASH_REMATCH[1]}"
-    [[ "$rline" =~ pytest_exit=([0-9]+) ]] && rpyexit="${BASH_REMATCH[1]}"
-    TT_TIMING_PRECOMPILE_PROGRAMS="${rprogs:--1}"
-    # WARMED NOTHING while bodies were failing. The collector normalizes this to
-    # `status=ok reason=nothing_to_compile` (it cannot tell an empty suite from a
-    # suite whose every body exploded), so `nothing_to_compile` alone must never
-    # be read as "the cache was already warm". Caught here so the recorded reason
-    # names the real cause -- e.g. a JIT server whose sfpi toolchain mismatches
-    # the client's, refusing every compile (eval/GOLDEN_GATE_TIMING.md).
-    if [[ "${rprogs:-0}" -eq 0 && ( "${rother:-0}" -gt 0 || "${rpyexit:-0}" -ne 0 ) ]]; then
-        echo "PRECOMPILE: ✗ warmed NOTHING after $((t1-t0))s (programs=0, other_failures=${rother:-?}, pytest_exit=${rpyexit:-?}) -> the real run compiles everything inline." >&2
-        grep -aE "UP_FRONT_COLLECT_RESULT:|Remote JIT compile failed" "$clog" 2>/dev/null | head -3 | sed 's/^/PRECOMPILE:   /' >&2
-        echo "PRECOMPILE:   (full collect log: $clog)" >&2
-        TT_TIMING_PRECOMPILE_MODE="cold"
-        if [[ "$_pc_route" == "farm" ]]; then
-            TT_TIMING_PRECOMPILE_REASON="jit_refused"
-        else
-            TT_TIMING_PRECOMPILE_REASON="warmed_nothing"
-        fi
-        return 0
-    fi
-
-    if [[ $cstatus -ne 0 ]]; then
-        echo "PRECOMPILE: ✗ warmup unusable (exit $cstatus${rreason:+, $rreason}) after $((t1-t0))s -> the real run compiles cache misses inline." >&2
-        grep -E "UP_FRONT_COLLECT_RESULT:|(^|[[:space:]])(ERROR|error:)|unrecognized|no tests ran|no tests collected" \
-            "$clog" 2>/dev/null | head -4 | sed 's/^/PRECOMPILE:   /' >&2
-        echo "PRECOMPILE:   (full collect log: $clog)" >&2
-        TT_TIMING_PRECOMPILE_MODE="cold"
-        # Only a collector-reported compile failure on the farm route is a JIT-farm refusal;
-        # pytest/collection/plugin failures are generic warm-up failures.
-        if [[ "$_pc_route" == "farm" && "$rstatus" == "failed" &&
-              "$rreason" =~ ^(compile_errors|incomplete|exception)$ ]]; then
-            TT_TIMING_PRECOMPILE_REASON="jit_refused"
-        else
-            TT_TIMING_PRECOMPILE_REASON="${rreason:-warmup_failed}"
-        fi
-        return 0
-    fi
-    TT_TIMING_PRECOMPILE_MODE="$_pc_route"
-    TT_TIMING_PRECOMPILE_REASON="${rreason:-ok}"
-    echo "PRECOMPILE: ✓ warmup complete in $((t1-t0))s — the real run below reuses it. Log: $clog" >&2
-}
 
 # --- Profiler CSV reporting (--profile) ---
 # Newest ops_perf_results CSV before the run; snapshotted just before pytest (below).
@@ -571,8 +475,7 @@ fi
 # --- Profiling preflight ---
 # `python -m tracy` needs a Tracy-enabled build and tracy deps (e.g. websockets).
 # Probe the import it does at startup (tracy.__main__ -> tracy.serve_wasm) so a
-# missing dep fails fast here instead of as a confusing mid-run traceback (and
-# before the precompile warm pass wastes a device-open).
+# missing dep fails fast here instead of as a confusing mid-run traceback.
 if [[ "$PROFILE_MODE" == true ]]; then
     if ! python3 -c "import tracy.serve_wasm" 2>/dev/null; then
         echo "SAFE_PYTEST_ERROR: --profile requested but 'python -m tracy' is unavailable"
@@ -592,12 +495,10 @@ if [[ "$SIM_MODE" == true && "$SIM_WORKERS" -gt 1 ]]; then
 fi
 
 # --- Debug/sim mode env (asserts + watcher) ---
-# MUST be set BEFORE the precompile warm pass below. TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS,
-# TT_METAL_LLK_ASSERTS and TT_METAL_WATCHER_NOINLINE are COMPILE-TIME flags: they change the
-# kernel build key. If the warm pass compiled without them (as it used to), it would produce
-# PRODUCTION binaries the --dev real run can't reuse — 0% cache hits, full recompile, warm
-# pass wasted. Setting them first makes the warm pass compile the SAME (debug) binaries the
-# real run uses, so --dev + --precompile actually warms the cache.
+# Exported before pytest starts, so the precompile compile step inside the session sees them.
+# TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS, TT_METAL_LLK_ASSERTS and TT_METAL_WATCHER_NOINLINE are
+# COMPILE-TIME flags: they change the kernel build key, so the compile step and the real pass
+# must agree on them or the precompiled (production) binaries would be useless to the --dev run.
 if [[ "$DEV_MODE" == true ]]; then
     # Lightweight asserts: compiles ASSERT() as ebreak, halting the core at the
     # exact instruction. The dispatch timeout then fires and runs triage, which
@@ -640,9 +541,8 @@ else
 fi
 
 # --- XIP disassembly dump (default OFF; kept under --dev) ---
-# MUST be set before precompile_warm: the warm pass LOADS kernel binaries, and
-# the dump fires on load, so exporting this after it is a no-op (verified — the
-# first cut sat below the warm phase and still wrote all 173 files).
+# Must be exported before pytest starts: the dump fires on every kernel BINARY
+# LOAD, including the precompile compile step inside the session.
 #
 # tt_memory.cpp re-writes the XIP-transformed ELF as <kernel>.xip.elf on every
 # kernel BINARY LOAD — ~514 KB per kernel, so ~1.4 GB on a 2753-kernel golden
@@ -658,18 +558,6 @@ fi
 # ordinary runs. Set TT_METAL_DISABLE_XIP_DUMP=0 to force it back on.
 if [[ "$DEV_MODE" != true ]]; then
     export TT_METAL_DISABLE_XIP_DUMP="${TT_METAL_DISABLE_XIP_DUMP:-1}"
-fi
-
-# --- Precompile warm phase (opt-in, hardware only; never aborts the real run) ---
-if [[ "$PRECOMPILE" == true ]]; then
-    if [[ "$SIM_MODE" == true ]]; then
-        echo "PRECOMPILE: skipped under simulator (no warm benefit)" >&2
-        TT_TIMING_PRECOMPILE_REASON="sim"
-    elif [[ "$PRECOMPILE_INLINE" == true ]]; then
-        echo "PRECOMPILE: inline — collect + compile happen inside the real pytest session (single process)" >&2
-    else
-        precompile_warm
-    fi
 fi
 
 # --- Hang detection setup (hardware only) ---
@@ -721,29 +609,39 @@ if [[ "$PROFILE_MODE" == true ]]; then
 else
     PYTEST_CMD=(pytest)
 fi
-# --inline-precompile: same plugin + env as precompile_warm, but loaded into the REAL session.
-# PYTHONPATH is prepended (not replaced) for the same reason as in precompile_warm.
-if [[ "$PRECOMPILE" == true && "$PRECOMPILE_INLINE" == true && "$SIM_MODE" == false ]]; then
-    # JIT server (warm-pass-only, same as precompile_warm): endpoint/preprocess/keepalive go into the
-    # process env, but the ENABLE bit is raised by the plugin only around its compile step
-    # (UP_FRONT_INLINE_JIT_SERVER=1), so pass 2's on-demand compiles stay local.
-    INLINE_SRV_ENV=()
-    INLINE_PC_ROUTE="local"
+# --- Precompile: load the collector into the real session ---
+# The plugin runs a collect pass over the selection, compiles the distinct programs in parallel,
+# then runs the real pass. Under --profile the whole session already runs inside `python -m tracy`
+# (TT_METAL_DEVICE_PROFILER=1), so the compile step and the real pass share one build_key by
+# construction. PYTHONPATH is PREPENDED, not replaced: overwriting it broke any suite whose imports
+# live outside the repo root (the eval golden tests, for one).
+if [[ "$PRECOMPILE" == true ]]; then
+    # JIT server: endpoint/preprocess/keepalive go into the process env, but the ENABLE bit is
+    # raised by the plugin only around its compile step, and only if the collected program count
+    # reaches the farm threshold (UP_FRONT_INLINE_JIT_SERVER=1 + UP_FRONT_INLINE_FARM_MIN_PROGRAMS).
+    # The real pass's on-demand compiles always stay local.
+    PRECOMPILE_SRV_ENV=()
     if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
         _h="${JIT_SERVER_ENDPOINT%:*}"; _p="${JIT_SERVER_ENDPOINT##*:}"
         if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
+            TT_TIMING_PRECOMPILE_REASON="jit_unreachable"
             echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
+            echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile locally." >&2
             exit 4
         fi
-        INLINE_PC_ROUTE="farm"
-        INLINE_SRV_ENV=(UP_FRONT_INLINE_JIT_SERVER=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
-                        TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
-        echo "PRECOMPILE: inline compile step -> JIT server ${JIT_SERVER_ENDPOINT} (real pass stays local)" >&2
+        PRECOMPILE_SRV_ENV=(UP_FRONT_INLINE_JIT_SERVER=1 UP_FRONT_INLINE_FARM_MIN_PROGRAMS="$PRECOMPILE_FARM_MIN_PROGRAMS" \
+                            TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
+                            TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
+        echo "PRECOMPILE: on — compile step -> JIT server ${JIT_SERVER_ENDPOINT} when >= ${PRECOMPILE_FARM_MIN_PROGRAMS} programs, else local (real pass always local)" >&2
+    else
+        echo "PRECOMPILE: on — collect + parallel compile (x${PRECOMPILE_WORKERS}) inside the pytest session, local" >&2
     fi
-    PYTEST_CMD=(env "${INLINE_SRV_ENV[@]}" UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 \
+    PYTEST_CMD=(env "${PRECOMPILE_SRV_ENV[@]}" UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 \
                 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
                 PYTHONPATH="$PRECOMPILE_PLUGIN_DIR${PYTHONPATH:+:$PYTHONPATH}" \
                 "${PYTEST_CMD[@]}" -p tests.plugins.up_front_collect)
+else
+    echo "PRECOMPILE: off (${TT_TIMING_PRECOMPILE_REASON}) — kernels compile on demand" >&2
 fi
 # -x: stop on first failure (avoids running tests after a hang bricks the device)
 # --run-all: skip -x to get full pass/fail counts (for eval scoring)
@@ -820,13 +718,15 @@ echo "========================================"
 # The triage-log guard matters in profile mode: the tracy wrapper exits 0 even
 # when the underlying test failed OR hung, so without it a hang would be reported
 # PASS and skip the device reset. An empty triage log means no hang fired.
-# --inline-precompile: the RESULT line now lives in the real run's stdout; record attribution.
-if [[ "$PRECOMPILE" == true && "$PRECOMPILE_INLINE" == true && "$SIM_MODE" == false ]]; then
+# Precompile attribution: the plugin's RESULT and ROUTE lines live in the session's stdout.
+# Best-effort, for the device-timing record only; a missing line degrades the reason, never the run.
+if [[ "$PRECOMPILE" == true ]]; then
     _iline=$(grep -a '^UP_FRONT_COLLECT_RESULT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 || true)
+    _iroute=$(grep -a '^UP_FRONT_INLINE_ROUTE:' "$PYTEST_STDOUT_LOG" 2>/dev/null | tail -1 | awk '{print $2}' || true)
     _ireason=""; _iprogs=""
     [[ "$_iline" =~ reason=([^[:space:]]+) ]] && _ireason="${BASH_REMATCH[1]}"
     [[ "$_iline" =~ programs=([0-9]+) ]] && _iprogs="${BASH_REMATCH[1]}"
-    TT_TIMING_PRECOMPILE_MODE="inline_${INLINE_PC_ROUTE:-local}"
+    TT_TIMING_PRECOMPILE_MODE="inline_${_iroute:-local}"
     TT_TIMING_PRECOMPILE_REASON="${_ireason:-no_result_line}"
     TT_TIMING_PRECOMPILE_PROGRAMS="${_iprogs:--1}"
     grep -a '^UP_FRONT_INLINE:\|^UP_FRONT_COLLECT:' "$PYTEST_STDOUT_LOG" 2>/dev/null | sed 's/^/PRECOMPILE: /' >&2
