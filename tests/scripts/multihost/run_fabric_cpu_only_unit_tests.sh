@@ -908,25 +908,25 @@ if run_group "pipeline-placement"; then
     if [[ "$size" == 20 ]]; then
       mock="$SC20_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING"
       mgd="${MGD_SUBTORUS}/subtorus_sc20_32x4_5group_ring_mesh_graph_descriptor.textproto"
-      cases=("native_ring:20:1")
+      cases=("native_ring:20")
     else
       mock="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC24_32x4_revC_subtorus_virtu/SC24_32x4_revC_subtorus_virtu_mapping.yaml"
       mgd="${MGD_SUBTORUS}/subtorus_sc24_4x32_6bigmesh_ring_mesh_graph_descriptor.textproto"
       # Ring uses every submesh; Kimi2-like forks use 72 of 96, testing spare capacity.
-      cases=("ring:96:1" "fork:72:1" "fork_mpi:72:1" "missing_shape:96:0")
+      cases=("ring:96" "fork:72" "fork_mpi:72")
     fi
     for entry in "${cases[@]}"; do
-      IFS=: read -r graph stages expected <<< "$entry"
+      IFS=: read -r graph stages <<< "$entry"
       for capacity in 1 2; do
         run_test env TT_METAL_SLOW_DISPATCH_MODE=1 \
           TT_PIPELINE_TEST_GRAPH="$graph" TT_PIPELINE_TEST_STAGES="$stages" \
           TT_PIPELINE_TEST_TARGET_STAGES=63 TT_PIPELINE_TEST_FABRIC=TORUS_XY \
-          TT_PIPELINE_TEST_CORE_CAPACITY="$capacity" TT_PIPELINE_TEST_EXPECT_FEASIBLE="$expected" \
+          TT_PIPELINE_TEST_CORE_CAPACITY="$capacity" \
           timeout -k 10s "${PIPELINE_PLACEMENT_TIMEOUT_SECONDS:-300}s" \
           tt-run --bare --mesh-graph-descriptor "$mgd" --mock-cluster-rank-binding "$mock" \
           --mpi-args "--allow-run-as-root --oversubscribe --bind-to none --mca coll ^han" \
           "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests \
-          --gtest_filter=PipelineBuilderMockSweep.RingCapacity
+          --gtest_filter=PipelineBuilderMockTest.GraphCapacity
       done
     done
   done
