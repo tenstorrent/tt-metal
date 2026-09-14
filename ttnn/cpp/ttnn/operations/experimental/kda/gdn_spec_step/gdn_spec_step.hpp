@@ -10,13 +10,19 @@
 
 namespace ttnn::experimental::kda {
 
-// M0a SCRATCH: row-batched T-loop recurrence prototype (one core per (user, value head); state resident in L1
-// across the T candidate tokens; per-token fp32 state written to ring block t*B*Nv + u*Nv + h). Not a product.
-ttnn::Tensor gdn_spec_tloop_proto(
-    const ttnn::Tensor& qkv,
+// Fused GDN spec-verify step: conv window rebuild + depthwise causal conv + SiLU + l2norms + gates + T-step gated
+// delta rule with per-token fp32 state ring writes + gated RMSNorm + silu(z) gate, one core per (user, value head).
+// ring, win_a/win_b are updated in place; the ctrl page carries parity, mi and the initial ring block per (u,h)
+// (HOLD sentinel 0xFFFFFFFF: no ring writes for that head, window rows copied through unchanged).
+ttnn::Tensor gdn_spec_step(
+    const ttnn::Tensor& qkvzab,
+    const ttnn::Tensor& win_a,
+    const ttnn::Tensor& win_b,
+    const ttnn::Tensor& ring,
+    const ttnn::Tensor& ctrl,
+    const ttnn::Tensor& taps,
     const ttnn::Tensor& dt_bias,
     const ttnn::Tensor& neg_exp_A,
-    const ttnn::Tensor& ring,
     const ttnn::Tensor& weight,
     uint32_t num_value_heads,
     uint32_t num_key_heads,
@@ -25,13 +31,11 @@ ttnn::Tensor gdn_spec_tloop_proto(
     uint32_t T,
     uint32_t B,
     uint32_t qkvz_dim,
-    uint32_t s0_slot = 0,
+    uint32_t conv_kernel = 4,
     std::optional<float> scale = std::nullopt,
     float l2_epsilon = 1e-6f,
     float norm_epsilon = 1e-6f,
-    bool row_batched = true,
-    bool write_ring = true,
-    uint32_t opt_flags = 0,
+    uint32_t hnew_depth = 2,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     ttnn::DataType output_dtype = ttnn::DataType::BFLOAT16);

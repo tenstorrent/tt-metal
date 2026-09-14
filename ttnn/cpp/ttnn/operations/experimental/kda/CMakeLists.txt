@@ -23,7 +23,7 @@ add_subdirectory(affine_exclusive_scan)
 add_subdirectory(prepare_chunk_recurrence)
 add_subdirectory(recurrent_chunk_scan)
 add_subdirectory(gdn_decode_step)
-add_subdirectory(gdn_spec_tloop_proto) # M0a scratch (uncommitted)
+add_subdirectory(gdn_spec_step)
 
 add_library(ttnn_op_experimental_kda INTERFACE)
 add_library(TTNN::Ops::Experimental::KDA ALIAS ttnn_op_experimental_kda)
@@ -38,7 +38,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence
         TTNN::Ops::Experimental::KDA::RecurrentChunkScan
         TTNN::Ops::Experimental::KDA::GdnDecodeStep
-        TTNN::Ops::Experimental::KDA::GdnSpecTloopProto
+        TTNN::Ops::Experimental::KDA::GdnSpecStep
 )
 
 # OBJECT libraries do not propagate their compiled objects through a nested
@@ -55,5 +55,5 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::PrepareChunkRecurrence>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::RecurrentChunkScan>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::GdnDecodeStep>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::GdnSpecTloopProto>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::KDA::GdnSpecStep>
 )
