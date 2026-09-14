@@ -742,10 +742,10 @@ class TransformerEncoder(Module):
 
             prev_pos = pos
 
-        return GenerationOutput(
-            tokens=tokens,
-            logits=torch.stack(logits, dim=1) if logits is not None else None,
-        )
+        if logits is not None:
+            logits = torch.stack(logits, dim=1) if logits else torch.zeros([batch_size, 0, self.config.vocab_size])
+
+        return GenerationOutput(tokens=tokens, logits=logits)
 
 
 class TransformerEncoderLayer(Module):
