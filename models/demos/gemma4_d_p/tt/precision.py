@@ -67,17 +67,26 @@ class Gemma4Precision:
         try:
             with open(_PATH) as f:
                 table = json.load(f)
-        except FileNotFoundError:
-            return cls({})
+        except OSError as exc:
+            raise RuntimeError(f"Cannot read required precision configuration {_PATH}: {exc}") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Invalid JSON in precision configuration {_PATH}: {exc}") from exc
 
         model_key = os.path.basename(str(model_path).rstrip("/"))
         mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
         model_entry = table.get(model_key)
         if not model_entry:
-            return cls({})
+            raise ValueError(
+                f"No precision configuration for {model_path!r} (model key {model_key!r}) in {_PATH}; "
+                f"expected one of {sorted(table)}"
+            )
 
-        # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
+        raw = model_entry.get(mesh_key)
+        if not raw:
+            raise ValueError(
+                f"No precision configuration for model {model_key!r}, mesh {mesh_key!r} in {_PATH}; "
+                f"expected one of {sorted(model_entry)}"
+            )
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:
