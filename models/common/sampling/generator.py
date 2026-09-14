@@ -350,6 +350,13 @@ class SamplingGenerator:
         if self._penalties_active:
             self.tt_penalties.reset_output_tokens()
 
+    def _copy_warmup_logits(self, logits: ttnn.Tensor) -> ttnn.Tensor:
+        # clone chooses its own core grid, which can cross the prefetcher/worker
+        # sub-device boundary on Galaxy.
+        if self.sub_core_grids is not None:
+            return ttnn.identity(logits, sub_core_grids=self.sub_core_grids)
+        return ttnn.clone(logits)
+
     def precompile(
         self,
         logits: ttnn.Tensor,
@@ -372,6 +379,11 @@ class SamplingGenerator:
         callers pass ``skip_precompile=True``, executes its program for the first time inside a live
         trace capture -- TT_FATAL !is_capturing_trace, which kills the engine rather than erroring.
         """
+        # Capture's penalty precompile uses a copy because penalties rewrite
+        # logits in place. Warm that copy program before any trace is live too.
+        if all_configs or self._penalties_active:
+            logits = self._copy_warmup_logits(logits)
+
         if not all_configs:
             self._run_sampling(
                 logits,
@@ -432,7 +444,7 @@ class SamplingGenerator:
             )
             # TTPenalties.apply() rewrites its input in place, so compiling on `logits` itself would
             # leave the capture buffer already penalized and make the first replay penalize it twice.
-            scratch = ttnn.clone(logits) if penalties_on else logits
+            scratch = self._copy_warmup_logits(logits) if penalties_on else logits
             self._run_sampling(
                 scratch,
                 penalties_on=penalties_on,
@@ -442,14 +454,19 @@ class SamplingGenerator:
             if scratch is not logits:
                 ttnn.deallocate(scratch)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
-        sampled = self._run_sampling(
-            logits,
-            penalties_on=penalties_on,
-            tt_out_tok=tt_out_tok,
-        )
-        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
-        ttnn.synchronize_device(self.mesh_device)
+        # Whatever sampling allocates inside the capture window (e.g. the argmax output when no
+        # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
+        # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
+        # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
+        with ttnn.corruptible_allocation_scope(self.mesh_device):
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+            sampled = self._run_sampling(
+                logits,
+                penalties_on=penalties_on,
+                tt_out_tok=tt_out_tok,
+            )
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=self.cq_id)
+            ttnn.synchronize_device(self.mesh_device)
 
         if tt_out_tok is not None:
             if isinstance(sampled, tuple):
