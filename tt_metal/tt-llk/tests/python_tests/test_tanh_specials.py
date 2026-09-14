@@ -271,7 +271,10 @@ def test_tanh_fp32_bound():
     unrounded minimax 0.039123535 this returned up to 1.000183 here while an
     exhaustive bfloat16 sweep still reported exact saturation.
     """
-    xs = list(np.linspace(2.9953, 2.99999, 256).astype(np.float32))
+    # Up to the last fp32 value below 3.0, not 2.99999 -- roughly 40 representable
+    # values sit above that, and they are the tightest part of the range.
+    top = np.nextafter(np.float32(3.0), np.float32(0.0))
+    xs = list(np.linspace(np.float32(2.9953), top, 256).astype(np.float32))
     _, hw = _run(
         {0: xs},
         DataFormat.Float32,
@@ -279,10 +282,78 @@ def test_tanh_fp32_bound():
         in_fmt=DataFormat.Float32,
         floats=True,
     )
-    over = np.abs(hw[: len(xs)]) > 1.0
-    worst = np.abs(hw[: len(xs)]).max()
+    got = np.abs(hw[: len(xs)])
+    over = got > 1.0
+    worst = got.max()
+
+    # Pin that the probes actually arrived. |y| <= 1 is satisfied by anything small,
+    # so a stimuli path that misplaced these or zeroed them would return tanh(0) = 0
+    # and pass -- deterministically, so the bit-exact re-run would not catch it either.
+    # Segment 4 gives 0.0390625 * 2.9953 + 0.8828125 = 0.99982 at the low end.
+    assert worst > 0.9998, (
+        "the fp32 probes did not reach the kernel: worst |y| = %.9f over %d inputs in "
+        "(2.99532, 3.0), where every one of them should evaluate to >= 0.99982. "
+        "Nothing below is asserting anything about segment 4." % (worst, len(xs))
+    )
     assert not over.any(), (
         "approximate tanh returned |y| > 1 on %d of %d fp32 inputs in "
         "(2.99532, 3.0); worst |y| = %.9f. No LUT segment may exceed 1.0 inside "
         "its own range." % (over.sum(), len(xs), worst)
     )
+
+
+def test_tanh_fp32_monotone_across_breakpoints():
+    """No downward step where two LUT segments meet, on the fp32 path.
+
+    The same blind spot as `test_tanh_fp32_bound`, one breakpoint over. fp16
+    coefficients cannot make the segments exactly continuous for free, and a step
+    of ~1.2e-4 is invisible to a bfloat16 sweep -- it is far below the ~2e-3 ulp
+    of a bfloat16 near these values, so the sweep still reports a monotone result.
+    `calculate_tanh<APPROXIMATION_MODE=true>` has no `convert<vFloat16b>` though,
+    and also serves the fp32-dest path, where that same step is ~2048 fp32 ulp of
+    non-monotonicity. The table holds the joins at |x| = 0.5, 1.0 and 2.0 exactly
+    and steps *up* at |x| = 1.5; this walks fp32 values either side of each.
+    """
+    xs = []
+    for bp in (0.5, 1.0, 1.5, 2.0, 3.0):
+        b = np.float32(bp)
+        below = b
+        for _ in range(16):
+            below = np.nextafter(below, np.float32(0.0))
+        for _ in range(32):
+            xs.append(below)
+            below = np.nextafter(below, np.float32(8.0))
+    xs = list(np.array(xs, dtype=np.float32))
+
+    _, hw = _run(
+        {0: xs},
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        in_fmt=DataFormat.Float32,
+        floats=True,
+    )
+    got = hw[: len(xs)].astype(np.float64)
+
+    # The probes straddle 0.5 upward, so nothing here should be near zero.
+    assert got.min() > 0.4, (
+        "the fp32 probes did not reach the kernel: min y = %.9f over %d inputs "
+        "straddling the breakpoints, where the smallest should be tanh(~0.5) ~ 0.46."
+        % (got.min(), len(xs))
+    )
+
+    # Each breakpoint contributes one contiguous run of 32 ascending inputs.
+    for start, bp in zip(range(0, len(xs), 32), (0.5, 1.0, 1.5, 2.0, 3.0)):
+        block = got[start : start + 32]
+        steps = np.diff(block)
+        worst = steps.min()
+        assert worst >= 0.0, (
+            "approximate tanh steps down by %.6g across |x| = %s: y goes %.9f -> %.9f. "
+            "No LUT segment may sit below its predecessor where they meet -- a bfloat16 "
+            "sweep cannot see this, but the fp32-dest path returns it."
+            % (
+                -worst,
+                bp,
+                block[int(np.argmin(steps))],
+                block[int(np.argmin(steps)) + 1],
+            )
+        )

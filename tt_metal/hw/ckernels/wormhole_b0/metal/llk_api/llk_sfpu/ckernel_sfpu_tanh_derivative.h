@@ -15,9 +15,13 @@ namespace ckernel {
 namespace sfpu {
 
 // Legacy tanh derivative: 1 - lut(x)^2, with tanh taken from the SFPLUT rather than computed.
-// The result is exactly 0 for |x| >= 3, so relative and ULP error in the tail are unbounded
-// while absolute error there stays below sech^2(3) = 0.0099; max absolute error is 0.0143
-// overall (Wormhole, fp32 end to end, every finite bfloat16 input). Kept for backward
+// For finite |x| >= 3 the result is exactly 0, so every point in the tail is 100% relative
+// error against a sech^2 that is merely small -- and, measured in ulp of that bfloat16
+// reference, a flat ~256 rather than anything unbounded. Absolute error is the only metric
+// that stays meaningful there, and it stays below sech^2(3) = 0.0099; max absolute error is
+// 0.0143 overall (Wormhole, fp32 end to end, every finite bfloat16 input). The infinities are
+// the exception to "exactly 0": the tail pair is (A=0, B=1) and the hardware evaluates
+// A*|x| + B, so 0 * inf + 1 is NaN and 1 - NaN^2 is NaN. Kept for backward
 // compatibility -- calculate_tanh_derivative_sech2 is accurate to 1 bfloat16 ULP instead.
 // Nothing in this repository calls it: tanh_derivative_tile dispatches
 // calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx, and the
@@ -64,10 +68,14 @@ inline void tanh_derivative_init() {
     // table measures 0.0179 here and is not monotone once squared, against 0.0143 for this.
     //
     // Four properties to preserve if you retune. Segment 0's intercept stays 0, so tanh'(0)
-    // is exactly 1. The last segment stays (0, 1.0), which makes the result exactly 0 past
-    // |x| = 3 and is what bounds it at all -- any nonzero slope there sends 1 - lut^2 to -inf.
-    // No segment may reach lut > 1, or the result goes negative. And the lut must not step
-    // down at a breakpoint, which is what keeps the result monotone in |x|.
+    // is exactly 1. The last segment stays (0, 1.0), which makes the result exactly 0 for
+    // finite |x| past 3 and is what bounds it at all -- any nonzero slope there sends
+    // 1 - lut^2 to -inf. No segment may reach lut > 1, or the result goes negative. And the
+    // lut must not step down at a breakpoint, which is what keeps the result monotone in |x|.
+    //
+    // That tail entry saturates the finite range only. The hardware evaluates A*|x| + B, so
+    // an infinite input computes 0 * inf + 1 = NaN and the kernel returns NaN rather than 0;
+    // do not read (0, 1.0) as handling the infinities.
     //
     // UnarySFPUGolden._tanh_derivative_lut mirrors these six pairs by hand, and
     // test_tanh_derivative_lut_consistency.py holds all three copies together.

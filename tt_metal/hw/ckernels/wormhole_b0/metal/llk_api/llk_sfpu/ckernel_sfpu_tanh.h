@@ -223,16 +223,23 @@ inline void tanh_init() {
         //
         // Fitted to minimise max bfloat16 ULP error, not max absolute error. To retune, keep:
         //  - segment 0's intercept at 0, else SGN_RETAIN puts a jump across the origin;
-        //  - the last segment at exactly (0, 1.0), so the kernel saturates to 1.0;
+        //  - the last segment at exactly (0, 1.0), so *finite* inputs saturate to 1.0. It says
+        //    nothing about the infinities: the hardware evaluates A*|x| + B, so 0 * inf + 1 is
+        //    NaN rather than 1.0. That predates this table; test_tanh_specials records it;
         //  - every segment <= 1.0 over its own range -- unlike the polynomial path below, this
         //    one has no min(result, 1.0f) to fall back on;
-        //  - no step down at a breakpoint larger than a bfloat16 ulp, which is what keeps the
-        //    result monotone. This table steps +1.2e-4, -1.2e-4, +2.1e-4 and -1.2e-4 at the
-        //    four interior breakpoints, well under the ~2e-3 ulp there.
+        //  - no step down where two segments meet. A bfloat16 sweep tolerates a step under the
+        //    ~2e-3 ulp there, but this kernel has no convert<vFloat16b> and also serves the
+        //    fp32-dest path, where a 1.2e-4 dip is ~2048 fp32 ulp of non-monotonicity. So the
+        //    intercept of segment 1 and the slope of segment 3 are held one fp16 ulp below
+        //    their minimax values, which lands the joins at |x| = 0.5, 1.0 and 2.0 exactly and
+        //    leaves a single upward step of +1.2e-4 at |x| = 1.5. It is free: the bfloat16
+        //    sweep is identical either way -- 10.00 max ULP, 0.018352 max absolute error, same
+        //    percentiles -- while fp32 max absolute error improves 0.018962 -> 0.018840.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
-        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.19299316f);
+        sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f, 0.096496582f);
+        sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f, 0.0964355469f);
         sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f, 0.76806641f);
 
         // 0.0390625 == 1.25 * 2^-5, fp16-exact, and chosen so A*3 + B is exactly 1.0: the

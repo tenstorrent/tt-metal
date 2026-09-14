@@ -8,7 +8,9 @@ The kernel evaluates `1 - lut(x)^2`, so the coefficient table in
 exact about: not the `calculate_tanh_derivative` sitting next to that init, which
 has no callers, but tt-llk's `_calculate_tanh_derivative_`, which the harness pairs
 with this init under `SfpuType::tanh_derivative_lut`. The table crosses between them
-in LReg0/1/2, so the init lives in one repository and the kernel in another.
+in LReg0/1/2 (slopes) and LReg4/5/6 (intercepts), so the init lives in one
+repository and the kernel in another, coupled by nothing but that register
+convention -- which is therefore as much a part of the contract as the numbers are.
 
 `UnarySFPUGolden._tanh_derivative_lut` then models that table by hand, deliberately,
 because validating the kernel against an accurate `sech^2` would fail by design. That
@@ -36,6 +38,8 @@ import pytest
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
 # tests/python_tests/ -> tests/ -> tt-llk/ -> tt_metal/
+# Only valid when tt-llk is vendored inside a tt-metal tree; a standalone tt-llk
+# checkout has no such parent, and `_read_tables` skips rather than fails there.
 _TT_METAL = Path(__file__).resolve().parents[3]
 _HEADER = "metal/llk_api/llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 ARCH_HEADERS = {
@@ -45,31 +49,95 @@ ARCH_HEADERS = {
 
 # sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.93701171875f, 0.5869140625f);
 # sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.183837890625f);
+#
+# The LReg index is captured, not just the literals. Parsing by textual order alone
+# would let a retune relabel which register two adjacent assignments target -- loading
+# the right numbers into the wrong segments -- with every test below still passing.
 _NUM = r"(-?[0-9.]+(?:[eE][-+]?\d+)?)f"
-_LUT16SS = re.compile(rf"vLut16ss\(\s*{_NUM}\s*,\s*{_NUM}\s*\)")
-_LUT16II = re.compile(rf"vLut16ii\(\s*{_NUM}\s*,\s*{_NUM}\s*\)")
+_ASSIGN = re.compile(
+    rf"l_reg\[\s*(?:sfpi::)?LRegs::LReg(\d)\s*\]\s*=\s*sfpi::vLut16(ss|ii)"
+    rf"\(\s*{_NUM}\s*,\s*{_NUM}\s*\)"
+)
+
+# Each vLut16 register packs two consecutive segments, so the register a segment's
+# coefficients must live in is fixed: slopes in LReg0/1/2, intercepts in LReg4/5/6,
+# each in segment order.
+SLOPE_REGS = [0, 1, 2]
+INTERCEPT_REGS = [4, 5, 6]
 
 # TABLE1 upper bounds; the sixth segment runs to infinity.
 BREAKPOINTS = [0.5, 1.0, 1.5, 2.0, 3.0]
+
+
+def _init_body(source: str) -> str:
+    """The brace-delimited body of `tanh_derivative_init`, by brace matching.
+
+    Slicing to end of file instead would be inert today but would quietly start
+    reading whatever LUT init is added below it.
+    """
+    match = re.search(r"\binline void tanh_derivative_init\s*\([^)]*\)\s*\{", source)
+    assert match, "could not find 'inline void tanh_derivative_init(...)' -- renamed?"
+
+    depth = 0
+    start = source.index("{", match.start())
+    for index in range(start, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[start + 1 : index]
+    raise AssertionError("unbalanced braces in tanh_derivative_init")
 
 
 def _table(path: Path) -> list[tuple[float, float]]:
     """The six (slope, intercept) pairs `tanh_derivative_init` loads.
 
     Slopes live in LReg0/1/2 and intercepts in LReg4/5/6, each register packing two
-    consecutive segments hi/lo, so the pairs interleave rather than reading straight down.
+    consecutive segments hi/lo, so the pairs interleave rather than reading straight
+    down. Both the values and the register each pair lands in are checked.
     """
-    assert path.is_file(), f"missing kernel header: {path}"
-    body = path.read_text()
-    start = body.index("inline void tanh_derivative_init()")
-    body = body[start:]
-    slopes = [float(v) for pair in _LUT16SS.findall(body) for v in pair]
-    intercepts = [float(v) for pair in _LUT16II.findall(body) for v in pair]
+    body = _init_body(path.read_text())
+    found = _ASSIGN.findall(body)
+
+    slopes: list[float] = []
+    intercepts: list[float] = []
+    slope_regs: list[int] = []
+    intercept_regs: list[int] = []
+    for reg, kind, first, second in found:
+        target, regs = (
+            (slopes, slope_regs) if kind == "ss" else (intercepts, intercept_regs)
+        )
+        target += [float(first), float(second)]
+        regs.append(int(reg))
+
     assert len(slopes) == 6 and len(intercepts) == 6, (
         f"expected 3 vLut16ss and 3 vLut16ii pairs in {path.name}, "
         f"found {len(slopes)} slopes and {len(intercepts)} intercepts"
     )
+    assert slope_regs == SLOPE_REGS, (
+        f"{path.name}: slopes must be loaded into LReg{SLOPE_REGS} in segment order, "
+        f"found LReg{slope_regs}. _calculate_tanh_derivative_ reads these registers by "
+        "index, so the right coefficients in the wrong register is the wrong table."
+    )
+    assert intercept_regs == INTERCEPT_REGS, (
+        f"{path.name}: intercepts must be loaded into LReg{INTERCEPT_REGS} in segment "
+        f"order, found LReg{intercept_regs}. _calculate_tanh_derivative_ reads these "
+        "registers by index, so the right coefficients in the wrong register is the "
+        "wrong table."
+    )
     return list(zip(slopes, intercepts))
+
+
+def _read_tables() -> dict[str, list[tuple[float, float]]]:
+    """Parse both arch headers, or skip if this is not a tt-metal tree."""
+    missing = [name for name, path in ARCH_HEADERS.items() if not path.is_file()]
+    if missing:
+        pytest.skip(
+            f"kernel headers not present ({', '.join(missing)}) -- expected in a "
+            "standalone tt-llk checkout, where there is nothing to guard"
+        )
+    return {name: _table(path) for name, path in ARCH_HEADERS.items()}
 
 
 def _model(pairs: list[tuple[float, float]], x: float) -> float:
@@ -82,8 +150,8 @@ def _model(pairs: list[tuple[float, float]], x: float) -> float:
 
 def test_arch_tables_match():
     """Wormhole and Blackhole must load the same table."""
-    wh = _table(ARCH_HEADERS["wormhole_b0"])
-    bh = _table(ARCH_HEADERS["blackhole"])
+    tables = _read_tables()
+    wh, bh = tables["wormhole_b0"], tables["blackhole"]
     assert wh == bh, (
         "tanh_derivative_init tables have diverged between architectures:\n"
         f"  wormhole_b0 {wh}\n  blackhole   {bh}"
@@ -92,7 +160,7 @@ def test_arch_tables_match():
 
 def test_golden_matches_kernel_table():
     """The hand-written golden must model exactly the table the kernel loads."""
-    pairs = _table(ARCH_HEADERS["wormhole_b0"])
+    pairs = _read_tables()["wormhole_b0"]
     golden = get_golden_generator(UnarySFPUGolden)
 
     # Both sides of every breakpoint, plus the saturated tail and the origin.
@@ -113,7 +181,7 @@ def test_golden_matches_kernel_table():
 
 def test_table_is_odd_and_saturating():
     """Structural properties the golden and both kernels rely on."""
-    pairs = _table(ARCH_HEADERS["wormhole_b0"])
+    pairs = _read_tables()["wormhole_b0"]
     slope0, intercept0 = pairs[0]
     assert intercept0 == 0.0, (
         "segment 0 must have a zero intercept, so tanh'(0) is exactly 1: the kernel "
@@ -121,10 +189,15 @@ def test_table_is_odd_and_saturating():
     )
     assert pairs[5] == (0.0, 1.0), (
         "the last segment must be the exact constant 1.0 -- it is what makes 1 - lut^2 "
-        "collapse to exactly 0 past |x| = 3, and what bounds the kernel at all: any "
-        "nonzero slope there sends 1 - lut^2 to -inf as |x| grows"
+        "collapse to exactly 0 for finite |x| past 3, and what bounds the kernel at "
+        "all: any nonzero slope there sends 1 - lut^2 to -inf as |x| grows. It does "
+        "not cover the infinities, where 0 * inf + 1 is NaN; see test_tanh_specials."
     )
-    assert 0.0 < slope0 <= 1.0
+    assert 0.0 < slope0 <= 1.0, (
+        f"segment 0's slope is {slope0!r}, outside (0, 1]. It is the only thing setting "
+        "the near-origin shape: <= 0 makes 1 - lut^2 flat or rising out of the origin, "
+        "and > 1 drives lut past 1 immediately, making the derivative negative."
+    )
 
 
 def test_table_is_monotone_and_in_range():
@@ -134,7 +207,7 @@ def test_table_is_monotone_and_in_range():
     breakpoint makes the derivative rise with |x|, and one that reaches lut > 1 makes it
     negative. Neither is visible in a max-error figure; both are visible here.
     """
-    pairs = _table(ARCH_HEADERS["wormhole_b0"])
+    pairs = _read_tables()["wormhole_b0"]
 
     # The lut must not step down where the segments meet.
     for bp, (a_lo, b_lo), (a_hi, b_hi) in zip(BREAKPOINTS, pairs[:-1], pairs[1:]):
@@ -149,6 +222,6 @@ def test_table_is_monotone_and_in_range():
     for x, y in zip(xs, ys):
         assert 0.0 <= y <= 1.0, f"1 - lut^2 = {y!r} at x={x}, outside [0, 1]"
     for (x_a, y_a), (x_b, y_b) in zip(zip(xs, ys), zip(xs[1:], ys[1:])):
-        assert y_b <= y_a + 1e-12, (
-            f"1 - lut^2 rises from {y_a!r} at x={x_a} to {y_b!r} at x={x_b}"
-        )
+        assert (
+            y_b <= y_a + 1e-12
+        ), f"1 - lut^2 rises from {y_a!r} at x={x_a} to {y_b!r} at x={x_b}"
