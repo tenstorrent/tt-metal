@@ -69,7 +69,6 @@ set(FABRIC_SOURCES
     topology_solver_sat.cpp
     topology_solver_sat_solver.cpp
     pipeline_builder.cpp
-    pipeline_builder_placement.cpp
     physical_grouping_descriptor_core.cpp
     physical_grouping_descriptor_graph_building.cpp
     physical_grouping_descriptor_matching.cpp
