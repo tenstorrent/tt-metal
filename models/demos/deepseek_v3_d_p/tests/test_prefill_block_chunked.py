@@ -106,24 +106,34 @@ class ChunkedThresholds:
 THRESHOLDS = ChunkedThresholds()
 
 
+def _chunked_tensor_dir(trace_dir: Path, subdir: str, layer: int, key: str) -> Path:
+    return trace_dir / "decoder_io" / key if subdir == "hidden_states" else trace_dir / "kv_cache" / f"layer_{layer}"
+
+
+def _chunked_has_key(trace_dir: Path, subdir: str, layer: int, key: str) -> bool:
+    shards = sorted(_chunked_tensor_dir(trace_dir, subdir, layer, key).glob("rows_*.safetensors"))
+    if not shards:
+        return False
+    with safe_open(shards[0], framework="pt") as f:
+        return key in f.keys()
+
+
 def _load_trace_tensor(trace_dir: Path, layout: str, subdir: str, layer: int, key: str, total_len: int):
     """Load `key` for `layer`, sliced to [:total_len]. "single_file" packs a layer's tensors into one
     safetensors file; "chunked_group_a_v1" gives each a shard directory, with hidden_states/ as decoder_io/."""
     if layout == "chunked_group_a_v1":
-        sub = trace_dir / "decoder_io" / key if subdir == "hidden_states" else trace_dir / "kv_cache" / f"layer_{layer}"
-        return read_sharded_rows(sub, key, 0, total_len)
+        return read_sharded_rows(_chunked_tensor_dir(trace_dir, subdir, layer, key), key, 0, total_len)
     path = trace_dir / subdir / f"layer_{layer}.safetensors"
     with safe_open(path, framework="pt") as f:
         return f.get_tensor(key)[:total_len].to(torch.float32)
 
 
 def _load_optional(trace_dir: Path, layout: str, subdir: str, layer: int, key: str, total_len: int):
-    """None instead of raising, for the five MLA intermediates no chunked_group_a_v1 capture records."""
-    try:
-        return _load_trace_tensor(trace_dir, layout, subdir, layer, key, total_len)
-    except Exception as e:
-        logger.warning(f"golden lacks {key} ({type(e).__name__}) -- skipping its comparison(s)")
+    """None if a chunked_group_a_v1 capture never recorded this MLA intermediate; single_file always loads."""
+    if layout == "chunked_group_a_v1" and not _chunked_has_key(trace_dir, subdir, layer, key):
+        logger.warning(f"golden lacks {key} -- skipping its comparison(s)")
         return None
+    return _load_trace_tensor(trace_dir, layout, subdir, layer, key, total_len)
 
 
 def _pcc(label: str, ref: torch.Tensor, dev: torch.Tensor, thr: float) -> float:
