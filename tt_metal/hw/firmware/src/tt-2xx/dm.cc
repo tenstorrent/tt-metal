@@ -255,7 +255,14 @@ extern "C" uint32_t _start1() {
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
     }
     WAYPOINT("I");
-    DPRINT("DM0-FW: initialized\n");
+    if (hartid == 0) {
+        // The host zeroes the print lock before the reset, but a stale dirty cache line can land on it
+        // afterwards (qsr.s1); like brisc.cc, put the lock into a known state before the first print.
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        // Every hart runs this path; only DM0 announces. On Quasar the eight DMs share one print buffer,
+        // and eight simultaneous boot prints race on its header (seen on the qsr.s1 model).
+        DPRINT("DM0-FW: initialized\n");
+    }
 
     // handle noc_tobank ???
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
