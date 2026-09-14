@@ -27,7 +27,7 @@
 # only, no device) -- capture_stages.py needs ltx_core too, so both gates unlock together:
 #
 #   mkdir -p ~/ltx25_diffvae/stages
-#   PYTHONPATH=$LTX_CORE_SRC:. python capture_stages.py randn:1x128x4x34x60 \
+#   PYTHONPATH=$LTX_CORE_SRC:. python models/tt_dit/tests/models/vae/capture_stages.py randn:1x128x4x34x60 \
 #       --crop 10 --out ~/ltx25_diffvae/stages/crop10.safetensors
 #
 # The synthetic randn: latent reproduces all 8 committed baseline PCCs to four decimals, so it is

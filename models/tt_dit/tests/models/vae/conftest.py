@@ -66,6 +66,11 @@ def timing_tree(request):
 
 
 def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "diffvae_gate: LTX-2.5 DiffVAE regression gate, selected by run_diffvae_gates.sh; "
+        "under DIFFVAE_GATES_STRICT=1 a runtime skip is treated as a failure",
+    )
     config._diffvae_rollups = []
 
 

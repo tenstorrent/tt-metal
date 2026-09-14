@@ -18,8 +18,14 @@ Two things it does that ``decoder.decode_video`` does not:
 The stage sequence mirrors ``_decode_pixels`` for the untiled single-tile case; if upstream
 changes that order this will drift, so keep it next to the source when updating.
 
-  PYTHONPATH=~/LTX-2/packages/ltx-core/src:. python capture_stages.py \
+  PYTHONPATH=$LTX_CORE_SRC:. python models/tt_dit/tests/models/vae/capture_stages.py \
       latents/latent_0_1x128x4x34x60.pt --crop 10 --out stages/crop10.safetensors
+
+Host only, no device: the upstream decoder is built on CPU in fp32 from the shipped video-VAE
+checkpoint (``DIFFVAE_CHECKPOINT``), with upstream's eager tiled-SDPA fallback swapped in for
+every attention module, since the default NeighborhoodAttention3D needs NATTEN and cutlass-FNA is
+a CUDA kernel. That is the same backend the stage-5 parity test uses, so the window geometry is
+shared.
 
 The latent argument also accepts ``randn:BxCxFxHxW``, which draws one instead of reading a dump.
 A capture only has to exercise the decoder on a numerically sane input for parity to mean
@@ -30,15 +36,49 @@ differ in distribution, so a synthetic capture is not evidence about output qual
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 import torch
 from safetensors.torch import save_file
 
-from host_ref import load
-
+CHECKPOINT = Path(
+    os.environ.get(
+        "DIFFVAE_CHECKPOINT",
+        os.path.expanduser("~/.cache/ltx-checkpoints/ltx-2.5/vae/ltx-2.5-video-vae-bf16.safetensors"),
+    )
+)
 
 ENDPOINTS = ("input.latent", "stage5.noise", "output.pixels")
+
+
+def load():
+    """Build upstream's DiffusionVideoDecoder on CPU in fp32, attention on the eager fallback."""
+    from ltx_core.loader.single_gpu_model_builder import SingleGPUModelBuilder
+    from ltx_core.model.video_vae import (
+        VideoDecoderConfigurator,
+        is_diffusion_video_vae,
+        video_decoder_sd_ops_for_checkpoint,
+    )
+    from ltx_core.model.video_vae.transformer.fallback_na import EagerSdpaAttention
+
+    path = str(CHECKPOINT)
+    assert is_diffusion_video_vae(path), f"{path} is not a diffusion video VAE"
+    decoder = SingleGPUModelBuilder(
+        model_path=path,
+        model_class_configurator=VideoDecoderConfigurator,
+        model_sd_ops=video_decoder_sd_ops_for_checkpoint(path, diffusion_vae=True),
+        module_ops=(),  # no cutlass-FNA module op: it is CUDA-only
+    ).build(device=torch.device("cpu"), dtype=torch.float32)
+
+    eager = EagerSdpaAttention()
+    swapped = 0
+    for module in decoder.modules():
+        if hasattr(module, "attention_function"):
+            module.attention_function = eager
+            swapped += 1
+    print(f"swapped {swapped} attention modules to EagerSdpaAttention", flush=True)
+    return decoder
 
 
 def capture(decoder, latent: torch.Tensor, *, seed: int, pixels_only: bool = False) -> dict[str, torch.Tensor]:

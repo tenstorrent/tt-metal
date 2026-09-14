@@ -253,7 +253,7 @@ to keep Dynamo from specializing on shape, and carries absolute offsets across s
 
 ### Verified against upstream, on shipped weights
 
-Ground truth comes from `capture_stages.py`, which drives upstream's own decoder one stage at a
+Ground truth comes from `models/tt_dit/tests/models/vae/capture_stages.py`, which drives upstream's own decoder one stage at a
 time with the shipped checkpoint and *injected* noise — stage 5 predicts x0 from that noise in a
 single step, so the noise is an input, and matching pixels requires the reference's own draw
 rather than a reseed. It bypasses tiling deliberately, so each stage compares against one

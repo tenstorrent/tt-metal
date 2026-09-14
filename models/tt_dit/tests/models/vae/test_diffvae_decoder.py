@@ -13,7 +13,7 @@ Ground truth is ``capture_stages.py``'s dump, which also supplies the stage-5 no
 input to a single-step x0 prediction, not an implementation detail, so matching pixels
 requires using the reference's own noise rather than reseeding.
 
-  PYTHONPATH=/tmp/LTX-2/packages/ltx-core/src:. python capture_stages.py \
+  PYTHONPATH=$LTX_CORE_SRC:. python models/tt_dit/tests/models/vae/capture_stages.py \
       latents/latent_0_1x128x4x34x60.pt --crop 10 --out stages/crop10.safetensors
 """
 

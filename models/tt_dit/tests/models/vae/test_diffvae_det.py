@@ -10,7 +10,7 @@ network compared only at its output tells you something is wrong but never where
 
 Generate the capture first (host only, no device):
 
-  PYTHONPATH=/tmp/LTX-2/packages/ltx-core/src:. python capture_stages.py \
+  PYTHONPATH=$LTX_CORE_SRC:. python models/tt_dit/tests/models/vae/capture_stages.py \
       latents/latent_0_1x128x4x34x60.pt --crop 10 --out stages/crop10.safetensors
 """
 
