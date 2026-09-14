@@ -302,6 +302,9 @@ TEST_F(SplitGalaxyMeshDeviceFixture, RankBasedSocketCreation) {
     auto recv_rank_1 = Rank{3};
 
     auto socket_mem_config = tt_metal::distributed::SocketMemoryConfig(tt_metal::BufferType::L1, socket_fifo_size);
+    socket_mem_config.per_core_allocation = true;
+    // Rank-addressed sockets use canonical logical mesh coordinates. Ranks 0/2 own (0, 0);
+    // ranks 1/3 own (3, 3) on this 4x4 split-host mesh.
     auto socket_connection_0 = tt_metal::distributed::SocketConnection(
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)),
         tt_metal::distributed::MeshCoreCoord(MeshCoordinate(0, 0), tt_metal::CoreCoord(0, 0)));
