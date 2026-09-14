@@ -717,7 +717,7 @@ class TransformerEncoder(Module):
                     if decode_attn_bias is not None
                     else None,
                 )
-                # Outside the step so its not executed twice doe to the tracer's preparation run.
+                # Outside the step so it's not executed twice due to the tracer's preparation run.
                 cache.advance(1)
 
             torch_logits = tensor.to_torch(step_output).float()
