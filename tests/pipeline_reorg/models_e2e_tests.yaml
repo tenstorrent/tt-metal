@@ -1261,6 +1261,7 @@
       release_ready: false
   owner_id: U087HGJ455E # Sudhanshu Singhal
   team: shield
+  budget_type: e2e
 
 # ── Panoptic DeepLab ───────────────────────────────────────────────
 - name: panoptic-deeplab e2e tests
