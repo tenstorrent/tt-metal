@@ -368,3 +368,62 @@ def test_mask_resolves_to_the_nearest_preceding_definition(tree):
     # Resolving the second write against the first function's mask reads it as the disjoint
     # Unsigned bit and the SAME-FIELD race disappears.
     assert "SAME-FIELD" in r.stdout, r.stdout
+
+
+# --- unclassifiable threads ----------------------------------------------------------------------
+
+
+def test_unknown_thread_is_reported_as_a_note_and_does_not_fail(tree):
+    """A write whose thread cannot be determined is surfaced, but never fails the commit.
+
+    thread_of() keys on the llk_unpack/llk_math/llk_pack file and function naming. A write
+    dispatched by a ThreadId template parameter, or one in a shared header, matches neither and
+    used to be dropped silently -- the one outcome the rest of this checker is written to avoid.
+    It is a gap in the tool's coverage, not evidence of a hazard, so it reports and exits clean.
+    """
+    tmp, d = tree
+    _math_owns_word(d)  # MATH owns the SrcA bits of word 1
+    write(
+        d,
+        "shared_helper.h",
+        """
+        inline void set_dest_acc_by_dispatch() {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(v);
+        }
+        """,
+    )
+    r = run(tmp)
+    assert r.returncode == 0, f"an unclassified write must not fail the commit:\n{r.stdout}"
+    assert "whose thread could not be determined" in r.stdout, r.stdout
+    assert "shared_helper.h" in r.stdout, r.stdout
+
+
+def test_unknown_thread_does_not_become_an_owner(tree):
+    """The unclassified write must not be attributed to a thread of its own.
+
+    If it entered the ownership map under a null thread, every genuine write to the same word
+    would see it as another thread's claim and report against it -- turning a coverage gap into
+    a wave of false findings.
+    """
+    tmp, d = tree
+    write(
+        d,
+        "llk_math_owner.h",
+        """
+        inline void _llk_math_owner_() {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(v);
+        }
+        """,
+    )
+    write(
+        d,
+        "shared_helper.h",
+        """
+        inline void set_by_dispatch() {
+            cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(v);
+        }
+        """,
+    )
+    r = run(tmp)
+    assert r.returncode == 0, r.stdout
+    assert "SAME-FIELD" not in r.stdout, f"the note must not create a finding:\n{r.stdout}"
