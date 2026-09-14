@@ -82,6 +82,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -107,6 +108,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -128,6 +130,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -149,6 +152,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -174,6 +178,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 - name: "(Kimi-K2.7-1T) prefill transformer determinism 5k"
@@ -198,6 +203,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 - name: "(Kimi-K2.7-1T) chunked prefill padded accuracy 15k@5k no-trace"
@@ -226,6 +232,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -257,6 +264,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -273,7 +281,8 @@
   #   PREFILL_TRACE_DIR          -> code_debug (56320) golden trace; metadata.json token_ids feed the prefill
   cmd: |
     export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export KIMI_K2_7_HF_MODEL=/mnt/models/moonshotai/Kimi-K2_7-Code-dequantized
     export TT_KIMI_PREFILL_TTNN_CACHE=/mnt/models/moonshotai/Kimi-K2_7-Code-Cache/Kimi-K2_7-Code-Cache-prefill
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/vllm-kimi-k27-codedebug-56320
@@ -294,6 +303,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -334,6 +344,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -367,6 +378,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -391,6 +403,7 @@
       release_ready: false
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -425,6 +438,7 @@
       release_ready: false
   owner_id: U09L76N1MAT  # Nenad Babin
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -448,6 +462,7 @@
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 - name: "(Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k"
@@ -470,6 +485,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -493,6 +509,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -517,6 +534,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -538,6 +556,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -567,6 +586,7 @@
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -589,6 +609,7 @@
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -618,6 +639,7 @@
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -647,6 +669,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -678,6 +701,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -685,7 +709,8 @@
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
-    export LOGURU_LEVEL=INFO
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export GLM52_HF_MODEL=/mnt/models/deepseek-prefill-cache/GLM-5.2-FP8
     export TT_GLM52_PREFILL_TTNN_CACHE=/mnt/models/deepseek-prefill-cache/glm52_ttnn_cache
     export PREFILL_TRACE_DIR=/mnt/models/deepseek-prefill-cache/glm-traces/vllm-glm52-indexer-kcache-55k
@@ -703,6 +728,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -732,6 +758,7 @@
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -755,6 +782,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -776,6 +804,7 @@
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -795,6 +824,7 @@
       timeout: 8
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -814,6 +844,7 @@
       timeout: 6
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -851,25 +882,18 @@
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
-# MiniMax-M3 full-model chunked-prefill throughput regression (same harness as KV PCC, PCC skipped).
-# Gates whole-sequence tok/s against PREFILL_EXPECTED_TPS +/- PREFILL_PERF_MARGIN on high-power Galaxy.
-# Allowed range: ~5007-6774 tok/s (5890 +/- 15%).
-# 5890 is the measured whole-sequence median of run 32280869211 job 96161901672 (PREFILL_TPS_ITERS=5
-# within that one run), the first run of this pipeline after the per-device MeshWorkload dispatch
-# fan-out was removed - it exceeded the old 4500 ceiling, which is why this moved. That is a single
-# run, unlike the ten-run median the Kimi chunked
-# baseline uses, so if this proves noisy widen PREFILL_PERF_MARGIN rather than chasing the centre.
-# For scale, this pipeline is host-dispatch bound: it measured 5057.8 tok/s (run 31996994902) with the
-# fan-out absent and 3582.8 (run 32075671439) with it present, so the gate's own floor is what caught
-# #52775 here.
-# If this test fails: first check whether it is a true regression or a performance improvement.
-# If neither (CI noise), widen this range or comment out this test due to CI instability.
+# MiniMax-M3 full-model chunked-prefill throughput gate (PCC skipped).
+# CI run 34492835936 / job 102927415837 measured a whole-sequence median of 10675.4 tok/s with
+# five iterations, LOGURU_LEVEL=ERROR, and TT_METAL_SHM_TRACKING_DISABLED=1. Target: 10675.4 +/- 15%,
+# accepting 9074.1-12276.7 tok/s.
 - name: "(MiniMax-M3-428B) chunked prefill perf longbook 55k@5k"
   cmd: |
-    export LOGURU_LEVEL=INFO
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=ERROR
     export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
     export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
     export HF_MODEL=/mnt/models/MiniMaxAI/MiniMax-M3-ref/
@@ -881,7 +905,7 @@
     export PREFILL_TPS_ITERS=5
     export PREFILL_SKIP_PCC=1
     export PREFILL_REQUIRE_HIGH_POWER=1
-    export PREFILL_EXPECTED_TPS=5890
+    export PREFILL_EXPECTED_TPS=10675.4
     export PREFILL_PERF_MARGIN=0.15
     mpirun --bind-to none --pernode --tag-output bash -lc '
       python3 models/demos/minimax_m3/tests/galaxy_prefill_kv_pcc.py
@@ -897,6 +921,7 @@
       release_ready: false
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -935,6 +960,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -961,6 +987,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -987,6 +1014,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1007,6 +1035,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1033,6 +1062,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1068,6 +1098,7 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
   sp_config: sc1
 
 # Trace twin of the entry above: SAME splits, SAME golden, SAME KV bar -- the only difference is that
@@ -1099,6 +1130,116 @@
       release_ready: false
   owner_id: U08GEEEEC75 # ssalice
   team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+# ===== GPT-OSS-120B ==================================================================================
+
+# GPT-OSS-120B full-model real-weights chunked prefill + per-layer KV PCC (standalone harness,
+# not pytest; the GPT-OSS analog of the MiniMax-M3 KV-accuracy stage above). Auto-SKIPs (rc 0)
+# off-galaxy or when PREFILL_TRACE_DIR is unset. Requires staged mounts:
+#   HF_MODEL          -> /mnt/models/blaze/openai/gpt-oss-120b (config only here: with
+#                        GPT_OSS_WEIGHTS_FROM_CACHE=1 weights come from the tilized cache)
+#   TT_CACHE_PATH     -> /mnt/models/blaze/openai/gpt-oss-120b
+#                        must hold "tensor_cache_bfp8_MeshShape([4, 8])"; without it the run
+#                        cold-tilizes from safetensors and will blow the timeout
+#   PREFILL_TRACE_DIR -> /mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+# fabric_profile torus_xy: every chunk drives the SP ring cache-read (FABRIC_1D_RING), which
+# needs the certified TorusXY wraparound links the impl workflow provides.
+- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@2.5k"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export EXPERT_DTYPE=bf8
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=2560
+    export PREFILL_TPS_ITERS=1
+    # Floor under the measured ~0.92 min KV PCC (ring chunked and 1k-chunk configs,
+    # EXPERT_DTYPE=bf8): fail below 0.85, keeping headroom for bf8/golden noise.
+    export GPT_OSS_KV_PCC_MIN=0.85
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: gpt_oss_prefill_kv_pcc
+  test_group: module
+  skus:
+    bh_sc1:
+      # ~12 min measured warm (cache load + JIT + prefill + PCC readback); headroom for cold
+      # kernel JIT and the ~180 GB tilized-cache read over NFS. Cold cache BUILD will exceed this.
+      timeout: 35
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# Same harness/goldens at the variable-chunk small size (PREFILL_CHUNK_SIZE=1024 -> 5 chunks
+# over the 5k golden): regression for the small variable-chunk size. Same staged mounts as the
+# 5k@2.5k stage above.
+- name: "(GPT-OSS-120B) chunked prefill KV accuracy longbook 5k@1k"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export PREFILL_TRACE_DIR=/mnt/models/blaze/openai/gpt-oss-120b/golden/longbook_qa_eng_prefill_5000
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export EXPERT_DTYPE=bf8
+    export PREFILL_CHUNKED=1
+    export PREFILL_CHUNK_SIZE=1024
+    export PREFILL_TPS_ITERS=1
+    export GPT_OSS_KV_PCC_MIN=0.85
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/gpt_oss_d_p/tests/galaxy_prefill_kv_pcc.py
+    '
+  test_type: gpt_oss_prefill_kv_pcc_1k
+  test_group: module
+  skus:
+    bh_sc1:
+      # Same profile as the 5k@2.5k stage (5 ring chunks instead of 2; compile/IO dominate).
+      timeout: 35
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+# Variable-chunk smoke (models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py):
+# one runtime built for {1k, 8k} prefills the same 1024 real tokens as a native 1k chunk vs
+# padded into an 8k chunk and reports both timings. No PCC/golden --- it exists to catch the
+# multi-chunk-size runtime build or small-chunk ring path breaking. Auto-SKIPs off-galaxy.
+# No PREFILL_TRACE_DIR needed; weights via the same staged tilized cache.
+- name: "(GPT-OSS-120B) variable-chunk prefill smoke 1k vs 8k"
+  fabric_profile: torus_xy
+  cmd: |
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export HF_MODEL=/mnt/models/blaze/openai/gpt-oss-120b
+    export TT_CACHE_PATH=/mnt/models/blaze/openai/gpt-oss-120b
+    export GPT_OSS_WEIGHTS_FROM_CACHE=1
+    export EXPERT_DTYPE=bf8
+    export VARCHUNK_SMALL=1024
+    export VARCHUNK_LARGE=8192
+    mpirun --pernode --tag-output bash -lc '
+      python3 models/demos/gpt_oss_d_p/tests/variable_chunk_smoke.py
+    '
+  test_type: gpt_oss_varchunk_smoke
+  test_group: module
+  skus:
+    bh_sc1:
+      # One runtime build + 6 short prefills; no golden readback. Cache read + JIT dominate.
+      timeout: 30
+  owner_id: U08HM8SL5U4 # Maciek Dragula
+  team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1131,6 +1272,7 @@
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc4
 
 
@@ -1162,6 +1304,7 @@
       release_ready: true
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc4
 
 
@@ -1183,6 +1326,7 @@
       timeout: 70
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1203,6 +1347,7 @@
       timeout: 80
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1238,6 +1383,7 @@
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
   team: models
+  budget_type: demo
   sp_config: sc1
 
 
@@ -1260,7 +1406,7 @@
       export OMP_NUM_THREADS=$(nproc)
       rc=0
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf -q || rc=1
-      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_ring_accuracy -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_8x4_whole_mesh_accuracy -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_matched_local_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_full_mesh_ci_perf -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
@@ -1276,4 +1422,5 @@
       release_ready: false
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: demo
   sp_config: sc1

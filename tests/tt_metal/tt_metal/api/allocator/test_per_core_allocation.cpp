@@ -5,8 +5,10 @@
 // Integration tests for per-core L1 allocation via experimental::per_core_allocation.
 // These tests require a real device (slow dispatch).
 
+#include "impl/buffers/buffer_impl.hpp"
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <numeric>
 #include <optional>
 #include <string>
@@ -16,8 +18,13 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
+#include "tests/tt_metal/tt_metal/api/allocator/hybrid_allocator_fixture.hpp"
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
+#include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
@@ -25,7 +32,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tests/tt_metal/tt_metal/common/device_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/dataflow_buffer/prefetcher_pipe.hpp"
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include "tt_metal/distributed/hd_socket_descriptor.hpp"
 #include "tt_metal/hw/inc/hostdev/socket.h"
 #include "tt_metal/llrt/tt_cluster.hpp"
@@ -34,39 +41,11 @@ namespace tt::tt_metal {
 
 namespace per_core = experimental::per_core_allocation;
 
-class PerCoreAllocationTest : public MeshDeviceSingleCardBufferFixture {
-protected:
-    void SetUp() override {
-        // Enable HYBRID allocator mode before device creation.
-        setenv("TT_METAL_ALLOCATOR_MODE_HYBRID", "1", /*overwrite=*/1);
+// The fixture is shared with test_range_lockstep_allocation.cpp; the name is kept so the
+// existing test ids do not move.
+using PerCoreAllocationTest = HybridAllocatorTest;
 
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config, {}, DEFAULT_WORKER_L1_SIZE);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
-        }
-        init_max_cbs();
-    }
-
-    void TearDown() override {
-        MeshDeviceSingleCardBufferFixture::TearDown();
-        unsetenv("TT_METAL_ALLOCATOR_MODE_HYBRID");
-    }
-};
-
-// Use 1024-byte page size to be safely above all alignment requirements
-// (FreeListOpt internally uses DRAM alignment which may be larger than L1 alignment)
-static constexpr DeviceAddr PAGE_SIZE = 1024;
+static constexpr DeviceAddr PAGE_SIZE = HYBRID_TEST_PAGE_SIZE;
 
 TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto* device = this->devices_[0]->get_devices()[0];
@@ -87,7 +66,7 @@ TEST_F(PerCoreAllocationTest, BasicPerCoreAllocation) {
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
 
-    auto buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     ASSERT_TRUE(per_core::is_per_core_allocation(*buf));
 
@@ -119,11 +98,11 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
     // Create per-core buffer
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
-    auto per_core_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto per_core_buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
 
     // Create lockstep buffer on same cores
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, lockstep_args);
 
     // Both should be allocated successfully
     EXPECT_TRUE(per_core_buf->is_allocated());
@@ -139,9 +118,6 @@ TEST_F(PerCoreAllocationTest, PerCoreAndLockstepCoexist) {
 }
 
 TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
-    if (this->arch_ == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
     ASSERT_GE(this->devices_[0]->compute_with_storage_grid_size().x, 2);
 
     auto* mesh_device = this->devices_[0].get();
@@ -155,7 +131,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     auto shard_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
     experimental::per_core_allocation::set_per_core_allocation(shard_args, true);
     // Allocate through the MeshDevice allocator that owns the pipe's persistent L1.
-    auto buf = Buffer::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf = BufferImpl::create(mesh_device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, shard_args);
 
     const DeviceAddr per_core_size = buf->aligned_size_per_bank();
     const DeviceAddr ring_begin = pipe.buffer_address();
@@ -195,13 +171,13 @@ TEST_F(PerCoreAllocationTest, DeallocationFreesPerCoreSpace) {
 
     // Create and destroy a buffer
     {
-        auto buf1 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+        auto buf1 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
         EXPECT_TRUE(per_core::is_per_core_allocation(*buf1));
         // buf1 destroyed here, freeing per-core allocations
     }
 
     // Create another buffer on same cores — should succeed (space was freed)
-    auto buf2 = Buffer::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
+    auto buf2 = BufferImpl::create(device, total_size, PAGE_SIZE, BufferType::L1, shard_args);
     EXPECT_TRUE(per_core::is_per_core_allocation(*buf2));
     EXPECT_TRUE(buf2->is_allocated());
 }
@@ -272,7 +248,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSocketCoexistsWithLockstep) {
     CoreRange grid(CoreCoord(0, 0), CoreCoord(1, 0));
     ShardSpecBuffer shard_spec(CoreRangeSet(grid), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
     EXPECT_TRUE(lockstep_buf->is_allocated());
     EXPECT_NE(lockstep_buf->address(), pc_addr) << "Lockstep buffer aliases the per-core socket FIFO";
 }
@@ -415,7 +391,7 @@ TEST_F(PerCoreAllocationTest, H2DSocketPerCoreFifoDoesNotAliasLockstep) {
     CoreRange grid(CoreCoord(0, 0), CoreCoord(0, 1));
     ShardSpecBuffer shard_spec(CoreRangeSet(grid), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
     auto lockstep_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
-    auto lockstep_buf = Buffer::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
+    auto lockstep_buf = BufferImpl::create(device, 2 * PAGE_SIZE, PAGE_SIZE, BufferType::L1, lockstep_args);
     ASSERT_TRUE(lockstep_buf->is_allocated());
 
     const DeviceAddr lockstep_base = lockstep_buf->address();

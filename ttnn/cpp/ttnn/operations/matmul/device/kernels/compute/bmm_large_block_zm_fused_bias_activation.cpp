@@ -2,6 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// bmm_large_block_zm_fused_bias_activation_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this
+// file serves the consumers still on the legacy API. Until the last of them migrates and this file
+// is retired, changes here likely belong in the fork too.
+
 #include <cstdint>
 
 #include "api/compute/matmul.h"
@@ -288,12 +293,12 @@ void kernel_main() {
 #ifdef PACK_RELU
                 // for each batch we start with relu disabled so that intermediate results are not relu'd
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
                 }
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+                    pack_reconfig_data_format(mm_partials_dfb_id);
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -302,16 +307,16 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                        pack_relu_config(ReluConfig::zero());
                     }
 #endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
                         transpose_init(in0_transpose_dfb_id);
-                        PACK((pack_reconfig_data_format(in0_dfb_id)));
+                        pack_reconfig_data_format(in0_dfb_id);
 #ifdef PACKER_L1_ACC
-                        PACK((llk_pack_reconfig_l1_acc(0)));
+                        pack_reconfig_l1_acc(0);
 #endif
                         transpose_tile_block<in0_block_num_tiles>(in0_transpose_dfb_id, in0_dfb_id);
                         reconfig_data_format_srca(in0_transpose_dfb_id, in1_dfb_id);
@@ -322,7 +327,7 @@ void kernel_main() {
                             out_subblock_w,
                             out_subblock_h,
                             in0_block_w);
-                        PACK((pack_reconfig_data_format(mm_partials_dfb_id)));
+                        pack_reconfig_data_format(mm_partials_dfb_id);
                     }
 
                     in0_dfb.wait_front(in0_block_num_tiles);
@@ -400,18 +405,18 @@ void kernel_main() {
 #endif
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_dfb_id)));
+                                pack_reconfig_data_format(mm_out_dfb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else {
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #else
-                                PACK((llk_pack_reconfig_l1_acc(0)));
+                                pack_reconfig_l1_acc(0);
 #endif
 #endif
                                 const uint32_t start_dst_index = 0;
@@ -427,11 +432,11 @@ void kernel_main() {
 
 #ifdef PACKER_L1_ACC
                                 if (block == 0) {  // no accumulation for first iteration
-                                    PACK((llk_pack_reconfig_l1_acc(0)));
+                                    pack_reconfig_l1_acc(0);
                                 } else if (block == 1 || in0_transpose_tile) {
                                     // block == 1 switches accumulation on. For later blocks, the transpose stage
                                     // disabled it again, so put it back here.
-                                    PACK((llk_pack_reconfig_l1_acc(1)));
+                                    pack_reconfig_l1_acc(1);
                                 }
 #endif
 
@@ -486,13 +491,13 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                pack_relu_config(ReluConfig::zero());
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format(out_dfb_id)));
+                pack_reconfig_data_format(out_dfb_id);
 #endif
 #ifdef PACKER_L1_ACC
-                PACK((llk_pack_reconfig_l1_acc(0)));
+                pack_reconfig_l1_acc(0);
 #endif
                 reconfig_data_format(in1_dfb_id, mm_partials_dfb_id, in0_dfb_id, bias_dfb_id);
                 if constexpr (row_broadcast_bias) {
@@ -574,15 +579,15 @@ void kernel_main() {
 #endif  // FUSE_BIAS
                 if constexpr (untilize_out) {
 #ifdef PACK_RELU
-                    PACK((llk_pack_relu_config(ReluConfig::none())));
+                    pack_relu_config(ReluConfig::none());
 #endif  // PACK_RELU
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_dfb_id, mm_partials_dfb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                    PACK((pack_reconfig_data_format(out_dfb_id)));
+                    pack_reconfig_data_format(out_dfb_id);
 #endif
 #ifdef PACKER_L1_ACC
-                    PACK((llk_pack_reconfig_l1_acc(0)));
+                    pack_reconfig_l1_acc(0);
 #endif
 #endif  // FUSE_BIAS
                     pack_untilize_dest_init<out_subblock_w, out_block_w>(out_dfb_id);
