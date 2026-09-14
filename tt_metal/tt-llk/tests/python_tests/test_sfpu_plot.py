@@ -18,12 +18,14 @@ import math
 import os
 import time
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -359,7 +361,14 @@ def _plot_and_print(
     title_suffix: str = "",
     allowed_intervals: Optional[List[Tuple[float, float]]] = None,
     undefined_ranges: Optional[List[Tuple[float, float]]] = None,
+    param_line: Optional[str] = None,
 ):
+    """Draw the multi-panel accuracy figure and print the stats summary.
+
+    `param_line`, when given, is rendered as a second, smaller title line under
+    the suptitle — the place for the run's parameters (in/out format, Dest
+    route, dest_acc, approx mode, point count) so a saved PNG is self-describing.
+    """
     # Keep the raw inputs/outputs around so we can still surface non-finite
     # points on the top plot — even though they're masked out of error stats.
     x_raw = x.copy()
@@ -408,6 +417,17 @@ def _plot_and_print(
             fontsize=14,
             fontweight="bold",
         )
+        if param_line:
+            fig.text(
+                0.5,
+                0.90,
+                param_line,
+                ha="center",
+                va="top",
+                fontsize=9,
+                color="#555555",
+                fontfamily="monospace",
+            )
         ax.axis("off")
         ax.text(0.5, 0.5, msg, ha="center", va="center", fontfamily="monospace")
         plt.savefig(plot_path, dpi=150)
@@ -681,6 +701,19 @@ def _plot_and_print(
         fontweight="bold",
         y=0.995,
     )
+    # Second title line: the run's parameters, in a smaller monospace font so
+    # the op name stays the headline. tight_layout below reserves the strip.
+    if param_line:
+        fig.text(
+            0.5,
+            0.981,
+            param_line,
+            ha="center",
+            va="top",
+            fontsize=10,
+            color="#555555",
+            fontfamily="monospace",
+        )
     subtitle = f"x ∈ [{x.min():.2g}, {x.max():.2g}]"
     if n_nonfinite:
         subtitle += f"  ({n_nonfinite} inf/nan excluded)"
@@ -1204,7 +1237,8 @@ def _plot_and_print(
             bbox=summary_bbox_kwargs,
         )
 
-    plt.tight_layout()
+    # Leave a strip at the top for the suptitle and the parameter line.
+    plt.tight_layout(rect=(0, 0, 1, 0.965 if param_line else 0.98))
 
     # Draw a thin vertical separator between the plot column and the summary
     # column. Done after tight_layout so the position lines up with the actual
@@ -1251,7 +1285,7 @@ def _plot_and_print(
 #   Run one op:   pytest test_sfpu_plot.py -k Exp -s
 #   Run all:      pytest test_sfpu_plot.py -s
 #
-#   Each case writes _plot_output/sfpu_<id>.png and prints a stats summary, then
+#   Each case writes _plot_output/{wh,bh}/sfpu_<id>.png and prints a stats summary, then
 #   asserts the hardware result matches golden.
 #   Set expect_pass=False to keep the run green while exploring a known-inaccurate op.
 #
@@ -1275,6 +1309,33 @@ _FMT_SHORT = {
     DataFormat.Float16: "fp16",
     DataFormat.Float32: "fp32",
 }
+
+# Plots go to tests/python_tests/_plot_output/<arch>/
+PLOT_OUTPUT_ROOT = Path(__file__).resolve().parent / "_plot_output"
+_ARCH_PLOT_DIR = {
+    ChipArchitecture.WORMHOLE: "wh",
+    ChipArchitecture.BLACKHOLE: "bh",
+    ChipArchitecture.QUASAR: "qsr",
+}
+_ARCH_TITLE = {
+    ChipArchitecture.WORMHOLE: "Wormhole",
+    ChipArchitecture.BLACKHOLE: "Blackhole",
+    ChipArchitecture.QUASAR: "Quasar",
+}
+
+
+def plot_output_dir(arch: Optional[ChipArchitecture] = None) -> Path:
+    """Per-arch plot folder: _plot_output/{wh,bh,qsr} (default: the current arch)."""
+    if arch is None:
+        arch = get_chip_architecture()
+    return PLOT_OUTPUT_ROOT / _ARCH_PLOT_DIR[arch]
+
+
+def arch_title_suffix(arch: Optional[ChipArchitecture] = None) -> str:
+    """Title tag naming the arch, e.g. ' [Wormhole]'."""
+    if arch is None:
+        arch = get_chip_architecture()
+    return f" [{_ARCH_TITLE[arch]}]"
 
 
 @dataclass
@@ -1429,7 +1490,7 @@ def run_case(case: Case) -> bool:
     """Run one Case end-to-end: stimuli -> golden -> hardware -> plot + stats.
 
     Returns whether the hardware result matched golden (passed_test) and writes
-    _plot_output/sfpu_<id>.png. This only assembles inputs for _plot_and_print;
+    _plot_output/<arch>/sfpu_<id>.png. This only assembles inputs for _plot_and_print;
     it does not alter any metric or plotting behavior.
     """
     formats = case.fmt
@@ -1447,7 +1508,7 @@ def run_case(case: Case) -> bool:
 
     mathop = case.op
     spec = case.spec
-    plot_path = f"_plot_output/sfpu_{case.test_id}.png"
+    plot_path = str(plot_output_dir() / f"sfpu_{case.test_id}.png")
     torch_format = format_dict[formats.output_format]
     generate_golden = get_golden_generator(UnarySFPUGolden)
 
@@ -1622,6 +1683,13 @@ def run_case(case: Case) -> bool:
     # in output_format, so pass output_format (not input_format). Identical for
     # symmetric cases; for a mixed case like (Float32, Float16_b), using the
     # input format would measure ULP on the wrong (finer) grid and under-report.
+    param_line = (
+        f"{case.test_id}  |  in {formats.input_format.name} → out "
+        f"{formats.output_format.name}  |  dest_acc={dest_acc.name}  |  "
+        f"unpack_to_dest={unpack_to_dest}  |  approx={case.approx_mode.name}  |  "
+        f"clamp_negative={case.clamp_negative}  |  "
+        f"{spec.distribution.name.lower()}, {x.size} points"
+    )
     _plot_and_print(
         mathop,
         formats.output_format,
@@ -1629,8 +1697,10 @@ def run_case(case: Case) -> bool:
         golden_plot,
         hw_plot,
         plot_path,
+        title_suffix=arch_title_suffix(),
         allowed_intervals=allowed_intervals,
         undefined_ranges=undefined_ranges,
+        param_line=param_line,
     )
 
     test_passed = passed_test(golden_tensor, res_tensor, formats.output_format)
