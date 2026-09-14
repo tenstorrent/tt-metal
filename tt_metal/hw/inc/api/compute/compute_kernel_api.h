@@ -60,6 +60,7 @@
 #include "llk_math_eltwise_binary_sfpu_add_int.h"
 #include "llk_math_eltwise_binary_sfpu_mul_int.h"
 #include "llk_math_eltwise_binary_sfpu_binary_comp.h"
+#include "ckernel_sfpu_rounding_ops.h"
 #endif
 #define MATH(...) __VA_ARGS__
 #else

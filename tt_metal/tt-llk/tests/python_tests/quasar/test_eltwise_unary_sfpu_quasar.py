@@ -112,6 +112,15 @@ RELU_CC_OPS = [
     MathOperation.ReluMax,
 ]
 
+# Float rounding family. Domain [-10, 10] (sfpu_domains) spans both signs so floor/ceil
+# differ from trunc, and includes half-integers for round-half-to-even.
+ROUNDING_OPS = [
+    MathOperation.Floor,
+    MathOperation.Ceil,
+    MathOperation.Trunc,
+    MathOperation.Frac,
+    MathOperation.Round,
+]
 
 # Extra (integer) formats only the comp family sweeps. Int32/Int16/Int8 (signed) and UInt8
 # (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
@@ -409,6 +418,13 @@ def prepare_inputs_for_operation(
         # all covered (mirrors sfpu_domains' Softplus spec).
         min_val = -8.0
         max_val = 30.0
+        src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        src_A = src_A.to(torch_format)
+    elif mathop in ROUNDING_OPS:
+        # [-10, 10] spans both signs so floor/ceil differ from trunc, and includes half-integers
+        # for round-half-to-even (mirrors sfpu_domains' Floor/Ceil/Trunc/Frac/Round spec).
+        min_val = -10.0
+        max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     # else: keep src_A as-is
@@ -734,6 +750,10 @@ OP_CONFIGS = [
         OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
         for op in TRIGONOMETRY_OPS
     ],
+    *[
+        OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES, uniform_spec=True)
+        for op in ROUNDING_OPS
+    ],
 ] + [OpConfig(op, TENSOR_DIMS, DEST_SYNC_MODES) for op in COMP_OPS]
 
 OP_CONFIG_BY_MATHOP = {cfg.mathop: cfg for cfg in OP_CONFIGS}
@@ -825,7 +845,8 @@ def test_eltwise_unary_sfpu_quasar(
     """
     Consolidated unary-SFPU test on Quasar. One compile-time-selected op per
     variant (abs, exp, gelu, relu, lrelu, relu_min, relu_max, reciprocal, sqrt,
-    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast, and the six
+    tanh, sigmoid, silu, rsqrt, square, cumsum, typecast,
+    floor/ceil/trunc/frac/round, and the six
     compare-to-zero modes), validated against the UnarySFPUGolden reference.
     Typecast sweeps explicit (src, dst) format pairs; every other op sweeps the
     shared format matrix.
