@@ -29,51 +29,110 @@ RELEASE = re.compile(r"\b(?:t6_mutex_release|TTI?_ATRELM)\s*\(")
 EXEMPT_DEFN = re.compile(
     r"\b(?:inline\s+void\s+)?t6_mutex_(?:acquire|release)\s*\(\s*const\b"
 )
-GUARD_CLASS = re.compile(r"\bclass\b[^;{]*\bT6MutexLockGuard\b")
+GUARD_CLASS = re.compile(r"\b(?:class|struct)\b[^;{]*\bT6MutexLockGuard\b")
+# A brace opened by one of these declares a scope, not a function body.
+CONTAINER = re.compile(r"\b(?:namespace|class|struct|union|enum|extern)\b")
 
 
-def functions(lines):
-    """Yield (start_line_index, end_line_index, text) for each brace-delimited body.
+def _blank_noncode(src):
+    """Return src with comment and string-literal bodies blanked, offsets and lines preserved.
+
+    Brace counting has to see only real braces: one inside a comment or a string literal
+    unbalances every scope after it.
+    """
+    out, i, n = [], 0, len(src)
+    while i < n:
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+        elif src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+        elif src[i] in "\"'":
+            q, j = src[i], i + 1
+            while j < n and src[j] != q and src[j] != "\n":
+                j += 2 if src[j] == "\\" else 1
+            j = min(j + 1, n)
+        else:
+            out.append(src[i])
+            i += 1
+            continue
+        out.append("".join(c if c == "\n" else " " for c in src[i:j]))
+        i = j
+    return "".join(out)
+
+
+def _signature(lines, brace_line):
+    """The declarator line for a body, which is what a reader recognises and the baseline keys on."""
+    if lines[brace_line].strip() != "{":
+        return brace_line
+    sig = brace_line - 1
+    while sig > 0:
+        prev = re.sub(r"//.*", "", lines[sig]).strip()
+        if not prev or prev.startswith(("*", "/*", "//", "#")):
+            sig -= 1
+            continue
+        break
+    return max(sig, 0)
+
+
+def functions(src):
+    """Yield (signature_line_index, end_line_index, text, in_guard) for each function body.
+
+    Brace kind decides what a body is. A `namespace`, `class`, `struct`, `union`, `enum` or
+    `extern` brace opens a container; only a declarator carrying a parameter list opens a
+    function. Every LLK header wraps its functions in `namespace ckernel`, so counting the
+    namespace brace as a body would merge the whole file into one balance and let a leak in
+    one function cancel against a release in another.
 
     Keyed on position, not name: two overloads with the same name in one file would otherwise
     share a single balance count and mask each other.
+
+    `in_guard` marks a body lexically inside `T6MutexLockGuard`, whose ctor acquires and dtor
+    releases -- balanced per object, never within one function.
     """
-    depth, start, buf = 0, None, []
-    for i, raw in enumerate(lines):
-        line = re.sub(r"//.*", "", raw)
-        if depth == 0 and "{" in line:
-            start, buf = i, []
-        if start is not None:
-            buf.append(raw)
-        depth += line.count("{") - line.count("}")
-        if start is not None and depth <= 0:
-            # The opening brace is usually on its own line; the signature is above it. Report the
-            # signature, not "{" -- it is what a reader recognises and what the baseline keys on.
-            sig = start
-            while sig > 0:
-                prev = re.sub(r"//.*", "", lines[sig - 1]).strip()
-                if not prev or prev.startswith(("*", "/*", "#")):
-                    sig -= 1
-                    continue
-                if lines[start].strip() == "{":
-                    sig -= 1
-                break
-            yield sig, i, "\n".join(buf)
-            start, buf, depth = None, [], 0
+    code = _blank_noncode(src)
+    line_of, ln = [], 0
+    for c in code:
+        line_of.append(ln)
+        if c == "\n":
+            ln += 1
+    line_of.append(ln)
+
+    stack, decl_start, fn = [], 0, None
+    for k, c in enumerate(code):
+        if c == "{":
+            head = code[decl_start:k]
+            if fn is None and "(" in head and not CONTAINER.search(head):
+                kind, fn = "fn", k
+            elif GUARD_CLASS.search(head):
+                kind = "guard"
+            else:
+                kind = "other"
+            stack.append(kind)
+            decl_start = k + 1
+        elif c == "}":
+            kind = stack.pop() if stack else "other"
+            decl_start = k + 1
+            if kind == "fn" and fn is not None:
+                yield line_of[fn], line_of[k], code[fn : k + 1], "guard" in stack
+                fn = None
+        elif c == ";":
+            decl_start = k + 1
 
 
 def scan(path):
     src = open(path, errors="ignore").read()
     lines = src.split("\n")
-    if GUARD_CLASS.search(src):
-        return  # RAII guard: acquire in ctor, release in dtor, balanced at the object level
-    for start, end, body in functions(lines):
+    for brace_line, end, body, in_guard in functions(src):
+        if in_guard:
+            continue  # RAII guard: acquire in ctor, release in dtor, balanced at the object level
+        start = _signature(lines, brace_line)
         head = lines[start] if start < len(lines) else ""
         if EXEMPT_DEFN.search(head):
             continue
-        body_nc = re.sub(r"//.*", "", body)
-        acq = len(ACQUIRE.findall(body_nc))
-        rel = len(RELEASE.findall(body_nc))
+        acq = len(ACQUIRE.findall(body))
+        rel = len(RELEASE.findall(body))
         if acq != rel:
             yield start + 1, acq, rel, head.strip()[:76]
 

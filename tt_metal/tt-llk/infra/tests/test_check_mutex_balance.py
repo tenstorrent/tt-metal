@@ -112,6 +112,70 @@ def test_two_overloads_do_not_mask_each_other(tmp_path):
     assert r.returncode == 1, "the leaking overload must be reported"
 
 
+def test_namespace_does_not_merge_functions(tmp_path):
+    """Every LLK header wraps its functions in `namespace ckernel`; the brace must not scope a body."""
+    f = hdr(
+        tmp_path,
+        "ns.h",
+        """
+        namespace ckernel
+        {
+        inline void _llk_math_leaks_()
+        {
+            t6_mutex_acquire(mutex::REG_RMW);
+        }
+
+        inline void _llk_math_frees_()
+        {
+            t6_mutex_release(mutex::REG_RMW);
+        }
+        }
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 1, "a leak and an unrelated release must not cancel"
+    assert "_llk_math_leaks_" in r.stdout and "_llk_math_frees_" in r.stdout, r.stdout
+
+
+def test_guard_exemption_does_not_cover_the_rest_of_the_file(tmp_path):
+    """Only T6MutexLockGuard's own body is exempt, not every function beside it."""
+    f = hdr(
+        tmp_path,
+        "guard_plus_leak.h",
+        """
+        namespace ckernel
+        {
+        class T6MutexLockGuard final
+        {
+        public:
+            explicit T6MutexLockGuard(const std::uint8_t i) : mutex_index(i)
+            {
+                t6_mutex_acquire(mutex_index);
+            }
+
+            ~T6MutexLockGuard()
+            {
+                t6_mutex_release(mutex_index);
+            }
+
+        private:
+            const std::uint8_t mutex_index;
+        };
+
+        inline void _llk_pack_leaks_()
+        {
+            t6_mutex_acquire(mutex::REG_RMW);
+        }
+        }
+        """,
+    )
+    r = run(f)
+    assert r.returncode == 1, "a raw leak beside the guard class must still be reported"
+    assert "_llk_pack_leaks_" in r.stdout, r.stdout
+    # The guard's own ctor and dtor stay exempt, so the leak is the only finding.
+    assert "1 function(s)" in r.stdout, r.stdout
+
+
 def test_wrapper_definitions_are_exempt():
     """t6_mutex_acquire/release each hold one half by definition."""
     seen = 0
