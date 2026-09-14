@@ -1,0 +1,4 @@
+{
+  "arch": "TTQwen38ForCausalLM",
+  "main_class": "models.autoports.qwen_qwen3_8_27b.tt.generator_vllm:Qwen38ForCausalLM"
+}
