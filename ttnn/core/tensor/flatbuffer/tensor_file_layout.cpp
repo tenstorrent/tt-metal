@@ -16,8 +16,7 @@
 namespace ttnn {
 namespace {
 
-void safe_fwrite_bytes(
-    const void* buffer, size_t bytes, FILE* file, const std::string& filename, std::string_view what) {
+void safe_fwrite_bytes(const void* buffer, size_t bytes, FILE* file, std::string_view filename, std::string_view what) {
     TT_FATAL(bytes > 0, "Expected to write > 0 bytes to file");
 
     // Use byte-wise fwrite so we can detect partial writes
@@ -35,7 +34,7 @@ void safe_fwrite_bytes(
 }
 
 // Zero-fills `bytes` bytes. Aligning to `kTensorDataAlignment` never needs more than that many bytes of padding.
-void write_padding(size_t bytes, FILE* file, const std::string& filename) {
+void write_padding(size_t bytes, FILE* file, std::string_view filename) {
     if (bytes == 0) {
         return;
     }
@@ -48,9 +47,9 @@ void write_padding(size_t bytes, FILE* file, const std::string& filename) {
 
 void write_tensor_file(
     FILE* file,
-    const std::string& file_name,
+    std::string_view file_name,
     const flatbuffers::FlatBufferBuilder& builder,
-    const std::vector<SerializedTensorBuffer>& buffers) {
+    ttsl::Span<const SerializedTensorBuffer> buffers) {
     // Pad the header so the data region starts on `kTensorDataAlignment`. The padding is counted in `header_size`,
     // so a reader that only knows about the 8-byte minimum still finds the data region where it expects it.
     const uint64_t flatbuffer_size = builder.GetSize();
@@ -60,18 +59,19 @@ void write_tensor_file(
     safe_fwrite_bytes(builder.GetBufferPointer(), flatbuffer_size, file, file_name, "tensor header");
     write_padding(header_size - flatbuffer_size, file, file_name);
 
-    uint64_t bytes_written = 0;
+    // Offset, relative to the start of the data region, one past the last buffer written so far.
+    uint64_t data_region_end = 0;
     for (const auto& [buffer, offset] : buffers) {
         auto buffer_view = buffer.view_bytes();
         TT_FATAL(!buffer_view.empty(), "Unexpected empty buffer during tensor serialization");
         TT_FATAL(
-            offset >= bytes_written,
+            offset >= data_region_end,
             "Shard buffer offset {} overlaps the preceding buffer, which ends at {}",
             offset,
-            bytes_written);
-        write_padding(offset - bytes_written, file, file_name);
+            data_region_end);
+        write_padding(offset - data_region_end, file, file_name);
         safe_fwrite_bytes(buffer_view.data(), buffer_view.size(), file, file_name, "tensor data");
-        bytes_written = offset + buffer_view.size();
+        data_region_end = offset + buffer_view.size();
     }
 
     TT_FATAL(fflush(file) == 0, "Failed to flush \"{}\": errno={} \"{}\"", file_name, errno, strerror(errno));

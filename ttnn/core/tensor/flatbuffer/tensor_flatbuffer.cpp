@@ -210,8 +210,6 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
-            uint64_t shard_buffer_offset = 0;
-
             size_t key = 0;
             for (size_t dim = 0; dim < placements.size(); ++dim) {
                 if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
@@ -219,19 +217,22 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
                 }
             }
 
-            if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
-                // Shards whose coordinates differ only along replicated dimensions are identical.
-                shard_buffer_offset = dedup_key_to_offset[key];
-            } else if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
-                // If two shards share the same buffer, they are identical.
-                shard_buffer_offset = it->second;
-            } else {
+            const uint64_t shard_buffer_offset = [&]() -> uint64_t {
+                if (dedup_key_to_offset[key] != std::numeric_limits<uint64_t>::max()) {
+                    // Shards whose coordinates differ only along replicated dimensions are identical.
+                    return dedup_key_to_offset[key];
+                }
+                if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
+                    // If two shards share the same buffer, they are identical.
+                    return it->second;
+                }
                 // Start every distinct buffer on `kTensorDataAlignment` so a reader can DMA out of the mapped
                 // file directly. The padded position is what gets recorded, so readers never see the gap.
-                shard_buffer_offset = tt::align(next_buffer_offset, kTensorDataAlignment);
-                next_buffer_offset = shard_buffer_offset + buffer_size;
-                buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = shard_buffer_offset});
-            }
+                const uint64_t aligned_offset = tt::align(next_buffer_offset, kTensorDataAlignment);
+                next_buffer_offset = aligned_offset + buffer_size;
+                buffers.push_back(SerializedTensorBuffer{.buffer = *buffer, .offset = aligned_offset});
+                return aligned_offset;
+            }();
 
             buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
             dedup_key_to_offset[key] = shard_buffer_offset;

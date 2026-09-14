@@ -34,8 +34,8 @@ tt::tt_metal::TensorSpec get_tensor_spec(const ttnn::Shape& shape, DataType dtyp
 }
 
 // Alignment that the data region and every shard buffer within it are expected to satisfy, so that a caller can
-// hand the mapped file to the driver as pinned memory without copying it first. Mirrors `kTensorDataAlignment`,
-// which lives in an internal header.
+// use the mapped file as a pinned DMA source without copying it first. Spelled out rather than taken from the
+// serializer's own `kTensorDataAlignment`, so that changing the on-disk format has to change this golden too.
 constexpr uintptr_t kExpectedDataAlignment = 64;
 
 // Reads the byte offset at which the tensor data region begins in a serialized tensor file.
@@ -478,15 +478,16 @@ TEST(TensorSerializationFlatbufferAlignmentTest, ShardsAreAlignedForPinnedMemory
     EXPECT_EQ(read_data_region_offset(test_file.string()) % kExpectedDataAlignment, 0);
 
     Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
-    EXPECT_THAT(shard_addresses(loaded_tensor), SizeIs(kNumShards));
-    for (uintptr_t address : shard_addresses(loaded_tensor)) {
+    const std::vector<uintptr_t> addresses = shard_addresses(loaded_tensor);
+    EXPECT_THAT(addresses, SizeIs(kNumShards));
+    for (uintptr_t address : addresses) {
         EXPECT_EQ(address % kExpectedDataAlignment, 0);
     }
 
+    std::vector<Tensor> loaded_shards = ttnn::distributed::get_device_tensors(loaded_tensor);
+    ASSERT_THAT(loaded_shards, SizeIs(kNumShards));
     for (size_t i = 0; i < kNumShards; i++) {
-        EXPECT_THAT(
-            ttnn::distributed::get_device_tensors(loaded_tensor)[i].to_vector<float>(),
-            Pointwise(FloatEq(), shards[i].to_vector<float>()));
+        EXPECT_THAT(loaded_shards[i].to_vector<float>(), Pointwise(FloatEq(), shards[i].to_vector<float>()));
     }
 }
 
