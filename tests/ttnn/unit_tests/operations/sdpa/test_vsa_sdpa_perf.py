@@ -146,8 +146,10 @@ def test_vsa_sdpa_sparsity_scaling(device):
     actually selects them, so a gap between the two is a locality cost rather than a fixed one.
     """
     n_blocks = 1808
-    # 197 is the production listing at sparsity 0.9; the rest bracket it over two octaves each way.
-    sweep = [1808, 904, 452, 226, 197, 128, 64, 32]
+    # 197 is the production listing at sparsity 0.9 and 289 is what Sol-Attn's threshold selects at
+    # tau=1.0 (see models/tt_dit/models/transformers/minimax_h3/sol_attn_oracle.py); the rest bracket
+    # them over two octaves each way.
+    sweep = [1808, 904, 452, 289, 226, 197, 128, 64, 32]
     print()
     for order in ("model", "topk"):
         dense_ms = None
