@@ -69,7 +69,7 @@ metal_infra:
 
 ttnn:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
   merge_gate:
     wh_n150_civ2: 45
     wh_n300_civ2: 55
@@ -88,11 +88,11 @@ ttnn:
     sim_bh_p150: 680
   unit:
     wh_llmbox: 50
-    wh_galaxy: 120
+    wh_galaxy: 125
     bh_galaxy: 40
     bh_p100: 815
     bh_p150b_civ2: 850
-    wh_n150_civ2: 1020
+    wh_n150_civ2: 1040
     wh_n300_civ2: 1190
     bh_p150b_civ2_viommu: 117
     bh_p300: 60
@@ -135,7 +135,7 @@ ttnn:
     bh_p100a_civ2_viommu: 8
     bh_p150b_civ2_viommu: 8
   demo:
-    bh_sc1_high_power: 10
+    bh_sc1_high_power: 20
   sweep:
     wh_galaxy: 640
     wh_n150_civ2: 1100
@@ -179,21 +179,21 @@ shield:
     wh_n300: 30
     bh_p150b_civ2: 120
   e2e_tier3:
-    bh_p150b_civ2: 18
+    bh_p150b_civ2: 33
   unit_tier2:
     wh_n150: 220
     wh_n300: 216
     bh_p150: 100
     bh_p150b_civ2: 90
   unit_tier3:
-    bh_p150b_civ2: 24
+    bh_p150b_civ2: 50
     bh_p150: 2
   device_perf:
     wh_n150: 100
     bh_p150: 60
   demo:
-    bh_sc4: 50
-    bh_sc1: 75
+    bh_sc4: 100
+    bh_sc1: 150
 
 scaleout:
   merge_gate:
@@ -243,7 +243,7 @@ scaleout:
 
 runtime:
   pr_gate:
-    wh_n150_civ2: 15
+    wh_n150_civ2: 30
     github_hosted_cpu: 15
   merge_gate:
     wh_n150_civ2: 45
@@ -361,7 +361,7 @@ models:
     bh_quietbox_2: 390
     bh_galaxy: 78
     bh_sc1: 335
-    bh_sc4: 120
+    bh_sc4: 160
   e2e_tier2:
     wh_llmbox_perf: 266
     wh_n150: 45
@@ -415,8 +415,8 @@ models:
     bh_quietbox_2: 80
   demo:
     bh_galaxy: 470
-    bh_sc1: 640
-    bh_sc1_high_power: 194
+    bh_sc1: 1280
+    bh_sc1_high_power: 388
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600

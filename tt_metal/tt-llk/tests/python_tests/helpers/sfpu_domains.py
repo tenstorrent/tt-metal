@@ -725,6 +725,9 @@ _OP_DOMAIN_REGISTRY: Dict[
     MathOperation.TopKRebuild: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
     ),
+    MathOperation.TopKDefuse: OperandSpecs(
+        spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-10.0, high=10.0)
+    ),
     # ── FPU binary ────────────────────────────────────────────────────────────
     MathOperation.Elwadd: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
@@ -1092,6 +1095,7 @@ _UNARY_OPS_NOT_SWEPT: Dict[MathOperation, str] = {
     MathOperation.TopKLocalSort: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKMerge: "perf-only; whole-op topk is covered by test_topk.py",
     MathOperation.TopKRebuild: "perf-only; whole-op topk is covered by test_topk.py",
+    MathOperation.TopKDefuse: "perf-only; whole-op topk is covered by test_topk.py",
 }
 
 

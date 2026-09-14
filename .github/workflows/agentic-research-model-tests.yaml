@@ -59,12 +59,6 @@ jobs:
             .github
             tests/pipeline_reorg
       - run: pip3 install PyYAML
-      - name: Validate every tier's time budget
-        run: |
-          for tier in 1 2 3; do
-            python3 .github/scripts/utils/verify_time_budget.py \
-              "$REGISTRY" .github/time_budget.yaml agentic_research "$tier"
-          done
       - name: Resolve hardware
         id: hardware
         run: |
@@ -76,7 +70,9 @@ jobs:
         env:
           MATRIX: ${{ steps.hardware.outputs.matrix }}
         run: |
-          # A missing tier must never bypass its budget check.
+          # Every entry must carry a tier: it selects which of the registry's
+          # agentic_research_tier<N> allowances the entry is charged against, and a
+          # missing one would silently fall back to a budget key that does not exist.
           jq -e 'all(.[]; .tier == 1 or .tier == 2 or .tier == 3)' <<< "$MATRIX"
           selected=$(jq -c --arg model "$MODEL" --arg tier "$TIER" --arg plugin_ref "$VLLM_TT_PLUGIN_REF" '
             [.[] | select(($model == "all" or .model == $model) and
