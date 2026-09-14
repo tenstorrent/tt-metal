@@ -11,6 +11,26 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc.h"
 
+struct ShardNocReadAddress {
+    uint64_t value;
+};
+
+template <typename Accessor, typename Endpoint>
+FORCE_INLINE void async_read_accessor_page(
+    const Noc& noc, const Accessor& accessor, const Endpoint& dst, uint32_t page_bytes, uint32_t page_id) {
+    noc.async_read(accessor, dst, page_bytes, {.page_id = page_id}, {});
+}
+
+template <typename Accessor, typename Endpoint>
+FORCE_INLINE void async_read_accessor_page(
+    const Noc&, const Accessor&, const Endpoint& dst, uint32_t page_bytes, ShardNocReadAddress src) {
+    if (page_bytes <= NOC_MAX_BURST_SIZE) {
+        noc_async_read<NOC_MAX_BURST_SIZE>(src.value, dst.get_address(), page_bytes);
+    } else {
+        noc_async_read(src.value, dst.get_address(), page_bytes);
+    }
+}
+
 // Batch packetized DRAM reads into a CB while keeping multiple packets in flight. The caller
 // provides the source page mapping; this supports both the dense and neighbor-halo readers
 // without duplicating FIFO-wrap arithmetic.
@@ -45,12 +65,8 @@ FORCE_INLINE void prefetch_batch_read_tiles(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                noc.async_read(
-                    accessor,
-                    CoreLocalMem<uint8_t>(l1_write_addr),
-                    input_page_size,
-                    {.page_id = next_page_id(tiles_read)},
-                    {});
+                async_read_accessor_page(
+                    noc, accessor, CoreLocalMem<uint8_t>(l1_write_addr), input_page_size, next_page_id(tiles_read));
                 l1_write_addr += payload_size_bytes;
                 tiles_read += contig_pages_advanced;
             }
@@ -137,12 +153,12 @@ FORCE_INLINE void prefetch_batch_read_packets(
                 if (l1_write_addr >= cb_fifo_limit) {
                     l1_write_addr -= cb_fifo_size;
                 }
-                noc.async_read(
+                async_read_accessor_page(
+                    noc,
                     accessor,
                     CoreLocalMem<uint8_t>(l1_write_addr),
                     input_page_size,
-                    {.page_id = packet_page_id(first_page_id, page)},
-                    {});
+                    packet_page_id(first_page_id, page));
                 l1_write_addr += input_page_size;
             }
             l1_write_addr += (packet_size_in_pages - pages_to_read) * input_page_size;
