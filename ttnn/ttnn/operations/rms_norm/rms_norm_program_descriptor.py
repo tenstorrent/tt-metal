@@ -235,7 +235,17 @@ def _split_two_group(total: int, parts: int):
     return starts, counts
 
 
-def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], grid_x: int, grid_y: int) -> Blocking:
+def derive_blocking(
+    input_tensor: ttnn.Tensor,
+    gamma: Optional[ttnn.Tensor],
+    grid_x: int,
+    grid_y: int,
+    l1_free_bytes: Optional[int] = None,
+) -> Blocking:
+    """Pure host derivation (§H0-H3). `l1_free_bytes` (largest contiguous free L1 block per bank at
+    descriptor-build time) further bounds the CB budget: the CB region is carved from the bottom of
+    the unreserved L1 up to the lowest live buffer, so tensors other than this op's own shards
+    (e.g. a caller's still-live L1 tensors) shrink it below the nominal unreserved size."""
     shape = list(input_tensor.padded_shape)
     w = shape[-1]
     rt = (math.prod(shape[:-2]) if len(shape) > 2 else 1) * _ceil_div(shape[-2], TILE)
@@ -251,7 +261,10 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
         input_rm=input_rm,
         sharded=sharded,
     )
-    budget = ttnn.get_max_worker_l1_unreserved_size() - L1_MARGIN_BYTES
+    budget = ttnn.get_max_worker_l1_unreserved_size()
+    if l1_free_bytes is not None:
+        budget = min(budget, l1_free_bytes)
+    budget -= L1_MARGIN_BYTES
 
     if sharded:
         shard_spec = input_tensor.memory_config().shard_spec
@@ -265,7 +278,8 @@ def derive_blocking(input_tensor: ttnn.Tensor, gamma: Optional[ttnn.Tensor], gri
                 f"rms_norm: shard grid ({len(shard_cores)} cores x {core_w_tiles} tiles) does not cover W tiles={wt}"
             )
         shard_bytes = rt * core_w_tiles * t_in
-        budget -= 2 * shard_bytes  # input + output shards are already resident
+        # input + output shards are already resident (a live-L1 query already excludes them)
+        budget = min(budget, ttnn.get_max_worker_l1_unreserved_size() - L1_MARGIN_BYTES - 2 * shard_bytes)
         xs = [c.x for c in shard_cores]
         ys = [c.y for c in shard_cores]
         x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
@@ -371,7 +385,8 @@ def create_program_descriptor(
 ) -> ttnn.ProgramDescriptor:
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
-    blocking = derive_blocking(input_tensor, gamma, grid.x, grid.y)
+    l1_free_bytes = ttnn.get_memory_view(device, ttnn.BufferType.L1).largest_contiguous_bytes_free_per_bank
+    blocking = derive_blocking(input_tensor, gamma, grid.x, grid.y, l1_free_bytes)
 
     input_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     sharded = blocking.regime.startswith("R3")
