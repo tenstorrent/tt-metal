@@ -1205,9 +1205,13 @@ protected:
 
     CoreRange worker_range(const CoreCoord& first_worker, bool multi_core = true) const {
         if (Common::is_quasar_sim()) {
-            const CoreCoord worker_grid = device_->compute_with_storage_grid_size();
-            const CoreCoord last_worker = multi_core ? CoreCoord{worker_grid.x - 1, worker_grid.y - 1} : first_worker;
-            return CoreRange{first_worker, last_worker};
+            // The live Tensix tiles of the qsr.s1 model are the four corners of an 8x4 array, so any
+            // multi-tile rectangle contains RTL stubs that never acknowledge and a multicast into it never
+            // completes (cq_dispatch parks in its write barrier). Keep the destination a single tile; with
+            // the SD worker_start above it is also a different tile from the CQ kernels' {0,0}, so the
+            // dispatcher never multicasts into a rectangle that contains itself.
+            (void)multi_core;
+            return CoreRange{first_worker, first_worker};
         }
         const CoreCoord last_worker = multi_core ? CoreCoord{first_worker.x + 1, first_worker.y + 1} : first_worker;
         return CoreRange{first_worker, last_worker};
