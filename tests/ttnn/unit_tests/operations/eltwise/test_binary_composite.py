@@ -403,7 +403,7 @@ def test_binary_logical_and__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_and_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
@@ -442,7 +442,7 @@ def test_binary_logical_or__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_or_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
@@ -481,7 +481,7 @@ def test_binary_logical_xor__ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.logical_xor_)
     golden_tensor = golden_function(in_data1, in_data2)
 
-    assert_with_ulp(input_tensor1, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=input_tensor1)
     assert torch.equal(ttnn.to_torch(input_tensor1), golden_tensor)
 
 
@@ -971,7 +971,7 @@ def test_situ_glu(input_shape, ttnn_dtype, device):
     if is_bfp8:
         assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BFP8_PCC)
     else:
-        assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+        assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
         assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
 
 
@@ -1023,7 +1023,7 @@ def test_situ_glu_sub_core_grids(device, sub_core_grid):
     assert out.memory_config().buffer_type == gate_tt.memory_config().buffer_type
     tt_res = ttnn.to_torch(out)
     golden = ttnn.get_golden_function(ttnn.situ_glu)(gate, up, beta1=SITU_GLU_BETA1, beta2=SITU_GLU_BETA2)
-    assert_with_ulp(golden, tt_res, ulp_threshold=SITU_GLU_ULP)
+    assert_with_ulp(expected_result=golden, actual_result=tt_res, ulp_threshold=SITU_GLU_ULP)
     assert_with_pcc(golden, tt_res, pcc=SITU_GLU_BF16_PCC)
 
 
@@ -1122,7 +1122,7 @@ def test_min_max_output_dtype(device, input_dtype, output_dtype):
         (ttnn.minimum(a, 1.0, dtype=output_dtype), torch.clamp(torch_a, max=1.0)),
     ]:
         assert output.dtype == output_dtype
-        assert_with_ulp(torch_golden, output, ulp_threshold=0)
+        assert_with_ulp(expected_result=torch_golden, actual_result=output, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
@@ -1135,12 +1135,14 @@ def test_pow_output_dtype(device, input_dtype, output_dtype):
 
     tensor_tensor = ttnn.pow(base, exponent, dtype=output_dtype)
     assert tensor_tensor.dtype == output_dtype
-    assert_with_ulp(torch.pow(torch_base, torch_exponent), tensor_tensor, ulp_threshold=1)
+    assert_with_ulp(expected_result=torch.pow(torch_base, torch_exponent), actual_result=tensor_tensor, ulp_threshold=1)
 
     # A scalar base reaches the same dispatch through a full_like, so it must carry the dtype too.
     scalar_base = ttnn.pow(2.0, exponent, dtype=output_dtype)
     assert scalar_base.dtype == output_dtype
-    assert_with_ulp(torch.pow(torch.tensor(2.0), torch_exponent), scalar_base, ulp_threshold=1)
+    assert_with_ulp(
+        expected_result=torch.pow(torch.tensor(2.0), torch_exponent), actual_result=scalar_base, ulp_threshold=1
+    )
 
 
 @pytest.mark.parametrize("output_dtype", [ttnn.uint32, ttnn.float32, ttnn.int32])
@@ -1178,7 +1180,7 @@ def test_bias_gelu_output_dtype(device, input_dtype, output_dtype):
 
     assert from_tensor.dtype == output_dtype
     assert from_scalar.dtype == output_dtype
-    assert_with_ulp(ttnn.to_torch(from_tensor).float(), from_scalar, ulp_threshold=0)
+    assert_with_ulp(expected_result=ttnn.to_torch(from_tensor).float(), actual_result=from_scalar, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
@@ -1193,7 +1195,7 @@ def test_bias_gelu_output_dtype_noop_for_input_dtype(device, dtype):
         (ttnn.bias_gelu(a, 0.5), ttnn.bias_gelu(a, 0.5, dtype=dtype)),
     ]:
         assert requested.dtype == dtype
-        assert_with_ulp(ttnn.to_torch(default).float(), requested, ulp_threshold=0)
+        assert_with_ulp(expected_result=ttnn.to_torch(default).float(), actual_result=requested, ulp_threshold=0)
 
 
 @pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])

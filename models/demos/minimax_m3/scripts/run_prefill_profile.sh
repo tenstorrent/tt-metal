@@ -26,8 +26,12 @@
 #   STAGE=k         which stage to profile, 0..STAGES-1. Stage k owns global layers
 #                   [k*60/STAGES, (k+1)*60/STAGES); LAYER_IDS must fall inside that range and LAYERS
 #                   takes the first N of it. Only stage 0 has dense layers.          [default 0]
-#   FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config. 1d matches the whole-galaxy baseline; the
-#                   pipeline runner's intra-galaxy bindings use 2d.                  [default 1d]
+#   M3_FABRIC=1d|1d_ring|2d|2d_torus_xy   fabric config (utils/fabric_env.py, same names as the runner's
+#                   PREFILL_FABRIC_MODE). 1d matches the whole-galaxy baseline and the production runner;
+#                   the pipeline runner's intra-galaxy bindings use 2d. Ring/torus modes select the
+#                   torus_xy mesh graph descriptor (see below).                          [default 1d]
+#   M3_CCL_TOPOLOGY=linear|ring  topology of the legacy CCLs (all_gather_async / reduce_scatter);
+#                   ring needs a ring/torus M3_FABRIC (measured in PR #55668).             [default linear]
 #   TT_CACHE_PATH   tilized weight-cache root; the sub-mesh shapes need their own
 #                   tensor_cache_bfp8_MeshShape([4, 4]) / ([2, 4]) (see docs/PIPELINE_PREFILL_TESTING.md).
 #   RESULTS_DIR     where finished captures are moved.        [default $TT_METAL_HOME/prefill_profile_results]
@@ -56,15 +60,15 @@ export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$_SCRIPT_DIR/../../../.." && pwd)}"
 export HF_MODEL="${HF_MODEL:-/mnt/models/MiniMaxAI/MiniMax-M3-ref}"
 STAGES="${STAGES:-1}"
 STAGE="${STAGE:-0}"
-FABRIC="${FABRIC:-1d}"
-export PROFILE_STAGES="$STAGES" PROFILE_STAGE="$STAGE" PROFILE_FABRIC="$FABRIC"
+export M3_FABRIC="${M3_FABRIC:-1d}"
+export PROFILE_STAGES="$STAGES" PROFILE_STAGE="$STAGE"
 # TODO(profiling): 1d_ring / 2d / 2d_torus_xy are passed through but not yet validated on a carved sub-mesh.
 # FABRIC_1D_RING refuses a plain mesh descriptor on Blackhole (tt_metal/fabric/topology_mapper.cpp,
 # ring_requires_torus), so ring and torus modes select the torus-XY descriptor. The M3 CCLs still run
 # with Topology.Linear (TtPrefillRuntimeConfig.topology), so a ring fabric alone does not make them ring
 # collectives.
 _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto"
-case "$FABRIC" in
+case "$M3_FABRIC" in
   1d_ring|2d_torus_*) _DESC_DEFAULT="$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto" ;;
 esac
 export TT_MESH_GRAPH_DESC_PATH="${TT_MESH_GRAPH_DESC_PATH:-$_DESC_DEFAULT}"
@@ -244,7 +248,7 @@ echo "logging to $LOG"
   echo "MiniMax-M3 prefill zone profile"
   echo "  HF_MODEL=$HF_MODEL  EXPERT_DTYPE=$EXPERT_DTYPE  CHUNK=$CHUNK  NOC_TRACES=${NOC_TRACES:-0}"
   echo "  LAYERS=${PROFILE_LAYER_IDS:-${PROFILE_NUM_LAYERS:-all}}  ZONE LEVEL=$M3_PROFILE_LEVEL  SKIP_PREFIX=${PROFILE_SKIP_PREFIX:-0}"
-  echo "  STAGES=$STAGES  STAGE=$STAGE  FABRIC=$FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
+  echo "  STAGES=$STAGES  STAGE=$STAGE  M3_FABRIC=$M3_FABRIC  MESH=($STAGE_ROWS, 4)  CACHE_DIR=$STAGE_CACHE"
   echo "  TT_MESH_GRAPH_DESC_PATH=$TT_MESH_GRAPH_DESC_PATH"
   echo "  RESULTS_DIR=$RESULTS_DIR"
   echo "  RLIMIT_NPROC soft=$(ulimit -Su) hard=$NPROC_HARD  user threads in use=$NPROC_IN_USE"
@@ -261,7 +265,7 @@ fi
 {
   echo ""
   echo "==================== SUMMARY ===================="
-  grep -E "^# |PROFILED CHUNK|wall-clock|whole-cache de-shard" "$LOG"
+  grep -E "^# |PROFILED CHUNK|wall-clock" "$LOG"
 } | tee -a "$LOG"
 echo ""
 echo "full log: $LOG"

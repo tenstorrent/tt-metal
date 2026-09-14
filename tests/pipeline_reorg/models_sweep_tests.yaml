@@ -32,6 +32,7 @@
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sweep
 
 - name: Llama 3.3-70B prefix-caching benchmark
   cmd: |
@@ -45,6 +46,7 @@
       tier: 1
   owner_id: U09LTAPEU2U # Viktor Pus
   team: models
+  budget_type: sweep
 
 - name: Llama 3.3-70B seqlen sweep (LoudBox)
   cmd: |
@@ -59,6 +61,7 @@
     # bh_quietbox_2 descoped: 70B prefill exceeds Blackhole 4-device L1 (circular-buffer clash). See #48533.
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sweep
 
 - name: Qwen3-32B seqlen sweep (LoudBox)
   cmd: |
@@ -75,6 +78,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sweep
 
 - name: Gemma-3-4B seqlen sweep
   cmd: |
@@ -91,6 +95,7 @@
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sweep
 
 # Model-independent sampling coverage (temperature / top-k / top-p / seed / penalties /
 # batch isolation) on synthetic logits -- no model weights. In the sweep pipeline rather than
@@ -115,6 +120,7 @@
     # wh_galaxy_perf / bh_galaxy. The (4,8) cases stay in the suite and auto-skip here.
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers MLP module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/mlp
@@ -126,6 +132,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers RoPE module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rope
@@ -137,6 +144,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers RMSNorm module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct pytest --tb=short models/common/tests/modules/rmsnorm
@@ -148,6 +156,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers attention module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d pytest --tb=short models/common/tests/modules/attention
@@ -159,6 +168,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers embedding module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d pytest --tb=short models/common/tests/modules/embedding
@@ -170,6 +180,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: TT-Transformers LM head module sweep
   cmd: HF_HUB_OFFLINE=1 HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=meta-llama/Llama-3.1-8B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d pytest --tb=short models/common/tests/modules/lm_head
@@ -181,6 +192,7 @@
       tier: 1
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: sweep
 
 - name: DeepSeek-V3 long-sequence module sweep (Galaxy)
   cmd: |
@@ -200,3 +212,4 @@
       tier: 1
   owner_id: U0896VBAKFC
   team: models
+  budget_type: sweep
