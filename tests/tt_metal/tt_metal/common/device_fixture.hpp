@@ -15,7 +15,7 @@
 
 namespace tt::tt_metal {
 
-class MeshDeviceFixture : public MeshDispatchFixture {
+class AnyDispatchMeshDeviceFixture : public MeshDispatchFixture {
 private:
     std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
 
@@ -24,18 +24,9 @@ protected:
     static void TearDownTestSuite() {}
 
     void SetUp() override {
-        // Save time. Don't do any setup if invalid dispatch mode
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
+        this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
-        // Some CI machines have lots of cards, running all tests on all cards is slow
-        // Coverage for multidevices is decent if we just confirm 2 work
-        this->num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (num_devices_ > 2) {
-            this->num_devices_ = 2;
-        }
         std::vector<ChipId> ids;
         for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids()) {
             ids.push_back(id);
@@ -53,34 +44,21 @@ protected:
         }
     }
 
-    bool validate_dispatch_mode() {
-        this->slow_dispatch_ = true;
-        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (!slow_dispatch) {
-            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
-            this->slow_dispatch_ = false;
-            return false;
-        }
-        return true;
-    }
-
     void create_devices(const std::vector<ChipId>& device_ids) {
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
+        // TODO: Some CI machines have lots of cards, running all tests on all the cards is slow.
+        // Coverage for multidevices should be decent if we just confirm 2 work.
         id_to_device_ = distributed::MeshDevice::create_unit_meshes(
             device_ids, l1_small_size_, trace_region_size_, 1, dispatch_core_config);
         devices_.clear();
         for (const auto& [device_id, device] : id_to_device_) {
             devices_.push_back(device);
         }
-        this->num_devices_ = this->devices_.size();
     }
 
-    explicit MeshDeviceFixture(
+    explicit AnyDispatchMeshDeviceFixture(
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         MeshDispatchFixture(l1_small_size, trace_region_size) {}
-
-    size_t num_devices_{};
 
 public:
     std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
@@ -95,15 +73,40 @@ public:
     }
 };
 
-class MeshDeviceSingleCardFixture : public MeshDispatchFixture {
+class MeshDeviceFixture : public AnyDispatchMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        // Save time. Don't do any setup if invalid dispatch mode
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        AnyDispatchMeshDeviceFixture::SetUp();
+    }
+
+    bool validate_dispatch_mode() {
+        this->slow_dispatch_ = true;
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch) {
+            log_info(tt::LogTest, "This suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
+            this->slow_dispatch_ = false;
+            return false;
+        }
+        return true;
+    }
+
+    explicit MeshDeviceFixture(
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
+        AnyDispatchMeshDeviceFixture(l1_small_size, trace_region_size) {}
+};
+
+// Opens exactly one MMIO chip as a unit MeshDevice.
+class AnyDispatchMeshDeviceSingleCardFixture : public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
 
     void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
+        this->DetectDispatchMode();
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         this->create_devices();
         init_max_cbs();
@@ -117,6 +120,40 @@ protected:
         }
     }
 
+    virtual size_t num_command_queues() const { return 1; }
+
+    virtual void create_devices() {
+        const ChipId mmio_device_id = *tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids().begin();
+        create_devices({mmio_device_id});
+    }
+
+    void create_devices(const std::vector<ChipId>& ids) {
+        const auto& dispatch_core_config = tt::tt_metal::MetalContext::instance().resolve_dispatch_core_config();
+        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
+            ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
+        devices_.clear();
+        for (const auto& [device_id, device] : id_to_device_) {
+            devices_.push_back(device);
+        }
+    }
+
+    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
+
+public:
+    distributed::MeshDevice& device() { return *devices_.front(); }
+};
+
+// Same as MeshDeviceSingleCardFixture but remove the check for slow dispatch mode
+class MeshDeviceSingleCardFixture : public AnyDispatchMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        if (!this->validate_dispatch_mode()) {
+            GTEST_SKIP();
+        }
+        AnyDispatchMeshDeviceSingleCardFixture::SetUp();
+    }
+
     virtual bool validate_dispatch_mode() {
         this->slow_dispatch_ = true;
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -127,31 +164,38 @@ protected:
         }
         return true;
     }
-
-    virtual size_t num_command_queues() const { return 1; }
-
-    void create_devices() {
-        std::vector<ChipId> ids;
-        for (ChipId id : tt::tt_metal::MetalContext::instance().get_cluster().mmio_chip_ids()) {
-            ids.push_back(id);
-        }
-        const auto& dispatch_core_config =
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_core_config();
-        id_to_device_ = distributed::MeshDevice::create_unit_meshes(
-            ids, l1_small_size_, trace_region_size_, num_command_queues(), dispatch_core_config);
-        devices_.clear();
-        for (const auto& [device_id, device] : id_to_device_) {
-            devices_.push_back(device);
-        }
-        this->num_devices_ = this->devices_.size();
-    }
-
-    std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    std::map<ChipId, std::shared_ptr<distributed::MeshDevice>> id_to_device_;
-    size_t num_devices_{};
 };
 
 class MeshDeviceSingleCardBufferFixture : public MeshDeviceSingleCardFixture {};
+
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+class UnitMeshAnyDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {};
+
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires slow dispatch mode.
+class UnitMeshFixture : public MeshDeviceSingleCardFixture {};
+
+// Single unit-mesh fixture: always owns exactly one unit MeshDevice.
+// Requires fast dispatch mode.
+class UnitMeshFastDispatchFixture : public AnyDispatchMeshDeviceSingleCardFixture {
+protected:
+    void SetUp() override {
+        auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        // Emule has no HWCommandQueue, so TT_METAL_EMULE_MODE always enables slow
+        // dispatch. Skip only on real silicon under slow dispatch; still run on emule.
+        auto* emulated = getenv("TT_METAL_EMULE_MODE");
+        if (slow_dispatch && !emulated) {
+            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        AnyDispatchMeshDeviceSingleCardFixture::SetUp();
+    }
+
+public:
+    std::shared_ptr<distributed::MeshDevice> get_mesh_device() {
+        TT_FATAL(!devices_.empty(), "MeshDevice not initialized in {}", __FUNCTION__);
+        return devices_.front();
+    }
+};
 
 class BlackholeSingleCardFixture : public MeshDeviceSingleCardFixture {
 protected:
@@ -168,7 +212,7 @@ protected:
     }
 };
 
-class QuasarMeshDeviceSingleCardFixture : public MeshDeviceSingleCardFixture {
+class QuasarMeshDeviceSingleCardFixture : public UnitMeshFixture {
 protected:
     void SetUp() override {
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());

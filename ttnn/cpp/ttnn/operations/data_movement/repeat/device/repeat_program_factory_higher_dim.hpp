@@ -4,15 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
-
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "ttnn/operations/data_movement/repeat/device/repeat_device_operation_types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::prim {
 
 struct RepeatProgramFactoryHigherDim {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RepeatParams& operation_attributes, const RepeatInputs& tensor_args, Tensor& tensor_return_value);
 };
 

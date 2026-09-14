@@ -4,8 +4,6 @@
 
 #pragma once
 
-#include <climits>
-
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_AERISC) || defined(COMPILE_FOR_DM)
 #include "risc_common.h"
@@ -15,7 +13,7 @@
 #include "ckernel.h"
 #endif
 
-#include "hostdevcommon/profiler_common.h"
+#include "hostdev/profiler_common.h"
 #include "internal/risc_attribs.h"
 #include "internal/hw_thread.h"
 
@@ -921,9 +919,10 @@ inline __attribute__((always_inline)) void timeStampedData(uint64_t data, Args..
         expected_size == 0 || total_data_count == expected_size,
         "Number of arguments does not match expected size for this PacketType");
 
-    constexpr uint32_t additional_slots = sizeof...(trailers);
+    // Total number of words to write: 2 for the marker + 2 for the data + 2 for each trailer
+    constexpr uint32_t words_written = PROFILER_L1_MARKER_UINT32_SIZE * (2 + sizeof...(trailers));
 
-    if (bufferHasRoom<dispatch>(additional_slots)) {
+    if (bufferHasRoom<dispatch>(words_written - 1)) {
         mark_time_at_index_inlined(wIndex, get_const_id(data_id, packet_type));
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 

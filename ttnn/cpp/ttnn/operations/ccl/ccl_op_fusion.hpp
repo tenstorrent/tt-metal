@@ -96,7 +96,7 @@ struct StridedAllGatherFusedOpSignaler {
 
         uint32_t num_workers_to_sync,
         uint32_t curr_worker_index,
-        uint32_t all_gather_direction);
+        uint32_t signal_sem_index);
 };
 
 // Used to propagate semaphore information from matmul to reduce scatter in matmul_reduce_scatter op
@@ -240,8 +240,12 @@ struct MinimalMatmulFusedOpSignaler {
     /* Matmul info for All Gather */
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
-    std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
+    // Semaphore layout: [backward_0..backward_{N-1}, forward_0..forward_{N-1}, self], where N = num_ag_workers
+    std::vector<uint32_t> fused_op_receiver_signal_semaphores;
     FusedOpSignalerMode fused_op_signaler_mode = FusedOpSignalerMode::MULTI;
+
+    // Number of all-gather workers per direction that will independently signal the matmul
+    uint32_t num_ag_workers = 1;
 
     /* All Gather specs */
     uint32_t ring_size = 0;
@@ -285,6 +289,15 @@ struct StridedReduceScatterFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
     std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
+    // Per-core signaling: L1 base address (identical on every RS worker core) of the per-MM-core progress counter
+    uint32_t mm_progress_counters_addr = 0;
+    // Rolling-window return path (MM output held in L1 as only mm_window_blocks M blocks per core).
+    // Set by the RS program factory, consumed by the matmul factory: L1 base address (identical on
+    // every MM core) of that core's per-RS-reader credit counters, and how many readers there are.
+    // mm_window_blocks == 0 means no window, and the other two are unused.
+    uint32_t rs_credit_counters_addr = 0;
+    uint32_t num_rs_readers = 0;
+    uint32_t mm_window_blocks = 0;
 
     bool initialized = false;
 

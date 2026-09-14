@@ -6,7 +6,6 @@
 
 #define ALWI inline __attribute__((always_inline))
 
-#include "chlkc_list.h"
 #include "ckernel.h"
 #include "internal/firmware_common.h"
 #include "ckernel_include.h"

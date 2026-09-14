@@ -159,6 +159,7 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     uint32_t element_size_bytes,
     uint32_t output_shard_width) {
     std::vector<LowLevelGatherTransfer> low_level_transfers;
+    low_level_transfers.reserve(transfers.size());
 
     const uint32_t num_input_cores = input_cores.size();
 
@@ -286,6 +287,7 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
 
     // Convert to vector of BlockedTransferGroup
     std::vector<BlockedTransferGroup> blocked_groups;
+    blocked_groups.reserve(groups.size());
     for (const auto& [key, transfers_list] : groups) {
         BlockedTransferGroup group(key.first, key.second, block_size);
         group.transfers = transfers_list;

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,7 @@ except ModuleNotFoundError:  # pragma: no cover - handled in load_config
     yaml = None
 
 
-SIGNATURE_VERSION = "runner-failure-signatures-2026-07-24-v1"
+SIGNATURE_VERSION = "runner-failure-signatures-2026-08-17-v1"
 UNKNOWN_RUNNER = "(unknown runner)"
 
 OSC_SEQUENCE_RE = re.compile(r"\x1b\].*?\x1b\\")
@@ -35,6 +35,9 @@ FABRIC_LINK_MISMATCH_RE = re.compile(
     r"\S+\s+to\s+\S+\s+only\s+has\s+\d+\s+channels",
     re.IGNORECASE,
 )
+OUT_OF_DISK_HARD_RE = re.compile(r"(no\s+space\s+left\s+on\s+device|enospc)", re.IGNORECASE)
+DISK_USAGE_RE = re.compile(r"disk\s+usage\s+is\s+(?P<percent>\d{1,3})\s*%", re.IGNORECASE)
+DISK_USAGE_HIGH_RE = re.compile(r"disk\s+usage\s+is\s+high", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,7 @@ class RecentJob:
     html_url: str
     started_at: str
     completed_at: str
+    setup_runner_conclusion: str
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,22 @@ ERROR_SIGNATURES = (
         label="Failed reset",
         needle="Unable to reset board successfully",
         case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_DISCOVERY_FAILURE_FOUND",
+        label="Physical discovery failure",
+        pattern=r"Physical\s+Discovery\s+found\s+\d+\s+missing\s+channel\s+connections?",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="PHYSICAL_CHIP_NOT_FOUND",
+        label="Physical chip not found",
+        pattern=r"Physical\s+chip\s+id\s+\d+\s+(?:is\s+)?not\s+found\s+in\s+(?:the\s+)?control\s+plane\s+chip\s+mapping",
+        case_sensitive=False,
+    ),
+    ErrorSignature(
+        key="SETUP_RUNNER_FAILURE_FOUND",
+        label="Set up runner failure",
     ),
 )
 
@@ -354,6 +374,19 @@ def workflow_run_jobs_endpoint(owner_repo: str, run_id: str) -> str:
     return f"repos/{owner_repo}/actions/runs/{run_id}/jobs?{query}"
 
 
+def step_conclusion(job: dict[str, Any], step_name: str) -> str:
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return ""
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        if str(step.get("name") or "").casefold() == step_name.casefold():
+            return str(step.get("conclusion") or "")
+    return ""
+
+
 def recent_job_from_api(
     *,
     owner_repo: str,
@@ -362,6 +395,7 @@ def recent_job_from_api(
     run: dict[str, Any],
     job: dict[str, Any],
 ) -> RecentJob:
+    setup_runner_conclusion = step_conclusion(job, "Set up runner")
     return RecentJob(
         owner_repo=owner_repo,
         workflow=workflow_name,
@@ -377,6 +411,7 @@ def recent_job_from_api(
         html_url=str(job.get("html_url") or ""),
         started_at=str(job.get("started_at") or ""),
         completed_at=str(job.get("completed_at") or ""),
+        setup_runner_conclusion=setup_runner_conclusion,
     )
 
 
@@ -453,6 +488,9 @@ def strip_terminal_sequences(value: str) -> str:
 
 
 def signature_found(log_text: str, signature: ErrorSignature) -> bool:
+    if signature.key == "OUT_OF_DISK_FOUND":
+        return out_of_disk_signature_found(log_text)
+
     if signature.pattern:
         flags = 0 if signature.case_sensitive else re.IGNORECASE
         return re.search(signature.pattern, log_text, flags=flags) is not None
@@ -463,6 +501,23 @@ def signature_found(log_text: str, signature: ErrorSignature) -> bool:
     if signature.case_sensitive:
         return signature.needle in log_text
     return signature.needle.lower() in log_text.lower()
+
+
+def out_of_disk_signature_found(log_text: str) -> bool:
+    plain_log_text = strip_terminal_sequences(log_text)
+    if OUT_OF_DISK_HARD_RE.search(plain_log_text):
+        return True
+
+    disk_pressure_signals: list[tuple[int, bool]] = []
+    for match in DISK_USAGE_RE.finditer(plain_log_text):
+        percent = int(match.group("percent"))
+        disk_pressure_signals.append((match.start(), percent >= 90))
+
+    disk_pressure_signals.extend((match.start(), True) for match in DISK_USAGE_HIGH_RE.finditer(plain_log_text))
+    if not disk_pressure_signals:
+        return False
+
+    return max(disk_pressure_signals, key=lambda signal: signal[0])[1]
 
 
 def format_fabric_node(mesh: str, device: str) -> str:
@@ -485,6 +540,22 @@ def extract_fabric_missing_links(log_text: str) -> str:
 
 def matching_signature_labels(log_text: str) -> list[str]:
     return [signature.label for signature in ERROR_SIGNATURES if signature_found(log_text, signature)]
+
+
+def setup_runner_step_failed(job: RecentJob) -> bool:
+    return job.setup_runner_conclusion.casefold() == "failure"
+
+
+def matching_job_metadata_signature_labels(job: RecentJob) -> list[str]:
+    if setup_runner_step_failed(job):
+        return ["Set up runner failure"]
+    return []
+
+
+def combine_signature_labels(*label_groups: list[str]) -> list[str]:
+    """Return unique labels in ERROR_SIGNATURES declaration order."""
+    labels_by_name = {label for labels in label_groups for label in labels}
+    return [signature.label for signature in ERROR_SIGNATURES if signature.label in labels_by_name]
 
 
 def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
@@ -510,18 +581,47 @@ def fetch_github_job_log(job: RecentJob, timeout: int) -> LogLookupResult:
     return LogLookupResult(log_text=result.stdout, status="fetched")
 
 
+def should_fetch_setup_runner_metadata(job: RecentJob) -> bool:
+    return bool(
+        job.owner_repo and job.job_id and not job.setup_runner_conclusion and job.conclusion.casefold() == "failure"
+    )
+
+
+def enrich_setup_runner_metadata(job: RecentJob, timeout: int) -> RecentJob:
+    if not should_fetch_setup_runner_metadata(job):
+        return job
+
+    try:
+        payload = gh_api_json(f"repos/{job.owner_repo}/actions/jobs/{job.job_id}", timeout=timeout)
+    except (json.JSONDecodeError, OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        print(f"warning: could not fetch job metadata for {job.html_url}: {exc}", file=sys.stderr)
+        return job
+
+    if not isinstance(payload, dict):
+        return job
+
+    setup_runner_conclusion = step_conclusion(payload, "Set up runner")
+    if not setup_runner_conclusion:
+        return job
+    return replace(job, setup_runner_conclusion=setup_runner_conclusion)
+
+
 def scan_job(job: RecentJob, timeout: int) -> JobScanResult:
+    job = enrich_setup_runner_metadata(job, timeout=timeout)
+    metadata_signature_labels = matching_job_metadata_signature_labels(job)
     log_result = fetch_github_job_log(job, timeout=timeout)
     if log_result.log_text is None:
         return JobScanResult(
             job=job,
             log_status=log_result.status,
             log_checked=False,
-            signature_labels=(),
+            signature_labels=tuple(metadata_signature_labels),
             fabric_missing_links="",
         )
 
-    signature_labels = matching_signature_labels(log_result.log_text)
+    signature_labels = combine_signature_labels(
+        metadata_signature_labels, matching_signature_labels(log_result.log_text)
+    )
     fabric_missing_links = ""
     if "Fabric link down (MGD topology)" in signature_labels:
         fabric_missing_links = extract_fabric_missing_links(log_result.log_text)
@@ -581,6 +681,7 @@ def job_to_dict(job: RecentJob) -> dict[str, Any]:
         "html_url": job.html_url,
         "started_at": job.started_at,
         "completed_at": job.completed_at,
+        "setup_runner_conclusion": job.setup_runner_conclusion,
     }
 
 
@@ -613,6 +714,7 @@ def job_from_dict(value: dict[str, Any]) -> RecentJob:
         html_url=str(value.get("html_url") or ""),
         started_at=str(value.get("started_at") or ""),
         completed_at=str(value.get("completed_at") or ""),
+        setup_runner_conclusion=str(value.get("setup_runner_conclusion") or ""),
     )
 
 

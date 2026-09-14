@@ -6,50 +6,55 @@
 
 #include "api/compute/common_globals.h"
 #if defined(TRISC_MATH) || defined(TRISC_PACK)
+#ifndef ARCH_QUASAR
 #include "ckernel_sfpu_selu.h"
+#endif
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #endif
 
 namespace ckernel {
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
- * Performs element-wise computation of:  selu = scale *(max(0,x) + min(0,alpha * (exp(x)-1))) by broadcast , where x is each element of a tile
- * in DST register at index tile_index. The value is provided as const param0 The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
+ * Performs element-wise computation of selu = scale * (max(0,x) + min(0, alpha * (exp(x)-1))), where x is each
+ * element of a tile in DST register at index tile_index. scale and alpha are each passed as the raw bits of a
+ * float. The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is
+ * only available on the compute engine.
  *
  * Return value: None
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | idst            | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | param0          | scale value                                                                | uint32_t |                                                       | True     |
- * | param1          | alpha value                                                                | uint32_t |                                                       | True     |
+ * | scale           | Scale used in selu calculation, as the raw bits of a float                 | uint32_t |                                                       | True     |
+ * | alpha           | Alpha used in selu calculation, as the raw bits of a float                 | uint32_t |                                                       | True     |
  */
 // clang-format on
-ALWI void selu_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void selu_tile(uint32_t idst, uint32_t scale, uint32_t alpha) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_selu,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC,
-        param0,
-        param1));
+        scale,
+        alpha));
 }
 
-ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
+ALWI void selu_tile_pack(uint32_t idst, uint32_t scale, uint32_t alpha) {
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_selu,
-        (APPROX, DST_ACCUM_MODE, 8 /* ITERATIONS */),
+        (APPROX, is_fp32_dest_acc_en, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC,
-        param0,
-        param1));
+        scale,
+        alpha));
 }
 
 /**
@@ -58,5 +63,6 @@ ALWI void selu_tile_pack(uint32_t idst, uint32_t param0, uint32_t param1) {
 ALWI void selu_tile_init() { MATH(SFPU_UNARY_INIT(selu)); }
 
 ALWI void selu_tile_init_pack() { PACK(SFPU_UNARY_INIT(selu)); }
+#endif  // !ARCH_QUASAR
 
 }  // namespace ckernel

@@ -17,7 +17,13 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#if !defined(ARCH_QUASAR)
+// See reader_bmm_tile_layout_in0_sender_padding_metal2.cpp: ckernel.h is compute-only on Quasar (pulls
+// ckernel_trisc_id.h, which #errors on a DM build) and only feeds the batch-sparsity is_batch_valid mailbox
+// handoff, which is broken on Quasar (compute reads its own slot -> 0x19 loopback) and unused by resnet.
+// Disabled pending the ops-owned mailbox redesign (rtawfik/quasar-cb-l1-read-api-watcher-test add51617651).
 #include "ckernel.h"
+#endif
 #include "ckernel_defs.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -68,9 +74,16 @@ void kernel_main() {
             const auto is_batch_valid = *in0_mcast_receiver_semaphore_addr_ptr == VALID;
 
             // We need to pass the value to compute cores regardless of the value of is_batch_valid
+#if !defined(ARCH_QUASAR)
             ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, is_batch_valid);
             ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, is_batch_valid);
             ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, is_batch_valid);
+#else
+            // Quasar: DM-writer -> TRISC-reader is_batch_valid mailbox handoff is broken (compute reads its
+            // own slot -> 0x19 loopback). Disabled until the ops-owned mailbox redesign lands; this
+            // get_batch_from_reader (batch-sparsity) path is not exercised by resnet.
+            (void)is_batch_valid;
+#endif
 
             // Skip sending the input tensor for this batch as it is not valid.
             if (!is_batch_valid) {

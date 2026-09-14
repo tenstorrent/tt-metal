@@ -218,7 +218,10 @@ void kernel_main() {
     // Base of this core's per-CQ signal slots (kNumCqSignalSlots uint32 counters).
     // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
+    // Slots are `cq_signal_slot_stride` bytes apart, not packed: each is the target of
+    // its own dispatcher write, which only lands on an L1-aligned address.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
+    constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -249,9 +252,11 @@ void kernel_main() {
     // (rather than from the host) because no WaitForCqOnTensorPrefetcher signal
     // can be enqueued until StartTensorPrefetcher returns to the single-threaded
     // host caller, long after this init runs.
-    volatile tt_l1_ptr uint32_t* cq_signal_slots = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cq_signal_l1_base);
+    auto cq_signal_slot = [](uint32_t index) -> volatile tt_l1_ptr uint32_t* {
+        return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cq_signal_l1_base + index * cq_signal_slot_stride);
+    };
     for (uint32_t i = 0; i < kNumCqSignalSlots; ++i) {
-        cq_signal_slots[i] = 0;
+        *cq_signal_slot(i) = 0;
     }
 
     // ---- Request loop ----
@@ -275,9 +280,9 @@ void kernel_main() {
         if (cmd_id == tt::tt_metal::DRAM_PREFETCHER_CMD_WAIT_CQ) {
             // Block until the dispatcher has bumped this CQ's signal slot to the
             // requested value. Wrap-safe: compare the unsigned difference as signed.
-            const uint32_t idx = req->wait_cq.cq_index;
+            volatile tt_l1_ptr uint32_t* slot = cq_signal_slot(req->wait_cq.cq_index);
             const uint32_t target = req->wait_cq.cq_wait_value;
-            while ((int32_t)(cq_signal_slots[idx] - target) < 0) {
+            while ((int32_t)(*slot - target) < 0) {
                 invalidate_l1_cache();
             }
             socket_pop_pages(socket, 1);

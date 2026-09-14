@@ -30,7 +30,7 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
 
 bool has_flag(FabricType flags, FabricType test) { return (flags & test) == test; }
 
-FabricNodeId::FabricNodeId(MeshId mesh_id_val, std::uint32_t chip_id_val) :
+FabricNodeId::FabricNodeId(MeshId mesh_id_val, LogicalChipId chip_id_val) :
     mesh_id(mesh_id_val), chip_id(chip_id_val) {}
 
 bool operator==(const FabricNodeId& lhs, const FabricNodeId& rhs) {

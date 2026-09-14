@@ -33,7 +33,7 @@ def run_resnet_50(
         use_pretrained_weight,
         model_location_generator=model_location_generator,
     )
-    tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
+    tt_inputs_host, input_mem_config = test_infra.setup_input(device)
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     # First run configures convs JIT
     test_infra.run()
@@ -48,8 +48,9 @@ def run_resnet_50(
 
 
 # craq-sim runs the functional simulator at ~2.7 KHz, so a full resnet50 sweep (JIT compile + many ops)
-# far exceeds pytest-timeout's 300s default; bump it so the run isn't killed mid-sweep. Set to 0 to disable.
-@pytest.mark.timeout(7200)
+# far exceeds pytest-timeout's 300s default; bump it (>= 4h) so the batch-1 simulator run isn't killed
+# mid-sweep. Set to 0 to disable.
+@pytest.mark.timeout(14400)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",

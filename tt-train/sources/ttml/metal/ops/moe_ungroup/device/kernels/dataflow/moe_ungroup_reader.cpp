@@ -43,6 +43,13 @@ constexpr uint32_t Wt = get_compile_time_arg_val(17);
 
 constexpr auto expert_out_args = TensorAccessorArgs<18>();
 constexpr auto offsets_args = TensorAccessorArgs<expert_out_args.next_compile_time_args_offset()>();
+// The accessor chain must consume the host's CT-arg stream exactly; a host
+// built against a different arg table shifts every accessor base and can
+// silently parse page sizes as config words.
+static_assert(
+    offsets_args.next_compile_time_args_offset() == kernel_compile_time_args.size(),
+    "moe_ungroup_reader: compile-time arg count differs from host emission — "
+    "rebuild the ttml host library to match this kernel source");
 
 constexpr uint32_t TILE_BYTES = tt::constants::TILE_HW * 2U;  // bf16 tile
 
@@ -159,6 +166,11 @@ void kernel_main() {
                     fill_zeros_async(noc, cb_src0, TILE_BYTES, t * TILE_BYTES);
                 }
                 noc_async_read_barrier();
+                if (tiles_to_read < tiles_per_chunk) {
+                    // Pad fills went through async_write_zeros, which needs its
+                    // own barrier to restore the write path (Quasar zero mode).
+                    noc.write_zeros_l1_barrier();
+                }
                 cb_push_back(cb_src0, tiles_per_chunk);
             }
         }

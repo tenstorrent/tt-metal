@@ -58,7 +58,7 @@ void calculate_sum_x_squared() {
     tile_regs_acquire();
     for (uint32_t col = 0; col < num_inner; ++col) {
         auto working_register = col == 0 ? accum_register : tile_register;
-        copy_tile_init(cb_input);
+        copy_init(cb_input);
         copy_tile(cb_input, /* tile_idx */ col, /* register_idx */ working_register);
 
         if constexpr (do_mask_w) {
@@ -67,7 +67,7 @@ void calculate_sum_x_squared() {
                 // mask tile currently does not work for mask register that is not next to data register
                 const uint32_t mask_register = working_register + 1U;
 
-                copy_tile_init(cb_mask);
+                copy_init(cb_mask);
                 copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
                 mask_tile_init();
@@ -105,7 +105,7 @@ void calculate_sum_x_squared() {
         cb_wait_front(cb_input, block_size);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx, ++col) {
             auto working_register = col == 0 ? accum_register : tile_register;
-            copy_tile_init(cb_input);
+            copy_init(cb_input);
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
             if constexpr (do_mask_w) {
@@ -114,7 +114,7 @@ void calculate_sum_x_squared() {
                     // mask tile currently does not work for mask register that is not next to data register
                     const uint32_t mask_register = working_register + 1U;
 
-                    copy_tile_init(cb_mask);
+                    copy_init(cb_mask);
                     copy_tile(cb_mask, /* tile_idx */ 0, /* register idx */ mask_register);
 
                     mask_tile_init();
@@ -158,7 +158,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
 
         tile_regs_acquire();
         reconfig_data_format(cb_input, cb_gamma);
-        mul_bcast_rows_init_short(cb_input, cb_gamma);
+        mul_bcast_rows_init(cb_input, cb_gamma);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_rows(cb_input, cb_gamma, col + block_idx, col + block_idx, block_idx);
         }
@@ -175,7 +175,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
         cb_wait_front(cb_output_intermediate, block_size);
         tile_regs_acquire();
         reconfig_data_format(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
-        mul_bcast_cols_init_short(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
+        mul_bcast_cols_init(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_cols(
                 cb_output_intermediate,
@@ -218,7 +218,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
 
         tile_regs_acquire();
         reconfig_data_format(cb_input, cb_gamma);
-        mul_bcast_rows_init_short(cb_input, cb_gamma);
+        mul_bcast_rows_init(cb_input, cb_gamma);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
 #ifndef EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1
             mul_tiles_bcast_rows(cb_input, cb_gamma, block_idx, block_idx, block_idx);
@@ -243,7 +243,7 @@ void calculate_input_multiplied_by_gamma_and_divided_by_rms() {
         cb_wait_front(cb_output_intermediate, block_size);
         tile_regs_acquire();
         reconfig_data_format(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
-        mul_bcast_cols_init_short(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
+        mul_bcast_cols_init(cb_output_intermediate, cb_inverse_rms_after_reduction_intermediate);
         for (uint32_t block_idx = 0; block_idx < block_size; ++block_idx) {
             mul_tiles_bcast_cols(
                 cb_output_intermediate,
@@ -282,8 +282,8 @@ void kernel_main() {
         cb_wait_front(cb_mask, onetile);
     }
 
-    init_sfpu(cb_input, cb_output);
-    binary_op_init_common(cb_input, cb_gamma, cb_output);
+    compute_kernel_hw_startup(cb_input, cb_gamma, cb_output);
+    copy_init(cb_input);
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         calculate_sum_x_squared();
 
@@ -307,7 +307,7 @@ void kernel_main() {
 
             const uint32_t eps_register = 1U;
             reconfig_data_format_srca(cb_eps);
-            copy_tile_init(cb_eps);
+            copy_init(cb_eps);
             copy_tile(cb_eps, /* tile_idx */ 0, /* register_idx */ eps_register);
 
             reconfig_data_format(cb_rms_before_reduction_intermediate, cb_eps);
@@ -335,7 +335,7 @@ void kernel_main() {
             cb_wait_front(cb_rms_after_reduction_intermediate, onetile);
             tile_regs_acquire();
             cb_reserve_back(cb_rms_output, onetile);
-            copy_tile_init(cb_rms_after_reduction_intermediate);
+            copy_init(cb_rms_after_reduction_intermediate);
             copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
             tile_regs_commit();
 
@@ -353,7 +353,7 @@ void kernel_main() {
             cb_reserve_back(cb_inverse_rms_after_reduction_intermediate, onetile);
             tile_regs_acquire();
 
-            copy_tile_init(cb_rms_after_reduction_intermediate);
+            copy_init(cb_rms_after_reduction_intermediate);
             copy_tile(cb_rms_after_reduction_intermediate, /* tile idx */ 0, temporary_register);
             recip_tile_init();
             recip_tile(temporary_register);

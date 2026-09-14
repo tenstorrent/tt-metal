@@ -1,0 +1,39 @@
+# MiniMax-M3 — Gate 1 producer manifest: push 2 slots x 2 chunks, then read the KV back device-lessly
+# through the published table and PCC it against the golden trace.
+#
+# Pairs with m3_binding_mock_migration_1rank.yaml (PREFILL_MOCK_MIGRATION=1). No migration endpoint.
+#
+#   python -m models.demos.common.prefill.runners.prefill_producer \
+#     --manifest models/demos/minimax_m3/tt/runners/manifests/m3_producer_mock_migration.yaml
+#
+# prefill_producer (not migration_driver): this gate migrates nothing.
+
+model:
+  variant: minimax_m3
+  num_layers: 60
+  max_seq_len: 10240
+  chunk_size: 5120
+
+transport:
+  sp: 8
+  tp: 4
+  h2d_service_id: m3_prefill      # [MATCH RUNNER]
+  connect_timeout_s: 60
+
+workload:
+  num_users: 2
+  chunks: "2"
+  max_requests: 2                 # one resident request per slot
+  interleave: round_robin
+  check_pcc: true                 # this IS the gate: per-slot read-back vs golden
+  trace_dir: /data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240
+
+migration:
+  issue: false
+
+env:
+  PREFILL_MIGRATION_TABLE_PATH: /tmp/m3_kv_chunk_table.pb        # [MATCH RUNNER]
+  PREFILL_MIGRATION_DEVICE_MAP_PATH: /tmp/m3_kv_device_map.json  # [MATCH RUNNER]
+  # Must match the runner — decides the index_k chunk size, hence the read-back decoder.
+  M3_INDEX_CACHE_BF16: "1"
+  PREFILL_STANDALONE_CHUNKED_PCC: "0.88"

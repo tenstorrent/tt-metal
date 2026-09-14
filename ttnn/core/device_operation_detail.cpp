@@ -51,6 +51,7 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
     TT_FATAL(!tensors.empty(), "Cannot compute output placements and shape with no tensors");
 
     std::vector<std::reference_wrapper<const Tensor>> sharded_tensors;
+    sharded_tensors.reserve(tensors.size());
     for (const auto& tensor_ref : tensors) {
         if (!is_fully_replicated(tensor_ref.get())) {
             sharded_tensors.push_back(tensor_ref);
@@ -137,7 +138,7 @@ compute_output_placements_and_shape(const std::vector<std::reference_wrapper<con
             "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
             "have the max distribution rank");
     }
-    return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
+    return {std::move(result_placements), tt::tt_metal::distributed::MeshShape(std::move(result_strides))};
 }
 
 // Checks if the MeshCoordinateRangeSet containing all coordinates in b is a subset of a.
@@ -183,6 +184,7 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
 
     const Tensor& first_tensor = tensors.front().get();
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
+    tensor_coordinates.reserve(first_tensor.device_storage().get_coords().size());
     std::transform(
         first_tensor.device_storage().get_coords().begin(),
         first_tensor.device_storage().get_coords().end(),
@@ -195,6 +197,7 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
         const Tensor& tensor = tensor_ref.get();
         if (tensor.device_storage().get_coords().size() != tensor_coordinates.size()) {
             std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
+            tensor_mesh_coords.reserve(tensor.device_storage().get_coords().size());
             std::transform(
                 tensor.device_storage().get_coords().begin(),
                 tensor.device_storage().get_coords().end(),

@@ -18,6 +18,8 @@ from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
     ttnn_layer_norm_post_all_gather,
 )
 
+# Module-scoped device: every test here shares one device configuration
+pytestmark = pytest.mark.use_module_device
 
 TEST_PADDING_VALUE = -42
 
@@ -457,6 +459,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
 
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
+    # Module-scoped device: clear first (not disable_and_clear, which turns caching off) or `== 1` is vacuous.
+    device.clear_program_cache()
+
     for i in range(2):
         if i > 0:
             dummy_tensors.append(
@@ -470,9 +475,9 @@ def test_layernorm_part_1_with_program_cache2(inp_shape, n_devices, is_rmsnorm, 
             )
         run_layernorm_part_1(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device)
 
-    assert device.num_program_cache_entries() == 1, "Program cache should have only one entry" + str(
-        device.num_program_cache_entries()
-    )
+    assert (
+        device.num_program_cache_entries() == 1
+    ), f"Program cache should have exactly one entry, got {device.num_program_cache_entries()}"
 
 
 @pytest.mark.parametrize(
@@ -1053,3 +1058,111 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
         f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
         f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
     )
+
+
+@pytest.mark.parametrize("variant", ["layer_norm", "rms_norm", "rms_norm_2d"])
+@pytest.mark.parametrize("use_residual", [False, True])
+@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["sfpu_accurate", "fpu_fast_approx"])
+def test_pre_all_gather_non_welford_fp32_precision(device, variant, use_residual, fast_and_approximate_mode):
+    """Float32 non-Welford pre_all_gather stats vs an fp64 reference."""
+    torch.manual_seed(0)
+    shape = (1, 1, 32, 128)
+    torch_input = torch.randn(shape, dtype=torch.float32)
+    torch_residual = torch.randn(shape, dtype=torch.float32) if use_residual else None
+    golden = torch_input + torch_residual if use_residual else torch_input
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    tt_residual = None
+    if use_residual:
+        tt_residual = ttnn.from_torch(
+            torch_residual,
+            dtype=ttnn.float32,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    if variant == "layer_norm":
+        tt_out = ttnn_layer_norm_pre_all_gather(
+            tt_input,
+            dtype=ttnn.float32,
+            compute_kernel_config=kernel_config,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            residual_input_tensor=tt_residual,
+        )
+    else:
+        tt_out = ttnn_rms_norm_pre_all_gather(
+            tt_input,
+            dtype=ttnn.float32,
+            compute_kernel_config=kernel_config,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+            residual_input_tensor=tt_residual,
+            use_2d_core_grid=(variant == "rms_norm_2d"),
+        )
+    actual = ttnn.to_torch(tt_out)
+
+    # Quasar always takes the FPU path, even when fast_and_approximate_mode=False.
+    if fast_and_approximate_mode or device.arch() == ttnn.device.Arch.QUASAR:
+        rtol, atol, frob = 2e-3, 0.75, 2e-3
+    else:
+        rtol, atol, frob = 1e-5, 1e-5, 1e-5
+
+    # col 0 = sum(x^2); layernorm also stores sum(x) at col 32.
+    ref_sumx2 = golden.to(torch.float64).pow(2).sum(dim=-1)
+    tt_sumx2 = actual[..., 0].to(torch.float64).squeeze(-1)
+    assert_numeric_metrics(
+        ref_sumx2,
+        tt_sumx2,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frob,
+        pcc_threshold=0.99999,
+    )
+    if variant == "layer_norm":
+        ref_sumx = golden.to(torch.float64).sum(dim=-1)
+        tt_sumx = actual[..., 32].to(torch.float64).squeeze(-1)
+        assert_numeric_metrics(
+            ref_sumx,
+            tt_sumx,
+            rtol=rtol,
+            atol=atol,
+            frobenius_threshold=frob,
+            pcc_threshold=0.99999,
+        )
+
+
+@pytest.mark.parametrize(
+    "op",
+    [ttnn.layer_norm_pre_all_gather, ttnn.rms_norm_pre_all_gather],
+    ids=["layer_norm", "rms_norm"],
+)
+def test_pre_all_gather_non_welford_fp32_requires_fp32_dest_acc(device, op, expect_error):
+    """fp32 in without fp32_dest_acc_en would silently truncate in the unpacker, so it is a hard
+    error rather than a quiet fallback."""
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+    tt_inp = ttnn.from_torch(
+        torch.randn((1, 1, 32, 128), dtype=torch.float32),
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "requires fp32_dest_acc_en=true"):
+        op(tt_inp, dtype=ttnn.float32, compute_kernel_config=kernel_config)

@@ -8,15 +8,17 @@
 #include <enchantum/enchantum.hpp>
 #include <enchantum/generators.hpp>
 #include <enchantum/iostream.hpp>
-#include <exception>
 #include <filesystem>
 #include <tt-logger/tt-logger.hpp>
-#include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "tt-metalium/program.hpp"
 
 using tt::tt_metal::detail::ProgramImpl;
 namespace tt::tt_metal {
+
+DataCollector::DataCollector(MetalEnvImpl& env) :
+    env_(env), program_metadata_recording_enabled_(env.get_rtoptions().get_profiler_enabled()) {}
 
 // Class to track stats for DispatchData
 class DispatchStats {
@@ -139,7 +141,7 @@ void DataCollector::RecordProgramMetadata(ProgramImpl& program) {
     auto [it, inserted] = program_id_to_kernel_sources_.try_emplace(program_id);
     if (inserted) {
         auto& kernel_sources = it->second;
-        const auto& hal = MetalContext::instance().hal();
+        const auto& hal = env_.get_hal();
         for (uint32_t i = 0; i < hal.get_programmable_core_type_count(); i++) {
             for (const auto& [handle, kernel] : program.get_kernels(i)) {
                 // insert(const string&) allocates only on a miss; on a hit it just returns the
@@ -216,11 +218,15 @@ void DataCollector::DetachRealtimeProfilerCallbackListener(tt::RealtimeProfilerC
 void DataCollector::NotifyRealtimeProfilerActivated(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.insert(chip_id);
+    program_metadata_recording_enabled_.store(true, std::memory_order_relaxed);
 }
 
 void DataCollector::NotifyRealtimeProfilerDeactivated(uint32_t chip_id) {
     std::lock_guard<std::mutex> lock(realtime_profiler_active_chips_mutex_);
     realtime_profiler_active_chips_.erase(chip_id);
+    program_metadata_recording_enabled_.store(
+        env_.get_rtoptions().get_profiler_enabled() || !realtime_profiler_active_chips_.empty(),
+        std::memory_order_relaxed);
 }
 
 bool DataCollector::IsRealtimeProfilerActive() const {

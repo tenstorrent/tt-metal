@@ -490,7 +490,8 @@ def test_pad_dram_block_sharded_composite_fallback_unsupported(device, expect_er
         buffer_type=ttnn.BufferType.DRAM,
     )
     torch_input = torch.randn([1, 1, 64, 128], dtype=torch.bfloat16)
-    with expect_error(RuntimeError, "Logical DRAM core|No DRAM bank exists for core"):
+    # PR #51542 rejects invalid DRAM shard grids at buffer creation ("Invalid DRAM shard grid").
+    with expect_error(RuntimeError, "Invalid DRAM shard grid"):
         ttnn.from_torch(
             torch_input,
             layout=ttnn.ROW_MAJOR_LAYOUT,

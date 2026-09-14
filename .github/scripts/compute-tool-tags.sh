@@ -22,10 +22,12 @@ CCACHE_VERSION=$(grep -E "^ARG CCACHE_VERSION=" dockerfile/Dockerfile.tools | he
 MOLD_VERSION=$(grep -E "^ARG MOLD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 DOXYGEN_VERSION=$(grep -E "^ARG DOXYGEN_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CLANGBUILDANALYZER_VERSION=$(grep -E "^ARG CLANGBUILDANALYZER_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+IWYU_VERSION=$(grep -E "^ARG IWYU_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 GDB_VERSION=$(grep -E "^ARG GDB_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 CMAKE_VERSION=$(grep -E "^ARG CMAKE_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 YQ_VERSION=$(grep -E "^ARG YQ_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 ZSTD_VERSION=$(grep -E "^ARG ZSTD_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
+CURL_VERSION=$(grep -E "^ARG CURL_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 OPENMPI_VERSION=$(grep -E "^ARG OMPI_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 SFPI_VERSION=$(grep -E "^sfpi_version=" tt_metal/sfpi-version | cut -d"'" -f2)
 ORAS_VERSION=$(grep -E "^ARG ORAS_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
@@ -33,13 +35,17 @@ SYFT_SCANNER_VERSION=$(grep -E "^ARG SYFT_SCANNER_VERSION=" dockerfile/Dockerfil
 DOCKERFILE_FRONTEND_VERSION=$(grep -E "^ARG DOCKERFILE_FRONTEND_VERSION=" dockerfile/Dockerfile.tools | head -1 | cut -d= -f2)
 
 # Compute hashes for each tool (version + install script)
-for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd oras; do
+for tool in ccache mold doxygen clangbuildanalyzer gdb cmake yq zstd curl oras; do
     hash_var="$(printf '%s_HASH' "$tool" | tr '[:lower:]' '[:upper:]')"
     declare "$hash_var=$(cat "dockerfile/scripts/install-${tool}.sh" | sha1sum | cut -d' ' -f1 | head -c 12)"
 done
 
-# Handle special cases (sfpi and openmpi) separately
+# Handle special cases (sfpi, openmpi and iwyu) separately
 SFPI_HASH=$(cat dockerfile/scripts/install-sfpi.sh tt_metal/sfpi-version | sha1sum | cut -d' ' -f1 | head -c 12)
+# iwyu is bound to a Clang major version that the builder stage needs as an ARG,
+# so it lives in Dockerfile.tools as well as the script. Both feed the hash, or
+# bumping the Clang major alone would silently reuse the old image.
+IWYU_HASH=$({ cat dockerfile/scripts/install-iwyu.sh; grep -E "^ARG IWYU_LLVM_MAJOR=" dockerfile/Dockerfile.tools; } | sha1sum | cut -d' ' -f1 | head -c 12)
 OPENMPI_HASH=$(cat dockerfile/scripts/install-openmpi.sh .github/scripts/install-slurm.sh | sha1sum | cut -d' ' -f1 | head -c 12)
 # syft-scanner and dockerfile-frontend have no install script of their own
 # (single-stage passthroughs of an upstream image - see Dockerfile.tools) -
@@ -54,10 +60,12 @@ jq -n \
   --arg mold "${BASE}/mold:${MOLD_VERSION}-${MOLD_HASH}" \
   --arg doxygen "${BASE}/doxygen:${DOXYGEN_VERSION}-${DOXYGEN_HASH}" \
   --arg clangbuildanalyzer "${BASE}/clangbuildanalyzer:${CLANGBUILDANALYZER_VERSION}-${CLANGBUILDANALYZER_HASH}" \
+  --arg iwyu "${BASE}/iwyu:${IWYU_VERSION}-${IWYU_HASH}" \
   --arg gdb "${BASE}/gdb:${GDB_VERSION}-${GDB_HASH}" \
   --arg cmake "${BASE}/cmake:${CMAKE_VERSION}-${CMAKE_HASH}" \
   --arg yq "${BASE}/yq:${YQ_VERSION}-${YQ_HASH}" \
   --arg zstd "${BASE}/zstd:${ZSTD_VERSION}-${ZSTD_HASH}" \
+  --arg curl "${BASE}/curl:${CURL_VERSION}-${CURL_HASH}" \
   --arg sfpi "${BASE}/sfpi:${SFPI_VERSION}-${SFPI_HASH}" \
   --arg openmpi "${BASE}/openmpi:${OPENMPI_VERSION}-${OPENMPI_HASH}" \
   --arg oras "${BASE}/oras:${ORAS_VERSION}-${ORAS_HASH}" \
@@ -68,10 +76,12 @@ jq -n \
     "mold-tag": $mold,
     "doxygen-tag": $doxygen,
     "clangbuildanalyzer-tag": $clangbuildanalyzer,
+    "iwyu-tag": $iwyu,
     "gdb-tag": $gdb,
     "cmake-tag": $cmake,
     "yq-tag": $yq,
     "zstd-tag": $zstd,
+    "curl-tag": $curl,
     "sfpi-tag": $sfpi,
     "openmpi-tag": $openmpi,
     "oras-tag": $oras,

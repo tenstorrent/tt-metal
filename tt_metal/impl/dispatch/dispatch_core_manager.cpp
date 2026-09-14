@@ -240,8 +240,8 @@ std::optional<tt_cxy_pair> dispatch_core_manager::get_reserved_realtime_profiler
 // private methods
 
 dispatch_core_manager::dispatch_core_manager(
-    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env) :
-    env_(env) {
+    const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs, MetalEnvImpl& env, MetalContext& ctx) :
+    env_(env), ctx_(ctx) {
     this->reset_dispatch_core_manager(dispatch_core_config, num_hw_cqs, env);
 }
 
@@ -296,7 +296,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         }
 
         // Remove service-owned cores so FD never allocates them.
-        auto claimed = MetalContext::instance().get_service_core_manager().claimed_cores(device_id);
+        auto claimed = ctx_.get_service_core_manager().claimed_cores(device_id);
         if (!claimed.empty()) {
             logical_dispatch_cores.remove_if([&claimed](const CoreCoord& c) { return claimed.contains(c); });
         }

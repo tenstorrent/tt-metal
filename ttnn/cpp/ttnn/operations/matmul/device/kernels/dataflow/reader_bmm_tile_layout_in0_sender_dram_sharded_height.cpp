@@ -40,20 +40,20 @@ void kernel_main() {
     constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
 
     // Build NOC address for the remote input storage core
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
-    UnicastEndpoint src_core;
+    const UnicastEndpoint src_core;
 
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
-        uint32_t batch_offset = batch * in0_tensor_stride_batch_bytes;
+        const uint32_t batch_offset = batch * in0_tensor_stride_batch_bytes;
 
         // Process K blocks within each batch
         for (uint32_t block = 0; block < num_blocks; ++block) {
             dfb_in0.reserve_back(in0_block_num_tiles);
 
             // NOC read block from REMOTE input storage core to local CB
-            uint32_t read_offset = batch_offset + block * in0_block_size_bytes;
+            const uint32_t read_offset = batch_offset + (block * in0_block_size_bytes);
             noc.async_read(
                 src_core,
                 dfb_in0,

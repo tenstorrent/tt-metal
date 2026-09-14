@@ -8,6 +8,7 @@
 #include <sstream>
 #include <filesystem>
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <memory>
@@ -17,6 +18,7 @@
 #include <tt_stl/assert.hpp>
 
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
@@ -32,6 +34,22 @@ using namespace tt::tt_metal::distributed;
 namespace tt::tt_fabric {
 
 namespace {
+
+// When DistributedContext is initialized (MPI / tt-run split layout), prefix instance names with mgd{id}_ using
+// subcontext_id() so split-job ranks load disjoint logical names.
+std::optional<int> subcontext_id_for_instance_name_uniquify() {
+    using tt::tt_metal::distributed::multihost::DistributedContext;
+    if (DistributedContext::is_initialized()) {
+        const auto& world = DistributedContext::get_current_world();
+        if (world != nullptr) {
+            const auto sc = world->subcontext_id();
+            if (sc.has_value()) {
+                return *sc.value();
+            }
+        }
+    }
+    return std::nullopt;
+}
 
 std::string read_file_to_string(const std::filesystem::path& file_path) {
     std::ifstream input(file_path);
@@ -166,6 +184,18 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto, const bo
     proto_ = std::make_shared<proto::MeshGraphDescriptor>(temp_proto);
 
     populate();
+
+    // Prefix mgd{id}_ when DistributedContext reports a split-job sub-context id (MPI / tt-run).
+    if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
+        const std::string prefix = "mgd" + std::to_string(*sid) + "_";
+        instances_by_name_.clear();
+        for (auto& [_, inst] : instances_) {
+            inst.name = prefix + inst.name;
+        }
+        for (const auto& [gid, inst] : instances_) {
+            instances_by_name_[inst.name].push_back(gid);
+        }
+    }
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(
@@ -249,14 +279,17 @@ std::unordered_map<std::string, uint32_t> MeshGraphDescriptor::count_instances_b
     return counts;
 }
 
-FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
-    const auto& dim_types = mesh_desc->device_topology().dim_types();
+namespace {
+
+template <typename Descriptor>
+FabricType infer_declared_fabric_type_from_dim_types(const Descriptor* descriptor) {
+    const auto& dim_types = descriptor->device_topology().dim_types();
     if (dim_types.size() < 2) {
         return FabricType::MESH;
     }
 
-    bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
-    bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
+    const bool y_is_ring = (dim_types[0] == proto::TorusTopology::RING);
+    const bool x_is_ring = (dim_types[1] == proto::TorusTopology::RING);
 
     if (y_is_ring && x_is_ring) {
         return FabricType::TORUS_XY;
@@ -268,6 +301,16 @@ FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::Me
         return FabricType::TORUS_X;
     }
     return FabricType::MESH;
+}
+
+}  // namespace
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
+    return infer_declared_fabric_type_from_dim_types(mesh_desc);
+}
+
+FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::SwitchDescriptor* switch_desc) {
+    return infer_declared_fabric_type_from_dim_types(switch_desc);
 }
 
 void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
@@ -1819,15 +1862,22 @@ void MeshGraphDescriptor::populate_pinnings() {
             expand_physical_asic_positions(pinning.physical_asic_position(), expand_error);
         TT_FATAL(expand_error.empty(), "Failed to expand physical ASIC positions: {}", expand_error);
 
-        // Fast path: no regex fields anywhere in this entry -> preserve the original single-group behavior.
+        // Fast path: no regex fields. Still emit one group PER MESH so downstream can look up pins by
+        // mesh id (same shape as the regex path) instead of filtering mixed-mesh groups later.
         if (!pinning_entry_uses_regex(pinning)) {
-            AsicPinningGroup group;
-            group.fabric_nodes.reserve(pinning.logical_fabric_node_id().size());
+            std::map<uint32_t, std::vector<uint32_t>> mesh_to_chips;
             for (const auto& logical_node_id : pinning.logical_fabric_node_id()) {
-                group.fabric_nodes.emplace_back(MeshId{logical_node_id.mesh_id()}, logical_node_id.chip_id());
+                mesh_to_chips[logical_node_id.mesh_id()].push_back(logical_node_id.chip_id());
             }
-            group.asic_positions = positions;
-            pinnings_.push_back(std::move(group));
+            for (const auto& [m, chips] : mesh_to_chips) {
+                AsicPinningGroup group;
+                group.fabric_nodes.reserve(chips.size());
+                for (uint32_t c : chips) {
+                    group.fabric_nodes.emplace_back(MeshId{m}, c);
+                }
+                group.asic_positions = positions;
+                pinnings_[MeshId{m}].push_back(std::move(group));
+            }
             continue;
         }
 
@@ -1882,7 +1932,7 @@ void MeshGraphDescriptor::populate_pinnings() {
                 group.fabric_nodes.emplace_back(MeshId{m}, c);
             }
             group.asic_positions = positions;
-            pinnings_.push_back(std::move(group));
+            pinnings_[MeshId{m}].push_back(std::move(group));
         }
     }
 

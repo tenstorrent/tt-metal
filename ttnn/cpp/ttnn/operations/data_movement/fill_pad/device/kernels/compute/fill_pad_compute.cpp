@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -11,20 +12,20 @@
 #include "experimental/kernel_args.h"
 
 ALWI void process_masked_tile(
-    DataflowBuffer& dfb_data_in, DataflowBuffer& dfb_mask, DataflowBuffer& dfb_data_out, uint32_t fill_bits) {
-    constexpr uint32_t CB_DATA_IN = 0;
-    constexpr uint32_t CB_DATA_PADDING = 1;
-    constexpr uint32_t CB_MASK = 2;
-    constexpr uint32_t CB_OUT = 2;  // reuse CB_MASK tile
+    DataflowBuffer& dfb_data_in, DataflowBuffer& dfb_mask, DataflowBuffer& dfb_data_out, std::uint32_t fill_bits) {
+    constexpr std::uint32_t CB_DATA_IN = 0;
+    constexpr std::uint32_t CB_DATA_PADDING = 1;
+    constexpr std::uint32_t CB_MASK = 2;
+    constexpr std::uint32_t CB_OUT = 2;  // reuse CB_MASK tile
 
     dfb_data_in.wait_front(1);
     dfb_data_out.reserve_back(1);
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(dfb_data_in.get_id());
+    copy_init(dfb_data_in.get_id());
     copy_tile(dfb_data_in.get_id(), 0, CB_DATA_IN);  // data → DST[0]
 
-    copy_tile_to_dst_init_short(dfb_mask.get_id());
+    copy_init(dfb_mask.get_id());
     copy_tile(dfb_mask.get_id(), 0, CB_MASK);  // mask → DST[2]
 
     fill_tile_init();
@@ -48,24 +49,24 @@ ALWI void process_corner_tile(
     DataflowBuffer& dfb_right_mask,
     DataflowBuffer& dfb_bot_mask,
     DataflowBuffer& dfb_data_out,
-    uint32_t fill_bits) {
-    constexpr uint32_t CB_DATA_IN = 0;
-    constexpr uint32_t CB_DATA_PADDING = 1;
-    constexpr uint32_t CB_RIGHT_MASK = 2;
-    constexpr uint32_t CB_BOTTOM_MASK = 3;
-    constexpr uint32_t CB_OUT = 3;  // reuse CB_MASK tile
+    std::uint32_t fill_bits) {
+    constexpr std::uint32_t CB_DATA_IN = 0;
+    constexpr std::uint32_t CB_DATA_PADDING = 1;
+    constexpr std::uint32_t CB_RIGHT_MASK = 2;
+    constexpr std::uint32_t CB_BOTTOM_MASK = 3;
+    constexpr std::uint32_t CB_OUT = 3;  // reuse CB_MASK tile
 
     dfb_data_in.wait_front(1);
     dfb_data_out.reserve_back(1);
     tile_regs_acquire();
 
-    copy_tile_to_dst_init_short(dfb_data_in.get_id());
+    copy_init(dfb_data_in.get_id());
     copy_tile(dfb_data_in.get_id(), 0, CB_DATA_IN);  // data       → DST[0]
 
-    copy_tile_to_dst_init_short(dfb_right_mask.get_id());
+    copy_init(dfb_right_mask.get_id());
     copy_tile(dfb_right_mask.get_id(), 0, CB_RIGHT_MASK);  // right_mask → DST[2]
 
-    copy_tile_to_dst_init_short(dfb_bot_mask.get_id());
+    copy_init(dfb_bot_mask.get_id());
     copy_tile(dfb_bot_mask.get_id(), 0, CB_BOTTOM_MASK);  // bot_mask   → DST[3]
 
     fill_tile_init();
@@ -88,36 +89,39 @@ ALWI void process_corner_tile(
 }
 
 void kernel_main() {
-    // W_tiles / H_tiles / elem_size are declared for parity with the dataflow kernels but are
-    // unused in this compute body (preserved verbatim). has_right_pad / has_bottom_pad are the
-    // HAS_RIGHT_PAD / HAS_BOTTOM_PAD #defines (they gate the conditionally-bound mask DFBs).
-    constexpr auto W_tiles = get_arg(args::W_tiles);
-    constexpr auto H_tiles = get_arg(args::H_tiles);
-    constexpr auto elem_size = get_arg(args::elem_size);
+    // W_tiles / H_tiles / elem_size are carried for parity with the reader/writer arg
+    // layout but are unused by this kernel (the loops are driven by the per-phase counts).
+    [[maybe_unused]] constexpr auto W_tiles = get_arg(args::W_tiles);
+    [[maybe_unused]] constexpr auto H_tiles = get_arg(args::H_tiles);
+    [[maybe_unused]] constexpr auto elem_size = get_arg(args::elem_size);
     constexpr auto fill_bits_ct = get_arg(args::fill_bits);
 
+    // has_right_pad / has_bottom_pad are carried as preprocessor defines (not CTAs),
+    // because they gate references to the conditionally-bound right / bottom mask DFBs.
+
     // Per-phase tile counts. Phases with num == 0 are skipped. When the
-    // corresponding HAS_*_PAD macro is undefined the host always sets num to 0,
-    // so the #ifdef gating below removes the dead code path entirely.
-    const uint32_t num_right = get_arg(args::num_right);
-    const uint32_t num_bottom = get_arg(args::num_bottom);
-    const uint32_t num_corner = get_arg(args::num_corner);
+    // corresponding mask is not bound the host always sets num to 0, and the
+    // #ifdef gating below removes the dead code path entirely.
+    const auto num_right = get_arg(args::num_right);
+    const auto num_bottom = get_arg(args::num_bottom);
+    const auto num_corner = get_arg(args::num_corner);
 
     if (num_right + num_bottom + num_corner == 0) {
         return;
     }
 
     DataflowBuffer dfb_data_in(dfb::data_in);
-    DataflowBuffer dfb_data_out(dfb::data_out);
 #ifdef HAS_RIGHT_PAD
     DataflowBuffer dfb_right_mask(dfb::right_mask);
 #endif
 #ifdef HAS_BOTTOM_PAD
     DataflowBuffer dfb_bot_mask(dfb::bot_mask);
 #endif
+    DataflowBuffer dfb_data_out(dfb::data_out);
 
-    // Standard init for unary-style SFPU compute with one primary input CB.
-    unary_op_init_common(dfb::data_in, dfb::data_out);
+    // Standard init for unary-style SFPU compute with one primary input DFB.
+    compute_kernel_hw_startup(dfb::data_in, dfb::data_out);
+    copy_init(dfb::data_in);
 
     // Wait for persistent mask tiles pushed once by the writer. They are popped
     // once at cleanup; during the main loop they are reused persistently.
@@ -131,17 +135,17 @@ void kernel_main() {
     // ---- Main loop: same tile ordering as reader and writer (right/bottom/corner) ----
 
 #ifdef HAS_RIGHT_PAD
-    for (uint32_t i = 0; i < num_right; ++i) {
+    for (std::uint32_t i = 0; i < num_right; ++i) {
         process_masked_tile(dfb_data_in, dfb_right_mask, dfb_data_out, fill_bits_ct);
     }
 #endif
 #ifdef HAS_BOTTOM_PAD
-    for (uint32_t j = 0; j < num_bottom; ++j) {
+    for (std::uint32_t j = 0; j < num_bottom; ++j) {
         process_masked_tile(dfb_data_in, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
 #endif
 #if defined(HAS_RIGHT_PAD) && defined(HAS_BOTTOM_PAD)
-    for (uint32_t k = 0; k < num_corner; ++k) {
+    for (std::uint32_t k = 0; k < num_corner; ++k) {
         process_corner_tile(dfb_data_in, dfb_right_mask, dfb_bot_mask, dfb_data_out, fill_bits_ct);
     }
 #endif

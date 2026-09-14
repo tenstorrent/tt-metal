@@ -37,7 +37,7 @@ void kernel_main() {
     CircularBuffer sin_interm_cb(sin_interm_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    binary_op_init_common(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
+    compute_kernel_hw_startup(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
 
     // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
     // write -1.0 into the scalar CB and push it.
@@ -63,7 +63,7 @@ void kernel_main() {
             in_cb.wait_front(Wt);
 
             // Process second half: multiply by -1 and store in rotated buffer
-            mul_tiles_bcast_scalar_init_short(in_cb_id, scalar_cb_id);
+            mul_bcast_scalar_init(in_cb_id, scalar_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < half_Wt; ++j) {
                 mul_tiles_bcast_scalar(in_cb_id, scalar_cb_id, j + half_Wt, 0, j);
@@ -92,7 +92,7 @@ void kernel_main() {
             rotated_in_interm_cb.wait_front(Wt);
 
             // sin_interim = rotated * sin (broadcast rows)
-            mul_bcast_rows_init_short(rotated_in_interm_cb_id, sin_cb_id);
+            mul_bcast_rows_init(rotated_in_interm_cb_id, sin_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < Wt; ++j) {
                 mul_tiles_bcast<BroadcastType::ROW>(rotated_in_interm_cb_id, sin_cb_id, j, j, j);
@@ -122,7 +122,7 @@ void kernel_main() {
             // out = cos_interim + sin_interim
             sin_interm_cb.wait_front(Wt);
             cos_interm_cb.wait_front(Wt);
-            add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
+            add_init(cos_interm_cb_id, sin_interm_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < Wt; ++j) {
                 add_tiles(cos_interm_cb_id, sin_interm_cb_id, j, j, j);

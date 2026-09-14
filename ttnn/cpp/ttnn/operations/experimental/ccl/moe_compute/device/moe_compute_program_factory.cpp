@@ -197,7 +197,7 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
         final_barrier_semaphore = args.combine_params->optional_cross_device_semaphore.value_or(
             ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
 
-        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+        tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
     }
 
     for (const auto& coord : mesh_coordinates.coords()) {
@@ -353,6 +353,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     const uint32_t matmul_num_cores = matmul_core_range_set.num_cores();
 
     // a2a_cb_pages = IN2_TILES_PER_STEP = ceil(intermediate_tiles / matmul_num_cores), even-rounded
+    // and at least the W2 A2A matmul width.
     // (formula-driven, replaces the pre-#43932 per-config table). The ring size is the live
     // DRAM-bank count, so each ring core maps 1:1 to a DRAM bank and no cross-bank walk is needed.
     const uint32_t expected_matmul_n =
@@ -363,7 +364,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         expected_matmul_n,
         matmul_num_cores);
     const uint32_t a2a_cb_pages_raw = (intermediate_tiles + matmul_num_cores - 1) / matmul_num_cores;
-    const uint32_t a2a_cb_pages = (a2a_cb_pages_raw + 1) & ~1u;  // even-rounded per #43932
+    const uint32_t a2a_cb_pages = moe_ring::even_stride_at_least_a2a_width(a2a_cb_pages_raw);
 
     const uint32_t tilize_bounding_box_num_cores = tilize_bounding_box.size();
     const uint32_t matmul_bounding_box_num_cores = matmul_bounding_box.size();
@@ -1311,6 +1312,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Set the runtime arguments for the kernels
     std::vector<uint32_t> matmul_runtime_args;
+    matmul_runtime_args.reserve(6 + matmul_tensors.size() + num_dram_banks);
     matmul_runtime_args.push_back(0);  // DRAM Bank ID placeholder
     matmul_runtime_args.push_back(0);  // VChannel placeholder
     for (const auto& tensor : matmul_tensors) {
@@ -1393,6 +1395,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // matmul cores ordered by core ID, this will be used by selective combine to direct semaphore signaling
     std::vector<CoreCoord> ring_pos2core(matmul_num_cores);
     std::vector<uint32_t> vchannels;
+    vchannels.reserve(matmul_cores.size());
     uint32_t dram_bank = 0;
     for (auto core : matmul_cores) {
         uint32_t vchannel = dram_bank & 0x3;

@@ -60,6 +60,7 @@ void loop_and_wait_with_timeout(
     const OnTimeout& on_timeout,
     std::chrono::duration<float> timeout_duration,
     const GetProgress& get_progress,
+    ContextId context_id,
     std::atomic<bool>* exit_condition = nullptr) {
     if (timeout_duration.count() > 0.0f) {
         auto last_progress_time = std::chrono::high_resolution_clock::now();
@@ -68,7 +69,7 @@ void loop_and_wait_with_timeout(
         // interval. Only long running operations will read progress value updates.
         auto last_progress_update_time = std::chrono::high_resolution_clock::now();
         auto progress_update_interval = std::chrono::milliseconds(
-            tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_progress_update_ms());
+            tt::tt_metal::MetalContext::instance(context_id).rtoptions().get_dispatch_progress_update_ms());
 
         while (true) {
             if (exit_condition != nullptr && exit_condition->load(std::memory_order_acquire)) {
@@ -240,7 +241,7 @@ void SystemMemoryManager::init_dispatch_core_interfaces(uint8_t num_hw_cqs, uint
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
     const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t cq_start = ctx.dispatch_mem_map().get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     for (uint8_t cq_id = 0; cq_id < num_hw_cqs; cq_id++) {
         // L1 addresses differ per cq_id when this CQ's dispatch kernels share their dispatch core's L1 with another
         // CQ's
@@ -694,9 +695,8 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
     }
 
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
-    const CoreType core_type = ctx.get_dispatch_core_manager().get_dispatch_core_type();
     const uint32_t prefetch_q_rd_ptr =
-        ctx.dispatch_mem_map(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
+        ctx.dispatch_mem_map().get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD, cq_id);
 
     // Helper to wait for fetch queue space, if needed
     uint32_t fence;
@@ -726,17 +726,24 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         };
 
         // Get dispatch progress for timeout detection
-        auto get_dispatch_progress = [&]() -> uint32_t { return get_cq_dispatch_progress(this->device_id, cq_id); };
+        auto get_dispatch_progress = [&]() -> uint32_t {
+            return get_cq_dispatch_progress(this->context_id, this->device_id, cq_id);
+        };
 
         auto timeout_duration = ctx.rtoptions().get_timeout_duration_for_operations();
 
         loop_and_wait_with_timeout(
-            fetch_operation_body, fetch_wait_condition, fetch_on_timeout, timeout_duration, get_dispatch_progress);
+            fetch_operation_body,
+            fetch_wait_condition,
+            fetch_on_timeout,
+            timeout_duration,
+            get_dispatch_progress,
+            this->context_id);
     };
 
     wait_for_fetch_q_space();
     // Wrap FetchQ if possible
-    const auto& mem_map = ctx.dispatch_mem_map(core_type);
+    const auto& mem_map = ctx.dispatch_mem_map();
     uint32_t prefetch_q_base = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED, cq_id);
     uint32_t prefetch_q_limit =
         prefetch_q_base + (mem_map.prefetch_q_entries() * mem_map.prefetch_q_entry_size_bytes());
@@ -759,7 +766,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Body of the operation to be timed out
     auto wait_operation_body = [this, cq_id, &write_ptr_and_toggle, &write_ptr, &write_toggle]() {
-        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->device_id, cq_id, this->cq_size);
+        write_ptr_and_toggle = get_cq_completion_wr_ptr<true>(this->context_id, this->device_id, cq_id, this->cq_size);
         write_ptr = write_ptr_and_toggle & 0x7fffffff;
         write_toggle = write_ptr_and_toggle >> 31;
         // Yield to clock the simulator when running on TTSim; no-op on real hardware.
@@ -782,15 +789,16 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
 
     // Get dispatch progress for timeout detection
     auto get_dispatch_progress = [this, cq_id]() -> uint32_t {
-        return get_cq_dispatch_progress(this->device_id, cq_id);
+        return get_cq_dispatch_progress(this->context_id, this->device_id, cq_id);
     };
 
     loop_and_wait_with_timeout(
         wait_operation_body,
         wait_condition,
         on_timeout,
-        tt::tt_metal::MetalContext::instance().rtoptions().get_timeout_duration_for_operations(),
+        tt::tt_metal::MetalContext::instance(this->context_id).rtoptions().get_timeout_duration_for_operations(),
         get_dispatch_progress,
+        this->context_id,
         &exit_condition);
 
     return write_ptr_and_toggle;

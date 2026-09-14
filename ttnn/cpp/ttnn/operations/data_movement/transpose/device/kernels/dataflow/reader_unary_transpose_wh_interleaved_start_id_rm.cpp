@@ -8,30 +8,25 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t num_hw_blocks_per_core = get_arg_val<uint32_t>(2);
+    uint32_t start_id = get_arg(args::start_id);
+    uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(0);
-    constexpr uint32_t H_per_tile = get_compile_time_arg_val(1);
-    constexpr uint32_t H_per_tile_last = get_compile_time_arg_val(2);
-    constexpr uint32_t Wt = get_compile_time_arg_val(3);
-    constexpr uint32_t W = get_compile_time_arg_val(4);
-    constexpr uint32_t HtWt = get_compile_time_arg_val(5);
-    constexpr uint32_t W_size_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t l1_write_offset_bytes = get_compile_time_arg_val(7);
-    constexpr auto src_args = TensorAccessorArgs<9>();
-
-    constexpr auto dfb_in0 = tt::CBIndex::c_0;
+    constexpr auto Ht = get_arg(args::Ht);
+    constexpr auto H_per_tile = get_arg(args::H_per_tile);
+    constexpr auto H_per_tile_last = get_arg(args::H_per_tile_last);
+    constexpr auto Wt = get_arg(args::Wt);
+    constexpr auto W_size_bytes = get_arg(args::W_size_bytes);
+    constexpr auto l1_write_offset_bytes = get_arg(args::l1_write_offset_bytes);
 
     const uint32_t stick_size_bytes = W_size_bytes;
 
-    const auto s = TensorAccessor(src_args, src_addr);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
-    DataflowBuffer dfb(dfb_in0);
+    DataflowBuffer dfb(dfb::in0);
 
     uint32_t i_stick = start_id;
 
@@ -44,12 +39,12 @@ void kernel_main() {
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {
             dfb.reserve_back(Wt);
-            const uint32_t cb_write_ptr = dfb.get_write_ptr();
+            const uint32_t dfb_write_ptr = dfb.get_write_ptr();
             uint32_t l1_write_offset = 0;
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
                 tt::data_movement::common::noc_async_read_sharded(
-                    noc, cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
+                    noc, dfb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
                 l1_write_offset += l1_write_offset_bytes;
                 i_stick += 1;
             }

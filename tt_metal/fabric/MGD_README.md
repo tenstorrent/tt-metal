@@ -27,6 +27,23 @@ This descriptor will capture information about how to compose a "big-mesh" (intr
 
 Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.com/document/d/1291H1Wl_pSkIGHP9B_L6oikaD3MflAGXg3Lox1O8S0c/edit?usp=sharing)
 
+### Torus dimensions
+
+`device_topology.dim_types` records declared topology. A `RING` axis remains
+declared as torus even when its extent is one or two; Fabric realizes a distinct
+wrap edge only at size three or greater. Size-two links retain ordinary mesh
+directionality and boundary ports, while deadlock avoidance remains based on
+the declared torus configuration.
+
+When a torus axis comes from the fabric config rather than the MGD (the config
+overrides `LINE` dim_types with `FABRIC_2D_TORUS_X/Y/XY`), the edge ports of
+that axis are reserved for the torus and excluded from inter-mesh links — just
+as a genuine torus consumes them physically with wrap cables. Deadlock
+avoidance is derived per direction from the fabric config, so an inter-mesh
+link on a config-torused direction could face a peer that labels the axis
+differently and hang (issue #54650). An axis the MGD itself declares as `RING`
+keeps its boundary ports.
+
 
 ## Minimal workflow
 > This is currently TBD

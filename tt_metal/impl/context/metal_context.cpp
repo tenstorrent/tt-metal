@@ -13,7 +13,6 @@
 #include <vector>
 #include <unordered_set>
 
-#include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
 
 #include "metal_context.hpp"
@@ -170,10 +169,10 @@ void MetalContext::initialize(
     const size_t fw_compile_hash = std::hash<std::string>{}(rtoptions().get_compile_hash_string());
     validate_worker_l1_size(worker_l1_size, hal());
 
-    // DispatchCoreConfig::get_dispatch_core_axis calls get_default_axis with DEFAULT_CONTEXT_ID
-    // which will cause implicit initialization of a MetalContext if one doesn't exist yet.
-    // Workaround that by setting the dispatch core axis here and storing a resolved config.
-    // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    // Fill an unset axis before the re-init comparison below. A caller with no axis preference passes
+    // DispatchCoreConfig{}, and comparing that against the already-resolved stored config would read as a
+    // parameter change and tear down a context that in fact matches. Resolving first also leaves the stored
+    // snapshot complete, which get_dispatch_core_axis() now requires.
     DispatchCoreConfig resolved_config = dispatch_core_config;
     resolved_config.set_dispatch_core_axis(
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config()));
@@ -230,20 +229,24 @@ void MetalContext::initialize(
 
     // Initialize dispatch state
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ =
         std::make_unique<DispatchQueryManager>(*this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs);
     const bool is_galaxy_cluster = get_cluster().is_galaxy_cluster();
-    std::vector<CoreType> core_types{CoreType::WORKER, CoreType::ETH};
-    if (hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
-        core_types.push_back(CoreType::DISPATCH);
+    // Build the single canonical DispatchMemMap for the core type we actually dispatch on. On Quasar the dispatch
+    // engine runs on DISPATCH cores (resolved per-device from the soc descriptor), which differs from the WORKER/ETH
+    // config core type; elsewhere the resolved type matches the config core type.
+    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config_);
+    const auto& cluster = get_cluster();
+    if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
+        const ChipId device_id = *cluster.all_chip_ids().begin();
+        dispatch_core_type =
+            resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_);
     }
-    for (CoreType core_type : core_types) {
-        const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout(core_type);
-        dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
-            core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
-    }
-// Initialize debug servers. Attaching individual devices done below
+    const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout();
+    dispatch_mem_map_ = std::make_unique<DispatchMemMap>(
+        dispatch_core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
+    // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
@@ -267,10 +270,10 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>();
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
     }
 
-    data_collector_ = std::make_unique<DataCollector>();
+    data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
 
     // Minimal setup, don't initialize FW/Dispatch/etc.
     if (minimal) {
@@ -316,7 +319,7 @@ void MetalContext::reinitialize_dispatch_managers() {
     // Reinitialize dispatch core manager and query manager to pick up current dispatch mode
     // This refreshes cached dispatch/compute core allocations when transitioning SD<->FD
     dispatch_core_manager_ = std::make_unique<dispatch_core_manager>(
-        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl());
+        dispatch_core_config_, num_hw_cqs_, MetalEnvAccessor(*this->env_).impl(), *this);
     dispatch_query_manager_ = std::make_unique<DispatchQueryManager>(
         *this->env_, *dispatch_core_manager_, dispatch_core_config_, num_hw_cqs_);
 }
@@ -506,9 +509,7 @@ void MetalContext::register_handlers_locked() {
 }
 
 void MetalContext::teardown_dispatch_state() {
-    for (auto& mem_map : dispatch_mem_map_) {
-        mem_map.reset();
-    }
+    dispatch_mem_map_.reset();
     device_manager_->reset_dispatch_topology();
     dispatch_query_manager_.reset();
     dispatch_core_manager_.reset();
@@ -519,7 +520,7 @@ MetalContext::MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_e
     check_context_id(context_id);
     // Construct before the dispatch managers: dispatch core (re)initialization queries it to exclude
     // claimed service cores from the FD pool.
-    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl());
+    service_core_manager_ = std::make_unique<internal::ServiceCoreManager>(MetalEnvAccessor(*this->env_).impl(), *this);
     device_manager_ = std::make_unique<DeviceManager>(metal_env, *this);
 }
 
@@ -566,6 +567,17 @@ const Hal& MetalContext::hal() const {
 
 // ─── Dispatch managers ────────────────────────────────────────────────────────
 
+DispatchCoreConfig MetalContext::resolve_dispatch_core_config(
+    std::optional<DispatchCoreType> type, std::optional<DispatchCoreAxis> axis) const {
+    TT_ASSERT(env_ != nullptr, "Missing MetalEnv for this MetalContext");
+    auto& env = MetalEnvAccessor(*env_).impl();
+    if (!type.has_value()) {
+        type = env.get_rtoptions().get_dispatch_core_type_override();
+    }
+    return tt::tt_metal::resolve_dispatch_core_config(
+        env.get_cluster().arch(), env.get_fabric_tensix_config(), type, axis);
+}
+
 dispatch_core_manager& MetalContext::get_dispatch_core_manager() {
     TT_FATAL(dispatch_core_manager_, "Trying to get dispatch_core_manager before initializing it.");
     return *dispatch_core_manager_;
@@ -582,19 +594,8 @@ DispatchQueryManager& MetalContext::get_dispatch_query_manager() {
 }
 
 const DispatchMemMap& MetalContext::dispatch_mem_map() const {
-    const auto& cluster = get_cluster();
-    if (env_ != nullptr && cluster.arch() == tt::ARCH::QUASAR && !cluster.all_chip_ids().empty()) {
-        const ChipId device_id = *cluster.all_chip_ids().begin();
-        return dispatch_mem_map(
-            resolve_dispatch_core_type(MetalEnvAccessor(*env_).impl(), device_id, dispatch_core_config_));
-    }
-    return dispatch_mem_map(get_core_type_from_config(dispatch_core_config_));
-}
-
-const DispatchMemMap& MetalContext::dispatch_mem_map(const CoreType& core_type) const {
-    const auto& mem_map = dispatch_mem_map_[enchantum::to_underlying(core_type)];
-    TT_FATAL(mem_map, "Tried to get dispatch_mem_map for {} before initializing it.", core_type);
-    return *mem_map;
+    TT_FATAL(dispatch_mem_map_, "Tried to get dispatch_mem_map before initializing it.");
+    return *dispatch_mem_map_;
 }
 
 // ─── Fabric / control plane / system mesh — delegated to MetalEnv ─────────────

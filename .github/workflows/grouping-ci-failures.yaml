@@ -2,18 +2,9 @@ name: (triage) Grouping CI Failures
 
 on:
   schedule:
-    # Run every hour at minute 0
-    - cron: '0 * * * *'
+    - cron: '0 */4 * * *'
   workflow_dispatch:
     inputs:
-      update_mode:
-        description: 'Mode: update (sync new errors) or rebuild (recreate all issues)'
-        required: false
-        default: 'update'
-        type: choice
-        options:
-          - update
-          - rebuild
       start_date:
         description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
         required: false
@@ -23,12 +14,18 @@ on:
         required: false
         default: ""
 
+# Each run builds on its predecessor's state artifact, so runs queue rather than
+# overlap. Cancelling would be worse than waiting: a half-finished run publishes nothing.
+concurrency:
+  group: grouping-ci-failures-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   grouping-ci-failures:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write
+      actions: read
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,38 +49,92 @@ jobs:
           echo "start_date=$START_DATE" >> $GITHUB_OUTPUT
           echo "Using calculated start date: $START_DATE"
 
+      - name: Find previous grouping state
+        id: prev-state
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const branch = context.ref.replace('refs/heads/', '');
+
+            const runs = await github.request('GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}/runs', {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'grouping-ci-failures.yaml',
+              branch,
+              status: 'success',
+              exclude_pull_requests: true,
+              per_page: 1
+            });
+
+            const run = (runs.data.workflow_runs || [])[0];
+            if (!run) {
+              console.log(`No previous successful run on ${branch}; starting from an empty state`);
+              core.setOutput('run_id', '');
+              core.setOutput('has_state', 'false');
+              return;
+            }
+
+            const artifacts = await github.paginate(
+              'GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts',
+              { owner: context.repo.owner, repo: context.repo.repo, run_id: run.id, per_page: 100 }
+            );
+            const state = artifacts.find(a => a.name === 'grouping-state' && !a.expired);
+
+            if (state) {
+              console.log(`Restoring grouping state from run ${run.id} (${run.created_at})`);
+            } else {
+              const expired = artifacts.some(a => a.name === 'grouping-state');
+              console.log(expired
+                ? `Grouping state on run ${run.id} has expired; starting from an empty state`
+                : `Run ${run.id} predates grouping state; starting from an empty state`);
+            }
+
+            core.setOutput('run_id', String(run.id));
+            core.setOutput('has_state', state ? 'true' : 'false');
+
+      - name: Download previous grouping state
+        id: download-state
+        if: ${{ steps.prev-state.outputs.has_state == 'true' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: grouping-state
+          path: ${{ github.workspace }}/grouping-state
+          run-id: ${{ steps.prev-state.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run grouping ci failures
         uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
         with:
-          # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
-          # github_token: Personal Access Token for creating/updating GitHub issues
-          github_token: ${{ secrets.ERROR_GROUPING_TOKEN }}
-          # slack_token: Slack Bot Token for fetching messages
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
-          # channel_id: Slack channel ID to fetch messages from
           channel_id: ${{ secrets.FULL_CI_TRIAGE_CHANNEL }}
-          update_mode: ${{ inputs.update_mode || 'update' }}
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}
-          github_repo_owner: "tenstorrent"
-          github_repo_name: "tt-auto-triage"
-          project_owner: "tenstorrent"
-          project_name: "issue dump"
+          state_path: ${{ github.workspace }}/grouping-state
           workflow_file: '.github/workflows/grouping-ci-failures.yaml'
 
+      - name: Upload grouping state
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: grouping-state
+          path: grouping-state/
+          if-no-files-found: error
+          retention-days: 90
+
       - name: Install infra dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         run: pip install -r infra/requirements-infra.txt
 
       - name: Create job failure cluster JSON
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
       - name: Check if incremental JSON is empty
         id: check-json
-        if: ${{ !cancelled() }}
+        if: ${{ success() }}
         shell: bash
         run: |
           if [ -f "incremental_error_report.json" ]; then
@@ -102,7 +153,7 @@ jobs:
           fi
 
       - name: Upload job failure cluster data
-        if: ${{ !cancelled() && steps.check-json.outputs.is_empty == 'false' }}
+        if: ${{ success() && steps.check-json.outputs.is_empty == 'false' }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}

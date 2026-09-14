@@ -16,8 +16,9 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-slices
   name: fabric cpu unit tests (bh-slices)
@@ -30,8 +31,9 @@
     cpu_medium:
       timeout: 25
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 # bh-pod-pipeline became runnable after the SC36 subtorus rename and runs 38 per-host-sliced pod combos
 # across 4 single-pod mocks. The four 40-host llama_8b pods dominate wall-clock (they alone need ~40 min),
@@ -50,8 +52,9 @@
       # see https://github.com/tenstorrent/tt-metal/issues/49313.)
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-pod-pipeline-revc
   name: fabric cpu unit tests (bh-pod-pipeline-revC)
@@ -61,8 +64,9 @@
       # 14 fast layout/pipeline-builder combos (SC4 revC subtorus aisleC/aisleD); ~3 min.
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-pod-pipeline-llama
   name: fabric cpu unit tests (bh-pod-pipeline-llama)
@@ -74,8 +78,9 @@
       # run completes in ~40 min, so this shard gets a dedicated 55-min budget for host-variance headroom.
       timeout: 55
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-sp4-glx
   name: fabric cpu unit tests (bh-sp4-glx)
@@ -84,8 +89,9 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-subtorus
   name: fabric cpu unit tests (bh-subtorus)
@@ -96,8 +102,9 @@
     cpu_medium:
       timeout: 15
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-subtorus-sc20
   name: fabric cpu unit tests (bh-subtorus-sc20)
@@ -108,8 +115,9 @@
       # 32x4 5-group ring — the slowest CPU-only shard; 15 min timed out on CI.
       timeout: 40
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-blitz-decode
   name: fabric cpu unit tests (bh-blitz-decode)
@@ -120,18 +128,22 @@
       # suite has grown past the old 15-min cap (deterministic timeout on main nightly).
       timeout: 30
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song
 
 - id: fabric-cpu-bh-ring-stress
   name: fabric cpu unit tests (bh-ring-stress)
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group bh-ring-stress
   skus:
     cpu_medium:
-      # Long-running: 5 non-pod-aligned ring maps (20/24/28/32/36 stages) on the 36-host SC36 revC subtorus
-      # aisleD mock. Erratic general-SAT solves. ~1.5 min locally BUT the cpu_medium CI runner is ~4x
-      # slower -- the 4-stage step measured 5m34s on CI, so 5 stages ~6.5 min; 10 min = ~1.5x margin.
-      timeout: 10
+      # Long-running: non-pod-aligned ring maps (20/24/28/32/36 stages) on the SC36 revC subtorus aisleD
+      # and SC36 revAB subtorus aisleC (SC20 mapping) mocks, plus the long 96/112-stage rings embedded on
+      # the full SC36 aisleD mock and the 112-stage exact fit on the SC28 aisleD subset, plus the SC24
+      # 96-stage/6-BigMesh entries. Erratic general-SAT solves; the cpu_medium CI runner is ~4x slower
+      # than local (the 4-stage step measured 5m34s on CI). Budgeted from local end-to-end x4 + margin.
+      timeout: 45
   team: scaleout
+  budget_type: unit
   arch: wormhole_b0
-  owner_id: U03FJB5TM5Y # Ridvan Song
+  owner_id: U08RRAU5E15 # Ridvan Song

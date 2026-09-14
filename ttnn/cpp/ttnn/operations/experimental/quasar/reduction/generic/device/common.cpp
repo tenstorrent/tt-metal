@@ -9,7 +9,7 @@
 #include <tuple>
 
 #include <tt-metalium/allocator.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>

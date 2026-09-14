@@ -334,9 +334,10 @@ void RunTestOnCore(
     bool use_write_with_state = false;
     bool use_inline_dw_write_from_state = false;
     bool use_inline_dw_write_with_state = false;
-    // WH/BH: NOC_MAX_TRANSACTION_ID == 0xF. Quasar user pool: USER_TXN_ID_MAX == 15. Same bound.
-    constexpr uint32_t k_max_user_txn_id = 15;
-    constexpr uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
+    // WH/BH expose trids [0,15]. Quasar reserves [8,31] for DFB implicit sync,
+    // leaving user kernels [0,7].
+    const uint32_t k_max_user_txn_id = is_quasar ? 7 : 15;
+    const uint32_t k_invalid_txn_id = k_max_user_txn_id + 1;
     uint32_t invalid_txn_id = 0;
     switch (feature) {
         case SanitizeNOCAddress:
@@ -824,14 +825,13 @@ void RunTestIEth(
 
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
-    auto* device = mesh_device->get_devices()[0];
     // Try reading from a core that doesn't exist
     constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
-        [[maybe_unused]] auto data =
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), core, addr, sz_bytes);
+        [[maybe_unused]] auto data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            mesh_device->get_device_ids()[0], core, addr, sz_bytes);
     } catch (std::runtime_error& e) {
         const std::string expected = fmt::format("Host watcher: bad {} NOC coord {}\n", "read", core.str());
         const std::string error = std::string(e.what());

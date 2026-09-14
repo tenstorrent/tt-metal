@@ -85,6 +85,7 @@ MatmulReduceScatterAsyncProgramFactory::cached_program_t MatmulReduceScatterAsyn
         program,
         output_tensors.mm,
         tensor_args.persistent_intermediate,
+        /*penult_intermediate_tensor=*/std::nullopt,  // contiguous intermediate path not supported through here.
         mesh_coord,
         forward_coord,
         backward_coord,
@@ -168,7 +169,8 @@ void MatmulReduceScatterAsyncProgramFactory::override_runtime_arguments(
             args.reduce_scatter_params.semaphore,
             output_tensors.mm,
             tensor_args.persistent_intermediate,
-            output_tensors.reduce_scatter);
+            output_tensors.reduce_scatter,
+            /*penult_intermediate=*/std::nullopt);
     }
 }
 

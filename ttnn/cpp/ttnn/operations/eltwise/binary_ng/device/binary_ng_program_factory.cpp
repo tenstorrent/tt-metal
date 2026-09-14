@@ -868,13 +868,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
                          : (is_sfpu_op && !is_block_float(a_dtype)) ? a_dtype
                                                                     : DataType::BFLOAT16;
     const auto c_dtype = c.dtype();
-    const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
+    // Int8 quant input (dequant/requant operand A) is read through the UInt8 unpacker.
+    const auto a_data_format =
+        (is_quant_op && a_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+    // Int8 output is packed through the UInt8 packer path.
+    const auto c_pack_data_format = (c_dtype == DataType::INT8) ? tt::DataFormat::UInt8 : c_data_format;
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
+    uint32_t c_single_tile_size = tt::tile_size(c_pack_data_format);
 
     // we parallelize the computation across the output tiles
     const auto& all_device_cores = operation_attributes.worker_grid;
@@ -894,13 +898,36 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     // Quant/requant rounding depends on the output dtype. For uint8, we need fp32->uint8 rounding instead
     // of the default fp32->int8. The packer narrows the int32 SFPU result to uint8.
-    if (c_dtype == DataType::UINT8) {
-        if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "quant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
-        } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
-            compute_kernel_defines["BINARY_SFPU_INIT"] =
-                "requant_uint8_tile_init(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    // For int8 output, the SFPU crafts an offset-128 byte and stores through the UInt8 packer path.
+    const char* quant_zp_arg = "(get_arg_val<uint32_t>(QUANT_ZERO_POINT_RT_ARGS_IDX));";
+    const bool int8_in = is_quant_op && a_dtype == DataType::INT8;
+    const auto set_sfpu_op = [&](const std::string& init_fn, const std::string& op_fn) {
+        compute_kernel_defines["BINARY_SFPU_INIT"] = init_fn + quant_zp_arg;
+        compute_kernel_defines["BINARY_SFPU_OP"] = op_fn;
+    };
+    if (operation_attributes.binary_op_type == BinaryOpType::QUANT) {
+        if (c_dtype == DataType::UINT8) {
+            compute_kernel_defines["BINARY_SFPU_INIT"] = std::string("quant_uint8_tile_init") + quant_zp_arg;
+        } else if (c_dtype == DataType::INT8) {
+            set_sfpu_op("quant_int8_tile_init", "quant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::DEQUANT) {
+        if (int8_in) {
+            set_sfpu_op("dequant_int8_tile_init", "dequant_int8_tile");
+        }
+    } else if (operation_attributes.binary_op_type == BinaryOpType::REQUANT) {
+        if (c_dtype == DataType::INT8) {
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_int8_out_tile_init" : "requant_int8_tile_init",
+                int8_in ? "requant_int8_in_int8_out_tile" : "requant_int8_tile");
+        } else if (c_dtype == DataType::UINT8) {
+            // uint8 output uses the standard packer narrowing (int32 SFPU result -> uint8), so it reuses
+            // the int32-output op body; only the init differs, to select FP32_TO_UINT8 rounding.
+            set_sfpu_op(
+                int8_in ? "requant_int8_in_uint8_out_tile_init" : "requant_uint8_tile_init",
+                int8_in ? "requant_int8_in_tile" : "requant_tile");
+        } else if (int8_in) {
+            set_sfpu_op("requant_int8_in_tile_init", "requant_int8_in_tile");
         }
     }
 
@@ -1116,7 +1143,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             .core_ranges = all_device_cores,
             .format_descriptors = {{CBFormatDescriptor{
                 .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                .data_format = c_data_format,
+                .data_format = c_pack_data_format,
                 .page_size = c_single_tile_size,
             }}},
             .buffer = c_sharded ? c_buffer : nullptr,
@@ -1288,18 +1315,28 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
         reader_defines["BCAST_LLK"] = "0";
     }
 
+    const bool fill_with_value_int = b_dtype == DataType::INT32 || b_dtype == DataType::UINT32;
     if (op_type == BinaryOpType::WHERE_TTS || op_type == BinaryOpType::WHERE_TST) {
         // Add common fill defines
         compute_kernel_defines["FILL_LLK"] = "fill_tile";
         if (b_dtype == DataType::INT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::Int32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else if (b_dtype == DataType::UINT32) {
             compute_kernel_defines["FILL_LLK"] = "fill_tile_int<DataFormat::UInt32>";
-            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
         } else {
             compute_kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
         }
+        if (fill_with_value_int && compute_kernel != CMAKE_UNIQUE_NAMESPACE::KernelName::ComputeNoBcast) {
+            compute_kernel_defines["FILL_WITH_VALUE_INT"] = "1";
+        }
+        // where_tile<DataFormat::X> selector — mirrors get_sfpu_init_fn(WHERE, a_dtype)
+        // in binary_ng_utils.cpp so the eltwise_chain `Where` element can pick the
+        // exact same DataFormat the legacy BINARY_SFPU_OP macro baked in.
+        const char* where_df = (a_dtype == DataType::INT32)     ? "Int32"
+                               : (a_dtype == DataType::UINT32)  ? "UInt32"
+                               : (a_dtype == DataType::FLOAT32) ? "Float32"
+                                                                : "Float16_b";
+        compute_kernel_defines["WHERE_DATA_FORMAT"] = where_df;
     }
     compute_kernel_defines["WHERE_TTS"] = (op_type == BinaryOpType::WHERE_TTS) ? "1" : "0";
     compute_kernel_defines["WHERE_TST"] = (op_type == BinaryOpType::WHERE_TST) ? "1" : "0";
@@ -1309,7 +1346,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = all_device_cores;
     compute_desc.defines = {compute_kernel_defines.begin(), compute_kernel_defines.end()};
-    compute_desc.compile_time_args = {num_tiles_per_cycle};
+    compute_desc.compile_time_args = {num_tiles_per_cycle, static_cast<uint32_t>(fill_with_value_int)};
     compute_desc.config = ComputeConfigDescriptor{
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .unpack_to_dest_mode = {unpack_to_dest_mode.begin(), unpack_to_dest_mode.end()},
@@ -1353,7 +1390,7 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     return desc;
 }
 
-void BinaryNgDeviceOperation::override_runtime_arguments(
+void BinaryNgDeviceOperation::ProgramFactory::override_runtime_arguments(
     tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,

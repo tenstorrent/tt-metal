@@ -2,12 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// NOTE: A Metal 2.0 fork of this kernel lives beside it, as
+// reader_unary_start_id_metal2.cpp. Ops ported to Metal 2.0 bind the fork; this file serves
+// the consumers still on the legacy API. Until the last of them migrates and this file is
+// retired, changes here likely belong in the fork too.
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     // run-time args

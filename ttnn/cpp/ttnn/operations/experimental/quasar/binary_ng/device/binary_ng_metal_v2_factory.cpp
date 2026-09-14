@@ -63,7 +63,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/work_split.hpp>
 
@@ -588,6 +587,8 @@ ProgramArtifacts create_no_bcast_artifacts(
     const uint32_t c_entries = c_borrowed ? full_shard_tiles(c, *c.shard_spec()) : 2u;
 
     std::vector<m2::DataflowBufferSpec> dfbs;
+    constexpr uint32_t num_mandatory_dfbs = 3;  // in0, in1, out
+    dfbs.reserve(num_mandatory_dfbs + (has_lhs_act ? 1 : 0) + (has_rhs_act ? 1 : 0));
     dfbs.push_back(
         make_dfb(IN0, a_tile_bytes, a_entries, a_df, a_tile, a_borrowed ? std::optional{T_A} : std::nullopt));
     dfbs.push_back(
@@ -780,7 +781,8 @@ ProgramArtifacts create_no_bcast_artifacts(
                   "n_stride_b",
                   "c_stride_b",
                   "src_num_tiles_b"}},
-        .hw_config = ttnn::create_reader_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_reader_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     m2::Group<m2::TensorBinding> writer_tensor_bindings;
@@ -807,7 +809,8 @@ ProgramArtifacts create_no_bcast_artifacts(
         .dfb_bindings = writer_dfb_bindings,
         .tensor_bindings = writer_tensor_bindings,
         .runtime_arg_schema = {.runtime_arg_names = writer_rt_names},
-        .hw_config = ttnn::create_writer_datamovement_config(a.device()->arch()),
+        .hw_config =
+            ttnn::create_writer_datamovement_config(a.device()->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
     // Compute: consumes pre_lhs/pre_rhs, produces out. When an operand has activations, the kernel both

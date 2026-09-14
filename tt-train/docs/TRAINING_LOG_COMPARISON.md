@@ -47,7 +47,7 @@ Use this when you've made changes to kernels (e.g., fusing operations) and want 
 
 ## Log Format
 
-The script expects log files from tt-train's main training binary (e.g., `nano_gpt`) or `train_nanogpt.py`. The logs should contain lines in the following format:
+The script expects log files from tt-train's main training binary (e.g., `nano_gpt`) or `train.py`. The logs should contain lines in the following format:
 
 ```
 Step: 1, Loss: 11.0234375, Time: 703.14 ms, ...

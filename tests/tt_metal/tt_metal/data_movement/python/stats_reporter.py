@@ -120,7 +120,8 @@ class StatsReporter:
                         [
                             k
                             for k in test_metadata.keys()
-                            if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                            if k not in standard_fields
+                            and k not in ("bandwidth_mode", "bandwidth_unit", "directory", "web_viewer_name")
                         ]
                     )
                     for field in optional_fields:
@@ -135,12 +136,38 @@ class StatsReporter:
                 )
 
                 # Add test-specific headers
+                header_test_type_keys = list()
                 for test_type, test_type_attributes in self.test_type_attributes.items():
                     if test_type.replace("_", " ").title() in test_name:
-                        header.extend(test_type_attributes["attributes"].keys())
-                        if test_type == "multicast_schemes":
-                            header.append("Grid Dimensions")
+                        header_test_type_keys = list(test_type_attributes["attributes"].keys())
+                        header.extend(header_test_type_keys)
                         break
+
+                # Add grid dimension headers if any run for this test has them
+                def _test_runs():
+                    for r in self.aggregate_stats:
+                        for rid, rs in self.aggregate_stats[r].items():
+                            if rs["attributes"].get("Test id") == test_id:
+                                yield rs
+
+                has_num_banks = any(rs.get("num_banks") is not None for rs in _test_runs())
+                if has_num_banks:
+                    header.append("Number of Banks")
+
+                has_loopback = any(rs.get("loopback") is not None for rs in _test_runs())
+                # Add Loopback column unless it is already included in the test-specific attributes
+                if has_loopback and "Loopback" not in header_test_type_keys:
+                    header.append("Loopback")
+
+                has_mst_grid = any(rs.get("mst_grid_dimensions") is not None for rs in _test_runs())
+                has_sub_grid = any(rs.get("sub_grid_dimensions") is not None for rs in _test_runs())
+                has_legacy_grid = any(rs.get("grid_dimensions") is not None for rs in _test_runs())
+                if has_mst_grid:
+                    header.append("Master Grid Dimensions")
+                if has_sub_grid:
+                    header.append("Subordinate Grid Dimensions")
+                if has_legacy_grid and not has_mst_grid:
+                    header.append("Grid Dimensions")
 
                 # Add performance metrics at the end
                 use_gbps = bandwidth_unit == "gbps"
@@ -203,7 +230,8 @@ class StatsReporter:
                                 [
                                     k
                                     for k in test_metadata.keys()
-                                    if k not in standard_fields and k not in ("bandwidth_mode", "bandwidth_unit")
+                                    if k not in standard_fields
+                                    and k not in ("bandwidth_mode", "bandwidth_unit", "directory", "web_viewer_name")
                                 ]
                             )
                             for field in optional_fields:
@@ -220,9 +248,23 @@ class StatsReporter:
                         for test_type, test_type_attributes in self.test_type_attributes.items():
                             if test_type.replace("_", " ").title() in test_name:
                                 row.extend([run_stats.get(val) for val in test_type_attributes["attributes"].values()])
-                                if test_type == "multicast_schemes":
-                                    row.append(run_stats.get("grid_dimensions"))
                                 break
+
+                        # Add number of banks if present for this test
+                        if has_num_banks:
+                            row.append(run_stats.get("num_banks"))
+
+                        if has_loopback and "Loopback" not in header_test_type_keys:
+                            val = run_stats.get("loopback")
+                            row.append(str(val).lower() if val is not None else val)
+
+                        # Add grid dimension data if present for this test
+                        if has_mst_grid:
+                            row.append(run_stats.get("mst_grid_dimensions"))
+                        if has_sub_grid:
+                            row.append(run_stats.get("sub_grid_dimensions"))
+                        if has_legacy_grid and not has_mst_grid:
+                            row.append(run_stats.get("grid_dimensions"))
 
                         # Add performance metrics at the end
                         if bandwidth_mode == "combined":

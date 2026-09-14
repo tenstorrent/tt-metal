@@ -26,6 +26,12 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const auto& input_tensors = tensor_args.input_tensors;
 
     if (const bool input_is_sharded = input_tensors[0].is_sharded(); !input_is_sharded) {
+        // The launch infra allocates the output tensor before factory selection, so the
+        // allocator's free window already accounts for it.
+        if (can_use_tiled_unaligned_concat(
+                input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
+            return ConcatTiledUnalignedProgramFactory{};
+        }
         return ConcatProgramFactory{};
     }
 
@@ -37,6 +43,11 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_nd_sharded = (TensorMemoryLayout::ND_SHARDED == args.output_mem_config.memory_layout());
     if (!input_nd_sharded && !output_nd_sharded) {
         const auto memory_layout = input_tensors[0].memory_config().memory_layout();
+        const uint32_t rank = input_tensors[0].logical_shape().rank();
+        // The s2s factories all index shape[-2], so they need a 2D-or-higher shape; a rank-1
+        // width concat stays on the default factory. is_height_concat already implies rank >= 2.
+        const bool width_concat = rank >= 2 && is_width_concat(rank, args.dim);
+        const bool height_concat = is_height_concat(rank, args.dim);
 
         if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             return ConcatBlockShardedProgramFactory{};
@@ -45,7 +56,7 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
         // specific cases for 2 tensors
         if (input_tensors.size() == 2) {
             if (input_tensors[0].layout() == input_tensors[1].layout()) {
-                if (3 == args.dim) {
+                if (width_concat) {
                     if (input_tensors[0].layout() == Layout::ROW_MAJOR &&
                         0 == input_tensors[0].padded_shape()[-1] % args.groups &&
                         0 == input_tensors[1].padded_shape()[-1] % args.groups) {
@@ -58,8 +69,8 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
             }
         }
 
-        // specific cases sharded to sharded for dim 2 and 3 (no ND sharding)
-        if (2 == args.dim || 3 == args.dim) {
+        // Sharded-to-sharded on the last two dims (no ND sharding).
+        if (width_concat || height_concat) {
             return ConcatS2SMultiProgramFactory{};
         }
     }
@@ -67,6 +78,20 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     // default factory
     // including ND sharded tensors
     return ConcatProgramFactory{};
+}
+
+ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // can_use_tiled_unaligned_concat (reached via select_program_factory) reads live L1 occupancy,
+    // so the factory choice is not a pure function of operation_attributes/tensor_args and the
+    // default hash (which only combines those two) can't tell apart two calls with identical specs
+    // but different allocator state. Mixing in the selected factory's index forces a cache miss
+    // whenever the decision flips, instead of replaying a cached program built for the other
+    // factory -- silently pinning the slow fallback, or worse, replaying a native program whose CB
+    // addresses were baked in for a free L1 window into a window a live tensor now occupies.
+    auto factory = select_program_factory(operation_attributes, tensor_args);
+    return tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
+        operation_attributes, tensor_args, factory.index());
 }
 
 void ConcatDeviceOperation::validate_on_program_cache_miss(
@@ -115,7 +140,9 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
                 "Sharded tensors must have the same shard orientation.");
         }
     }
-    if (warn_about_alignment) {
+    if (warn_about_alignment &&
+        !can_use_tiled_unaligned_concat(
+            input_tensors, args.dim, args.groups, args.output_mem_config, /*output_already_allocated=*/true)) {
         log_warning(
             tt::LogOp,
             "ttnn.concat: Tile padding along concatenated dim ({}) is not "
@@ -134,12 +161,13 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             args.output_mem_config.shard_spec().value().orientation == first_input.shard_spec().value().orientation,
             "Sharded output and inputs must have the same shard orientation.");
-        if (args.dim == shape_first.rank() - 1) {
+        const uint32_t rank = shape_first.rank();
+        if (is_width_concat(rank, args.dim)) {
             TT_FATAL(
                 memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
                     memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
                 "Only support width concat on height-sharded or block-sharded tensors.");
-        } else if (args.dim == shape_first.rank() - 2) {
+        } else if (is_height_concat(rank, args.dim)) {
             TT_FATAL(
                 memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                     memory_layout == TensorMemoryLayout::BLOCK_SHARDED,
@@ -183,44 +211,6 @@ Tensor ConcatDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto output_spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(output_spec, tensor_args.input_tensors[0].device());
-}
-
-ttsl::hash::hash_t ConcatDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto factory = select_program_factory(operation_attributes, tensor_args);
-    auto hash = tt::tt_metal::operation::hash_operation<ConcatDeviceOperation>(
-        operation_attributes.dim,
-        operation_attributes.groups,
-        operation_attributes.output_mem_config,
-        operation_attributes.sub_core_grids,
-        factory.index(),
-        tensor_args.input_tensors.size());
-
-    for (std::size_t tensor_index = 0; tensor_index < tensor_args.input_tensors.size(); ++tensor_index) {
-        const auto& tensor = tensor_args.input_tensors[tensor_index];
-        hash = ttsl::hash::hash_objects(
-            hash,
-            tensor_index,
-            tensor.logical_shape().rank(),
-            tensor.logical_shape(),
-            tensor.padded_shape(),
-            tensor.layout(),
-            tensor.dtype(),
-            tensor.memory_config());
-    }
-
-    const auto output_spec = compute_output_specs(operation_attributes, tensor_args);
-    hash = ttsl::hash::hash_objects(
-        hash,
-        tensor_args.input_tensors.size(),
-        output_spec.logical_shape().rank(),
-        output_spec.logical_shape(),
-        output_spec.padded_shape(),
-        output_spec.layout(),
-        output_spec.data_type(),
-        output_spec.memory_config());
-
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
@@ -406,17 +396,17 @@ Tensor concat_impl(
         // Only valid when sharding type is compatible with the concat dimension:
         //   width concat (dim=-1) → HEIGHT_SHARDED or BLOCK_SHARDED
         //   height concat (dim=-2) → WIDTH_SHARDED or BLOCK_SHARDED
-        const bool is_width_concat = normalized_dim == ref_rank - 1;
-        const bool is_height_concat = normalized_dim == ref_rank - 2;
+        const bool width_concat = ttnn::prim::is_width_concat(ref_rank, normalized_dim);
+        const bool height_concat = ttnn::prim::is_height_concat(ref_rank, normalized_dim);
         const auto memory_layout = input_tensors[0].memory_config().memory_layout();
-        const bool shard_dim_compatible = (is_width_concat && (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
-                                                               memory_layout == TensorMemoryLayout::BLOCK_SHARDED)) ||
-                                          (is_height_concat && (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                                                                memory_layout == TensorMemoryLayout::BLOCK_SHARDED));
+        const bool shard_dim_compatible = (width_concat && (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
+                                                            memory_layout == TensorMemoryLayout::BLOCK_SHARDED)) ||
+                                          (height_concat && (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+                                                             memory_layout == TensorMemoryLayout::BLOCK_SHARDED));
         if (shard_dim_compatible) {
             const auto& first_shard = input_tensors[0].shard_spec().value();
             auto output_shard_shape = first_shard.shape;
-            const uint32_t shard_concat_idx = is_width_concat ? 1 : 0;
+            const uint32_t shard_concat_idx = width_concat ? 1 : 0;
             output_shard_shape[shard_concat_idx] = 0;
             for (const auto& t : input_tensors) {
                 output_shard_shape[shard_concat_idx] += t.shard_spec().value().shape[shard_concat_idx];

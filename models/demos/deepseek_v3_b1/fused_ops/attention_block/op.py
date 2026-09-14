@@ -3494,10 +3494,14 @@ class AttentionBlock:
                 # query a specific core via experimental_per_core_buffer_address. Per-core
                 # addresses are uniform across the shard grid (asserted by
                 # assert_uniform_per_core_addresses), so any core returns the same base.
+                # The address is per (device, core), so a device is named too: this takes the
+                # tensor's first device and uses that base for the whole mesh. Nothing checks
+                # that the devices agree -- assert_uniform_per_core_addresses covers cores
+                # within a device, not devices against each other.
                 def _fused_base_addr(t):
                     if t.is_per_core_allocated():
                         core = t.memory_config().shard_spec.grid.bounding_box().start
-                        return t.experimental_per_core_buffer_address(core)
+                        return t.experimental_per_core_buffer_address(t.device_coords()[0], core)
                     return t.buffer_address()
 
                 fused_weights_base_addr = _fused_base_addr(ref_fused_weights_tensor)

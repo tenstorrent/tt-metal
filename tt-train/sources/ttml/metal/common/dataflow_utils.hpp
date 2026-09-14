@@ -15,6 +15,10 @@
 #include "api/debug/dprint_pages.h"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 
+#ifndef FORCE_INLINE
+#define FORCE_INLINE inline
+#endif
+
 constexpr uint32_t onetile = 1U;
 
 inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
@@ -165,7 +169,10 @@ inline void fill_reserved_tiles_with_zero(uint32_t cb_id, uint32_t start_slot, u
 /**
  * Zero-fill an L1 region asynchronously via Noc::async_write_zeros.
  *
- * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's contents.
+ * Caller must call `noc.write_zeros_l1_barrier()` before consuming the CB's
+ * contents AND before issuing any NoC write: on Quasar the fill borrows the
+ * write command buffer until the barrier restores it, so an intervening write
+ * would silently emit zeros. Multiple fills may batch before one barrier.
  */
 inline void fill_zeros_async(const Noc& noc, uint32_t cb_id, uint32_t bytes, uint32_t offset_bytes = 0) {
     CircularBuffer cb(cb_id);
@@ -392,6 +399,43 @@ inline void read_tiles_by_row(
 }
 
 /**
+ * Read up to `read_capacity_bytes` of uint32 target indices for one tile-row from a row-major
+ * page, clamping the transfer to the page end (the page holds only the logical inner dim, so a
+ * fixed-size read would run past it whenever the logical height is not a multiple of
+ * TILE_HEIGHT). Slots past the clamp are filled with 0xFFFFFFFF: padded tile rows must never
+ * alias a valid class index, and every consumer bounds-checks its targets, so the sentinel is
+ * always skipped.
+ *
+ * Issues its own noc_async_read_barrier; the caller only handles CB reserve/push.
+ *
+ * @param addr_gen            Address generator for the row-major target buffer
+ * @param l1_write_addr       Destination in L1 (capacity >= read_capacity_bytes)
+ * @param tiled_row           Global tile-row index (page = tiled_row / tiled_H)
+ * @param tiled_H             Tile-rows per page
+ * @param page_bytes          Logical page size in bytes (inner dim * sizeof(uint32_t))
+ * @param read_capacity_bytes Bytes consumed per tile-row (TILE_HEIGHT * sizeof(uint32_t))
+ */
+template <typename AddrGen>
+inline void read_target_indices_page_clamped(
+    const AddrGen& addr_gen,
+    const uint32_t l1_write_addr,
+    const uint32_t tiled_row,
+    const uint32_t tiled_H,
+    const uint32_t page_bytes,
+    const uint32_t read_capacity_bytes) {
+    auto [page, offset] = get_page_and_offset(tiled_row, tiled_H);
+    const uint32_t read_bytes = offset < page_bytes ? std::min(read_capacity_bytes, page_bytes - offset) : 0U;
+    if (read_bytes > 0U) {
+        noc_async_read(addr_gen.get_noc_addr(page, offset), l1_write_addr, read_bytes);
+        noc_async_read_barrier();
+    }
+    volatile tt_l1_ptr uint32_t* indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_write_addr);
+    for (uint32_t i = read_bytes / sizeof(uint32_t); i < read_capacity_bytes / sizeof(uint32_t); ++i) {
+        indices[i] = 0xFFFFFFFFU;
+    }
+}
+
+/**
  * F10 helper: read a `rows x cols` block of tiles from a row-major source (DRAM) and lay them
  * out *column-major* in the destination circular buffer. Each source tile at logical position
  * (r, c) — DRAM tile id `start_idx + r * cols + c` — is written to CB position `c * rows + r`.
@@ -517,6 +561,26 @@ inline void write_full_row_tiles(
     for (uint32_t j = 0; j < Wt; j += block_size) {
         uint32_t current_block_size = std::min(block_size, Wt - j);
         write_tiles_by_row(cb_idx, addr_gen, row_start_idx + j, current_block_size, tile_bytes, block_size);
+    }
+}
+
+// Advance (sb, tile_base) to the next (b, sb) block of a Q tensor.
+// Packed layout is flat across blocks; head-major gives each (b, h) a contiguous page of Ts*Th
+// tiles, so head h at seq tile sb sits at (b*H + h)*Ts*Th + sb*Th. Wrapping sb therefore has to
+// skip the other H-1 heads' pages and step past head 0's last seq tile: ((H-1)*Ts + 1)*Th.
+template <bool Packed, uint32_t Ts, uint32_t Th, uint32_t n_heads>
+FORCE_INLINE void advance_q_block(uint32_t& sb, uint32_t& tile_base) {
+    ++sb;
+    if constexpr (Packed) {
+        tile_base += n_heads * Th;
+        if (sb == Ts) {
+            sb = 0U;
+        }
+    } else if (sb < Ts) {
+        tile_base += Th;
+    } else {
+        sb = 0U;
+        tile_base += ((n_heads - 1U) * Ts + 1U) * Th;
     }
 }
 

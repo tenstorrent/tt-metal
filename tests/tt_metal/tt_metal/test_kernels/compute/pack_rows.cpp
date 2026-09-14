@@ -17,7 +17,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-    copy_tile_init(tt::CBIndex::c_0);
+    copy_init(tt::CBIndex::c_0);
     pack_rows_init(num_rows);
 
     cb0.wait_front(1);

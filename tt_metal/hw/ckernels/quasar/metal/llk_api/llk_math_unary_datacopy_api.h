@@ -31,8 +31,8 @@ template <
     bool EN_32BIT_DEST,
     BroadcastType src_b_bcast_type = BroadcastType::NONE,
     bool unpack_to_dest = false,
-    [[maybe_unused]] bool is_int_fpu_en = false,
-    [[maybe_unused]] bool tilize = false>
+    bool is_int_fpu_en /*maybe_unused*/ = false,
+    bool tilize /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -54,6 +54,7 @@ inline void llk_math_eltwise_unary_datacopy_init(const std::uint32_t operand) {
         static_assert(
             !(EN_32BIT_DEST && !unpack_to_dest),
             "32BIT_DEST is not supported for broadcast when unpack_to_dest is false");
+        static_assert(!unpack_to_dest, "unpack_to_dest is not supported for unary broadcast");
 
         const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand);
         LLK_ASSERT(
@@ -131,6 +132,6 @@ inline void llk_math_eltwise_unary_datacopy_block(
 }
 
 template <
-    [[maybe_unused]] BroadcastType src_b_bcast_type = BroadcastType::NONE,
-    [[maybe_unused]] bool unpack_to_dest = false>
+    BroadcastType src_b_bcast_type /*maybe_unused*/ = BroadcastType::NONE,
+    bool unpack_to_dest /*maybe_unused*/ = false>
 inline void llk_math_eltwise_unary_datacopy_uninit() {}

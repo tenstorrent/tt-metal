@@ -21,23 +21,12 @@ struct ExpRingJointSDPADeviceOperation {
     using tensor_args_t = ExpRingJointSDPAInputs;
     using spec_return_value_t = ExpRingJointSDPAResultSpec;
     using tensor_return_value_t = ExpRingJointSDPAResult;
-    using program_factory_t = std::variant<ExpRingJointSDPAProgramFactory>;
+    using program_factory_t = std::variant<ExpRingJointSDPAMeshWorkloadFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
-
-    // The per-link GlobalSemaphore addresses are excluded from the program-cache hash
-    // (ExpRingJointSDPAParams::attribute_values omits `semaphore`), so they are DYNAMIC: the factory
-    // bakes them for the cache-miss build and this method re-applies them to the cached program on
-    // every dispatch, so a cache hit with a different semaphore set cannot reuse a frozen address.
-    // Slot layout mirrors the factory via the shared exp_ring_joint_sdpa_dynamic constants.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
 };
 
 ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(

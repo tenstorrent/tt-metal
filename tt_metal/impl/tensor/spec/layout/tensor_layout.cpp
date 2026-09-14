@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/memory_config.hpp>
-#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
+#include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
+#include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 
 #include "page_config_impl.hpp"
 #include "tensor_layout_impl.hpp"
@@ -251,6 +253,9 @@ BufferShardingArgs TensorLayoutImpl::compute_buffer_sharding_args(const tt::tt_m
     if (tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(memory_config_)) {
         tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
     }
+    if (tt::tt_metal::experimental::range_lockstep_allocation::is_range_lockstep_allocation(memory_config_)) {
+        tt::tt_metal::experimental::range_lockstep_allocation::set_range_lockstep_allocation(sharding_args, true);
+    }
     return sharding_args;
 }
 
@@ -470,11 +475,6 @@ TensorLayout TensorLayout::fromPaddedShape(
         page_config,
         memory_config,
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
-}
-
-TensorLayout TensorLayout::restore_from_serialized(
-    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
-    return TensorLayout(dtype, page_config, memory_config, alignment);
 }
 
 Layout TensorLayout::get_layout() const { return impl().get_layout(); }

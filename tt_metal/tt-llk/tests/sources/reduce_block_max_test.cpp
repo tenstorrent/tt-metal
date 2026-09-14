@@ -277,8 +277,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     //   * UNPACK_MATH_DONE - the early first-half token (runtime overlap path only).
     if constexpr (RESPECT_TRIGGER)
     {
+        t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1);
         if constexpr (USE_RUNTIME && OVERLAP_FIRST_HALF)
         {
+            t6_semaphore_init(ckernel::semaphore::UNPACK_MATH_DONE, 0, 1);
             t6_semaphore_post<>(ckernel::semaphore::UNPACK_MATH_DONE);
         }
         t6_semaphore_post<>(ckernel::semaphore::FPU_SFPU);

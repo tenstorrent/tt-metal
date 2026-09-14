@@ -6,6 +6,7 @@ import torch
 import pytest
 import ttnn
 import random
+from tests.ttnn.utils_for_testing import assert_with_ulp
 
 pytestmark = pytest.mark.use_module_device
 
@@ -282,3 +283,18 @@ def test_binary_scalar_uint32_large_values(scalar, device):
         f"Large scalar {scalar} was likely truncated to float. "
         f"Expected {expected.flatten()[0].item()}, got {result.flatten()[0].item()}"
     )
+
+
+@pytest.mark.parametrize("s", [3, 0.5])
+@pytest.mark.parametrize("h", [64])
+@pytest.mark.parametrize("w", [128])
+def test_sub_scalar(device, s, h, w):
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_output_tensor = torch_input_tensor - s
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = input_tensor - s
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
