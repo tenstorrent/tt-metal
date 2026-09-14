@@ -49,21 +49,14 @@ inline void calculate_tanh_derivative() {
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     // A 3-segment SFPLUT table, breakpoints |x| = 1 and 2, evaluated as 1 - lut(x)^2.
-    //
-    // Its consumer is NOT calculate_tanh_derivative above, which has no callers. It is
-    // tt-llk's _calculate_tanh_derivative_, which the LLK harness pairs with this init under
-    // SfpuType::tanh_derivative_lut (tt-llk/tests/helpers/include/sfpu_operations.h). The
-    // table crosses from here to there in LReg0/1/2, so an init in this repository feeds a
-    // kernel in another and nothing in the build couples them but that register convention.
-    //
-    // This table is therefore the whole of that kernel's approximation, and it is independent
-    // of tanh_init: tanh_init fits tanh, this fits sech^2 through 1 - lut^2, so the
-    // tanh-optimal coefficients are not automatically right here. Retuning it for its own
-    // objective is separate work; these values drop max |1 - lut^2 - sech^2| from 0.241 to
-    // 0.080, both maxima at |x| = 1.
-    //
-    // UnarySFPUGolden._tanh_derivative_lut mirrors these three pairs by hand;
-    // test_tanh_derivative_lut_consistency.py holds all three copies together.
+    // Its consumer is not calculate_tanh_derivative above but tt-llk's
+    // _calculate_tanh_derivative_, paired with this init under SfpuType::tanh_derivative_lut;
+    // the table crosses repositories in LReg0/1/2, coupled by nothing but that convention,
+    // and is the whole of that kernel's approximation. It fits sech^2 through 1 - lut^2, so
+    // tanh_init's tanh-optimal coefficients do not carry over; these drop
+    // max |1 - lut^2 - sech^2| from 0.241 to 0.080. UnarySFPUGolden._tanh_derivative_lut
+    // mirrors the three pairs by hand, and test_tanh_derivative_lut_consistency.py holds
+    // the copies together.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut8si(0.8125f, 0.0f);
     sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut8si(0.1875f, 0.625f);
     sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut8si(0.0f, 1.0f);
