@@ -868,7 +868,29 @@ def warmup_gemma4_batched_prefill_traces(
     if generator.already_warmed_up_prefill:
         return
     generator.already_warmed_up_prefill = True
+    generator._defer_prefill_recording = enable_trace
+    try:
+        _warmup_gemma4_prefill_sweep(
+            generator,
+            kv_cache,
+            enable_trace=enable_trace,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+            prefill_forward_fn=prefill_forward_fn,
+        )
+        generator._defer_prefill_recording = False
+        generator._record_pending_prefill_traces()
+    except BaseException:
+        generator.already_warmed_up_prefill = False
+        raise
+    finally:
+        generator._defer_prefill_recording = False
+        generator._pending_prefill_traces.clear()
 
+
+def _warmup_gemma4_prefill_sweep(
+    generator, kv_cache, *, enable_trace, can_sample_on_device, greedy_only, prefill_forward_fn
+):
     prefill_forward = prefill_forward_fn if prefill_forward_fn is not None else generator.prefill_forward_text
 
     model_args = generator.model_args[0]
