@@ -12,13 +12,23 @@ namespace hal
 namespace cfg
 {
 
+// Terminology:
+//     scope    = logical CFG register block
+//     sections = repeated registers within that block
+//     bank     = physical/configuration-state copy of the block
+
 /**
  * @brief The two architectural CFG register scopes.
  *
  * Thread registers are private to the issuing Tensix thread, are 16 bits
- * wide, and are written with SETC16. State registers are shared hardware
- * configuration, are 32 bits wide, and have two banks selected independently
- * by each thread through CFG_STATE_ID.
+ * wide, and are written with SETC16: 3 banks, selected by thread id.
+ *
+ * State registers are shared hardware configuration and are 32 bits wide.
+ * The scope covers the two hardware banking schemes, which the HAL addresses
+ * identically:
+ *
+ *     Configuration State (ALU, PACK, UNPACK, THCON) = 2 banks, selected by CFG_STATE_ID
+ *     Global                                         = 1 shared bank
  */
 enum class RegisterScope : std::uint8_t
 {
@@ -26,7 +36,9 @@ enum class RegisterScope : std::uint8_t
     State
 };
 
-// Copy number of the given register.
+/**
+ * @brief Selects one of the repeated registers within a register block.
+ */
 enum class Sec : std::uint8_t
 {
     S0,
@@ -73,7 +85,7 @@ public:
     std::uint32_t shamt0;    // SEC0 bit shift within the word
     std::uint32_t width;     // field width in bits
     std::uint32_t count;     // number of sections
-    std::uint32_t sec_bits;  // section stride, in bits
+    std::uint32_t sec_bits;  // distance between consecutive sections, in bits
 
     // Whether the selected section exists for this field.
     constexpr bool has(Sec s) const

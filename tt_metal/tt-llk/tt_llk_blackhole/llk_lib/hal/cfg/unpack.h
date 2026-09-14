@@ -63,6 +63,7 @@ private:
         static_assert(RegIndex < detail::UnpackerRegisterCount, "unpacker register index out of range");
 
         static constexpr std::uint32_t XyWord = 44 + 12 * RegIndex + 2 * UnpackerIndex;
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Xstride {
             RegisterScope::State, 32, XyWord, 0, 0, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
         static constexpr Field Ystride {
@@ -125,6 +126,7 @@ private:
         static_assert(UnpackerIndex < detail::UnpackerCount, "unpacker index out of range");
         static_assert(RegIndex < detail::UnpackerRegisterCount, "unpacker register index out of range");
 
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Value {
             RegisterScope::State, 32, 48 + 12 * UnpackerIndex + RegIndex, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
     };
@@ -163,6 +165,7 @@ public:
     std::uint32_t unpacker;
 
 private:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Context01 {RegisterScope::State, 32, 51, 0, 0, 32, 1, 0}; // Context 0&1 blobs y_start (32b)
     static constexpr Field Context23 {RegisterScope::State, 32, 52, 0, 0, 32, 1, 0}; // Context 2&3 blobs y_start (32b)
 
@@ -337,6 +340,7 @@ private:
     public:
         static_assert(UnpackerIndex < detail::UnpackerCount, "unpacker index out of range");
 
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field ForcedSharedExp {
             RegisterScope::State, 32, 50 + 12 * UnpackerIndex, 0, 0, 8, 1, 0}; // Forced shared exponent used when shared exponent reads are disabled for BFP
                                                                                // formats (8b)

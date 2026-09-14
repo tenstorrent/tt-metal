@@ -18,6 +18,7 @@ namespace cfg
 class DestTargetRegCfgPack
 { // Set destination register offset for Packer. Address must be aligned to 16B
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Offset {RegisterScope::State, 32, 180, 0, 0, 12, 4, 32};  // Packer source/target dest register static offset - 4 reg sets (12b)
     static constexpr Field ZOffset {RegisterScope::State, 32, 180, 0, 12, 6, 4, 32}; // Packer Z-tile offset for tile position generator - 4 reg sets (6b)
 };
@@ -25,6 +26,7 @@ public:
 class CgSrcPipeline
 { // Enable clock gating of the srca/srcb pipeline
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field GateSrcAPipeEn {RegisterScope::State, 32, 184, 0, 0, 1, 1, 0}; // Gate SRCA pipeline enable (1b)
     static constexpr Field GateSrcBPipeEn {RegisterScope::State, 32, 184, 0, 1, 1, 1, 0}; // Gate SRCB pipeline enable (1b)
 };
@@ -32,6 +34,7 @@ public:
 class RiscvIcInvalidate
 { // RISCV instruction cache invalidate
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field InvalidateAll {RegisterScope::State, 32, 185, 0, 0, 5, 1, 0}; // Invalidate RISCV instruction cache. Bit 0 - main Risc core, bits 1-3
                                                                                          // - three Trisc threads, 4 - Noc control risc (5b)
 };
@@ -39,36 +42,42 @@ public:
 class PrngSeed
 { // Seed master PRNG and start seeding clients
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Seed_Val {RegisterScope::State, 32, 186, 0, 0, 32, 1, 0}; // Seed value for master PRNG (32b)
 };
 
 class IntDescaleValues
 { // 4 8-bit words for descaling
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Value {RegisterScope::State, 32, 187, 0, 0, 32, 16, 32}; // Value (32b)
 };
 
 class TriscEndPc
 { // Trisc end PC value (ending location of code)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field PC {RegisterScope::State, 32, 203, 0, 0, 32, 3, 32}; // End PC value (32b)
 };
 
 class BriscEndPc
 { // Main risc (brisc) end PC value (ending location of code)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field PC {RegisterScope::State, 32, 206, 0, 0, 32, 1, 0}; // End PC value (32b)
 };
 
 class NocRiscEndPc
 { // NOC risc end PC value (ending location of code)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field PC {RegisterScope::State, 32, 207, 0, 0, 32, 1, 0}; // End PC value (32b)
 };
 
 class RiscPrefetchCtrl
 { // Risc prefetcher enable
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable_Trisc {RegisterScope::State, 32, 208, 0, 0, 3, 1, 0};   // Trisc prefetcher enable (3b)
     static constexpr Field Enable_Brisc {RegisterScope::State, 32, 208, 0, 3, 1, 1, 0};   // Brisc prefetcher enable (1b)
     static constexpr Field Enable_NocRisc {RegisterScope::State, 32, 208, 0, 4, 1, 1, 0}; // NOC risc prefetcher enable (1b)
@@ -78,12 +87,14 @@ public:
 class Scratch
 { // Just a register with no architectural effects. Used with CFGSHIFTMASK instruction
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field val {RegisterScope::State, 32, 209, 0, 0, 32, 3, 32}; // Scratch register value. (32b)
 };
 
 class L1CacheTagSearchAccel
 { // L1 Cache Tag Search Acceleration control register
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Search_Enable {
         RegisterScope::State, 32, 212, 0, 0, 1, 1, 0}; // Enable the functionality (for other fields of this register, like addresses, to be captured, this bit
                                                        // has to be toggled - meaning needs to be disabled and then enabled back with new values for the other
@@ -107,6 +118,7 @@ public:
 class DestAccessCfg
 { // There are two optional modes you can turn on in dest: - "Stride 8 swizzling in 32-bit mode" (call this A) - "Address remapping" (call this B)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field swizzle_32b {RegisterScope::State, 32, 220, 0, 0, 1, 1, 0}; // Allow 32-bit datums to be swizzled across horizontal banks. (1b)
     static constexpr Field remap_addrs {RegisterScope::State, 32, 220, 0, 1, 1, 1, 0}; // Allow hardware to remap dest addresses behind-the-scenes. (1b)
     static constexpr Field disable_full_write_dest_q_bypass {
@@ -123,6 +135,7 @@ public:
 class SrcAccessCfg
 { // Mode bits for accessing source registers
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field math_view_srca_as_one_bank {
         RegisterScope::State,
         32,
@@ -145,6 +158,7 @@ public:
 class ChickenBits
 { // A place to add chicken bits
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field sfpu_scbd_disable {
         RegisterScope::State, 32, 222, 0, 0, 1, 1, 0}; // Disable any stalls from the SFPU scoreboarding logic. Not to be confused with the dest arbitration;
                                                        // this scoreboarding is the  one that lets you omit SFPNOPs between instructions that would otherwise

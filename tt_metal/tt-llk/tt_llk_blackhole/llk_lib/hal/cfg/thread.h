@@ -29,12 +29,14 @@ inline constexpr std::uint32_t PerformanceCounterCount = 4;
 class CfgStateId
 { // Cfg state id for this thread
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field StateID {RegisterScope::Thread, 16, 0, 0, 0, 1, 1, 0}; // Configuration state context to use for this thread (1b)
 };
 
 class DestTargetRegCfgMath
 { // Set destination register offset for math and packer
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Offset {RegisterScope::Thread, 16, 1, 0, 0, 12, 1, 0}; // Math source/target dest register static offset (12b)
 };
 
@@ -82,6 +84,7 @@ inline constexpr ZSelector Z {};
 class DisableImpliedFmtFields
 {
 private:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field SrcAField {RegisterScope::Thread, 16, 2, 0, 0, 1, 1, 0}; // Disable implied Unp0-SrcA Fmt (1b)
     static constexpr Field SrcBField {RegisterScope::Thread, 16, 3, 0, 0, 1, 1, 0}; // Disable implied Unp1-SrcB Fmt (1b)
 
@@ -103,6 +106,7 @@ inline constexpr DisableImpliedFmtFields DisableImpliedFmt {};
 class SfpuDestFmt
 { // Format SFPU expects in Dest (used to determine 8-bit/5-bit exponent formats)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 4, 0, 0, 1, 1, 0}; // Enable SFPU format from thread register (1b)
     static constexpr Field Base {RegisterScope::Thread, 16, 4, 0, 1, 4, 1, 0};   // Format SFPU expects in Dest (4b)
 };
@@ -110,6 +114,7 @@ public:
 class SrcASet
 { // SrcA Base Set
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base {RegisterScope::Thread, 16, 5, 0, 0, 2, 1, 0};            // SrcA Base Set (2b)
     static constexpr Field SetOvrdWithAddr {RegisterScope::Thread, 16, 5, 0, 2, 1, 1, 0}; // Ovrd set index with higher wr addr bits (1b)
 };
@@ -117,12 +122,14 @@ public:
 class SrcBSet
 { // SrcB Base Set
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base {RegisterScope::Thread, 16, 6, 0, 0, 2, 1, 0}; // SrcB Base Set (2b)
 };
 
 class ClrDvalid
 { // Disable data valid clear unless its CLEARDVALID inst. Banks will still switch (useful when using both banks)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field SrcA_Disable {RegisterScope::Thread, 16, 7, 0, 0, 1, 1, 0}; // SrcA Data valid clear disable (1b)
     static constexpr Field SrcB_Disable {RegisterScope::Thread, 16, 7, 0, 1, 1, 1, 0}; // SrcB Data valid clear disable (1b)
 };
@@ -130,24 +137,28 @@ public:
 class ScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran.
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 8, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
 class PackScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran. (pack)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 9, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
 class UnpackScbdBankMask32b
 { // Generate bank masks for screboard assuming double buffering at 32-bit datum gran. (unpack)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 10, 0, 0, 1, 1, 0}; // Enable (1b)
 };
 
 class FidelityBase
 { // Base fidelity phase
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Phase {RegisterScope::Thread, 16, 11, 0, 0, 2, 1, 0}; // Base fidelity phase (2b)
 };
 
@@ -242,6 +253,7 @@ private:
     public:
         static constexpr std::uint32_t Shift = IsSrcB ? 8 : 0;
 
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Incr {RegisterScope::Thread, 16, 12, 0, Shift, 6, 8, 16};             // Src A/B autoincrement amount (6b)
         static constexpr Field Incr2 {RegisterScope::Thread, 16, 20, 0, IsSrcB ? 1u : 0u, 1, 8, 16}; // Bit 6 of Src A/B autoincrement amount (1b)
         static constexpr Field CR {RegisterScope::Thread, 16, 12, 0, Shift + 6, 1, 8, 16};           // Src A/B CR (1b)
@@ -361,12 +373,14 @@ inline constexpr AddrModFields AddrMod {};
 class SfpuStack
 { // Config bits for the SFPU stack mode
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Incr {RegisterScope::Thread, 16, 36, 0, 0, 10, 1, 0}; // Dest SP autoincrement amount (10b)
 };
 
 class UnpackMiscCfg
 { // Unpacker misc config
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field CfgContextOffset_0 {
         RegisterScope::Thread, 16, 41, 0, 0, 4, 1, 0}; // Unpacker 0 cfg context offset added to the context id from instruction field or context counter. Final
                                                        // context id is computed as CfgContextOffset + (AutoIncContextId ? CfgContextCnt : CfgContextId) (4b)
@@ -397,6 +411,7 @@ public:
 class NocOverlayMsgClear
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field StreamId_0 {RegisterScope::Thread, 16, 42, 0, 0, 6, 1, 0}; // Noc overlay stream id for unpacker 0 (6b)
     static constexpr Field MsgNum_0 {RegisterScope::Thread, 16, 42, 0, 8, 3, 1, 0};   // Number of messages(tiles) to pop from message fifo for unpacker 0 (3b)
     static constexpr Field StreamId_1 {RegisterScope::Thread, 16, 42, 1, 0, 6, 1, 0}; // Noc overlay stream id unpacker 1 (6b)
@@ -410,6 +425,7 @@ private:
     class Fields
     {
     public:
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Start {RegisterScope::Thread, 16, 44, 0, 2 * Index, 1, 1, 0};    // Start perf count Index (1b)
         static constexpr Field Stop {RegisterScope::Thread, 16, 44, 0, 2 * Index + 1, 1, 1, 0}; // End perf count Index (1b)
     };
@@ -457,18 +473,21 @@ inline constexpr PerfCntCmdFields PerfCntCmd {};
 class EnableAccStats
 { // enable generating histogram of exponents
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 45, 0, 0, 1, 1, 0}; // enable (1b)
 };
 
 class FpuBiasSel
 { // Select upper or lower 32 bias values
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Pointer {RegisterScope::Thread, 16, 46, 0, 0, 1, 1, 0}; // When set, selects bias values 32 to 63 (1b)
 };
 
 class Fp16aForce
 { // Read dest like FP16A in int mode (for move int8 ops)
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Enable {RegisterScope::Thread, 16, 55, 0, 0, 1, 1, 0}; // When set, performs move ops like FP16A (1b)
 };
 
@@ -480,6 +499,7 @@ public:
 class TensixTriscSync
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field TrackGlobalCfg {
         RegisterScope::Thread, 16, 56, 0, 0, 1, 1, 0}; // If 1, TRISC memory-mapped accesses to global config registers (in the CfgExu and also  including the
                                                        // so-called THCON register in tt_tdma) will be tracked. If Tensix  instructions are also tracked, then
@@ -513,6 +533,7 @@ public:
 class StreamwaitPhaseHi
 { // This config register stores extra data that don't fit within the STREAMWAIT opcode itself
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Val {
         RegisterScope::Thread, 16, 57, 0, 0, 10, 1, 0}; // The 10-bit target_val value in the STREAMWAIT opcode is appended to this value. For example, if this
                                                         // was 0x3FF and target_val was 2, then STREAMWAIT would wait for phase 0xFFC02. (10b)
@@ -521,6 +542,7 @@ public:
 class StreamwaitNumMsgsHi
 { // This config register stores extra data that don't fit within the STREAMWAIT opcode itself
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Val {
         RegisterScope::Thread, 16, 58, 0, 0, 7, 1, 0}; // The 10-bit target_val value in the STREAMWAIT opcode is appended to this value. For example, if this
                                                        // was 0x7F and target_val was 2, then STREAMWAIT would wait for 0x1FC02 messages to be received. (7b)
@@ -529,6 +551,7 @@ public:
 class StreamIdSync
 { // Select a stream to be used for Sync Exu
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field BankSel {
         RegisterScope::Thread, 16, 59, 0, 0, 6, 4, 16}; // Selects which stream to use for stallwait stream instructions (3-bit group id, 3-bit stream id) (6b)
 };
@@ -536,6 +559,7 @@ public:
 class StreamIdTrisc
 { // Select a stream to be used to be read by TRISC
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field BankSel {RegisterScope::Thread, 16, 63, 0, 0, 6, 4, 16}; // Selects which stream to use for internally mapping to Trisc registers
                                                                                     // (3-bit group id, 3-bit stream id) (6b)
 };
@@ -543,6 +567,7 @@ public:
 class TensixCsrConfig
 { // Modifies behaviour of qstatus, bstatus, and stream CSR bits.
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field RawBusyStatus {
         RegisterScope::Thread, 16, 67, 0, 0, 1, 1, 0}; // If high, the bstatus CSR will only report whether a given execution unit is currently busy. If low,
                                                        // the bstatus bits  will be the OR of the busy status and the queue status. In other words, if this bit
