@@ -1436,7 +1436,10 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
     const tt_metal::NOC upstream_noc =
         (device_->arch() == tt::ARCH::QUASAR) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
     const auto upstream_virtual = device_->virtual_noc0_coordinate(upstream_noc, phys_spoof);
-    const auto downstream_virtual = device_->virtual_noc0_coordinate(tt_metal::NOC::NOC_0, CoreCoord{0, 0});
+    // The slow-dispatch harness has no downstream for the dispatcher. Name the dispatcher's own tile
+    // rather than a {0,0} placeholder: {0,0} is a DRAM tile on some descriptors but not a core at all
+    // on others (qsr.s1), where translating it throws, and any latched coordinate must be a live tile.
+    const auto downstream_virtual = my_virtual;
 
     const bool cq_dram_backed = Common::is_quasar_cq_dram_backed();
     const std::string is_cq_dram_backed = cq_dram_backed ? "1" : "0";
@@ -1532,8 +1535,11 @@ inline std::map<std::string, std::string> make_sd_dispatch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(upstream_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        // No dispatch_s in the slow-dispatch harness. Name the dispatch tile anyway (as fast dispatch does for a
+        // co-located dispatch_s): the prefetcher still latches this coordinate into a cmd buf at entry, and a
+        // placeholder (255,255) has no address-map entry under ATT (the resolver traps on it).
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"IS_D_VARIANT", "1"},
         {"IS_H_VARIANT", "1"},
     };
@@ -1580,8 +1586,11 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"UPSTREAM_NOC_Y", std::to_string(my_virtual.y)},
         {"DOWNSTREAM_NOC_X", std::to_string(downstream_virtual.x)},
         {"DOWNSTREAM_NOC_Y", std::to_string(downstream_virtual.y)},
-        {"DOWNSTREAM_SUBORDINATE_NOC_X", "255"},
-        {"DOWNSTREAM_SUBORDINATE_NOC_Y", "255"},
+        // No dispatch_s in the slow-dispatch harness. Name the dispatch tile anyway (as fast dispatch does for a
+        // co-located dispatch_s): the prefetcher still latches this coordinate into a cmd buf at entry, and a
+        // placeholder (255,255) has no address-map entry under ATT (the resolver traps on it).
+        {"DOWNSTREAM_SUBORDINATE_NOC_X", std::to_string(downstream_virtual.x)},
+        {"DOWNSTREAM_SUBORDINATE_NOC_Y", std::to_string(downstream_virtual.y)},
         {"DOWNSTREAM_CB_BASE", std::to_string(dispatch_cb_base)},
         {"DOWNSTREAM_CB_LOG_PAGE_SIZE", std::to_string(DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE)},
         {"DOWNSTREAM_CB_PAGES", std::to_string(dispatch_cb_pages)},

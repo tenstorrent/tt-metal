@@ -14,6 +14,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -42,8 +43,17 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, GlobalsAndTLS) {
         GTEST_SKIP() << "This test can only be run using a simulator. Set TT_METAL_SIMULATOR environment variable.";
     }
 
-    constexpr CoreCoord core = {0, 0};
-    const uint32_t dram_channel = this->device().dram_channel_from_virtual_core(core);
+    constexpr CoreCoord core = {0, 0};  // logical worker core the kernels run on
+
+    // DRAM target: view 0, resolved through the soc descriptor. The old code passed the worker core's
+    // {0,0} to dram_channel_from_virtual_core, which only works where virtual (0,0) happens to be DRAM
+    // view 0's worker endpoint (the aether 2x3 model); on qsr.s1 it throws "not a DRAM core". Round-trip
+    // through dram_channel_from_virtual_core so the device-side lookup is still exercised.
+    const auto& soc_desc =
+        MetalContext::instance().get_cluster().get_soc_desc(this->device().get_devices().front()->id());
+    const CoreCoord dram_virtual_core = soc_desc.get_preferred_worker_core_for_dram_view(0, NOC::NOC_0);
+    const uint32_t dram_channel = this->device().dram_channel_from_virtual_core(dram_virtual_core);
+    ASSERT_EQ(dram_channel, 0u);
 
     // Initialize L1 signal so hart FIRST_USER_DM (2) can proceed first; the simple_tls_check
     // kernel chains the signal forward (signal_addr := hartid + 1) so hartids 2..7 run in order.

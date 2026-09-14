@@ -56,6 +56,12 @@ SubDeviceManagerTracker::~SubDeviceManagerTracker() {
 
 SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
     ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) {
+    // Same gate as load_sub_device_manager, applied before the manager (and its per-sub-device
+    // allocators) is built so slow dispatch fails with this message instead of deep inside the
+    // allocator construction.
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance(extract_context_id(device_)).rtoptions().get_fast_dispatch(),
+        "Using sub device managers is unsupported with slow dispatch");
     auto sub_device_manager = std::make_unique<SubDeviceManager>(sub_devices, local_l1_size, device_);
     auto sub_device_manager_id = sub_device_manager->id();
     sub_device_managers_.insert_or_assign(sub_device_manager_id, std::move(sub_device_manager));
