@@ -193,5 +193,24 @@ card:
     | 130,048 | 512 | 1 | 18.15 | 1.25 | 380.812 s | 408.967 s |
 
     Decode is nearly flat across the context range. Time to first token and end-to-end
-    latency are prefill-dominated at long context. `p150x4` is a regression profile with
-    no current sweep.
+    latency are prefill-dominated at long context.
+
+    `p150x4` (four P150 ASICs, 1x4 mesh), same method, prefix caching disabled so every
+    request is cold:
+
+    | Input tokens requested | Output tokens | Concurrency | Decode tok/s/user | Aggregate output tok/s | Time to first token | End-to-end latency |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 128 | 512 | 1 | 28.99 | 28.84 | 0.129 s | 17.754 s |
+    | 1,024 | 512 | 1 | 28.79 | 26.98 | 1.232 s | 18.980 s |
+    | 2,048 | 512 | 1 | 28.74 | 26.68 | 1.408 s | 19.189 s |
+    | 4,096 | 512 | 1 | 28.58 | 22.40 | 4.975 s | 22.853 s |
+    | 8,192 | 512 | 1 | 28.31 | 17.69 | 10.896 s | 28.948 s |
+    | 16,384 | 512 | 1 | 27.76 | 11.62 | 25.643 s | 44.049 s |
+    | 32,768 | 512 | 1 | 26.74 | 5.97 | 66.650 s | 85.757 s |
+    | 65,536 | 512 | 1 | 24.89 | 2.38 | 194.450 s | 214.977 s |
+    | 130,048 | 512 | 1 | 21.91 | 2.23 | 206.156 s | 229.481 s |
+
+    Four ASICs raise decode by about 45% at short context and 21% at full context. Prefill
+    is the exception: `p150x4` does not use streaming prefill, so it still pads to the next
+    power of two. That makes its 65,536 request slower than the same request on `p150x2`
+    (194.450 s against 156.630 s), while 130,048 is much faster (206.156 s against 380.812 s).
