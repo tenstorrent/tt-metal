@@ -15,19 +15,24 @@ import os
 import pytest
 from loguru import logger
 
-from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_FPS, align_num_frames, resolve_canvas_size
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....utils.video import Audio, export_video_audio_yuv
 from .common import GALAXY_MESHES
-from .common_av import CALIBRATED_FOX_PROMPT, artifact_dir, log_timing_table, run_warm_generation, weights_dir
+from .common_av import (
+    CALIBRATED_FOX_PROMPT,
+    artifact_dir,
+    log_timing_table,
+    run_warm_generation,
+    vsa_config_for_adapter,
+    weights_dir,
+)
 
-NUM_INFERENCE_STEPS = 5
+NUM_INFERENCE_STEPS = int(os.environ.get("MINIMAX_H3_NUM_STEPS", 5))
 EXPECTED_FORWARDS = NUM_INFERENCE_STEPS - 1
 SEED = 0
 ASPECT_RATIO = (16, 9)
 DURATIONS_S = [5, 10, 15]
-VSA_SPARSITY = 0.9
 
 
 @pytest.mark.timeout(5400)
@@ -43,6 +48,8 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
     stitch = os.environ.get("MINIMAX_H3_VAE_STITCH", "gather")
     profile_phases = bool(int(os.environ.get("MINIMAX_H3_VAE_PHASES", "0")))
 
+    vsa_config = vsa_config_for_adapter(lora_path)
+
     height, width = resolve_canvas_size(*ASPECT_RATIO)
     num_frames = align_num_frames(round(duration_s * MINIMAX_H3_FPS))
 
@@ -51,7 +58,7 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
         weights_dir=weights_dir("transformer", "text_encoder", "vae", "audio_vae"),
         lora_path=lora_path,
         lora_strength=float(os.environ.get("FASTH3_LORA_STRENGTH", 1.0)),
-        vsa_config=MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY),
+        vsa_config=vsa_config,
         vae_output_type="yuv420",
         vae_stitch_exchange=stitch,
         vae_profile=profile_phases,
@@ -70,13 +77,15 @@ def test_t2va_lora_yuv_timing(mesh_device, reset_seeds, duration_s):
 
     report = pipeline._lora_report
     assert report is not None and report.bound, "the transformer was built without an adapter bound"
-    assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
-        f"{len(report.replaced)} gates assigned for {pipeline.transformer_config['num_layers']} blocks; "
-        "VSA is running partly ungated"
-    )
-    logger.info(f"VSA: {len(report.replaced)} gates assigned and active")
+    if vsa_config is not None:
+        assert len(report.replaced) == pipeline.transformer_config["num_layers"], (
+            f"{len(report.replaced)} gates assigned for {pipeline.transformer_config['num_layers']} blocks; "
+            "VSA is running partly ungated"
+        )
+        logger.info(f"VSA: {len(report.replaced)} gates assigned and active")
 
-    stem = f"t2va_lora_vsa_yuv420_{stitch}_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
+    attention = "vsa" if vsa_config is not None else "dense"
+    stem = f"t2va_lora_{attention}_yuv420_{stitch}_{width}x{height}_{duration_s}s_{EXPECTED_FORWARDS}fwd"
     log_timing_table(
         pipeline,
         stem,

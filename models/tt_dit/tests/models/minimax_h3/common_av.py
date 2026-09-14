@@ -410,6 +410,35 @@ def temporal_seam_score(frames: np.ndarray, period: int) -> float:
 # ------------------------------------------------------------------ shared e2e gate scaffolding
 
 # Matched pair with the tier-6 bars (CLIP 37.37, imaging_quality 0.6896); imported by fl2va so it cannot drift.
+# FastVideo trains the H3 students against a fixed attention: 90% sparsity over 64-wide VSA tiles
+# for the VSA variants (`attention: vsa-h3-90pct-tile64` in the bundle manifest), dense for the
+# others. The attention path is therefore not a free knob -- it is a property of the adapter, and
+# the adapter says which it is by carrying `to_gate_compress` gates or not.
+VSA_SPARSITY = 0.9
+
+
+def vsa_config_for_adapter(lora_path: str):
+    """The attention path the adapter was distilled against, read from its own header.
+
+    Cheap on purpose: the header alone, not the 5.3 GB of tensors, and the pipeline parses the file
+    once later. Choosing wrong is loud rather than silent in both directions -- a gate with no
+    `to_gate_compress` to land on fails to route, and a VSA build whose adapter carries no gate
+    leaves the compressed branch provably off. Community adapters publish no count manifest at all,
+    so a missing key means dense.
+    """
+    from safetensors import safe_open
+
+    from ....models.transformers.minimax_h3.vsa_stages_minimax_h3 import MiniMaxH3VSAConfig
+
+    with safe_open(lora_path, framework="pt") as handle:
+        metadata = handle.metadata() or {}
+    if not int(metadata.get("set_weight_tensors", 0)):
+        logger.info(f"{lora_path}: no gate tensors, running the dense attention path")
+        return None
+    logger.info(f"{lora_path}: carries gate tensors, running VSA at sparsity {VSA_SPARSITY}")
+    return MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY)
+
+
 CALIBRATED_FOX_PROMPT = (
     "A red fox trots across a snowy field at dawn, its breath visible in the cold air. "
     "The low sun throws long blue shadows behind it, and loose snow lifts from each footfall."
