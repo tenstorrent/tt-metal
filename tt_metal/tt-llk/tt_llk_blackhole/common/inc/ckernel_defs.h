@@ -267,6 +267,35 @@ constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint3
     }
 }
 
+// Per-tile L1 footprint in bytes of `datum_count` datums of `format`. SCALE_DATUM_SIZE keeps
+// one-byte-per-datum for the sub-byte BFP payloads, so correct it here (Bfp4 packs 2 datums/byte,
+// Bfp2 packs 4) and add the shared exponent byte every BFP* format stores per 16 datums.
+constexpr static std::uint32_t TILE_SIZE_BYTES(std::uint32_t format, std::uint32_t datum_count)
+{
+    std::uint32_t tile_size_bytes = SCALE_DATUM_SIZE(format, datum_count);
+
+    switch (masked_data_format(format))
+    {
+        case (to_underlying(DataFormat::Bfp4)):
+        case (to_underlying(DataFormat::Bfp4_b)):
+            tile_size_bytes /= 2;
+            break;
+        case (to_underlying(DataFormat::Bfp2)):
+        case (to_underlying(DataFormat::Bfp2_b)):
+            tile_size_bytes /= 4;
+            break;
+        default:
+            break;
+    }
+
+    if (IS_BFP_FORMAT(format))
+    {
+        tile_size_bytes += datum_count / 16;
+    }
+
+    return tile_size_bytes;
+}
+
 // Datum byte size from a data format's low 2 bits: Float32 -> 4, Float16 -> 2, else 1.
 // Distinct from SCALE_DATUM_SIZE above: that switches on the full masked format and has no Tf32 case
 // (returns 1 for Tf32), whereas this keys on (fmt & 0x3) and returns 4 for Tf32 -- the behavior

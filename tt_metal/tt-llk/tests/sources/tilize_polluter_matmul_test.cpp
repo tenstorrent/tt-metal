@@ -120,9 +120,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             FACE_R_DIM,
             FACE_R_DIM,
             mm_num_faces,
-            mm_num_faces,
-            tile_size,
-            tile_size);
+            mm_num_faces);
     }
     _llk_unpack_AB_matmul_init_<>();
     _llk_unpack_AB_matmul_<>(L1_ADDRESS(params.buffer_A[0]), L1_ADDRESS(params.buffer_B[0]), 0, 0, tile_size, tile_size);

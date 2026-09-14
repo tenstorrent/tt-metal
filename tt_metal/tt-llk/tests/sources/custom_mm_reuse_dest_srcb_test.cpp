@@ -104,9 +104,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FACE_R_DIM,
         IN0_TILE_R_DIM,
         params.num_faces_B,
-        params.num_faces_A,
-        params.TILE_SIZE_UNPACK_B,
-        params.TILE_SIZE_UNPACK_A);
+        params.num_faces_A);
 
     _llk_unpack_AB_custom_mm_init_<false /* transpose */>(IN0_TILE_R_DIM, formats.unpack_B_dst /* weights land in SrcA */, REUSE_KT /* producer ct_dim */);
 

@@ -62,9 +62,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             in1_tile_r_dim < FACE_R_DIM ? in1_tile_r_dim : FACE_R_DIM,
             in0_tile_r_dim < FACE_R_DIM ? in0_tile_r_dim : FACE_R_DIM,
             num_faces_B, // in1
-            num_faces_A, // in0
-            TILE_SIZE_UNPACK_B,
-            TILE_SIZE_UNPACK_A);
+            num_faces_A);
         _llk_unpack_AB_matmul_init_<>(
             UNPACK_TRANSPOSE_FACES,
             CT_DIM,

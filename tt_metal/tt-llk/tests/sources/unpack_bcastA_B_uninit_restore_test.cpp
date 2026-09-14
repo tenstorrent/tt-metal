@@ -82,7 +82,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         // SrcA Y-stride (and Z-stride / Tile_x_dim / Z-dim). This is the only place
         // the new Y-stride write is exercised; the matmul tilize test uses IGNORE.
         _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::FACE_ROW_MAJOR, false>(
-            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, tile_size_datums, FACE_R_DIM, num_faces);
+            formats_array[1].unpack_A_src, formats_array[1].unpack_A_dst, FACE_R_DIM, num_faces);
     }
     else
     {

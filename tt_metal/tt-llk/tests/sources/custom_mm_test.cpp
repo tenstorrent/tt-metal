@@ -86,9 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         params.in1_face_r_dim,
         params.in0_face_r_dim,
         params.num_faces_B,
-        params.num_faces_A,
-        params.TILE_SIZE_UNPACK_B,
-        params.TILE_SIZE_UNPACK_A);
+        params.num_faces_A);
 
     // unpB_face_r_dim = in0 (SrcB) face rows in {1,2,4,8}; unpA_dst_format tunes the
     // instruction sequence (post1 only for Bfp4_b). transpose=false.

@@ -51,9 +51,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         FACE_R_DIM,
         params.in0_face_r_dim, // in0 partial-tile face row dim (rows in {1, 2, 4, 8})
         params.num_faces_B /* unpA_num_faces: in1, a full 4-face tile */,
-        params.num_faces_A /* unpB_num_faces: in0, only the top two faces */,
-        params.TILE_SIZE_UNPACK_B,  // SrcA tile size (in1)
-        params.TILE_SIZE_UNPACK_A); // SrcB tile size (in0)
+        params.num_faces_A /* unpB_num_faces: in0, only the top two faces */);
 
     // compressed_custom_mm unpack init takes only unpB_face_r_dim (no CT_DIM, unlike custom_mm).
     _llk_unpack_AB_compressed_custom_mm_init_<false /* transpose */>(params.in0_face_r_dim);

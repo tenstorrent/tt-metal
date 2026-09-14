@@ -39,18 +39,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     if (params.CONFIGURE_TEST_RUN_IDX == 0)
     {
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            next_src, next_src, next_dst, next_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces, NEXT_SIZE, NEXT_SIZE);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(next_src, next_src, next_dst, next_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
     }
     else
     {
-        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-            prev_src, prev_src, prev_dst, prev_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces, PREV_SIZE, PREV_SIZE);
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(prev_src, prev_src, prev_dst, prev_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
 
-        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, FACE_R_DIM, num_faces);
-        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, TO_FROM_INT8>(
-            next_src, next_dst, NEXT_SIZE, FACE_R_DIM, num_faces);
+        _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, TO_FROM_INT8>(next_src, next_dst, FACE_R_DIM, num_faces);
+        _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, p_dim_stride_target::IGNORE, TO_FROM_INT8>(next_src, next_dst, FACE_R_DIM, num_faces);
     }
 
     ckernel::unpacker::are_unpackers_AB_configured_correctly(next_src, next_dst, next_src, next_dst, FACE_R_DIM, FACE_R_DIM, num_faces, num_faces);
