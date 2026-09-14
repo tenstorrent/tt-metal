@@ -32,11 +32,11 @@ from models.demos.deepseek_v3_d_p.tests.kda.cache_adapters import (
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _PCC_THRESHOLD, _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
-    assert_bit_identical,
     check_kimi_k3_accuracy,
     make_kimi_k3_device_case,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 pytest_plugins = ("models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf",)
 
@@ -171,9 +171,9 @@ def _physical_contract(state: KdaState, geometry: KdaCacheGeometry) -> dict[str,
 def test_kimi_k3_cache_adapter_ablation(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
-    kimi_k3_production_reference: tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float],
+    kimi_k3_production_reference: Callable[[], tuple[KimiK3TestCase, torch.Tensor, KDAReferenceState, float]],
 ) -> None:
-    case, golden_output, golden_state, _ = kimi_k3_production_reference
+    case, golden_output, golden_state, _ = kimi_k3_production_reference()
     layer, hidden = make_kimi_k3_device_case(mesh_device, case, tensor_parallel_axis=tensor_parallel_axis)
     mesh_shape = tuple(mesh_device.shape)
     sp_axis = 1 - tensor_parallel_axis
@@ -244,7 +244,8 @@ def test_kimi_k3_cache_adapter_ablation(
         ),
     }
     timing = {name: _summary(_trace_samples_ms(mesh_device, operation)) for name, operation in operations.items()}
-    layer_timing = _summary(_trace_wall_samples_ms(mesh_device, layer, hidden, _LAYER_REPETITIONS))
+    layer_samples_ms, _ = _trace_wall_samples_ms(mesh_device, layer, hidden, _LAYER_REPETITIONS)
+    layer_timing = _summary(layer_samples_ms)
     layer_median_ms = float(layer_timing["median_ms"])
     for direction in ("export", "import"):
         combined = timing[f"{direction}_combined"]
