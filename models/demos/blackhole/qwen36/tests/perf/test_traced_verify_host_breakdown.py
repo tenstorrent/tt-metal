@@ -2,6 +2,45 @@
 # SPDX-License-Identifier: Apache-2.0
 """Where does a TRACED verify step's wall time go, piece by piece?
 
+MEASURED 2026-09-14 (T3K, block 16, bucket 128, after the readback narrowing):
+
+    replay      107.1 ms  (52.5 %)   device time is 105.8 ms -- the replay IS the device
+    save         30.7 ms  (15.0 %)   see below: ~1.7 ms amortized in the real loop
+    logits       26.8 ms  (13.1 %)
+    stage        19.4 ms  ( 9.5 %)
+    restore      17.7 ms  ( 8.7 %)
+    taps          2.3 ms
+    setup         0.1 ms
+    TOTAL       204.1 ms
+
+THE VERIFY IS NOW DEVICE-BOUND. replay 107.1 ms against 105.8 ms of device time is ~99 %
+utilization: tracing has extracted everything there is to extract here, and no further dispatch work
+on the verify forward can help it. What is left is the ~68 ms of host work around it, plus the
+device floor itself (25 % collectives, 17.6 % layout churn -- see test_profile_verify_forward.py).
+
+TWO CORRECTIONS this measurement forced:
+
+* ``save`` is overstated HERE. This harness calls save_gdn_state every iteration; the real loop
+  saves only when the anchor advances, i.e. once per ~18 steps at acceptance 7. Amortized it is
+  ~1.7 ms/step, not 30.7. Read this row as the cost of a save, not the cost of a step.
+* ``restore`` is 17.7 ms, NOT the 60-85 ms estimated from its dispatch count (~144 ttnn.copy calls
+  across 48 GDN layers at the ~0.6 ms/dispatch exchange rate). The estimate was 3-5x too high.
+  Moving it inside the capture is still worth ~17 ms and is still trace-legal -- it copies between
+  persistent, fixed-address buffers -- but it is a modest lever, not the dominant one.
+
+AND ONE THING THAT DOES NOT WORK: taking the verify's argmax on device.
+
+Greedy verification uses these logits for exactly one thing, ``posterior = argmax(logits)``, so the
+drafter's 4.5x win (tests/unit/test_drafter_device_argmax.py) looks like it should transplant here.
+It does not. Implemented and measured: tokens identical, acceptance identical, and the loop went
+**22.19 -> 4.48 tok/s**. Reverted.
+
+The difference is the SOURCE tensor. The drafter argmaxes ``[1, 15, vocab]`` straight off a fresh
+lm_head; the verify's ``_vt_logits`` is ``[1, 1, 128, vocab]`` -- ~63 MB -- and slicing that to 16
+rows and untilizing it costs vastly more than the 26.8 ms readback it replaces. Same op, same
+width, opposite verdict, decided by the tensor it reads. Do not re-derive this from the drafter
+result; the readback here is already close to the best available form.
+
 The verify forward was traced (1.96x end to end) and then profiled: **105.8 ms of device time**
 (tests/perf/test_profile_verify_forward.py). But a forward costs ~460 ms of wall, so the traced
 path is still only ~23 % device-utilized and ~350 ms per forward is NOT the device. That is now the
