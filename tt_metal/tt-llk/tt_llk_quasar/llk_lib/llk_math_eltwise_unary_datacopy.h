@@ -21,17 +21,15 @@ using namespace ckernel::math;
  * set this value to 16 rows
  * @param num_dvalids_outer_loop: Number of times required to reset datavalids for the unpacker & counters for math srca/srcb. If unpacker is unpacking 1 32x32
  * tile, with 1 dvalid -> set this value to 1. If unpacker is unpacking 4 faces (16x16 each), with 4 dvalids -> set this value to 4
- * @param num_rows_per_move_instrn: Number of rows moved per FPU move instruction (1, 4, or 8)
  */
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
-inline void _llk_math_eltwise_unary_datacopy_mop_config_(
-    const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop, const std::uint32_t num_rows_per_move_instrn)
+inline void _llk_math_eltwise_unary_datacopy_mop_config_(const std::uint32_t num_rows_inner_loop, const std::uint32_t num_dvalids_outer_loop)
 {
     // Divide number of rows by how many rows are output per fpu instruction.
     // The FPU moves ELTWISE_MATH_ROWS rows per MOV (8 on Quasar, 4 on 4row_arch's 4-row FPU); the MOV
-    // width MUST match num_rows_per_move_instrn (the dest addr_mod stride + inner-loop divisor), or
-    // each MOV writes fewer rows than the stride advances and leaves periodic gaps.
-    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(num_rows_per_move_instrn);
+    // width MUST match ELTWISE_MATH_ROWS (the dest addr_mod stride + inner-loop divisor), or each MOV
+    // writes fewer rows than the stride advances and leaves periodic gaps.
+    const std::uint32_t MOP_INNER_LOOP = num_rows_inner_loop >> rows_log2(ELTWISE_MATH_ROWS);
     const std::uint32_t mov_rows_instn = (ELTWISE_MATH_ROWS == 8) ? p_mov_src_to_dest::MOV_8_ROWS : p_mov_src_to_dest::MOV_4_ROWS;
 
     const std::uint32_t MOP_OUTER_LOOP = num_dvalids_outer_loop;
@@ -71,16 +69,15 @@ inline void _llk_math_eltwise_unary_datacopy_mop_config_(
  * @brief Sets up addrmods for eltwise unary datacopy operations.
  *
  * @tparam DATA_COPY_TYPE: Which src register to datacopy from, values = <A2D/B2D>
- * @param num_rows_per_move_instrn: Number of rows moved per FPU move instruction (1, 4, or 8)
  */
 template <DataCopyType DATA_COPY_TYPE>
-inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_rows_per_move_instrn)
+inline void _llk_math_eltwise_unary_datacopy_addrmod_()
 {
-    constexpr std::uint8_t use_srca  = (DATA_COPY_TYPE == DataCopyType::A2D);
-    constexpr std::uint8_t use_srcb  = (DATA_COPY_TYPE == DataCopyType::B2D);
-    const std::uint8_t num_rows_srca = use_srca ? num_rows_per_move_instrn : 0;
-    const std::uint8_t num_rows_srcb = use_srcb ? num_rows_per_move_instrn : 0;
-    const std::uint8_t num_rows_dest = num_rows_per_move_instrn;
+    constexpr std::uint8_t use_srca      = (DATA_COPY_TYPE == DataCopyType::A2D);
+    constexpr std::uint8_t use_srcb      = (DATA_COPY_TYPE == DataCopyType::B2D);
+    constexpr std::uint8_t num_rows_srca = use_srca ? ELTWISE_MATH_ROWS : 0;
+    constexpr std::uint8_t num_rows_srcb = use_srcb ? ELTWISE_MATH_ROWS : 0;
+    constexpr std::uint8_t num_rows_dest = ELTWISE_MATH_ROWS;
 
     // Increment rows for src register that is used, inc dest rows
     addr_mod_t {
@@ -116,23 +113,8 @@ inline void _llk_math_eltwise_unary_datacopy_addrmod_(const std::uint32_t num_ro
 template <DataCopyType DATA_COPY_TYPE, bool IS_32b_DEST_EN>
 inline void _llk_math_eltwise_unary_datacopy_init_(const std::uint32_t num_rows_per_matrix, const std::uint32_t num_matrices = NUM_TILES)
 {
-    const std::uint32_t num_rows_per_move_instrn = [num_rows_per_matrix]() -> const std::uint32_t
-    {
-        if constexpr (IS_32b_DEST_EN)
-        {
-            return ELTWISE_MATH_ROWS; // 8 on Quasar, 4 on 4row_arch
-        }
-        else
-        {
-            // 16-bit MOV path: must equal the MOV width (mov_rows_instn) so the dest stride and
-            // inner-loop count match how many rows each MOV actually writes. 8 on Quasar, 4 on 4row_arch.
-            return ELTWISE_MATH_ROWS;
-        }
-    }();
-
-    _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>(num_rows_per_move_instrn);
-    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(
-        find_max(FACE_R_DIM, num_rows_per_matrix), num_matrices, num_rows_per_move_instrn);
+    _llk_math_eltwise_unary_datacopy_addrmod_<DATA_COPY_TYPE>();
+    _llk_math_eltwise_unary_datacopy_mop_config_<DATA_COPY_TYPE, IS_32b_DEST_EN>(find_max(FACE_R_DIM, num_rows_per_matrix), num_matrices);
 
     _set_tile_shape_idx_gpr_(find_max(FACE_R_DIM, num_rows_per_matrix));
 

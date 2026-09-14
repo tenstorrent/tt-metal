@@ -786,7 +786,7 @@ inline void _llk_math_matmul_init_(
         {
             _llk_math_matmul_di_mop_config_4row_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
         }
-        else
+        else if constexpr (ELTWISE_MATH_ROWS == 8)
         {
             _llk_math_matmul_di_mop_config_<MATH_FIDELITY_TYPE, ENABLE_2X_FORMAT>(ct_dim, rt_dim);
         }
