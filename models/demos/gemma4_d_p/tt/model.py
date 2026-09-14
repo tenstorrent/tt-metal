@@ -15,42 +15,6 @@ from models.demos.gemma4_d_p.tt.prefill_metadata import PrefillMetadata
 from models.demos.gemma4_d_p.utils.general_utils import get_cache_file_name
 
 
-def _get_lm_head_program_config(mesh_device, m: int, k: int, n: int):
-    """Distribute a token-tile projection across the compute grid with vocabulary shards."""
-    tile_size = 32
-    grid = mesh_device.compute_with_storage_grid_size()
-    num_cores = grid.x * grid.y
-
-    m_tiles = max(1, (m + tile_size - 1) // tile_size)
-    k_tiles = max(1, k // tile_size)
-    n_tiles = max(1, n // tile_size)
-
-    if m_tiles > 1 or n > 64 * 1024:
-        return None
-
-    per_core_n = max(1, (n_tiles + num_cores - 1) // num_cores)
-
-    in0_block_w = 32
-    while in0_block_w > 1 and k_tiles % in0_block_w != 0:
-        in0_block_w //= 2
-
-    out_subblock_w = min(per_core_n, 4)
-    while out_subblock_w > 1 and per_core_n % out_subblock_w != 0:
-        out_subblock_w -= 1
-
-    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
-        compute_with_storage_grid_size=ttnn.CoreCoord(grid.x, grid.y),
-        in0_block_w=in0_block_w,
-        out_subblock_h=1,
-        out_subblock_w=out_subblock_w,
-        per_core_M=m_tiles,
-        per_core_N=per_core_n,
-        fuse_batch=True,
-        fused_activation=None,
-        mcast_in0=True,
-    )
-
-
 def _cp_chunk_major_row_order(max_seq_len, cp, chunk_size):
     """Row permutation putting each CP rank's positions in chunk order.
 
@@ -199,7 +163,6 @@ class Gemma4Model:
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
         self.vocab_size = hf_config.vocab_size
-        self.final_logit_softcapping = hf_config.final_logit_softcapping
         self.embed_scale = hf_config.hidden_size**0.5
         self.ccl_manager = ccl_manager
         self._rope_prefill_positions = None
@@ -225,7 +188,6 @@ class Gemma4Model:
         mlp_dtype = precision.get("shared_mlp", dtype)
         attention_dtype = precision.get("attention", dtype)
         embedding_dtype = precision.get("embedding", dtype)
-        lm_head_dtype = precision.get("lm_head", dtype)
         kv_cache_dtype = precision.get("kv_cache", dtype)
 
         # RoPE caches per layer type (sliding vs global)
@@ -323,8 +285,8 @@ class Gemma4Model:
     ):
         """Prefill one user's chunk and return its final decoder hidden states.
 
-        The caller owns trace staging and runs the LM head on the final token
-        after the last chunk. Migration acknowledgements follow each layer's KV writes.
+        The caller owns trace staging. Migration acknowledgements follow each
+        layer's KV writes.
         """
         seq_len = hidden_states.shape[2]
         if hidden_states.shape[0] != 1 or hidden_states.shape[1] != 1:
@@ -375,35 +337,6 @@ class Gemma4Model:
                     on_layer_complete(i)
         return hidden_states
 
-    def _cp_gather_prefill_sequence(self, hidden_states):
-        """Gather a chunk across CP ranks without freeing the caller-owned hidden states."""
-
-        if self.mesh_config.cp_degree <= 1:
-            return hidden_states
-        return ttnn.all_gather(
-            hidden_states,
-            dim=2,
-            cluster_axis=self.mesh_config.cp_axis,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-    def _apply_lm_head(self, hidden_states):
-        """Project a token tile to logits, apply softcapping, and gather the vocabulary."""
-        from models.demos.gemma4_d_p.tt.ccl import ccl_allgather
-
-        if self.lm_head_weight is None:
-            raise RuntimeError("LM head weights not loaded")
-        program_config = _get_lm_head_program_config(
-            self.mesh_device, m=hidden_states.shape[2], k=self.hidden_size, n=self.lm_head_weight.shape[-1]
-        )
-        logits = ttnn.linear(hidden_states, self.lm_head_weight, program_config=program_config)
-        hidden_states.deallocate(True)
-        if self.final_logit_softcapping and self.final_logit_softcapping > 0:
-            cap = self.final_logit_softcapping
-            logits = ttnn.mul(logits, 1.0 / cap)
-            logits = ttnn.tanh(logits)
-            logits = ttnn.mul(logits, cap)
-        return ccl_allgather(logits, self.mesh_config, self.ccl_manager)
 
     def embed_tokens(self, tokens):
         """Embed input tokens and scale by sqrt(hidden_size).
@@ -430,24 +363,3 @@ class Gemma4Model:
             len(tokens.shape) == 2 and tokens.shape[0] == 1
         ), f"Expected tokens shaped [1, sequence_length], got {tokens.shape}"
         return ttnn.to_layout(self.embed_tokens(tokens), ttnn.TILE_LAYOUT)
-
-    def process_output_prefill(self, tt_out, last_token_idx):
-        """Read prefill logits to host and slice to the last token's vocab row.
-
-        Under TP, Gemma4 all-gathers logits inside the model so a single
-        device tensor already holds the full vocab.
-        """
-        if self.mesh_config is not None and self.mesh_config.tp_degree > 1:
-            torch_output = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
-        else:
-            torch_output = ttnn.to_torch(tt_out)
-        return torch_output[..., last_token_idx, : self.vocab_size]
-
-    def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
-        """Run the LM head on a chunk-relative token tile without freeing the trace output."""
-        gathered = self._cp_gather_prefill_sequence(hidden_states)
-        tile_start = (last_token_idx // 32) * 32
-        sliced = ttnn.slice(gathered, (0, 0, tile_start, 0), (1, 1, tile_start + 32, gathered.shape[-1]))
-        if gathered is not hidden_states and gathered is not sliced:
-            gathered.deallocate(True)
-        return self._apply_lm_head(sliced)

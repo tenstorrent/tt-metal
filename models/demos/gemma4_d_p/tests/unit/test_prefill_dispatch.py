@@ -123,37 +123,3 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
     assert (result.wqk is not None) == is_global
     assert (result.wqkv is not None) != is_global
     assert len([name for name in loaded if "/wqk" in name]) == 1
-
-
-def test_last_token_projection_gathers_cp_before_slicing(monkeypatch):
-    events = []
-    hidden = SimpleNamespace(shape=(1, 1, 1024, 64), deallocate=Mock())
-    gathered = SimpleNamespace(shape=(1, 1, 8192, 64), deallocate=Mock())
-    token_tile = object()
-    logits = object()
-    model = object.__new__(Gemma4Model)
-
-    def gather(actual):
-        assert actual is hidden
-        events.append("gather")
-        return gathered
-
-    def slice_tile(actual, start, end):
-        assert actual is gathered
-        assert start == (0, 0, 8160, 0)
-        assert end == (1, 1, 8192, 64)
-        events.append("slice")
-        return token_tile
-
-    def project(actual):
-        assert actual is token_tile
-        events.append("project")
-        return logits
-
-    model._cp_gather_prefill_sequence = gather
-    model._apply_lm_head = project
-    monkeypatch.setattr(ttnn, "slice", slice_tile)
-    assert model.process_logits_after_prefill_trace(hidden, 8191) is logits
-    assert events == ["gather", "slice", "project"]
-    hidden.deallocate.assert_not_called()
-    gathered.deallocate.assert_called_once_with(True)
