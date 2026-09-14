@@ -30,6 +30,7 @@ and returning non-zero. **If it rejects, report the reason and stop.**
   must be preserved for every tester, optimizer, and prettifier invocation
 - `WORKTREE_BRANCH` — non-empty string
 - `LOG_DIR_BASE` — must be exactly `/proj_sw/user_dev/llk_code_gen`
+- `LOG_DIR` — when set, must be under that base; otherwise the router started the run against a wrong path and must redo `execute_step_begin_setup`
 
 **CRITICAL: All code writes and file modifications MUST happen inside `$WORKTREE_DIR/tt_metal/tt-llk`, `$WORKTREE_DIR/tt_metal/hw/ckernels`, or `$WORKTREE_DIR/tt_metal/hw/inc/api`.** The worktree has `codegen/` populated with symlinks to the source branch (read-only: `agents/`, `scripts/`, `references/`, `config/`, `CLAUDE.md`, `skills/`) plus a real per-worktree `codegen/artifacts/` directory for this run's outputs. Anything you or a subagent writes outside the worktree leaks into the source branch.
 

@@ -18,6 +18,16 @@
 # worktree; following it to the source copy is fine — same code.
 _ORCH_SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# The only accepted log base: the shared dashboard tree. Every step that creates a
+# run directory checks against it BEFORE writing, so a wrong path is rejected
+# while nothing exists yet.
+_LOG_DIR_BASE="/proj_sw/user_dev/llk_code_gen"
+_reject_log_base() {   # Arg: the value offered. Returns 0 when acceptable.
+    [ "$1" = "$_LOG_DIR_BASE" ] && return 0
+    echo "REJECT: LOG_DIR_BASE must be exactly ${_LOG_DIR_BASE} (got '${1:-<empty>}'). Nothing was created; fix it and rerun this step."
+    return 1
+}
+
 # --- out-of-space (ENOSPC) guard -------------------------------------------
 # True when a captured error string carries the out-of-space signature.
 _is_enospc() { printf '%s' "$1" | grep -qiE 'no space left on device|errno 28|enospc'; }
@@ -98,7 +108,7 @@ execute_step_report_no_space() {
         rc=$?
         if [ "$rc" -eq 0 ]; then
             python -c "import json; d=json.load(open('$_L/run.json')); print(json.dumps(d))" \
-                >> /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl 2>/dev/null || true
+                >> "$_LOG_DIR_BASE/quasar/runs.jsonl" 2>/dev/null || true
             echo "NO_SPACE_REPORTED: run.json finalized failed (no space on device) after ${attempt} attempt(s)"
             return 0
         fi
@@ -120,20 +130,26 @@ execute_step_validate_input() {
     [ -n "$wt" ] && [ -d "$wt" ] || { echo "REJECT: WORKTREE_DIR missing or not a directory: '$wt'"; return 1; }
     cd "$wt/tt_metal/tt-llk" || { echo "REJECT: cannot cd into $wt/tt_metal/tt-llk"; return 1; }
 
-    local S="$_ORCH_SCRIPTS" kn ta sm qsb wb ldb ok=1
+    local S="$_ORCH_SCRIPTS" kn ta sm qsb wb ldb ld ok=1
     kn="$(python "$S/state.py" --worktree-dir "$wt" get KERNEL_NAME)"
     ta="$(python "$S/state.py" --worktree-dir "$wt" get TARGET_ARCH)"
     sm="$(python "$S/state.py" --worktree-dir "$wt" get SFPI_MODE)"
     qsb="$(python "$S/state.py" --worktree-dir "$wt" get QSR_SIM_BACKEND)"
     wb="$(python "$S/state.py" --worktree-dir "$wt" get WORKTREE_BRANCH)"
     ldb="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
+    ld="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR)"
 
     [ -n "$kn" ] || { echo "REJECT: KERNEL_NAME is empty"; ok=0; }
     [ "$ta" = "quasar" ] || { echo "REJECT: TARGET_ARCH must be 'quasar' (got '$ta')"; ok=0; }
     { [ "$sm" = "true" ] || [ "$sm" = "false" ]; } || { echo "REJECT: SFPI_MODE must be exactly true/false (got '$sm')"; ok=0; }
     { [ "$qsb" = "emu" ] || [ "$qsb" = "vcs" ]; } || { echo "REJECT: QSR_SIM_BACKEND must be emu/vcs (got '$qsb')"; ok=0; }
     [ -n "$wb" ] || { echo "REJECT: WORKTREE_BRANCH is empty"; ok=0; }
-    [ "$ldb" = "/proj_sw/user_dev/llk_code_gen" ] || { echo "REJECT: LOG_DIR_BASE must be /proj_sw/user_dev/llk_code_gen (got '$ldb')"; ok=0; }
+    _reject_log_base "$ldb" || ok=0
+    # LOG_DIR was derived by begin_setup; a value outside the base means the run was started
+    # against a wrong path and its run.json already lives there. Refuse rather than continue.
+    if [ -n "$ld" ]; then
+        case "$ld" in "$_LOG_DIR_BASE"/*) ;; *) echo "REJECT: LOG_DIR '$ld' is outside ${_LOG_DIR_BASE} — rerun execute_step_begin_setup with the correct base"; ok=0 ;; esac
+    fi
     [ "$ok" = 1 ] || return 1
     echo "OK: KERNEL_NAME=$kn TARGET_ARCH=$ta SFPI_MODE=$sm QSR_SIM_BACKEND=$qsb WORKTREE_BRANCH=$wb LOG_DIR_BASE=$ldb"
 }
@@ -157,6 +173,7 @@ execute_step_validate_env() {
 execute_step_begin_setup() {
     local kernel="$1" arch="$2" log_dir_base="$3"
     local START_TIME RUN_ID LOG_DIR BATCH_ID MODEL RUN_TYPE CODEGEN_VERSION PROMPT QSR_BACKEND QUEUE_ITEM_ID
+    _reject_log_base "$log_dir_base" || return 1   # before anything is created
     QSR_BACKEND="${QSR_SIM_BACKEND:-emu}"
     [ "$QSR_BACKEND" = emulator ] && QSR_BACKEND=emu
     { [ "$QSR_BACKEND" = emu ] || [ "$QSR_BACKEND" = vcs ]; } || {
@@ -248,10 +265,12 @@ execute_step_setup_run() {
     REMOVE_TESTS="$(python "$S/state.py" --worktree-dir "$wt" get REMOVE_TESTS)"; REMOVE_TESTS="${REMOVE_TESTS:-false}"
     HIDE_EXISTING_KERNEL="$(python "$S/state.py" --worktree-dir "$wt" get HIDE_EXISTING_KERNEL)"; HIDE_EXISTING_KERNEL="${HIDE_EXISTING_KERNEL:-false}"
     LOG_DIR_BASE="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR_BASE)"
+    _reject_log_base "$LOG_DIR_BASE" || return 1   # before the run dir is created
     # Reuse begin_setup's identity if the router threaded it into worktree state;
     # otherwise compute fresh (flows that skip begin_setup).
     RUN_ID="$(python "$S/state.py" --worktree-dir "$wt" get RUN_ID)"
     LOG_DIR="$(python "$S/state.py" --worktree-dir "$wt" get LOG_DIR)"
+    case "$LOG_DIR" in ""|"$_LOG_DIR_BASE"/*) ;; *) echo "REJECT: LOG_DIR '$LOG_DIR' is outside ${_LOG_DIR_BASE} — rerun execute_step_begin_setup with the correct base"; return 1 ;; esac
     if [ -z "$RUN_ID" ] || [ -z "$LOG_DIR" ]; then
         RUN_ID="$(date +%Y-%m-%d)_${KERNEL_NAME}_${TARGET_ARCH}_$(head -c 4 /dev/urandom | xxd -p)"
         LOG_DIR="$LOG_DIR_BASE/quasar/$RUN_ID"
@@ -653,6 +672,18 @@ _perf_run() {
     return "$rc"
 }
 
+# _perf_run with retries on exit 3 (simulator unavailable). Same args. Up to
+# PERF_ENV_RETRIES extra tries (default 2); any other exit code returns at once.
+_perf_run_retry() {
+    local tries max rc; max="$(sg PERF_ENV_RETRIES)"; [ -n "$max" ] || max=2
+    for tries in $(seq 0 "$max"); do
+        _perf_run "$@"; rc=$?
+        [ "$rc" -eq 3 ] || return "$rc"
+        [ "$tries" -lt "$max" ] && echo "  perf $1: simulator unavailable (exit 3) — retry $((tries + 1))/${max}"
+    done
+    return 3
+}
+
 # One line from a perf_eval.py result, 11 '|'-separated fields:
 # verdict|median%|worst%|cur_cycles|base_cycles|variants|improved|neutral|regressed|worst_key|verdict_typical
 # verdict = strict any-variant-slower rule (drives the loop); verdict_typical = median (reported).
@@ -894,11 +925,13 @@ execute_step_perf_baseline() {
 
     local build_root="${TMPDIR:-/tmp}/codegen-perf-baseline-$(sg RUN_ID)" rc
     rm -rf "$build_root"
-    _perf_run baseline full "$build_root"; rc=$?
+    _perf_run_retry baseline full "$build_root"; rc=$?
     rm -rf "$build_root"   # no ELF of the hidden kernel may survive
     if [ "$rc" -ne 0 ] || [ -z "$_PERF_CSV" ]; then
-        ss PERF_REASON "baseline perf run failed (run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing})"
-        echo "perf_baseline: FAILED (run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing}) — perf comparison disabled; log: $_L/perf_baseline/run.log"
+        local why="run_test.sh exit ${rc}, csv=${_PERF_CSV:-missing}"
+        [ "$rc" -eq 3 ] && why="simulator unavailable after retries (exit 3)"
+        ss PERF_REASON "baseline perf run failed (${why})"
+        echo "perf_baseline: FAILED (${why}) — perf comparison disabled; log: $_L/perf_baseline/run.log"
         return 0
     fi
     # SFPU work runs on the math thread, so MATH_ISOLATE is the kernel's own cost.
@@ -1664,7 +1697,7 @@ PY
     # $LOG_DIR/run.json is the authoritative per-run record — derive the
     # runs.jsonl entry from it so the two artifacts stay in sync.
     python -c "import json; d=json.load(open('$_L/run.json')); print(json.dumps(d))" \
-        >> /proj_sw/user_dev/llk_code_gen/quasar/runs.jsonl
+        >> "$_LOG_DIR_BASE/quasar/runs.jsonl"
 }
 
 # ===========================================================================

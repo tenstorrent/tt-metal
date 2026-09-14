@@ -127,9 +127,11 @@ For `REQUEST_TYPE=generate` on quasar, put the run in motion before creating the
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_begin_setup {kernel} {target_arch} "/proj_sw/user_dev/${USER}/llk_code_gen"
+execute_step_begin_setup {kernel} {target_arch} "/proj_sw/user_dev/llk_code_gen"
 # Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
 ```
+
+The log base is the shared dashboard tree, literally `/proj_sw/user_dev/llk_code_gen`. If the step prints `REJECT:`, nothing was created; fix the argument and rerun it.
 
 Set up an isolated worktree so all code changes happen on a dedicated branch
 based on `CODEGEN_BASE_COMMIT` when set, or `origin/main` otherwise.
@@ -175,7 +177,7 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH 
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set QSR_SIM_BACKEND "{emu|vcs}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
-python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/${USER}/llk_code_gen"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
 # From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR    "{log_dir}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "{run_id}"
