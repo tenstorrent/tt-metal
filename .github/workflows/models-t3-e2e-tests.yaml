@@ -40,6 +40,7 @@ on:
           - bert-large
           - distilbert
           - squeezebert
+          - modernbert-base
           - mnist-mlp
           - efficientdet-d0
           - mobilenetv3

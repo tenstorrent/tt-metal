@@ -36,6 +36,7 @@ on:
           - sd35
           - mochi
           - bert-large
+          - modernbert-base
           - tt-model-sampling
           - efficientdet-d0
           - mobilenetv3
