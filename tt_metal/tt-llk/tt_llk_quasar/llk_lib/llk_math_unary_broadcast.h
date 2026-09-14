@@ -166,7 +166,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
                 temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
                 temp.program_bank0_sw_cntl(instrn_buffer);
             }
-            else
+            else if constexpr (ELTWISE_MATH_ROWS == 4)
             {
                 constexpr std::uint32_t replay_buf_len = 20;
                 load_replay_buf<0, replay_buf_len>(
@@ -227,7 +227,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
                 temp.set_end_op(TT_OP_CLEARDVALID(p_cleardvalid::CLR_SRCB_VLD, 0, 0, 0, 0, 0));
                 temp.program_bank0_sw_cntl(instrn_buffer);
             }
-            else
+            else if constexpr (ELTWISE_MATH_ROWS == 4)
             {
                 constexpr std::uint32_t replay_buf_len = 6;
                 load_replay_buf<0, replay_buf_len>(
