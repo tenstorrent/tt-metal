@@ -113,12 +113,6 @@ RELU_CC_OPS = [
 ]
 
 
-def _quasar_relu_min(x, threshold=RELU_MIN_THRESHOLD):
-    """x if x > threshold else 0 (not max(x, threshold))."""
-    xf = float(x)
-    return xf if xf > float(threshold) else 0.0
-
-
 # Extra (integer) formats only the comp family sweeps. Int32/Int16/Int8 (signed) and UInt8
 # (unsigned) use their native Quasar dest format. UInt16 is the exception: it has no native Quasar
 # dest format, so the inference routes its data path through Int16 and sets FormatConfig.sfpu_src=
@@ -879,22 +873,14 @@ def test_eltwise_unary_sfpu_quasar(
     if not is_perf:
         if format_dict[formats.input_format].is_floating_point:
             generate_golden = get_golden_generator(UnarySFPUGolden)
-            orig_relu_min = None
-            if mathop == MathOperation.ReluMin:
-                orig_relu_min = generate_golden.ops[MathOperation.ReluMin]
-                generate_golden.ops[MathOperation.ReluMin] = _quasar_relu_min
-            try:
-                golden_tensor = generate_golden(
-                    mathop,
-                    src_A,
-                    formats.output_format,
-                    dest_acc,
-                    formats.input_format,
-                    input_dimensions,
-                )
-            finally:
-                if orig_relu_min is not None:
-                    generate_golden.ops[MathOperation.ReluMin] = orig_relu_min
+            golden_tensor = generate_golden(
+                mathop,
+                src_A,
+                formats.output_format,
+                dest_acc,
+                formats.input_format,
+                input_dimensions,
+            )
         else:
             # Integer-input ops (Int32/Int16/UInt16 — currently only the comp family): apply the
             # UnarySFPUGolden op element-wise instead of through its __call__. __call__ runs a
