@@ -798,6 +798,20 @@ _OP_DOMAIN_REGISTRY: Dict[
             distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
         ),
     ),
+    # logaddexp2: same shape, tighter boundary. The composed log2(2**a + 2**b) form
+    # overflows past |x| > 127 rather than 88.7, so the same +/-200 draw crosses it
+    # with room to spare: 33.2% of positions have max(a, b) past 127. The
+    # log2(1 + 2**-|a - b|) correction is worth more than half an ulp of the result
+    # on 1.3% of positions, against 0.7% for logaddexp -- a band 1.85x wider,
+    # because 2**-|a - b| decays more slowly than e**-|a - b|.
+    MathOperation.SfpuLogaddexp2: OperandSpecs(
+        spec_A=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+        spec_B=StimuliSpec(
+            distribution=DistributionKind.UNIFORM, low=-200.0, high=200.0
+        ),
+    ),
     MathOperation.SfpuAddTopRow: OperandSpecs(
         spec_A=StimuliSpec(distribution=DistributionKind.UNIFORM, low=-1.0, high=1.0)
     ),
@@ -1081,6 +1095,7 @@ _SFPU_BINARY_OPS: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuElwrsub,
         MathOperation.SfpuXlogy,
         MathOperation.SfpuLogaddexp,
+        MathOperation.SfpuLogaddexp2,
         MathOperation.SfpuElwLeftShift,
         MathOperation.SfpuElwRightShift,
         MathOperation.SfpuElwLogicalRightShift,
@@ -2240,7 +2255,7 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         # Composition through a reciprocal / log / exp. Each builds its result from a primitive
         # the ISA specifies only inside a stated finite range, so what the composition does with
         # a non-finite input is an LLK decision rather than an ISA one, and one answer decides
-        # all seven.
+        # all eight.
         MathOperation.SfpuElwdiv,  # reciprocal + Newton-Raphson
         MathOperation.SfpuXlogy,  # x * log(y)
         MathOperation.SfpuElwpow,  # exp(b * ln a)
@@ -2248,6 +2263,7 @@ _BINARY_SPECIALS_NOT_READY: FrozenSet[MathOperation] = frozenset(
         MathOperation.SfpuBinaryRemainder,  # as fmod
         MathOperation.SfpuAtan2,  # ratio plus a format-specific polynomial; 2 cells, not 4
         MathOperation.SfpuLogaddexp,  # max(a, b) + log1p(exp(-|a - b|))
+        MathOperation.SfpuLogaddexp2,  # as logaddexp, correction scaled by log2(e)
         # Compare-against-zero on an operand that may be a NaN: calculate_mask lowers to
         # SFPSETCC, which is unspecified for a negative zero or a NaN. The same thing that
         # holds Sign and Heaviside out of the unary gate.

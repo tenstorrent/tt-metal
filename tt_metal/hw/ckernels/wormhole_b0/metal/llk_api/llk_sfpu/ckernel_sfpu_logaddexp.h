@@ -66,13 +66,13 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
 // have to be loaded here: an SFPU helper called from another op's kernel does not carry
 // its own initialisation. Without this, calculate_log1p_fp32 returns 2^24 instead of ln 2.
 //
-// Delegating to log1p_init rather than copying its values keeps one source for the tuned
-// coefficients: a retune of the log1p polynomial reaches this op instead of silently
-// desyncing from it. The coefficient set differs by destination precision, which is why
-// this init is templated where the surrounding binary inits are not. log1p_init ignores
-// its first two template parameters.
+// The coefficient set differs by destination precision, which is why this init is
+// templated where the surrounding binary inits are not.
 template <bool is_fp32_dest_acc_en>
 inline void calculate_sfpu_logaddexp_init() {
+    // Delegating to log1p_init rather than copying its values keeps one source for the
+    // tuned coefficients: a retune of the log1p polynomial reaches this op instead of
+    // silently desyncing from it. log1p_init ignores its first two template parameters.
     log1p_init<false /* APPROXIMATION_MODE */, false /* FAST_APPROX */, is_fp32_dest_acc_en>();
 }
 
