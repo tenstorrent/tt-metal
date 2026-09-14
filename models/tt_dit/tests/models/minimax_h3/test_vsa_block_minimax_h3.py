@@ -46,9 +46,24 @@ HEAD_DIM = REAL_BLOCK_CONFIG["attention_head_dim"]
 HIDDEN_SIZE = REAL_BLOCK_CONFIG["hidden_size"]
 TIME_EMBED_DIM = REAL_BLOCK_CONFIG["time_embed_dim"]
 
-# 15 s / 768p production sizes: 362 frames -> 107 latent frames, 768x1344 canvas -> (24, 42)
-# patch grid; text 512; audio at 40 latents/s -> 604 rows (kept even for the stereo layout).
-_15S = dict(num_text=512, num_audio=604, grid=(107, 24, 42))
+
+# 768p production sizes (768x1344 canvas -> (24, 42) patch grid, text 512, audio at 40 latents/s kept even for the
+# stereo layout) for a clip of VSA_BLOCK_SECONDS seconds (default 15: 362 frames -> 107 latent frames, 604 audio).
+def _shape_for(seconds: float) -> dict:
+    from ....pipelines.minimax_h3.packing import (
+        MINIMAX_H3_FPS,
+        align_num_frames,
+        audio_latent_num_frames,
+        video_latent_num_frames,
+    )
+
+    frames = align_num_frames(round(seconds * MINIMAX_H3_FPS))
+    audio = audio_latent_num_frames(frames)
+    audio += audio % 2
+    return dict(num_text=512, num_audio=audio, grid=(video_latent_num_frames(frames), 24, 42), seconds=seconds)
+
+
+_15S = _shape_for(float(os.environ.get("VSA_BLOCK_SECONDS", "15")))
 
 _ring_8k_trace = {**ring_params_8k_req_exact_devices, "trace_region_size": 150_000_000, "l1_small_size": 65536}
 
@@ -79,7 +94,7 @@ def test_vsa_block_15s_768p(mesh_device, sp_axis, tp_axis, num_links, is_fsdp, t
     placement = os.environ.get("VSA_PLACEMENT", DEFAULT_VSA_PLACEMENT)  # see test_vsa_performance_minimax_h3
     geometry = build_vsa_geometry((num_text, 0, num_audio), grid, sp_factor=sp_factor, placement=placement)
     logger.info(
-        f"15s/768p: seq_len={seq_len}, tiles={geometry.n_tiles} ({geometry.n_pad_tiles} pad), "
+        f"{_15S['seconds']:g}s/768p: seq_len={seq_len}, tiles={geometry.n_tiles} ({geometry.n_pad_tiles} pad), "
         f"padded_len={geometry.padded_len} ({geometry.padded_len // sp_factor} rows/device)"
     )
 

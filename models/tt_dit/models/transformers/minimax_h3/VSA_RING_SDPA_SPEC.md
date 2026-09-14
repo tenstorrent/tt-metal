@@ -417,3 +417,42 @@ with ONE link (8 / 10 senders), but 2 links x 3+ workers (16+ senders, spilling 
 4 workers did with the stock builder in section 12. The MUX with 3-4 clients is therefore fine and the hang is tied
 to the second-row placement (root cause open); the op refuses such configurations at validation instead of timing
 out on the device.
+
+## 16. Robustness across clip lengths (2026-09-14)
+
+The 768p / SP=8 pipeline hands the fine stage these per-device shapes (`build_vsa_geometry`, interleaved placement;
+text 512, audio at 40 latents/s):
+
+| clip | frames / latent frames | T_local | blocks per shard | tile rows per shard | k | dense rows per shard | pad tiles |
+|---|---|---|---|---|---|---|---|
+| 5 s | 124 / 37 | 5376 | 84 | 168 | 66 | 1-2 | 0 |
+| 10 s | 243 / 72 | 9664 | 151 | 302 | 119 | 1-2 | 5 |
+| 15 s | 362 / 107 | 14400 | 225 | 450 | 179 | 2-3 | 0 |
+
+What varies for the op: the gather's row split (302 rows over 4 workers is 75/76 each, so blocks straddle two
+workers' ranges -- the gate waits per tile row, so this is exercised, not special-cased), pad tiles at 10 s (the
+leader skips blocks with zero counts, as the plain op does), and the pass layout: 5 s runs ONE pass (12-13 rows per
+consumer, dense rows placed least-loaded), 10 s two passes with a 3-4 row second pass, 15 s two passes of 18 + 10-11.
+The 10 s two-op reference differs from the ring by bf16 rounding order only (max |diff| 0.006 over 67,648 row
+blocks, none above 1e-2; PCC 0.99994 because the longer near-uniform lists shrink the output variance).
+
+Measurements (slowest device; op-level with the model's k and dense counts, random lists; block = traced block
+period, 20 replays):
+
+| clip | two-op op | ring op | block two-op | block ring |
+|---|---|---|---|---|
+| 5 s | 6.62 | 4.76 | 20.50 | 18.94 |
+| 10 s | 14.31 | 10.10 | 39.78 | 37.32 |
+| 15 s | 25.68 | 20.09 | 62.30 | 59.48 |
+
+All three shapes pass the perf test's determinism check (a program-cache hit with the other semaphore set is
+bit-identical) and the model block test (`VSA_BLOCK_SECONDS=5|10|15`, traced vs untraced PCC 100 %). The perf test
+is parametrized by clip (`-k 5s|10s|15s`), the block and e2e tests take `VSA_BLOCK_SECONDS` / `VSA_E2E_SECONDS`, and
+a unit variant (`test_vsa_ring_sdpa_odd_blocks`, 13 blocks per shard, dense rows) pins the mid-block gather split
+against the torch reference (passes, PCC 0.9998 vs torch). End to end (real weights, 8 steps, same-session pairs):
+
+| clip | denoise/step vsa | denoise/step ring | gain |
+|---|---|---|---|
+| 5 s | 0.859 s | 0.816 s | -43 ms (-5.0 %) |
+| 10 s | 1.701 s | 1.568 s | -133 ms (-7.8 %) |
+| 15 s | 2.727 s | 2.569 s | -158 ms (-5.8 %) |

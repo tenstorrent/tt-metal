@@ -37,6 +37,15 @@ def _selection(heads, rows_local, blocks_per_shard, sp, my_shard, k_sel, exempt_
     return idx
 
 
+# The per-device fine-stage shapes the 768p / SP=8 pipeline produces (build_vsa_geometry, interleaved placement):
+# 64-token blocks per shard, top-k list length (sparsity 0.9) and dense (exempt-token) q rows per shard.
+SHAPES = {
+    "5s": dict(blocks_per_shard=84, k_sel=66, n_dense=2),
+    "10s": dict(blocks_per_shard=151, k_sel=119, n_dense=2),  # odd block count: gather rows split mid-block
+    "15s": dict(blocks_per_shard=225, k_sel=179, n_dense=4),
+}
+
+
 @pytest.mark.parametrize(
     ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params"),
     [
@@ -51,11 +60,13 @@ def _selection(heads, rows_local, blocks_per_shard, sp, my_shard, k_sel, exempt_
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_seeds):
+@pytest.mark.parametrize("shape", list(SHAPES.keys()), ids=list(SHAPES.keys()))
+def test_vsa_ring_sdpa_perf(mesh_device, sp_axis, tp_axis, num_links, shape, reset_seeds):
     skip_if_unsupported_num_links(mesh_device, num_links)
     sp = tuple(mesh_device.shape)[sp_axis]
     tp = tuple(mesh_device.shape)[tp_axis]
-    heads_local, blocks_per_shard, k_sel = 14, 226, 179
+    heads_local = 14
+    blocks_per_shard, k_sel = SHAPES[shape]["blocks_per_shard"], SHAPES[shape]["k_sel"]
     heads_total = heads_local * tp
     n_blocks = blocks_per_shard * sp
     t_local = blocks_per_shard * BLOCK
@@ -109,9 +120,9 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
     sems = [[ttnn.create_global_semaphore(mesh_device, crs, 0) for _ in range(2)] for _ in range(2)]
     # dense (exempt-token) q rows like the model's 15 s block (4 per device): the same LOCAL rows on every shard,
     # VSA_RING_PERF_DENSE=n (0 disables). They cost ~7 sparse rows each and drive the ring's pass layout.
-    n_dense = int(os.environ.get("VSA_RING_PERF_DENSE", "4"))
+    n_dense = int(os.environ.get("VSA_RING_PERF_DENSE", str(SHAPES[shape]["n_dense"])))
     dense_local_rows = [int(round((i + 0.5) * blocks_per_shard / n_dense)) for i in range(n_dense)]
-    dense_words = (blocks_per_shard + 31) // 32
+    dense_words = ((blocks_per_shard + 31) // 32 + 7) // 8 * 8  # the op wants words*4 a multiple of 32
     mask = torch.zeros(dense_words, dtype=torch.int64)
     for r in dense_local_rows:
         mask[r // 32] |= 1 << (r % 32)
@@ -210,12 +221,30 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
     else:
         ms_two, out_two = bench(two_op, "all_gather x2 + vsa_sdpa")
     ms_ring, out_ring = bench(ring, "vsa_ring_sdpa")
+    out_again = ring(0)  # determinism: a program-cache hit with the other semaphore set must match bit for bit
+    ttnn.synchronize_device(mesh_device)
     compose = ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_shape, dims=shard_qkv)
     a = ttnn.to_torch(out_two, mesh_composer=compose).float()
     b = ttnn.to_torch(out_ring, mesh_composer=compose).float()
     pcc = torch.corrcoef(torch.stack([a.flatten(), b.flatten()]))[0, 1].item()
+    if pcc < 0.99999:  # where does the ring differ from the two-op path: per (head, 64-row q block) max |diff|
+        d = (a - b).abs().amax(dim=-1)  # [1, H_total, S_total]
+        rows = d.reshape(d.shape[1], -1, 64).amax(dim=-1)  # [H_total, S_total/64]
+        flat = rows.flatten()
+        top = torch.topk(flat, 8)
+        logger.warning(
+            f"ring vs two_op: max|diff|={flat.max():.4f} rows>1e-2: {(flat > 1e-2).sum().item()}/{flat.numel()} "
+            f"rows>1e-1: {(flat > 1e-1).sum().item()}; top rows (head, qrow, diff): "
+            + ", ".join(
+                f"({i // rows.shape[1]}, {i % rows.shape[1]}, {v:.3f})"
+                for v, i in zip(top.values.tolist(), top.indices.tolist())
+            )
+        )
+    again = ttnn.to_torch(out_again, mesh_composer=compose).float()
+    assert torch.equal(b, again), "vsa_ring_sdpa is not deterministic across calls"
+    assert torch.isfinite(b).all(), "vsa_ring_sdpa output has NaN/Inf"
     print(
-        f"\nVSA_RING_PERF concat={ms_cat:.2f} ag={ms_ag:.2f} vsa={ms_vsa:.2f} two_op={ms_two:.2f} ring={ms_ring:.2f} ms "
+        f"\nVSA_RING_PERF shape={shape} concat={ms_cat:.2f} ag={ms_ag:.2f} vsa={ms_vsa:.2f} two_op={ms_two:.2f} ring={ms_ring:.2f} ms "
         f"saving={ms_two - ms_ring - ms_cat:.2f} ms (incl. concat) pcc={pcc:.6f} workers={workers} "
         f"wait_all={os.environ.get('TT_VSA_RING_WAIT_ALL', '0')} coarse={os.environ.get('TT_VSA_RING_COARSE', '0')} "
         f"rmax={os.environ.get('TT_VSA_RMAX', '-')} depth={os.environ.get('TT_VSA_DEPTH', '-')} dense={n_dense}"

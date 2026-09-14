@@ -25,7 +25,8 @@ def test_t2va_15s_768p_e2e_perf(mesh_device, reset_seeds):
     steps = int(os.environ.get("VSA_E2E_STEPS", "50"))
     weights = weights_dir("transformer", "text_encoder", "vae", "audio_vae")
     height, width = resolve_canvas_size(16, 9)  # 768 x 1344
-    num_frames = align_num_frames(round(15.0 * MINIMAX_H3_FPS))
+    seconds = float(os.environ.get("VSA_E2E_SECONDS", "15"))  # 5 / 10 / 15 s clips
+    num_frames = align_num_frames(round(seconds * MINIMAX_H3_FPS))
 
     order = os.environ.get("VSA_E2E_STREAM_ORDER")  # e.g. identity | bstride4.16 (default: the config default)
     vsa_kw = {"stream_order": order} if order else {}
@@ -46,7 +47,7 @@ def test_t2va_15s_768p_e2e_perf(mesh_device, reset_seeds):
     total = sum(seconds for _, seconds in rows)
     order = vsa_config.stream_order if vsa_config else "-"
     logger.info(
-        f"E2E_PERF mode={mode} steps={steps} frames={output.num_frames} stream_order={order} warm_total={total:.1f}s"
+        f"E2E_PERF mode={mode} seconds={seconds:g} steps={steps} frames={output.num_frames} stream_order={order} warm_total={total:.1f}s"
     )
     for label, seconds in rows:
         logger.info(f"E2E_PERF   {label:<20} {seconds:8.1f}s")

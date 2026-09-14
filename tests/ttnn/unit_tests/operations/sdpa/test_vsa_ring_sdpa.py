@@ -239,3 +239,22 @@ def test_vsa_ring_sdpa_medium(mesh_device, sp_axis, tp_axis, num_links, reset_se
         seed=1,
         trace=False,
     )
+
+
+@GALAXY_4X8
+def test_vsa_ring_sdpa_odd_blocks(mesh_device, sp_axis, tp_axis, num_links, reset_seeds):
+    """Odd blocks per shard (13 -> 26 tile rows over the gather's 4 workers: 7/7/6/6 rows, so blocks straddle two
+    workers' row ranges, as the 10 s clip's 151 blocks do) with dense rows, against the torch reference."""
+    skip_if_unsupported_num_links(mesh_device, num_links)
+    _run(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        num_links,
+        heads_total=56,
+        blocks_per_shard=13,
+        k_sel=8,
+        dense_local_rows=[2, 9],
+        seed=3,
+        trace=False,
+    )
