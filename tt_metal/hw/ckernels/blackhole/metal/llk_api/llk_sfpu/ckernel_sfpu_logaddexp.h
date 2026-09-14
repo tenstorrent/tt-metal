@@ -33,6 +33,13 @@ namespace ckernel::sfpu {
 // Substituting a zero difference then keeps both signs correct:
 // max(+/-inf, +/-inf) + ln 2 = +/-inf. The added clause excludes NaNs, so they do
 // not take this equal-infinity fix-up.
+//
+// A NaN in either operand is propagated explicitly, not left to the arithmetic. max() is a
+// bare SFPSWAP with no NaN guard, so it orders a NaN by its sign: a negative NaN loses to
+// any finite operand and would drop out of the result. The NaN operand is therefore copied
+// into the result before the correction is added. SFPMAD addition is IEEE-754 for a
+// non-finite input, so NaN + correction stays NaN whatever the exponential and log1p make
+// of the NaN difference.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;
@@ -41,6 +48,10 @@ inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_in
         sfpi::vFloat b = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
 
         sfpi::vFloat result = sfpi::max(a, b);
+        // A NaN operand is copied into the result rather than left to max(); see above.
+        v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) != 0) { result = a; }
+        v_elseif(sfpi::exexp(b) == 128 && sfpi::exman(b) != 0) { result = b; }
+        v_endif;
         v_if(sfpi::exexp(a) == 128 && sfpi::exman(a) == 0 && sfpi::as<sfpi::vInt>(a) == sfpi::as<sfpi::vInt>(b)) {
             a = 0.0f;
         }
