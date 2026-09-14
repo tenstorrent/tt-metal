@@ -23,16 +23,18 @@ namespace {
 // Runtime-arg slots holding buffer addresses, matched positionally by the kernels.  Both factories
 // pass addresses as plain uint32 runtime args, so override_runtime_arguments() re-applies exactly
 // these on every cache hit; every other slot is derived from state the program hash covers.
+//
+// Only *bare* buffer bases ride these slots.  Every offset that used to be folded into an address
+// (the K/V section start inside a fused shard, the per-core head start) is a separate scalar slot
+// that the kernel adds on device, so a tensor binding can later supply the base unchanged.
 constexpr uint32_t kInterleavedReaderIn0AddrIdx = 0;
 constexpr uint32_t kInterleavedReaderIn1AddrIdx = 1;  // literal 0 when there is no separate KV input
 constexpr uint32_t kInterleavedWriterQAddrIdx = 0;
 constexpr uint32_t kInterleavedWriterKAddrIdx = 1;
 constexpr uint32_t kInterleavedWriterVAddrIdx = 2;
 
-constexpr uint32_t kShardedQBaseAddrIdx = 6;
-constexpr uint32_t kShardedQStartAddrIdx = 7;    // q_base_addr + remote_q_head_start_idx * head_size
-constexpr uint32_t kShardedKVBaseAddrIdx = 15;   // k_base_addr on the reader, v_base_addr on the writer
-constexpr uint32_t kShardedKVStartAddrIdx = 16;  // ..._base_addr + remote_kv_head_start_idx * head_size
+constexpr uint32_t kShardedQBufferAddrIdx = 6;    // input_tensor_q shard base
+constexpr uint32_t kShardedKVBufferAddrIdx = 14;  // input_tensor_kv shard base, or input_tensor_q's when fused
 
 // Single source of truth for the Interleaved factory's per-core work split.  create_descriptor() and
 // override_runtime_arguments() both walk `cores` in this order, so the core -> runtime-arg-slot
@@ -357,11 +359,11 @@ struct ShardedCoreArgs {
     std::vector<uint32_t> writer_args;
 };
 
-// Single source of truth for the Sharded per-core reader/writer runtime args, INCLUDING the
-// address-derived slots (q/k/v base + per-core start addresses).  create_descriptor() emplaces these
-// on a cache miss; override_runtime_arguments() re-runs this builder and patches only the address
-// slots in place on every cache hit.  Both paths share this one builder so the baked and the
-// re-applied addresses cannot drift (an off-by-one index would silently corrupt an address).
+// Single source of truth for the Sharded per-core reader/writer runtime args, INCLUDING the two
+// buffer-address slots (bare Q and KV shard bases).  create_descriptor() emplaces these on a cache
+// miss; override_runtime_arguments() re-runs this builder and patches only the address slots in
+// place on every cache hit.  Both paths share this one builder so the baked and the re-applied
+// addresses cannot drift (an off-by-one index would silently corrupt an address).
 std::vector<ShardedCoreArgs> build_sharded_core_args(
     const NlpCreateHeadsDeviceOperation::operation_attributes_t& operation_attributes,
     const NlpCreateHeadsDeviceOperation::tensor_args_t& tensor_args,
@@ -396,18 +398,19 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
         num_kv_heads / (read_from_input_tensor_kv ? input_tensor_kv.value().shard_spec().value().num_cores()
                                                   : input_tensor.shard_spec().value().num_cores());
 
-    uint32_t q_base_addr = input_tensor.buffer()->address();
-    uint32_t k_base_addr = 0;
-    if (read_from_input_tensor_kv) {
-        k_base_addr = input_tensor_kv.value().buffer()->address();
-    } else {
-        k_base_addr = q_base_addr + per_core_in_q_heads * head_tiles * single_tile_size;
-    }
-    // Tied: V is K's own columns, so the writer reads from K's base rather than the section after
-    // it. v_start_addr below is derived from this, so the per-core offsets follow automatically.
-    uint32_t v_base_addr = operation_attributes.kv_tied
-                               ? k_base_addr
-                               : k_base_addr + (per_core_in_kv_heads * head_tiles * single_tile_size);
+    // Bare shard bases -- the only address-valued runtime args.  The K/V columns live either in the
+    // separate KV tensor's shard (section offset 0 for K) or after the Q heads inside the fused
+    // shard; that section start is passed as a byte offset the kernel adds to the base on device.
+    const uint32_t q_buffer_addr = input_tensor.buffer()->address();
+    const uint32_t kv_buffer_addr =
+        read_from_input_tensor_kv ? input_tensor_kv.value().buffer()->address() : q_buffer_addr;
+    const uint32_t k_section_offset =
+        read_from_input_tensor_kv ? 0 : per_core_in_q_heads * head_tiles * single_tile_size;
+    // Tied: V is K's own columns, so the writer reads from K's section rather than the one after
+    // it. The per-core head offsets are added on device from remote_kv_head_start_idx.
+    const uint32_t v_section_offset = operation_attributes.kv_tied
+                                          ? k_section_offset
+                                          : k_section_offset + (per_core_in_kv_heads * head_tiles * single_tile_size);
 
     uint32_t num_cores = std::max(q_cores.num_cores(), k_cores.num_cores());
     auto core_grid = q_cores.bounding_box();
@@ -428,9 +431,6 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     uint32_t remote_q_head_start_idx = 0;
     uint32_t remote_kv_head_start_idx = 0;
     uint32_t q_x = 0, q_y = 0, kv_x = 0, kv_y = 0;
-    uint32_t q_start_addr = q_base_addr;
-    uint32_t k_start_addr = k_base_addr;
-    uint32_t v_start_addr = v_base_addr;
 
     uint32_t remote_q_read = 0;
     uint32_t remote_kv_read = 0;
@@ -440,28 +440,28 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = cores[i];
         bool read_kv_heads = i < k_cores.num_cores();
-        std::vector<uint32_t> reader_runtime_args;
-        reader_runtime_args.reserve(18 + num_cores_x + num_cores_y);
-        reader_runtime_args = {
-            head_size,
-            per_risc0_out_q_heads,
-            per_core_in_q_heads,
-            remote_q_head_start_idx,
-            q_x,
-            q_y,
-            q_base_addr,
-            q_start_addr,
-            0,
-            read_kv_heads,
-            per_core_out_kv_heads,
-            per_core_in_kv_heads,
-            remote_kv_head_start_idx,
-            kv_x,
-            kv_y,
-            k_base_addr,
-            k_start_addr,
-            k_num_tiles,
-            num_cores_x,
+        // Slot layout is mirrored by reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp.  The
+        // kernel derives its start addresses itself: q = q_buffer_addr + remote_q_head_start_idx *
+        // head_size, kv = kv_buffer_addr + kv_section_offset + remote_kv_head_start_idx * head_size.
+        std::vector<uint32_t> reader_runtime_args = {
+            head_size,                 // 0
+            per_risc0_out_q_heads,     // 1  num_q_heads read by this RISC
+            per_core_in_q_heads,       // 2
+            remote_q_head_start_idx,   // 3
+            q_x,                       // 4
+            q_y,                       // 5
+            q_buffer_addr,             // 6  bare Q shard base (kShardedQBufferAddrIdx)
+            0,                         // 7  q_offset into the Q output CB (risc1 patches its half)
+            read_kv_heads,             // 8
+            per_core_out_kv_heads,     // 9
+            per_core_in_kv_heads,      // 10
+            remote_kv_head_start_idx,  // 11
+            kv_x,                      // 12
+            kv_y,                      // 13
+            kv_buffer_addr,            // 14 bare KV shard base (kShardedKVBufferAddrIdx)
+            k_section_offset,          // 15 byte offset of the K (reader) / V (writer) section
+            k_num_tiles,               // 16
+            num_cores_x,               // 17
         };
         reader_runtime_args.insert(reader_runtime_args.end(), noc_x_coords.begin(), noc_x_coords.end());
         reader_runtime_args.insert(reader_runtime_args.end(), noc_y_coords.begin(), noc_y_coords.end());
@@ -470,36 +470,30 @@ std::vector<ShardedCoreArgs> build_sharded_core_args(
         q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
         q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
         remote_q_head_start_idx = (remote_q_head_start_idx + per_risc0_out_q_heads) % per_core_in_q_heads;
-        q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
 
         // Reader gets the args as built above (risc0 values); writer gets the same vector with the
-        // risc1 q values and (for kv cores) the v addresses patched over slots 15/16.
+        // risc1 q values and (for kv cores) the V section offset patched over slot 15.
         std::vector<uint32_t> writer_runtime_args = reader_runtime_args;
 
         writer_runtime_args[1] = per_risc1_out_q_heads;
         writer_runtime_args[3] = remote_q_head_start_idx;
         writer_runtime_args[4] = q_x;
         writer_runtime_args[5] = q_y;
-        writer_runtime_args[7] = q_start_addr;
-        writer_runtime_args[8] = per_risc0_out_q_heads * head_size;
+        writer_runtime_args[7] = per_risc0_out_q_heads * head_size;
 
         if (per_risc1_out_q_heads > 0) {
             remote_q_read += per_risc1_out_q_heads;
             q_y = (remote_q_read / per_core_in_q_heads) / num_cores_x;
             q_x = (remote_q_read / per_core_in_q_heads) % num_cores_x;
             remote_q_head_start_idx = (per_risc1_out_q_heads + remote_q_head_start_idx) % per_core_in_q_heads;
-            q_start_addr = q_base_addr + remote_q_head_start_idx * head_size;
         }
 
         if (read_kv_heads) {
-            writer_runtime_args[15] = v_base_addr;
-            writer_runtime_args[16] = v_start_addr;
+            writer_runtime_args[15] = v_section_offset;
             remote_kv_read += per_core_out_kv_heads;
             kv_y = (remote_kv_read / per_core_in_kv_heads) / num_cores_x;
             kv_x = (remote_kv_read / per_core_in_kv_heads) % num_cores_x;
             remote_kv_head_start_idx = (remote_kv_head_start_idx + per_core_out_kv_heads) % per_core_in_kv_heads;
-            k_start_addr = k_base_addr + remote_kv_head_start_idx * head_size;
-            v_start_addr = v_base_addr + remote_kv_head_start_idx * head_size;
         }
 
         result.push_back({core, std::move(reader_runtime_args), std::move(writer_runtime_args)});
@@ -592,11 +586,10 @@ ProgramDescriptor NlpCreateHeadsDeviceOperation::Sharded::create_descriptor(
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
     writer_desc.config = WriterConfigDescriptor{};
 
-    // Build the per-core reader/writer runtime args (including the address-derived q/k/v base and
-    // per-core start-address slots) via the shared builder.  The reader/writer kernels bake raw q/k/v
-    // base addresses AND per-core `base + head_offset` start addresses as uint32 runtime args; a plain
-    // Buffer* binding can only express the bare base, so those slots are re-applied on every cache hit
-    // by override_runtime_arguments() (which re-runs this same builder).
+    // Build the per-core reader/writer runtime args via the shared builder.  The only address-valued
+    // slots are the two bare input shard bases (Q, and KV or Q again when fused); every section and
+    // head offset is a separate scalar the kernel adds on device.  The two base slots are re-applied
+    // on every cache hit by override_runtime_arguments() (which re-runs this same builder).
     auto per_core_args = build_sharded_core_args(operation_attributes, tensor_args, tensor_return_value);
     for (auto& e : per_core_args) {
         reader_desc.runtime_args.emplace_back(e.core, std::move(e.reader_args));
@@ -624,8 +617,7 @@ void NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
     // Kernel push order in Sharded::create_descriptor(): reader 0, writer 1.
     constexpr uint32_t kReaderKernelIdx = 0;
     constexpr uint32_t kWriterKernelIdx = 1;
-    constexpr uint32_t kAddrIdxs[] = {
-        kShardedQBaseAddrIdx, kShardedQStartAddrIdx, kShardedKVBaseAddrIdx, kShardedKVStartAddrIdx};
+    constexpr uint32_t kAddrIdxs[] = {kShardedQBufferAddrIdx, kShardedKVBufferAddrIdx};
 
     // The active core set is fixed by the (hashed) shard specs, so it never grows across hits:
     // every core the miss emplaced args for is covered here.
