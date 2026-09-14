@@ -345,8 +345,10 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
 
     const bool linearized_mesh_ring = operation_attributes.linearized_mesh_ring;
     const uint32_t axis = operation_attributes.cluster_axis;
-    const auto topology =
-        linearized_mesh_ring ? tt::tt_fabric::Topology::Ring : operation_attributes.axis_topology[axis];
+    const auto topology = linearized_mesh_ring
+                              ? (operation_attributes.linearized_mesh_open_path ? tt::tt_fabric::Topology::Linear
+                                                                                : tt::tt_fabric::Topology::Ring)
+                              : operation_attributes.axis_topology[axis];
     const bool is_ring = tt::tt_fabric::is_ring_or_torus(topology);
 
     const uint32_t num_devices = operation_attributes.num_devices;
@@ -372,13 +374,9 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         .mesh_rows = linearized_mesh_ring ? operation_attributes.mesh_rows : mesh_shape[0],
         .mesh_cols = linearized_mesh_ring ? operation_attributes.mesh_cols : mesh_shape[1],
         .ring_size = num_devices,
-        .num_links = operation_attributes.num_links,
-        .topology = topology,
-        .fabric_config = operation_attributes.fabric_config,
-        .axis_topology = operation_attributes.axis_topology,
         .route_plan_hash = operation_attributes.neighbor_route_plan_hash};
-    const auto mesh_ring_position =
-        ttnn::operations::ccl::common::get_mesh_ring_position(input_tensor, sender_device_coord, mesh_ring_plan);
+    const auto mesh_ring_position = ttnn::operations::ccl::common::get_mesh_ring_position(
+        input_tensor, sender_device_coord, mesh_ring_plan, topology);
     const uint32_t device_idx = mesh_ring_position.transport_rank;
     auto fwd_coord = mesh_ring_position.forward_coord;
     auto bwd_coord = mesh_ring_position.backward_coord;
