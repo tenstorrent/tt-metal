@@ -1083,7 +1083,7 @@ def test_ds_prefill_transformer_chunked(
         weight_cache_path,
         num_layers,
         n_chunks,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
@@ -1125,7 +1125,7 @@ def test_ds_prefill_transformer_chunked_padded(
         weight_cache_path,
         num_layers,
         splits,
-        GateComputeMode.DEVICE,
+        GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
     )
