@@ -1,8 +1,9 @@
-name: "[post-commit] LLK audit tool - unit tests"
+name: "[post-commit] LLK tooling - unit tests"
 
-# Hermetic Python unit tests for the llk-audit recall tool's checkers. No clang,
+# Hermetic Python unit tests for the LLK static-analysis tooling: the llk-audit
+# recall tool's checkers and the pre-commit checkers under infra/. No clang,
 # hardware, or repo build needed — the tests run each checker over synthetic
-# fact bases. Path-filtered so it only runs when the tool changes.
+# fact bases. Path-filtered so it only runs when that tooling changes.
 
 on:
   workflow_dispatch:
@@ -12,14 +13,15 @@ on:
       - "main"
     paths:
       - "tt_metal/tt-llk/.claude/tools/llk-audit/**"
+      - "tt_metal/tt-llk/infra/**"
       - ".github/workflows/llk-audit-tool-tests.yaml"
 
 permissions:
   contents: read
 
 jobs:
-  llk-audit-unit-tests:
-    name: Run llk-audit checker unit tests
+  llk-tooling-unit-tests:
+    name: Run LLK tooling unit tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -32,3 +34,9 @@ jobs:
       - name: Run llk-audit unit tests
         working-directory: tt_metal/tt-llk/.claude/tools/llk-audit
         run: python3 tests/test_checks.py
+      - name: Install pytest
+        run: python3 -m pip install --no-cache-dir pytest
+      - name: Run infra checker unit tests
+        working-directory: tt_metal/tt-llk/infra
+        # --noconftest: the repo-root conftest imports models/, which is not built here.
+        run: python3 -m pytest tests -q --noconftest
