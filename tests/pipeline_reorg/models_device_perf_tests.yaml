@@ -40,6 +40,7 @@
       hf_model: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
 - name: Llama 3.3-70B device perf tests
   cmd: |
@@ -56,6 +57,7 @@
       hf_model: meta-llama/Llama-3.3-70B-Instruct
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
 - name: Qwen3-32B device perf tests
   cmd: |
@@ -72,6 +74,7 @@
       hf_model: Qwen/Qwen3-32B
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: device_perf
 
 - name: Stable Diffusion XL device-perf tests
   cmd: |
@@ -88,6 +91,7 @@
       timeout: 60
   owner_id: U08SXRPCTJ5 # Janko Mitrovic
   team: shield
+  budget_type: device_perf
 
 - name: ResNet-50 device perf tests
   cmd: |
@@ -104,6 +108,7 @@
       arch_dir: wormhole
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: device_perf
 
 - name: ResNet-50 e2e model perf tests
   cmd: |
@@ -114,6 +119,7 @@
       timeout: 8
   owner_id: U085GDCAZTN # Pavle Josipovic
   team: ttnn
+  budget_type: device_perf
 
 - name: DeepSeek-V3 decode device perf tests (Galaxy)
   cmd: |
@@ -128,6 +134,7 @@
       timeout: 20
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: device_perf
 
 - name: DeepSeek-V3 fused-op device perf tests (Galaxy)
   cmd: |
@@ -179,3 +186,4 @@
       timeout: 45
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: device_perf
