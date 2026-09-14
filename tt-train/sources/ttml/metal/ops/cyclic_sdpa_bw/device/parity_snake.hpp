@@ -31,6 +31,7 @@
 #include <cstdint>
 
 #include "cyclic_schedule.hpp"
+#include "parity_snake_order.hpp"
 
 namespace ttml::metal::ops::cyclic_sdpa_bw {
 
@@ -45,29 +46,6 @@ struct SnakeNeighbors {
     uint32_t prev;
     uint32_t next;
 };
-
-//: The core at snake position k. Precondition: k < C.
-//
-// Positions 0 .. floor(C/2) - 1 hold the even cores ascending; the rest hold
-// the odd cores descending from the largest odd core <= C.
-constexpr uint32_t snake_core_at(uint32_t C, uint32_t k) {
-    const uint32_t evens = C / 2u;
-    if (k < evens) {
-        return 2u * (k + 1u);
-    }
-    const uint32_t largest_odd = (C % 2u != 0u) ? C : C - 1u;
-    return largest_odd - 2u * (k - evens);
-}
-
-//: The snake position of core c, the inverse of snake_core_at.
-//: Precondition: 1 <= c <= C.
-constexpr uint32_t snake_index_of(uint32_t C, uint32_t c) {
-    if (c % 2u == 0u) {
-        return c / 2u - 1u;
-    }
-    const uint32_t largest_odd = (C % 2u != 0u) ? C : C - 1u;
-    return C / 2u + (largest_odd - c) / 2u;
-}
 
 //: The one or two snake neighbours of core c. Precondition: 1 <= c <= C.
 constexpr SnakeNeighbors snake_neighbors(uint32_t C, uint32_t c) {

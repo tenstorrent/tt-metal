@@ -33,6 +33,8 @@
 
 #include <cstdint>
 
+#include "parity_snake_order.hpp"
+
 namespace ttml::metal::ops::cyclic_sdpa_bw {
 
 //: No such column. Columns are 1..T.
@@ -41,6 +43,21 @@ constexpr uint32_t kNoColumn = 0;
 constexpr uint32_t kNoCore = 0;
 //: No such timestep. Timesteps are 0..T, so this cannot be 0.
 constexpr uint32_t kNoTimestep = 0xFFFFFFFFu;
+
+// Which set of block pairs the schedule covers.
+//
+// Causal is the paper's triangle, j <= i, and is Algorithm 2 of main.tex.
+// Dense is every pair, which is what a ring-attention step needs when the
+// visiting key/value chunk is earlier in the sequence than the local query
+// chunk: nothing is masked, so the block matrix is full rather than
+// triangular. Dense is Algorithm 6 of the prototype (tt_flash_attn/algo6.py).
+//
+// Both are square here, R = T = 2C row and column blocks, which is what the
+// ring needs: the two chunks of a step are the same length.
+enum class MaskMode : uint32_t {
+    Causal = 0u,
+    Dense = 1u,
+};
 
 //: A scheduled block pair: row block i against column block j.
 struct BlockPair {
@@ -69,22 +86,43 @@ struct Producer {
 
 class CyclicSchedule {
 public:
-    explicit constexpr CyclicSchedule(uint32_t cores) : C_(cores) {}
+    explicit constexpr CyclicSchedule(uint32_t cores, MaskMode mode = MaskMode::Causal) :
+        C_(cores), mode_(mode) {}
 
     constexpr uint32_t C() const {
         return C_;
+    }
+    constexpr MaskMode mode() const {
+        return mode_;
+    }
+    constexpr bool dense() const {
+        return mode_ == MaskMode::Dense;
     }
     //: T = 2C block rows and columns.
     constexpr uint32_t T() const {
         return 2u * C_;
     }
-    //: The modulus M = T + 1 = 2C + 1.
+    //: The causal modulus M = T + 1 = 2C + 1. Meaningful only in causal mode.
     constexpr uint32_t M() const {
         return 2u * C_ + 1u;
     }
-    //: Number of timesteps, T + 1.
+    // Length of one dense pass: each core holds one of its two columns for
+    // this many timesteps and streams every row past it, then switches to the
+    // other. It is T, except that it must leave at least one timestep between
+    // a row's two passes -- a row ends its first pass on the snake's last core
+    // and starts its second on the snake's first, which are not adjacent, so
+    // the packet is spilled there rather than forwarded. T >= C + 1 for every
+    // C >= 1, so T always suffices.
+    constexpr uint32_t dense_pass() const {
+        return T();
+    }
+    //: Number of timesteps: T + 1 causal, 2T dense.
     constexpr uint32_t num_timesteps() const {
-        return M();
+        return dense() ? 2u * T() : M();
+    }
+    //: The last timestep, num_timesteps() - 1. T causal, 2T - 1 dense.
+    constexpr uint32_t last_timestep() const {
+        return num_timesteps() - 1u;
     }
 
     // ------------------------------------------------------------ ownership
@@ -109,12 +147,48 @@ public:
     // Precondition: 1 <= c <= C and 0 <= t <= T. Every pair it returns
     // satisfies t == i + C j (mod M).
     constexpr BlockPair pair(uint32_t c, uint32_t t) const {
+        if (dense()) {
+            return dense_pair(c, t);
+        }
         const uint32_t m = (t + (C_ + 1u) * c) % M();
         if (m >= c) {
             return {m, c};
         }
         // m + M - c rather than m - c + T + 1: same value, no unsigned wrap.
         return {m + M() - c, M() - c};
+    }
+
+    // The dense schedule, in closed form. Core c sits at position k on the
+    // parity snake and, offset by k, holds one of its columns for the whole
+    // of pass 1 and the other for the whole of pass 2:
+    //
+    //   u = (t - k) mod 2T
+    //   (i, j) = (u + 1,     first(c))   for u < T
+    //   (i, j) = (u - T + 1, second(c))  otherwise
+    //
+    // Rows are distinct across cores at any timestep because their snake
+    // positions are, which is the property that removes the dQ race; and a row
+    // sits at snake position t - i + 1, so between consecutive active
+    // timesteps its packet moves exactly one step along the snake. Every core
+    // is busy at every timestep.
+    constexpr BlockPair dense_pair(uint32_t c, uint32_t t) const {
+        const uint32_t k = snake_index_of(C_, c);
+        const uint32_t m = num_timesteps();
+        const uint32_t u = (t + m - (k % m)) % m;
+        const auto cols = dense_pass_columns(c);
+        if (u < T()) {
+            return {u + 1u, cols.first};
+        }
+        return {u - dense_pass() + 1u, cols.second};
+    }
+
+    // A core's two columns in the order the dense passes take them: the even
+    // one first. Exactly one of c and T + 1 - c is even, since their sum is
+    // odd. Taking the even one first is what makes the causal and dense
+    // schedules agree on which column a core starts on.
+    constexpr OwnedColumns dense_pass_columns(uint32_t c) const {
+        const OwnedColumns owned = owned_columns(c);
+        return (owned.first % 2u == 0u) ? owned : OwnedColumns{owned.second, owned.first};
     }
 
     // ------------------------------------------------------------- activity
@@ -124,6 +198,20 @@ public:
     //
     // Precondition: 1 <= i <= T and 0 <= t <= T.
     constexpr uint32_t column_at(uint32_t i, uint32_t t) const {
+        if (dense()) {
+            // Row i is at snake position (t - (i - 1)) within a pass, and is
+            // inactive at the timesteps that position runs past the end of the
+            // snake -- which is where its packet is spilled between passes.
+            const uint32_t m = num_timesteps();
+            const uint32_t k = (t + m - ((i - 1u) % m)) % m;
+            if (k < C_) {
+                return dense_pass_columns(snake_core_at(C_, k)).first;
+            }
+            if (k >= dense_pass() && k < dense_pass() + C_) {
+                return dense_pass_columns(snake_core_at(C_, k - dense_pass())).second;
+            }
+            return kNoColumn;
+        }
         // i + M - t is positive because t <= T < M, so this never wraps.
         const uint32_t j = (2u * ((i + M() - t) % M())) % M();
         return (j >= 1u && j <= i) ? j : kNoColumn;
@@ -172,7 +260,7 @@ public:
             --start;
         }
         uint32_t end = t;
-        while (end < T() && is_active(i, end + 1u)) {
+        while (end < last_timestep() && is_active(i, end + 1u)) {
             ++end;
         }
         return {start, end};
@@ -183,7 +271,7 @@ public:
     // whether the endpoint publishes its progress: a final spill needs
     // completion but no publication (main.tex, Algorithm 4).
     constexpr bool has_later_active(uint32_t i, uint32_t t) const {
-        for (uint32_t s = t + 1u; s <= T(); ++s) {
+        for (uint32_t s = t + 1u; s <= last_timestep(); ++s) {
             if (is_active(i, s)) {
                 return true;
             }
@@ -239,7 +327,7 @@ public:
     // The core that consumes row i at t + 1, or kNoCore when the streak ends
     // at t and the packet is spilled to DRAM instead of forwarded.
     constexpr uint32_t next_consumer(uint32_t i, uint32_t t) const {
-        if (t >= T()) {
+        if (t >= last_timestep()) {
             return kNoCore;
         }
         const uint32_t j_next = column_at(i, t + 1u);
@@ -248,6 +336,7 @@ public:
 
 private:
     uint32_t C_;
+    MaskMode mode_;
 };
 
 }  // namespace ttml::metal::ops::cyclic_sdpa_bw

@@ -25,6 +25,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -535,6 +536,194 @@ TEST(CyclicScheduleTest, EveryCoreChangesColumnExactlyTwice) {
         }
         for (uint32_t t = 1; t <= s.T(); ++t) {
             EXPECT_EQ(changes_at[t], 1u) << "C=" << C << " t=" << t;
+        }
+    }
+}
+
+// ============================================================================
+// Dense mode
+//
+// The unmasked schedule a ring-attention step needs when the visiting
+// key/value chunk is earlier in the sequence than the local query chunk, so
+// that every block pair is live. Algorithm 6 of the prototype
+// (tt_flash_attn/algo6.py); the tables below are generated from it.
+//
+// Each core holds one of its two columns for a whole pass of T timesteps and
+// streams every row past it, then the other for a second pass, with cores
+// offset by their position on the parity snake.
+// ============================================================================
+
+namespace {
+
+// C = 3: pair(c, t) as (i, j), cores 1..3 down, timesteps 0..11 across.
+constexpr uint32_t kDensePairs_C3[3][12][2] = {
+    {{5, 1}, {6, 1}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {5, 6}, {6, 6}, {1, 1}, {2, 1}, {3, 1}, {4, 1}},
+    {{1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 2}, {6, 2}, {1, 5}, {2, 5}, {3, 5}, {4, 5}, {5, 5}, {6, 5}},
+    {{6, 3}, {1, 4}, {2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {1, 3}, {2, 3}, {3, 3}, {4, 3}, {5, 3}},
+};
+
+// C = 4.
+constexpr uint32_t kDensePairs_C4[4][16][2] = {
+    {{6, 1}, {7, 1}, {8, 1}, {1, 8}, {2, 8}, {3, 8}, {4, 8}, {5, 8},
+     {6, 8}, {7, 8}, {8, 8}, {1, 1}, {2, 1}, {3, 1}, {4, 1}, {5, 1}},
+    {{1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 2}, {6, 2}, {7, 2}, {8, 2},
+     {1, 7}, {2, 7}, {3, 7}, {4, 7}, {5, 7}, {6, 7}, {7, 7}, {8, 7}},
+    {{7, 3}, {8, 3}, {1, 6}, {2, 6}, {3, 6}, {4, 6}, {5, 6}, {6, 6},
+     {7, 6}, {8, 6}, {1, 3}, {2, 3}, {3, 3}, {4, 3}, {5, 3}, {6, 3}},
+    {{8, 5}, {1, 4}, {2, 4}, {3, 4}, {4, 4}, {5, 4}, {6, 4}, {7, 4},
+     {8, 4}, {1, 5}, {2, 5}, {3, 5}, {4, 5}, {5, 5}, {6, 5}, {7, 5}},
+};
+
+// Core counts to sweep. The golden fixtures cover 4, 8, 16, 32 and 64 for the
+// causal schedule; the dense schedule has no fixtures of its own beyond the
+// tables above, so it is swept over a wider set including odd and tiny counts,
+// where the parity snake's two segments are most awkward.
+constexpr uint32_t kDenseCores[] = {1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 16u, 32u, 64u};
+
+}  // namespace
+
+TEST(CyclicScheduleDenseTest, MatchesThePrototypeTables) {
+    const CyclicSchedule s3(3, MaskMode::Dense);
+    ASSERT_EQ(s3.num_timesteps(), 12u);
+    for (uint32_t c = 1; c <= 3u; ++c) {
+        for (uint32_t t = 0; t < 12u; ++t) {
+            const auto p = s3.pair(c, t);
+            EXPECT_EQ(p.i, kDensePairs_C3[c - 1u][t][0]) << "c=" << c << " t=" << t;
+            EXPECT_EQ(p.j, kDensePairs_C3[c - 1u][t][1]) << "c=" << c << " t=" << t;
+        }
+    }
+    const CyclicSchedule s4(4, MaskMode::Dense);
+    ASSERT_EQ(s4.num_timesteps(), 16u);
+    for (uint32_t c = 1; c <= 4u; ++c) {
+        for (uint32_t t = 0; t < 16u; ++t) {
+            const auto p = s4.pair(c, t);
+            EXPECT_EQ(p.i, kDensePairs_C4[c - 1u][t][0]) << "c=" << c << " t=" << t;
+            EXPECT_EQ(p.j, kDensePairs_C4[c - 1u][t][1]) << "c=" << c << " t=" << t;
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, CoversEveryPairExactlyOnce) {
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule s(C, MaskMode::Dense);
+        const uint32_t T = s.T();
+        std::vector<uint32_t> seen(static_cast<size_t>(T) * T, 0);
+        for (uint32_t c = 1; c <= C; ++c) {
+            for (uint32_t t = 0; t < s.num_timesteps(); ++t) {
+                const auto p = s.pair(c, t);
+                ASSERT_GE(p.i, 1u);
+                ASSERT_LE(p.i, T);
+                ASSERT_GE(p.j, 1u);
+                ASSERT_LE(p.j, T);
+                ++seen[static_cast<size_t>(p.i - 1u) * T + (p.j - 1u)];
+                EXPECT_EQ(s.owner(p.j), c) << "C=" << C << ": core " << c << " used a column it does not own";
+            }
+        }
+        for (uint32_t i = 1; i <= T; ++i) {
+            for (uint32_t j = 1; j <= T; ++j) {
+                EXPECT_EQ(seen[static_cast<size_t>(i - 1u) * T + (j - 1u)], 1u)
+                    << "C=" << C << " pair (" << i << ", " << j << ")";
+            }
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, DistinctRowsWithinATimestepAndNoIdleCore) {
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule s(C, MaskMode::Dense);
+        // 2T timesteps, every core busy at each of them: dense work is T * T
+        // pairs over C cores, which is 2T each.
+        EXPECT_EQ(s.num_timesteps(), 2u * s.T()) << "C=" << C;
+        for (uint32_t t = 0; t < s.num_timesteps(); ++t) {
+            std::vector<uint32_t> rows;
+            for (uint32_t c = 1; c <= C; ++c) {
+                rows.push_back(s.pair(c, t).i);
+            }
+            std::sort(rows.begin(), rows.end());
+            EXPECT_EQ(std::adjacent_find(rows.begin(), rows.end()), rows.end())
+                << "C=" << C << " t=" << t << ": two cores share a row block, so dQ would race";
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, PairAndColumnAtAgree) {
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule s(C, MaskMode::Dense);
+        for (uint32_t c = 1; c <= C; ++c) {
+            for (uint32_t t = 0; t < s.num_timesteps(); ++t) {
+                const auto p = s.pair(c, t);
+                EXPECT_EQ(s.column_at(p.i, t), p.j) << "C=" << C << " c=" << c << " t=" << t;
+            }
+        }
+        // And a row is active exactly T times, once per column.
+        for (uint32_t i = 1; i <= s.T(); ++i) {
+            uint32_t active = 0;
+            for (uint32_t t = 0; t < s.num_timesteps(); ++t) {
+                if (s.is_active(i, t)) {
+                    ++active;
+                }
+            }
+            EXPECT_EQ(active, s.T()) << "C=" << C << " row " << i;
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, PacketsMoveOneSnakeHop) {
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule s(C, MaskMode::Dense);
+        for (uint32_t i = 1; i <= s.T(); ++i) {
+            for (uint32_t t = 0; t + 1u < s.num_timesteps(); ++t) {
+                const uint32_t j0 = s.column_at(i, t);
+                const uint32_t j1 = s.column_at(i, t + 1u);
+                if (j0 == kNoColumn || j1 == kNoColumn) {
+                    continue;
+                }
+                EXPECT_TRUE(snake_adjacent(C, s.owner(j0), s.owner(j1)))
+                    << "C=" << C << " row " << i << " t=" << t << ": packet jumps from core " << s.owner(j0)
+                    << " to core " << s.owner(j1);
+            }
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, ColumnChangesAndStreakEnds) {
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule s(C, MaskMode::Dense);
+        // One column per pass, so at most two changes over the whole run.
+        for (uint32_t c = 1; c <= C; ++c) {
+            uint32_t changes = 0;
+            for (uint32_t t = 1; t < s.num_timesteps(); ++t) {
+                if (s.pair(c, t).j != s.pair(c, t - 1u).j) {
+                    ++changes;
+                }
+            }
+            EXPECT_LE(changes, 2u) << "C=" << C << " c=" << c;
+        }
+        // Every inter-streak spill lands on core 1, the snake's last core, so
+        // the endpoint protocol of Algorithm 4 needs a single counter here
+        // rather than the two the causal schedule needs.
+        for (uint32_t i = 1; i <= s.T(); ++i) {
+            for (uint32_t t = 0; t < s.num_timesteps(); ++t) {
+                if (s.is_later_streak_start(i, t)) {
+                    EXPECT_EQ(s.spill_endpoint(i, t), 1u) << "C=" << C << " row " << i << " t=" << t;
+                    EXPECT_EQ(s.endpoint_threshold(i, t), s.prev_active(i, t) + 1u);
+                }
+            }
+        }
+    }
+}
+
+TEST(CyclicScheduleDenseTest, CausalModeIsUnchanged) {
+    // The default is still causal, and adding the mode changed none of it.
+    for (const uint32_t C : kDenseCores) {
+        const CyclicSchedule with_default(C);
+        const CyclicSchedule explicitly_causal(C, MaskMode::Causal);
+        ASSERT_EQ(with_default.num_timesteps(), C * 2u + 1u);
+        for (uint32_t c = 1; c <= C; ++c) {
+            for (uint32_t t = 0; t < with_default.num_timesteps(); ++t) {
+                EXPECT_EQ(with_default.pair(c, t).i, explicitly_causal.pair(c, t).i);
+                EXPECT_EQ(with_default.pair(c, t).j, explicitly_causal.pair(c, t).j);
+            }
         }
     }
 }
