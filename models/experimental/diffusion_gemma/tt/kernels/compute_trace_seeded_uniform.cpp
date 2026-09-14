@@ -30,7 +30,8 @@ void kernel_main() {
     to.u = to_bits;
     scale.f = to.f - from.f;
 
-    init_sfpu(output_cb, output_cb);
+    compute_kernel_hw_startup(output_cb, output_cb);
+    copy_init(output_cb);
     rand_tile_init(base_seed + seed_offset + core_index);
     for (uint32_t tile = 0; tile < num_tiles; ++tile) {
         cb_output.reserve_back(1);

@@ -61,20 +61,20 @@ void kernel_main() {
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
     constexpr uint32_t out_block_size_bytes = out_block_num_tiles * out_single_tile_size_bytes;
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out);
     // DRAM read setup
-    AllocatorBank<AllocatorBankType::DRAM> dram_bank;
+    const AllocatorBank<AllocatorBankType::DRAM> dram_bank;
     // Output reshard setup - build NOC address for remote output storage core
-    UnicastEndpoint remote;
+    const UnicastEndpoint remote;
 #ifdef FUSE_BIAS
     DataflowBuffer dfb_in3(dfb_id_in3);
 #endif
 
     // Process each batch
     for (uint32_t batch = 0; batch < num_batches_per_core; ++batch) {
-        uint32_t in1_batch_offset = batch * in1_tensor_stride_batch_bytes;
+        const uint32_t in1_batch_offset = batch * in1_tensor_stride_batch_bytes;
         uint32_t l1_read_addr_in1 = 0;
 
         // Read all N blocks of weights for this batch
@@ -87,7 +87,7 @@ void kernel_main() {
             uint32_t curr_dram_offset = l1_read_addr_in1;
 
             while (remaining_bytes > 0) {
-                uint32_t read_size = (remaining_bytes > in1_page_size) ? in1_page_size : remaining_bytes;
+                const uint32_t read_size = (remaining_bytes > in1_page_size) ? in1_page_size : remaining_bytes;
                 noc.async_read(
                     dram_bank,
                     dfb_in1,
@@ -122,7 +122,7 @@ void kernel_main() {
 
 #ifdef OUT_SHARDED
         // NOC write output to remote output storage core (CB6)
-        uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
+        const uint32_t out_batch_offset = batch * out_tensor_stride_batch_bytes;
         noc.async_write(
             dfb_out,
             remote,

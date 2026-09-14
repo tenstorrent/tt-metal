@@ -24,8 +24,8 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in);
     DataflowBuffer dfb_out(dfb::out);
 
-    unary_op_init_common(dfb::in, dfb::out);
-    copy_tile_init(dfb::in);
+    compute_kernel_hw_startup(dfb::in, dfb::out);
+    copy_init(dfb::in);
     for (std::uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         // Pop tile after tile, copy to DST and pack
         dfb_in.wait_front(1);

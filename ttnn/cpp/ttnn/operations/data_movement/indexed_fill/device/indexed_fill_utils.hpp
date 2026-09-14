@@ -58,18 +58,14 @@ tt::tt_metal::ShardSpec adjust_to_shape(
     const ttnn::Shape& to_shape,
     bool is_tile);
 
-// Build a default shard spec for `padded_out_shape` over the device's full compute grid.
-// `is_tile` controls whether shard heights/widths are rounded to tile boundaries.
-tt::tt_metal::ShardSpec generate_shard_spec_all_cores(
+// Synthesize a populated-shard output ShardSpec for specless sharded indexed_fill outputs.
+tt::tt_metal::ShardSpec generate_output_shard_spec(
     const Tensor& input_tensor,
     const ttnn::Shape& padded_out_shape,
     tt::tt_metal::TensorMemoryLayout memory_layout,
     bool is_tile = true);
 
-// Derive a shard_spec for a sharded output MemoryConfig that has none.
-// Uses adjust_to_shape() when input_tensor_a is sharded, otherwise generate_shard_spec_all_cores().
-// Returns the filled-in MemoryConfig (or the original unchanged if it is not sharded / already
-// has a shard_spec).
+// Fills a specless sharded output MemoryConfig via adjust_to_shape (sharded input) or generate_output_shard_spec.
 tt::tt_metal::MemoryConfig resolve_output_memory_config(
     const Tensor& input_tensor_a,
     const ttnn::Shape& padded_out_shape,

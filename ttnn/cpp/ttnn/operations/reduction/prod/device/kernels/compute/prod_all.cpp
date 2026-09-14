@@ -28,14 +28,14 @@ void kernel_main() {
 
     // Seed DEST with the first input tile.
     input_dfb_obj.wait_front(one_tile);
-    copy_tile_to_dst_init_short(dfb::in);
+    copy_init(dfb::in);
     copy_tile(dfb::in, 0, 0);
     input_dfb_obj.pop_front(one_tile);
 
     // Fold each remaining tile in: DEST = DEST * next_tile.
     // DEST_TO_SRCA loads the running product from DEST into SRCA.
     mul_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in);
-    for (uint32_t t = 1; t < num_tiles; t++) {
+    for (std::uint32_t t = 1; t < num_tiles; t++) {
         input_dfb_obj.wait_front(one_tile);
         mul_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(dfb::in, 0, 0);
         input_dfb_obj.pop_front(one_tile);

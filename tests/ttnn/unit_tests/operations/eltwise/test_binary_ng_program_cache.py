@@ -14,8 +14,9 @@ operation_attributes_t::attribute_values(): binary_op_type, lhs/rhs/post_activat
            input_layout_a/b, output_layout, equal_nan, the shard volumes, and
            c_tensor_shape_in_pages (the sharded output's tensor shape in pages on the accessor path)
 
-tensor_args_t::to_hash(): input tensor dtypes and memory_configs, plus each
-           sharded input's tensor shape in pages (BufferDistributionSpec::tensor_shape_in_pages)
+tensor_args_t::to_hash(): input tensor dtypes, memory_configs, Alignment, and Tile,
+           plus each sharded input's tensor shape in pages
+           (BufferDistributionSpec::tensor_shape_in_pages)
 
 The default compute_program_hash() combines both of the above.
 
@@ -305,6 +306,30 @@ def test_ng_cache_miss_different_memory_configs(device, isolate_program_cache):
         device, ttnn.add, shape, shape, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
     )
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
+
+    assert device.cache_entries_counter.total == 2
+
+
+def test_ng_cache_miss_different_alignment(device, isolate_program_cache):
+    """Different tensor alignments -> different cache entries.
+    Alignment is part of tensor_layout and is hashed in to_hash()."""
+    shape = [1, 1, 32, 32]
+    padded = [1, 1, 64, 32]  # > round_up(32, 32); produces Alignment{64,32} not {32,32}
+
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(shape, dtype=torch.bfloat16)
+    tt_a = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    tt_b = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch_b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device), padded, 0.0
+    )
+    with device.cache_entries_counter.measure():
+        tt_out1 = ttnn.add(tt_a, tt_b)
+    assert_with_pcc(torch.add(torch_a, torch_b), ttnn.to_torch(tt_out1), 0.999)
+
+    torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.bfloat16)
+    assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.cache_entries_counter.total == 2
 

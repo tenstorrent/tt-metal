@@ -65,7 +65,6 @@ jobs:
               ".github/workflows/blackhole-e2e-tests.yaml",
               ".github/workflows/galaxy-profiler-tests.yaml",
               ".github/workflows/galaxy-multi-user-isolation-tests.yaml",
-              ".github/workflows/galaxy-deepseek-tests.yaml",
               ".github/workflows/galaxy-unit-tests.yaml",
               ".github/workflows/models-t1-device-perf-tests.yaml",
               ".github/workflows/galaxy-integration-tests.yaml",

@@ -21,14 +21,14 @@ transport:
 model:
   variant: gpt_oss_d_p
   num_layers: 36
-  max_seq_len: 56320
-  chunk_size: 5120
+  max_seq_len: 131072
+  chunk_size: 8192
 
 workload:
   num_users: 2
   slot_prompts:
-    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
-    - /data/lgalas/gpt_oss_tt_cache/golden/longbook_qa_eng_prefill_56320
+    - /data/jmalone/gpt_oss_golden/full_context
+    - /data/jmalone/gpt_oss_golden/full_context
   max_requests: 2
   interleave: round_robin
   check_pcc: true

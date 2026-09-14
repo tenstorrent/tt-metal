@@ -22,7 +22,6 @@ struct Statistics {
 
 class Buffer;
 enum class BufferType;
-class AllocatorState;
 
 // This is the internal representation for Allocator, not exposed for general usage.
 class AllocatorImpl;
@@ -49,14 +48,13 @@ public:
     // this helper function is made for reports.cpp in TTNN and act as a transient member function.
     size_t get_worker_l1_size() const;
     Statistics get_statistics(const BufferType& buffer_type) const;
-    // AllocatorState Methods
-    // Extracts the current state of the allocator.
-    AllocatorState extract_state() const;
-    // Overrides the current state with the given state, deallocating all of existing buffers.
-    void override_state(const AllocatorState& state);
+
+    // debug/test/internal usage.
+    AllocatorImpl& impl() { return *impl_; }
+    const AllocatorImpl& impl() const { return *impl_; }
 
 private:
-    AllocatorImpl* impl;
+    AllocatorImpl* impl_;
 };
 
 namespace detail {

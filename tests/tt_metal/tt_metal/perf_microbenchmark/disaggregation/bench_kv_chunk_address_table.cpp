@@ -10,7 +10,7 @@
 //       for position in range(start_pos, end_pos, chunk_n_tokens):
 //         lookup(layer, position, slot_id)
 //
-// Also benchmarks lookup_range() which returns a contiguous span.
+// Also benchmarks visit_range() over the contiguous per-row range.
 
 #include <benchmark/benchmark.h>
 
@@ -91,7 +91,7 @@ void BM_LookupIndividual(benchmark::State& state) {
 }
 
 // --- Range lookup benchmark ---
-// Simulates: for layer in layers: lookup_range(layer, 0, seq_len, slot)
+// Simulates: for layer in layers: visit_range(layer, 0, seq_len, slot, ...)
 //
 // Args: [num_layers, max_seq_len, num_slots]
 void BM_LookupRange(benchmark::State& state) {
@@ -114,10 +114,11 @@ void BM_LookupRange(benchmark::State& state) {
     for ([[maybe_unused]] auto _ : state) {
         uint64_t sink = 0;
         for (uint32_t layer = 0; layer < num_layers; layer++) {
-            auto range = table.lookup_range(layer, 0, max_seq_len, slot);
-            for (const auto& loc : range) {
-                sink += loc.noc_addr;
-            }
+            table.visit_range(layer, 0, max_seq_len, slot, 0, [&sink](auto range) {
+                for (const auto& loc : range) {
+                    sink += loc.noc_addr;
+                }
+            });
         }
         benchmark::DoNotOptimize(sink);
     }
@@ -154,10 +155,11 @@ void BM_LookupMigratePattern(benchmark::State& state) {
     for ([[maybe_unused]] auto _ : state) {
         uint64_t sink = 0;
         for (uint32_t layer = 0; layer < num_layers; layer++) {
-            auto range = table.lookup_range(layer, start_pos, end_pos, slot);
-            for (const auto& loc : range) {
-                sink += loc.noc_addr;
-            }
+            table.visit_range(layer, start_pos, end_pos, slot, 0, [&sink](auto range) {
+                for (const auto& loc : range) {
+                    sink += loc.noc_addr;
+                }
+            });
         }
         benchmark::DoNotOptimize(sink);
     }

@@ -626,6 +626,16 @@ void validate_matmul_compute_grid_and_per_core_dims(
                 }
                 validate_matmul_nonzero_block_dims(
                     config_name, program_config.in0_block_w, program_config.per_core_M, program_config.per_core_N);
+                if constexpr (std::is_same_v<
+                                  ProgramConfigType,
+                                  operations::matmul::MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig>) {
+                    dram_sharded_helpers::validate_num_workers_per_dram_bank(program_config.num_workers_per_dram_bank);
+                    TT_FATAL(
+                        program_config.num_workers_per_dram_bank == 1 ||
+                            input_tensor_a.device()->arch() == tt::ARCH::BLACKHOLE,
+                        "{}: num_workers_per_dram_bank > 1 is currently supported only on Blackhole",
+                        config_name);
+                }
             }
         },
         chosen_program_config);

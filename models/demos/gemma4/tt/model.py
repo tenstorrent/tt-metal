@@ -15,7 +15,6 @@ Supports both prefill and decode modes with paged attention.
 Compatible with tt_transformers Generator interface.
 """
 
-
 import os
 
 import torch
@@ -266,6 +265,18 @@ class Gemma4Model:
         transformation_mats=None,
     ):
         self.mesh_device = mesh_device
+        # Keep prompt-dependent slice bounds in persistent buffers. Literal
+        # offsets compile a new program after prefill traces are already live.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=mesh_device,
+            mesh_mapper=self._replicate_to_mesh_mapper(),
+        )
         self.hf_config = hf_config
         self.mesh_config = mesh_config
         self.hidden_size = hf_config.hidden_size
@@ -1807,6 +1818,36 @@ class Gemma4Model:
             torch_output = ttnn.to_torch(tt_out)
         return torch_output[..., last_token_idx, : self.vocab_size]
 
+    def _g4_retire_scavenge(self):
+        """Free device tensors this model handed to the shared consumption.
+
+        Trace replay bakes buffer addresses; any device intermediate alive
+        across a replay is silent corruption (#30187 class). The shared
+        tt_transformers consumption keeps our returned logits (and its own
+        per-slot slices) alive briefly — gemma4 owns the hygiene by
+        deallocating everything it retired on the NEXT model call, which is
+        always before the next trace replay.
+        """
+        lst = getattr(self, "_g4_retired_dev_tensors", None)
+        if lst:
+            for t in lst:
+                # Already-freed tensors are the benign case (the shared
+                # consumption released them); a real deallocation failure
+                # must PROPAGATE — continuing would let the next trace
+                # replay run with a retired buffer still allocated (the
+                # exact #30187 aliasing this scavenge exists to prevent).
+                if hasattr(t, "is_allocated") and not t.is_allocated():
+                    continue
+                t.deallocate(True)
+            lst.clear()
+
+    def _g4_retire(self, t):
+        lst = getattr(self, "_g4_retired_dev_tensors", None)
+        if lst is None:
+            lst = []
+            self._g4_retired_dev_tensors = lst
+        lst.append(t)
+
     def process_logits_after_prefill_trace(self, hidden_states, last_token_idx):
         """Deferred lm_head for traced prefill.
 
@@ -1817,20 +1858,61 @@ class Gemma4Model:
 
         If the last dim is already vocab-sized (legacy / batched path that ran
         lm_head inside the trace), only slice and return.
+
+        Trace-safety contract (owned here, NOT in tt_transformers), applied
+        only to the BATCHED consumption (``_g4_batched_prefill_consumption``
+        set by the vLLM bridge around a batched call): the caller's per-slot
+        input slice and every intermediate are deallocated before the next
+        trace replay, and the return is already ROW_MAJOR so the caller's
+        ``to_layout`` is a no-op and creates nothing new. The single-user
+        path is untouched: its input is the trace's PERSISTENT output buffer
+        (must not be deallocated) and its consumer untilizes a TILE return.
         """
+        batched = bool(getattr(self, "_g4_batched_prefill_consumption", False))
+        # Scavenge unconditionally: the retired list only ever holds batched
+        # logits (host-consumed), but the LAST batch's entry must not survive
+        # into the next replay via a batched-only gate (single-user prefill or
+        # decode may be the next call).
+        self._g4_retire_scavenge()
         get_last_token = (last_token_idx // 32) * 32
+        for device_tensor, values in (
+            (self._tail_slice_start, [0, 0, get_last_token, 0]),
+            (self._tail_slice_end, [1, 1, get_last_token + 32, int(hidden_states.shape[-1])]),
+        ):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor(values, dtype=torch.int32),
+                    mesh_mapper=self._replicate_to_mesh_mapper(),
+                ),
+                device_tensor,
+            )
         sliced = ttnn.slice(
-            hidden_states,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, hidden_states.shape[-1]),
+            input_tensor=hidden_states,
+            starts=self._tail_slice_start,
+            ends=self._tail_slice_end,
+            slice_dim=2,
+            num_devices=int(hidden_states.shape[-2]) // 32,
         )
+        if batched and hidden_states is not sliced:
+            hidden_states.deallocate(True)
         if sliced.shape[-1] == self.hidden_size:
             logits = self._apply_lm_head(sliced, is_decode=False)
+            if batched and logits is not sliced:
+                sliced.deallocate(True)
         else:
             logits = sliced
         # Trace deferred lm_head: commit bounded ring fills after logits.
         self._flush_deferred_bounded_fills_if_needed()
-        return logits
+        if not batched:
+            return logits
+        if logits.layout == ttnn.ROW_MAJOR_LAYOUT:
+            logits_rm = logits
+        else:
+            logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if logits_rm is not logits:
+                logits.deallocate(True)
+        self._g4_retire(logits_rm)
+        return logits_rm
 
     def extract_last_tokens_batched_prefill(
         self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len, target_batch=None

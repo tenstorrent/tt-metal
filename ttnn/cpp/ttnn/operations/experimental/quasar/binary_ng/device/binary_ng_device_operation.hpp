@@ -56,6 +56,9 @@ struct BinaryNgDeviceOperation {
         Layout input_layout_b = Layout::TILE;
         Layout output_layout = Layout::TILE;
 
+        // `worker_grid` is hashed because get_worker_grid resolves it from MUTABLE device state, so
+        // unhashed a cache hit could reuse a program placed on a different core set. `sub_device_id`
+        // stays out -- already covered via `sub_core_grids`.
         static constexpr auto attribute_names = std::forward_as_tuple(
             "binary_op_type",
             "lhs_activations",
@@ -65,6 +68,7 @@ struct BinaryNgDeviceOperation {
             "dtype",
             "compute_kernel_config",
             "sub_core_grids",
+            "worker_grid",
             "subtile_broadcast_type",
             "is_sfpu",
             "is_quant_op",
@@ -86,6 +90,7 @@ struct BinaryNgDeviceOperation {
                 get_dtype(),
                 compute_kernel_config,
                 sub_core_grids,
+                worker_grid,
                 subtile_broadcast_type,
                 is_sfpu,
                 is_quant_op,
@@ -127,15 +132,31 @@ struct BinaryNgDeviceOperation {
             tensor_return_value_t& c);
     };
 
-    using program_factory_t = std::variant<ProgramFactory, ProgramFactoryMetalV2>;
+    // Quasar-native DFB factory. Starts as a mechanical copy of ProgramFactoryMetalV2 so later commits
+    // read as a diff of what "native" means (>2 of 6 DM cores, >1 of 4 Tensix). Opt-in via
+    // TTNN_QSR_NATIVE, so the metal_v2 path stays live as the A/B reference arm.
+    // Must stay a stateless literal type -- the framework default-constructs it into static storage.
+    struct ProgramFactoryQuasarNative {
+        static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& c);
+    };
 
-    // Returns ProgramFactoryMetalV2{} when the op matches the Metal 2.0 slice; ProgramFactory{}
-    // otherwise.
+    // APPEND-ONLY: the index is persisted per cache entry, so reordering mis-resolves existing entries.
+    using program_factory_t = std::variant<ProgramFactory, ProgramFactoryMetalV2, ProgramFactoryQuasarNative>;
+
+    // Returns ProgramFactoryQuasarNative{} when the op matches the (opt-in) Quasar-native slice,
+    // ProgramFactoryMetalV2{} when it matches the Metal 2.0 slice, and ProgramFactory{} otherwise.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
     // True iff (attributes, tensor_args) match the Metal 2.0 factory's supported slice. Shared by
     // select_program_factory.
     static bool matches_metal_v2_slice(const operation_attributes_t&, const tensor_args_t&);
+
+    // Strict subset of matches_metal_v2_slice, plus TTNN_QSR_NATIVE. Checked first; its leading test is
+    // the cached env bool, so the non-native hot-path cost is a load and a branch.
+    static bool matches_quasar_native_slice(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);

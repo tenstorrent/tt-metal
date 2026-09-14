@@ -40,10 +40,11 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
+from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS, PREFILL_CHUNK_TOKENS_PER_CHIP
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
-    PROMPT_25K_PATH,
+    PROMPT_5K_PATH,
     create_hf_model_with_weights,
     get_4d_causal_mask,
     tokenize_prompt_to_isl,
@@ -53,6 +54,14 @@ from tests.ttnn.utils_for_testing import comp_pcc
 DSV3 = get_adapter("deepseek_v3_d_p")
 
 PLOT_DIR = "models/demos/deepseek_v3_d_p/tests"
+
+
+# Each mesh carries the isl_total that lands PREFILL_CHUNK_TOKENS_PER_CHIP on every one of its chips, so there
+# is one ISL per mesh instead of a cross product to prune. The id carries it because
+# perf/test_prefill_block_perf.py selects rows by it.
+def _with_isl(param):
+    isl_total = PREFILL_CHUNK_TOKENS_PER_CHIP * param.values[0][0]
+    return pytest.param(*param.values, isl_total, marks=param.marks, id=f"{param.id}-isl_{isl_total}")
 
 
 def _ci_unsupported_param_combos(**params):
@@ -90,31 +99,29 @@ def _ci_unsupported_param_combos(**params):
         "layer8",
     ],
 )
-@pytest.mark.parametrize(
-    "isl_total",
-    [1024, 2560, 5120, 6400, 12800, 25 * 1024],
-    ids=["isl_1k", "isl_2k56", "isl_5k", "isl_6k4", "isl_12k8", "isl_25k"],
-)
 @pytest.mark.parametrize("skip_reference", [False, True], ids=["with_ref", "no_ref"])
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, isl_total",
     [
-        pytest.param(
-            (1, 1),
-            {},
-            1,
-            id="mesh-1x1",
-        ),
-        pytest.param(
-            (2, 4),
-            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
-            2,
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
-            id="fabric2d-mesh-2x4-2link",
-        ),
-        # FABRIC_2D variants — shared list defined in conftest.py (also used by
-        # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
-        *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        _with_isl(param)
+        for param in (
+            pytest.param(
+                (1, 1),
+                {},
+                1,
+                id="mesh-1x1",
+            ),
+            pytest.param(
+                (2, 4),
+                fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.EMB_SIZE),
+                2,
+                marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+                id="fabric2d-mesh-2x4-2link",
+            ),
+            # FABRIC_2D variants — shared list defined in conftest.py (also used by
+            # test_prefill_transformer.py). Covers (4,2) BH LoudBox, (2,4) asymmetric, (8,4) BH Galaxy.
+            *FABRIC_2D_PREFILL_BLOCK_MESH_PARAMS,
+        )
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -141,10 +148,9 @@ def test_prefill_block_loop(
     if state_dict is None:
         pytest.skip("State dict not available (no pretrained weights)")
 
-    # These sequence lengths belong to the existing 4x4 subtorus sweep, which is intentionally
-    # local/experimental until a dedicated CI owner exists.
-    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and isl_total in (2560, 12800):
-        pytest.skip("isl_2k56 / isl_12k8 are subtorus-4x4-only; not run in CI")
+    # The 4x4 subtorus sweep is intentionally local/experimental until a dedicated CI owner exists.
+    if (os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ) and tuple(mesh_device.shape) == (4, 4):
+        pytest.skip("the 4x4 subtorus sweep is local/experimental; not run in CI")
 
     # Deep-copy the HF config: hf_config returns a process-wide lru_cache'd object, so mutating it in
     # place (max_seq_len here, n_routed_experts below) would leak into later tests in the same session.
@@ -404,8 +410,8 @@ def test_prefill_block_loop(
         # repeats the 1K prompt. Never pad — pad tokens all have the same embedding and
         # collapse gate routing onto a handful of experts, distorting expert-load
         # measurements.
-        if isl_total == 25 * 1024:
-            prompt_path = PROMPT_25K_PATH
+        if isl_total == PREFILL_CHUNK_TOKENS:
+            prompt_path = PROMPT_5K_PATH
         else:
             prompt_path = PROMPT_1K_PATH
         prompts = load_prompts_from_json(str(prompt_path))

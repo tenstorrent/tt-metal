@@ -84,7 +84,7 @@ bool eth_direct_sender_receiver_kernels(
     auto* const sender_device = sender_mesh_device->get_devices()[0];
     auto* const receiver_device = receiver_mesh_device->get_devices()[0];
     bool pass = true;
-    log_info(
+    log_debug(
         tt::LogTest,
         "Sending {} bytes from device {} eth core {} addr {} to device {} eth core {} addr {} processor {}",
         byte_size,

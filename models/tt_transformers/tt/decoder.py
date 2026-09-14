@@ -118,8 +118,15 @@ class TransformerBlock(LightweightModule):
             or use_galaxy_row_submesh_rmsnorm_l1_workaround
         ):
             extra_rmsnorm_kwargs["fp32_dest_acc_en"] = False
+        # Post-norm decoders (EXAONE-4.x) have no input_layernorm: attention reads
+        # the raw residual stream (h = x + post_attention_layernorm(attn(x))). The
+        # attention_norm slot degenerates to its gather role (norm=None), keeping
+        # the fractured->replicated all-gather the norm normally provides.
+        self.use_post_norm = getattr(args, "use_post_norm", False)
         self.attention_norm = DistributedNorm(
-            RMSNorm(
+            None
+            if self.use_post_norm
+            else RMSNorm(
                 device=mesh_device,
                 dim=args.dim,
                 eps=args.norm_eps,
@@ -178,6 +185,21 @@ class TransformerBlock(LightweightModule):
                     ccl_topology=self.args.ccl_topology(),
                     tt_ccl=self.tt_ccl,
                 ),
+                args,
+                tt_ccl=self.tt_ccl,
+                prefetcher=self.prefetcher,
+                TG=args.is_galaxy,
+            )
+            self.ff_norm.enable_all_gather = (
+                False  # output of ff_norm should be sharded if model uses pre_ff_norm, so skip all_gather
+            )
+        elif self.use_post_norm:
+            # Post-norm (EXAONE-4.x): route forward() through the sandwich branch so
+            # ff_norm (HF post_attention_layernorm) is applied to the attention OUTPUT
+            # before the residual add, with a gather-only identity in the pre-MLP slot
+            # (MLP reads the raw residual stream: out = h + post_ff_norm(mlp(h))).
+            self.pre_ff_norm = DistributedNorm(
+                None,
                 args,
                 tt_ccl=self.tt_ccl,
                 prefetcher=self.prefetcher,

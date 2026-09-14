@@ -143,8 +143,30 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
 
+  bake-env-dev-full:
+    needs: build-artifact
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    uses: ./.github/workflows/build-prebuilt-tests-image.yaml
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    secrets: inherit
+    with:
+      artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      dockerfile: dockerfile/Dockerfile.prebuilt-tests-env
+      image-name: prebuilt-tests-env-image
+      checkout-source: true
+      build-args: PROFILE=full
+      # No source-ref: this caller takes no ref input, so build-artifact builds at
+      # this workflow's commit and the producer's default resolves to the same one.
+
   runtime-sanity-tests:
-    needs: [check-harbor, build-artifact, resolve-skus]
+    # The bake feeds prebuilt-image but is deliberately absent from `if`: a failed
+    # bake yields an empty ref and the legs fall back to the artifact path, rather
+    # than skipping and counting as success in workflow-status.
+    needs: [check-harbor, build-artifact, resolve-skus, bake-env-dev-full]
     if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.resolve-skus.result == 'success' }}
     uses: ./.github/workflows/runtime-sanity-tests-impl.yaml
     secrets: inherit
@@ -152,3 +174,4 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
