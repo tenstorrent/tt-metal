@@ -32,9 +32,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t next_src = (std::uint32_t)params.formats.pack_src;
     const std::uint32_t next_dst = (std::uint32_t)params.formats.pack_dst;
 
-    // Distinct prev/next tile sizes; both paths need to hit NEXT_SIZE.
-    constexpr std::uint32_t PREV_SIZE = 16 * 16 * 2;
-    constexpr std::uint32_t NEXT_SIZE = 16 * 16 * 4;
     constexpr std::uint32_t num_faces = 4;
 
     if (params.CONFIGURE_TEST_RUN_IDX == 0)

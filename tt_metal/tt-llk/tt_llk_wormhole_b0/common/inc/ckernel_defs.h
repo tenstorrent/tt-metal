@@ -258,6 +258,12 @@ constexpr static std::uint32_t TILE_SIZE_BYTES(std::uint32_t format, std::uint32
 
     switch (masked_data_format(format))
     {
+        case (to_underlying(DataFormat::Tf32)):
+            // SCALE_DATUM_SIZE has no Tf32 case and falls through to one byte per datum. Tf32 in L1
+            // occupies a 32-bit Float32 footprint with the low mantissa bits zeroed.
+            tile_size_bytes = datum_count << 2;
+            break;
+
         case (to_underlying(DataFormat::Bfp4)):
         case (to_underlying(DataFormat::Bfp4_b)):
             tile_size_bytes /= 2;

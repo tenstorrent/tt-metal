@@ -54,9 +54,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig(&formats_array)[2] = params.formats;
 #endif
     constexpr std::uint32_t num_faces = 4;
-    // Datum count for one 32x32 tile; only used to seed the tile-size GPR (the
-    // single-tile run-1 datacopy reads tile index 0, so the exact value is moot).
-    constexpr std::uint32_t tile_size_datums = num_faces * FACE_R_DIM * FACE_C_DIM;
 
     // ---- Run 0: SDPA row-broadcast of operand A against operand B ----
     _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(

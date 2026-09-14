@@ -56,6 +56,9 @@ static inline __attribute__((always_inline)) std::uint32_t store_then_load(volat
  * @param unpack_num_faces: Number of faces.
  * @return Per-tile L1 stride in 16-byte words.
  */
+// Unpacker base-address registers address L1 in 16-byte words.
+constexpr std::uint32_t L1_WORD_SIZE_BYTES = 16;
+
 inline constexpr std::uint32_t _llk_unpack_tile_size_(
     const std::uint32_t unpack_src_format, const std::uint32_t unpack_face_r_dim, const std::uint32_t unpack_num_faces)
 {
@@ -68,10 +71,10 @@ inline constexpr std::uint32_t _llk_unpack_tile_size_(
         // reserves whole 16-byte L1 words for that section, so a tile with fewer than 16 face rows
         // still pays for 16 exponent bytes.
         const std::uint32_t exp_bytes = datum_count / 16;
-        tile_size_bytes += ((exp_bytes + 15) & ~15u) - exp_bytes;
+        tile_size_bytes += ((exp_bytes + L1_WORD_SIZE_BYTES - 1) & ~(L1_WORD_SIZE_BYTES - 1)) - exp_bytes;
     }
 
-    return (tile_size_bytes + 15) >> 4;
+    return (tile_size_bytes + L1_WORD_SIZE_BYTES - 1) / L1_WORD_SIZE_BYTES;
 }
 
 /**

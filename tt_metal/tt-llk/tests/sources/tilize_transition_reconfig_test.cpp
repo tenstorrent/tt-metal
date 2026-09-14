@@ -69,7 +69,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Victim (run-1) target geometry (compile-time).
     constexpr std::uint32_t g1_face_r_dim = VICTIM_FACE_R_DIM;
     constexpr std::uint32_t g1_num_faces  = VICTIM_NUM_FACES;
-    constexpr std::uint32_t g1_tile_size  = g1_face_r_dim * FACE_C_DIM * g1_num_faces;
 
     // ---- Run 0: real tilize "polluter" (output discarded) ----
     const std::uint32_t g0_block_ct  = _llk_unpack_tilize_block_ct_dim_wrapper_(1);
