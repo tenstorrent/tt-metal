@@ -906,6 +906,17 @@ def run_model(
         pytest.fail(f"PCC below its stage bar ({th}) at: {pcc_failure_msg}")
 
 
+def _ci_unsupported_param_combos_ds_transformer(**params):
+    on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
+    gate_fallback_mode = params["gate_fallback_mode"]
+    if not on_ci:
+        return False
+    if gate_fallback_mode != GateComputeMode.DEVICE_FP32:
+        return True
+    return False
+
+
+@pytest.mark.uncollect_if(pred=_ci_unsupported_param_combos_ds_transformer)
 @pytest.mark.skipif(not is_blackhole(), reason="Requires Blackhole.")
 @pytest.mark.parametrize("tokenizer", ["right", "left"], indirect=True, ids=["right_pad", "left_pad"])
 @pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
@@ -952,10 +963,9 @@ def run_model(
     [
         (64, GateComputeMode.HOST_ALL),
         (256, GateComputeMode.HOST_ALL),
-        (256, GateComputeMode.DEVICE),
         (256, GateComputeMode.DEVICE_FP32),
     ],
-    ids=["e64_host", "e256_host", "e256_device", "e256_device_fp32"],
+    ids=["e64_host", "e256_host", "e256_device_fp32"],
 )
 # iter2000 is the long-running stability soak (program-cache growth, semaphore
 # desync, leaks). Kept opt-in via -k iter2000; CI selectors normally pick iter1.

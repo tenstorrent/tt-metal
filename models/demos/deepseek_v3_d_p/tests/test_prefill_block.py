@@ -557,10 +557,12 @@ def run_model(
 def _ci_unsupported_param_combos(**params):
     on_ci = params["is_ci_env"] or params["is_ci_v2_env"]
     is_balanced = params["is_balanced"]
-
+    gate_fallback_mode = params["gate_fallback_mode"]
     if not on_ci:
         return False
     if not is_balanced:
+        return True
+    if gate_fallback_mode is not None and gate_fallback_mode != GateComputeMode.DEVICE:
         return True
     return False
 
@@ -578,11 +580,16 @@ def _ci_unsupported_param_combos(**params):
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE), ("moe", GateComputeMode.HOST_ALL)],
+    [
+        ("dense", None),
+        ("moe", GateComputeMode.DEVICE),
+        ("moe", GateComputeMode.DEVICE_FP32),
+        ("moe", GateComputeMode.HOST_ALL),
+    ],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
     # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
-    ids=["dense", "moe-gate_device", "host_gate_all"],
+    ids=["dense", "moe-gate_device", "moe-gate_device_fp32", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
