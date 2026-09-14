@@ -148,7 +148,7 @@ def _hf_text_config(model_path):
 # ── The prefill model under test ────────────────────────────────────────────
 
 
-def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
+def _build_prefill_model(mesh_device, model_path, chunk_size, context_len=None, max_batch_size=1):
     """Create a CP prefill model with ring caches for one or more chunks."""
     if mesh_config.cp_degree <= 1:
         raise ValueError("This demo requires context parallel prefill")
@@ -163,8 +163,8 @@ def _build_prefill_model(mesh_config, model_path, chunk_size, context_len=None):
     )
     t0 = time.time()
     model_args, model, kv_cache, _state_dict = create_tt_model(
-        mesh_config=mesh_config,
-        max_batch_size=1,
+        mesh_device=mesh_device,
+        max_batch_size=max_batch_size,
         max_seq_len=max_seq_len,
         dtype=MODEL_DTYPE,
         force_rebuild=_load_full_weights(),
