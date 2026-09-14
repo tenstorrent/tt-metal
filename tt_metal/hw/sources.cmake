@@ -118,6 +118,9 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/eltwise_unary/xielu.h
     inc/api/compute/ema.h
     inc/api/compute/experimental/2_0/bcast.h
+    inc/api/compute/experimental/2_0/compressed_custom_mm.h
+    inc/api/compute/experimental/2_0/custom_mm.h
+    inc/api/compute/experimental/2_0/custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/2_0/eltwise_binary.h
     inc/api/compute/experimental/2_0/hw_startup.h
     inc/api/compute/experimental/2_0/llk_operand.h
