@@ -31,9 +31,15 @@ inline void _calculate_where_(
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
 
-    lltt::record(0, 6);
+    constexpr int replay_len = (data_format == DataFormat::Float32) ? 7 : 6;
+    lltt::record(0, replay_len);
     TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
+    if constexpr (data_format == DataFormat::Float32)
+    {
+        // Drop the IEEE-754 sign bit so that -0.0 (0x80000000) evaluates to 0 (false)
+        TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+    }
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
     TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
@@ -42,10 +48,36 @@ inline void _calculate_where_(
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
-        lltt::replay(0, 6);
+        lltt::replay(0, replay_len);
     }
 #else
-    if (dst_index_out == dst_index_in0)
+    if constexpr (data_format == DataFormat::Float32)
+    {
+        // For Float32, shift left by 1 to discard the sign bit before testing for zero (IEEE 754: -0.0 == 0).
+        // Macro path evaluates LREG0 directly on load cycle; using explicit replay buffer allows inserting TTI_SFPSHFT.
+        int offset3 = (dst_index_out * 32) << 1;
+
+        load_replay_buf(
+            0,
+            7,
+            [offset0, offset1, offset2, offset3, mod0]
+            {
+                TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
+                TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
+                TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+                TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
+                TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
+                TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
+            });
+
+#pragma GCC unroll 8
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            lltt::replay(0, 7);
+        }
+    }
+    else if (dst_index_out == dst_index_in0)
     {
         // We use macros 0 and 2 to schedule the following, which achieves 3 cycles per input row of 32 values:
 
