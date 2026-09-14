@@ -611,6 +611,7 @@ class ttMLA:
                     layer_num=self.layer_num,
                     first_layer_idx=first_layer_idx,
                     tp_shard_kv=self.tp_shard_kv,
+                    output_tp_sequence_sharded=self._needs_head_to_seq_reshard,
                 )
         else:
             self._indexer = NullIndexer()  # dense v3.1: forward calls .forward() -> None (dense path)
@@ -1814,7 +1815,8 @@ class ttMLA:
 
         q is absorbed ``[1, H/tp, S/sp, geometry.logical_width]`` TILE bf16. ``kvpe`` carries one
         replicated ROW_MAJOR physical cache row per token; its width depends on the explicit cache format.
-        Indices are ``[1, 1, S_global, k]`` uint32, re-sharded onto SP (dim2) to match q when needed.
+        Indices are uint32 query-row shards: ``[1,1,S/(sp*tp),k]`` for head-to-sequence
+        redistribution, otherwise ``[1,1,S/sp,k]``. Replicated inputs are partitioned when needed.
 
         block_cyclic_chunk_local: when set, ``kvpe`` is the KVPE cache in its native BLOCK-CYCLIC SP layout
         (not natural order) and ``indices`` are natural positions; sparse_sdpa remaps each index to its
@@ -1835,7 +1837,8 @@ class ttMLA:
         # all head quarters for that sequence quarter. We invert the redistribution after sparse_sdpa to
         # restore the head-sharded layout expected by the epilogue. No replicated intermediate or wasted
         # network traffic; tp=1 and already-fat shards are untouched.
-        # The SP indexer emits S/sp indices; we split them over TP below to match the resharded q rows.
+        # The indexer emits matching TP sequence shards directly. The partition fallback below also
+        # accepts SP-only or globally replicated indices from callers using the older output contract.
         transpose_head_to_seq = self._needs_head_to_seq_reshard
 
         q_seq_sharded = q

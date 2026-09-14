@@ -274,6 +274,7 @@ class TtIndexer:
         layer_num: int = 1,
         first_layer_idx: int | None = None,
         tp_shard_kv: bool = False,
+        output_tp_sequence_sharded: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -292,6 +293,9 @@ class TtIndexer:
         mesh_shape = list(mesh_device.shape)
         self.sp_factor = mesh_shape[sp_axis]
         self.tp_factor = mesh_shape[tp_axis]
+        # MLA's head-to-sequence redistribution consumes exactly the TP query shards scored here.
+        # Other consumers retain the SP-only output contract (gather query rows over TP).
+        self.output_tp_sequence_sharded = output_tp_sequence_sharded
         # KV dedup: index key cache sharded across SP*TP. Adds a TP-inner all-gather leg
         # (_tp_replicate_index_kbuf, which rebuilds the fused ring's k_local) and passes tp_axis to the write.
         self.tp_shard_kv = tp_shard_kv
@@ -784,9 +788,11 @@ class TtIndexer:
         actual_end: int = None,
         metadata=None,
     ) -> ttnn.Tensor:
-        """Indexer forward → top-k key indices [1, 1, S/sp, k] over the device index-key cache, SP-sharded
-        on the query axis (each chip scores its own S/sp rows; no Q/W all-gather). Fully on-device:
-        stems, RoPE, cache, logits, topk — no host.
+        """Indexer forward → top-k key indices over the device index-key cache, SP-sharded
+        on the query axis (each chip scores S/(sp*tp) rows; no Q/W all-gather). Fully on-device:
+        stems, RoPE, cache, logits, topk — no host. Output is [1,1,S/(sp*tp),k] when
+        output_tp_sequence_sharded, otherwise [1,1,S/sp,k]. The TP-sharded output is a fresh top-k
+        allocation: the caller must retain it through all consumers, including shared-indexer layers.
 
         ``index_kv_cache``: the persistent per-user key cache, allocated by the caller and passed in every
         call — the same ownership as ttMLA's KVPE ``kvpe_cache``. ALWAYS required (the indexer never
@@ -878,8 +884,8 @@ class TtIndexer:
         # split those rows over TP so each chip scores only S/(sp·tp) of them — indexer_score + topk shrink
         # ~TP×. RoPE is per-row so the split is safe (no 2-D rope op needed). The score is told the TP axis via
         # seq_shard_axes below, so its EXACT block-cyclic geometry adds each device's tp_rank*Sq' sub-offset
-        # (rotation-safe). topk runs on the sub-rows; indices are all-gathered back over TP to the [1,1,S/sp,k]
-        # contract so mla.py / sparse_sdpa are unchanged (both DeepSeek and GLM ride this one path).
+        # (rotation-safe). topk runs on the sub-rows; consumers using MLA's head-to-sequence reshard
+        # keep these shards. Only consumers needing all S/sp query rows gather the indices over TP.
         if tpsp:
             q_full = q_dev  # release the full-S slab once TP-split (mesh_partition allocates new)
             q_dev = ttnn.mesh_partition(q_dev, dim=2, cluster_axis=self.tp_axis)  # [1,H_idx,S/(sp·tp),D_idx]
@@ -988,7 +994,7 @@ class TtIndexer:
         # wq_b replicated -> each chip already holds the COMPLETE head-summed logit, so there is NO
         # partial-logit all-reduce over tp. This is the win: the removed step was a 2-CCL (RS+AG) all-reduce
         # spanning the full end_pos-wide logit (+ a TILE<->ROW_MAJOR round-trip), the indexer's dominant cost.
-        # Top-k key indices [1,1,S/sp,k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
+        # Top-k key indices [1,1,S/(sp*tp),k] (ROW_MAJOR uint32). Future/pad -inf columns surface as the
         # 0xFFFFFFFF sentinel that sparse_mla drops. The indexer score/cache contract requires a
         # 16-element-aligned key prefix; this is independent of fixed top-k capacity.
         # Host-side end_pos is unknown under capture (start_pos is read on-device), so the metadata path
@@ -1012,10 +1018,10 @@ class TtIndexer:
             valid_length_tensor=metadata[1] if metadata is not None else None,
             valid_length_offset=glob if metadata is not None else 0,
         )
-        # TP×SP: topk ran on the TP-seq-sharded rows ([1,1,S/(sp·tp),k]); regather over TP back to the
-        # [1,1,S/sp,k] contract so sparse_sdpa/mla.py are unchanged. (Redundant TP-round-trip for GLM's
-        # head→seq reshard, which re-splits it; correct regardless. tp=1: no-op.)
-        if tpsp:
+        # TP×SP: topk already has the query shards consumed by MLA's head-to-sequence reshard.
+        # Return that allocation directly; gathering then partitioning would recreate the same shards.
+        # Head-sharded attention still needs every S/sp query row on each TP rank.
+        if tpsp and not self.output_tp_sequence_sharded:
             # The dedicated gather supports ROW_MAJOR uint32 on a partial axis of the 2D mesh.
             idx_local = idx
             idx = self._tp_all_gather(idx_local, dim=2)  # [1,1,S/sp,k] ROW_MAJOR
