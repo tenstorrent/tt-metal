@@ -1,0 +1,50 @@
+{
+  "config_id": "head_bfp4_lofi",
+  "supported_context": 262144,
+  "hf_advertised_context": 262144,
+  "capability_reduction": null,
+  "kv_dtype": "bfloat8_b",
+  "page_size": 32,
+  "local_kv_heads": 1,
+  "head_dim": 256,
+  "mesh": [
+    1,
+    4
+  ],
+  "context_test_batch_size": 1,
+  "public_sequence_alignment_requirement": null,
+  "resources_bytes_per_device": {
+    "embedding_bf16_hidden_shard": 635699200,
+    "decoder_norms_constants_reserve": 134217728,
+    "final_norm_bf16": 327680,
+    "rope_bf16_tables": 67108864,
+    "linear_recurrence_fp32": 37748736,
+    "linear_conv_bf16_row_major": 737280,
+    "page_table_int32": 32768,
+    "trace_region_per_device": 200000000,
+    "persistent_ccl_and_sampling_reserve": 268435456,
+    "bounded_4096_prefill_activations_and_scratch_reserve": 2147483648,
+    "decoder_projections_selected_both_layouts": 7015956480,
+    "full_kv_selected": 2281701376,
+    "lm_head_selected_vocab_shard": 178790400,
+    "lm_head_selected_dram_decode_copy": 179896320,
+    "history_persistent_max_bytes_per_device": 33554432,
+    "history_append_scratch_max_bytes_per_device": 33554432,
+    "history_cursor_and_alignment_reserve_bytes_per_device": 4096,
+    "prefill_trace_persistent_reserve_bytes_per_device": 4194304
+  },
+  "conservative_total_bytes_per_device": 13219443200,
+  "device_dram_bytes": 34138688512,
+  "headroom_bytes_per_device": 20919245312,
+  "prefill_chunk_size": 4096,
+  "arithmetic_scope": "Full64 weights in prefill/decode layouts, selected KV and head; inherited conservative scratch/CCL/history reserves. Capacity arithmetic is not an execution test.",
+  "source_sha256": {
+    "fused_decoder.py": "3f324562925d42fb0c2997672f86fe68926a21869d3f2d351d1f5c3ba9792035",
+    "multichip_decoder.py": "98d74fc7c0691ad979be040686b5b068fe41cbac23c6bae636f647376b234385",
+    "optimized_decoder.py": "0ced5e6a94d769d2219b1688bf45d166486c9c45420fdcb7e1d18cb1fc4a0a97",
+    "generator.py": "eadef0efc46cd029838fec0032d09002fd71fb943c9abfe7970242beacbcc8fa",
+    "functional_decoder.py": "c790a57d53a3d2bbf9461400088dbd6281aba72ce98285513badc6bb8ad9623c",
+    "model.py": "6183416be2342eddf8019476022aebe89f3f4b7be0c0647589a5f7d9c7facab5",
+    "precision.py": "fdfe57b3b5371c863c8e791ea507b7148497b62639d8f1d95fa47f122a1f9c92"
+  }
+}

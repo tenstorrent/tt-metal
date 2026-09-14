@@ -1,0 +1,1311 @@
+{
+  "thresholds": {
+    "top1": 0.9,
+    "top5": 0.98,
+    "top100": 1.0
+  },
+  "ranking_metric": "traced_teacher_forcing_decode_t_s_u",
+  "provisional_fastest": "head_bfp4_lofi",
+  "results": [
+    {
+      "config_id": "activation_bfp8",
+      "precision_config_path": "doc/datatype_sweep/configs/activation_bfp8.json",
+      "dtype_policy": {
+        "config_id": "activation_bfp8",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat8_b",
+          "mlp": "bfloat8_b"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 75.48538083210588,
+      "traced_teacher_forcing_decode_t_s_u": 39.174281766517836,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        39.18190494861929,
+        39.166658584416375
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/activation_bfp8.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh activation_bfp8_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/activation_bfp8_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/activation_bfp8_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "baseline_bfp4_lofi_head_bfp8_hifi2",
+      "precision_config_path": "doc/datatype_sweep/configs/baseline_bfp4_lofi_head_bfp8_hifi2.json",
+      "dtype_policy": {
+        "config_id": "baseline_bfp4_lofi_head_bfp8_hifi2",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 77.21432717517018,
+      "traced_teacher_forcing_decode_t_s_u": 40.141821958478644,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.22840560739234,
+        40.05523830956494
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/baseline_bfp4_lofi_head_bfp8_hifi2.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh baseline_bfp4_lofi_head_bfp8_hifi2_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/baseline_bfp4_lofi_head_bfp8_hifi2_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/baseline_bfp4_lofi_head_bfp8_hifi2_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "canonical_decoder_bfp8_hifi2",
+      "precision_config_path": "doc/datatype_sweep/configs/canonical_decoder_bfp8_hifi2.json",
+      "dtype_policy": {
+        "config_id": "canonical_decoder_bfp8_hifi2",
+        "weight_groups": {
+          "attention": "bfloat8_b",
+          "output": "bfloat8_b",
+          "gate": "bfloat8_b",
+          "up": "bfloat8_b",
+          "down": "bfloat8_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "HiFi2",
+        "output": "HiFi2",
+        "gate": "HiFi2",
+        "up": "HiFi2",
+        "down": "HiFi2",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 82.98045629635453,
+      "traced_teacher_forcing_decode_t_s_u": 30.36638318050995,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        30.378457347148707,
+        30.35430901387119
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/canonical_decoder_bfp8_hifi2.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh canonical_decoder_bfp8_hifi2_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/canonical_decoder_bfp8_hifi2_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/canonical_decoder_bfp8_hifi2_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "canonical_decoder_bfp8_lofi",
+      "precision_config_path": "doc/datatype_sweep/configs/canonical_decoder_bfp8_lofi.json",
+      "dtype_policy": {
+        "config_id": "canonical_decoder_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfloat8_b",
+          "output": "bfloat8_b",
+          "gate": "bfloat8_b",
+          "up": "bfloat8_b",
+          "down": "bfloat8_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 80.47800930216908,
+      "traced_teacher_forcing_decode_t_s_u": 30.718049356170727,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        30.715801754570343,
+        30.72029695777111
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/canonical_decoder_bfp8_lofi.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh canonical_decoder_bfp8_lofi_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/canonical_decoder_bfp8_lofi_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/canonical_decoder_bfp8_lofi_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "canonical_qwen36_mixed_lofi",
+      "precision_config_path": "doc/datatype_sweep/configs/canonical_qwen36_mixed_lofi.json",
+      "dtype_policy": {
+        "config_id": "canonical_qwen36_mixed_lofi",
+        "weight_groups": {
+          "attention": "bfloat8_b",
+          "output": "bfloat8_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat8_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 78.10893468558788,
+      "traced_teacher_forcing_decode_t_s_u": 34.350214327409574,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        34.35367188986369,
+        34.34675676495546
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/canonical_qwen36_mixed_lofi.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh canonical_qwen36_mixed_lofi_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/canonical_qwen36_mixed_lofi_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/canonical_qwen36_mixed_lofi_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "ccl_bfp8",
+      "precision_config_path": "doc/datatype_sweep/configs/ccl_bfp8.json",
+      "dtype_policy": {
+        "config_id": "ccl_bfp8",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat8_b",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 78.04032973945141,
+      "traced_teacher_forcing_decode_t_s_u": 39.649166507158284,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        39.664043694577195,
+        39.63428931973938
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/ccl_bfp8.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh ccl_bfp8_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/ccl_bfp8_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/ccl_bfp8_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "decoder_bfp4_hifi2",
+      "precision_config_path": "doc/datatype_sweep/configs/decoder_bfp4_hifi2.json",
+      "dtype_policy": {
+        "config_id": "decoder_bfp4_hifi2",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "HiFi2",
+        "output": "HiFi2",
+        "gate": "HiFi2",
+        "up": "HiFi2",
+        "down": "HiFi2",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 77.41734944283962,
+      "traced_teacher_forcing_decode_t_s_u": 38.06120817792532,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        38.00802315722928,
+        38.11439319862136
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/decoder_bfp4_hifi2.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh decoder_bfp4_hifi2_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/decoder_bfp4_hifi2_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/decoder_bfp4_hifi2_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "head_bfp4_hifi2",
+      "precision_config_path": "doc/datatype_sweep/configs/head_bfp4_hifi2.json",
+      "dtype_policy": {
+        "config_id": "head_bfp4_hifi2",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat4_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 76.50205912068486,
+      "traced_teacher_forcing_decode_t_s_u": 40.73469939146638,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.76970100304831,
+        40.69969777988445
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/head_bfp4_hifi2.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh head_bfp4_hifi2_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/head_bfp4_hifi2_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/head_bfp4_hifi2_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "head_bfp4_lofi",
+      "precision_config_path": "doc/datatype_sweep/configs/head_bfp4_lofi.json",
+      "dtype_policy": {
+        "config_id": "head_bfp4_lofi",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat4_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "LoFi"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 76.6074638813734,
+      "traced_teacher_forcing_decode_t_s_u": 40.87812872356109,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.86900287849036,
+        40.887254568631825
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/head_bfp4_lofi.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh head_bfp4_lofi_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/head_bfp4_lofi_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/head_bfp4_lofi_evaluated.json",
+      "decision": "selected",
+      "decision_reason": "Fastest evaluated passing traced teacher-forcing candidate"
+    },
+    {
+      "config_id": "head_bfp4_lofi_kv_bfp4",
+      "precision_config_path": "doc/datatype_sweep/configs/head_bfp4_lofi_kv_bfp4.json",
+      "dtype_policy": {
+        "config_id": "head_bfp4_lofi_kv_bfp4",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat4_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "LoFi"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.98,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 98,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 80.88701264932752,
+      "traced_teacher_forcing_decode_t_s_u": 40.85737089383238,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.86063302824651,
+        40.854108759418246
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/head_bfp4_lofi_kv_bfp4.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh head_bfp4_lofi_kv_bfp4_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/head_bfp4_lofi_kv_bfp4_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/head_bfp4_lofi_kv_bfp4_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "head_bfp4_lofi_no_fp32_acc",
+      "precision_config_path": "doc/datatype_sweep/configs/head_bfp4_lofi_no_fp32_acc.json",
+      "dtype_policy": {
+        "config_id": "head_bfp4_lofi_no_fp32_acc",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat4_b"
+        },
+        "fp32_dest_acc_en": false,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "LoFi"
+      },
+      "fp32_dest_acc_en": false,
+      "top1": 0.99,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 75.95261465758085,
+      "traced_teacher_forcing_decode_t_s_u": 40.71733677566609,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.72337063083789,
+        40.71130292049429
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/head_bfp4_lofi_no_fp32_acc.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh head_bfp4_lofi_no_fp32_acc_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/head_bfp4_lofi_no_fp32_acc_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/head_bfp4_lofi_no_fp32_acc_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "head_bfp8_lofi",
+      "precision_config_path": "doc/datatype_sweep/configs/head_bfp8_lofi.json",
+      "dtype_policy": {
+        "config_id": "head_bfp8_lofi",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "LoFi"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 1.0,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 77.0042515359819,
+      "traced_teacher_forcing_decode_t_s_u": 40.18237905360395,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.171958449014824,
+        40.192799658193074
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/head_bfp8_lofi.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh head_bfp8_lofi_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/head_bfp8_lofi_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/head_bfp8_lofi_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "inner_mlp_bfp4_lofi_outer_bfp8",
+      "precision_config_path": "doc/datatype_sweep/configs/inner_mlp_bfp4_lofi_outer_bfp8.json",
+      "dtype_policy": {
+        "config_id": "inner_mlp_bfp4_lofi_outer_bfp8",
+        "weight_groups": {
+          "attention": "bfloat8_b",
+          "output": "bfloat8_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {
+          "0": {
+            "weight_groups": {
+              "gate": "bfloat8_b",
+              "up": "bfloat8_b",
+              "down": "bfloat8_b"
+            },
+            "compute_fidelities": {
+              "gate": "HiFi2",
+              "up": "HiFi2",
+              "down": "HiFi2"
+            }
+          },
+          "63": {
+            "weight_groups": {
+              "gate": "bfloat8_b",
+              "up": "bfloat8_b",
+              "down": "bfloat8_b"
+            },
+            "compute_fidelities": {
+              "gate": "HiFi2",
+              "up": "HiFi2",
+              "down": "HiFi2"
+            }
+          }
+        },
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat8_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "HiFi2",
+        "output": "HiFi2",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.99,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 99,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 77.71854475140572,
+      "traced_teacher_forcing_decode_t_s_u": 36.16019747164819,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        36.1663984777726,
+        36.15399646552377
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/inner_mlp_bfp4_lofi_outer_bfp8.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh inner_mlp_bfp4_lofi_outer_bfp8_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/inner_mlp_bfp4_lofi_outer_bfp8_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/inner_mlp_bfp4_lofi_outer_bfp8_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "kv_bf16",
+      "precision_config_path": "doc/datatype_sweep/configs/kv_bf16.json",
+      "dtype_policy": {
+        "config_id": "kv_bf16",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat16",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 1.0,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 100,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 77.35558971762657,
+      "traced_teacher_forcing_decode_t_s_u": 40.15891581755838,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.15068871601657,
+        40.167142919100186
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/kv_bf16.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh kv_bf16_evaluated models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/kv_bf16_evaluated.json:runtime",
+      "artifact": "doc/datatype_sweep/kv_bf16_evaluated.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    },
+    {
+      "config_id": "kv_bfp4",
+      "precision_config_path": "doc/datatype_sweep/configs/kv_bfp4.json",
+      "dtype_policy": {
+        "config_id": "kv_bfp4",
+        "weight_groups": {
+          "attention": "bfloat4_b",
+          "output": "bfloat4_b",
+          "gate": "bfloat4_b",
+          "up": "bfloat4_b",
+          "down": "bfloat4_b",
+          "head": "bfloat8_b"
+        },
+        "fp32_dest_acc_en": true,
+        "layer_exceptions": {},
+        "activation_dtype": {
+          "attention": "bfloat16",
+          "mlp": "bfloat16"
+        },
+        "residual_dtype": "bfloat16",
+        "ccl_dtype": "bfloat16",
+        "kv_cache_dtype": "bfloat4_b",
+        "logits_dtype": "bfloat16",
+        "sampling_dtype": "bfloat16",
+        "norm_dtype": "bfloat16",
+        "embedding_dtype": "bfloat16",
+        "recurrent_dtype": "float32",
+        "convolution_dtype": "bfloat16",
+        "sensitive_compute_fidelity": "HiFi4",
+        "token_dtype": "uint32",
+        "max_context": 262144,
+        "final_norm_compute_fidelity": "HiFi2"
+      },
+      "compute_fidelity_policy": {
+        "attention": "LoFi",
+        "output": "LoFi",
+        "gate": "LoFi",
+        "up": "LoFi",
+        "down": "LoFi",
+        "head": "HiFi2"
+      },
+      "fp32_dest_acc_en": true,
+      "top1": 0.98,
+      "top5": 1.0,
+      "top100": 1.0,
+      "prefill_accuracy": [
+        {
+          "top1": 0.98,
+          "top5": 1.0,
+          "top100": 1.0,
+          "matches_top1": 98,
+          "matches_top5": 100,
+          "matches_top100": 100,
+          "total": 100,
+          "k": 100
+        }
+      ],
+      "token_count": 100,
+      "ttft_ms": 81.09759166836739,
+      "traced_teacher_forcing_decode_t_s_u": 40.15712132812661,
+      "traced_teacher_forcing_repeats_t_s_u": [
+        40.17754341880017,
+        40.13669923745304
+      ],
+      "measurement_regime": "traced teacher forcing, batch1 S203 G100, native sampled-token delivery; median last2 warmed runs",
+      "workload": {
+        "prompt_len": 203,
+        "gen_len": 100,
+        "batch": 1
+      },
+      "command": "QWEN_PRECISION_CONFIG=models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/configs/kv_bfp4.json models/autoports/qwen_qwen3_8_27b/tests/run_datatype_experiment.sh kv_bfp4_recovered models.autoports.qwen_qwen3_8_27b.tests.run_datatype_candidate ",
+      "commit": "624f6352a9ca1c339870dbe517e564910bb71b15",
+      "hardware": "4 Blackhole p300c; TP4 Ring; payload8192",
+      "mesh": [
+        1,
+        4
+      ],
+      "status": "pass",
+      "trace_verified": true,
+      "reference": "models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt",
+      "runtime_propagation_evidence": "doc/datatype_sweep/kv_bfp4_recovered.json:runtime",
+      "artifact": "doc/datatype_sweep/kv_bfp4_recovered.json",
+      "decision": "rejected",
+      "decision_reason": "Slower passing full-model candidate"
+    }
+  ]
+}

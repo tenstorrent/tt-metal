@@ -46,6 +46,7 @@ def main():
         gen.sampler.pad_to_power_of_2 = args.pad_topk
         report = dict(
             full=args.full,
+            precision_policy=gen.model.precision,
             layers=gen.model.layer_indices,
             mesh=[1, 4],
             sampling_strategy=args.sampling_strategy,

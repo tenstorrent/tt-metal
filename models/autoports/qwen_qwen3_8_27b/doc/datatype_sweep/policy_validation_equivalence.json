@@ -1,0 +1,40 @@
+{
+  "status": "pass",
+  "unchanged_valid_configs": [
+    "doc/datatype_sweep/configs/activation_bfp8.json",
+    "doc/datatype_sweep/configs/baseline_bfp4_lofi_head_bfp8_hifi2.json",
+    "doc/datatype_sweep/configs/canonical_decoder_bfp8_hifi2.json",
+    "doc/datatype_sweep/configs/canonical_decoder_bfp8_lofi.json",
+    "doc/datatype_sweep/configs/canonical_qwen36_mixed_lofi.json",
+    "doc/datatype_sweep/configs/ccl_bfp8.json",
+    "doc/datatype_sweep/configs/decoder_bfp4_hifi2.json",
+    "doc/datatype_sweep/configs/head_bfp4_hifi2.json",
+    "doc/datatype_sweep/configs/head_bfp4_lofi.json",
+    "doc/datatype_sweep/configs/head_bfp4_lofi_kv_bfp4.json",
+    "doc/datatype_sweep/configs/head_bfp4_lofi_no_fp32_acc.json",
+    "doc/datatype_sweep/configs/head_bfp8_lofi.json",
+    "doc/datatype_sweep/configs/inner_mlp_bfp4_lofi_outer_bfp8.json",
+    "doc/datatype_sweep/configs/kv_bf16.json",
+    "doc/datatype_sweep/configs/kv_bfp4.json",
+    "doc/datatype_sweep/selected_precision_config.json"
+  ],
+  "old_source": "models/autoports/qwen_qwen3_8_27b/doc/datatype_sweep/source_snapshots/selected_confirmation/precision.py",
+  "new_source": "models/autoports/qwen_qwen3_8_27b/tt/precision.py",
+  "old_sha256": "fdfe57b3b5371c863c8e791ea507b7148497b62639d8f1d95fa47f122a1f9c92",
+  "new_sha256": "629b6e9f37a1b30c545f450adc664d4d8fe54f710edbeeedda7495bf1a198cf2",
+  "source_diff": [
+    "--- ",
+    "+++ ",
+    "@@ -70,6 +70,8 @@",
+    "     if set(policy[\"activation_dtype\"]) != {\"attention\", \"mlp\"}:",
+    "         raise ValueError(\"Activation policy requires attention and mlp groups\")",
+    "     for layer, exception in policy[\"layer_exceptions\"].items():",
+    "+        if not isinstance(layer, str) or str(int(layer)) != layer:",
+    "+            raise ValueError('Layer exceptions require canonical string indices, such as \"0\"')",
+    "         if not 0 <= int(layer) < 64 or set(exception) - {\"weight_groups\", \"compute_fidelities\"}:",
+    "             raise ValueError(\"Invalid layer exception\")",
+    "         for groups in exception.values():"
+  ],
+  "fix": "Reject noncanonical layer-exception keys before allocation; canonical measured policies are identical",
+  "regression_check": "check_datatype_evidence rejects integer0 and string00, confirms string0 is applied"
+}

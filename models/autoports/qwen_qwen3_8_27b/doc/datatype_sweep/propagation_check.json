@@ -1,0 +1,8 @@
+{
+  "status": "pass",
+  "selected_config": "head_bfp4_lofi",
+  "candidates": 15,
+  "default_confirmation_traced_teacher_forcing_t_s_u": 40.84867239103487,
+  "construction_path": "build_generator -> QwenModel -> load_precision (selected artifact by default)",
+  "serving_scope": "No vLLM adapter exists in this stage; subsequent adapter construction inherits this shared default."
+}

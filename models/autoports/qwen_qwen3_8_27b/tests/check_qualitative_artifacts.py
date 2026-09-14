@@ -42,10 +42,19 @@ def main():
     tree = ast.parse(code)
     assert len(tree.body) == 1 and isinstance(tree.body[0], ast.FunctionDef)
     assert not tree.body[0].decorator_list and not tree.body[0].args.defaults
+    # Generated functions may use any local name for their sequence. Restrict
+    # attribute calls to append on a locally initialized list, not one spelling.
+    local_lists = {
+        target.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.List)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
     for node in ast.walk(tree):
         assert not isinstance(node, (ast.Import, ast.ImportFrom, ast.Global, ast.Nonlocal))
         if isinstance(node, ast.Attribute):
-            assert isinstance(node.value, ast.Name) and node.value.id == "fib" and node.attr == "append"
+            assert isinstance(node.value, ast.Name) and node.value.id in local_lists and node.attr == "append"
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
             assert node.func.id == "range"
     namespace = {"__builtins__": {"range": range}}

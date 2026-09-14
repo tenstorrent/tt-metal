@@ -533,7 +533,9 @@ class OptimizedDecoder(LightweightModule):
             shape = x.shape
             x = ttnn.to_memory_config(ttnn.reshape(x, [1, 1, shape[0], 5120]), memory)
             attention = ttnn.to_memory_config(ttnn.reshape(attention, [1, 1, shape[0], 5120]), memory)
-            h = ttnn.add(x, attention, memory_config=memory)
+            h = ttnn.add(
+                x, attention, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
+            )
             n = self._norm(h, "post_attention_layernorm")
             if self.policy.get("minimal_mlp", False):
                 product = self._minimal(
@@ -566,8 +568,14 @@ class OptimizedDecoder(LightweightModule):
                 )
             down = self._linear(product, "mlp.down_proj", keep_sharded=True)
             down = ttnn.to_memory_config(down, memory)
-            return self._public_rows(ttnn.add(h, down, memory_config=memory), shape[0], 5120)
-        h = ttnn.add(x, attention)
+            return self._public_rows(
+                ttnn.add(
+                    h, down, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
+                ),
+                shape[0],
+                5120,
+            )
+        h = ttnn.add(x, attention, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")))
         n = self._norm(h, "post_attention_layernorm")
         if self.policy.get("minimal_mlp", False):
             product = self._minimal(
@@ -589,7 +597,11 @@ class OptimizedDecoder(LightweightModule):
                 up,
                 input_tensor_a_activations=[] if self.policy.get("gate_epilogue", True) else [ttnn.UnaryOpType.SILU],
             )
-        return ttnn.add(h, self._linear(product, "mlp.down_proj"))
+        return ttnn.add(
+            h,
+            self._linear(product, "mlp.down_proj"),
+            dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")),
+        )
 
     def _qkv(self, x, cos, sin):
         b, t, _ = x.shape

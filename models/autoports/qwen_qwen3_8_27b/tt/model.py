@@ -14,6 +14,7 @@ from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5TextRotaryEmbedd
 import ttnn
 from models.autoports.qwen_qwen3_8_27b.tt.functional_decoder import DecoderState
 from models.autoports.qwen_qwen3_8_27b.tt.multichip_decoder import MultichipDecoder
+from models.autoports.qwen_qwen3_8_27b.tt.precision import decoder_policy, load_precision
 from models.common.modules.tt_ccl import TT_CCL
 
 MODEL_ID = "Qwen/Qwen3.8-27B"
@@ -51,11 +52,13 @@ class ModelCache:
 
 
 class QwenModel:
-    def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram"):
+    def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
+        self.precision = load_precision(precision_config)
         self.mesh = mesh_device
         self.snapshot = Path(snapshot or checkpoint_path())
         self.config = AutoConfig.from_pretrained(self.snapshot, local_files_only=True).text_config
-        self.context = self.config.max_position_embeddings
+        self.context = self.precision["max_context"]
+        assert self.context == self.config.max_position_embeddings
         self.ccl = TT_CCL(mesh_device)
         self.checkpoint = Checkpoint(self.snapshot)
         self.layer_indices = (
@@ -71,6 +74,7 @@ class QwenModel:
                     layer_idx=i,
                     mesh_device=mesh_device,
                     ccl=self.ccl,
+                    policy=decoder_policy(self.precision, i),
                 )
             )
         self.embedding_weight = self.upload(
@@ -82,7 +86,11 @@ class QwenModel:
             (self.checkpoint.tensor("model.language_model.norm.weight").float() + 1).reshape(1, 1, -1)
         )
         name = "model.language_model.embed_tokens.weight" if self.config.tie_word_embeddings else "lm_head.weight"
-        self.head_weight = self.upload(self.checkpoint.tensor(name).T.contiguous(), dtype=ttnn.bfloat8_b, shard=-1)
+        self.head_weight = self.upload(
+            self.checkpoint.tensor(name).T.contiguous(),
+            dtype=getattr(ttnn, self.precision["weight_groups"]["head"]),
+            shard=-1,
+        )
         self.head_strategy = head_strategy
         if head_strategy not in ("interleaved", "dram"):
             raise ValueError("Unknown LM-head program family")
@@ -100,7 +108,13 @@ class QwenModel:
                 )
                 self.head_decode_weights.append(ttnn.to_memory_config(weight, memory))
         self.head_compute = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=getattr(ttnn.MathFidelity, self.precision["compute_fidelities"]["head"]),
+            math_approx_mode=False,
+            fp32_dest_acc_en=self.precision["fp32_dest_acc_en"],
+            packer_l1_acc=True,
+        )
+        self.norm_compute = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=getattr(ttnn.MathFidelity, self.precision["final_norm_compute_fidelity"]),
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
@@ -181,7 +195,7 @@ class QwenModel:
                 program_config=ttnn.LayerNormShardedMultiCoreProgramConfig(
                     compute_with_storage_grid_size=(10, 4), subblock_w=4, block_h=1, block_w=4, inplace=False
                 ),
-                compute_kernel_config=self.head_compute,
+                compute_kernel_config=self.norm_compute,
             )
             hidden = ttnn.to_memory_config(hidden, self.layers[0]._width_memory(8, 32, 640))
             return self._dram_logits(hidden)
@@ -191,7 +205,7 @@ class QwenModel:
             weight=self.norm_weight,
             epsilon=self.config.rms_norm_eps,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.head_compute,
+            compute_kernel_config=self.norm_compute,
         )
         if decode:
             hidden = ttnn.reshape(
@@ -201,7 +215,7 @@ class QwenModel:
         return ttnn.linear(
             hidden,
             self.head_weight,
-            dtype=ttnn.bfloat16,
+            dtype=getattr(ttnn, self.precision["logits_dtype"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.head_compute,
             core_grid=ttnn.CoreGrid(y=8, x=8),
@@ -220,7 +234,7 @@ class QwenModel:
             out = ttnn.linear(
                 hidden,
                 weight,
-                dtype=ttnn.bfloat16,
+                dtype=getattr(ttnn, self.precision["logits_dtype"]),
                 compute_kernel_config=self.head_compute,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=config,

@@ -524,13 +524,13 @@ class QwenGenerator(Generator):
             if layer.kind == "full_attention":
                 if any(
                     t is None
-                    or t.dtype != ttnn.bfloat8_b
+                    or t.dtype != getattr(ttnn, layer.policy["kv_dtype"])
                     or t.layout != ttnn.TILE_LAYOUT
                     or t.memory_config() != ttnn.DRAM_MEMORY_CONFIG
                     or tuple(t.shape) != (cache.num_pages, 1, 32, 256)
                     for t in (state.key, state.value)
                 ):
-                    raise ValueError("Full-attention cache violates the TP4 BFP8 page contract")
+                    raise ValueError("Full-attention cache violates the TP4 selected-dtype page contract")
             elif (
                 state.recurrent is None
                 or tuple(state.recurrent.shape) != (cache.batch_size, 12, 128, 128)
@@ -709,6 +709,7 @@ def build_generator(model_dir, mesh_device, **kwargs):
         snapshot=kwargs.pop("snapshot", None),
         layer_indices=indices,
         head_strategy=kwargs.pop("head_strategy", "dram"),
+        precision_config=kwargs.pop("precision_config", None),
     )
     return QwenGenerator(
         model,

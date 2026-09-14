@@ -1,0 +1,189 @@
+{
+  "status": "pass",
+  "reference_sha256": "f05df402a4f19faf2737b52e75da345e2073325897918765d50d6333c857f247",
+  "reference_greedy_top1_differences": [
+    {
+      "index": 15,
+      "greedy": 13,
+      "top1": 15060,
+      "top5": [
+        15060,
+        13,
+        3377,
+        25,
+        4952
+      ]
+    }
+  ],
+  "metric_contract": "Standard readiness scores stored topk_tokens; feedback uses generated_tokens. HF argmax/topk tie ordering differs at one position.",
+  "rows": [
+    {
+      "artifact": "activation_bfp8_evaluated.json",
+      "computed": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "canonical_decoder_bfp8_hifi2_evaluated.json",
+      "computed": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "canonical_decoder_bfp8_lofi_evaluated.json",
+      "computed": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "canonical_qwen36_mixed_lofi_evaluated.json",
+      "computed": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 1.0,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "ccl_bfp8_evaluated.json",
+      "computed": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 1.0
+    },
+    {
+      "artifact": "decoder_bfp4_hifi2_evaluated.json",
+      "computed": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "head_bfp4_lofi_kv_bfp4_evaluated.json",
+      "computed": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.98
+    },
+    {
+      "artifact": "head_bfp4_lofi_no_fp32_acc_evaluated.json",
+      "computed": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.98
+    },
+    {
+      "artifact": "inner_mlp_bfp4_lofi_outer_bfp8_evaluated.json",
+      "computed": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "kv_bf16_evaluated.json",
+      "computed": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.99
+    },
+    {
+      "artifact": "kv_bfp4_recovered.json",
+      "computed": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.98,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.98
+    },
+    {
+      "artifact": "selected_confirmation.json",
+      "computed": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "reported": {
+        "top1": 0.99,
+        "top5": 1.0,
+        "top100": 1.0
+      },
+      "greedy_sequence_match": 0.98
+    }
+  ]
+}

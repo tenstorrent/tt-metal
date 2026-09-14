@@ -277,12 +277,12 @@ class MultichipDecoder(OptimizedDecoder):
             # A layer stack shares this context; 64 independent L1 workspaces
             # would crowd out native matmul circular buffers.
             ar_cores = self.policy.get("allreduce_cores", 80)
-            workspace_key = "_qwen_tp4_allreduce_buffer_" + str(ar_cores)
+            workspace_key = "_qwen_tp4_allreduce_buffer_" + str(ar_cores) + self.policy["ccl_dtype"]
             workspace = getattr(self.ccl, workspace_key, None)
             if workspace is None:
                 workspace = ttnn.empty(
                     [1, 1, 32, 20480],
-                    dtype=ttnn.bfloat16,
+                    dtype=getattr(ttnn, self.policy["ccl_dtype"]),
                     layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                     memory_config=self._width_memory(ar_cores, 32, 20480 // ar_cores),
@@ -392,7 +392,9 @@ class MultichipDecoder(OptimizedDecoder):
         if not (self.sharded_residual and self.policy.get("sharded_l1", False) and tuple(x.shape)[:2] == (1, 1)):
             return super()._finish(x, attention)
         memory = ttnn.L1_MEMORY_CONFIG
-        h = ttnn.add(x, attention, memory_config=memory)
+        h = ttnn.add(
+            x, attention, memory_config=memory, dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16"))
+        )
         n = self._norm(h, "post_attention_layernorm")
         if self.policy["packed_mlp"]:
             packed = self._linear(n, "mlp.gate_up")
@@ -407,7 +409,12 @@ class MultichipDecoder(OptimizedDecoder):
             gate = self._linear(n, "mlp.gate_proj", activation="silu")
             up = self._linear(n, "mlp.up_proj")
             product = ttnn.mul(gate, up, memory_config=memory)
-        return ttnn.add(h, self._linear(product, "mlp.down_proj"), memory_config=memory)
+        return ttnn.add(
+            h,
+            self._linear(product, "mlp.down_proj"),
+            memory_config=memory,
+            dtype=getattr(ttnn, self.policy.get("residual_dtype", "bfloat16")),
+        )
 
     def _linear(self, x, name, activation=None, keep_sharded=False):
         if (

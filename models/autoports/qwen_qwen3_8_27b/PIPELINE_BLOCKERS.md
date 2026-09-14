@@ -53,3 +53,8 @@ and resume point here before continuing the pipeline.
 - The exact current-checkout `FABRIC_1D_RING`, `MeshShape(1, 4)`,
   `trace_region_size=0` open/close smoke completed with `MESH_SMOKE_OK`.
 - Repair validated. Resume the preserved stage 7 thread with `--resume-stage 7`.
+- The telemetry server subsequently respawned collector PID 4055677, which
+  reopened all four devices. To keep the experiment reservation stable, host
+  telemetry server PID 1567332 was suspended with reversible SIGSTOP and the
+  collector was terminated. KMD owner lists are empty. Restore telemetry after
+  the pipeline with `sudo kill -CONT 1567332`.

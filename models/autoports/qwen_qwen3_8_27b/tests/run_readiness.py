@@ -48,7 +48,7 @@ def main():
     try:
         gen = build_generator(root, mesh)
         factory = lambda *_args, **_kwargs: gen
-        report = dict(reference=str(a.reference), hf_metadata=metadata)
+        report = dict(reference=str(a.reference), hf_metadata=metadata, precision_policy=gen.model.precision)
         if a.only in ("prefill", "all"):
             with patch.object(prefill, "_import_build_generator", return_value=factory):
                 report["prefill"] = prefill.run_prefill_check(
