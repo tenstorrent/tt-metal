@@ -49,20 +49,24 @@ void kernel_main() {
     DataflowBuffer dfb_in0(dfb::in0);
     Scratchpad<volatile int> batch(scratch::batch);
 
-    // Stage the b uint32 batch ids into the scratchpad, then index them back below. The
-    // `batch_id_size > 0` guard skips both the staging read and every later batch[] access when
-    // there are no ids, so the CPU never reads uninitialized scratch memory.
+    // CPU handle for the staged ids. On Quasar DM the CPU's private L1 D$ and L2 are not coherent with the
+    // NoC's write to shared L1 (TL1): invalidate_l1_cache() is a no-op there and an L2-only invalidate leaves
+    // a stale D$ line. Read through the uncached L1 alias (base + MEM_L1_UNCACHED_BASE) so the CPU bypasses
+    // both caches and sees the NoC-written ids directly -- this is what the old DataflowBuffer::get_write_ptr()
+    // did for this path. Plain base on WH/BH (the alias is Quasar-only, and CPU/NoC are coherent there).
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    volatile tt_l1_ptr int* batch_ids = reinterpret_cast<volatile tt_l1_ptr int*>(
+        static_cast<uintptr_t>(batch.get_base_address()) + MEM_L1_UNCACHED_BASE);
+#else
+    volatile tt_l1_ptr int* batch_ids = reinterpret_cast<volatile tt_l1_ptr int*>(batch.get_base_address());
+#endif
+
+    // Stage the b uint32 batch ids into the scratchpad, then index them back below via batch_ids. The
+    // `batch_id_size > 0` guard skips both the staging read and every later batch_ids[] access when there
+    // are no ids, so the CPU never reads uninitialized scratch memory.
     if (batch_id_size > 0) {
         noc.async_read(batchAddr, batch, (batch_id_size << 2), {.page_id = 0}, {.offset_bytes = 0});
         noc.async_read_barrier();
-#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
-        // Quasar DM: the NoC wrote the ids straight to shared L1, but the CPU batch[] reads below go
-        // through the RISC's L2 cache, which invalidate_l1_cache() does not touch here. Drop the stale
-        // lines over the staged range so the CPU sees the NoC-written ids. No-op on WH/BH (CPU reads
-        // are coherent with NoC writes there and invalidate_l2_cache_range is tt-2xx-only).
-        invalidate_l2_cache_range(
-            static_cast<uintptr_t>(batch.get_base_address()), static_cast<size_t>(batch_id_size << 2));
-#endif
     }
 
     if constexpr (IS_SHARD_LOCAL) {
@@ -99,7 +103,7 @@ void kernel_main() {
             uint32_t replace_src = 0;
             if (batch_id_size > 0) {
                 for (uint32_t k = 0; k < batch_id_size; ++k) {
-                    if (static_cast<uint32_t>(batch[k]) == b_global) {
+                    if (static_cast<uint32_t>(batch_ids[k]) == b_global) {
                         replace_b = true;
                         replace_src = k;
                     }
@@ -179,7 +183,7 @@ void kernel_main() {
             uint32_t batch_to_replace_id = 0;
             if (batch_id_size > 0) {
                 for (uint32_t i = 0; i < batch_id_size; ++i) {
-                    if (static_cast<uint32_t>(batch[i]) == my_batch_id) {
+                    if (static_cast<uint32_t>(batch_ids[i]) == my_batch_id) {
                         replace_batch = true;
                         batch_to_replace_id = i;
                     }
@@ -246,7 +250,7 @@ void kernel_main() {
                 uint32_t batch_to_replace_id = 0;
                 if (batch_id_size > 0) {
                     for (uint32_t k = 0; k < batch_id_size; ++k) {
-                        if (static_cast<uint32_t>(batch[k]) == my_slice) {
+                        if (static_cast<uint32_t>(batch_ids[k]) == my_slice) {
                             replace_batch = true;
                             batch_to_replace_id = k;
                         }
