@@ -19,7 +19,8 @@ import ttnn
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
 from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
 from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
-from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
+from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import CONFIG_NAMES, build_kv_chunk_address_table
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_and_get_pcc
 
 from ..demo.text_demo_prefill import _build_prefill_model, _get_prefill_tokens, _host_tensor, _mesh_config, _model_path
 from .test_factory import parametrize_mesh_with_fabric
@@ -116,7 +117,6 @@ def test_traced_and_untraced_prefill_dispatch_share_same_chunk_metadata(monkeypa
     monkeypatch.setattr("ttnn.unsqueeze_to_4D", lambda value: value)
 
     hidden = SimpleNamespace(shape=(1, 1, 128, 64))
-    traced_model._rope_prefill_positions = [0, 1, 2, 3]
     traced_model._rope_prefill_positions = [0, 1, 2, 3]
 
     traced_model(hidden_states=hidden, chunk_start_idx=2048, user_id=1)
@@ -344,11 +344,8 @@ def _run_chunked_device_prefill(mesh_device, tokens, *, chunk_size, traced, mode
 
 
 def _pcc(lhs, rhs):
-    lhs = lhs.reshape(-1).float()
-    rhs = rhs.reshape(-1).float()
-    lhs = lhs - lhs.mean()
-    rhs = rhs - rhs.mean()
-    return float(torch.dot(lhs, rhs) / (torch.linalg.vector_norm(lhs) * torch.linalg.vector_norm(rhs)))
+    _, _, pcc = comp_and_get_pcc(rhs.reshape(-1).float(), lhs.reshape(-1).float())
+    return float(pcc)
 
 
 @pytest.fixture(scope="module")
@@ -439,7 +436,7 @@ def test_device_external_ring_caches_match_internal_prefill(mesh_device):
         kv_caches=external_caches,
         chunk_size=chunk_size,
     )
-    assert address_table.num_configs() == 36
+    assert address_table.num_configs() == len(CONFIG_NAMES)
     assert address_table.total_entries() > 0
 
     _, external_model, _ = _build_prefill_model(
