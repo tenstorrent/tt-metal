@@ -61,7 +61,7 @@ def split_qkv_heads_prefill(
     )
 
 
-def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None):
+def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None, fp32_accumulate=False):
     """Normalize each token and head independently along head_dim."""
     orig_shape = tensor.shape
     head_dim = orig_shape[-1]
@@ -72,13 +72,19 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True, memory_config=None
         num_heads = orig_shape[1]
         seq_or_batch = orig_shape[2]
         flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
-    # Match Hugging Face's FP32 per-head Q/K/V RMSNorm computation.
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        tensor.device().arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=False,
+    # Prefill matches Hugging Face's FP32 per-head Q/K/V RMSNorm (HiFi4 + fp32 accumulation).
+    # Decode keeps the op default: the fp32 config lowered paged-decode attention PCC below the
+    # 0.99 gate on both Wormhole and Blackhole (26B / E2B unit tests, 2026-09-11 onwards).
+    compute_kernel_config = (
+        ttnn.init_device_compute_kernel_config(
+            tensor.device().arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+        if fp32_accumulate
+        else None
     )
     if with_scale and weight is not None:
         normed = ttnn.rms_norm(
