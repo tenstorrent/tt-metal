@@ -1028,7 +1028,7 @@ TEST(PipelineBuilderMockSweep, RingCapacity) {
     const std::string graph = requested_graph == nullptr ? "native_ring" : requested_graph;
     ASSERT_TRUE(
         graph == "native_ring" || graph == "ring" || graph == "small_ring" || graph == "llama" || graph == "gemma" ||
-        graph == "fork" || graph == "fork_mpi");
+        graph == "fork" || graph == "fork_mpi" || graph == "missing_shape");
     const char* requested_stages = std::getenv("TT_PIPELINE_TEST_STAGES");
     const size_t stage_count = requested_stages == nullptr ? layouts.size() : std::stoul(requested_stages);
     ASSERT_GE(stage_count, 2u);
@@ -1041,7 +1041,9 @@ TEST(PipelineBuilderMockSweep, RingCapacity) {
             stage_chip_counts[node] = graph == "small_ring" ? 2 : 8;
         }
     }
-    if (graph == "llama") {
+    if (graph == "missing_shape") {
+        stage_chip_counts[nodes.front()] = 3;
+    } else if (graph == "llama") {
         ASSERT_EQ(stage_count, 40u);
         for (size_t i = 7; i < 39; ++i) {
             stage_chip_counts[nodes[i]] = 2;
