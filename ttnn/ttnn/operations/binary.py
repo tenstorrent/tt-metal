@@ -196,7 +196,8 @@ def _golden_function_add(
     # result activations afterward. Mirror that order in comparison-mode goldens.
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = input_tensor_a if hasattr(input_tensor_a, "dtype") else input_tensor_b
+    if hasattr(tensor_operand, "dtype") and integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a + b)
     else:
@@ -244,7 +245,8 @@ def _golden_function_subtract(
 ):
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = input_tensor_a if hasattr(input_tensor_a, "dtype") else input_tensor_b
+    if hasattr(tensor_operand, "dtype") and integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a - b)
     else:
@@ -292,7 +294,8 @@ def _golden_function_rsub(
 ):
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = input_tensor_a if hasattr(input_tensor_a, "dtype") else input_tensor_b
+    if hasattr(tensor_operand, "dtype") and integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: b - a)
     else:
@@ -340,7 +343,8 @@ def _golden_function_multiply(
 ):
     input_tensor_a = apply_activations(input_tensor_a, input_tensor_a_activations)
     input_tensor_b = apply_activations(input_tensor_b, input_tensor_b_activations, input_tensor_a)
-    if integer_golden.is_unsigned_dtype(input_tensor_a.dtype):
+    tensor_operand = input_tensor_a if hasattr(input_tensor_a, "dtype") else input_tensor_b
+    if hasattr(tensor_operand, "dtype") and integer_golden.is_unsigned_dtype(tensor_operand.dtype):
         # PyTorch lacks unsigned arithmetic kernels; widen and restore TT wraparound.
         output_tensor = integer_golden.binary(input_tensor_a, input_tensor_b, lambda a, b: a * b)
     else:
