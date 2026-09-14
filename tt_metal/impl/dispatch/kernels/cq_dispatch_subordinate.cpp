@@ -490,12 +490,14 @@ void process_go_signal_mcast_cmd() {
                             (go_signal_value >> 24) == RUN_MSG_GO && num_worker_sems == 1 && num_unicasts == 0;
 
     if (use_fds_go) {
+        DPRINT("DISPATCH_S: go FDS\n");
         ASSERT(multicast_go_offset == 0);
         open_worker_completion_round(0);
         open_round_uses_fds_go = true;
         last_go_token = kFdsGoToken;
         write_go_verified(kFdsGoToken);
     } else if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
+        DPRINT("DISPATCH_S: go NOC\n");
         uint64_t dst_noc_addr_multicast =
             get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
@@ -515,8 +517,11 @@ void process_go_signal_mcast_cmd() {
         }
         cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
+    } else {
+        DPRINT("DISPATCH_S: go NOC\n");
     }
 #else
+    DPRINT("DISPATCH_S: go NOC\n");
     if (multicast_go_offset != CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET) {
         // Setup registers before waiting for workers so only the NOC_CMD_CTRL register needs to be touched after.
         uint64_t dst_noc_addr_multicast =
@@ -725,7 +730,11 @@ void kernel_main() {
     noc_v3_cq_state_reset();
 #endif
     set_l1_data_cache<true>();
-    DPRINT("dispatch_s : start\n");
+#ifdef FDS_SIGNALLING
+    DPRINT("dispatch_s : start (worker signalling FDS)\n");
+#else
+    DPRINT("dispatch_s : start (worker signalling NOC)\n");
+#endif
     // Initialize customized command buffers.
     dispatch_s_wr_reg_cmd_buf_init();
     dispatch_s_atomic_cmd_buf_init();

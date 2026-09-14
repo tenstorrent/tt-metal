@@ -155,8 +155,8 @@ void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8
     logical_dispatch_cores_on_user_chips_ =
         populate_all_logical_dispatch_cores(env_, num_hw_cqs_, dispatch_core_config_);
     cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, num_hw_cqs, logical_dispatch_cores_on_user_chips_);
-    // FDS go/completion is a Quasar dispatch-engine path. A single go wire is shared by every CQ on the
-    // engine, so FDS needs one CQ to own it; the go and completion paths are always used together.
+    // FDS go/completion is a Quasar DE path. A single go wire is shared by every CQ on the dispatch
+    // engine, so FDS needs one CQ to own it.
     fds_signalling_enabled_ = resolved_dispatch_core_type_ == CoreType::DISPATCH && hal.supports_fds() &&
                               !rtoptions.get_disable_fds() && rtoptions.get_fast_dispatch() &&
                               cq_dispatch_layout_.num_cqs_per_core == 1;
