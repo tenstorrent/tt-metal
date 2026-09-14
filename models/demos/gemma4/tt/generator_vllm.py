@@ -1951,9 +1951,9 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     trace capture at this request's horizon).
 
     PERF: each vLLM decode step runs a tight INTERNAL loop of dFlash iterations
-    and commits a BLOCK of up to ``_SPEC_BLOCK`` tokens, so vLLM's ~135ms/iter
-    host overhead is amortized over the whole block (like DiffusionGemma's
-    256-token canvas) instead of one ~5-token iteration. This makes the server
+    and commits a BLOCK of up to ``_SPEC_BLOCK`` tokens, so vLLM's per-STEP host
+    overhead is amortized over the whole block (like DiffusionGemma's 256-token
+    canvas) instead of being paid once per ~5-token iteration. This makes the server
     decode rate device-bound and ~metal-parity (measured 31B P150X8: code
     ~62 tok/s / prose ~47, vs metal demo 68/55 and baseline serving 26). The
     runner-supplied per-token inputs are advisory: the fused decoder owns the
@@ -1963,11 +1963,25 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
     _SPEC_V = min(int(os.environ.get("GEMMA4_DFLASH_VERIFY", "7")), 15)
     _SPEC_N = _SPEC_V + 1
     # Server BLOCK size: one vLLM decode step runs a tight INTERNAL loop of
-    # dFlash iterations and emits up to this many committed tokens. This
-    # amortizes vLLM's ~135ms/iter host overhead over a whole block (like
-    # DiffusionGemma's 256-token canvas), so the server rate becomes
-    # device-bound and matches the metal-demo speculation gain instead of
-    # paying the host overhead once per ~5-token iteration.
+    # dFlash iterations and emits up to this many committed tokens, amortizing
+    # vLLM's per-step host overhead over the whole block.
+    #
+    # MEASURED (supersedes an earlier "~135 ms/iter" claim, which was wrong --
+    # it was a per-STEP number mislabelled per-iteration, taken before
+    # async_scheduling). Fitting step_time = H + (B/acceptance)*D over three
+    # block sizes on a P150x8 31B dFlash server (ISL 128, osl 1024, conc 1):
+    #     B=64  88.0 tok/s/u  acc 5.61  11.40 iters/step  727 ms/step
+    #     B=32  81.2 tok/s/u  acc 5.24   6.11 iters/step  394 ms/step
+    #     B=8   57.0 tok/s/u  acc 5.04   1.59 iters/step  140 ms/step
+    #   -> H = 39.4 ms per vLLM step, D = 59.9 ms per spec iteration
+    #      (residuals -0.7% / +2.8% / -4.3%)
+    # A whole iteration is only ~60 ms, so 135 ms/iter was impossible. At B=64
+    # the host overhead is 5.5% of the step, and B=8 costs ~35% throughput --
+    # the block loop still pays for itself, but far less than the old number
+    # implied. Note H is WALL-CLOCK per step; viztracer puts plugin CPU work at
+    # ~4 ms, so most of H is waiting (dispatch/IPC/queueing), not compute, and
+    # is plausibly recoverable by a plugin-driven spec loop
+    # (vllm-tt-plugin#110).
     _SPEC_BLOCK = int(os.environ.get("GEMMA4_DFLASH_SERVE_BLOCK", "64"))
 
     model_capabilities = {
