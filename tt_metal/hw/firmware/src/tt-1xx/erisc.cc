@@ -10,6 +10,7 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
+#include "api/debug/device_print.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -112,6 +113,7 @@ void __attribute__((noinline)) Application(void) {
     }
     WAYPOINT("RED");
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
     DeviceProfilerInit();
     while (routing_info->routing_enabled) {
@@ -141,6 +143,7 @@ void __attribute__((noinline)) Application(void) {
                 WAYPOINT("D");
             }
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 launch_msg_address->kernel_config.enables = 0;

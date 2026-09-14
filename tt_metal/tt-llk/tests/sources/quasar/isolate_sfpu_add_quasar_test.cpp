@@ -102,8 +102,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _configure_buf_desc_table_(buf_desc_id_pack, bd_pack);
     _llk_pack_hw_configure_<p_pacr::PACK1, false /*EN_32BIT_DEST*/>(static_cast<DataFormat>(formats.pack_S_src), ckernel::ReluConfig::none());
 
-    // Implied math format disable for SrcS and sfpmem mod selection
+    // Implied math format disable for SrcS (unpacker). Load/store decode uses explicit sfpmem.
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
+
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
 
     // -------------------------------------------------------------------------
     // SFPU configuration and execution
@@ -125,20 +129,23 @@ void run_kernel(RUNTIME_PARAMETERS params)
         0 /*set_mutex*/,
         0 /*last*/,
         // Lambda function to load replay buffer
-        [in0_base, in1_base, out_base, num_sfpu_iterations]
+        [in0_base, in1_base, out_base, num_sfpu_iterations, load_sfpmem, store_sfpmem]
         {
 #pragma GCC unroll 4
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_base + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_base + (d << 1));
                 // Add LREG0 + LREG1, store result in LREG2
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
                 // Store result back to output slice
-                TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_base + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, out_base + (d << 1));
             }
         });
 
+    // UNPACR2 is issued manually below, so the auto-loop must not replay it. This register is not
+    // reset between tests, so a preceding tile-at-a-time SrcS test would otherwise leave it set.
+    _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 

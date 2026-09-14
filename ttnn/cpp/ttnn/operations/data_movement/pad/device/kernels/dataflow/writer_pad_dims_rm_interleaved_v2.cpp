@@ -8,23 +8,20 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
-    uint32_t num_sticks_per_barrier = get_arg_val<uint32_t>(2);
-    uint32_t start_page_id = get_arg_val<uint32_t>(3);
+    auto num_sticks_per_core = get_arg(args::num_sticks_per_core);
+    auto num_sticks_per_barrier = get_arg(args::num_sticks_per_barrier);
+    auto start_page_id = get_arg(args::start_page_id);
 
-    constexpr uint32_t dfb_out0 = get_compile_time_arg_val(0);
-    constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
-    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
-    constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(4);
-    constexpr auto dst_args = TensorAccessorArgs<5>();
+    constexpr auto stick_size_bytes = get_arg(args::stick_size_bytes);
+    constexpr auto stick_size_padded_aligned = get_arg(args::stick_size_padded_aligned);
+    constexpr auto num_output_pages_in_row = get_arg(args::num_output_pages_in_row);
 
-    const auto s = TensorAccessor(dst_args, dst_addr, accessor_page_size);
+    const auto s = TensorAccessor(tensor::dst);
     Noc noc;
-    DataflowBuffer dfb_out0_exp(dfb_out0);
+    DataflowBuffer dfb_out0_exp(dfb::out0);
 
     uint32_t i_page = start_page_id;
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {

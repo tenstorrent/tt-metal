@@ -269,11 +269,29 @@ def test_qwen_attention_ttt_inference(
         freqs_cis_i_ref = freqs_cis_ref[current_pos[0], :].unsqueeze(0)
 
         reference_output = reference_model(
-            pt_attention_input.to(torch.bfloat16), current_pos[0], freqs_cis_i_ref, mask=None
+            # Match the reference model's own dtype (the same helper this test already uses
+            # at the KV-cache comparison below); hardcoding bfloat16 fails against an fp32
+            # HF reference with "expected m1 and m2 to have the same dtype".
+            pt_attention_input.to(get_ref_model_dype(reference_model, model_args_ref.model_name)),
+            current_pos[0],
+            freqs_cis_i_ref,
+            mask=None,
         )
 
-        reference_output_custom = reference_model_custom(pt_attention_input, current_pos[0], freqs_cis_i_ref, mask=None)
-        passing, pcc_message = comp_pcc(reference_output, reference_output_custom, pcc)
+        # Match the custom reference module's own parameter dtype: load_state_dict keeps the
+        # module's dtype (fp32) while pt_attention_input is bf16, which trips
+        # "expected m1 and m2 to have the same dtype" inside its wq/wk/wv linears.
+        _custom_dtype = next(reference_model_custom.parameters()).dtype
+        reference_output_custom = reference_model_custom(
+            pt_attention_input.to(_custom_dtype), current_pos[0], freqs_cis_i_ref, mask=None
+        )
+        # Sanity: the two reference implementations must agree with each other before any
+        # reference-vs-TT number means anything. This result was previously overwritten by the
+        # next line and never surfaced.
+        ref_passing, ref_pcc_message = comp_pcc(reference_output, reference_output_custom, pcc)
+        logger.info(f"REF-vs-REF PCC: {ref_pcc_message} (passing={ref_passing})")
+        cust_passing, cust_msg = comp_pcc(reference_output_custom, tt_output_torch, pcc)
+        logger.info(f"CUSTOM-REF-vs-TT PCC: {cust_msg} (passing={cust_passing})")
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))

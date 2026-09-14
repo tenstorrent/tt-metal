@@ -25,7 +25,15 @@ ttnn::Tensor scaled_dot_product_attention(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt);
+    const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt,
+    /// Windowed mode only. Global row index of Q row 0, for a Q holding a contiguous slice of a longer
+    /// sequence: Q and the output are indexed locally while cu_window_seqlens and K/V stay global, so this
+    /// locates the slice among the windows. Must be a multiple of TILE_HEIGHT and satisfy offset+Sq <= Sk.
+    uint32_t windowed_q_token_offset = 0,
+    /// Windowed mode only. Per-device form of the offset above: a 1-element int32/uint32 ROW_MAJOR device
+    /// tensor, read at runtime rather than baked into the program. Shard it on the sequence-parallel axis
+    /// so every device runs the SAME program yet sees its own origin. Overrides the scalar when set.
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
 
 /// Chunked SDPA over paged K/V: one Q chunk per call, K/V in paged layout.
 /// Two overloads: legacy (chunk_start_idx as int) or flexible (chunk_start_idx_tensor on device).
@@ -103,7 +111,16 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt);
+    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
+    // Trace-safe metadata path, same contract as ring_mla's below: when slot_id and
+    // kv_actual_isl_tensor are both set, the per-chunk scalars are read on-device from these
+    // 1-element uint32 DRAM tensors instead of being patched into runtime args, so one captured
+    // trace replays across chunks. Chunked prefill needs this because kv_actual_isl / logical_n
+    // change every chunk, and a trace freezes whatever was live at capture.
+    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
+    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
+    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -115,7 +132,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
-    uint32_t cluster_axis,
+    std::optional<uint32_t> cluster_axis,
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,

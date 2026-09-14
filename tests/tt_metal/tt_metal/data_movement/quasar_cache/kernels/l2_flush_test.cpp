@@ -6,7 +6,7 @@
 // Writes values to cacheable memory and flushes/invalidates using various L2 functions.
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
 #include "risc_common.h"
@@ -19,7 +19,6 @@ void kernel_main() {
     uint32_t value = get_arg(args::value);
     uint32_t num_words = get_arg(args::num_words);
 
-    DPRINT << "START mode=" << test_mode << " words=" << num_words << ENDL();
     DEVICE_PRINT("START mode={} words={}\n", test_mode, num_words);
 
     // Write values to cacheable addresses
@@ -28,7 +27,6 @@ void kernel_main() {
         ptr[i] = value + i;
     }
 
-    DPRINT << "WRITES DONE" << ENDL();
     DEVICE_PRINT("WRITES DONE\n");
 
     // Flush/invalidate based on test mode
@@ -85,6 +83,5 @@ void kernel_main() {
             while (1);
     }
 
-    DPRINT << "DONE" << ENDL();
     DEVICE_PRINT("DONE\n");
 }

@@ -50,10 +50,10 @@ TEST_F(NamedArgsTest, TensixTestNamedCommonAndPerCoreRuntimeArgs) {
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 0}, {"my_kernel.param_b", 0}},
                 .named_common_runtime_args = {{"my_kernel.marker", expected_marker}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core0, core0_idx}, {core1, core1_idx}}}},
             },
@@ -127,6 +127,7 @@ TEST_F(NamedArgsTest, TensixTestNamedArrayRuntimeArgs) {
                                         << ", got " << results[0];
 }
 
+// Both header channels must remain usable together on the data-movement path.
 TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
@@ -140,14 +141,16 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
-        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
+        .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}, {"TEST_LEGACY_NAMED_CT_ARGS", "1"}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -160,10 +163,11 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgs) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+    detail::ReadFromDeviceL1(device, core, write_addr, 5 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[2], param_a) << "blaze_ct_args::my_kernel::param_a should be 42";
     EXPECT_EQ(results[3], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF";
+    EXPECT_EQ(results[4], legacy_param);
 }
 
 TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
@@ -223,15 +227,9 @@ TEST_F(NamedArgsTest, TensixTestNamedPerCoreArrayRuntimeArgs) {
         << "Core (1,0): sum should be " << expected_sum_core1 << ", got " << results_core1[0];
 }
 
-// Covers the COMPUTE JIT compile path for the experimental named blaze_ct_args:: header.
-// All tests above use DataMovementConfigDescriptor (the BRISC/NCRISC path via
-// jit_build_genfiles_kernel_include); this one uses ComputeConfigDescriptor (the
-// TRISC path via jit_build_genfiles_triscs_src + build_trisc_prolog). Before the
-// genfiles relocation, named_args_generated.h was emitted per-source by build.cpp's
-// compile_one and delivered via `-include` — a non-atomic write on a shared path
-// (racy under multiprocess, and never carried to the remote/JIT-server path). This
-// exercises the relocated, presence-gated prolog #include on the compute path.
-TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
+// Verifies that TRISC kernels can use the force-included legacy CT map together with
+// the Blaze header included by build_trisc_prolog. Both values must reach device L1.
+TEST_F(NamedArgsTest, TensixTestMixedNamedCompileTimeArgsComputeKernel) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -244,13 +242,16 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
 
     const uint32_t param_a = 42;
     const uint32_t param_b = 0xBEEF;
+    const uint32_t legacy_param = 0xCAFE;
 
     KernelDescriptor kernel = {
         .kernel_source =
             "tests/tt_metal/tt_metal/test_kernels/compute/blaze_named_compile_time_args_compute_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}},
+        .named_compile_time_args = {{"legacy_param", legacy_param}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
+        .blaze_named_args =
+            {.named_compile_time_args = {{"my_kernel.param_a", param_a}, {"my_kernel.param_b", param_b}}},
         .config = ComputeConfigDescriptor{},
     };
 
@@ -260,10 +261,11 @@ TEST_F(NamedArgsTest, TensixTestNamedCompileTimeArgsComputeKernel) {
     distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> results;
-    detail::ReadFromDeviceL1(device, core, write_addr, 2 * sizeof(uint32_t), results);
+    detail::ReadFromDeviceL1(device, core, write_addr, 3 * sizeof(uint32_t), results);
 
     EXPECT_EQ(results[0], param_a) << "blaze_ct_args::my_kernel::param_a should be 42 (compute path)";
     EXPECT_EQ(results[1], param_b) << "blaze_ct_args::my_kernel::param_b should be 0xBEEF (compute path)";
+    EXPECT_EQ(results[2], legacy_param) << "legacy named compile-time arg should remain available";
 }
 
 // Test 1: Mixed positional + named args coexist in the same kernel.
@@ -319,9 +321,8 @@ TEST_F(NamedArgsTest, TensixTestMixedPositionalAndNamedRuntimeArgs) {
     EXPECT_EQ(results[3], named_common_val) << "Named common RT arg (after positional)";
 }
 
-// Test 2a: CT arg redefinition with same value succeeds (dedup).
-// Two entries with the same name and value should be silently deduplicated.
-TEST_F(NamedArgsTest, TensixTestCTArgDedupSameValue) {
+// Test 2a: The legacy field still accepts repeated names with the same value.
+TEST_F(NamedArgsTest, TensixTestLegacyCTArgDedupSameValue) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
@@ -377,10 +378,10 @@ TEST_F(NamedArgsTest, TensixTestCTArgConflictFails) {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
         // Same name, conflicting values — should fatal
-        .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.param_a", 42}, {"my_kernel.param_a", 99}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -405,10 +406,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_ns = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"123bad.field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"123bad.field", 1}},
                 .named_common_runtime_args = {{"123bad.marker", 0}},
                 .named_per_core_runtime_args = {{"123bad.core_idx", {{core, 0}}}},
             },
@@ -421,10 +422,10 @@ TEST_F(NamedArgsTest, TensixTestInvalidIdentifierFails) {
     KernelDescriptor kernel_bad_field = {
         .kernel_source = "tests/tt_metal/tt_metal/test_kernels/misc/blaze_named_runtime_args_kernel.cpp",
         .core_ranges = cores,
-        .named_compile_time_args = {{"my_kernel.bad-field", 1}},
         .defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}},
         .blaze_named_args =
             {
+                .named_compile_time_args = {{"my_kernel.bad-field", 1}},
                 .named_common_runtime_args = {{"my_kernel.marker", 0}},
                 .named_per_core_runtime_args = {{"my_kernel.core_idx", {{core, 0}}}},
             },
@@ -504,7 +505,7 @@ void blaze_expect_cache_hit_values(
 
 }  // namespace
 
-TEST(NamedArgsDescriptorCacheHit, SameSchemaDifferentValuesShareProgramHash) {
+TEST(NamedArgsDescriptorCacheHit, CPU_SameSchemaDifferentValuesShareProgramHash) {
     // Premise of the staleness bug (and of the regression test below): the two
     // invocations must land on the SAME cache entry.  Values are deliberately
     // excluded from the schema hash; if that ever changes, this test fails first
@@ -517,7 +518,7 @@ TEST(NamedArgsDescriptorCacheHit, SameSchemaDifferentValuesShareProgramHash) {
         << "Same named-arg schema with different values must share a program-cache hash";
 }
 
-TEST(NamedArgsDescriptorCacheHit, NamedValuesReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_NamedValuesReappliedOnCacheHit) {
     const CoreCoord core0{0, 0};
     const CoreCoord core1{1, 0};
     ProgramDescriptor desc_v1{.kernels = {blaze_cache_hit_kernel(core0, core1, 0)}};
@@ -536,7 +537,7 @@ TEST(NamedArgsDescriptorCacheHit, NamedValuesReappliedOnCacheHit) {
     blaze_expect_cache_hit_values(program, core0, core1, 1000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, NamedOnlyValuesReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_NamedOnlyValuesReappliedOnCacheHit) {
     // No positional args at all: before the fix, apply_descriptor_runtime_args had
     // nothing to copy for this descriptor, so EVERY named value stayed frozen at the
     // first invocation's.  Covers all four named-RT-arg variants in this configuration.
@@ -577,7 +578,7 @@ TEST(NamedArgsDescriptorCacheHit, NamedOnlyValuesReappliedOnCacheHit) {
     EXPECT_EQ(common_args[2], 400u) << "named common array[1] must be desc_v2's value";
 }
 
-TEST(NamedArgsDescriptorCacheHit, RepeatedCacheHitsKeepReapplyingValues) {
+TEST(NamedArgsDescriptorCacheHit, CPU_RepeatedCacheHitsKeepReapplyingValues) {
     // Repeated same-schema invocations are the production norm.  The patch must be a
     // pure function of the current descriptor on EVERY hit — a works-once or otherwise
     // stateful re-application (e.g. one that corrupts sizes or skips later hits) must
@@ -598,7 +599,7 @@ TEST(NamedArgsDescriptorCacheHit, RepeatedCacheHitsKeepReapplyingValues) {
     blaze_expect_cache_hit_values(program, core0, core1, 2000);
 }
 
-TEST(NamedArgsDescriptorCacheHit, MultipleNamedArgsPerVariantReappliedOnCacheHit) {
+TEST(NamedArgsDescriptorCacheHit, CPU_MultipleNamedArgsPerVariantReappliedOnCacheHit) {
     // Two entries per variant (arrays of different lengths) pack into adjacent slots
     // in declaration order: positional, then scalars, then arrays.  Every packed
     // offset must be re-applied on a cache hit, not just the first named slot.

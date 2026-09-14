@@ -17,19 +17,13 @@ TEST_PADDING_VALUE = -42
 
 
 @pytest.mark.parametrize(
-    "shape_dim",
+    "shape",
     (
-        ((1, 1, 32, 32), 3),
-        ((1, 2, 32, 32), 3),
-        ((2, 3, 32, 32), 3),
-        ((1, 1, 32, 32), 2),
-        ((1, 2, 32, 32), 2),
-        ((2, 3, 32, 32), 2),
-        ((32, 32, 32, 32), 1),
-        ((32, 32, 32, 32), 0),
-        ((32, 32, 32, 32), 2),
-        ((32, 32, 32, 32), 3),
-        ((1, 2, 18, 20), 3),
+        (1, 1, 32, 32),
+        (1, 2, 32, 32),
+        (2, 3, 32, 32),
+        (32, 32, 32, 32),
+        (1, 2, 18, 20),
     ),
 )
 @pytest.mark.parametrize(
@@ -47,8 +41,9 @@ TEST_PADDING_VALUE = -42
         ttnn.TILE_LAYOUT,
     ),
 )
-def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
-    shape, dim = shape_dim
+def test_min_max_mean_global(device, shape, kind, layout):
+    # Global (dim=None) reduces only; per-dim min/max/mean coverage lives in the
+    # unit tier (test_max.py, test_reduction_min.py, test_reduction_mean.py).
     torch.manual_seed(0)
 
     N = shape[0]

@@ -19,7 +19,7 @@ import io
 import os
 import textwrap
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Callable, Iterable
 
 
@@ -27,6 +27,7 @@ from typing import Any, Callable, Iterable
 class TableData:
     columns: list[str]
     rows: list[list[str]]
+    unserialized_values: list[list[Any]] = field(default_factory=list)
 
 
 def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
@@ -61,7 +62,7 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
             elif "serialized_name" in metadata:
                 columns.append(metadata.get("serialized_name") or fld.name)
 
-    def collect_row(row: list[str], obj: Any, flds: Iterable[Any]) -> None:
+    def collect_row(row: list[str], unserialized: list[Any], obj: Any, flds: Iterable[Any]) -> None:
         for fld in flds:
             metadata = fld.metadata
             if metadata.get("verbose", 0) > verbose_level:
@@ -71,23 +72,30 @@ def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
             if metadata.get("recurse"):
                 value = getattr(obj, fld.name)
                 assert is_dataclass(value)
-                collect_row(row, value, fields(value))
+                collect_row(row, unserialized, value, fields(value))
             elif "additional_fields" in metadata:
                 assert all(hasattr(obj, af) for af in metadata["additional_fields"])
                 all_values = [getattr(obj, fld.name)]
                 all_values.extend(getattr(obj, af) for af in metadata["additional_fields"])
                 assert "serializer" in metadata, "Serializer must be provided for combined field."
-                row.append(metadata["serializer"](all_values))
+                combined = metadata["serializer"](all_values)
+                row.append(combined)
+                unserialized.append(combined)
             elif "serializer" in metadata:
-                row.append(metadata["serializer"](getattr(obj, fld.name)))
+                value = getattr(obj, fld.name)
+                row.append(metadata["serializer"](value))
+                unserialized.append(value)
 
     collect_header(result[0], fields(result[0]))
     rows: list[list[str]] = []
+    unserialized_values: list[list[Any]] = []
     for item in result:
         row: list[str] = []
-        collect_row(row, item, fields(item))
+        unserialized: list[Any] = []
+        collect_row(row, unserialized, item, fields(item))
         rows.append(row)
-    return TableData(columns=columns, rows=rows)
+        unserialized_values.append(unserialized)
+    return TableData(columns=columns, rows=rows, unserialized_values=unserialized_values)
 
 
 class OutputSerializer(ABC):
@@ -106,6 +114,16 @@ class OutputSerializer(ABC):
         script_failed: bool,
         failure_message: str | None,
         documentation: str | None,
+    ) -> None:
+        pass
+
+    def record_diagnostics(
+        self,
+        script_name: str,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
     ) -> None:
         pass
 
@@ -239,7 +257,7 @@ def _one_line(s: str) -> str:
     return s.replace("\n", "\\n").replace("\r", "\\r")
 
 
-def _strip_rich_markup(s: str) -> str:
+def strip_rich_markup(s: str) -> str:
     """Strip Rich markup tags (e.g. `[warning]...[/]`) from a string.
 
     Some script messages contain bracketed text that looks like markup but
@@ -267,7 +285,7 @@ class CsvSerializer(OutputSerializer):
         # Strip Rich markup (colour tags like `[blue]0x...[/]` embedded in cell
         # values), then escape embedded newlines so each record is exactly one
         # physical line.
-        self._sink.write_line(_one_line(_strip_rich_markup(line)))
+        self._sink.write_line(_one_line(strip_rich_markup(line)))
 
     def _print_csv_row(self, row: list[str]) -> None:
         buf = io.StringIO()
@@ -352,6 +370,17 @@ class MultiSerializer(OutputSerializer):
                 failure_message=failure_message,
                 documentation=documentation,
             )
+
+    def record_diagnostics(
+        self,
+        script_name: str,
+        failures: list[str],
+        warnings: list[str],
+        script_failed: bool,
+        failure_message: str | None,
+    ) -> None:
+        for s in self._serializers:
+            s.record_diagnostics(script_name, failures, warnings, script_failed, failure_message)
 
     def close(self) -> None:
         for s in self._serializers:

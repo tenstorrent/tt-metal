@@ -182,14 +182,21 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                ttsl::SmallVector<std::array<uint32_t, 2>> padding = {
-                    {0, 0},
-                    {0, 0},
-                    {0, padded_output_shape[2] - output_shape[2]},
-                    {0, padded_output_shape[3] - output_shape[3]}};
+                // Pad only the last two dims (height/width), sized to the tensor's rank.
+                int padding_rank = padded_output_shape.rank();
+                // Unreachable below rank 2 -- a rank <2 sharded tensor is (1, N) once promoted, so its
+                // shard height of 1 fails the tile-alignment check upstream. Assert rather than rely on
+                // that: at rank 1 the indexing below would be padding[-1].
+                TT_FATAL(padding_rank >= 2, "Height-sharded tilize needs rank >= 2, got {}", padding_rank);
+                ttsl::SmallVector<std::array<uint32_t, 2>> padding(padding_rank, {0, 0});
+                padding[padding_rank - 2] = {0, padded_output_shape[-2] - output_shape[-2]};
+                padding[padding_rank - 1] = {0, padded_output_shape[-1] - output_shape[-1]};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
                 tensor = ttnn::pad(tensor, padding, pad_value, true, std::nullopt);
-                return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                tensor = ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
+                // ttnn::pad grows the logical shape to the padded height/width, so restore the tensor's
+                // logical shape to the true (unpadded) output shape while keeping the tile-aligned padded shape.
+                return ttnn::experimental::view(tensor, output_shape, padded_output_shape);
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {

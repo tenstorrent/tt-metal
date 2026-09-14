@@ -10,6 +10,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #ifndef OVERRIDE_KERNEL_PREFIX
 #define OVERRIDE_KERNEL_PREFIX ""
@@ -42,14 +43,14 @@ const std::vector<uint32_t> kExpectedComputeValues = {4, 6, 5, 9, 8, 10, 9, 13, 
 //
 // workload_id_str must be unique per call (used to derive kernel names).
 distributed::MeshWorkload create_workload(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const experimental::NodeCoord& node,
     uint32_t dm_base_address,
     uint32_t dm_base_value,
     uint32_t compute_address,
     const std::string& workload_id_str) {
     distributed::MeshWorkload workload;
-    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device.shape());
 
     std::vector<experimental::KernelSpec> kernel_specs;
     std::vector<experimental::KernelSpecName> wu_kernel_names;
@@ -86,7 +87,7 @@ distributed::MeshWorkload create_workload(
         .kernels = kernel_specs,
         .work_units = {main_wu},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
     experimental::ProgramRunArgs params;
     for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
@@ -134,7 +135,7 @@ void set_multi_node_run_args(
 }
 
 distributed::MeshWorkload create_multi_node_workload(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    distributed::MeshDevice& mesh_device,
     const experimental::NodeRange& node_range,
     const std::vector<uint32_t>& dm_addresses,
     uint32_t dm_value,
@@ -162,11 +163,11 @@ distributed::MeshWorkload create_multi_node_workload(
         .work_units = {experimental::WorkUnitSpec{
             .name = "multi_node", .kernels = {dm_kernel, compute_kernel}, .target_nodes = node_range}},
     };
-    Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
     set_multi_node_run_args(program, nodes, dm_addresses, dm_value, compute_addresses);
 
     distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+    workload.add_program(distributed::MeshCoordinateRange(mesh_device.shape()), std::move(program));
     return workload;
 }
 
@@ -178,8 +179,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -189,24 +188,24 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSingleWorkloadNonBlockingEnqueueFi
     const uint32_t dm_base_value = 0xdead0000;
 
     std::vector<uint32_t> zeros(kWorkloadOutputCount, 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, base_address, zeros);
+    slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     distributed::MeshWorkload workload =
-        create_workload(mesh_device, node, dm_base_address, dm_base_value, compute_address, "k0");
+        create_workload(this->device(), node, dm_base_address, dm_base_value, compute_address, "k0");
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
     std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
-    tt_metal::detail::ReadFromDeviceL1(dev, node, dm_base_address, kNumUserDMThreads * sizeof(uint32_t), dm_output);
+    slow_dispatch::ReadFromL1(this->device(), node, dm_base_address, kNumUserDMThreads * sizeof(uint32_t), dm_output);
     for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
         ASSERT_EQ(dm_output[i], dm_base_value + i);
     }
 
     std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
-    tt_metal::detail::ReadFromDeviceL1(
-        dev, node, compute_address, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
+    slow_dispatch::ReadFromL1(
+        this->device(), node, compute_address, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
     ASSERT_EQ(compute_output, kExpectedComputeValues);
 }
 
@@ -216,8 +215,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -232,15 +229,15 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
     auto compute_addr_for = [&](uint32_t w) { return dm_base_addr_for(w) + kL1CacheLineBytes; };
 
     std::vector<uint32_t> zeros(kNumWorkloads * 2 * kL1CacheLineBytes / sizeof(uint32_t), 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, base_address, zeros);
+    slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
+    distributed::MeshCommandQueue& cq = this->device().mesh_command_queue();
     std::vector<distributed::MeshWorkload> workloads;
     workloads.reserve(kNumWorkloads);
     for (uint32_t w = 0; w < kNumWorkloads; w++) {
         const std::string kernel_id = "k" + std::to_string(w + 1);
-        workloads.push_back(
-            create_workload(mesh_device, node, dm_base_addr_for(w), dm_base_values[w], compute_addr_for(w), kernel_id));
+        workloads.push_back(create_workload(
+            this->device(), node, dm_base_addr_for(w), dm_base_values[w], compute_addr_for(w), kernel_id));
     }
 
     for (uint32_t w = 0; w < kNumWorkloads; w++) {
@@ -253,14 +250,14 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestMultipleWorkloadsNonBlockingEnqueu
         const uint32_t compute_addr = compute_addr_for(w);
 
         std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, node, dm_base_addr, kNumUserDMThreads * sizeof(uint32_t), dm_output);
+        slow_dispatch::ReadFromL1(this->device(), node, dm_base_addr, kNumUserDMThreads * sizeof(uint32_t), dm_output);
         for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
             EXPECT_EQ(dm_output[i], dm_base_values[w] + i);
         }
 
         std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
-        tt_metal::detail::ReadFromDeviceL1(
-            dev, node, compute_addr, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
+        slow_dispatch::ReadFromL1(
+            this->device(), node, compute_addr, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
         EXPECT_EQ(compute_output, kExpectedComputeValues);
     }
 }
@@ -271,8 +268,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    IDevice* dev = mesh_device->get_devices()[0];
     const experimental::NodeCoord node{0, 0};
 
     const uint32_t base_address = MetalContext::instance().hal().get_dev_addr(
@@ -289,17 +284,17 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
     auto compute_addr_for = [&](uint32_t w) { return dm_base_addr_for(w) + kL1CacheLineBytes; };
 
     std::vector<uint32_t> zeros(num_workloads * 2 * kL1CacheLineBytes / sizeof(uint32_t), 0);
-    tt_metal::detail::WriteToDeviceL1(dev, node, base_address, zeros);
+    slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
 
-    distributed::MeshCommandQueue& cq0 = mesh_device->mesh_command_queue(0);
-    distributed::MeshCommandQueue& cq1 = mesh_device->mesh_command_queue(1);
+    distributed::MeshCommandQueue& cq0 = this->device().mesh_command_queue(0);
+    distributed::MeshCommandQueue& cq1 = this->device().mesh_command_queue(1);
 
     std::vector<distributed::MeshWorkload> workloads;
     workloads.reserve(num_workloads);
     for (uint32_t w = 0; w < num_workloads; w++) {
         const std::string kernel_id = "k" + std::to_string(w + 1);
         workloads.push_back(create_workload(
-            mesh_device, node, dm_base_addr_for(w), dm_base_value_for(w), compute_addr_for(w), kernel_id));
+            this->device(), node, dm_base_addr_for(w), dm_base_value_for(w), compute_addr_for(w), kernel_id));
     }
 
     // Interleave: w even -> CQ0, w odd -> CQ1, so consecutive enqueues alternate queues.
@@ -312,14 +307,14 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, TestInterleavedWorkloadsAcrossT
         const uint32_t compute_addr = compute_addr_for(w);
 
         std::vector<uint32_t> dm_output(kNumUserDMThreads, 0);
-        tt_metal::detail::ReadFromDeviceL1(dev, node, dm_base_addr, kNumUserDMThreads * sizeof(uint32_t), dm_output);
+        slow_dispatch::ReadFromL1(this->device(), node, dm_base_addr, kNumUserDMThreads * sizeof(uint32_t), dm_output);
         for (uint32_t i = 0; i < kNumUserDMThreads; i++) {
             EXPECT_EQ(dm_output[i], dm_base_value_for(w) + i);
         }
 
         std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
-        tt_metal::detail::ReadFromDeviceL1(
-            dev, node, compute_addr, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
+        slow_dispatch::ReadFromL1(
+            this->device(), node, compute_addr, kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t), compute_output);
         EXPECT_EQ(compute_output, kExpectedComputeValues);
     }
 }
@@ -330,14 +325,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
                         "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
     }
 
-    auto mesh_device = devices_[0];
-    const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const CoreCoord worker_grid = this->device().compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
     if (num_nodes < 2) {
         GTEST_SKIP() << "Test requires at least two worker nodes";
     }
 
-    IDevice* dev = mesh_device->get_devices()[0];
     const experimental::NodeRange node_range{{0, 0}, {worker_grid.x - 1, worker_grid.y - 1}};
     const std::vector<experimental::NodeCoord> nodes =
         experimental::grid_to_nodes(node_range.start_coord, node_range.end_coord);
@@ -356,7 +349,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
 
     std::vector<uint32_t> zeros(kNumRounds * num_nodes * 2 * kL1CacheLineBytes / sizeof(uint32_t), 0);
     for (const auto& node : nodes) {
-        tt_metal::detail::WriteToDeviceL1(dev, node, base_address, zeros);
+        slow_dispatch::WriteToL1(this->device(), node, base_address, zeros);
     }
 
     auto addresses_for_round = [&](uint32_t round) {
@@ -370,11 +363,11 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
     };
 
     auto [dm_addresses_0, compute_addresses_0] = addresses_for_round(0);
-    distributed::MeshCoordinateRange device_range(mesh_device->shape());
+    distributed::MeshCoordinateRange device_range(this->device().shape());
     distributed::MeshWorkload workload =
-        create_multi_node_workload(mesh_device, node_range, dm_addresses_0, dm_values[0], compute_addresses_0);
+        create_multi_node_workload(this->device(), node_range, dm_addresses_0, dm_values[0], compute_addresses_0);
     Program& program = workload.get_programs().at(device_range);
-    auto& cq = mesh_device->mesh_command_queue();
+    auto& cq = this->device().mesh_command_queue();
 
     for (uint32_t round = 0; round < kNumRounds; ++round) {
         auto [dm_addresses, compute_addresses] = addresses_for_round(round);
@@ -389,12 +382,12 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestWorkloadAcrossMultipleWorkerNodes)
         for (uint32_t node_index = 0; node_index < num_nodes; ++node_index) {
             const experimental::NodeCoord& node = nodes[node_index];
             std::vector<uint32_t> dm_output(1, 0);
-            tt_metal::detail::ReadFromDeviceL1(dev, node, dm_addresses[node_index], sizeof(uint32_t), dm_output);
+            slow_dispatch::ReadFromL1(this->device(), node, dm_addresses[node_index], sizeof(uint32_t), dm_output);
             EXPECT_EQ(dm_output[0], dm_values[round]);
 
             std::vector<uint32_t> compute_output(kNumComputeNEOs * kNumTRISCsPerNEO, 0);
-            tt_metal::detail::ReadFromDeviceL1(
-                dev,
+            slow_dispatch::ReadFromL1(
+                this->device(),
                 node,
                 compute_addresses[node_index],
                 kNumComputeNEOs * kNumTRISCsPerNEO * sizeof(uint32_t),

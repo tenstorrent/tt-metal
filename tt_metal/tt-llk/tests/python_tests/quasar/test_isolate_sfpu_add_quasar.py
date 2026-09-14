@@ -42,6 +42,8 @@ ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
     [
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.Float16_b,
         DataFormat.Float16,
         DataFormat.Float32,
@@ -147,6 +149,7 @@ def test_isolate_sfpu_add_quasar(formats_dest_acc_implied_math_input_dims):
         ),
         unpack_to_srcs=True,
         dest_acc=dest_acc,
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result

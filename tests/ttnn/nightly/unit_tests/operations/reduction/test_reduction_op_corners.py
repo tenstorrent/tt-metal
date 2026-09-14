@@ -501,9 +501,7 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     ), f"Preallocated {op} result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
 
 
-@pytest.mark.parametrize(
-    "tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23), (2, 2, 32, 64), (1, 1, 0, 64)]
-)
+@pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64), (1, 1, 15, 23), (2, 2, 32, 64)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
 def test_moe(device, tensor_shape, dtype, layout):

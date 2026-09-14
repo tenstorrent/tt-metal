@@ -9,6 +9,7 @@ from helpers.llk_params import (
     DataCopyType,
     ImpliedMathFormat,
     MathOperation,
+    PerfRunType,
     UnpackerEngine,
     VectorMode,
     format_dict,
@@ -20,14 +21,15 @@ from helpers.param_config import (
     parametrize,
     runtime,
 )
+from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
     IMPLIED_MATH_FORMAT,
+    LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
     TEST_FACE_DIMS,
@@ -58,7 +60,7 @@ def _processed_face_mask(vector_mode: VectorMode, num_faces: int) -> torch.Tenso
     return mask
 
 
-def _get_valid_formats_dest_acc():
+def get_valid_formats_dest_acc():
     formats = input_output_formats(
         [
             DataFormat.Float16,
@@ -67,6 +69,13 @@ def _get_valid_formats_dest_acc():
         ]
     )
     return generate_quasar_sfpu_format_variants(MathOperation.SfpuWhere, formats)
+
+
+# Perf keeps VectorMode.RC (full-tile throughput) and None_ (1-face SFPU path).
+# Condition regimes are data patterns, not distinct MOPs; pin mixed.
+# Lists (not tuples): helpers.param_config.parametrize treats a tuple as one value.
+PERF_SFPU_WHERE_VECTOR_MODES = [VectorMode.RC, VectorMode.None_]
+PERF_SFPU_WHERE_TEST_CASES = ["mixed"]
 
 
 def _build_condition_for_test_case(
@@ -84,13 +93,21 @@ def _build_condition_for_test_case(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc(),
+    formats_dest_acc=get_valid_formats_dest_acc(),
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
-    formats_dest_acc, implied_math_format, test_case, vector_mode
+    formats_dest_acc,
+    implied_math_format,
+    test_case,
+    vector_mode,
+    *,
+    run_types=(PerfRunType.L1_TO_L1,),
+    loop_factor=1,
+    is_perf=False,
+    perf_report=None,
 ):
     """
     Test ternary `where(condition, true_val, false_val) -> output` on Quasar.
@@ -145,18 +162,22 @@ def test_sfpu_where_quasar(
     tile_cnt_A = tile_cnt_single * 3
     num_faces = 4
 
-    generate_golden = get_golden_generator(WhereGolden)
-    golden_tensor = generate_golden(condition, true_val, false_val)
     torch_format_out = format_dict[formats.output_format]
-    golden_tensor = golden_tensor.to(torch_format_out)
+    if not is_perf:
+        generate_golden = get_golden_generator(WhereGolden)
+        golden_tensor = generate_golden(condition, true_val, false_val)
+        golden_tensor = golden_tensor.to(torch_format_out)
 
     unpack_to_dest = format_variant.unpack_to_dest
     src_B_dummy = torch.zeros_like(condition)
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_where_quasar_test.cpp",
-        formats,
-        templates=[
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+
+    test_config_kwargs = {
+        "test_name": "sources/quasar/sfpu_where_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -166,13 +187,14 @@ def test_sfpu_where_quasar(
             DEST_SYNC(),
             VECTOR_MODE(vector_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B_dummy,
@@ -183,10 +205,20 @@ def test_sfpu_where_quasar(
             tile_count_res=1,
             num_faces=num_faces,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs=test_config_kwargs,
     )
     format_variant.apply_formats(configuration.formats_config)
+
+    if is_perf:
+        configuration.run(perf_report)
+        return
 
     res_from_L1 = configuration.run().result
 
@@ -203,7 +235,7 @@ def test_sfpu_where_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=_get_valid_formats_dest_acc()[:3],
+    formats_dest_acc=get_valid_formats_dest_acc()[:3],
     implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
@@ -241,10 +273,10 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
     unpack_to_dest = format_variant.unpack_to_dest
     src_B_dummy = torch.zeros_like(condition)
 
-    configuration = TestConfig(
-        "sources/quasar/sfpu_where_quasar_test.cpp",
-        formats,
-        templates=[
+    test_config_kwargs = {
+        "test_name": "sources/quasar/sfpu_where_quasar_test.cpp",
+        "formats": formats,
+        "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
             IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
@@ -254,13 +286,14 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
             DEST_SYNC(),
             VECTOR_MODE(vector_mode),
         ],
-        runtimes=[
+        "runtimes": [
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             TEST_FACE_DIMS(),
             DEST_INDEX(0),
+            LOOP_FACTOR(1),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B_dummy,
@@ -271,8 +304,14 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
             tile_count_res=1,
             num_faces=num_faces,
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
+        "unpack_to_dest": unpack_to_dest,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=False,
+        run_types=(PerfRunType.L1_TO_L1,),
+        test_config_kwargs=test_config_kwargs,
     )
     format_variant.apply_formats(configuration.formats_config)
 

@@ -24,9 +24,14 @@ Tensor _addcmul(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_mul = ttnn::multiply(input_b, input_c, std::nullopt, output_mem_config);
-    Tensor t_factor = ttnn::multiply(t_mul, value, std::nullopt, output_mem_config);
-    t_mul.deallocate();
+    // Associate as (value * input_b) * input_c, matching both the LLK kernel
+    // (ckernel_sfpu_addcmul.h) and the registered golden torch.addcmul, which computes
+    // self + scalar_val * t1_val * t2_val left-to-right. Scaling by `value` first (rather
+    // than last) avoids spurious overflow/underflow when `value` is chosen to keep the
+    // product in range (e.g. Adam's addcmul(avg_sq, grad, grad, value=1-beta2)).
+    Tensor t_scaled = ttnn::multiply(input_b, value, std::nullopt, output_mem_config);
+    Tensor t_factor = ttnn::multiply(t_scaled, input_c, std::nullopt, output_mem_config);
+    t_scaled.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
     return result;
 }

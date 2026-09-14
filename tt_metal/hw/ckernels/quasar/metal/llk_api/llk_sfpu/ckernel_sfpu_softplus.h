@@ -51,11 +51,11 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
     sfpi::vFloat val = sfpi::dst_reg[0]; // load x from dest (SFPLOAD)
     sfpi::vFloat t   = beta * val;
 
-    // Linear region (t >= threshold): softplus(x) = x; default for every lane so the single store covers it.
+    // Linear region (t > threshold): softplus(x) = x; default for every lane so the single store covers it.
     sfpi::vFloat result = val;
 
-    // `t < threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
-    v_if (t < threshold)
+    // `t <= threshold` relies on vConstNeg1/LREG11 == -1.0 (re-established per launch by _init_sfpu_config_reg_).
+    v_if (t <= threshold)
     {
         sfpi::vFloat a = sfpi::abs(t);
         sfpi::vFloat residual;
@@ -134,11 +134,11 @@ sfpi_inline void _calculate_softplus_body_(const float beta, const float beta_re
  * @param beta: Sharpness parameter beta, as an fp32 bit pattern.
  * @param beta_reciprocal: 1/beta, as an fp32 bit pattern.
  * @param threshold: Linear-region threshold on beta*x above which softplus(x) = x, as an fp32 bit pattern.
- * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t < threshold` compare relies on
+ * @note The fp32 tail calls @ref _sfpu_exp_fp32_accurate_. The `t <= threshold` compare relies on
  *       vConstNeg1/LREG11 == -1.0, re-established per launch by @ref _init_sfpu_config_reg_, so there
  *       is no op-specific init step to pair with.
  */
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_softplus(std::uint32_t beta, std::uint32_t beta_reciprocal, std::uint32_t threshold)
 {
     const float beta_f            = Converter::as_float(beta);

@@ -25,6 +25,7 @@ import pytest
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    fabric_1d_device_params,
     torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
@@ -57,25 +58,6 @@ def _mesh_param(shape, fabric, payload, nlinks, topo_marker, test_id, reliabilit
 
 
 ALL_MESH_CONFIGS = [
-    # Existing two-chip rows cannot form a useful ring; migrate them one-for-one to Fabric2D.
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        1,
-        "linear",
-        "fabric2d-2x1-1link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
-    _mesh_param(
-        (2, 1),
-        ttnn.FabricConfig.FABRIC_2D,
-        get_max_payload_size(),
-        2,
-        "linear",
-        "fabric2d-2x1-2link",
-        reliability_mode=ttnn.FabricReliabilityMode.RELAXED_INIT,
-    ),
     # Local policy: one 2x2 QuietBox case, canonical 2x4 LoudBox, and one 4x2 axis diagnostic.
     _mesh_param(
         (2, 2),
@@ -166,11 +148,14 @@ ALL_MESH_CONFIGS = [
 
 def fabric_to_device_params(fabric_cfg):
     assert fabric_cfg in (
+        ttnn.FabricConfig.FABRIC_1D,
         ttnn.FabricConfig.FABRIC_2D,
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
     )
+    if fabric_cfg == ttnn.FabricConfig.FABRIC_1D:
+        return fabric_1d_device_params()
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D:
         return fabric2d_device_params()
     if fabric_cfg == ttnn.FabricConfig.FABRIC_2D_TORUS_X:

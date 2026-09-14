@@ -75,6 +75,7 @@ void ConfigureDevicePrintForCoord(
     rtopts.set_feature_prepend_device_core_risc(kDprint, true);
     rtopts.set_feature_mesh_coords(kDprint, {{row, col}});
     rtopts.set_feature_all_chips(kDprint, false);
+    rtopts.resolve_mesh_coords_to_chip_ids(MetalContext::instance().get_system_mesh());
 }
 
 // Builds a MeshWorkload where each device DEVICE_PRINTs its global mesh coordinate (row, col).
@@ -125,7 +126,7 @@ void RunFilteringTest(
         << log;
 
     for (const auto& mesh_device : all_devices) {
-        auto [row, col] = GetGlobalCoord(mesh_device->get_devices()[0]->id());
+        auto [row, col] = GetGlobalCoord(mesh_device->get_device_ids()[0]);
         if (std::make_pair(row, col) == fixture->target_coord) {
             continue;
         }
@@ -140,7 +141,7 @@ void RunFilteringTest(
 void RunAllChipsVerificationTest(
     DevicePrintFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     constexpr auto kDprint = tt::llrt::RunTimeDebugFeatureDprint;
-    ChipId chip_id = mesh_device->get_devices()[0]->id();
+    ChipId chip_id = mesh_device->get_device_ids()[0];
     auto [row, col] = GetGlobalCoord(chip_id);
 
     auto workload = BuildMeshCoordWorkload(mesh_device);
@@ -168,15 +169,11 @@ void RunAllChipsVerificationTest(
 }  // namespace
 
 void DevicePrintMeshCoordsFixture::ExtraSetUp() {
-    // Teardown forces MetalContext to re-initialize (including resolve_mesh_coords_to_chip_ids)
-    // when devices are opened by DebugToolsMeshFixture::SetUp().  Re-apply rtoptions afterwards
-    // because ParseAllFeatureEnv resets them to defaults on re-initialization.
-    MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDevicePrintForCoord(
         MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
-void DevicePrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
+void DevicePrintMeshCoordsFixture::ExtraTearDown() {}
 
 // Test 1: Only the device at mesh coord (0,0) should produce DEVICE_PRINT output.
 TEST_F(DevicePrintMeshCoordsFixture, TensixTestDevicePrintMeshCoordsFiltersCorrectDevice) {

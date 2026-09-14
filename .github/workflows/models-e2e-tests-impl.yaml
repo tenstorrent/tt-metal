@@ -80,16 +80,6 @@ jobs:
       - name: Install dependencies
         if: ${{ inputs.matrix == '' }}
         run: pip3 install PyYAML
-      - name: Verify test timeouts against budget
-        if: ${{ inputs.matrix == '' }}
-        run: |
-          set -e
-          echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
-          python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            ./.github/time_budget.yaml \
-            "e2e" \
-            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         if: ${{ inputs.matrix == '' }}
         id: build-matrix
@@ -160,6 +150,7 @@ jobs:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
+        TT_METAL_RUNTIME_ROOT: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         # Only the per-runner BH cache modes (local-disk, lfc) need HF online

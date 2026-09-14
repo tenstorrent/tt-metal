@@ -245,6 +245,34 @@ gate — the credit quartet is now recalled via `_CB_RECV_TYPES`; this is the No
 - **Fix hazard:** `write_barrier` is a GENERIC name — it must be gated on the DataflowBuffer/DFBInterface
   recv_type, NOT added to `NOC_METHOD_FLUSH` globally, or it would over-match unrelated `.write_barrier()`.
 
+### L11 — dummy-publication scope is a function-NAME predicate, so MOP-config publishers are missed
+`_dummy_publication_guard` only visits functions whose name marks them as dest-reuse publishers
+(`*dummy_valid*`, `*dummy_unpack*`, `*switch_to_reduce*`, `*reuse_dest*`, `*dest_reuse*`). A
+publisher named otherwise is never visited — the live example is
+`_llk_unpack_A_rmsnorm_mop_config_`, which builds its publications as `static constexpr`
+`TT_OP_UNPACR_NOP` words for a MOP `set_start_op`.
+- **Risk:** CAP-REDUCTION — a real serializing publication (and, in principle, a both-banks or
+  wrong-arch encoding defect) in such a function is not reported.
+- **Live today:** the two rmsnorm sites, plus any future `*_mop_config_` publisher.
+- **Fix hazard:** widening to `*mop_config*` pulls in every MOP-config function in the tree, and
+  the overwhelming majority of their publications are ordinary unpack setup with no Dest->Src
+  consumer — a large FALSE-FLAG bucket that would bury the real ones. The scope predicate is the
+  wrong axis; the right fix is to pair a publication with a `MOVD2A`/`MOVD2B` consumer, which is
+  cross-thread and usually cross-file (see the `srcreg-bank` `blind_spots`). Until then the
+  `/srcreg-bank-sync-audit` skill tells the auditor to widen manually.
+
+### L12 — UNPACR_NOP control operands are read only as literal `0`/`1`
+`publication_bank_controls` compares the wait-bank and both-banks operands against `"0"`/`"1"`
+after stripping inline comments. A control passed as a variable, an enum, or an arithmetic
+expression reads as neither set nor clear.
+- **Risk:** CAP-REDUCTION — such a publication is treated as the default form (reported as
+  `DUMMY_PUBLISH_SERIALIZING`) and, more importantly, a both-banks/wait-like pairing built from
+  non-literal operands is not flagged.
+- **Live today:** none — every in-tree UNPACR_NOP passes these two controls as literals.
+- **Fix hazard:** resolving enums/expressions needs constant folding the extractor does not do;
+  guessing (e.g. treating any non-`0` token as set) would FALSE-FLAG on `p_unpacr_nop::` selector
+  constants that legitimately occupy other operands.
+
 ## How to add an entry
 Append a `### <id> — <one-line title>` block with **Risk** (CAP-REDUCTION / FALSE-FLAG), **Live
 today**, **Fix**, and any **Fix hazard**. Link the relevant checker `blind_spots` rather than

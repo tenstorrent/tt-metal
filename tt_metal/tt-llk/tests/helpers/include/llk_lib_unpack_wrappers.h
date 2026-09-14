@@ -104,4 +104,12 @@ inline void _llk_unpack_tilize_uninit_wrapper_(const std::uint32_t unpack_dst_fo
 #error "Unsupported architecture for LLK unpack tilize wrappers"
 #endif
 
+// Isolate handshake count shared by unpack and math. The two TRISC threads deadlock
+// if they disagree. Tilize posts architecture-specific dvalids (BH: 1/tile, WH: 1/face);
+// unpack_A posts one per face.
+inline std::uint32_t _perf_src_handshake_iters_(const bool tilize_en, const std::uint32_t num_tiles, const std::uint32_t num_faces)
+{
+    return tilize_en ? _llk_unpack_tilize_num_dvalids_wrapper_(num_tiles, num_faces) : num_tiles * num_faces;
+}
+
 #endif // ENV_LLK_INFRA

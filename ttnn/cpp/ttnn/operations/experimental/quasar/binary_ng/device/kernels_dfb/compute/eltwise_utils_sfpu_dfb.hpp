@@ -40,7 +40,7 @@ ALWI void preprocess_sfpu_impl_dfb(
 
     tile_regs_acquire();
     for (uint32_t i = 0; i < per_core_block_size; ++i) {
-        copy_tile_to_dst_init_short(dfb_pre_id);
+        copy_init(dfb_pre_id);
         copy_tile(dfb_pre_id, i, i);
         process_activations(i);
     }

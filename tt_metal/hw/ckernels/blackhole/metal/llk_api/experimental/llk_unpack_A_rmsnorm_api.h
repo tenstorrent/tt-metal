@@ -3,23 +3,26 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include "experimental/llk_unpack_A_rmsnorm.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A
  *************************************************************************/
 
 template <
-    uint32_t num_tiles,
+    std::uint32_t num_tiles,
     BroadcastType BType = BroadcastType::NONE,
     bool acc_to_dest = false,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A_rmsnorm_init(
-    const std::uint32_t transpose_of_faces = 0,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t operand = 0) {
+    const std::uint32_t transpose_of_faces,
+    const std::uint32_t within_face_16x16_transpose,
+    const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);

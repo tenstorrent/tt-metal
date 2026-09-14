@@ -9,7 +9,7 @@ function(create_unit_test_executable)
 
     # Enable unity build for the executable
     TT_ENABLE_UNITY_BUILD(${exec_name})
-    target_precompile_headers(${exec_name} REUSE_FROM metal_common_pch)
+    target_precompile_headers(${exec_name} REUSE_FROM metal_test_pch)
 
     # Link libraries
     target_link_libraries(
@@ -48,7 +48,7 @@ add_executable(unit_tests_inspector ${UNIT_TESTS_INSPECTOR_SRC})
 
 # Enable unity build for the executable
 TT_ENABLE_UNITY_BUILD(unit_tests_inspector)
-target_precompile_headers(unit_tests_inspector REUSE_FROM metal_common_pch)
+target_precompile_headers(unit_tests_inspector REUSE_FROM metal_test_pch)
 
 # Link libraries
 target_link_libraries(

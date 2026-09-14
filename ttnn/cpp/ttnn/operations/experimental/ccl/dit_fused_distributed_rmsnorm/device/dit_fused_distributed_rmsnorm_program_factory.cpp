@@ -1251,8 +1251,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
         forwarder_kernel_ids[f] = CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "dit_rmsnorm_fused_forwarder.cpp",
+            "ttnn/cpp/ttnn/operations/experimental/ccl/dit_fused_norm_common/kernels/dataflow/"
+            "dit_fused_norm_forwarder.cpp",
             CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
             WriterDataMovementConfig(fwd_ct));
     }
