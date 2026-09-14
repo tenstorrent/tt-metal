@@ -33,7 +33,7 @@
     "run": {
       "type": "object",
       "description": "Identity of the run, used to match a snapshot to this manifest.",
-      "required": ["arch", "fabric_config", "fabric_type", "host_rank", "world_size"],
+      "required": ["arch", "fabric_config", "fabric_type", "host_rank", "mpi_rank", "world_size"],
       "properties": {
         "arch": {
           "description": "tt::ARCH as string, e.g. WORMHOLE_B0 / BLACKHOLE. Selects architecture-specific overlay register indices on the capture side.",
@@ -54,7 +54,11 @@
         },
         "udm_mode": { "type": "string" },
         "host_rank": {
-          "description": "This rank's MeshHostRankId. Each rank writes its own manifest file.",
+          "description": "This rank's MeshHostRankId. This is not necessarily the MPI process rank.",
+          "type": "integer"
+        },
+        "mpi_rank": {
+          "description": "MPI process rank from DistributedContext. Used to identify this host's files after they are copied and renamed.",
           "type": "integer"
         },
         "world_size": { "type": "integer" },
