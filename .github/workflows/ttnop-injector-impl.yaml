@@ -27,7 +27,8 @@ env:
   PYTEST_MARKERS: "not perf and not nightly and not accuracy and not quasar"
   TTNOP_THREADS: unpack,math
   TTNOP_SITE_MODE: sync
-  TTNOP_DELAYS: 5,10,20,40,60,80,100
+  TTNOP_RANDOM_DELAY_COUNT: 40
+  TTNOP_RANDOM_DELAY_SEED: ${{ github.run_id }}
   TTNOP_WEDGE_TIMEOUT: 120
   TTNOP_QUIET_TIMEOUT: 900
   TTNOP_MAX_RESETS: 5

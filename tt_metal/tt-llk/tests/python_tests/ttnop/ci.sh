@@ -99,6 +99,24 @@ XDIST_ARGS=()
 # Progress comes from supervise.py. These keep pytest from flooding the log.
 QUIET_ARGS=(-p no:sugar -o console_output_style=classic -o log_cli=false --show-capture=no --tb=short)
 
+if [[ "${TTNOP_RANDOM_DELAY_COUNT:-0}" -gt 0 ]]; then
+    export TTNOP_DELAYS="$(
+        python3 - <<'PY'
+import os
+import random
+
+from sweep import parse_delays
+
+count = int(os.environ["TTNOP_RANDOM_DELAY_COUNT"])
+delays = list(parse_delays(os.environ.get("TTNOP_DELAYS", "")))
+available = [delay for delay in range(1, 101) if delay not in delays]
+seed = os.environ.get("TTNOP_RANDOM_DELAY_SEED")
+random_delays = sorted((random.Random(seed) if seed else random.SystemRandom()).sample(available, count))
+print(",".join(map(str, delays + random_delays)))
+PY
+    )"
+fi
+
 echo ">> delays=${TTNOP_DELAYS:-1-100} threads=${TTNOP_THREADS:-unpack,math}" \
      "sites=${TTNOP_SITE_MODE:-sync} filler=${TTNOP_FILLER:-auto}" \
      "unpacr_nop=${TTNOP_ENABLE_UNPACR_NOP:-0}"
