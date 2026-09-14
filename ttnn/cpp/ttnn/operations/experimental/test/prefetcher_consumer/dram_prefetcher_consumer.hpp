@@ -24,13 +24,17 @@ struct DramPrefetcherConsumerDeviceOperation {
     struct operation_attributes_t {
         uint32_t num_iters;
         uint32_t page_size_bytes;
+        uint32_t ordinary_read_bytes;
         // optional<> because reflection-based profiler serialization needs a default-
         // constructible attribute struct, and GlobalCircularBuffer has no default ctor.
         std::optional<tt::tt_metal::experimental::GlobalCircularBuffer> global_cb;
         ttnn::MeshDevice* mesh_device;
     };
 
-    struct tensor_args_t {};
+    struct tensor_args_t {
+        std::optional<ttnn::Tensor> ordinary_source_tensor;
+        std::optional<ttnn::Tensor> timing_tensor;
+    };
 
     // Side-effect op (no output tensors).
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
@@ -67,6 +71,17 @@ void test_dram_prefetcher_consumer(
     tt::tt_metal::distributed::MeshDevice* mesh_device,
     uint32_t num_iters,
     uint32_t page_size_bytes,
+    const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
+
+// Benchmark-only variant that issues an ordinary NoC DRAM read after each prefetched
+// page arrives, keeping the Tensor Prefetcher and ordinary MPFE ports contended.
+void test_dram_prefetcher_contention_consumer(
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    const ttnn::Tensor& ordinary_source_tensor,
+    const ttnn::Tensor& timing_tensor,
+    uint32_t num_iters,
+    uint32_t page_size_bytes,
+    uint32_t ordinary_read_bytes,
     const tt::tt_metal::experimental::GlobalCircularBuffer& global_cb);
 
 }  // namespace ttnn::operations::experimental::test

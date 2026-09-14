@@ -37,6 +37,36 @@ void bind_test_dram_prefetcher_consumer(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("global_cb"));
 
+    ttnn::bind_function<"test_dram_prefetcher_contention_consumer", "ttnn.experimental.">(
+        mod,
+        R"doc(
+            Benchmark-only Tensor Prefetcher consumer. After each prefetched page
+            arrives, every receiver issues an ordinary NoC DRAM read against the same
+            bank before releasing the page. This keeps the Device-side Tensor
+            Prefetcher MPFE port and the ordinary-operation MPFE port contended.
+
+            Args:
+                mesh_device: the MeshDevice to enqueue on.
+                ordinary_source_tensor (ttnn.Tensor): DRAM tensor read by the competing
+                    ordinary-operation traffic.
+                timing_tensor (ttnn.Tensor): row-major L1-sharded uint32 tensor with one
+                    eight-word shard per receiver; receives cycle counters.
+                num_iters (int): prefetched pages consumed by each receiver.
+                page_size_bytes (int): receiver-side prefetched page size.
+                ordinary_read_bytes (int): bytes read through the ordinary DRAM path
+                    after each prefetched page arrives.
+                global_cb (GlobalCircularBuffer): DRAM-sender GCB to consume.
+        )doc",
+        &test_dram_prefetcher_contention_consumer,
+        nb::arg("mesh_device"),
+        nb::arg("ordinary_source_tensor"),
+        nb::arg("timing_tensor"),
+        nb::arg("num_iters"),
+        nb::arg("page_size_bytes"),
+        nb::arg("ordinary_read_bytes"),
+        nb::kw_only(),
+        nb::arg("global_cb"));
+
     ttnn::bind_function<"test_dram_prefetcher_validator", "ttnn.experimental.">(
         mod,
         R"doc(
