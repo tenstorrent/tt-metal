@@ -40,6 +40,21 @@ class FakePrefillGenerator:
             tokens[row, 0] = logits.argmax()
         return tokens
 
+    def serving_prefill_tokens(self, tokens, *, page_table, kv_cache, prompt_lens, start_pos, slots):
+        outputs = []
+        for row, (start, end, slot) in enumerate(zip(start_pos, prompt_lens, slots)):
+            outputs.extend(
+                self.prefill_forward(
+                    tokens[row : row + 1, start:end],
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    prompt_lens=[end - start],
+                    start_pos=[start],
+                    slots=[slot],
+                )
+            )
+        return self.sample_prefill(outputs)
+
     def _host_logits(self, output):
         return output
 

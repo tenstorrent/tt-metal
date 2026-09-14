@@ -1,5 +1,15 @@
 # Qwen/Qwen3.8-27B TTNN autoport
 
+**Native vLLM single-user S128/G128/N1: warmed TTFT 62.95 ms and decode
+41.313 tokens/s/user**, max sequences1, concurrency1, greedy temperature0,
+one same-shape warmup. Serving uses all 64 layers on TP4 Blackhole, the selected
+precision, context 262144, nonblocking traces and device split sampling.
+The matched pre-optimization result was 81.37 ms and 41.322 tokens/s/user:
+TTFT improves 22.6%, with decode effectively unchanged and within 0.6% of the
+canonical full-model S128/G128/B1 token-out reference below.
+See the [optimized serving report](doc/optimized_vllm/README.md) for validation,
+raw before/after metrics and secondary CI S100/G100/N32 capacity evidence.
+
 The Stage8 precision sweep selects BFP4/LoFi decoder and LM-head projections,
 FP32 destination accumulation, BF16 activations/residuals/CCL, and BFP8 KV cache.
 The [selected precision artifact](doc/datatype_sweep/selected_precision_config.json)
@@ -37,4 +47,5 @@ The [Stage7 report](doc/optimized_full_model/README.md) records the completed
 optimized full-model baseline and historical performance. The
 [Stage5 decoder geometry](doc/optimized_multichip_decoder/README.md) and residual
 layout are preserved. [Stage6](doc/full_model/README.md) records the starting full
-model. No vLLM integration is included.
+model. The [Stage9 report](doc/vllm_integration/README.md) records the completed
+serving integration that Stage10 optimizes in place.

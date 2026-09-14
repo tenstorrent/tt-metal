@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """vLLM interface translation for the selected TP4 Qwen generator."""
 
+import json
 import os
 import secrets
 from pathlib import Path
@@ -175,24 +176,31 @@ class Qwen38ForCausalLM:
         if fresh:
             self.generator.reset_recurrent_slots(fresh)
         device_sampling = self._sampling(sampling_params, reset=True, output_positions=ends)
-        outputs = []
-        for row, (start, end, slot) in enumerate(zip(starts, ends, slots)):
-            outputs.extend(
-                self.generator.prefill_forward(
-                    tokens[row : row + 1, start:end],
-                    page_table=table,
-                    kv_cache=kv_cache,
-                    prompt_lens=[end - start],
-                    start_pos=[start],
-                    slots=[slot],
-                )
+        if device_sampling:
+            tokens_out = self.generator.serving_prefill_tokens(
+                tokens,
+                page_table=table,
+                kv_cache=kv_cache,
+                prompt_lens=ends,
+                start_pos=starts,
+                slots=slots,
             )
-        self._decode_bound = False
-        if not device_sampling:
-            result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)
-        else:
-            tokens_out = self.generator.sample_prefill(outputs)
             result = self.process_decode_output_host(self.read_decode_output(tokens_out), is_tokens=True)[: len(ends)]
+        else:
+            outputs = []
+            for row, (start, end, slot) in enumerate(zip(starts, ends, slots)):
+                outputs.extend(
+                    self.generator.prefill_forward(
+                        tokens[row : row + 1, start:end],
+                        page_table=table,
+                        kv_cache=kv_cache,
+                        prompt_lens=[end - start],
+                        start_pos=[start],
+                        slots=[slot],
+                    )
+                )
+            result = torch.cat([self.generator._host_logits(x).reshape(1, 1, -1) for x in outputs], dim=0)
+        self._decode_bound = False
         # HF declares M-RoPE; text-only positions have zero spatial offset.
         return result, torch.zeros(len(ends), dtype=torch.int64)
 
@@ -279,4 +287,5 @@ class Qwen38ForCausalLM:
         self.close()
 
     def close(self):
+        print("QWEN_VLLM_COUNTERS", json.dumps(dict(self.generator.counters), sort_keys=True), flush=True)
         self.generator.close()

@@ -53,6 +53,8 @@ class QwenGenerator(Generator):
         self.cache = None
         self.trace = self.sample_trace = None
         self.prefill_trace = None
+        self.prefill_sample_trace = None
+        self.prefill_sample_input = None
         self.prefill_prepared = None
         self.trace_records_history = None
         self.token_history = self.history_cursor = None
@@ -114,10 +116,10 @@ class QwenGenerator(Generator):
         return history[: self.history_count, 0, 0, :].long()
 
     def _release_traces(self, *, keep_prefill=False):
-        for trace in (self.trace, self.sample_trace, self.prefill_trace):
+        for trace in (self.trace, self.sample_trace, self.prefill_trace, self.prefill_sample_trace):
             if trace is not None:
                 ttnn.release_trace(self.mesh, trace)
-        self.trace = self.sample_trace = self.prefill_trace = None
+        self.trace = self.sample_trace = self.prefill_trace = self.prefill_sample_trace = None
         self.trace_records_history = None
         if not keep_prefill:
             self.prefill_prepared = None
@@ -139,7 +141,7 @@ class QwenGenerator(Generator):
         # remain alive when an earlier decode trace is replayed.
         ttnn.copy(self._prefill_trace_logits(), self.prefill_prepared["output"])
 
-    def _prefill_for_generate(self, tokens):
+    def _prefill_for_generate(self, tokens, *, trace_sampling=False):
         """Own one prefill result until first-token sampling consumes it."""
         length = tokens.shape[-1]
         if (tokens < 0).any() or (tokens >= self.model.config.vocab_size).any():
@@ -155,6 +157,7 @@ class QwenGenerator(Generator):
             0,  # Prefix position.
             length,
             False,  # Last-token logits only; public all-logits prefill stays eager.
+            trace_sampling,
         )
         if self.prefill_prepared is None or self.prefill_prepared["key"] != key:
             # Fresh persistent buffers must not overlap any live trace's scratch.
@@ -162,6 +165,7 @@ class QwenGenerator(Generator):
             self.prefill_prepared = dict(
                 key=key,
                 length=length,
+                trace_sampling=trace_sampling,
                 tokens=self.model.upload(tokens.int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
                 positions=self.model.upload(
                     torch.arange(length, dtype=torch.int32).reshape(1, length),
@@ -187,6 +191,82 @@ class QwenGenerator(Generator):
         self.prefill_signatures.add((self.cache.batch_size, tuple(self.page_table.shape), 0, 0, length, False))
         return self.prefill_prepared["output"]
 
+    def serving_prefill_tokens(self, tokens, *, page_table, kv_cache, prompt_lens, start_pos, slots):
+        """Sample scheduler rows; prompt_lens are absolute exclusive prompt ends."""
+        if kv_cache is not self.cache:
+            raise ValueError("Serving prefill requires the exact bound cache")
+        tokens = torch.as_tensor(tokens)
+        ends = torch.as_tensor(prompt_lens).reshape(-1).tolist()
+        starts = torch.as_tensor(start_pos).reshape(-1).tolist()
+        slots = list(slots)
+        if (
+            tokens.ndim != 2
+            or not ends
+            or tokens.shape[0] != len(ends)
+            or len(starts) != len(ends)
+            or len(slots) != len(ends)
+            or len(set(slots)) != len(slots)
+        ):
+            raise ValueError("Serving prefill needs one token row, start, end and distinct slot per prompt")
+        for start, end, slot in zip(starts, ends, slots):
+            if not 0 <= slot < kv_cache.batch_size or not 0 <= start < end <= min(tokens.shape[1], kv_cache.capacity):
+                raise ValueError("Serving prompt positions or slots exceed the bound cache")
+        if len(ends) == 1 and slots == [0] and starts == [0] and ends[0] <= 4096:
+            self._refresh_table(page_table)
+            output = self._prefill_for_generate(tokens[:, : ends[0]], trace_sampling=True)
+            if self.prefill_sample_trace is None:
+                # The real first sample warms the graph without advancing RNG twice.
+                self._sampling_step(output)
+                self.counters["prefill_sampling_eager_calls"] += 1
+            else:
+                ttnn.execute_trace(self.mesh, self.prefill_sample_trace, cq_id=0, blocking=False)
+                self.counters["prefill_sampling_replays"] += 1
+            return self.tokens
+        signature = self._prepare_serving_prefill_sampling(
+            tokens, page_table=page_table, kv_cache=kv_cache, ends=ends, starts=starts, slots=slots
+        )
+        # Preparation owns every public logit and packed temporary. They must
+        # die before replay can reuse the sampling trace's scratch addresses.
+        if self.prefill_sample_trace is None:
+            self._sampling_step(self.prefill_sample_input)
+            self.counters["prefill_sampling_eager_calls"] += 1
+        else:
+            ttnn.execute_trace(self.mesh, self.prefill_sample_trace, cq_id=0, blocking=False)
+            self.counters["prefill_sampling_replays"] += 1
+        self._prefill_sampling_signatures.add(signature)
+        return self.tokens
+
+    def _prepare_serving_prefill_sampling(self, tokens, *, page_table, kv_cache, ends, starts, slots):
+        """Copy packed logits into cache-bound storage; return no device temporaries."""
+        outputs = []
+        for row, (start, end, slot) in enumerate(zip(starts, ends, slots)):
+            outputs.extend(
+                self.prefill_forward(
+                    tokens[row : row + 1, start:end],
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    prompt_lens=[end - start],
+                    start_pos=[start],
+                    slots=[slot],
+                )
+            )
+        if getattr(self, "_prefill_sampling_cache", None) is not self.cache:
+            self._prefill_sampling_signatures = set()
+            self._prefill_sampling_cache = self.cache
+        signature = tuple((tuple(x.shape), x.dtype, x.layout) for x in outputs)
+        if signature not in self._prefill_sampling_signatures or self.prefill_sample_input is None:
+            # New packing programs and the persistent destination must predate
+            # capture, including a previously warmed shape's first staged use.
+            self._release_traces(keep_prefill=True)
+        packed = ttnn.concat(outputs, dim=2) if len(outputs) > 1 else outputs[0]
+        packed = ttnn.pad(packed, [(0, 0), (0, 0), (0, 32 - len(outputs)), (0, 0)], value=0.0)
+        if self.prefill_sample_input is None:
+            self.prefill_sample_input = ttnn.clone(packed)
+            self.counters["prefill_sampling_input_allocations"] += 1
+        ttnn.copy(packed, self.prefill_sample_input)
+        self.counters["prefill_sampling_input_copies"] += 1
+        return signature
+
     def _ensure_cache(self, batch, capacity):
         if (
             self.owns_cache
@@ -196,6 +276,7 @@ class QwenGenerator(Generator):
         ):
             return self.cache
         self._release_traces()
+        self.prefill_sample_input = None
         self.prefill_signatures.clear()
         self.remaining_steps = None
         self.owns_cache = True
@@ -441,6 +522,7 @@ class QwenGenerator(Generator):
         ttnn.synchronize_device(self.mesh)
         captured = []
         open_trace = None
+        prefill_trace = prefill_sample_trace = None
         try:
             open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
             captured.append(open_trace)
@@ -460,7 +542,22 @@ class QwenGenerator(Generator):
                 # does not execute or mutate the current decode cache state.
                 open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
                 captured.append(open_trace)
+                prefill_trace = open_trace
                 self._prefill_trace_step()
+                ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
+                open_trace = None
+                if self.prefill_prepared["trace_sampling"]:
+                    open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                    captured.append(open_trace)
+                    prefill_sample_trace = open_trace
+                    self._sampling_step(self.prefill_prepared["output"])
+                    ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
+                    open_trace = None
+            elif self.prefill_sample_input is not None:
+                open_trace = ttnn.begin_trace_capture(self.mesh, cq_id=0)
+                captured.append(open_trace)
+                prefill_sample_trace = open_trace
+                self._sampling_step(self.prefill_sample_input)
                 ttnn.end_trace_capture(self.mesh, open_trace, cq_id=0)
                 open_trace = None
         except BaseException:
@@ -470,11 +567,13 @@ class QwenGenerator(Generator):
                 ttnn.release_trace(self.mesh, trace)
             raise
         self.trace, self.sample_trace = captured[:2]
-        self.prefill_trace = captured[2] if len(captured) == 3 else None
+        self.prefill_trace = prefill_trace
+        self.prefill_sample_trace = prefill_sample_trace
         self.trace_records_history = record_history
         self.logits = logits
         self.counters["trace_captures"] += 2
         self.counters["prefill_trace_captures"] += int(self.prefill_trace is not None)
+        self.counters["prefill_sampling_trace_captures"] += int(self.prefill_sample_trace is not None)
 
     def decode_forward(
         self,
@@ -618,6 +717,7 @@ class QwenGenerator(Generator):
             if (page_host < 0).any() or (page_host >= cache.num_pages).any():
                 raise ValueError("Invalid external page table")
         self._release_traces()
+        self.prefill_sample_input = None
         self.prefill_signatures.clear()
         self.remaining_steps = None
         self.cache = cache

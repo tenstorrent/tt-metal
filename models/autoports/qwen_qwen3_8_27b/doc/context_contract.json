@@ -404,5 +404,31 @@
       "scope": "Batch32 short prompts and batch1 maximum context are separate coverage points."
     },
     "nonaligned_full_model_evidence": "optimized_full_model/prefill_contract_full.json"
+  },
+  "optimized_vllm": {
+    "status": "validated",
+    "supported_context": 262144,
+    "capability_reduction": null,
+    "mesh": [
+      1,
+      4
+    ],
+    "kv_cache_dtype": "bfloat8_b",
+    "page_size": 32,
+    "trace_region_size_bytes_per_device": 134217728,
+    "prefill_trace_max_prompt_length": 4096,
+    "prefill_trace_cache_entries": 1,
+    "prefill_trace_scope": "One scheduled row at slot0,start0; logical lengths1..4096. Other valid shapes retain chunked public prefill. This bound limits trace reuse, not serving context.",
+    "prefill_persistent_reserve_upper_bound_bytes_per_device": 8421376,
+    "allocation_note": "At most two32x65536 BF16 logits buffers (owned short-prefill output and cache-bound fallback sampling input), plus4096 UINT32 token IDs and4096 UINT32 positions. First-token sampling traces consume the unchanged128MiB trace reservation; no extra KV/cache pool or model weights. Public fallback temporaries die before sampling replay.",
+    "evidence": [
+      "optimized_vllm/prefill_full.json",
+      "optimized_vllm/fallback_reduced.json",
+      "optimized_vllm/watcher_prefill.json",
+      "optimized_vllm/adapter_final.json",
+      "optimized_vllm/after/primary_vllm_benchmark.json",
+      "optimized_vllm/after/batch32_vllm_ci_serving_benchmark.json"
+    ],
+    "validation_scope": "Full64 serving-helper exact eager/traced logits/tokens at31,33,128,129,4095,4096,4097; B4 mixed-slot and async state tracking; real vLLM max_model_len262144 with B1 primary and B32 burst. Prior full-model262144 execution remains valid for the unchanged chunked model path; this stage adds bounded persistent storage without a capability reduction."
   }
 }

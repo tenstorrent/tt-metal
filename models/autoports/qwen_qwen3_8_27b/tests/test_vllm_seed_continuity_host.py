@@ -72,6 +72,9 @@ class FakeGenerator:
     def sample_prefill(self, outputs):
         return self._draw()
 
+    def serving_prefill_tokens(self, tokens, **kwargs):
+        return self.sample_prefill(self.prefill_forward(tokens, **kwargs))
+
 
 def params(seeds=(42, 99), top_k=(5, 1)):
     return SimpleNamespace(
