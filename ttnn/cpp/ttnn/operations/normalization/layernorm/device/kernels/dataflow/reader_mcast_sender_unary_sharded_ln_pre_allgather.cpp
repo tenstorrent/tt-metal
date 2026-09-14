@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
@@ -33,10 +34,6 @@ void kernel_main() {
     constexpr bool rms_norm = false;
 #endif
 
-    const uint32_t mcast_dest_noc_start_x = get_arg(args::mcast_dest_noc_start_x);
-    const uint32_t mcast_dest_noc_start_y = get_arg(args::mcast_dest_noc_start_y);
-    const uint32_t mcast_dest_noc_end_x = get_arg(args::mcast_dest_noc_end_x);
-    const uint32_t mcast_dest_noc_end_y = get_arg(args::mcast_dest_noc_end_y);
     const uint32_t start_x = get_arg(args::start_x);
     const uint32_t start_y = get_arg(args::start_y);
 
@@ -52,8 +49,8 @@ void kernel_main() {
     }
 
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
+    constexpr auto reduction_ready = MCAST_SPEC_ARGS(reduction_ready);
+    auto reduction_ready_pipe = reduction_ready.optional_sender(noc);
     Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
 
@@ -104,16 +101,7 @@ void kernel_main() {
 
         // inc semaphore of other cores, tell other all-to-all workers to start
         if constexpr (num_blocks > 1) {
-            reduce_sender_sem.set(VALID);
-            reduce_receiver_sem.wait(num_blocks - 1);
-            reduce_receiver_sem.set(0);
-            reduce_sender_sem.set_multicast(
-                noc,
-                mcast_dest_noc_start_x,
-                mcast_dest_noc_start_y,
-                mcast_dest_noc_end_x,
-                mcast_dest_noc_end_y,
-                num_blocks - 1);
+            reduction_ready_pipe->send_signal();
         }
 
         // read data from other cores

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
 #include "kernels/groupnorm_constants.hpp"
@@ -18,7 +19,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -431,8 +432,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         device,
         mcast_groups,
         ttnn::kernel_lib::host::McastConfig{
-            .noc = reader_noc,
-            .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id, reduce_receiver_semaphore_id}});
+            .noc = reader_noc, .handshake = false, .sem_ids = std::vector<uint32_t>{reduce_sender_semaphore_id}});
 
     std::map<std::string, std::string> reader_mcast_sender_defines;
     std::map<std::string, std::string> reader_mcast_receiver_defines;
@@ -463,11 +463,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
-    reduction_family.append_compile_time_args_to(
-        reader_mcast_sender_compile_time_args_group_1, /*pre_handshake=*/false);
-    reduction_family.append_compile_time_args_to(
-        reader_mcast_receiver_compile_time_args_group_1, /*pre_handshake=*/use_welford);
     std::unordered_map<std::string, uint32_t> reader_mcast_sender_named_compile_time_args = {
+        {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"num_cores_per_mcast_group", num_cores_per_mcast_group},
         {"num_batch_group", num_groups_per_core * num_batches_per_core_group_1},
         {"num_batches", num_batches_per_core_group_1},
@@ -500,6 +497,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     };
 
     std::unordered_map<std::string, uint32_t> reader_mcast_receiver_named_compile_time_args = {
+        {"reduce_receiver_semaphore_id", reduce_receiver_semaphore_id},
         {"num_batch_group", num_groups_per_core * num_batches_per_core_group_1},
         {"num_batches", num_batches_per_core_group_1},
         {"per_core_N", per_core_Nt},
@@ -1188,7 +1186,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
                     reader_args.push_back(device->worker_core_from_logical_core(gcore).y);
                 }
             }
-            reduction_family.append_runtime_args_to(reader_args, core);
             if (j == 0) {
                 reader_mcast_sender_desc.emplace_runtime_args(core, reader_args);
             } else {
@@ -1258,6 +1255,10 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         writer_desc.emplace_runtime_args(core, writer_mcast_sender_args);
     }
 
+    // Partial-statistics readiness is consumed before gathering; this family delivers the result.
+    std::vector<std::reference_wrapper<KernelDescriptor>> reduction_kernels{reader_mcast_sender_desc};
+    reduction_kernels.emplace_back(reader_mcast_receiver_desc);
+    reduction_family.attach(desc, "reduction_mcast", reduction_kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc));
     desc.kernels.push_back(std::move(reader_mcast_receiver_desc));
     desc.kernels.push_back(std::move(writer_desc));

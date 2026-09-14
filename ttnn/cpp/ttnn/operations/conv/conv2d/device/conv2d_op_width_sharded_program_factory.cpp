@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -20,7 +22,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::prim {
@@ -376,14 +378,8 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             ttnn::kernel_lib::host::McastConfig{
                 .noc = act_noc,
                 .handshake = true,
-                .data_ready = ttnn::kernel_lib::host::DataReadyMode::Flag,
-                .base_sem_id = static_cast<uint32_t>(desc.semaphores.size()),
+                .data_ready = dataflow_kernel_lib::DataReadySignal::Flag,
                 .ack_count_override = std::max(input_num_cores, output_num_cores) - 1});
-    }
-    if (activation_mcast.has_value()) {
-        const auto activation_mcast_semaphores = activation_mcast->owned_semaphores();
-        desc.semaphores.insert(
-            desc.semaphores.end(), activation_mcast_semaphores.begin(), activation_mcast_semaphores.end());
     }
 
     TT_FATAL(act_block_h_datums % 2 == 0, "2 Indices are packed in one uint32_t word.");
@@ -531,11 +527,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
         get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
         (uint32_t)has_bias};
 
-    if (activation_mcast.has_value()) {
-        activation_mcast->append_compile_time_args_to(activation_kernel_compile_args);
-    } else {
-        ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(activation_kernel_compile_args);
-    }
     if (config_tensors_in_dram) {
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         activation_kernel_compile_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok
@@ -604,10 +595,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
             core_y,
             full_core_grid.x,  // num_cores_x
         };
-        if (activation_mcast.has_value()) {
-            activation_mcast->append_runtime_args_to(rt_args, CoreCoord(core_x, core_y));
-        }
-
         act_kernel_desc.runtime_args.emplace_back(CoreCoord(core_x, core_y), std::move(rt_args));
 
         // Weights kernel is not placed on inactive cores.  Weights[1] is the
@@ -637,6 +624,11 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor(
     // after this function returns.
     post_conv2d_op_memory_checks_descriptor(desc, operation_attributes, tensor_args, reader_indices_actual_page_size);
 
+    if (activation_mcast.has_value()) {
+        activation_mcast->attach(desc, "activation_mcast", act_kernel_desc);
+    } else {
+        ttnn::kernel_lib::host::attach_absent(act_kernel_desc, "activation_mcast");
+    }
     desc.kernels.push_back(std::move(act_kernel_desc));
     desc.kernels.push_back(std::move(weights_kernel_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));

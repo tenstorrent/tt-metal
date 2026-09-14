@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -67,10 +67,9 @@ void kernel_main() {
 
     constexpr auto s_weight_args = TensorAccessorArgs<36>();
     constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
-    constexpr uint32_t mcast_sem_args_base = s_bias_args.next_compile_time_args_offset();
-    constexpr uint32_t operation_runtime_args_end = 1;
-    constexpr auto weights_mcast_args =
-        dataflow_kernel_lib::McastArgs<mcast_sem_args_base, operation_runtime_args_end>();
+    constexpr auto weights_mcast_args = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weights_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
 
     const bool has_sharded_input = get_arg_val<uint32_t>(0) > 0;
 

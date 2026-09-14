@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 using namespace dataflow_kernel_lib;
 template <bool FORWARD, typename Receiver>
 void receive_for_contract(Receiver& receiver) {
@@ -12,8 +12,10 @@ void receive_for_contract(Receiver& receiver) {
     }
 }
 void kernel_main() {
-    constexpr auto args = McastArgs<0, 0>();
+    constexpr auto args = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
     Noc noc;
     auto receiver = args.receiver(noc);
-    receive_for_contract<get_compile_time_arg_val(args.next_compile_time_args_offset())>(receiver);
+    receive_for_contract<get_compile_time_arg_val(0)>(receiver);
 }

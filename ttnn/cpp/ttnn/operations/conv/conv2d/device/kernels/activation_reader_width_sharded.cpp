@@ -5,7 +5,7 @@
 #include <api/dataflow/dataflow_api.h>
 #include "conv_reader_common.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 #include <optional>
 
@@ -66,8 +66,11 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_row_major_bfloat16 = get_compile_time_arg_val(19);
     constexpr uint32_t tilized_in0_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t operation_ct_args_end = 21;
-    constexpr dataflow_kernel_lib::McastArgs<operation_ct_args_end, 3> act_mcast_args;
-    constexpr uint32_t config_dram_addr_index = act_mcast_args.next_compile_time_args_offset();
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("activation_mcast_ct_offset"),
+        get_named_compile_time_arg_val("activation_mcast_rt_offset")>
+        act_mcast_args;
+    constexpr uint32_t config_dram_addr_index = operation_ct_args_end;
     constexpr uint32_t config_page_size_index = config_dram_addr_index + 1;
     constexpr uint32_t config_tensor_args_index = config_page_size_index + 1;
 

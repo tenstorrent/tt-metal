@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/normalization/layernorm/device/sharded_layernorm_factory_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
@@ -68,7 +69,6 @@ const m2::TensorParamName STATS_T{"stats"};
 const m2::TensorParamName RECIP{"recip"};
 const m2::TensorParamName OUTPUT{"output"};
 
-const m2::SemaphoreSpecName REDUCE_SENDER{"reduce_sender"};
 const m2::SemaphoreSpecName REDUCE_RECEIVER{"reduce_receiver"};
 const m2::SemaphoreSpecName REDUCE_SECOND_STAGE{"reduce_second_stage"};
 
@@ -464,7 +464,6 @@ CoreRanges CoreRanges::compute(const GridParams& grid, const WorkerDistribution&
     const CoreRange bbox = grid.shard_spec.grid.bounding_box();
     cr.mcast_dest_cores = CoreRangeSet(bbox);
     cr.inactive_cores = cr.mcast_dest_cores.subtract(cr.all_cores);
-    cr.num_mcast_dests = (grid.mcast_1d ? bbox.size() : grid.num_blocks) - 1;
 
     return cr;
 }
@@ -859,7 +858,6 @@ m2::KernelSpec::CompileTimeArgs reader_sender_compile_time_args(
         {"use_two_stage_reduce", static_cast<uint32_t>(grid.use_two_stage_reduce)},
         {"num_blocks_first_stage", workers.num_blocks_first_stage},
         {"num_blocks_second_stage", workers.num_blocks_second_stage},
-        {"num_mcast_dests", core_ranges.num_mcast_dests},
     };
 }
 
@@ -892,9 +890,13 @@ m2::KernelSpec::CompileTimeArgs reader_receiver_compile_time_args(
 // `is_all_to_all_worker` is true for the reader instances placed on the all-to-all group: after the
 // all-gather only those nodes carry the reduced-statistics buffer, so only they bind it.
 void bind_reader_resources(m2::KernelSpec& kernel, const SpecConfig& c, bool is_all_to_all_worker) {
-    bind_semaphore(kernel, REDUCE_RECEIVER, "reduce_receiver");
-    bind_semaphore(kernel, REDUCE_SENDER, "reduce_sender");
-    bind_semaphore(kernel, REDUCE_SECOND_STAGE, "reduce_second_stage");
+    if (!c.is_post_all_gather) {
+        // These synchronize operation-owned gather/reduction work, separately from multicast.
+        bind_semaphore(kernel, REDUCE_SECOND_STAGE, "reduce_second_stage");
+        if (!c.is_pre_all_gather) {
+            bind_semaphore(kernel, REDUCE_RECEIVER, "reduce_receiver");
+        }
+    }
 
     if (c.is_pre_all_gather) {
         // Before the all-gather the reader only serves the E[x^2] chain: it gathers the other cores'
@@ -1255,14 +1257,7 @@ void add_kernel_and_work_unit_specs(
         .unique_id = READER_SENDER,
         .source = c.reader_sender_path,
         .compile_time_args = reader_sender_compile_time_args(grid, workers, core_ranges, c),
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"mcast_dest_noc_start_x",
-                  "mcast_dest_noc_start_y",
-                  "mcast_dest_noc_end_x",
-                  "mcast_dest_noc_end_y",
-                  "start_x",
-                  "start_y"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"start_x", "start_y"}},
         .hw_config = reader_hw,
     };
     reader_sender.advanced_options.num_runtime_varargs = sender_num_coords;
@@ -1442,10 +1437,12 @@ void add_kernel_and_work_unit_specs(
     //----------------------------------------------------------------------
     // Semaphores and work units
     //----------------------------------------------------------------------
-    // The semaphore set spans the whole multicast bounding box, not just the active cores: the
-    // reduction's multicast signals the holes too.
-    for (const auto& name : {REDUCE_SENDER, REDUCE_RECEIVER, REDUCE_SECOND_STAGE}) {
-        spec.semaphores.push_back(m2::SemaphoreSpec{.unique_id = name, .target_nodes = core_ranges.mcast_dest_cores});
+    // Operation-owned gather/reduction synchronization; multicast resources are attached separately.
+    if (!c.is_post_all_gather) {
+        spec.semaphores.push_back({.unique_id = REDUCE_SECOND_STAGE, .target_nodes = core_ranges.mcast_dest_cores});
+        if (!c.is_pre_all_gather) {
+            spec.semaphores.push_back({.unique_id = REDUCE_RECEIVER, .target_nodes = core_ranges.mcast_dest_cores});
+        }
     }
 
     // The writer and compute kernels of the all-to-all group span both the sender node set and the
@@ -1544,36 +1541,8 @@ bool CoreIndices::is_all_to_all(const RuntimeArgsContext& ctx) const {
 
 namespace {
 
-// The multicast range this sender covers, plus its own position within the grid.
-std::vector<uint32_t> reader_sender_named_values(
-    const CoreCoord& core, const RuntimeArgsContext& ctx, IDevice* device) {
-    CoreCoord mcast_start, mcast_end;
-    if (ctx.grid.mcast_1d) {
-        CoreCoord top_left = {(std::size_t)ctx.core_ranges.start_core.x, (std::size_t)ctx.core_ranges.start_core.y};
-        CoreCoord bottom_right = {
-            (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1,
-            (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-        mcast_start = device->worker_core_from_logical_core(top_left);
-        mcast_end = device->worker_core_from_logical_core(bottom_right);
-    } else {
-        if (ctx.grid.row_wise) {
-            CoreCoord left_plus_one = {(std::size_t)ctx.core_ranges.start_core.x + 1, (std::size_t)core.y};
-            CoreCoord right = {
-                (std::size_t)ctx.core_ranges.start_core.x + ctx.grid.grid_size.x - 1, (std::size_t)core.y};
-            mcast_start = device->worker_core_from_logical_core(left_plus_one);
-            mcast_end = device->worker_core_from_logical_core(right);
-        } else {
-            CoreCoord top_plus_one = {(std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + 1};
-            CoreCoord bottom = {
-                (std::size_t)core.x, (std::size_t)ctx.core_ranges.start_core.y + ctx.grid.grid_size.y - 1};
-            mcast_start = device->worker_core_from_logical_core(top_plus_one);
-            mcast_end = device->worker_core_from_logical_core(bottom);
-        }
-    }
-    if (ctx.reader_noc == NOC::NOC_1) {
-        std::swap(mcast_start, mcast_end);
-    }
-
+// This sender's starting position in the operation-owned gather coordinate grid.
+CoreCoord reader_sender_start(const CoreCoord& core, const RuntimeArgsContext& ctx) {
     uint32_t start_x = 0;
     uint32_t start_y = 0;
     if (ctx.grid.mcast_1d) {
@@ -1584,7 +1553,7 @@ std::vector<uint32_t> reader_sender_named_values(
     } else {
         start_y = core.y - ctx.core_ranges.start_core.y;
     }
-    return {mcast_start.x, mcast_start.y, mcast_end.x, mcast_end.y, start_x, start_y};
+    return {start_x, start_y};
 }
 
 // The coordinate block an all-to-all worker walks to reach its remote peers: every X coordinate of
@@ -1671,7 +1640,6 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,
@@ -1767,16 +1735,9 @@ RunArgsAndWriterVarargs build_run_args(
         // Reader
         //------------------------------------------------------------------
         if (idx.width_index == 0) {
-            const auto named = reader_sender_named_values(core, ctx, device);
+            const auto start = reader_sender_start(core, ctx);
             m2::AddRuntimeArgsForNode(
-                reader_sender.runtime_arg_values,
-                core,
-                {{"mcast_dest_noc_start_x", named[0]},
-                 {"mcast_dest_noc_start_y", named[1]},
-                 {"mcast_dest_noc_end_x", named[2]},
-                 {"mcast_dest_noc_end_y", named[3]},
-                 {"start_x", named[4]},
-                 {"start_y", named[5]}});
+                reader_sender.runtime_arg_values, core, {{"start_x", start.x}, {"start_y", start.y}});
             reader_sender.advanced_options.runtime_varargs[core] = gather_coord_varargs(idx, ctx);
         } else if (is_all_to_all) {
             const bool is_last_all_to_all_worker =
@@ -1899,6 +1860,70 @@ RunArgsAndWriterVarargs build_run_args(
     }
 
     return RunArgsAndWriterVarargs{.run_args = std::move(run_args), .writer_num_varargs = writer_num_varargs};
+}
+
+// Attach after the native schema and invocation prefixes have both been assembled.
+void attach_multicast(
+    m2::ProgramSpec& spec,
+    m2::ProgramRunArgs& args,
+    IDevice* device,
+    const CoreRanges& ranges,
+    const GridParams& grid,
+    const SpecConfig& config) {
+    namespace mh = ttnn::kernel_lib::host;
+    std::vector<m2::KernelSpecName> readers;
+    for (const auto& kernel : spec.kernels) {
+        if (kernel.unique_id == READER_SENDER || kernel.unique_id == READER_RECEIVER_ALL_TO_ALL ||
+            kernel.unique_id == READER_RECEIVER) {
+            readers.push_back(kernel.unique_id);
+        }
+    }
+    const auto attach_channel = [&](std::string_view prefix,
+                                    bool enabled,
+                                    bool per_line,
+                                    const CoreRangeSet& receivers,
+                                    bool handshake,
+                                    dataflow_kernel_lib::DataReadySignal signal) {
+        if (!enabled) {
+            mh::attach_absent(spec, prefix, readers);
+            return;
+        }
+        mh::McastConfig policy{.noc = config.reader_noc, .handshake = handshake, .data_ready = signal};
+        if (per_line) {
+            mh::Mcast1D family(
+                device,
+                receivers,
+                grid.row_wise ? mh::Mcast1DShape::PerRow : mh::Mcast1DShape::PerColumn,
+                mh::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
+                policy);
+            family.attach(spec, args, prefix, readers);
+        } else {
+            // Holes in a non-rectangular grid receive payloads, but do not acknowledge readiness.
+            policy.ack_count_override = grid.num_blocks - 1;
+            mh::Mcast2D family(device, receivers, mh::Mcast2DFixedSenderConfig{.sender = ranges.start_core}, policy);
+            family.attach(spec, args, prefix, readers);
+        }
+    };
+    if (!config.is_post_all_gather) {
+        attach_channel(
+            "reduction_ready",
+            config.is_pre_all_gather ? grid.shard_spec.grid.num_cores() > 1 : grid.use_mcast,
+            !grid.mcast_1d,
+            config.is_pre_all_gather ? grid.shard_spec.grid : ranges.mcast_dest_cores,
+            true,
+            dataflow_kernel_lib::DataReadySignal::Flag);
+    }
+    if (!config.is_pre_all_gather) {
+        // Several chunks may be in flight: one monotonic event per completed chunk avoids
+        // losing publications when a receiver has not yet consumed the previous event.
+        attach_channel(
+            "final_statistics",
+            config.is_post_all_gather || grid.use_mcast,
+            !grid.mcast_1d,
+            ranges.mcast_dest_cores,
+            false,
+            dataflow_kernel_lib::DataReadySignal::Counter);
+    }
 }
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers

@@ -12,7 +12,7 @@
 #include "api/core_local_mem.h"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/groupnorm_zero_fill.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -39,11 +39,14 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(0));
     tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(num_mcast_cores));
 
-    constexpr uint32_t operation_rt_args_end = 2 * num_mcast_cores;
-    constexpr dataflow_kernel_lib::McastArgs<8, operation_rt_args_end> reduction_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")>
+        reduction_mcast_args;
 
     const Noc noc;
-    Semaphore<> reduce_receiver_sem(reduction_mcast_args.consumer_ready);
+    constexpr uint32_t partial_ready_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    Semaphore<> reduce_receiver_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;

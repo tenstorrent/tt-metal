@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -30,7 +32,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/workload_descriptor.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 namespace ttnn::prim {
 
@@ -772,7 +774,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             ttnn::kernel_lib::host::Mcast1DFixedSenderConfig{.starting_sender_index = 0},
             ttnn::kernel_lib::host::McastConfig{
                 .noc = writer_mcast_noc,
-                .base_sem_id = static_cast<uint32_t>(desc.semaphores.size()),
             });
     }
 
@@ -785,15 +786,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
             all_cores,
             ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = top_left_core},
             ttnn::kernel_lib::host::McastConfig{
-                .noc = writer_mcast_noc,
-                .base_sem_id = static_cast<uint32_t>(desc.semaphores.size()),
-                .ack_count_override = total_active_num_cores - 1});
-    }
-
-    if (!skip_weights_mcast) {
-        const auto weights_mcast_semaphores =
-            block_sharded ? weights_mcast_1d->owned_semaphores() : weights_mcast_2d->owned_semaphores();
-        desc.semaphores.insert(desc.semaphores.end(), weights_mcast_semaphores.begin(), weights_mcast_semaphores.end());
+                .noc = writer_mcast_noc, .ack_count_override = total_active_num_cores - 1});
     }
 
     if (split_reader_cb_shared) {
@@ -1060,13 +1053,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     writer_compile_time_args.insert(writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
-    if (skip_weights_mcast) {
-        ttnn::kernel_lib::host::append_absent_mcast_compile_time_args_to(writer_compile_time_args);
-    } else if (block_sharded) {
-        weights_mcast_1d->append_compile_time_args_to(writer_compile_time_args);
-    } else {
-        weights_mcast_2d->append_compile_time_args_to(writer_compile_time_args);
-    }
 
     const bool check_skip_compute = input_cores != output_cores;
 
@@ -1346,9 +1332,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 }
                 args.push_back(uint32_t{1});  // 4: has_sharded_input, always true for input_cores
                 args.push_back(uint32_t{1});  // 5: skip_work
-                if (!skip_weights_mcast) {
-                    weights_mcast_1d->append_runtime_args_to(args, core);
-                }
                 writer_mcast_sender_desc.emplace_runtime_args(core, args);
                 continue;
             }
@@ -1378,9 +1361,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 const bool has_sharded_input = input_cores.contains(core);
                 sender_rt_args.push_back(static_cast<uint32_t>(has_sharded_input));
                 sender_rt_args.push_back(uint32_t{0});  // skip_work
-                if (!skip_weights_mcast) {
-                    weights_mcast_1d->append_runtime_args_to(sender_rt_args, core);
-                }
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             } else {
                 uint32_t writer_remaining_tiles_to_push = 0;
@@ -1393,9 +1373,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                     }
                 }
                 sender_rt_args.push_back(writer_remaining_tiles_to_push);
-                if (!skip_weights_mcast) {
-                    weights_mcast_2d->append_runtime_args_to(sender_rt_args, core);
-                }
                 writer_mcast_sender_desc.emplace_runtime_args(core, sender_rt_args);
             }
         }
@@ -1409,7 +1386,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                 if (block_sharded) {
                     const bool has_sharded_input = input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(has_sharded_input));
-                    weights_mcast_1d->append_runtime_args_to(receiver_args, core);
                 } else {
                     bool is_no_op_core = !input_cores.contains(core);
                     receiver_args.push_back(static_cast<uint32_t>(is_no_op_core));
@@ -1424,7 +1400,6 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
                         }
                     }
                     receiver_args.push_back(writer_remaining_tiles_to_push);
-                    weights_mcast_2d->append_runtime_args_to(receiver_args, core);
                 }
                 writer_mcast_receiver_desc.runtime_args.emplace_back(core, std::move(receiver_args));
             }
@@ -1450,12 +1425,25 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // after this function returns.
     post_conv2d_op_memory_checks_descriptor(desc, operation_attributes, tensor_args, reader_indices_actual_page_size);
 
+    // Allocate weights resources after the operation's activation and split-reader semaphores.
+    if (skip_weights_mcast) {
+        // No receiver kernel exists when weights multicast is skipped.
+        ttnn::kernel_lib::host::attach_absent(writer_mcast_sender_desc, "weights_mcast");
+    } else {
+        const std::array weights_kernels{std::ref(writer_mcast_sender_desc), std::ref(writer_mcast_receiver_desc)};
+        if (block_sharded) {
+            weights_mcast_1d->attach(desc, "weights_mcast", weights_kernels);
+        } else {
+            weights_mcast_2d->attach(desc, "weights_mcast", weights_kernels);
+        }
+    }
     desc.kernels.push_back(std::move(writer_mcast_sender_desc));
     if (create_writer_mcast_receiver) {
         desc.kernels.push_back(std::move(writer_mcast_receiver_desc));
     }
     desc.kernels.push_back(std::move(reader_desc));
     desc.kernels.push_back(std::move(compute_kernel_desc));
+
     return desc;
 }
 

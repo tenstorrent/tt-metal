@@ -94,10 +94,8 @@ extern const m2::TensorParamName STATS_T;
 extern const m2::TensorParamName RECIP;
 extern const m2::TensorParamName OUTPUT;
 
-// Semaphore identities. The kernel-side names follow the legacy kernels: the sender semaphore is the
-// one the coordinator sets to hand out permission, the receiver semaphore the one the workers count
-// up on, and the second-stage semaphore synchronizes the second half of a two-stage reduce.
-extern const m2::SemaphoreSpecName REDUCE_SENDER;
+// Operation-owned synchronization: completed all-to-all workers and second-stage reduction.
+// Readiness and final-statistics multicast resources are declared by attach_multicast.
 extern const m2::SemaphoreSpecName REDUCE_RECEIVER;
 extern const m2::SemaphoreSpecName REDUCE_SECOND_STAGE;
 
@@ -158,7 +156,6 @@ struct CoreRanges {
     CoreRangeSet not_all_to_all_workers;
     CoreRangeSet mcast_dest_cores;
     CoreRangeSet inactive_cores;
-    uint32_t num_mcast_dests = 0;
     uint32_t num_cores_x_mcast = 0;
     uint32_t num_cores_y_mcast = 0;
 
@@ -385,7 +382,6 @@ struct RuntimeArgsContext {
     bool is_post_all_gather = false;
     bool writes_back = false;
     uint32_t num_distributed_devices = 1;
-    tt::tt_metal::NOC reader_noc = tt::tt_metal::NOC::NOC_0;
 
     // Storage core info for write-back
     std::vector<uint32_t> storage_core_noc_x;
@@ -432,7 +428,6 @@ RunArgsAndWriterVarargs build_run_args(
     const std::vector<CoreCoord>& cores,
     const RuntimeArgsContext& ctx,
     const SpecConfig& config,
-    IDevice* device,
     const Tensor& input,
     const std::optional<Tensor>& residual,
     const std::optional<Tensor>& gamma,
@@ -440,5 +435,8 @@ RunArgsAndWriterVarargs build_run_args(
     const std::optional<Tensor>& stats,
     const std::optional<Tensor>& recip,
     const Tensor& output);
+
+void attach_multicast(
+    m2::ProgramSpec&, m2::ProgramRunArgs&, IDevice*, const CoreRanges&, const GridParams&, const SpecConfig&);
 
 }  // namespace ttnn::prim::sharded_layernorm_helpers

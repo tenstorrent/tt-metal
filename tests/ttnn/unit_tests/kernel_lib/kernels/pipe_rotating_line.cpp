@@ -4,7 +4,8 @@
 // mcast_pipe + mcast_host END-TO-END rotating-LINE test kernel.
 //
 // Every core on a 1D line runs this ONE kernel and plays BOTH faces of the channel over
-// `num_rounds`, decoding the host::Mcast1D(rotating) wire with McastArgs<CT=1, RT=4>.
+// `num_rounds`, decoding the host::Mcast1D(rotating) wire with
+// McastArgs<get_named_compile_time_arg_val("mcast_ct_offset"), get_named_compile_time_arg_val("mcast_rt_offset")>.
 //
 // Sender selection cycles every mc.num_senders rounds. Receiver-capable cores receive every other
 // round; an independent sender outside that rectangle stays sender-only. This is the 1D mirror of
@@ -23,14 +24,16 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb = get_compile_time_arg_val(0);  // mcast + landing region (one per core)
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/4>();
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // Right after the prepared CT block
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t SCALARS = 1;
     constexpr uint32_t num_rounds = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 2);

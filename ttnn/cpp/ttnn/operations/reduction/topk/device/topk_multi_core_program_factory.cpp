@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "ttnn/operations/reduction/topk/device/topk_device_operation.hpp"
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt_stl/assert.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 #include "ttnn/operations/reduction/topk/device/topk_utils.hpp"
 #include "ttnn/operations/reduction/reduce_op_validation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -336,7 +337,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
 
     // Semaphore-based flow control for coordinating data transfer between local and final cores
     const uint32_t arrival_counter_semaphore_id = 0;
-    const uint32_t receiver_semaphore_id = 1;  // Signals readiness to receive data
     desc.semaphores.push_back(SemaphoreDescriptor{
         .id = arrival_counter_semaphore_id,
         .core_type = tt::CoreType::WORKER,
@@ -350,12 +350,7 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         local_cores_range_set,
         ttnn::kernel_lib::host::Mcast2DFixedSenderConfig{.sender = final_core},
         ttnn::kernel_lib::host::McastConfig{
-            .handshake = false,
-            .data_ready = ttnn::kernel_lib::host::DataReadyMode::Flag,
-            .base_sem_id = receiver_semaphore_id});
-    for (const auto& semaphore : final_readiness_mcast.owned_semaphores()) {
-        desc.semaphores.push_back(semaphore);
-    }
+            .handshake = false, .data_ready = dataflow_kernel_lib::DataReadySignal::Flag});
 
     // Local reader - Data Input and Index Generation/Reading
     // Responsibility: Stream input tensor data from DRAM to local cores
@@ -394,7 +389,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         gathered_values_cb_index,              // Final TopK values destination
         gathered_indices_cb_index              // Final TopK indices destination
     };
-    final_readiness_mcast.append_compile_time_args_to(reader_final_compile_time_args);
 
     KernelDescriptor reader_final_desc;
     reader_final_desc.kernel_source =
@@ -403,9 +397,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
     reader_final_desc.core_ranges = final_cores_range_set;  // Runs only on final aggregation core
     reader_final_desc.compile_time_args = reader_final_compile_time_args;
     reader_final_desc.config = ReaderConfigDescriptor{};
-    KernelDescriptor::RTArgList reader_final_runtime_args;
-    final_readiness_mcast.append_runtime_args_to(reader_final_runtime_args, final_core);
-    reader_final_desc.emplace_runtime_args(final_core, reader_final_runtime_args);
 
     // Local writer - Local TopK Results Transmission
     // Responsibility: Send local TopK results from each core to final aggregation core
@@ -422,7 +413,6 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
         output_ind_cb_index,         // Local TopK indices source
         gathered_values_cb_index,    // Final TopK values destination
         gathered_indices_cb_index};  // Final TopK indices destination
-    final_readiness_mcast.append_compile_time_args_to(writer_local_compile_time_args);
 
     KernelDescriptor writer_local_desc;
     writer_local_desc.kernel_source =
@@ -558,10 +548,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             });
 
         // Local writer
-        KernelDescriptor::RTArgList writer_local_runtime_args;
-        writer_local_runtime_args.push_back(core_id);  // Width position for placement in final aggregation buffer
-        final_readiness_mcast.append_runtime_args_to(writer_local_runtime_args, core);
-        writer_local_desc.emplace_runtime_args(core, writer_local_runtime_args);
+        // Width position for placement in the final aggregation buffer.
+        writer_local_desc.runtime_args.emplace_back(core, KernelDescriptor::CoreRuntimeArgs{core_id});
 
         // Local compute
         compute_local_desc.runtime_args.emplace_back(
@@ -582,6 +570,8 @@ tt::tt_metal::ProgramDescriptor TopKDeviceOperation::TopKMultiCoreProgramFactory
             index_tensor,  // DRAM address for TopK indices output tensor
         });
 
+    const std::array kernels{std::ref(reader_final_desc), std::ref(writer_local_desc)};
+    final_readiness_mcast.attach(desc, "readiness_mcast", kernels);
     desc.kernels.push_back(std::move(reader_local_desc));
     desc.kernels.push_back(std::move(reader_final_desc));
     desc.kernels.push_back(std::move(writer_local_desc));

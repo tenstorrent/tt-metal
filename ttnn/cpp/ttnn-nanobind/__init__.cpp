@@ -271,7 +271,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
     auto m_mcast_host =
-        mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast_pipe)");
+        mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);

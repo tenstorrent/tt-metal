@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
@@ -70,15 +70,12 @@ void kernel_main() {
 #endif
     constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(16));
 
-    constexpr dataflow_kernel_lib::McastArgs<17, 11> in1_mcast_args;
-    rt_args_idx = in1_mcast_args.next_runtime_args_offset();
-
 #ifndef OUT_SHARDED
     const uint32_t last_num_blocks_h_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif
 
-    constexpr auto out_args = TensorAccessorArgs<in1_mcast_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<17>();
 
     OpSignaler op_signaler;
     if constexpr (fuse_op_reduce_scatter) {
@@ -90,6 +87,12 @@ void kernel_main() {
 
     // WRITER
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
+
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in1_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in1_mcast_rt_offset")>
+        in1_mcast_args;
 
     const Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);

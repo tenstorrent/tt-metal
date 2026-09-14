@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/dataflow/noc_semaphore.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 template <
     uint32_t tile_bytes,
@@ -96,10 +96,11 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<25>();
     constexpr auto weight_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<bias_args.next_compile_time_args_offset(), 15>();
+    constexpr auto weight_mcast = dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("weights_mcast_ct_offset"),
+        get_named_compile_time_arg_val("weights_mcast_rt_offset")>();
     auto weight_sender = weight_mcast.optional_sender(noc);
     auto weight_receiver = weight_mcast.optional_receiver(noc);
-    argidx = weight_mcast.next_runtime_args_offset();
 
     // Reducer coordinates and worker core coordinates are only present when num_workers > 0
     uint32_t reducer_core_x = 0, reducer_core_y = 0;
@@ -121,11 +122,13 @@ void kernel_main() {
 
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
+    constexpr uint32_t weight_bytes = weight_tiles * tile_bytes;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
     constexpr uint32_t H_out_p = H_out + 2 * output_pad_h;
     constexpr uint32_t W_out_p = W_out + 2 * output_pad_w;
     constexpr uint32_t T_out_H_out_W_out = T_out * H_out_p * W_out_p;
 
+    uint32_t weight_round = 0;
     // Process each batch element
     for (uint32_t batch_idx = 0; batch_idx < N; batch_idx++) {
         for (uint32_t c_in_block = c_in_block_start; c_in_block < c_in_block_end; c_in_block++) {
@@ -140,15 +143,11 @@ void kernel_main() {
                     if (weight_sender) {
                         read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(
                             noc, weight_reader, cb_weight, c_in_offset_t, c_out_offset_t);
-                        weight_sender->send(weight_l1, weight_l1, weight_tiles * tile_bytes);
+                        weight_sender->send(weight_l1, weight_l1, weight_bytes);
                     } else {
                         // All members of a weight group share the same batch/channel loop and CB
                         // layout. A chain receiver finishes forwarding before compute can use it.
-                        const uint32_t round =
-                            (batch_idx * (c_in_block_end - c_in_block_start) + c_in_block - c_in_block_start) *
-                                (c_out_block_end - c_out_block_start) +
-                            c_out_block - c_out_block_start;
-                        weight_receiver->receive_and_forward(weight_l1, weight_tiles * tile_bytes, round);
+                        weight_receiver->receive_and_forward(weight_l1, weight_bytes, weight_round++);
                     }
                 } else {
                     read_weight_block<tile_bytes, matmul_K_t, matmul_N_t, C_out_t>(

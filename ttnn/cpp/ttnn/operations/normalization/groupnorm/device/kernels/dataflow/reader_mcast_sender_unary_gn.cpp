@@ -14,7 +14,7 @@
 #include "groupnorm_zero_fill.hpp"
 #include "groupnorm_reader_rm.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -121,12 +121,17 @@ void kernel_main() {
     tt_l1_ptr uint32_t* noc_coord_x = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(5));
     tt_l1_ptr uint32_t* noc_coord_y = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(5 + num_mcast_cores));
 
-    constexpr uint32_t operation_rt_args_end = 5 + 2 * num_mcast_cores;
-    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), operation_rt_args_end>
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")>
         reduction_mcast_args;
 
     const Noc noc;
-    Semaphore<> reduce_receiver_sem(reduction_mcast_args.consumer_ready);
+    // The gather consumes partial-statistics readiness before the result broadcast.
+    constexpr uint32_t partial_ready_id = num_mcast_cores > 1
+                                              ? get_named_compile_time_arg_val("reduce_receiver_semaphore_id")
+                                              : reduction_mcast_args.consumer_ready;
+    Semaphore<> reduce_receiver_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.sender(noc);
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;

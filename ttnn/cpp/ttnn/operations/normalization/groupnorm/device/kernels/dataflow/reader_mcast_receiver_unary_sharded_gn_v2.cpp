@@ -10,7 +10,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 // split REDUCE across cores
 void kernel_main() {
@@ -22,7 +22,10 @@ void kernel_main() {
     constexpr uint32_t per_core_M = get_compile_time_arg_val(4);
     constexpr uint32_t tile_height = get_compile_time_arg_val(5);
 
-    constexpr dataflow_kernel_lib::McastArgs<6, 0> reduction_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")>
+        reduction_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;
     constexpr uint32_t dfb_ex_id = tt::CBIndex::c_9;
@@ -33,6 +36,8 @@ void kernel_main() {
     constexpr uint32_t dfb_out0_id = tt::CBIndex::c_16;
 
     const Noc noc;
+    constexpr uint32_t partial_ready_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    Semaphore<> partial_ready_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex_global(dfb_ex_global_id);
@@ -67,6 +72,8 @@ void kernel_main() {
         for (uint32_t j = 0; j < 2; ++j) {
             dfb_ex_partial.wait_front(1);
             dfb_ex_global.reserve_back(1);
+            // Publish partials before the sender gathers them; receive only waits for the result.
+            partial_ready_sem.up(noc, reduction_mcast_args.sender_x(), reduction_mcast_args.sender_y(), 1);
             reduction_pipe.receive();
             dfb_ex_global.push_back(1);
             dfb_ex_partial.pop_front(1);

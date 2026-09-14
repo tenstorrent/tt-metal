@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <functional>
 #include "groupnorm_device_operation.hpp"
 #include "groupnorm_program_utils.hpp"
 #include "kernels/groupnorm_constants.hpp"
 
+#include <array>
 #include <bit>
 #include <map>
 #include <string>
@@ -18,7 +20,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/operations/math.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/host/mcast_host.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/host/mcast_host.hpp"
 
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
@@ -655,10 +657,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
-    reduction_family.append_compile_time_args_to(
-        reader_mcast_sender_compile_time_args_group_1, /*pre_handshake=*/false);
-    reduction_family.append_compile_time_args_to(
-        reader_mcast_sender_compile_time_args_group_2, /*pre_handshake=*/false);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
 
     std::string reader_kernel_path =
@@ -1482,7 +1480,6 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             for (const auto& gcore : group) {
                 reader_args.push_back(device->worker_core_from_logical_core(gcore).y);
             }
-            reduction_family.append_runtime_args_to(reader_args, core);
             if (equal_batches_per_core || virtual_core.y <= last_row_with_extra_batch) {
                 reader_mcast_sender_desc_g1.emplace_runtime_args(core, reader_args);
             } else {
@@ -1561,6 +1558,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         }
     }
 
+    const std::array kernels{std::ref(reader_mcast_sender_desc_g1), std::ref(reader_mcast_sender_desc_g2)};
+    reduction_family.attach(desc, "reduction_mcast", kernels);
     desc.kernels.push_back(std::move(reader_mcast_sender_desc_g1));
     desc.kernels.push_back(std::move(reader_mcast_sender_desc_g2));
     desc.kernels.push_back(std::move(writer_desc_g1));

@@ -12,7 +12,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "groupnorm_reader_rm.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     // clang-format off
@@ -107,7 +107,9 @@ void kernel_main() {
     const uint32_t out_start_id = get_arg_val<uint32_t>(3);
     const uint32_t num_channels_tiles = get_arg_val<uint32_t>(4);
 
-    constexpr dataflow_kernel_lib::McastArgs<out_args.next_compile_time_args_offset(), 5> reduction_mcast_args;
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("reduction_mcast_ct_offset"),
+        get_named_compile_time_arg_val("reduction_mcast_rt_offset")> reduction_mcast_args;
 
     constexpr uint32_t dfb_ex_partial_id = tt::CBIndex::c_8;    // E[x] partial reduce
     constexpr uint32_t dfb_ex2_partial_id = tt::CBIndex::c_21;  // E[x] partial reduce
@@ -127,7 +129,8 @@ void kernel_main() {
 #endif
 
     const Noc noc;
-    Semaphore<> reduce_receiver_sem(reduction_mcast_args.consumer_ready);
+    constexpr uint32_t partial_ready_id = get_named_compile_time_arg_val("reduce_receiver_semaphore_id");
+    Semaphore<> reduce_receiver_sem(partial_ready_id);
     auto reduction_pipe = reduction_mcast_args.receiver(noc);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
     DataflowBuffer dfb_ex2_partial(dfb_ex2_partial_id);

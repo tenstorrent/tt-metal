@@ -13,7 +13,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_args.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = static_cast<bool>(get_compile_time_arg_val(0));
@@ -54,11 +54,6 @@ void kernel_main() {
 
     constexpr uint32_t num_remote_senders = (num_blocks_inner_dim + num_blocks_per_shard - 1) / num_blocks_per_shard;
 
-    constexpr dataflow_kernel_lib::McastArgs<14, 1> in0_mcast_args;
-    operation_rt_args_idx = in0_mcast_args.next_runtime_args_offset();
-    static_assert(in0_mcast_args.active);
-    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
-
     MatmulOpReceiver fused_op_receiver;
     if constexpr (fuse_op) {
         fused_op_receiver = MatmulOpReceiver(
@@ -69,11 +64,20 @@ void kernel_main() {
         );
     }
 
+    // Multicast arguments follow the operation-owned argument setup.
+    constexpr dataflow_kernel_lib::McastArgs<
+        get_named_compile_time_arg_val("in0_mcast_ct_offset"),
+        get_named_compile_time_arg_val("in0_mcast_rt_offset")>
+        in0_mcast_args;
+    static_assert(in0_mcast_args.active);
+    static_assert(num_remote_senders <= in0_mcast_args.num_senders);
+
     const Noc noc;
     DataflowBuffer dfb_in0(dfb_id_in0);
     DataflowBuffer dfb_in2(dfb_id_in2);
     auto in0_sender_pipe = in0_mcast_args.optional_sender(noc);
     auto in0_receiver_pipe = in0_mcast_args.optional_receiver(noc);
+    const bool can_receive = in0_mcast_args.can_receive();
 
     dfb_in2.reserve_back(batch * in0_block_num_tiles);
 
@@ -172,7 +176,7 @@ void kernel_main() {
 
                         in0_sender_pipe->send(
                             in0_tensor_read_addr, in0_tensor_local_l1_write_addr, in0_block_size_bytes);
-                    } else if (in0_mcast_args.can_receive()) {
+                    } else if (can_receive) {
                         in0_receiver_pipe->receive(block_id);
                     }
                     dfb_in0.push_back(in0_block_num_tiles);
