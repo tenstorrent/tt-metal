@@ -222,18 +222,28 @@ inline void tanh_init() {
         // Fitted to minimise max bfloat16 ULP error rather than max absolute error. The two
         // have different optima, so this is not the table an absolute-error fit would give.
         //
-        // Three properties to preserve if you retune. Segment 0's intercept must stay 0:
+        // Four properties to preserve if you retune. Segment 0's intercept must stay 0:
         // SGN_RETAIN would otherwise put a jump across the origin, and ULP error diverges as
         // x -> 0, since ulp(tanh x) shrinks with x while the intercept does not. The last
-        // segment must stay exactly (0, 1.0), so the kernel saturates to 1.0. And the segments
-        // must stay continuous at the breakpoints, which is what keeps the result monotone.
+        // segment must stay exactly (0, 1.0), so the kernel saturates to 1.0. No segment may
+        // exceed 1.0 anywhere inside its own range -- unlike the polynomial path below, this
+        // one has no min(result, 1.0f) to fall back on, and a segment that crosses 1.0 before
+        // its breakpoint returns |tanh| > 1 for fp32 DEST values in that window even when no
+        // bfloat16 input lands there. And the segments must stay continuous at the breakpoints
+        // to within the fp16 coefficient grid: exact continuity is not reachable once the
+        // coefficients are rounded, so what has to hold is that no step down at a breakpoint
+        // exceeds a bfloat16 ulp, which is what keeps the result monotone in bfloat16. The
+        // steps this table leaves are +1.2e-4 at 0.5, -1.2e-4 at 1.0, +2.1e-4 at 1.5 and
+        // -1.2e-4 at 2.0, all far below the 2e-3 ulp of a bfloat16 near those values.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.19299316f);
 
         sfpi::l_reg[sfpi::LRegs::LReg1] = sfpi::vLut16ss(0.28710938f, 0.096496582f);
         sfpi::l_reg[sfpi::LRegs::LReg5] = sfpi::vLut16ii(0.48193359f, 0.76806641f);
 
-        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.039123535f, 0.0f);
+        // 0.0390625 == 1.25 * 2^-5, fp16-exact, and chosen so A*3 + B is exactly 1.0: the
+        // minimax slope 0.039123535 crosses 1.0 at |x| = 2.99532 and peaks at 1.000183.
+        sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vLut16ss(0.0390625f, 0.0f);
         sfpi::l_reg[sfpi::LRegs::LReg6] = sfpi::vLut16ii(0.8828125f, 1.0f);
     } else {
         if constexpr (is_fp32_dest_acc_en) {

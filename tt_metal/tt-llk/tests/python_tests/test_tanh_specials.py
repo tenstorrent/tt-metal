@@ -1,11 +1,20 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""The 257 bfloat16 patterns the exhaustive ULP sweep cannot reach.
+"""What an exhaustive bfloat16 sweep of approximate tanh cannot reach.
 
-`StimuliSpec.ulp_sweep` enumerates the 65,279 distinct *finite* values and
-dedupes -0.0 against +0.0, so 2^16 - 65,279 = 257 bit patterns never reach the
-kernel: 2 infinities, 254 NaNs, and negative zero.
+Two disjoint blind spots, one test file.
+
+**The 257 bit patterns.** `StimuliSpec.ulp_sweep` enumerates the 65,279 distinct
+*finite* values and dedupes -0.0 against +0.0, so 2^16 - 65,279 = 257 bit patterns
+never reach the kernel: 2 infinities, 254 NaNs, and negative zero.
+
+**The gaps between bfloat16 values.** DEST holds fp32, so the kernel sees inputs a
+bfloat16 sweep never presents. Segment 4 of the LUT once crossed 1.0 at |x| = 2.99532
+and peaked at 1.000183 -- and the two bfloat16 neighbours either side of that window,
+2.984375 and 3.0, both evaluate to <= 1.0, so an exhaustive bfloat16 sweep reported
+exact saturation while fp32 inputs returned |tanh| > 1. `test_tanh_fp32_bound` walks
+that window directly.
 
 That matters for this kernel specifically. Segment 5 of the SFPLUT is the
 constant pair (A=0, B=1), evaluated as `A*|x| + B` -- so an infinite input makes
@@ -18,8 +27,6 @@ Reference: tanh(+-inf) = +-1, tanh(NaN) = NaN, tanh(+-0.0) = +-0.0 (sign kept).
 """
 
 from __future__ import annotations
-
-import struct
 
 import numpy as np
 import pytest
@@ -50,22 +57,47 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 
-
-def _bf16_bits_to_f32(bits: int) -> float:
-    """A bfloat16 bit pattern widened to float32 (bf16 is fp32's top 16 bits)."""
-    return struct.unpack("<f", struct.pack("<I", bits << 16))[0]
-
-
 # exp field all ones -> 2 infinities + 254 NaNs, both signs
-POS_SPECIALS = [_bf16_bits_to_f32(b) for b in range(0x7F80, 0x8000)]  # 128
-NEG_SPECIALS = [_bf16_bits_to_f32(b) for b in range(0xFF80, 0x10000)]  # 128
-ZEROS = [0.0, -0.0]
+POS_SPECIALS = list(range(0x7F80, 0x8000))  # 128 bfloat16 bit patterns
+NEG_SPECIALS = list(range(0xFF80, 0x10000))  # 128
+ZEROS = [0x0000, 0x8000]  # +0.0, -0.0
+
+FACE_SIZE = 256
 
 
-def _run(values_by_face, out_fmt, dest_acc):
-    formats = InputOutputFormat(DataFormat.Float16_b, out_fmt)
+def _write_bits(src, bits_by_face):
+    """Write raw bfloat16 bit patterns into `src`, one face at a time.
+
+    Not `StimuliSpec.custom(values=...)`, which would be the natural way to say
+    this: that path ends in `torch.tensor(vals, dtype=torch.bfloat16)`, and torch's
+    float -> bfloat16 conversion collapses every NaN onto one *positive* pattern.
+    All 127 negative NaNs would arrive as +NaN and the two halves of this test
+    would be the same half twice. Writing the bit patterns through a uint16 view
+    converts nothing, so what reaches L1 is what is asked for. (The same hazard is
+    in the shared strategy for any test that feeds it NaNs; fixing it there changes
+    what several other suites are fed, so it is left alone here.)
+    """
+    u16 = src.view(-1).view(torch.uint16)
+    for face, bits in bits_by_face.items():
+        base = face * FACE_SIZE
+        assert len(bits) <= FACE_SIZE, "face %d overflows" % face
+        u16[base : base + len(bits)] = torch.tensor(bits, dtype=torch.uint16)
+
+
+def _run(values_by_face, out_fmt, dest_acc, in_fmt=DataFormat.Float16_b, floats=False):
+    """Run approximate tanh over `values_by_face`.
+
+    `floats=True` takes ordinary float values per face instead of raw bit patterns;
+    the bit-pattern path exists only for the NaN-sign hazard `_write_bits` documents,
+    which ordinary finite values do not have.
+    """
+    formats = InputOutputFormat(in_fmt, out_fmt)
     dims = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
-    spec = StimuliSpec.custom_faces(values_by_face)
+    spec = (
+        StimuliSpec.custom_faces(values_by_face)
+        if floats
+        else StimuliSpec.constant(0.0)
+    )
     src_A, tc_A, src_B, tc_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=dims,
@@ -73,6 +105,8 @@ def _run(values_by_face, out_fmt, dest_acc):
         stimuli_format_B=formats.input_format,
         input_dimensions_B=dims,
     )
+    if not floats:
+        _write_bits(src_A, values_by_face)
     nb, ntb = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half,
         dest_acc,
@@ -103,7 +137,7 @@ def _run(values_by_face, out_fmt, dest_acc):
             tile_count_res=tc_A,
         ),
         dest_acc=dest_acc,
-        unpack_to_dest=False,
+        unpack_to_dest=in_fmt.is_32_bit() and dest_acc == DestAccumulation.Yes,
     )
     hw = torch.tensor(cfg.run().result, dtype=format_dict[formats.output_format])
     return src_A.to(torch.float32).numpy(), hw.to(torch.float32).numpy()
@@ -142,23 +176,28 @@ def test_tanh_specials(out_fmt, dest_acc):
         groups.setdefault(key, {}).setdefault(classify(hv), 0)
         groups[key][classify(hv)] += 1
 
-    print("\n=== %s out, dest_acc=%s ===" % (out_fmt.name, dest_acc.name))
-    print(
-        "%-10s %8s   %-14s %-14s %s"
-        % ("input", "count", "IEEE tanh", "recorded", "hardware returned")
-    )
-
     # What the hardware actually does today, measured on a Wormhole n150 and
-    # byte-for-byte identical on main's 3-entry table -- so these are properties of
-    # the SFPLUT path, not of any particular coefficient table.
+    # byte-for-byte identical on main's 3-entry table, so none of it is a property of
+    # any particular coefficient table.
     #
     #   +-inf -> NaN on the fp32 path: segment 5 is the constant pair (A=0, B=1) and
     #            the hardware evaluates A*|x| + B, so an infinite input computes
-    #            0 * inf + 1. IEEE tanh(+-inf) is +-1.
-    #   -0.0  -> +0.0: the sign of zero is not carried through.
-    #   On the bf16 path a NaN packs out as +inf and the infinities stay infinite --
-    #   a NaN only survives to L1 on an fp32-end-to-end pipeline, so that arm says
-    #   nothing about the kernel.
+    #            0 * inf + 1. IEEE tanh(+-inf) is +-1. This one *is* the LUT.
+    #   NaN   -> the sign survives: +NaN and -NaN give distinct results on the bf16
+    #            path (+inf and -inf), so the input path carries the sign bit.
+    #   -0.0  -> +0.0, and this is NOT the LUT. SGN_RETAIN ends in copysign, and
+    #            segment 0 computes A*0 + 0, so the LUT would return -0.0. The sign
+    #            is already gone before the SFPU runs: the same stimuli through
+    #            sources/eltwise_unary_datacopy_test.cpp -- unpack to DEST and pack
+    #            back, no SFPU at all -- return +0.0 on both output formats, while
+    #            helpers.pack writes 0x8000 to L1 and helpers.unpack reads -0.0 back,
+    #            so neither host leg is responsible. A second, separate loss sits on
+    #            the bf16 pack: SFPU negate turns +0.0 into -0.0 and that -0.0 reaches
+    #            L1 intact with fp32 out but packs to +0.0 with bf16 out. Fixing
+    #            either belongs to the unpack/pack path, not to this kernel.
+    #   On the bf16 path a NaN packs out as an infinity of the same sign -- a NaN only
+    #   survives to L1 on an fp32-end-to-end pipeline, so that arm says nothing about
+    #   the kernel.
     #
     # Asserting the divergences on purpose: they predate this table, fixing them costs
     # instructions on every datum, and until that trade is made deliberately this test
@@ -168,6 +207,7 @@ def test_tanh_specials(out_fmt, dest_acc):
             "+inf": "NaN",
             "-inf": "NaN",
             "NaN(+)": "NaN",
+            "NaN(-)": "NaN",
             "+0.0": "+0.0",
             "-0.0": "+0.0",
         },
@@ -175,38 +215,74 @@ def test_tanh_specials(out_fmt, dest_acc):
             "+inf": "+inf",
             "-inf": "-inf",
             "NaN(+)": "+inf",
+            "NaN(-)": "-inf",
             "+0.0": "+0.0",
             "-0.0": "+0.0",
         },
     }[out_fmt]
-    IEEE = {
-        "+inf": "1",
-        "-inf": "-1",
-        "NaN(+)": "NaN",
-        "NaN(-)": "NaN",
-        "+0.0": "+0.0",
-        "-0.0": "-0.0",
-    }
 
-    failures = []
-    for key in ("+inf", "-inf", "NaN(+)", "NaN(-)", "+0.0", "-0.0"):
-        if key not in groups:
-            continue
-        got = groups[key]
-        total = sum(got.values())
-        shown = ", ".join("%s x%d" % (k, v) for k, v in sorted(got.items()))
-        want = RECORDED.get(key)
-        uniform = list(got) == [want] if want else False
-        note = "OK" if uniform else "<-- CHANGED"
-        if want is not None and not uniform:
-            failures.append("%s: recorded %s, got %s" % (key, want, shown))
-        print(
-            "%-10s %8d   %-14s %-14s %s   %s"
-            % (key, total, IEEE[key], want or "-", shown, note)
-        )
+    # Each of these must both arrive in `groups` and carry a RECORDED entry. A key
+    # that never arrives is a hole in the stimuli rather than a pass -- -0.0 would
+    # disappear from `groups` entirely if its sign were lost before the kernel -- and
+    # a key with nothing recorded against it can never fail, which is how the 127
+    # negative-NaN patterns went unasserted.
+    KEYS = ("+inf", "-inf", "NaN(+)", "NaN(-)", "+0.0", "-0.0")
 
+    def shown(key):
+        return ", ".join("%s x%d" % (k, v) for k, v in sorted(groups[key].items()))
+
+    missing = [k for k in KEYS if k not in groups]
+    unrecorded = [
+        "%s (hardware returned %s)" % (k, shown(k))
+        for k in KEYS
+        if k in groups and k not in RECORDED
+    ]
+    failures = [
+        "%s: recorded %s, got %s" % (k, RECORDED[k], shown(k))
+        for k in KEYS
+        if k in groups and k in RECORDED and list(groups[k]) != [RECORDED[k]]
+    ]
+
+    assert not missing, (
+        "these input patterns never reached the kernel: "
+        + ", ".join(missing)
+        + "\nThe stimuli path lost them before the math did, so nothing below is "
+        "asserting anything about them."
+    )
+    assert not unrecorded, (
+        "no recorded behaviour for: "
+        + ", ".join(unrecorded)
+        + "\nA key with no RECORDED entry cannot fail. Add the measured value."
+    )
     assert not failures, (
         "behaviour on the non-finite / signed-zero patterns changed:\n  "
         + "\n  ".join(failures)
         + "\nThese were identical on main. If the change is deliberate, update RECORDED."
+    )
+
+
+def test_tanh_fp32_bound():
+    """|tanh| <= 1 for fp32 inputs between the last two bfloat16 values below 3.
+
+    The LUT has no `min(result, 1.0f)` -- the polynomial path in the same header
+    carries one -- so the bound is a property of the coefficients alone: every
+    segment must stay at or below 1.0 across its whole range, not merely at the
+    breakpoints a bfloat16 input can land on. With segment 4's slope at the
+    unrounded minimax 0.039123535 this returned up to 1.000183 here while an
+    exhaustive bfloat16 sweep still reported exact saturation.
+    """
+    xs = list(np.linspace(2.9953, 2.99999, 256).astype(np.float32))
+    _, hw = _run(
+        {0: xs},
+        DataFormat.Float32,
+        DestAccumulation.Yes,
+        in_fmt=DataFormat.Float32,
+        floats=True,
+    )
+    over = np.abs(hw[: len(xs)]) > 1.0
+    worst = np.abs(hw[: len(xs)]).max()
+    assert not over.any(), (
+        "approximate tanh returned |y| > 1 on %d of %d fp32 inputs in "
+        "(2.99532, 3.0); worst |y| = %.9f. No LUT segment may exceed 1.0 inside "
+        "its own range." % (over.sum(), len(xs), worst)
     )
