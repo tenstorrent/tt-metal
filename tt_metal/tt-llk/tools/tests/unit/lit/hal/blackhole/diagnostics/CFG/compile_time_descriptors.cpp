@@ -25,20 +25,16 @@ static_assert(static_cast<std::uint32_t>(cfg::GprTransferSize::Bits128) == 1);
 static_assert(static_cast<std::uint32_t>(cfg::WrcfgCompletion::Wait) == 0);
 static_assert(static_cast<std::uint32_t>(cfg::WrcfgCompletion::Deferred) == 1);
 
-// Field arithmetic: state/thread words, repeated sections, narrow/full-width
-// masks, and multi-word descriptors.
+// Field arithmetic: state/thread words, repeated sections, and narrow/full-width masks.
 constexpr cfg::Field state_field {cfg::RegisterScope::State, 32, 10, 1, 3, 5, 3, 40};
 static_assert(state_field.abs0() == 355);
 static_assert(state_field.addr32(cfg::Sec::S0) == 11);
 static_assert(state_field.addr32(cfg::Sec::S1) == 12);
 static_assert(state_field.shamt(cfg::Sec::S1) == 11);
 static_assert(state_field.mask(cfg::Sec::S1) == 0xf800u);
-static_assert(state_field.words() == 1);
 
 constexpr cfg::Field full_word {cfg::RegisterScope::State, 32, 20, 0, 0, 32, 1, 0};
 static_assert(full_word.mask(cfg::Sec::S0) == 0xffffffffu);
-static_assert(full_word.words() == 1);
-static_assert(cfg::Thcon[cfg::Reg0].TileDescriptor.Raw.words() == 4);
 
 constexpr cfg::Field thread_field {cfg::RegisterScope::Thread, 16, 7, 0, 8, 4, 2, 16};
 static_assert(thread_field.abs0() == 120);
