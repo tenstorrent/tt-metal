@@ -475,7 +475,7 @@ def run_model(
         if layer_type == "dense":
             pcc_threshold = thresholds.dense
         else:
-            if gate_fallback_mode == GateComputeMode.DEVICE:
+            if gate_fallback_mode == GateComputeMode.DEVICE_FP32:
                 pcc_threshold = thresholds.moe_gate_device
             else:
                 pcc_threshold = thresholds.moe_gate_host
@@ -562,7 +562,7 @@ def _ci_unsupported_param_combos(**params):
         return False
     if not is_balanced:
         return True
-    if gate_fallback_mode is not None and gate_fallback_mode != GateComputeMode.DEVICE:
+    if gate_fallback_mode is not None and gate_fallback_mode != GateComputeMode.DEVICE_FP32:
         return True
     return False
 
@@ -582,13 +582,13 @@ def _ci_unsupported_param_combos(**params):
     "layer_type, gate_fallback_mode",
     [
         ("dense", None),
-        ("moe", GateComputeMode.DEVICE),
+        ("moe", GateComputeMode.DEVICE_FP32),
         ("moe", GateComputeMode.HOST_ALL),
     ],
     # The host-gate id omits the `moe` token on purpose: CI selects the device gate via count-guarded
     # `-k "... and moe and ..."`, so a host id carrying `moe` would be collected too
     # and break the count. It is a local sub-256-expert aid (CI-skipped by enum); select via `-k host_gate`.
-    ids=["dense", "moe-gate_device", "host_gate_all"],
+    ids=["dense", "moe-gate_device_fp32", "host_gate_all"],
 )
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "non_balanced"])
 @pytest.mark.parametrize(
@@ -666,7 +666,7 @@ def test_ds_prefill_block(
         pcc_validation
         and not determinism_check
         and layer_type == "moe"
-        and gate_fallback_mode == GateComputeMode.DEVICE
+        and gate_fallback_mode == GateComputeMode.DEVICE_FP32
         and is_balanced
         and device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D
         and tuple(mesh_device.shape) == (2, 4)
@@ -710,8 +710,8 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.DEVICE)],
-    ids=["dense", "moe_gate_device"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
+    ids=["dense", "moe_gate_device_fp32"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
@@ -1105,7 +1105,7 @@ def test_glm_prefill_block(
         topology=topology,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
-        gate_fallback_mode=GateComputeMode.DEVICE,
+        gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         weight_cache_path=device_cache,
         # single-block test: layer_num=1 so the sparse single-shot cache write (update_padded_kv_cache,
         # num_layers=layer_num) gets a valid count, not the None default.
