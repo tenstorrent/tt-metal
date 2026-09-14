@@ -5,6 +5,7 @@
 #include "mcast_reverse_tree.hpp"
 
 #include <algorithm>
+#include <ranges>
 #include <string>
 #include <utility>
 #include <vector>
@@ -130,8 +131,8 @@ std::optional<McastReverseTree> build_mcast_reverse_tree(
             cur = parent[cur];
         }
         int current_depth = depth[cur];
-        for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
-            depth[*it] = ++current_depth;
+        for (const int node : std::views::reverse(pending)) {
+            depth[node] = ++current_depth;
         }
     }
 

@@ -262,8 +262,8 @@ UnicastTrafficResult run_unicast_traffic_bw_nodes(
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, *forwarding_dir_opt);
     chan_id_t edm_port = dir_eth_chans[link_idx];
 
-    auto sender_device = BaseFabricFixture::devices_map_.at(src_physical);
-    auto receiver_device = BaseFabricFixture::devices_map_.at(dst_physical);
+    const auto& sender_device = BaseFabricFixture::devices_map_.at(src_physical);
+    const auto& receiver_device = BaseFabricFixture::devices_map_.at(dst_physical);
     tt::tt_metal::CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
     const auto topology = control_plane.get_fabric_context().get_fabric_topology();
