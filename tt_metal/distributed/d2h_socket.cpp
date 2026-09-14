@@ -279,14 +279,6 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
     } else if (mesh_device) {
         sender_device_id = mesh_device->get_device(sender_core_.device_coord)->id();
         sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core_.core_coord);
-        if (!cluster.is_mock_or_emulated()) {
-            // Anchored at 0, so a write addresses the core's L1 by its device address. Only the
-            // Blackhole writer below uses this window; see the writer selection.
-            sender_core_window_ = cluster.get_driver()->create_io_window(
-                sender_device_id,
-                cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
-                /*addr=*/0);
-        }
     } else {
         sender_device_id = device_id.value();
         sender_virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
@@ -303,8 +295,14 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device, 
             sender_core_window_->write_block(device_addr - l2cpu_window_base, data, num_bytes);
         };
     } else if (arch == tt::ARCH::BLACKHOLE && mesh_device && !cluster.is_mock_or_emulated()) {
-        // This process owns a mesh_device, so it holds a window onto the sender core anchored at 0,
-        // and Blackhole reaches the whole L1 through it — no driver reconfig per write.
+        // Only this path uses a window of our own, so it is also the only path that reserves one:
+        // a window is a finite hardware TLB held for the socket's lifetime, and the write_core
+        // fallback below needs none. Anchored at 0, so a write addresses the core's L1 by its
+        // device address, and Blackhole reaches the whole L1 through it — no reconfig per write.
+        sender_core_window_ = cluster.get_driver()->create_io_window(
+            sender_device_id,
+            cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core, tt::CoordSystem::TRANSLATED),
+            /*addr=*/0);
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_window_->write_block(device_addr, data, num_bytes);
         };
