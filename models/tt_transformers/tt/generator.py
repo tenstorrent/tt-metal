@@ -887,6 +887,13 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 kv_cache=kv_cache,
                 enable_trace=enable_trace,
                 can_sample_on_device=on_device_sampling_enabled,
+                # Without this the sweep pre-captures non-greedy shapes (top_k=10, top_p=0.9)
+                # that a model whose per-device vocab shard exceeds ttnn.topk's single-call
+                # width has no device route for, so warmup raises before the demo generates
+                # anything. Such a model reports itself through _on_device_sampling_greedy_only;
+                # getattr keeps the tt-metal tests that pass a stub model working, matching the
+                # _supports_on_device_sampling lookup above.
+                greedy_only=getattr(self.model[0], "_on_device_sampling_greedy_only", False),
             )
         elif (
             enable_trace

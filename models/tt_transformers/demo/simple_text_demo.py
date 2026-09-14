@@ -1189,7 +1189,31 @@ def test_demo_text(
             generator.prev_page_table = None
 
         input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(global_batch_size, -1)
-        # Use device sampling for all cases when supported (prefill + decode)
+        # Use device sampling for all cases when supported (prefill + decode).
+        #
+        # A model whose per-device vocabulary shard is wider than ttnn.topk takes in one call has
+        # an on-device route for greedy decoding only (TTSampling.greedy_only; Qwen3-8B on N300 is
+        # 75968 against a 65536 ceiling). Handing that model a non-greedy request raises instead of
+        # running slowly, so send the request to host sampling, which is what this path did for
+        # such models before on-device greedy decoding existed. Greedy requests keep the device
+        # route and its saving.
+        #
+        # temperature alone decides: format_sampling_params rewrites temperature 0 into the argmax
+        # representation (top_k 1, top_p 0) whatever top_k and top_p were asked for.
+        _requested_temperature = sampling_params["temperature"]
+        request_is_greedy = all(
+            t == 0
+            for t in (_requested_temperature if isinstance(_requested_temperature, List) else [_requested_temperature])
+        )
+        use_device_sampling = model[0]._supports_on_device_sampling and (
+            request_is_greedy or not getattr(model[0], "_on_device_sampling_greedy_only", False)
+        )
+        if model[0]._supports_on_device_sampling and not use_device_sampling:
+            logger.info(
+                "Sampling on host: this model has an on-device route for greedy decoding only, and "
+                "this request sets a non-zero temperature. Tokens are correct; each one costs a "
+                "round trip of the scores to the host."
+            )
         device_sampling_params = (
             SamplingParams(
                 temperature=sampling_params["temperature"],
@@ -1207,7 +1231,7 @@ def test_demo_text(
                 if "enable_log_probs" in sampling_params
                 else False,
             )
-            if model[0]._supports_on_device_sampling
+            if use_device_sampling
             else None
         )
 
