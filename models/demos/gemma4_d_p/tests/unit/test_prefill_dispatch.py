@@ -98,6 +98,8 @@ def test_attention_reuses_external_ring_cache_without_auxiliary_allocations(monk
 
 @pytest.mark.parametrize("is_global", [False, True])
 def test_projection_loads_only_required_weight(monkeypatch, is_global):
+    import torch
+
     from models.demos.gemma4_d_p.tt.attention import weights
 
     monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda _: None)
@@ -117,9 +119,26 @@ def test_projection_loads_only_required_weight(monkeypatch, is_global):
         row_parallel=lambda: None,
     )
     config = SimpleNamespace(
-        is_kv_tied=is_global, num_attention_heads=32, num_key_value_heads=4, head_dim=512, hidden_size=5376
+        is_sliding=not is_global,
+        is_kv_tied=is_global,
+        num_attention_heads=4,
+        num_key_value_heads=4,
+        head_dim=512 if is_global else 256,
+        hidden_size=128,
     )
-    result = weights.load_attention_weights(mesh_config, config, {}, tensor_cache_path="/tmp/weights")
+    projection_size = config.num_attention_heads * config.head_dim
+    state_dict = {
+        "q_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "k_proj.weight": torch.ones(projection_size, config.hidden_size),
+        "o_proj.weight": torch.ones(config.hidden_size, projection_size),
+        "q_norm.weight": torch.ones(config.head_dim),
+        "k_norm.weight": torch.ones(config.head_dim),
+    }
+    if not is_global:
+        state_dict["v_proj.weight"] = torch.ones(projection_size, config.hidden_size)
+    result = weights.load_attention_weights(mesh_config, config, state_dict, tensor_cache_path="/tmp/weights")
     assert (result.wqk is not None) == is_global
     assert (result.wqkv is not None) != is_global
-    assert len([name for name in loaded if "/wqk" in name]) == 1
+    projection_names = [name for name in loaded if "/wqk" in name]
+    expected_name = "/tmp/weights/wqk_packed640_tp4_bf16" if is_global else "/tmp/weights/wqkv_decode_order_tp4_bf16"
+    assert projection_names == [expected_name]
