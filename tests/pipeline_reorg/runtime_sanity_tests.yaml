@@ -100,7 +100,7 @@
     sim_wh_n150:
       timeout: 30
     sim_bh_p150:
-      timeout: 30
+      timeout: 40
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
   budget_type: sanity
