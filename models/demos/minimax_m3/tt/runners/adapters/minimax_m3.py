@@ -19,6 +19,10 @@ by a multi-config table (one config per (tensor, head-shard); see ``tt/runners/k
 with a pipeline the gathered stage layouts merge every stage's layers into one table at global layer
 indices (one layout per cache — k, v, index_k — via ``kv_migration_stages``).
 
+Limitation: the block-cyclic SP cache and the MSA cache read address the prefix in whole chunks, so M3
+does not support multi-turn continuation from a prefix that is not chunk-aligned (the producer's
+``PREFILL_PRODUCER_MULTI_TURN_PROB`` mode resumes at a 32-token boundary); ``prefill_chunk`` asserts on it.
+
 Import-safety: the heavy stack (TtPrefillRuntime / Model / transformers AutoConfig / weight loading) is
 imported lazily inside the methods that need it, so ``import ...adapters.minimax_m3`` stays cheap enough
 for the H2D producer (which reads only path/trace attributes).
@@ -81,7 +85,10 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
     default_gate_mode = "DEVICE_FP32"  # unused by M3 (kept for runner contract parity)
     prefill_trace_default = "/mnt/models/MiniMaxAI/MiniMax-M3-ref/golden/longbook_10240"
 
-    l1_small_size = 0
+    # high_bw_all_gather (MSA cache read) parks its semaphores in L1_SMALL; 0 makes it fall back to general
+    # L1 with a warning and an L1-fragmentation risk. Same value as tt/ccl.py L1_SMALL_SIZE (kept literal so
+    # importing the adapter stays cheap).
+    l1_small_size = 1152
 
     # The D2D hidden state ships in the residual stream's layer-boundary layout (see tt/residual.py).
     @property

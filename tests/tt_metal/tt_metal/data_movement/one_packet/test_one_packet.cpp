@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "multi_device_fixture.hpp"
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
@@ -204,7 +203,7 @@ bool run_dm(const shared_ptr<distributed::MeshDevice>& mesh_device, const OnePac
 }  // namespace unit_tests::dm::one_packet
 
 /* ========== Test case for reading varying number of packets and packet sizes; Test id = 80 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketReadSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     // Physical Constraints
@@ -259,7 +258,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
 }
 
 /* ========== Test case for writing varying number of packets and packet sizes; Test id = 81 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketWriteSizes) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
 
@@ -314,7 +313,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
 }
 
 /* ========== Directed Ideal Test Case; Test id = 82 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -346,7 +345,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
 }
 
 /* ========== Directed Ideal Test Case; Test id = 83 ========== */
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketWriteDirectedIdeal) {
     auto mesh_device = get_mesh_device();
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
         tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
@@ -377,7 +376,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) 
     EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketReadSizes_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
@@ -427,7 +426,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes_2_0) {
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
@@ -477,7 +476,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes_2_0) {
     }
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
@@ -521,7 +520,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal_2_
     EXPECT_TRUE(unit_tests::dm::one_packet::run_dm(mesh_device, test_config));
 }
 
-TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2_0) {
+TEST_F(UnitMeshFastDispatchFixture, TensixDataMovementOnePacketWriteDirectedIdeal_2_0) {
     auto mesh_device = get_mesh_device();
     auto* device = mesh_device->impl().get_device(0);
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =

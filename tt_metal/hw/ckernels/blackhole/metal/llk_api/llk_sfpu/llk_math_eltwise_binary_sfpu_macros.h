@@ -9,6 +9,7 @@
 #include "llk_assert.h"
 #include "llk_math_eltwise_binary_sfpu_init.h"
 #include "llk_math_eltwise_binary_sfpu_params.h"
+#include "sanitizer/api.h"
 
 /*
  * Keep macro preconditions outside the tt-llk params wrapper. DST_SYNC is
@@ -26,6 +27,7 @@ inline __attribute__((always_inline)) void _sfpu_binary_check_(
     std::uint32_t dst_index_in1,
     std::uint32_t dst_index_out,
     [[maybe_unused]] VectorMode vector_mode) {
+    SAN_HOOK(unsupported());
     LLK_ASSERT(
         (dst_index_in0 < get_dest_max_tiles_rt<DST_SYNC, DstTileShape::Tile32x32>()),
         "dst_index_in0 exceeds max dest tiles");

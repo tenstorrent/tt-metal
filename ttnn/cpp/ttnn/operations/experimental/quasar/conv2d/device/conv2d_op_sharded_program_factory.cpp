@@ -245,8 +245,30 @@ const m2::KernelSpecName KERNEL_OUT_DRAIN{"out_drain"};  // Program A: credit-on
 // that the orchestration function then moves into ProgramRunArgs; no logic changes. Namespace scope here
 // (ttnn::prim::qsr, with `using namespace tt::tt_metal` and `namespace m2 = ...experimental` active) so all
 // types resolve.
+// Multicast destination rectangle. Mirrors the fix already applied to the Quasar
+// matmul factories (matmul_multicore_reuse_mcast_2d_program_factory.cpp):
+//   * WH/BH (2 NOCs, torus): a NOC_1 multicast runs high->low, so start/end are swapped.
+//   * Quasar (single NOC, non-torus): the rectangle must be ASCENDING regardless of NOC. reader_noc /
+//     writer_mcast_noc derive from preferred_noc_for_dram_*(arch), which returns NOC_1 on Quasar too,
+//     so the WH/BH swap degenerates the rectangle to [max..min] and the sender blocks forever on
+//     multicast acks.
+//
+// Observed before this fix, on the block-sharded 3x3 repro: the act-mcast rectangle reached the kernel
+// as start=(1,1) end=(0,1) (end_x < start_x). Confirmed twice over -- the reader's ring buffer reported
+// that rectangle (0xAD041001) and the NOC sanitizer independently flagged the same coords as
+// "Tensix core range w/ virtual coords 1-1-0-1 (multicast invalid range)". DM2 then hung inside
+// noc_async_write_multicast (waypoint NMLW) with the semaphore handshake already satisfied and the NOC
+// drained clean on entry, which starved compute of tilized activations and produced the 0x19
+// ERROR_TRISC MEM_READ_NO_RESPONSE downstream.
+//
+// This is the Quasar-only conv factory, so normalising unconditionally would be correct; the arch guard
+// is kept so the intent stays explicit and the WH/BH branch is greppable next to the matmul version.
 static std::array<uint32_t, 4> setup_mcast_args(
-    bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    tt::ARCH arch, bool is_noc_0, uint32_t start_x, uint32_t start_y, uint32_t end_x, uint32_t end_y) {
+    if (arch == tt::ARCH::QUASAR) {
+        return std::array<uint32_t, 4>{
+            std::min(start_x, end_x), std::min(start_y, end_y), std::max(start_x, end_x), std::max(start_y, end_y)};
+    }
     return is_noc_0 ? std::array<uint32_t, 4>{start_x, start_y, end_x, end_y}
                     : std::array<uint32_t, 4>{end_x, end_y, start_x, start_y};
 }
@@ -293,6 +315,7 @@ static void populate_reader_runtime_args(
                     CoreCoord bottom_core = {(std::size_t)core.x, (std::size_t)num_cores_y - 1};
                     CoreCoord bottom_core_physical = device->worker_core_from_logical_core(bottom_core);
                     mcast = setup_mcast_args(
+                        device->arch(),
                         reader_is_noc_0,
                         bottom_core_physical.x,
                         top_left_core_physical.y,
@@ -303,6 +326,7 @@ static void populate_reader_runtime_args(
                 } else {
                     CoreCoord core_physical = device->worker_core_from_logical_core(core);
                     mcast = setup_mcast_args(
+                        device->arch(),
                         reader_is_noc_0,
                         top_left_core_physical.x,
                         core_physical.y,
@@ -409,6 +433,7 @@ static void populate_writer_sender_runtime_args(
                     CoreCoord right_core_physical = device->worker_core_from_logical_core(right_core);
                     TT_FATAL(core.x == 0, "Expected core.x to be 0 for sender in 2D mcast setup");
                     mcast = setup_mcast_args(
+                        device->arch(),
                         writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                         top_left_core_plus_one_physical.x,
                         right_core_physical.y,
@@ -434,6 +459,7 @@ static void populate_writer_sender_runtime_args(
                     CoreCoord top_core_physical = device->worker_core_from_logical_core(top_core);
                     TT_FATAL(core.y == 0, "Expected core.y to be 0 for sender in 2D mcast setup");
                     mcast = setup_mcast_args(
+                        device->arch(),
                         writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                         top_core_physical.x,
                         top_left_core_plus_one_physical.y,
@@ -457,6 +483,7 @@ static void populate_writer_sender_runtime_args(
                 }
             } else {
                 std::array<uint32_t, 4> mcast = setup_mcast_args(
+                    device->arch(),
                     writer_mcast_noc == tt::tt_metal::NOC::NOC_0,
                     top_left_core_physical.x,
                     top_left_core_physical.y,
@@ -1028,17 +1055,15 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
-    // OPTION C (split tilize/matmul) test toggle. When TT_METAL_QSR_CONV_SPLIT_TILIZE is set, select the
-    // conv_bmm_split_tilize_metal2.cpp compute kernel, which tilizes ALL height blocks first (one contiguous
-    // tilize phase) then matmuls them, so the compute engine transitions tilize->matmul only once (diagnostic
-    // for the Quasar per-block tilize<->matmul DEST-handshake 0x19 race). Gated to the height-sharded,
-    // single-K-block (in0_num_blocks_w == 1), single-output-width-block (num_blocks_weight_w_per_core == 1),
-    // no-split-reader / no-activation-reuse / non-depthwise path -- the resnet stem / 1x1 conv shape the split
-    // kernel implements. Requires act_tilized to hold all height blocks at once (resized below). Everything
-    // else falls back to the fused kernel even when the env is set.
-    const bool split_tilize_matmul = (std::getenv("TT_METAL_QSR_CONV_SPLIT_TILIZE") != nullptr) && height_sharded &&
-                                     !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
-                                     (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
+    // 1D depthwise multi-height-block accumulation needs a DEDICATED read-back scratch. out_cb (the
+    // persistent borrowed sharded output) cannot double as the dest-reuse scratch when there is more
+    // than one height block: earlier blocks' finished tiles are never popped, so block N's read-back
+    // would consume block N-1's output. Mirrors the shared cb_info's depthwise_dest_reuse_scratch
+    // gate (conv2d_op_program_factory_common.cpp) and upstream conv2d_op_sharded_program_factory.cpp,
+    // and matches the compute kernel's use_partials_scratch CTA (issue #51270, items 4/5). Single
+    // height block keeps the in-place accumulate on out_cb.
+    const bool depthwise_uses_partials_scratch =
+        is_conv_1d_depthwise_conv && !coalesce_1d_depthwise_kw_reads && num_blocks_act_h_per_core > 1;
 
     // OPTION B — PROGRAM A (tilize-only, standalone). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set, this conv
     // op runs ONLY the gather+tilize half in a fresh tilize-oriented Metal program (conv_tilize_only_metal2.cpp)
@@ -1241,9 +1266,32 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // arise here.
 
     // 1D depthwise compute uses dest-reuse for accumulation — no MATMUL_PARTIALS CB is allocated.
-    const bool partials_cb_uses_output =
-        !is_conv_1d_depthwise_conv && get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).is_globally_allocated;
-    log_debug(tt::LogOp, "partials_cb_uses_output: {}", partials_cb_uses_output);
+    //
+    // matmul_partials in-place accumulate: the shared get_cb_info() borrows it onto the OUTPUT allocation
+    // (is_globally_allocated) and, for a MULTI-BLOCK per-core output, places it at a NON-ZERO address_offset --
+    // the END of the output region, so the scratch overlaps only the last-finalized output block. The Metal-2.0
+    // borrowed-DFB API (DataflowBufferSpec::borrowed_from, set below) has NO offset field: it can only alias at
+    // OFFSET 0 (the FRONT of the output). So when the mainline's address_offset is non-zero
+    // (num_blocks_act_h_per_core > 1), a borrow places the partials scratch over output block 0 and clobbers it
+    // the moment the second output block is produced -> corrupted, finite-but-wrong output. This is the WH
+    // batch-16 folded stem (HEIGHT_SHARDED, per_core_M=98 -> 2 height blocks): op002 stem_conv1 PCC ~0.52. It
+    // does NOT reproduce at batch 1 (single block, address_offset==0) nor under DRAM height-slicing (each slice
+    // is a single block), which is exactly what test_conv2d_stem_bisect.py showed.
+    //
+    // Fix: only borrow onto the output when the mainline offset is 0 (single output block, where FRONT==the whole
+    // region and the alias is safe); otherwise give matmul_partials its OWN L1 DFB, and the compute kernel takes
+    // its !partials_cb_uses_output path (dedicated-ring RESTORE_PARTIALS). On Quasar is_globally_allocated is
+    // already false (get_cb_info gates partials_use_output_cb on arch != QUASAR), so this is a no-op there; it
+    // only changes the multi-block case on WH/BH, which is where the offset-0 clobber bites.
+    const auto& matmul_partials_cb_info = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS);
+    const bool partials_cb_uses_output = !is_conv_1d_depthwise_conv && matmul_partials_cb_info.is_globally_allocated &&
+                                         matmul_partials_cb_info.address_offset == 0;
+    log_debug(
+        tt::LogOp,
+        "partials_cb_uses_output: {} (is_globally_allocated={} address_offset={})",
+        partials_cb_uses_output,
+        matmul_partials_cb_info.is_globally_allocated,
+        matmul_partials_cb_info.address_offset);
 
     const bool reader_indices_globally_allocated =
         get_cb_info_by_name(cb_info, Conv2dCb::READER_INDICES).is_globally_allocated;
@@ -1484,29 +1532,20 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
             // (fix #3 tried a fresh intermediate DFB + writer here; REVERTED — it still deadlocked identically
             // in fast_tilize_block, so the borrowed output was NOT the cause. See the WH split memory.)
-        } else if (split_tilize_matmul) {
-            // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
-            // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
-            // ring extent (page_size_units x num_entries) must stay under the uint16_t limit (65,536 units
-            // = 1 MB); if the full per-core tilized activation exceeds that, the DFB spec is rejected at
-            // program creation and this path cannot be used for that conv (fall back to the fused kernel).
-            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
-            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-                .unique_id = DFB_ACT_TILIZED,
-                .entry_size = tilized_info.page_size,
-                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
-                .data_format_metadata = tilized_info.data_format,
-            });
         } else {
             spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
         }
     }
 
     // MATMUL_PARTIALS: self-loop accumulator (resolution #2).  Borrowed-from OUTPUT when
-    // partials_cb_uses_output.  1D depthwise allocates no partials CB (dest-reuse), so skip it there.
-    if (!is_conv_1d_depthwise_conv && !split_program_tilize_only) {
+    // partials_cb_uses_output.  1D depthwise normally accumulates in-place on out_cb (dest-reuse) and
+    // allocates no partials CB — EXCEPT the multi-height-block non-coalesced path, which needs a
+    // DEDICATED (never borrowed) scratch so block N doesn't read back block N-1's already-written
+    // output (#51270 item 4). The shared cb_info sizes MATMUL_PARTIALS to act_block_num_tiles for that
+    // case.
+    if ((!is_conv_1d_depthwise_conv && !split_program_tilize_only) || depthwise_uses_partials_scratch) {
         auto dfb = make_dfb(DFB_MATMUL_PARTIALS, Conv2dCb::MATMUL_PARTIALS);
-        if (partials_cb_uses_output) {
+        if (partials_cb_uses_output) {  // never true for depthwise -> depthwise scratch stays dedicated
             dfb.borrowed_from = TP_OUTPUT;
         }
         spec.dataflow_buffers.push_back(std::move(dfb));
@@ -1598,8 +1637,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                                         "conv_unpack_tilize_probe_metal2.cpp"
         : split_program_tilize_only   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_tilize_only_metal2.cpp"
-        : split_tilize_matmul         ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                        "conv_bmm_split_tilize_metal2.cpp"
                                       : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =
@@ -1824,7 +1861,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // 2D writer CTA set (writer_tiled_out_2d_..._metal2).
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
-            ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+            // Loop count = INPUT channel-block count (conv_act_c_blocks): the writer pushes one weights
+            // block per input channel-block that compute consumes (in0_num_blocks_w = conv_act_c_blocks *
+            // num_blocks_act_w). Using out_conv_c_blocks here under/over-pushes when the input and output
+            // shard grids differ in the channel dim -> compute's cb_in1.wait_front hangs (#51270 item 2).
+            // The tile-id stride keeps out_conv_c_blocks via weight_block_height_num_outer_in below.
+            ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
             if (is_sender) {
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
@@ -1855,7 +1897,9 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             ctas.insert({"num_blocks_weight_h", num_blocks_act_w});
             ctas.insert({"weight_block_num_tiles", weight_block_num_tiles});
             if (is_sender) {
-                ctas.insert({"weight_block_height_num_outer", out_conv_c_blocks});
+                // Loop count = input channel-block count (see the 2D branch above). Inert for non-block-
+                // sharded convs (both quantities are 1), fixed for consistency (#51270 item 2).
+                ctas.insert({"weight_block_height_num_outer", conv_act_c_blocks});
                 ctas.insert({"weight_block_height_ntiles", weight_block_h_ntiles});
                 ctas.insert({"weight_block_width_ntiles", weight_block_w_ntiles});
                 ctas.insert({"weight_stride_h", weight_matrix_width_ntiles});
@@ -2099,10 +2143,26 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                 .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::PRODUCER},
-            // OUT is also self-consumed (dest-reuse accumulate reads prior partial back from out_cb).
+            // OUT is also self-consumed: for a single height block the dest-reuse accumulate reads the
+            // prior partial back from out_cb (in-place). For the multi-height-block scratch path below,
+            // out_cb is only produced (last tap) and this consumer is degenerate (never popped) — the
+            // same shape the coalesced path uses.
             m2::DFBBinding{
                 .dfb_spec_name = DFB_OUT, .accessor_name = "out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
+        if (depthwise_uses_partials_scratch) {
+            // Dedicated read-back scratch for multi-height-block accumulation (producer + consumer
+            // self-loop). Earlier taps pack the partial here and read it back; only the last tap writes
+            // out_cb (#51270 item 4).
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            compute_dfb_bindings.push_back(m2::DFBBinding{
+                .dfb_spec_name = DFB_MATMUL_PARTIALS,
+                .accessor_name = "matmul_partials",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
     } else {
         compute_dfb_bindings = {
             m2::DFBBinding{
@@ -2168,6 +2228,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             {"in0_num_blocks_w", in0_num_blocks_w},
             {"kernel_width", filter_w},
             {"coalesce_kw_reads", (uint32_t)coalesce_1d_depthwise_kw_reads},
+            {"use_partials_scratch", (uint32_t)depthwise_uses_partials_scratch},
         };
     } else {
         compute_kernel_spec.compile_time_args = {

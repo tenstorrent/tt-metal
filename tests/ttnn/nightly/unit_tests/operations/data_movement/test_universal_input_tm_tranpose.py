@@ -72,7 +72,7 @@ def run_transpose_test(
     # bf16 is bit-exact (ULP=0); bf8_b and f32 use PCC because composite paths can perturb
     # individual elements (block-quantization for bf8_b, bf16-precision intermediates for f32).
     if dtype == ttnn.bfloat16:
-        assert_with_ulp(ref, got, ulp_threshold=0)
+        assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
     else:
         assert_with_pcc(ref.float(), got.float(), 0.9999)
 
@@ -357,7 +357,7 @@ def test_transpose_dram_sharded_fallback(device):
 
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=1)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=1)
 
 
 # Non-native (BLOCK) sharded input → sharded output without shard_spec; COL_MAJOR cases cover orientation propagation.
@@ -884,7 +884,7 @@ def test_transpose_specless_sharded_output_grid_shrinks_height(device):
     _assert_shrink_h_or_w(device, result.memory_config(), n_used=8)
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_transpose_specless_sharded_output_grid_shrinks_width(device):
@@ -901,7 +901,7 @@ def test_transpose_specless_sharded_output_grid_shrinks_width(device):
     _assert_shrink_h_or_w(device, result.memory_config(), n_used=2)
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_transpose_specless_sharded_output_grid_shrinks_block(device):
@@ -924,7 +924,7 @@ def test_transpose_specless_sharded_output_grid_shrinks_block(device):
     assert grid == expected, f"Expected rectangular BLOCK grid {expected}, got {grid}"
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_transpose_specless_sharded_output_grid_shrinks_block_col_major(device):
@@ -946,7 +946,7 @@ def test_transpose_specless_sharded_output_grid_shrinks_block_col_major(device):
     assert ss.grid == expected, f"Expected COL_MAJOR rect {expected} (phys_x=n_h=2, phys_y=n_w=3), got {ss.grid}"
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_square(device):
@@ -969,4 +969,4 @@ def test_transpose_specless_sharded_output_grid_shrinks_block_col_major_non_squa
     assert ss.grid == expected, f"Expected COL_MAJOR rect (0,0)->(9,6), got {ss.grid}"
     ref = x.transpose(2, 3)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)

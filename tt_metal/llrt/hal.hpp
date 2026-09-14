@@ -18,6 +18,7 @@
 #include <functional>
 #include <memory>
 #include <ostream>
+#include <string_view>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_types.hpp>
 #include <umd/device/utils/semver.hpp>
@@ -243,6 +244,21 @@ HalCoreInfoType create_unregistered_programmable_core(
     HalProgrammableCoreType programmable_core_type, const HalCoreInfoType& factory_source);
 
 void ensure_hal_core_info_slots(std::vector<HalCoreInfoType>& core_info, const HalCoreInfoType& factory_source);
+
+// Verifies the KERNEL_CONFIG ring buffer does not extend into free_region_type.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    const std::vector<uint32_t>& mem_map_sizes,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
+
+// Overload for TENSIX cores whose KERNEL_CONFIG size isn't in mem_map_sizes because it's set
+// dynamically by the allocator.
+void assert_kernel_config_no_overlap(
+    const std::vector<DeviceAddr>& mem_map_bases,
+    uint32_t kernel_config_size,
+    HalL1MemAddrType free_region_type,
+    std::string_view core_name);
 
 inline DeviceAddr HalCoreInfoType::get_dev_addr(HalL1MemAddrType addr_type) const {
     uint32_t index = ttsl::as_underlying_type<HalL1MemAddrType>(addr_type);
