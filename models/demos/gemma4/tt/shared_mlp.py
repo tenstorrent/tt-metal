@@ -20,6 +20,7 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.ccl import ccl_allreduce
+from models.demos.gemma4.tt.compute_config import gelu_variant
 from models.demos.gemma4.tt.dram_sharded import TILE_SIZE, DramShardedLinear, can_dram_shard
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -215,8 +216,8 @@ class SharedMLP:
         gate = ttnn.slice(gate_up, [0, 0, 0, shard], [1, 1, s, 2 * shard])
         gate_up.deallocate(True)
 
-        # Match the checkpoint's gelu_pytorch_tanh activation.
-        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
+        # Prefer Accurate over FastLut/Tanh for device PCC (see compute_config).
+        gate = ttnn.gelu(gate, variant=gelu_variant())
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)
         up.deallocate(True)
