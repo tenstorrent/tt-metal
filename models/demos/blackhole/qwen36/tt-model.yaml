@@ -83,20 +83,36 @@ verify:
 
 card:
   description: |
-    Qwen3.8-27B (hybrid Gated-DeltaNet + gated-attention dense 27B, reasoning model, 256K context) served on two Tenstorrent P300 boards (4 Blackhole chips, 4-way tensor parallel) through vLLM with plain batched decode: full sampling support, up to 32 concurrent users, ~32 tok/s per user at one user scaling to ~490-740 tok/s aggregate at 32 (128-token prompts). This is the qwen36-prefill-opt serving branch (prefill optimizations, no speculative decoding). If you want a faster decode speed for batch=8 or less, refer to changh95/qwen3.8-27b-dflash2-p300x2.
+    [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) served on a Tenstorrent P300x2 (2× P300 = 4 Blackhole chips, 4-way tensor parallel) through vLLM with plain batched decode — up to 32 concurrent users, full sampling support, 262K context. If you want a faster decode speed for batch=8 or less, refer to [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2).
   quickstart: |
-    ### Profile
+    ### How to query
 
-    * `batch32` (default): `--max-num-seqs 32`, plain decode, full vLLM sampling support (temperature, top-p, penalties,
-      structured outputs), 262,144-token context, chunked prefill. One P300x2 serves everything from a single user to 32.
+    The server speaks the OpenAI API on port 20000 (model id `Qwen/Qwen3.8-27B`):
 
-    **If you want a faster decode speed for batch=8 or less, refer to
-    [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2)** (the same model with
-    DFlash2 speculative decoding: 1.2 to 1.5x the per-user speed at 1 to 4 users, greedy output).
+    ```bash
+    curl -s http://localhost:20000/v1/chat/completions \
+      -H 'Content-Type: application/json' \
+      -d '{"model": "Qwen/Qwen3.8-27B", "messages": [{"role": "user", "content": "Explain KV caching in two sentences."}], "max_tokens": 256, "temperature": 0.7}'
+    ```
 
-    ## Benchmarks (P300x2, plain decode, `batch32` profile)
+    Streaming (`"stream": true`), tool calls (`qwen3_coder` parser) and reasoning content (`qwen3` parser) work as in vLLM.
 
-    Measured 2026-09-13 with the tt-inference-server client (`vllm bench serve`, random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming; each point is 4×users requests, 2×users for 1,024-token outputs). Aggregate output tok/s, with tok/s per user (= OSL / mean end-to-end latency) in parentheses. Decode is weight-bandwidth-bound, so a single user sees ~32 tok/s and the aggregate scales almost linearly to 32 users.
+    ### At a glance
+
+    * Model: [Qwen/Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B) (hybrid Gated-DeltaNet + gated attention, 27B dense, reasoning, 256K context) at revision `1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0`.
+    * Hardware: P300x2, mesh `P150x4`, tensor parallel over 4 chips; one box serves 1 to 32 users.
+    * Decode: ~32 t/s/u at one user, ~490 t/s aggregate at 32 users on short prompts (739 t/s on 1,024-token outputs).
+    * Sampling: temperature, top-p/top-k, penalties, structured outputs, streaming — full vLLM support (no speculative decoding on this package).
+    * Faster single-user / small-batch decode: [changh95/qwen3.8-27b-dflash2-p300x2](https://huggingface.co/changh95/qwen3.8-27b-dflash2-p300x2) — the same model with DFlash2 speculative decoding, 1.2 to 1.5× the t/s/u at 1 to 4 users (greedy output).
+    * Source: tt-metal branch `qwen36-prefill-opt` (prefill optimizations on by default); packaged with tt-model-manager.
+
+    ## Benchmarks
+
+    * Box: one P300x2 (4 Blackhole chips, TP=4), `batch32` profile, plain decode. Client: tt-inference-server's `vllm bench serve` (random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming), measured 2026-09-13.
+    * `t/s` = aggregate output tokens per second; `t/s/u` = tokens per second per user (= OSL / mean end-to-end latency); TTFT = mean time to first token.
+    * Decode is weight-bandwidth-bound: one user sees ~32 t/s/u and the aggregate scales almost linearly to 32 users.
+
+    ### Throughput by concurrent users (t/s, with t/s/u in parentheses)
 
     | ISL / OSL | 1 user | 2 | 4 | 8 | 16 | 32 |
     |---|---|---|---|---|---|---|
@@ -113,7 +129,7 @@ card:
     | 8,192 / 1,024 | 31 (31.2) | 56 (28.2) | 104 (25.9) | 183 (22.9) | 295 (18.5) | 412 (12.9) |
     | 16,384 / 1,024 | 30 (30.1) | 53 (26.3) | 93 (23.2) | 150 (18.7) | 218 (13.6) | 226 (8.1) |
 
-    Mean TTFT (ms) / TPOT (ms) at 1, 4 and 32 users:
+    ### Latency (TTFT ms / TPOT ms)
 
     | ISL / OSL | 1 user | 4 users | 32 users |
     |---|---|---|---|
@@ -130,11 +146,11 @@ card:
     | 8,192 / 1,024 | 1,013 / 31.1 | 3,252 / 35.4 | 30,941 / 47.5 |
     | 16,384 / 1,024 | 2,073 / 31.2 | 6,632 / 36.7 | 48,441 / 75.6 |
 
-    The two 16k rows at 32 users are limited by the 525k-token KV pool (32 × 16.5k tokens fills it), not by decode.
+    * The two 16k rows at 32 users are limited by the 525k-token KV pool (32 × 16.5k tokens fills it), not by decode.
 
     ### tt-inference-server `--workflow benchmarks` (standard P300X2 grid)
 
-    | users | ISL | OSL | TTFT ms | TPOT ms | E2EL ms | output tok/s | tok/s per user |
+    | users | ISL | OSL | TTFT ms | TPOT ms | E2EL ms | t/s | t/s/u |
     |---|---|---|---|---|---|---|---|
     | 1 | 128 | 128 | 94 | 30.5 | 3,964 | 32.3 | 32.3 |
     | 32 | 128 | 128 | 2,735 | 44.0 | 8,320 | 492.2 | 15.4 |
