@@ -100,16 +100,17 @@ sleep 5
 # Collect the initial container-0 job (ignore its exit status — it was killed).
 wait "$container0_initial_pid" || true
 
+# No fallback: `-r` is the only reset that takes a device list, and the galaxy
+# resets (-glx_reset*) would reset the survivor trays too, so a failed -r means
+# the test cannot run at all.
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
 reset_ok=1
 if ! timeout 120 docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"; then
-    echo ">>> tt-smi -r timed out or failed, falling back to tt-smi -glx_reset ..."
-    if ! timeout 120 docker exec "${container0}" tt-smi -glx_reset "$RESET_DEVICE_IDS"; then
-        echo ">>> tt-smi -glx_reset also failed; recording failure and unblocking survivors."
-        reset_ok=0
-    fi
+    echo ">>> ERROR: 'tt-smi -r ${RESET_DEVICE_IDS}' failed or timed out in ${container0}."
+    reset_ok=0
+else
+    echo ">>> Reset complete."
 fi
-echo ">>> Reset complete."
 
 # Unblock the survivor loops so they perform their final confirming run.
 touch "$RESET_DONE_FLAG"
