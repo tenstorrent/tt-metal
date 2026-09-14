@@ -139,11 +139,11 @@ using DirectLinks = std::map<ConnectionKey, std::vector<LinkPair>>;
 GraphLayoutResult resolve_graph_layout_with_connections(
     const std::vector<std::string>& nodes,
     const std::vector<EdgeInputTuple>& edges,
-    const std::vector<std::vector<ChipTuple>>& chips,
-    const std::map<std::string, uint32_t>& stage_chip_counts,
-    const std::map<std::string, uint32_t>& stage_pipeline_core_counts,
-    std::optional<uint32_t> default_capacity,
-    const DirectLinks* links);
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::map<std::string, uint32_t>& node_pipeline_core_counts,
+    std::optional<uint32_t> pipeline_core_count,
+    const DirectLinks* direct_links);
 
 // Exact placement and endpoint selection, independent of the control plane.
 GraphLayoutResult resolve_pipeline_placement(

@@ -245,17 +245,17 @@ struct PlacementSearch {
     const std::vector<std::vector<InternalChip>>& chips;
     const std::map<std::string, uint32_t>& capacity_overrides;
 
-    std::map<std::string, size_t> stage_index_by_name{};
-    std::vector<std::pair<size_t, size_t>> edge_stage_indices{};
-    std::vector<size_t> stage_link_counts{};
-    std::vector<size_t> stage_neighbor_counts{};
+    std::map<std::string, size_t> stage_index_by_name;
+    std::vector<std::pair<size_t, size_t>> edge_stage_indices;
+    std::vector<size_t> stage_link_counts;
+    std::vector<size_t> stage_neighbor_counts;
     size_t last_host_neighbor_stage = 0;
-    std::vector<std::vector<size_t>> submesh_neighbors{}, boundary_stages{};
+    std::vector<std::vector<size_t>> submesh_neighbors, boundary_stages;
 
-    std::map<std::string, size_t> placement{};
-    std::vector<bool> used{};
+    std::map<std::string, size_t> placement;
+    std::vector<bool> used;
     GraphLayoutResult result{};
-    std::string failure{};
+    std::string failure;
 
     void prepare_search();
     void prepare_connectivity_checks();
@@ -263,7 +263,10 @@ struct PlacementSearch {
 
     uint32_t core_capacity(const std::string& stage, size_t mesh) const {
         auto it = capacity_overrides.find(stage);
-        return it == capacity_overrides.end() ? (chips[mesh].size() >= 8 ? 1u : 2u) : it->second;
+        if (it != capacity_overrides.end()) {
+            return it->second;
+        }
+        return chips[mesh].size() >= 8 ? 1u : 2u;
     }
 
     // A connected remaining graph needs its placed boundary and enough unused
@@ -311,9 +314,9 @@ struct LinkSearch {
     PlacementSearch& pipeline;
     GraphLayoutResult result{};
     using Endpoint = std::tuple<std::string, uint32_t, uint32_t>;
-    std::map<Endpoint, uint32_t> used_slots_by_chip{};
-    std::vector<size_t> last_required_edge_exclusive{};
-    std::set<std::vector<size_t>> failed_link_states{};
+    std::map<Endpoint, uint32_t> used_slots_by_chip;
+    std::vector<size_t> last_required_edge_exclusive;
+    std::set<std::vector<size_t>> failed_link_states;
     bool can_assign_host_endpoints = false;
     bool allow_shared_chips = false;
 
@@ -364,9 +367,12 @@ struct LinkSearch {
         // (H2D beside forward send, D2H beside loopback receive), then try any chip.
         for (int priority = 0; priority < 3; ++priority) {
             for (const auto& chip : pipeline.chips[pipeline.placement.at(stage)]) {
-                const int chip_priority = !used_slots_by_chip.contains({stage, chip.row, chip.col})
-                                              ? 0
-                                              : (preferred == std::pair{chip.row, chip.col} ? 1 : 2);
+                int chip_priority = 2;
+                if (!used_slots_by_chip.contains({stage, chip.row, chip.col})) {
+                    chip_priority = 0;
+                } else if (preferred == std::pair{chip.row, chip.col}) {
+                    chip_priority = 1;
+                }
                 if (chip_priority != priority) {
                     continue;
                 }

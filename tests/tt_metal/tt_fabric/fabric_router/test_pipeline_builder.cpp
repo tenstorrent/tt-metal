@@ -4,14 +4,13 @@
 
 // Pipeline placement tests, without MeshDevice or MeshSockets.
 //
-// Layout/Capacity/Fork/Replay tests supply synthetic or captured connectivity
+// Layout/Capacity/Fork tests supply synthetic connectivity
 // directly to the production solver; they need neither hardware nor MPI.
-// MockSweep and ControlPlaneFixture tests additionally exercise MGD mapping and
+// MockGraph, MockSweep and ControlPlaneFixture tests additionally exercise MGD mapping and
 // link discovery using a mock cluster supplied by tt-run.
 //
 // Graphs are reconstructed from model topologies, not imported from Blaze.
 // Legal same-chip entry/exit sharing is checked through distinct core slots.
-/// socket endpoints are therefore valid and are NOT rejected here.
 
 #include <gtest/gtest.h>
 
@@ -20,7 +19,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
-#include <fstream>
 #include <limits>
 #include <map>
 #include <optional>
@@ -763,7 +761,10 @@ TEST(PipelineBuilderCapacityTest, PlacementMatchesBruteForce) {
             }
         }
         auto capacity = [&](const std::string& stage, size_t mesh) {
-            return capacities.contains(stage) ? capacities.at(stage) : (chips[mesh].size() >= 8 ? 1u : 2u);
+            if (capacities.contains(stage)) {
+                return capacities.at(stage);
+            }
+            return chips[mesh].size() >= 8 ? 1u : 2u;
         };
         std::map<std::string, uint32_t> shapes;
         if (sample % 3 == 0) {
@@ -863,149 +864,129 @@ TEST(PipelineBuilderCapacityTest, PlacementMatchesBruteForce) {
     }
 }
 
-// Replays exercise production placement without constructing MetalContext or
-// discovering devices. See test_data/README.md for capture provenance and format.
-void load_pipeline_connections(
-    const std::string& filename, std::vector<std::vector<ChipTuple>>& chips, detail::DirectLinks& links) {
-    std::ifstream input("tests/tt_metal/tt_fabric/test_data/" + filename);
-    ASSERT_TRUE(input) << "missing captured topology: " << filename;
-    size_t count;
-    ASSERT_TRUE(static_cast<bool>(input >> count));
-    ASSERT_GT(count, 0u);
-    chips.resize(count);
-    for (auto& stage : chips) {
-        size_t chip_count;
-        ASSERT_TRUE(static_cast<bool>(input >> chip_count));
-        ASSERT_GT(chip_count, 0u);
-        for (size_t i = 0; i < chip_count; ++i) {
-            uint32_t mesh, chip, row, col;
-            ASSERT_TRUE(static_cast<bool>(input >> mesh >> chip >> row >> col));
-            stage.emplace_back(mesh, chip, row, col);
-        }
-    }
-    size_t src, dst;
-    detail::LinkPair link;
-    while (input >> std::ws && input.peek() != std::char_traits<char>::eof()) {
-        ASSERT_TRUE(static_cast<bool>(
-            input >> src >> dst >> link.exit_row >> link.exit_col >> link.entry_row >> link.entry_col));
-        ASSERT_LT(src, chips.size());
-        ASSERT_LT(dst, chips.size());
-        links[{src, dst}].push_back(link);
-    }
-    ASSERT_FALSE(links.empty());
-}
+// CPU-only integration cases: use the existing single-Galaxy 1x2 MGD and an MCD
+// through tt-run --mock-cluster-rank-binding. No saved connectivity or devices.
+// Run Graphs/PipelineBuilderMockGraphTest.* through tt-run with
+// custom_mesh_descriptors/single_bh_galaxy_1x2_mesh_graph_descriptor.textproto
+// and a mock rank binding to the existing single_bh_galaxy_clus_desc.yaml MCD.
+class PipelineBuilderMockGraphTest : public ::testing::TestWithParam<std::tuple<std::string, uint32_t>> {};
 
-void validate_replayed_layout(
-    const GraphLayoutResult& result,
-    const std::vector<EdgeInputTuple>& edges,
-    const std::vector<std::vector<ChipTuple>>& chips,
-    const detail::DirectLinks& links,
-    const std::map<std::string, uint32_t>& shapes,
-    std::optional<uint32_t> capacity) {
-    ASSERT_EQ(result.node_to_submesh.size(), result.stage_order.size());
-    std::set<size_t> assigned;
-    for (const auto& [stage, mesh] : result.node_to_submesh) {
-        ASSERT_LT(mesh, chips.size());
-        EXPECT_TRUE(assigned.insert(mesh).second);
-        if (shapes.contains(stage)) {
-            EXPECT_EQ(chips[mesh].size(), shapes.at(stage));
-        }
+TEST_P(PipelineBuilderMockGraphTest, Capacity) {
+    if (std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH") == nullptr) {
+        GTEST_SKIP() << "requires an MCD and the single-Galaxy 1x2 MGD";
     }
-    std::set<std::tuple<std::string, uint32_t, uint32_t, uint32_t>> occupied;
-    auto check_slot = [&](const std::string& stage, uint32_t row, uint32_t col, std::optional<uint32_t> slot) {
-        ASSERT_TRUE(slot.has_value());
-        const auto& submesh = chips.at(result.node_to_submesh.at(stage));
-        EXPECT_TRUE(std::any_of(submesh.begin(), submesh.end(), [&](const auto& chip) {
-            return std::get<2>(chip) == row && std::get<3>(chip) == col;
-        }));
-        EXPECT_LT(*slot, capacity.value_or(submesh.size() >= 8 ? 1u : 2u));
-        EXPECT_TRUE(occupied.emplace(stage, row, col, *slot).second);
-    };
-    ASSERT_EQ(result.resolved_edges.size(), edges.size());
-    for (size_t i = 0; i < edges.size(); ++i) {
-        const auto& e = result.resolved_edges[i];
-        EXPECT_EQ(std::make_tuple(e.src, e.dst, e.is_loopback), edges[i]);
-        const auto& candidates = links.at({result.node_to_submesh.at(e.src), result.node_to_submesh.at(e.dst)});
-        const detail::LinkPair chosen{e.exit_row, e.exit_col, e.entry_row, e.entry_col};
-        EXPECT_NE(std::find(candidates.begin(), candidates.end(), chosen), candidates.end());
-        check_slot(e.src, e.exit_row, e.exit_col, e.exit_core_slot);
-        check_slot(e.dst, e.entry_row, e.entry_col, e.entry_core_slot);
+    auto& context = tt::tt_metal::MetalContext::instance();
+    context.get_cluster().configure_ethernet_cores_for_fabric_routers(
+        FabricConfig::FABRIC_2D, std::numeric_limits<uint8_t>::max());
+    context.set_default_fabric_topology();
+    context.set_fabric_config(FabricConfig::FABRIC_2D, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    context.initialize_fabric_config();
+    const auto& control_plane = context.get_control_plane();
+    auto layouts = build_submesh_layouts_from_mgd(control_plane.get_mesh_graph());
+    ASSERT_EQ(layouts.size(), 16u);
+    for (const auto& layout : layouts) {
+        ASSERT_EQ(layout.rank_shape, MeshShape(1, 2));
     }
-    check_slot(result.stage_order.front(), result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot);
-    check_slot(result.stage_order.front(), result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot);
-}
-
-class PipelineBuilderReplayTest : public ::testing::TestWithParam<uint32_t> {};
-
-TEST_P(PipelineBuilderReplayTest, LlamaTopology) {
-    std::vector<std::vector<ChipTuple>> chips;
-    detail::DirectLinks links;
-    ASSERT_NO_FATAL_FAILURE(load_pipeline_connections("llama_1x2_pipeline_connections.txt", chips, links));
-    ASSERT_EQ(chips.size(), 40u);
-    const size_t count = chips.size();
-    const auto nodes = build_ring_nodes(count);
-    const auto edges = build_ring_edges(count);
-    const std::optional<uint32_t> capacity = GetParam() == 0 ? std::nullopt : std::optional{GetParam()};
-    if (GetParam() != 1) {
-        const auto result =
-            detail::resolve_graph_layout_with_connections(nodes, edges, chips, {}, {}, capacity, &links);
-        ASSERT_EQ(result.stage_order.size(), nodes.size());
-        validate_replayed_layout(result, edges, chips, links, {}, capacity);
-        return;
-    }
-    try {
-        detail::resolve_graph_layout_with_connections(nodes, edges, chips, {}, {}, 1, &links);
-        FAIL() << "expected exact infeasibility";
-    } catch (const std::runtime_error& error) {
-        EXPECT_NE(std::string(error.what()).find("exact placement/link search exhausted"), std::string::npos);
-    }
-}
-
-TEST_P(PipelineBuilderReplayTest, GemmaMixedShapeFork) {
-    std::vector<std::vector<ChipTuple>> chips;
-    detail::DirectLinks links;
-    ASSERT_NO_FATAL_FAILURE(load_pipeline_connections("gemma_sc20_pipeline_connections.txt", chips, links));
-    ASSERT_EQ(chips.size(), 139u);
-    // Router + target (62 stages) + drafter (11 stages). Both return over fabric.
-    const auto nodes = build_ring_nodes(74);
-    std::vector<EdgeInputTuple> edges;
-    for (const auto& [first, last] : {std::pair{1u, 62u}, std::pair{63u, 73u}}) {
-        edges.emplace_back(nodes[0], nodes[first], false);
-        for (size_t s = first; s < last; ++s) {
-            edges.emplace_back(nodes[s], nodes[s + 1], false);
-        }
-        edges.emplace_back(nodes[last], nodes[0], true);
-    }
-    // Target: 4x1 embedding, ten (five 4x1 + one 4x2) blocks, 4x4 output.
-    // Drafter: 4x1, five 4x2, 4x4, four 4x1. Router is 4x1.
-    std::vector<uint32_t> sizes{4, 4};
-    for (size_t i = 0; i < 10; ++i) {
-        sizes.insert(sizes.end(), {4, 4, 4, 4, 4, 8});
-    }
-    sizes.insert(sizes.end(), {16, 4, 8, 8, 8, 8, 8, 16, 4, 4, 4, 4});
-    ASSERT_EQ(sizes.size(), nodes.size());
+    const auto& [graph, count] = GetParam();
+    const std::optional<uint32_t> capacity = count == 0 ? std::nullopt : std::optional{count};
+    const bool fork = graph == "fabric_fork" || graph == "host_return_fork" || graph == "mixed_fabric_fork";
+    const auto nodes = build_ring_nodes(fork ? 7 : 4);
+    auto edges = build_ring_edges(nodes.size());
     std::map<std::string, uint32_t> shapes;
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        shapes[nodes[i]] = sizes[i];
+    for (const auto& node : nodes) {
+        shapes[node] = 2;
     }
-    const std::optional<uint32_t> capacity = GetParam() == 0 ? std::nullopt : std::optional{GetParam()};
-    if (GetParam() == 1) {
-        // Four router chips cannot hold four fabric endpoints plus H2D and D2H.
+    if (graph == "chain") {
+        edges.pop_back();
+    } else if (graph == "diamond") {
+        edges = {{"s0", "s1", false}, {"s0", "s2", false}, {"s1", "s3", false}, {"s2", "s3", false}};
+    } else if (graph == "disconnected") {
+        edges = {{"s0", "s1", false}, {"s2", "s3", false}};
+    } else if (fork) {
+        // Spec decode: router -> target/draft branches. Each has three stages;
+        // the draft return is omitted from fabric edges when it uses host MPI.
+        edges = {
+            {"s0", "s1", false},
+            {"s1", "s2", false},
+            {"s2", "s3", false},
+            {"s3", "s0", true},
+            {"s0", "s4", false},
+            {"s4", "s5", false},
+            {"s5", "s6", false}};
+        if (graph != "host_return_fork") {
+            edges.emplace_back("s6", "s0", true);
+        }
+    }
+    if (graph == "mixed_ring" || graph == "mixed_fabric_fork") {
+        // Merge adjacent slices into one 1x4 candidate; keep the other 14 disjoint.
+        auto& left = layouts[14];
+        for (const auto& [mesh, chip, row, col] : layouts[15].chips) {
+            left.chips.emplace_back(mesh, chip, row, col + 2);
+        }
+        left.rank_shape = MeshShape(1, 4);
+        layouts.pop_back();
+        shapes["s1"] = 4;
+    } else if (graph == "missing_shape") {
+        shapes["s1"] = 3;
+    }
+    // Stage 0 needs host I/O plus its fabric endpoints: 3/4 slots for
+    // chains/rings, 5/6 for spec-decode forks. Every candidate router has 2 chips.
+    const bool expected = graph != "missing_shape" && count != 1 && (!fork || count == 4);
+    const auto chips = to_submesh_chips(layouts);
+    if (!expected) {
         try {
-            detail::resolve_graph_layout_with_connections(nodes, edges, chips, shapes, {}, capacity, &links);
-            FAIL() << "expected exact infeasibility";
+            resolve_graph_layout(nodes, edges, chips, shapes, {}, capacity);
+            FAIL() << "expected infeasible " << graph << " with capacity " << count;
         } catch (const std::runtime_error& error) {
             EXPECT_NE(std::string(error.what()).find("exact placement/link search exhausted"), std::string::npos);
         }
-    } else {
-        const auto result =
-            detail::resolve_graph_layout_with_connections(nodes, edges, chips, shapes, {}, capacity, &links);
-        ASSERT_EQ(result.stage_order.size(), nodes.size());
-        validate_replayed_layout(result, edges, chips, links, shapes, capacity);
+        return;
     }
+    const auto result = resolve_graph_layout(nodes, edges, chips, shapes, {}, capacity);
+    ASSERT_EQ(result.node_to_submesh.size(), nodes.size());
+    ASSERT_EQ(result.resolved_edges.size(), edges.size());
+    const auto error = validate_pipeline_builder_graph_layout_errors(control_plane, layouts, result, edges.size());
+    EXPECT_FALSE(error.has_value()) << error.value_or("");
+    std::set<size_t> assigned;
+    for (const auto& [node, mesh] : result.node_to_submesh) {
+        EXPECT_TRUE(assigned.insert(mesh).second);
+        EXPECT_EQ(chips.at(mesh).size(), shapes.at(node));
+    }
+    std::set<std::tuple<std::string, uint32_t, uint32_t, uint32_t>> slots;
+    auto check_slot = [&](const std::string& node, uint32_t row, uint32_t col, std::optional<uint32_t> slot) {
+        ASSERT_TRUE(slot.has_value());
+        const auto& submesh = chips.at(result.node_to_submesh.at(node));
+        EXPECT_TRUE(std::any_of(submesh.begin(), submesh.end(), [&](const auto& chip) {
+            return std::get<2>(chip) == row && std::get<3>(chip) == col;
+        }));
+        EXPECT_LT(*slot, capacity.value_or(2));
+        EXPECT_TRUE(slots.emplace(node, row, col, *slot).second);
+    };
+    for (size_t i = 0; i < edges.size(); ++i) {
+        const auto& edge = result.resolved_edges[i];
+        EXPECT_EQ(std::make_tuple(edge.src, edge.dst, edge.is_loopback), edges[i]);
+        check_slot(edge.src, edge.exit_row, edge.exit_col, edge.exit_core_slot);
+        check_slot(edge.dst, edge.entry_row, edge.entry_col, edge.entry_core_slot);
+    }
+    check_slot("s0", result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot);
+    check_slot("s0", result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot);
 }
 
-INSTANTIATE_TEST_SUITE_P(CoreCapacity, PipelineBuilderReplayTest, ::testing::Values(0u, 2u, 1u));
+INSTANTIATE_TEST_SUITE_P(
+    Graphs,
+    PipelineBuilderMockGraphTest,
+    ::testing::Combine(
+        ::testing::Values(
+            "chain",
+            "ring",
+            "diamond",
+            "disconnected",
+            "fabric_fork",
+            "host_return_fork",
+            "mixed_fabric_fork",
+            "mixed_ring",
+            "missing_shape"),
+        ::testing::Values(0u, 1u, 2u, 4u)));
 
 // Opt-in benchmark: tt-run supplies the mock descriptor and MGD. Run each
 // capacity in a separate process with an external timeout; timeout != infeasible.
@@ -1016,15 +997,21 @@ TEST(PipelineBuilderMockSweep, RingCapacity) {
         GTEST_SKIP() << "requires mock cluster and TT_PIPELINE_TEST_CORE_CAPACITY (0=default)";
     }
     const std::string capacity_text(requested_capacity);
+    const char* expected_outcome = std::getenv("TT_PIPELINE_TEST_EXPECT_FEASIBLE");
+    ASSERT_NE(expected_outcome, nullptr) << "set TT_PIPELINE_TEST_EXPECT_FEASIBLE=0 or 1";
+    ASSERT_TRUE(std::string(expected_outcome) == "0" || std::string(expected_outcome) == "1");
     ASSERT_TRUE(capacity_text == "0" || capacity_text == "1" || capacity_text == "2");
     const std::optional<uint32_t> capacity =
         capacity_text == "0" ? std::nullopt : std::optional<uint32_t>(std::stoul(capacity_text));
     const char* requested_fabric = std::getenv("TT_PIPELINE_TEST_FABRIC");
     const std::string fabric_mode = requested_fabric == nullptr ? "2D" : requested_fabric;
     ASSERT_TRUE(fabric_mode == "2D" || fabric_mode == "TORUS_XY" || fabric_mode == "TORUS_Y");
-    const auto fabric_config = fabric_mode == "TORUS_XY"  ? FabricConfig::FABRIC_2D_TORUS_XY
-                               : fabric_mode == "TORUS_Y" ? FabricConfig::FABRIC_2D_TORUS_Y
-                                                          : FabricConfig::FABRIC_2D;
+    auto fabric_config = FabricConfig::FABRIC_2D;
+    if (fabric_mode == "TORUS_XY") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_XY;
+    } else if (fabric_mode == "TORUS_Y") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
+    }
 
     auto& context = tt::tt_metal::MetalContext::instance();
     context.get_cluster().configure_ethernet_cores_for_fabric_routers(
@@ -1096,6 +1083,8 @@ TEST(PipelineBuilderMockSweep, RingCapacity) {
             << error.what();
     }
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+    EXPECT_EQ(result.has_value(), std::string(expected_outcome) == "1")
+        << "unexpected placement outcome for " << graph << ", capacity " << capacity_text;
     fmt::print(
         "PIPELINE_SWEEP graph={} stages={} submeshes={} capacity={} fabric={} outcome={} resolve_seconds={:.6f}\n",
         graph,
