@@ -19,6 +19,7 @@ import ttnn
 
 from tests.nightly.t3000.ccl.test_a2a_combine_cache_hit_repro import (
     run_a2a_combine_static_buffer_cache_hit_repro,
+    run_a2a_combine_static_buffer_cache_hit_trace_repro,
 )
 
 
@@ -48,6 +49,7 @@ from tests.nightly.t3000.ccl.test_a2a_combine_cache_hit_repro import (
 @pytest.mark.parametrize("hidden_size", [7168])
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("reuse_optional_output", [False, True], ids=["new_output", "reuse_output"])
 def test_a2a_combine_cache_hit_repro(
     mesh_device,
     mesh_shape,
@@ -60,8 +62,65 @@ def test_a2a_combine_cache_hit_repro(
     hidden_size,
     num_iters,
     num_links,
+    reuse_optional_output,
 ):
     run_a2a_combine_static_buffer_cache_hit_repro(
+        mesh_device,
+        mesh_shape,
+        axis,
+        batches_per_device,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links,
+        reuse_optional_output=reuse_optional_output,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "trace_region_size": 2000000,
+        },
+    ],
+    ids=["fabric_1d_line_trace"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [pytest.param((8, 4), (8, 4), id="8x4_grid")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
+@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("num_iters", [2])
+@pytest.mark.parametrize("num_links", [4])
+def test_a2a_combine_cache_hit_trace_repro(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    seq,
+    local_reduce,
+    experts,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    num_links,
+):
+    run_a2a_combine_static_buffer_cache_hit_trace_repro(
         mesh_device,
         mesh_shape,
         axis,
