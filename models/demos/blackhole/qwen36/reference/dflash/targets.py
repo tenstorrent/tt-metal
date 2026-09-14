@@ -321,6 +321,67 @@ class TtTarget:
             )
         return x
 
+    def draft_ids_device(self, hidden, *, keep_rows):
+        """Greedy draft token ids, argmaxed ON DEVICE -- ``keep_rows`` ints cross PCIe, not logits.
+
+        The readback is what a drafter step spends its time on. Narrowing it to one device already
+        took it from 97.9 to 25.8 ms/step (tests/perf/test_dflash_lm_head_readback.py), and it is
+        still the largest phase of a traced step at ~33 ms including the head matmul
+        (tests/perf/test_dflash_drafter_trace_breakdown.py). Under greedy decoding the host does
+        nothing with those logits except ``argmax`` them, so the argmax belongs on the device and
+        the transfer becomes 15 uint32s.
+
+        This is one op, not a reduction tree: ``Qwen36Model._lm_head`` all-gathers its vocab shards
+        before returning, so every device holds the FULL-width row and device 0's argmax is the
+        global one. (An earlier note in this work claimed the sharding forced a per-shard argmax
+        plus a cross-device reduce -- that was wrong, and reading one device for the logits already
+        depended on it being wrong.)
+
+        Sampling still needs the distribution, so ``temperature > 0`` keeps :meth:`lm_head_device`.
+        """
+        import ttnn
+
+        logits = self.model._lm_head(hidden)
+        rows, width = logits.shape[-2], logits.shape[-1]
+        vocab = self.model.vocab_size
+        owned = []
+
+        keep = logits
+        if keep_rows is not None and keep_rows < rows:
+            keep = ttnn.slice(keep, (0, 0, rows - keep_rows, 0), (1, 1, rows, width))
+            owned.append(keep)
+        if width > vocab:
+            # MUST trim before the argmax. The head's output is padded past vocab_size, and the
+            # host path only ever trimmed AFTER reading back (`host[:, :vocab_size]`). An argmax
+            # over the padded columns can return an index that is not a token -- and would do so
+            # silently, since a padding value need only beat the real logits, which are negative
+            # far more often than not.
+            keep = ttnn.slice(keep, (0, 0, 0, 0), (1, 1, keep.shape[-2], vocab))
+            owned.append(keep)
+
+        # ROW_MAJOR, NOT TILE. ttnn.argmax over a 248,320-wide row costs ~104 ms in TILE layout and
+        # ~2.3 ms in ROW_MAJOR including the untilize -- a 45x difference, measured in
+        # tests/unit/test_drafter_device_argmax.py. The tiled form is so slow it loses to simply
+        # shipping the logits to host (26.8 ms), which is what the first version of this method did.
+        # ttnn's own docs point at this: sub_core_grids is documented as supported on ROW_MAJOR
+        # last-dim reductions.
+        rm = ttnn.to_layout(keep, ttnn.ROW_MAJOR_LAYOUT)
+        ids = ttnn.argmax(rm, dim=-1)
+        ttnn.deallocate(rm)
+        if self.model.num_devices > 1:
+            host = ttnn.to_torch(ttnn.get_device_tensors(ids)[0])
+        else:
+            host = ttnn.to_torch(ids)
+        # NB: never test membership with `in` here. `x in owned` calls `==`, and ttnn.Tensor's
+        # `==` is an ELEMENTWISE DEVICE OP -- against tensors this loop has already freed, which
+        # fails as `binary_ng ... input_tensor_a.is_allocated()`. `owned` only ever holds slices
+        # this function made, so `logits` is not in it by construction and no test is needed.
+        for t in owned:
+            ttnn.deallocate(t)
+        ttnn.deallocate(logits)
+        ttnn.deallocate(ids)
+        return host.reshape(1, -1)[:, -keep_rows:].long()
+
     def lm_head_device(self, hidden, *, keep_rows=None):
         """Draft logits for a **device** hidden tensor, via the mesh-resident LM head.
 

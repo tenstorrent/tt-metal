@@ -202,11 +202,13 @@ class TtDrafter:
         hidden = self._hidden(kv_source, block_ids, start, q_len, new_ctx)
 
         # Slot 0 is the anchor; the drafted slots are 1..q_len-1, i.e. hidden's trailing rows.
-        logits = self.target.lm_head_device(hidden, keep_rows=q_len - 1).float()
         if temperature > 0:
+            # Sampling needs the whole distribution, so the logits still come back to host.
+            logits = self.target.lm_head_device(hidden, keep_rows=q_len - 1).float()
             probs = _sampling_probs(logits, temperature, top_p, top_k)
             return _sample_probs(probs), probs
-        return torch.argmax(logits, dim=-1), None
+        # Greedy: the host only ever argmaxed these, so do it on device and move ids instead.
+        return self.target.draft_ids_device(hidden, keep_rows=q_len - 1), None
 
     def _traceable(self, q_len, new_ctx):
         """Whether this step matches the captured shape. A trace serves one shape and no other."""
