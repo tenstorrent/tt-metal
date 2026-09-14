@@ -79,6 +79,7 @@ set(SOURCES
     ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
+    ops/conv3d_op_test.cpp
     ops/mla_kv_assemble_op_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
