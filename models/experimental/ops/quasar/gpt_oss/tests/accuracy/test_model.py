@@ -110,6 +110,10 @@ def run_accuracy(
                 enable_trace=False,  # enable_trace
                 page_table=None,  # page_table
                 kv_cache=tt_kv_cache,  # kv_cache
+                reload_inputs=True,
+                reload_page_table=False,
+                reload_sampling_params=False,
+                reset_sampling_state=False,
             )
 
         # Get predicted token
