@@ -2049,6 +2049,22 @@
   team: train
   budget_type: e2e
 
+- name: Deepseek Sparse MoE
+  cmd: |
+    mpirun -np 1 --bind-to none --tag-output --wdir "${TT_METAL_HOME}" bash -lc '
+      ./tt-train/scripts/setup_pth.sh
+      python tt-train/tests/python/test_deepseek_sparse_ep.py
+    '
+  model: "[tt-train] deepseek_sparse_ep"
+  skus:
+    bh_sc1:
+      timeout: 30
+      tier: 3
+      release_ready: false
+  owner_id: U07K00A281X # Kevin Wu
+  team: train
+  budget_type: e2e
+
 # Unstable on bh_sc1, disable until issue is resolved. Maybe related to: https://github.com/tenstorrent/tt-metal/issues/49557
 # - name: Galaxy Llama 70B TP=8 FSDP=4 train e2e tests
 #   cmd: |
