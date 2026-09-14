@@ -38,6 +38,9 @@ TEST_PATH="${3:?TEST_PATH required}"
 TEST_ARGS="${4}"
 RESET_DEVICE_IDS="${5:?RESET_DEVICE_IDS required}"
 RESET_WAIT_SECS="${6:-60}"
+# Grace for the driver to re-enumerate the reset boards, matching
+# ResetUtil.post_reset_settle_seconds in tests/sweep_framework/framework/tt_smi_util.py.
+POST_RESET_SETTLE_SECS=10
 
 RESULTS_DIR=".multi-user-test-results"
 RESET_DONE_FLAG="${RESULTS_DIR}/reset_done"
@@ -105,11 +108,17 @@ wait "$container0_initial_pid" || true
 # the test cannot run at all.
 echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
 reset_ok=1
-if ! timeout 120 docker exec "${container0}" tt-smi -r "$RESET_DEVICE_IDS"; then
+# timeout runs inside the container: `timeout <n> docker exec` would kill only
+# the local client and leave tt-smi running on the devices.
+if ! docker exec "${container0}" timeout 120 tt-smi -r "$RESET_DEVICE_IDS"; then
     echo ">>> ERROR: 'tt-smi -r ${RESET_DEVICE_IDS}' failed or timed out in ${container0}."
     reset_ok=0
 else
-    echo ">>> Reset complete."
+    # Without this, the confirming runs below can fail on device re-enumeration
+    # rather than on ETH state ("Cannot access soc descriptor ... before device
+    # driver is initialized").
+    echo ">>> Reset complete. Settling ${POST_RESET_SETTLE_SECS}s..."
+    sleep "$POST_RESET_SETTLE_SECS"
 fi
 
 # Unblock the survivor loops so they perform their final confirming run.
