@@ -179,7 +179,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
     };
 
     const auto make_worker = [&](const char* name,
-                                 DataMovementHardwareConfig hw_config,
+                                 const DataMovementHardwareConfig& hw_config,
                                  DFBEndpointType endpoint,
                                  uint32_t is_reader) {
         KernelSpec k{
@@ -199,7 +199,7 @@ ttnn::device_operation::ProgramArtifacts ReshardSameWidthFactory<local_is_output
                      .accessor_name = kSWLocalTensorParam}},
             .compile_time_args = make_cta(is_reader),
             .runtime_arg_schema = {.runtime_arg_names = {off_name, count_name}},
-            .hw_config = std::move(hw_config),
+            .hw_config = hw_config,
             .advanced_options = {.num_runtime_varargs = num_varargs},
         };
         if (unaligned) {
