@@ -5,14 +5,15 @@
 """
 TtPrefillTransformer — multi-layer prefill model for DeepSeek V3.
 
-Composes: embed -> [block x N] -> norm -> lm_head -> sample
+Composes: embed -> [block x N]. The populated KV cache is the output: production prefill hands the
+KV cache to decode, which owns the LM head, so there is no norm / LM-head / sampling tail here.
 
 Equivalent to the reference Transformer class (models/demos/deepseek_v3/reference/deepseek/model.py:419)
 but targeting the TT prefill path with SP+TP parallelism.
 """
 
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Optional
 
 import torch
 from loguru import logger
@@ -26,8 +27,6 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.mla.utils import create_balanced_chunk_order, reverse_reorder_tensor_chunks
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
-from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
-from models.demos.deepseek_v3_d_p.tt.tt_lm_head import TtLMHead
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TopologyArg, TtPrefillBlock
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
@@ -38,11 +37,11 @@ class TtPrefillTransformer(LightweightModule):
     """
     Multi-layer prefill transformer for DeepSeek V3.
 
-    Architecture: embed -> [TtPrefillBlock x num_layers] -> norm -> lm_head -> sample
+    Architecture: embed -> [TtPrefillBlock x num_layers]. No norm / LM-head / sampling tail: the
+    populated KV cache is the output (decode owns that processing).
 
     State dict keys:
         embed_weight:   torch.Tensor [vocab_size, emb_dim]
-        norm_weight:    torch.Tensor [emb_dim]
         layers:         list[dict] — per-layer state dicts for TtPrefillBlock
     """
 
@@ -62,7 +61,8 @@ class TtPrefillTransformer(LightweightModule):
         """
         Top-level cache completeness check for the full transformer.
 
-        Checks embedding, all blocks (norms + MLA + FFN/MoE), and final norm.
+        Checks the embedding and all blocks (norms + MLA + FFN/MoE). There is no final norm / LM head
+        to check: the transformer has no tail.
         Replaces the monolithic check_ttnn_cache_complete from cache_utils.py.
 
         Args:
@@ -77,10 +77,11 @@ class TtPrefillTransformer(LightweightModule):
                 as_tensor stamps it into the tensorbin filename, so the completeness check must
                 pin the same value it will later request -- otherwise a stale cache at another
                 dtype reports complete and the empty placeholder is loaded as the weights.
-            is_first_rank / is_last_rank: a pipeline-parallel rank builds the
-                embedding only on the first rank and the final norm + LM head only
-                on the last, so check only the weights it actually loads. Both True
-                for single-rank.
+            is_first_rank: a pipeline-parallel rank builds the embedding only on the
+                first rank, so check it only there. True for single-rank.
+            is_last_rank / kv_only_last_layer: the rank's position and last-layer mode, passed by
+                the runtime alongside the model's own construction arguments. There is no final
+                norm / LM-head cache to gate on them any more, so they do not change what is checked.
             model_cfg: Variant static-constants class, forwarded to the per-block check. Optional
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
@@ -114,14 +115,6 @@ class TtPrefillTransformer(LightweightModule):
             ):
                 return False
 
-        # Final norm + LM head: only the last rank that emits a token loads these
-        # (skipped for a kv_only last layer and for non-last pipeline ranks).
-        if is_last_rank and not kv_only_last_layer:
-            if not TtDistributedRmsNorm.check_cache_complete(cache_path, "norm"):
-                return False
-            if not TtLMHead.check_cache_complete(cache_path):
-                return False
-
         logger.info(f"TTNN cache complete at {cache_path} ({num_layers} layers)")
         return True
 
@@ -146,7 +139,6 @@ class TtPrefillTransformer(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
-        lm_head_is_column_parallel: bool = False,
         is_chunked: bool = False,
         slot_num: int = 1,
         max_seq_len: Optional[int] = None,
@@ -166,22 +158,23 @@ class TtPrefillTransformer(LightweightModule):
         self.is_chunked = is_chunked
         self.num_layers = num_layers
         self.kv_only_last_layer = kv_only_last_layer
-        # Pipeline-parallel slicing. A rank owns layers [first_layer_idx, first_layer_idx+num_layers),
-        # builds the embedding only on the first rank, and the norm + LM head only on the last rank that
-        # also emits a token (is_last_rank and not kv_only_last_layer). All default so a single-rank
-        # instance builds the whole model unchanged.
+        # Pipeline-parallel slicing. A rank owns layers [first_layer_idx, first_layer_idx+num_layers) and
+        # builds the embedding only on the first rank. There is no norm / LM-head / sampling tail: on the
+        # last rank the populated KV cache is the output. All default so a single-rank instance builds the
+        # whole model unchanged.
         self.is_first_rank = is_first_rank
         self.is_last_rank = is_last_rank
+        # A kv-only last layer produces no hidden state, so it only makes sense on the rank with no
+        # downstream consumer of the activation (the runner sets kv_only_last_layer = is_last_rank and ...).
+        assert not (kv_only_last_layer and not is_last_rank), (
+            "kv_only_last_layer requires is_last_rank: a non-last pipeline rank must hand its hidden state "
+            "to the next rank, which a kv-only last layer does not produce"
+        )
         # GLM-5.2 indexer reuse: global per-layer full/shared map (None on models without it -> every
         # layer computes its own indexer, i.e. current behavior). first_layer_idx maps this rank's
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
-
-        # The blocks take the full per-axis topology (they split SP/TP internally for the MoE).
-        # The final norm and LM head are pure TP-axis (cluster_axis=tp_axis) collectives, so they
-        # take the scalar TP element.
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -254,26 +247,6 @@ class TtPrefillTransformer(LightweightModule):
             )
             self.layers.append(layer)
 
-        # --- Final norm (last token-emitting rank only) ---
-        # Built iff is_last_rank and not kv_only_last_layer: a kv_only last layer (chunked prefill)
-        # emits no token, and non-last pipeline ranks forward the hidden state — both skip the tail.
-        build_tail = is_last_rank and not kv_only_last_layer
-        self.norm = (
-            TtDistributedRmsNorm(
-                mesh_device=mesh_device,
-                emb_dim=config.hidden_size,
-                torch_weight=state_dict.get("norm_weight"),  # None if cache exists
-                epsilon=config.rms_norm_eps,
-                cluster_axis=tp_axis,
-                num_links=num_links,
-                topology=tp_topology,
-                weight_cache_path=weight_cache_path,
-                cache_name_prefix="norm",
-            )
-            if build_tail
-            else None
-        )
-
         # --- RoPE (computed once, reused across all layers) ---
         self.rope_setup = RotarySetup(config, mesh_device, sp_axis=sp_axis, is_balanced=is_balanced)
 
@@ -293,23 +266,6 @@ class TtPrefillTransformer(LightweightModule):
                 tail_slack=is_chunked,
             )
             if (is_chunked or self._has_indexer)
-            else None
-        )
-
-        # --- LM Head (last token-emitting rank only) ---
-        self.lm_head = (
-            TtLMHead(
-                mesh_device=mesh_device,
-                emb_dim=config.hidden_size,
-                vocab_size=config.vocab_size,
-                torch_weight=state_dict.get("lm_head_weight"),  # None if cache exists
-                num_links=num_links,
-                topology=tp_topology,
-                is_balanced=is_balanced,
-                weight_cache_path=weight_cache_path,
-                is_column_parallel=lm_head_is_column_parallel,
-            )
-            if build_tail
             else None
         )
 
@@ -355,7 +311,6 @@ class TtPrefillTransformer(LightweightModule):
         actual_isl: int,
         return_intermediates: bool = False,
         read_profiler: bool = False,
-        temperature: Union[float, list[float]] = 0.0,
         d2h_service=None,
         metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
@@ -367,11 +322,12 @@ class TtPrefillTransformer(LightweightModule):
         metadata: Optional[ttnn.Tensor] = None,
     ):
         """
-        Forward pass: [embed] -> [block x N] -> [norm -> lm_head -> sample].
+        Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
 
         Pipeline-parallel ranks run a slice of this: the embedding runs only on the
-        first rank and the norm/LM-head/sample tail only on the last, so the input
-        and output are dual-mode (see Args/Returns).
+        first rank and only the last rank ends the forward (there is no norm / LM-head /
+        sampling tail: decode owns the processing), so the input and output are dual-mode
+        (see Args/Returns).
 
         Args:
             token_ids: on the first rank, [1, 1, seq_len_per_chip] uint32 SP-sharded
@@ -386,8 +342,6 @@ class TtPrefillTransformer(LightweightModule):
                         for dense (non-sparse) variants.
             return_intermediates: if True, sync + snapshot to host after each stage
             read_profiler: if True, read TTNN profiler after each layer to avoid profiler buffer overflows
-            temperature: Temperature for sampling. Can be a single float or list of floats.
-                        If list, returns first temperature result but stores all in intermediates.
             d2h_service: optional service used to send a layer-ack completion signal back to host once
                         each layer's KV cache has been populated on device. When set, each block zeros the
                         cache pad window and enqueues the ack via the outbound_socket_service_sync device op
@@ -401,16 +355,12 @@ class TtPrefillTransformer(LightweightModule):
                         output activation). Read-only — see tt_prefill_block.forward.
 
         Returns:
-            On a non-last rank: the hidden-state activation tensor to hand to the next
-            rank (no token — the tail did not run).
+            On a non-last rank: the hidden-state activation tensor to hand to the next rank.
 
-            On the last rank (and single-rank): a tuple of
-            (first_token_id, first_token_prob, intermediates_dict or None)
-            - first_token_id: sampled token ID (for first temperature if list provided)
-            - first_token_prob: probability of sampled token (for first temperature if list provided)
-            - intermediates: dict with keys like "embed", "layer_0", "norm", "lm_head", "first_token"
-                            where "first_token" is a list of results for each temperature
-                            (None if return_intermediates=False)
+            On the last rank (and single-rank): the intermediates dict when
+            return_intermediates=True ("embed" on the first rank, then "layer_i" for every
+            layer that produced a hidden state; a kv-only last layer adds none), otherwise
+            None. No token is produced: the populated KV cache is the output.
         """
         # The two ack transports are mutually exclusive: the block takes the d2h_service branch and would
         # silently drop on_layer_complete, so a caller wiring both would get half the acks it asked for
@@ -422,8 +372,7 @@ class TtPrefillTransformer(LightweightModule):
 
         # Chunked prefill ([actual_start, actual_end) set) uses the prebuilt whole-cache indexed rope
         # and writes this chunk at the actual_start offset of user cache_user_id's slot; the single-shot
-        # path builds per-call rope for this seq_len. The norm/lm_head/sample tail still runs and a token
-        # is returned, but the chunked caller ignores it (the populated cache is the output).
+        # path builds per-call rope for this seq_len.
         if actual_start is not None or metadata is not None:
             # metadata path: per-chunk actual_start/actual_end live on-device in the metadata tensor
             # (read by the trace-safe MLA ops), so actual_start is None here -- still chunked prefill,
@@ -495,10 +444,9 @@ class TtPrefillTransformer(LightweightModule):
                 h, _ = ret
             signpost(f"forward_layer_{i}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
-                # Last layer was kv-only — KV cache filled, migration callback
-                # fired, no hidden state flowing forward. Skip norm + lm_head +
-                # sample; no first_token to produce.
-                return None, None, intermediates
+                # Last layer was kv-only: KV cache filled, migration callback fired, no hidden state
+                # produced. Nothing more to run or snapshot; the populated cache is the output.
+                return intermediates
             if return_intermediates:
                 ttnn.synchronize_device(self.mesh_device)
                 intermediates[f"layer_{i}"] = self._to_host(h)
@@ -509,152 +457,19 @@ class TtPrefillTransformer(LightweightModule):
         indexer_indices = None
 
         # Non-last pipeline ranks stop here: the layer slice's output activation is
-        # handed to the next rank, which continues from this hidden state. The norm /
-        # LM-head / sample tail (and its weights) live only on the last rank.
+        # handed to the next rank, which continues from this hidden state.
         if not self.is_last_rank:
             return h
 
-        h = self.norm(h)
-
-        if return_intermediates:
-            ttnn.synchronize_device(self.mesh_device)
-            intermediates["norm"] = self._to_host(h)
-
-        # LM Head: extract logits for last real token
-        logits_host, first_token_logits = self._lm_head_and_extract(h, actual_isl)
-
-        if return_intermediates:
-            intermediates["lm_head"] = logits_host
-            intermediates["logits"] = first_token_logits
-
-        # Reorder intermediates if balanced. Skip reordering for logits and lm_head in zigzag mode.
-        no_reorder_keys = {"logits", "lm_head"}
+        # Last (or single) rank: the populated KV cache is the output. There is no norm / LM-head /
+        # sampling tail (decode owns the processing), so the final hidden state is dropped here and only
+        # the optional host snapshots are returned.
         if return_intermediates and self.is_balanced:
+            # Balanced (zigzag) SP shards the sequence in a permuted chunk order; restore the natural
+            # order for every host snapshot ("embed" and "layer_i" are all sequence tensors).
             for key, tensor in intermediates.items():
-                if key in no_reorder_keys:
-                    logger.debug(f"Skipping reordering for non-sequence intermediate {key}")
-                    continue
                 if isinstance(tensor, torch.Tensor):
                     logger.debug(f"Reordering intermediate {key} with shape {tensor.shape}")
                     intermediates[key] = reverse_reorder_tensor_chunks(tensor, self.chunk_order, seq_dim=-2)
-                else:
-                    logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
 
-        # Sample token(s) from logits
-        first_token_id, first_token_prob, sweep_results = self._sample(first_token_logits, actual_isl, temperature)
-
-        if return_intermediates:
-            intermediates["first_token"] = sweep_results
-
-        return first_token_id, first_token_prob, intermediates
-
-    def _lm_head_and_extract(
-        self,
-        h: ttnn.Tensor,
-        actual_isl: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run LM head and extract last-token logits. Topology-aware.
-
-        Args:
-            h: Hidden states after final norm
-            actual_isl: Count of real tokens in the sequence
-
-        Returns:
-            Tuple of (logits_host, first_token_logits)
-        """
-        if self.padding_side == "right":
-            global_token_id = actual_isl - 1
-        else:  # "left"
-            global_token_id = self.seq_len - 1
-
-        logits, (device_id, token_offset) = self.lm_head(h, global_token_id)
-
-        logits_host = self.lm_head.logit_to_host(logits, device_id)
-        assert (
-            logits_host.shape[-1] == self.lm_head.vocab_size
-        ), f"Expected full vocab {self.lm_head.vocab_size}, got {logits_host.shape[-1]} — TP concat may be broken"
-        first_token_logits = self.lm_head.select_first_token(logits_host, token_offset)
-
-        logger.debug(f"[TtPrefillTransformer._extract] {logits.shape}")
-        logger.debug(f"[TtPrefillTransformer._extract] {logits_host.shape}")
-        logger.debug(f"[TtPrefillTransformer._extract] {first_token_logits.shape}")
-
-        return logits_host, first_token_logits
-
-    def _sample(
-        self,
-        first_token_logits: torch.Tensor,
-        actual_isl: int,
-        temperature: Union[float, list[float]],
-    ) -> tuple[int, float, list[dict]]:
-        """Sample token(s) from extracted logits with temperature sweep.
-
-        Args:
-            first_token_logits: Logits for the last real token position
-            actual_isl: Count of real tokens (stored in results)
-            temperature: Temperature for sampling (single float or list for sweep)
-
-        Returns:
-            Tuple of (first_token_id, first_token_prob, sweep_results)
-        """
-        temperatures = temperature if isinstance(temperature, list) else [temperature]
-
-        sweep_results = []
-        for temp in temperatures:
-            token_id, token_prob, top5 = self._sample_token(first_token_logits.clone(), temp)
-            sweep_results.append(
-                {
-                    "actual_isl": actual_isl,
-                    "token_id": token_id,
-                    "probability": token_prob,
-                    "temperature": temp,
-                    "top5": top5,
-                }
-            )
-
-        first_token_id = sweep_results[0]["token_id"]
-        first_token_prob = sweep_results[0]["probability"]
-
-        logger.debug(f"[TtPrefillTransformer._sample] {first_token_id=}, {first_token_prob=:.4f}")
-
-        return first_token_id, first_token_prob, sweep_results
-
-    def _sample_token(self, logits: torch.Tensor, temperature: float = 1.0) -> tuple[int, float, list]:
-        """
-        Sample token from logits with temperature scaling.
-
-        Uses Gumbel-softmax trick for sampling (same as DeepSeek reference).
-        https://github.com/deepseek-ai/DeepSeek-V3/blob/main/inference/generate.py
-
-        Args:
-            logits: Logits tensor for a single token position
-            temperature: Temperature for scaling (0.0 = argmax)
-
-        Returns:
-            Tuple of (sampled_token_id, probability, top5_list)
-            where top5_list is [{token_id, probability}, ...]
-        """
-        probs = torch.softmax(logits.float(), dim=-1)
-
-        # Get top-5 tokens (unscaled)
-        top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
-        top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
-
-        if temperature <= 0:
-            # Deterministic argmax — no Gumbel noise
-            sampled_id = probs.argmax(dim=-1)
-            prob = probs.flatten()[sampled_id.item()].item()
-            return sampled_id.item(), prob, top5
-
-        logits = logits / temperature
-        probs = torch.softmax(logits.float(), dim=-1)
-
-        # Recompute top-5 with temperature-scaled probs
-        top5_probs, top5_ids = torch.topk(probs.flatten(), k=5)
-        top5 = [{"token_id": tid.item(), "probability": tprob.item()} for tid, tprob in zip(top5_ids, top5_probs)]
-
-        # Gumbel-softmax trick for sampling (use non-in-place to preserve probs)
-        gumbel = probs / torch.empty_like(probs).exponential_(1)
-        sampled_id = gumbel.argmax(dim=-1)
-        prob = probs.flatten()[sampled_id.item()].item()
-        return sampled_id.item(), prob, top5
+        return intermediates

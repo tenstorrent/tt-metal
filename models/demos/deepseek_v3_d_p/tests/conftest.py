@@ -531,12 +531,6 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
                 if f"model.layers.{layer_id}." in key:
                     required_shards.add(shard_file)
 
-        # Find shard for model.norm (always needed by pretrained_transformer_weights fixture)
-        for key, shard_file in weight_map.items():
-            if "model.norm.weight" in key:
-                required_shards.add(shard_file)
-                break
-
         # Convert shard filenames to patterns
         shard_patterns = []
         for shard_file in sorted(required_shards):
@@ -545,7 +539,7 @@ def download_model_weights(variant: TestVariant, cache_dir: Path, layer_idx: int
             shard_patterns.append(f"*-{shard_num}-of-*.safetensors")
 
         logger.info(
-            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings + norm..."
+            f"Step 2/2: Downloading weight shards for layers {layer_idx}..{layer_idx + num_layers - 1} + embeddings..."
         )
         logger.info(
             f"Required shards: {len(required_shards)} files ({', '.join(sorted(required_shards)[:5])}{'...' if len(required_shards) > 5 else ''})"
@@ -600,7 +594,7 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         variant: The TestVariant to resolve weights for.
         layer_idx: Which layer weights to ensure are available.
         num_layers: Number of layers to download (default: 6).
-                    When >1, downloads additional shards including shard 160 for model.norm.
+                    When >1, downloads the additional per-layer shards.
 
     Returns:
         Path to model directory with weights.
@@ -975,9 +969,10 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     """
     Dequantized pretrained weights for N-layer transformer in TT state_dict format.
 
-    Extracts embed, norm, and per-layer weights (attention, FFN/MoE) using
+    Extracts embed and per-layer weights (attention, FFN/MoE) using
     sub_state_dict() + convert_state_dict(), matching the format produced
-    by extract_tt_state_dict() in transformer_helpers.py.
+    by extract_tt_state_dict() in transformer_helpers.py. No final norm: the
+    prefill transformer has no norm / LM-head tail.
 
     Parametrize with num_layers (default 6) via indirect fixture or marker:
         @pytest.mark.parametrize("pretrained_transformer_weights", [4], indirect=True)
@@ -1011,11 +1006,6 @@ def pretrained_transformer_weights(variant, model_path, hf_config, state_dict, r
     result = {
         "embed_weight": embed_dequant["weight"].float(),
     }
-
-    # Final norm
-    norm_sd = sub_state_dict(state_dict, f"{prefix}model.norm.")
-    norm_dequant = convert_state_dict(norm_sd, hf_config)
-    result["norm_weight"] = norm_dequant["weight"]
 
     # Per-layer weights
     result["layers"] = []
