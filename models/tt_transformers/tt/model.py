@@ -194,7 +194,11 @@ class Transformer(LightweightModule):
                 mesh_device=mesh_device,
                 tt_ccl=self.tt_ccl,
             )
-            self._on_device_sampling_greedy_only = bool(getattr(self.sampling, "greedy_only", False))
+            # Read through to the TTSampling module that owns the property. SamplingGenerator
+            # is a plain wrapper with no __getattr__, so asking it for `greedy_only` returns
+            # the getattr default and this flag reads False on exactly the models it exists
+            # for -- the whole point of it. Direct access so a future rename fails loudly.
+            self._on_device_sampling_greedy_only = self.sampling.tt_sampling.greedy_only
         else:
             self.sampling = None
 

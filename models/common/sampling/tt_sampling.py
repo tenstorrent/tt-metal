@@ -959,8 +959,15 @@ class TTSampling(LightweightModule):
             # cut below one tile, but x_untilized is row-major, so slice the real users
             # out here and scan only those, writing straight into the caller's output
             # tensor, which argmax zero-fills beyond the rows it produced.
+            # Skipped on the sub-core-grid path: trimming the rows here is a ttnn.slice on the
+            # gathered, DRAM-interleaved tensor, which does not honor sub_core_grids there. It
+            # auto-grids a block from origin (0,0), spills into the uncovered senders-column
+            # tail, and fails with "kernel group cores do not match sub device cores" -- the
+            # same reason the vocab-trim slice is skipped above and the chunked untilize below.
+            # That path scans the full tile instead, as it did before this optimisation.
             rows = int(x_untilized.shape[-2])
-            if pre_sliced or self._real_batch_rows < rows:
+            trim_rows = self._real_batch_rows < rows and self._force_argmax_sub_core_grids is None
+            if pre_sliced or trim_rows:
                 if pre_sliced:
                     # cut to the real users before the gather; nothing left to trim
                     x_real = x_untilized
