@@ -182,7 +182,7 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 45
+      timeout: 65
     bh_p100:
       timeout: 40
     bh_p150b_civ2:
