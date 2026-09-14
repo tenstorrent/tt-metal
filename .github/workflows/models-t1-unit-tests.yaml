@@ -35,6 +35,7 @@ on:
           - z-image-turbo
           - resnet50
           - tt-transformers-common
+          - mlp-topology-tg
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false

@@ -666,6 +666,28 @@
   team: models
   budget_type: unit
 
+- name: TT-Transformers MLP Galaxy CCL topology check
+  cmd: |
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export MESH_DEVICE=TG  # (8, 4) -> 32 chips, so ModelArgs.is_galaxy is true and the TG branch of MLP.forward runs
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    # Fail fast if the system mesh degraded below 32 chips: the mesh_device fixture would
+    # otherwise skip every case and the job would report a false green.
+    python3 -c "import ttnn; s = ttnn._ttnn.multi_device.SystemMeshDescriptor().shape().mesh_size(); assert s == 32, f'Galaxy system mesh degraded to {s} chips (expected 32); failing instead of skipping every test'"
+    # seq_len 32 is decode and, at dim 8192, takes the reduce-scatter branch; 512 is prefill.
+    # 32k and 64k are prefill too and add no path this check does not already cover.
+    pytest --timeout 900 models/tt_transformers/tests/test_mlp.py -k "not 32768 and not 65536" --tb=short
+  model: mlp-topology-tg
+  model_family: TT-Transformers
+  skus:
+    wh_galaxy_perf:
+      timeout: 30
+      tier: 1
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
 - name: Qwen3-32B unit tests (Galaxy)
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
