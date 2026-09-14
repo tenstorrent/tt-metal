@@ -213,8 +213,6 @@ def attention_forward(
                 tt_q,
                 cache_k,
                 cache_v,
-                tt_k,
-                tt_v,
                 kv_actual=cached_len,
                 logical_n=cached_len + seq_len * sp,
                 n_kv=config.num_kv_heads,
@@ -235,8 +233,6 @@ def attention_forward(
                 slot_idx=cache_batch_idx,
                 layer_idx=0,
                 num_layers=1,
-                # The per-layer seam wrote current K/V into the cache before this call.
-                write_chunk=False,
             )
         else:
             full_seq_len = seq_len * sp

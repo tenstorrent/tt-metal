@@ -299,9 +299,9 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(41));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(42);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(43);
-    // Slot 44: bounded circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // Slot 44: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
     // local slab addressing (sliding_window_work_plan.hpp) — must match host halo layout and compute.
-    constexpr uint32_t bounded_kv_slab_count = get_compile_time_arg_val(44);
+    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(44);
 
     // Joint-path compile-time gating. When zero, joint Q/K branches are statically dead
     // and dropped by the compiler, eliminating runtime ternaries and joint generator uses.
@@ -852,7 +852,7 @@ void kernel_main() {
                     kv_local_padded_Nt,
                     Sk_chunk_t,
                     logical_nt,
-                    bounded_kv_slab_count);
+                    circular_kv_slab_count);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }

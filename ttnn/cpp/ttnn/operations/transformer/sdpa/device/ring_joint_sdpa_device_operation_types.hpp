@@ -101,8 +101,6 @@ struct RingJointSDPAParams {
 
     bool has_sliding_window() const { return sliding_window_size.value_or(0) > 0; }
 
-    bool has_bounded_kv() const { return circular_kv_cache; }
-
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
@@ -178,6 +176,10 @@ struct RingJointSDPAInputs {
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
     bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+
+    // Circular sliding KV: Q-sized chunk slabs per device in the K/V cache (validation requires
+    // whole slabs, and at least two of them, before this is read).
+    uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
 
     // Latent-V optimization: absent V means the reader reuses K's buffer
     // and reads the first vDHt head-dim tiles (V's logical head dim).

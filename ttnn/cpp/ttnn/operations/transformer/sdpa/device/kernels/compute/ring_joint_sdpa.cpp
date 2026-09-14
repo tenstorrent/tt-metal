@@ -94,9 +94,9 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(55));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(56);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(57);
-    // Slot 58: bounded circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // Slot 58: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
     // local slab addressing (sliding_window_work_plan.hpp) — must match the reader and host layout.
-    constexpr uint32_t bounded_kv_slab_count = get_compile_time_arg_val(58);
+    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(58);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
     // In-place latent-V (single-tile Q): read V straight from K^T instead of materializing it.
     // Shared with the program factory and reader via kt_inplace_v_enabled().
@@ -435,7 +435,7 @@ void kernel_main() {
                 v_shares_k_buffer,
                 kt_inplace_v,
                 sliding_window_size,
-                bounded_kv_slab_count,
+                circular_kv_slab_count,
                 ring_size,
                 use_attention_sink,
                 cb_attention_sink,

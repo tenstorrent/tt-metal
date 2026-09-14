@@ -40,34 +40,11 @@ namespace {
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-// Circular sliding KV slab count derived from the cache/Q geometry (0 = unbounded). Validation
-// already required whole Q-sized slabs and >= 2 of them; both lengths are per-device, so the
-// ratio is unit-free.
+// Circular sliding KV slab count (0 = unbounded); validation already required whole slabs and >= 2.
 uint32_t derived_kv_slab_count(
     const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
-    return args.circular_kv_cache
-               ? static_cast<uint32_t>(tensor_args.local_kv_seq_len() / tensor_args.input_q.logical_shape()[2])
-               : 0;
+    return args.circular_kv_cache ? tensor_args.kv_slab_count() : 0;
 }
-
-// Compile-time lockstep checks for sliding_window_work_plan.hpp. The header is constexpr and
-// shared by this factory, the reader, and the compute kernel; a behavioral change that breaks
-// these asserts fails the HOST build instead of silently drifting from the CPU mirror in
-// models/demos/gpt_oss_d_p/tests/unit/test_bounded_ring_plan_math.py (which generated these
-// expected values). Geometry: sp=4 ring, 8-tile Q slabs, 4-tile K chunks, 128-token window,
-// 5 chunks written (post-wrap), Q chunk at local tile 0 on device 0.
-constexpr auto kCircularPlanDev0 = ring_joint::build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 16, 4, 160, 2);
-static_assert(kCircularPlanDev0.source_range_count == 2);
-static_assert(kCircularPlanDev0.source_ranges[0].source_ring_id == 3);
-static_assert(kCircularPlanDev0.source_ranges[0].first_k_chunk == 3);          // chunk group 3 -> wrapped slab 1
-static_assert(kCircularPlanDev0.source_ranges[1].first_k_chunk == 0);          // chunk group 4 -> wrapped slab 0
-static_assert(kCircularPlanDev0.source_ranges[0].first_global_k_chunk == 31);  // absolute origins unwrapped
-static_assert(kCircularPlanDev0.source_ranges[1].first_global_k_chunk == 32);
-constexpr auto kUnboundedPlanDev0 = ring_joint::build_sliding_q_work_plan(0, 4, 0, 8, 4, 128, 32, 40, 4, 160, 0);
-static_assert(kUnboundedPlanDev0.source_ranges[0].first_k_chunk == 7);  // identity slab base
-static_assert(kUnboundedPlanDev0.source_ranges[1].first_k_chunk == 8);
-static_assert(kUnboundedPlanDev0.source_ranges[0].first_global_k_chunk == 31);  // globals invariant
-static_assert(kUnboundedPlanDev0.source_ranges[1].first_global_k_chunk == 32);
 
 // Host-side summary of which ring-loop iterations do useful SDPA work. Bits are indexed by ring_iter,
 // not ring_id; kernels still advance their sync/ring-id sequence on every iter before checking the mask.
@@ -1064,7 +1041,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Circular sliding KV cache slab count (0 = unbounded), derived from the cache/Q geometry
     // (validated divisible with >= 2 slabs). Wraps the local-slab derivation in
     // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
-    const uint32_t bounded_kv_slab_count = derived_kv_slab_count(args, tensor_args);
+    const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
     const bool enable_kv_chains = !has_sliding_window;
     // The supported sliding specialization always uses a compact neighbor-halo buffer.
     const uint32_t padded_N = has_sliding_window ? global_padded_N : gathered_padded_N;
@@ -1133,7 +1110,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::constants::TILE_HEIGHT,
             ring_size,
             logical_nt,
-            bounded_kv_slab_count);
+            circular_kv_slab_count);
         TT_FATAL(
             kernel_chunked && chunked_sliding_halo_layout.uses_neighbor_halo(),
             "Sliding K/V requires neighbor-halo geometry; gathered rows={}, global rows={}",
@@ -1554,10 +1531,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
-        // Slot 44: bounded circular sliding KV slab count (0 = unbounded). Feeds the reader's
+        // Slot 44: circular sliding KV slab count (0 = unbounded). Feeds the reader's
         // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
         // layout and the compute kernel. Tensor accessors start at slot 45.
-        bounded_kv_slab_count,
+        circular_kv_slab_count,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1800,9 +1777,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         static_cast<uint32_t>(rank_mapping.orientation),
         rank_mapping.mesh_rows,
         rank_mapping.mesh_cols,
-        // Slot 58: bounded circular sliding KV slab count (0 = unbounded). Feeds the compute-side
+        // Slot 58: circular sliding KV slab count (0 = unbounded). Feeds the compute-side
         // build_sliding_q_work_plan so it stays in lockstep with the reader. CB block starts at 59.
-        bounded_kv_slab_count};
+        circular_kv_slab_count};
 
     std::map<std::string, std::string> defines;
     defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);

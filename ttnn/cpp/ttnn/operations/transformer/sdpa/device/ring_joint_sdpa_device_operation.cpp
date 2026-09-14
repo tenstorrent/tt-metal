@@ -287,24 +287,15 @@ void validate_runtime_patched_scalars(const RingJointSDPAParams& args, const Rin
             "logical_n={}",
             kv_actual_isl,
             args.logical_n);
-        if (args.has_bounded_kv()) {
+        if (args.circular_kv_cache) {
             // Circular sliding KV: logical_n legitimately exceeds the physical capacity — the cache
             // keeps only the newest chunk-group slabs (chunk group g in local slab g % n_slabs).
-            // The slab count is DERIVED from the cache/Q geometry; require whole slabs and at least
-            // two of them. The per-dispatch alignment (logical_n on a ring-group boundary, the new
-            // chunk filling exactly one group) is enforced by the chunked sliding block below,
-            // which always runs for this configuration.
+            // Whole slabs are already required by the rotation checks; the per-dispatch alignment
+            // (logical_n on a ring-group boundary, one group per chunk) by the chunked sliding block.
             TT_FATAL(
-                chunk_capacity > 0 && cache_capacity % chunk_capacity == 0,
-                "circular_kv_cache requires a cache of whole Q-sized chunk slabs. Got cache "
-                "capacity={}, chunk capacity={}",
-                cache_capacity,
-                chunk_capacity);
-            const auto n_slabs = cache_capacity / chunk_capacity;
-            TT_FATAL(
-                n_slabs >= 2,
+                tensor_args.kv_slab_count() >= 2,
                 "circular_kv_cache needs >= 2 slabs (current chunk + predecessor window slab). Got {}",
-                n_slabs);
+                tensor_args.kv_slab_count());
         } else {
             TT_FATAL(
                 args.logical_n <= cache_capacity,
@@ -632,21 +623,22 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             N_local_q);
     }
 
-    if (args.has_bounded_kv()) {
+    if (args.circular_kv_cache) {
         // Bounded circular sliding KV cache: only the chunked sliding-window read path knows how to
         // wrap local slab addressing (sliding_window_work_plan.hpp). Everything else keeps absolute
         // slab-major addressing and would read garbage from a wrapped cache.
         TT_FATAL(
             args.has_sliding_window() && is_chunked, "circular_kv_cache requires chunked sliding-window attention");
         // Metadata first: on that path kv_actual_isl is read on-device (host value absent), so the
-        // rotation check below would otherwise mask the real reason.
+        // rotation check below would otherwise mask the real reason. The metadata-path halo helper
+        // (compute_halo_tail_start_Ht, ring_attention_all_gather_metadata.hpp) derives the source slab
+        // without the circular wrap, so circular caches must stay off that path.
         TT_FATAL(!tensor_args.has_metadata(), "circular_kv_cache does not support the trace-safe metadata path");
         TT_FATAL(
             has_kv_pad_rotation,
             "circular_kv_cache requires kv_actual_isl (KV-pad rotation): the wrap position is "
             "derived from the true absolute logical_n/kv_actual_isl");
-        // Slab-count/geometry value checks live in validate_runtime_patched_scalars (hash-invariant
-        // shapes, but kept beside the capacity check they replace).
+        // The slab-count check lives in validate_runtime_patched_scalars (hash-invariant shapes).
     }
 
     TT_FATAL(!(L != 0 && args.is_causal), "Causality is enabled only for ring attention");
@@ -808,7 +800,7 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     // Bounded circular sliding KV keeps only the newest slabs, so logical_n legitimately exceeds
     // the physical global extent; its geometry is checked in validate_runtime_patched_scalars.
     TT_FATAL(
-        args.has_bounded_kv() || args.logical_n <= N_global,
+        args.circular_kv_cache || args.logical_n <= N_global,
         "Logical sequence length must be less than or equal to global sequence length. Got logical sequence length: "
         "{}, global sequence length: {}",
         args.logical_n,
