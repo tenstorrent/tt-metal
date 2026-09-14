@@ -482,7 +482,7 @@ void kernel_main() {
                 pack_reconfig_data_format(out_cb_id);
 #endif
 #ifdef ARCH_QUASAR
-                pack_init(out_cb_id);
+                pack_init(untilize_mode_out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
