@@ -23,6 +23,7 @@ from tools.generic_op_to_factory import (
     migration_workflow,
     prepare_baseline,
     prepare_target,
+    test_evidence,
 )
 from tools.generic_op_to_factory.classify_failures import parse_junit_xml
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path, verify_export
@@ -132,7 +133,6 @@ def plan(config):
         "workspace",
         "source_entry",
         "native_entry",
-        "smoke_nodeid",
         "cache_test",
         "build_argv",
         "precompile",
@@ -145,6 +145,7 @@ def plan(config):
         "command_timeout_seconds",
         "dependency_substitutions",
         "source_aliases",
+        "smoke_nodeid",
     }:
         raise ExportError("Missing or unknown port validation config keys")
     config = dict(config)
@@ -158,6 +159,7 @@ def plan(config):
     config.setdefault("command_timeout_seconds", None)
     config.setdefault("dependency_substitutions", [])
     config.setdefault("source_aliases", [])
+    config.setdefault("smoke_nodeid", None)
     aliases = config["source_aliases"]
     if not isinstance(aliases, list) or any(not isinstance(alias, str) for alias in aliases):
         raise ExportError("source_aliases must be a list of entry-point strings")
@@ -211,9 +213,11 @@ def plan(config):
         substitutions=config["dependency_substitutions"],
     )
     suite = f"eval/golden_tests/{run['golden_name']}"
-    if not config["smoke_nodeid"].startswith(suite + "/") or "::" not in config["smoke_nodeid"]:
-        raise ExportError("Choose an explicit smoke case in the recorded suite")
-    _safe_path(config["smoke_nodeid"].split("::")[0])
+    if config["smoke_nodeid"] is not None:
+        smoke = config["smoke_nodeid"]
+        if not isinstance(smoke, str) or not smoke.startswith(suite + "/") or "::" not in smoke:
+            raise ExportError("Choose an explicit smoke case in the recorded suite, or omit smoke_nodeid")
+        _safe_path(smoke.split("::")[0])
     _safe_path(config["cache_test"])
     if not config["cache_test"].startswith("tests/") or not config["cache_test"].endswith(".py"):
         raise ExportError("cache_test must identify a checked-in-style Python test path")
@@ -237,9 +241,14 @@ def plan(config):
     for path in (
         runtime / config["cache_test"],
         runtime / "tools/generic_op_to_factory/native_adapter.py",
+        runtime / "scripts/run_safe_pytest.sh",
     ):
         if not path.is_file() or not path.resolve().is_relative_to(runtime):
             raise ExportError(f"Required validation source is missing/redirected: {path}")
+    adapter = runtime / "tools/generic_op_to_factory/native_adapter.py"
+    if file_hash(adapter) != test_evidence.ADAPTER_SHA256:
+        raise ExportError("Target native_adapter.py must match this flow version before initialization")
+    test_evidence.check_runner(runtime / "scripts/run_safe_pytest.sh", precompile=config["precompile"])
     tree = GitTree(runtime, config["target_revision"])
     untracked = tree.git("ls-files", "--others", "--exclude-standard", "-z").decode().split("\0")
     untracked_hashes = {}
@@ -269,6 +278,7 @@ def plan(config):
                 Path(classify_failures.__file__),
                 Path(dependency_substitutions.__file__),
                 Path(factory_contract.__file__),
+                Path(test_evidence.__file__),
             )
         },
         "recorded_case_count": len(rows),
@@ -310,11 +320,36 @@ class PortValidation:
         if stage == "factory_contract":
             probe = attempt / "factory_contract.cpp"
             probe.write_text(factory_contract.render(c["factory_contract"]))
-            argv, cwd, evidence = factory_contract.compile_invocation(c["factory_contract"], self.runtime, probe)
+            build = self.runtime / "build_Release"
+            database = None
+            metadata = {}
+            if (build / "build.ninja").is_file():
+                # Read the completed build's actual commands, without reconfiguring
+                # CMake or disabling unity just to export a compilation database.
+                for path in build.rglob("*.ninja"):
+                    if path.resolve() != path or not path.is_file():
+                        raise ExportError("Redirected Ninja build metadata")
+                    metadata[str(path)] = file_hash(path)
+                self.runner.command(
+                    ["ninja", "-C", str(build), "-t", "compdb"],
+                    attempt,
+                    "compile-database",
+                    stdout_file="compile-database.json",
+                )
+                database = attempt / "compile-database.json"
+            argv, cwd, evidence = factory_contract.compile_invocation(
+                c["factory_contract"], self.runtime, probe, database=database
+            )
+            evidence.update(metadata)
             self.runner.command(argv, attempt, "factory-contract", cwd=cwd)
             write_json(attempt / "contract.json", {"kind": "ProgramDescriptor", **c["factory_contract"]})
             return evidence
         if stage in ("source_smoke", "source", "native_smoke", "native", "cache"):
+            if stage.endswith("smoke") and c["smoke_nodeid"] is None:
+                write_json(
+                    attempt / "skipped.json", {"reason": "Optional smoke omitted; full golden suite remains required"}
+                )
+                return {}
             mode = "source" if stage.startswith("source") else "native"
             route = {
                 "source": c["source_entry"],
@@ -366,8 +401,10 @@ class PortValidation:
                 device=True,
                 allowed=(0, 1) if stage in ("source", "native") else (0,),
             )
-            if "SAFE_PYTEST_RESULT: HANG" in (attempt / f"{stage}.log").read_text():
-                raise ExportError("Device hang prevents validation")
+            observed = test_evidence.verify(
+                attempt / f"{stage}.log", attempt / "junit.xml", route=route if stage != "cache" else None
+            )
+            write_json(attempt / "execution.json", observed)
             rows = parse_junit_xml(attempt / "junit.xml")
             if not rows:
                 raise ExportError("No test outcomes")

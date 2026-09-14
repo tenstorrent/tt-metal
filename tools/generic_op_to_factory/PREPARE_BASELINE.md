@@ -1,8 +1,9 @@
 # Prepare a baseline from a frozen run export
 
-For checkpointed orchestration of preparation, isolated checkout, build, safe
-test execution and comparison, see [the migration workflow](MIGRATION_WORKFLOW.md).
-The commands below remain available as independent building blocks.
+This is the Git-input preparation step of the default [migration flow](PORT_FLOW.md).
+After preparation, use `prepare_target` for the shared source/native target.
+The historical checkout/install instructions below apply only to the optional
+[historical-runtime diagnostic](MIGRATION_WORKFLOW.md).
 
 This stage reads Git objects, not an LLM or the current checkout's files. It
 does not fix generated code or turn a failed run into a passing operation.
@@ -50,7 +51,7 @@ submodule from the orchestrator revision. Preparation records both fields,
 without silently substituting one. The DB does not prove that a run never
 changed a helper or harness outside its ingested source tables.
 
-## Fresh runtime and installation
+## Optional historical runtime and installation
 
 Create an isolated tt-metal checkout at `starting_commit` under the user's
 tt-metal workspace. Run `git submodule update --init --recursive`. Materialize
@@ -137,5 +138,5 @@ attestation that runtime provenance matches. `migration_ready` stays false.
 ./scripts/run_safe_pytest.sh --run-all --no-precompile tools/generic_op_to_factory/tests/test_export_run.py tools/generic_op_to_factory/tests/test_prepare_baseline.py tools/generic_op_to_factory/tests/test_compare_baseline.py -q
 ```
 
-Run from this eval repository. Fixtures use synthetic DB rows and temporary
+Run from this tt-metal repository. Fixtures use synthetic DB rows and temporary
 Git repositories, never named production runs, network or accelerator access.

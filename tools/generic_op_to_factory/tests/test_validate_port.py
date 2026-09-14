@@ -4,6 +4,7 @@
 """Synthetic target/native orchestration; never opens a real device."""
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -23,7 +24,9 @@ def port(configured, tmp_path):
     revision = commit(
         baseline.runtime,
         {
-            "tools/generic_op_to_factory/native_adapter.py": b"# synthetic adapter; fake runner does not import it\n",
+            "tools/generic_op_to_factory/native_adapter.py": Path(validate_port.__file__)
+            .with_name("native_adapter.py")
+            .read_bytes(),
             "tests/test_cache.py": b"# fake runner emits a passing cache test\n",
             "ttnn/cpp/ttnn/operations/sample/device/sample.hpp": b"// synthetic operation header\n",
             "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp": b"// synthetic factory\n",
@@ -77,10 +80,48 @@ def test_port_plan_read_only(port):
     assert not Path(port["workspace"]).exists()
 
 
+@pytest.mark.parametrize("omit", [True, False])
+def test_default_flow_runs_only_two_full_suites_and_cache(port, omit):
+    if omit:
+        del port["smoke_nodeid"]
+    else:
+        port["smoke_nodeid"] = None
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("cache")
+    for stage in ("source_smoke", "native_smoke"):
+        attempt = validation.workspace / f"attempts/{stage}/001"
+        assert (attempt / "skipped.json").is_file()
+        assert not list(attempt.glob("*.command.json"))
+    real = list(validation.workspace.glob("attempts/*/001/junit.xml"))
+    assert {path.parent.parent.name for path in real} == {"source", "native", "cache"}
+
+
+def test_stale_target_adapter_is_refused(port):
+    (Path(port["runtime"]) / "tools/generic_op_to_factory/native_adapter.py").write_text("# stale")
+    with pytest.raises(ExportError, match="must match this flow"):  # allow-pytest.raises: host-only adapter gate
+        validate_port.plan(port)
+
+
 def test_factory_contract_is_required(port):
     del port["factory_contract"]
     with pytest.raises(ExportError, match="config keys"):  # allow-pytest.raises: host-only config validation
         validate_port.plan(port)
+
+
+def test_compilation_database_stdout_is_separate_from_diagnostics(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    attempt = validation.workspace / "stdout-test"
+    attempt.mkdir()
+    validation.runner.command(
+        ["python3", "-c", "import sys; print('[]'); print('compiler metadata warning', file=sys.stderr)"],
+        attempt,
+        "compdb",
+        stdout_file="database.json",
+    )
+    assert json.loads((attempt / "database.json").read_text()) == []
+    assert (attempt / "compdb.log").read_text() == "compiler metadata warning\n"
 
 
 @pytest.mark.parametrize("aliases", ["ttnn:alias", [None], ["bad-symbol"], ["ttnn:alias", "ttnn:alias"]])
@@ -138,6 +179,36 @@ def test_factory_contract_evidence_is_preserved(port):
     assert command["cwd"] == str(Path(port["runtime"]) / "build_Release")
     database = Path(port["runtime"]) / "build_Release/compile_commands.json"
     database.write_text("[]")
+    with pytest.raises(ExportError, match="evidence/runtime changed"):  # allow-pytest.raises: evidence drift validation
+        validation.run()
+
+
+def test_ninja_factory_gate_keeps_unity_configuration_and_fingerprints_metadata(port):
+    if shutil.which("ninja") is None:
+        pytest.skip("Ninja unavailable")
+    runtime = Path(port["runtime"])
+    build = runtime / "build_Release"
+    factory = runtime / port["factory_contract"]["factory_source"]
+    unity = build / "unity_0_cxx.cxx"
+    unity.write_text(f'#include "{factory}"\n')
+    ninja = build / "build.ninja"
+    ninja.write_text(
+        "rule compile\n"
+        f"  command = python3 {runtime / 'fake_contract_compiler.py'} -c $in -o $out\n"
+        f"build ignored.o: compile {unity}\n"
+    )
+    # A partial CMake database must not force a rebuild or hide the Ninja entry.
+    (build / "compile_commands.json").write_text("[]")
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("factory_contract")
+    attempt = validation.workspace / "attempts/factory_contract/001"
+    extraction = json.loads((attempt / "compile-database.command.json").read_text())
+    assert extraction["argv"] == ["ninja", "-C", str(build), "-t", "compdb"]
+    evidence = validation.state["stages"]["factory_contract"]["evidence"]
+    assert str(ninja) in evidence
+    assert str(unity) in evidence
+    ninja.write_text(ninja.read_text() + "# changed metadata\n")
     with pytest.raises(ExportError, match="evidence/runtime changed"):  # allow-pytest.raises: evidence drift validation
         validation.run()
 

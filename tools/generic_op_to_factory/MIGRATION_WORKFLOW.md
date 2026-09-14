@@ -1,7 +1,9 @@
-# General migration workflow: recorded-baseline milestone
+# Optional historical-runtime replay
 
-`tools.generic_op_to_factory.migration_workflow` orchestrates the first milestone of migrating a
-DB-recorded operation to a C++ program-factory operation. It consumes a
+`tools.generic_op_to_factory.migration_workflow` is the historical-runtime
+diagnostic, not a prerequisite of the default [two-golden migration flow](PORT_FLOW.md).
+Use it when target-source execution cannot run, differs from recorded DB outcomes,
+or historical reproduction is explicitly requested. It consumes a
 [verified frozen export](EXPORT_RUN.md); it does not ask an LLM to reconstruct
 source, query the live DB, or contain run/operation-specific recipes.
 

@@ -16,7 +16,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +26,7 @@ from tools.generic_op_to_factory import (
     dependency_substitutions,
     export_run,
     prepare_baseline,
+    test_evidence,
 )
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path, json_bytes
 
@@ -87,7 +88,14 @@ def write_json(path, value):
 
 
 def implementation():
-    modules = (export_run, prepare_baseline, compare_baseline, classify_failures, dependency_substitutions)
+    modules = (
+        export_run,
+        prepare_baseline,
+        compare_baseline,
+        classify_failures,
+        dependency_substitutions,
+        test_evidence,
+    )
     paths = [Path(__file__), *(Path(module.__file__) for module in modules)]
     return {path.name: _hash_file(path)[0] for path in paths}
 
@@ -465,6 +473,7 @@ class Workflow:
         activate=False,
         allowed=(0,),
         device=False,
+        stdout_file=None,
     ):
         argv = [arg.replace("{runtime}", str(self.runtime)).replace("{workspace}", str(self.workspace)) for arg in argv]
         if activate:
@@ -481,13 +490,19 @@ class Workflow:
         }
         meta_path = attempt / f"{label}.command.json"
         write_json(meta_path, metadata)
-        with (attempt / f"{label}.log").open("xb") as log:
+        with ExitStack() as streams:
+            log = streams.enter_context((attempt / f"{label}.log").open("xb"))
+            output = log
+            if stdout_file is not None:
+                if Path(stdout_file).name != stdout_file:
+                    raise ExportError("Command stdout destination must be a filename in its attempt")
+                output = streams.enter_context((attempt / stdout_file).open("xb"))
             child = subprocess.Popen(
                 argv,
                 cwd=cwd or self.runtime,
                 env=env,
-                stdout=log,
-                stderr=subprocess.STDOUT,
+                stdout=output,
+                stderr=log if stdout_file is not None else subprocess.STDOUT,
                 start_new_session=True,
             )
             metadata["pid"] = child.pid
@@ -657,6 +672,11 @@ class Workflow:
                     "reason": "No smoke node configured; full baseline still required",
                 }, []
             self.source_audit()
+            test_evidence.check_runner(
+                self.runtime / "scripts/run_safe_pytest.sh",
+                precompile=stage == "baseline" and config["precompile"],
+                require_raw=False,
+            )
             argv = ["./scripts/run_safe_pytest.sh", "--run-all"]
             if stage == "baseline" and config["precompile"]:
                 argv += [
@@ -695,6 +715,8 @@ class Workflow:
                 raise ExportError("Safe runner reported a device hang")
             self.source_audit()
             if stage != "collect":
+                observed = test_evidence.verify(attempt / f"{stage}.log", attempt / "junit.xml", require_raw=False)
+                write_json(attempt / "execution.json", observed)
                 rows = classify_failures.parse_junit_xml(attempt / "junit.xml")
                 if not rows:
                     raise ExportError("No test outcomes were produced")

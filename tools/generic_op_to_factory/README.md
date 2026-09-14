@@ -1,14 +1,24 @@
 # Generic operation → C++ ProgramDescriptor-factory migration
 
-This tt-metal-owned tool freezes a recorded eval run, reproduces its original
-baseline, and validates an authored native port. All orchestration, mapping,
+This tt-metal-owned tool freezes a recorded eval run and validates an authored
+native port with two golden suites on one target build. Historical replay is
+an optional diagnostic. All orchestration, mapping,
 review guidance and synthetic tests are versioned together here, on one
 tt-metal branch. The operation being migrated is a separate change.
 
-Start with [PORT_FLOW.md](PORT_FLOW.md) for the complete flow:
+Start with [PORT_FLOW.md](PORT_FLOW.md) for the complete flow.
+
+Use [COMPARISON_GATE.md](COMPARISON_GATE.md) for the detailed migration-acceptance
+protocol: host contract/planner comparison, cache transitions, paired host/device
+profiling, and explicit performance budgets. It distinguishes current automated
+checks from the additional measurement gates that still need tooling.
+
+Open [FLOW.html](FLOW.html) in a browser for an offline visual walkthrough,
+showing the shared target build, the two golden runs, file-only comparisons and
+optional diagnostics. It documents the flow; it is not a live status dashboard.
 
 1. [Export exact source and evidence](EXPORT_RUN.md) from a read-only DB snapshot.
-2. [Reproduce the recorded baseline](MIGRATION_WORKFLOW.md) in an isolated checkout.
+2. [Prepare frozen Git inputs](PREPARE_BASELINE.md) and one isolated target worktree.
 3. [Map the operation](MAPPING.md) and author its native
    [ProgramDescriptor factory](FACTORY_CONTRACT.md) and cache tests.
 4. [Validate source/native parity and cache behavior](PORT_FLOW.md), then complete
@@ -29,8 +39,9 @@ builds and golden tests need the selected checkout's own built environment.
 The evaluator repository is still a historical **input**: its recorded Git
 revision supplies golden suites, helpers and pytest plugins. It need not contain
 any of these migration tools, and no evaluator branch or submodule-pin change
-is part of installing the tool. Separate isolated checkouts reproduce source
-and target revisions; they do not split ownership of the migration flow.
+is part of installing the tool. Source and native golden suites share the final
+target worktree and build. A separate historical runtime is needed only for an
+explicit [historical-replay diagnostic](MIGRATION_WORKFLOW.md).
 
 JUnit parsing is owned locally in `classify_failures.py`, initially copied from
 `tt_ops_code_gen` revision `034527ad845a7b61596139802c4af567983a14bb`.

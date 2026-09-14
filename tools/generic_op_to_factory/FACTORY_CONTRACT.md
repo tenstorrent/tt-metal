@@ -59,21 +59,23 @@ See [MAPPING.md](MAPPING.md) for the actual adapter conditions and source links.
 The required `factory_contract` config identifies the device-operation header,
 qualified operation type and the registered factory `.cpp` (see [PORT_FLOW.md](PORT_FLOW.md)).
 After the normal build, `validate_port` writes a C++ probe and compiles it with
-`-fsyntax-only` using that translation unit's actual flags from
-`build_Release/compile_commands.json`. Both direct and CMake unity compilation
+`-fsyntax-only` using that translation unit's actual flags. For Ninja builds,
+the gate extracts commands with `ninja -t compdb` without reconfiguring. Other
+generators use `build_Release/compile_commands.json`. Both direct and CMake unity compilation
 entries are supported. Missing/ambiguous entries and unsupported command forms
 fail explicitly; the gate neither guesses include paths nor edits CMake.
-Build the target with `./build_metal.sh --export-compile-commands` (plus its
-other required flags). The default build can produce a partial, UMD-only
-database. This option currently disables TT unity builds, so choose it at the
-first target build to avoid switching configurations late in validation.
+The normal unity build is supported, including its CMake environment/ccache
+launcher. Do not add `--export-compile-commands` solely for this gate: it disables
+TT unity builds at the current revision. A non-Ninja build must provide a full
+database, not a partial UMD-only one.
 
 Static assertions check **every** alternative in `program_factory_t`: the
 framework descriptor concept, exact descriptor return type with a supported
 signature, and the explicit adapter-compatible refresh hook. Legacy factories,
 mixed descriptor/legacy variants, missing hooks and workload-only factories fail
 before any source/native device validation starts. The stage retains its probe,
-command, compiler log, contract receipt and compilation-database/unity hashes;
+command, compiler log, contract receipt and compilation-database/unity hashes
+(plus the Ninja metadata hashes when used);
 drift invalidates resume. Completion reports `factory_kind: ProgramDescriptor`.
 
 This is not proof that a Python binding dispatches to the configured type, that

@@ -366,8 +366,10 @@ precompile_warm() {
     env "${SRV_ENV[@]}" "${PROF_ENV[@]}" \
         UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
         LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
-        pytest "${PYTEST_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
+        pytest "${PYTEST_ARGS[@]}" --junitxml="${clog%.log}.junit.xml" \
+        -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
+    echo "SAFE_PYTEST_WARMUP_JUNIT=${clog%.log}.junit.xml" >&2
     t1=$(date +%s)
     TT_TIMING_PRECOMPILE_S=$((t1-t0))
     # The exit status is authoritative because up_front_collect OWNS it: on a genuine compile
@@ -756,15 +758,40 @@ trap '_signal_cleanup INT'  SIGINT
 # Run pytest in background so `wait` can be interrupted by a signal. Bash
 # blocks signal delivery while a synchronous foreground command is running.
 # Mirror stdout/stderr to PYTEST_STDOUT_LOG via process substitution so we can
-# grep for the libttsim watchdog message after a sim hang. Process substitution
-# leaves $! pointing at pytest itself (not tee), so the signal trap still kills
-# the right process tree.
-"${PYTEST_CMD[@]}" > >(tee "$PYTEST_STDOUT_LOG") 2>&1 &
+# grep for the libttsim watchdog message after a sim hang. Create tee in this
+# shell so its exact PID can be awaited; a substitution inside the background
+# pytest job would be its child, and a bare wait here would not drain it.
+exec {PYTEST_TEE_FD}> >(tee "$PYTEST_STDOUT_LOG")
+PYTEST_TEE_PID=$!
+if [[ ! "$PYTEST_TEE_PID" =~ ^[1-9][0-9]*$ ]]; then
+    exec {PYTEST_TEE_FD}>&-
+    echo "SAFE_PYTEST_ERROR: Unable to identify the log drain process"
+    exit 3
+fi
+"${PYTEST_CMD[@]}" >&"$PYTEST_TEE_FD" 2>&1 &
 CHILD_PID=$!
+exec {PYTEST_TEE_FD}>&-
 wait "$CHILD_PID"
 EXIT_CODE=$?
-wait 2>/dev/null  # let tee flush before we grep
+# An orphaned pytest descendant may retain the pipe. Bound the drain so that
+# incomplete output blocks validation instead of hanging the wrapper forever.
+if ! timeout 10s tail --pid="$PYTEST_TEE_PID" --sleep-interval=0.05 -f /dev/null; then
+    kill -TERM "$PYTEST_TEE_PID" 2>/dev/null || true
+    wait "$PYTEST_TEE_PID" 2>/dev/null || true
+    CHILD_PID=
+    echo ""
+    echo "SAFE_PYTEST_ERROR: Log drain timed out or failed; execution evidence is incomplete"
+    exit 3
+fi
+if ! wait "$PYTEST_TEE_PID" 2>/dev/null; then
+    CHILD_PID=
+    echo ""
+    echo "SAFE_PYTEST_ERROR: Log drain failed; execution evidence is incomplete"
+    exit 3
+fi
 CHILD_PID=
+echo ""
+echo "SAFE_PYTEST_RAW_EXIT_CODE=$EXIT_CODE"
 
 echo "========================================"
 

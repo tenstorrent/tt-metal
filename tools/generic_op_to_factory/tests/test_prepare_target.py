@@ -4,6 +4,7 @@
 """Target preparation tests use synthetic commits and exports only."""
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -64,6 +65,28 @@ def test_changed_golden_is_refused(target):
     package, runtime, _ = target
     (runtime / "eval/metrics.py").write_text("# changed\n")
     with pytest.raises(ExportError, match="golden/harness"):  # allow-pytest.raises: host-only workflow validation
+        prepare_target.inspect(*target)
+
+
+def test_only_exact_flow_runner_update_is_allowed_and_recorded(target):
+    _, runtime, _ = target
+    runner = runtime / "scripts/run_safe_pytest.sh"
+    canonical = Path(prepare_target.__file__).resolve().parents[2] / "scripts/run_safe_pytest.sh"
+    runner.write_bytes(canonical.read_bytes())
+    report = prepare_target.inspect(*target)
+    row = next(row for row in report["dependencies"] if row["path"] == "scripts/run_safe_pytest.sh")
+    assert row["flow_runner_update"]
+    assert row["target_sha256"] != row["target_commit_sha256"]
+    runner.write_bytes(runner.read_bytes() + b"# arbitrary target edit\n")
+    with pytest.raises(ExportError, match="uncommitted"):  # allow-pytest.raises: harness update gate
+        prepare_target.inspect(*target)
+
+
+def test_colocated_driver_does_not_approve_arbitrary_runner_changes(target, monkeypatch):
+    _, runtime, _ = target
+    monkeypatch.setattr(prepare_target, "__file__", str(runtime / "tools/generic_op_to_factory/prepare_target.py"))
+    (runtime / "scripts/run_safe_pytest.sh").write_text("# arbitrary local runner\n")
+    with pytest.raises(ExportError, match="uncommitted"):  # allow-pytest.raises: colocated admission gate
         prepare_target.inspect(*target)
 
 

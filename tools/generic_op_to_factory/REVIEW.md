@@ -1,5 +1,10 @@
 # Independent review gate
 
+For acceptance under [the detailed comparison protocol](COMPARISON_GATE.md),
+also review its G0–G5 evidence and measured budgets. The receipt below permits
+`not_measured` for the existing driver's narrower completion scope; that does
+not satisfy the protocol's performance gate.
+
 Before declaring a port complete, ask a separate, read-only agent to review it.
 Start the review alongside local inspection; do not give the reviewer an expected
 verdict. Re-review fixes against the final source and validation evidence.

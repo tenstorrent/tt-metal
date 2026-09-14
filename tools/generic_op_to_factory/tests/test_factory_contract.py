@@ -86,6 +86,16 @@ def test_command_string_is_tokenized_not_executed(inputs, tmp_path):
     assert "-DVALUE=two words" in argv and "-oout.o" not in argv
 
 
+def test_cmake_env_ccache_launcher_is_preserved(inputs, tmp_path):
+    runtime, specification = inputs
+    source = runtime / specification["factory_source"]
+    prefix = ["/usr/bin/cmake", "-E", "env", "CCACHE_COMPRESS=true", "CCACHE_BASEDIR=/a path", "ccache", "clang++"]
+    database(runtime, source, [*prefix, "-std=c++20", "-c", str(source), "-o", "out.o"])
+    argv, _, _ = contract.compile_invocation(specification, runtime, tmp_path / "probe.cpp")
+    assert argv[: len(prefix)] == prefix
+    assert argv[-2:] == ["-fsyntax-only", str(tmp_path / "probe.cpp")]
+
+
 @pytest.mark.parametrize("extra", [["&&", "false"], ["@flags.rsp"], ["-save-temps"], ["-E"]])
 def test_unsupported_commands_fail_closed(inputs, tmp_path, extra):
     runtime, specification = inputs
@@ -104,6 +114,15 @@ def test_missing_or_ambiguous_compile_entry_refused(inputs, tmp_path):
     entries = json.loads(db.read_text())
     db.write_text(json.dumps(entries * 2))
     with pytest.raises(ExportError, match="exactly one"):  # allow-pytest.raises: host-only command validation
+        contract.compile_invocation(specification, runtime, tmp_path / "probe.cpp")
+
+
+@pytest.mark.parametrize("source_count", [0, 2])
+def test_exactly_one_factory_source_argument_is_required(inputs, tmp_path, source_count):
+    runtime, specification = inputs
+    source = runtime / specification["factory_source"]
+    database(runtime, source, ["clang++", "-c", *([str(source)] * source_count)])
+    with pytest.raises(ExportError, match="one ordinary -c"):  # allow-pytest.raises: compiler command validation
         contract.compile_invocation(specification, runtime, tmp_path / "probe.cpp")
 
 

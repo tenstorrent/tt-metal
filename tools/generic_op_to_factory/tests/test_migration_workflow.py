@@ -19,13 +19,13 @@ from tools.generic_op_to_factory.tests.test_prepare_baseline import commit, inpu
 
 
 @pytest.fixture
-def configured(inputs, snapshot, tmp_path, request):
+def configured(inputs, snapshot, tmp_path, request, monkeypatch):
     _, evaluator, metal = inputs
     status = getattr(request, "param", "passed")
     scripts = {
         "create_venv.sh": "#!/bin/sh\nexec python3 -m venv --without-pip python_env\n",
         "build_metal.sh": "#!/bin/sh\nexec python3 fake_build.py\n",
-        "scripts/run_safe_pytest.sh": '#!/bin/sh\nexec python3 fake_pytest.py "$@"\n',
+        "scripts/run_safe_pytest.sh": '#!/bin/sh\n# SAFE_PYTEST_RAW_EXIT_CODE= and SAFE_PYTEST_WARMUP_JUNIT= supported by fake runner\nexec python3 fake_pytest.py "$@"\n',
         "fake_build.py": """from pathlib import Path
 p = Path('build_Release/lib')
 p.mkdir(parents=True, exist_ok=True)
@@ -37,6 +37,7 @@ from types import SimpleNamespace
 _ttnn = SimpleNamespace(__file__=str(Path(__file__).parent.parent / 'build_Release/lib/_ttnn.so'))
 """,
         "fake_pytest.py": """import sys
+import json
 import xml.etree.ElementTree as ET
 from pathlib import Path
 if '--collect-only' in sys.argv:
@@ -50,6 +51,10 @@ else:
     if failed:
         ET.SubElement(case, 'failure', message='synthetic failure')
     ET.ElementTree(root).write(output, encoding='utf-8')
+    if '--migration-route' in sys.argv:
+        route = json.loads(Path(sys.argv[sys.argv.index('--migration-route') + 1]).read_text())
+        print('MIGRATION_ROUTE=' + json.dumps({**route, 'calls': 1}))
+    print('SAFE_PYTEST_RAW_EXIT_CODE=' + str(1 if failed else 0))
     print('SAFE_PYTEST_RESULT: FAIL' if failed else 'SAFE_PYTEST_RESULT: PASS')
     sys.exit(1 if failed else 0)
 """.replace(
@@ -57,6 +62,13 @@ else:
         ),
         ".gitignore": "python_env/\nbuild_Release/\n__pycache__/\n",
     }
+    # This synthetic runtime intentionally ships a fake safe runner, not the
+    # hardware wrapper. Scope its approved hash to this fixture only.
+    monkeypatch.setattr(
+        flow.test_evidence,
+        "RUNNER_SHA256",
+        flow.hashlib.sha256(scripts["scripts/run_safe_pytest.sh"].encode()).hexdigest(),
+    )
     metal_revision = commit(metal, {name: content.encode() for name, content in scripts.items()})
     for name in ("create_venv.sh", "build_metal.sh", "scripts/run_safe_pytest.sh"):
         (metal / name).chmod(0o755)
@@ -242,6 +254,9 @@ def test_failed_execution_cannot_reach_comparison(configured, failure):
 
 
 def test_explicit_smoke_precompile_and_metrics(configured, monkeypatch):
+    # This fixture simulates command results, not warmup. Real runner admission
+    # and crash/warmup separation have dedicated test_test_evidence regressions.
+    monkeypatch.setattr(flow.test_evidence, "check_runner", lambda *args, **kwargs: None)
     configured.update(
         precompile=True,
         capture_metrics=True,

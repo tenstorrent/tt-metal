@@ -10,7 +10,6 @@ from pathlib import Path
 
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path
 
-
 PROBE = r"""
 #include "@HEADER@"
 #include "ttnn/operation_concepts.hpp"
@@ -89,16 +88,16 @@ def render(specification):
     )
 
 
-def compile_invocation(specification, runtime, probe):
+def compile_invocation(specification, runtime, probe, *, database=None):
     """Reuse the actual factory TU's build flags, including CMake unity builds.
 
     No shell evaluation, fallback flags, build-system edits or linking. Ambiguous
     or unsupported compilation databases fail explicitly.
     """
     runtime = Path(runtime).resolve()
-    database = runtime / "build_Release/compile_commands.json"
+    database = Path(database) if database is not None else runtime / "build_Release/compile_commands.json"
     if not database.is_file() or database.resolve() != database:
-        raise ExportError("Descriptor contract needs build_Release/compile_commands.json from the target build")
+        raise ExportError(f"Descriptor contract needs a regular compilation database: {database}")
     desired = runtime / specification["factory_source"]
     candidates = []
     for entry in json.loads(database.read_bytes()):
@@ -129,10 +128,22 @@ def compile_invocation(specification, runtime, probe):
         or any(arg in (";", "&&", "||", "|", ">", "<") or arg.startswith("@") for arg in arguments)
     ):
         raise ExportError("Unsupported compiler command; shell operators and response files are not accepted")
-    output = []
+    prefix = 0
+    if Path(arguments[0]).name == "cmake":
+        if arguments[1:3] != ["-E", "env"]:
+            raise ExportError("Unsupported CMake compiler launcher")
+        prefix = 3
+        while prefix < len(arguments) and re.match(r"^[A-Za-z_][A-Za-z_0-9]*=", arguments[prefix]):
+            prefix += 1
+        if prefix < len(arguments) and arguments[prefix] == "--":
+            prefix += 1
+        if prefix == len(arguments) or arguments[prefix].startswith("-"):
+            raise ExportError("CMake env launcher has no compiler command")
+    output = list(arguments[:prefix])
     skip = False
     compile_flags = 0
-    for arg in arguments:
+    source_flags = 0
+    for arg in arguments[prefix:]:
         if skip:
             skip = False
             continue
@@ -145,12 +156,13 @@ def compile_invocation(specification, runtime, probe):
         elif arg.startswith(("-o", "-MF", "-MT", "-MQ", "-MJ")):
             continue
         elif not arg.startswith("-") and (directory / arg).resolve() == source:
+            source_flags += 1
             continue
         elif arg.startswith(("-Wp,", "--output", "-save-temps")) or arg in ("-M", "-MM", "-E", "-S"):
             raise ExportError("Unsupported side-effect or non-compilation flags in factory command")
         else:
             output.append(arg)
-    if skip or compile_flags != 1:
+    if skip or compile_flags != 1 or source_flags != 1:
         raise ExportError("Expected one ordinary -c compiler invocation")
     output += ["-I", str(runtime), "-fsyntax-only", str(probe)]
     evidence = {str(database): _hash_file(database)[0]}

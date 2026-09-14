@@ -13,7 +13,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from tools.generic_op_to_factory import dependency_substitutions
+from tools.generic_op_to_factory import dependency_substitutions, test_evidence
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path, json_bytes
 from tools.generic_op_to_factory.prepare_baseline import GitTree, verify_preparation
 
@@ -45,15 +45,28 @@ def inspect(package, runtime, revision, *, allow_installed=False, substitutions=
             if not actual.is_file() or not actual.resolve().is_relative_to(runtime):
                 raise ExportError(f"Missing or redirected target reference: {relative}")
             target_bytes = metal.read(relative)
-            if actual.read_bytes() != target_bytes:
-                raise ExportError(f"Target reference has uncommitted changes: {relative}")
-            observed = hashlib.sha256(target_bytes).hexdigest()
+            actual_bytes = actual.read_bytes()
+            runner_update = False
+            if actual_bytes != target_bytes:
+                # The safe runner is flow tooling, not a kernel/helper substitution.
+                # Older targets may adopt this exact driver's evidence-safety update;
+                # arbitrary harness or canonical-helper edits remain forbidden.
+                runner_update = (
+                    relative == "scripts/run_safe_pytest.sh"
+                    and actual.resolve() == actual
+                    and hashlib.sha256(actual_bytes).hexdigest() == test_evidence.RUNNER_SHA256
+                )
+                if not runner_update:
+                    raise ExportError(f"Target reference has uncommitted changes: {relative}")
+            observed = hashlib.sha256(actual_bytes).hexdigest()
             dependencies.append(
                 {
                     "path": relative,
                     "recorded_sha256": entry["sha256"],
                     "target_sha256": observed,
                     "changed": observed != entry["sha256"],
+                    "target_commit_sha256": hashlib.sha256(target_bytes).hexdigest(),
+                    "flow_runner_update": runner_update,
                 }
             )
     destination = runtime / "ttnn/ttnn/operations" / _safe_path(manifest["operation"])
