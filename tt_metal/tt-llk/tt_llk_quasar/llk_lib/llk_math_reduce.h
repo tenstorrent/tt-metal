@@ -432,7 +432,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
                 TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
                 TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_8_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 8);
             }
-            else // ELTWISE_MATH_ROWS == 4 (4row_arch)
+            else if constexpr (ELTWISE_MATH_ROWS == 4)
             {
                 TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 0);
                 TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW32_OFFSET + 4);
