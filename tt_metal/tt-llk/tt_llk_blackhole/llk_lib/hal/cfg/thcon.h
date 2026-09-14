@@ -79,6 +79,7 @@ inline constexpr ThconReg11Selector Reg11 {};
 class ThconTileDescriptorFields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Raw {RegisterScope::State, 32, 64, 0, 0, 128, 2, 1536};           // Complete four-word descriptor
     static constexpr Field InDataFormat {RegisterScope::State, 32, 64, 0, 0, 4, 2, 1536};    // Unpacker input data format (4b)
     static constexpr Field Uncompressed {RegisterScope::State, 32, 64, 0, 4, 1, 2, 1536};    // Input tile is uncompressed (1b)
@@ -104,6 +105,7 @@ public:
 class ThconReg1Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Row_start_section_size {
         RegisterScope::State, 32, 64, 4, 0, 16, 2, 1536}; // Packer row-start section size (aligned to 16B word) - regs sets 0/2 (16b)
     static constexpr Field Exp_section_size {
@@ -154,6 +156,7 @@ public:
 class ThconReg2Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Out_data_format {RegisterScope::State, 32, 64, 8, 0, 4, 2, 1536}; // Unpacker 0/1 out data format (4b)
     static constexpr Field Throttle_mode {
         RegisterScope::State, 32, 64, 8, 4, 2, 2, 1536}; // Unpacker 0/1 high perf mode (enable 512-bit unpacker l1 read interface (2b)
@@ -231,6 +234,7 @@ public:
 class ThconReg3Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base_address {
         RegisterScope::State, 32, 64, 12, 0, 32, 2, 1536}; // Unpacker 0/1 Source/Tile base/context 0 address for unpacker (aligned to 16B word) (32b)
     static constexpr Field Base_cntx1_address {
@@ -244,6 +248,7 @@ public:
 class ThconReg4Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base_cntx4_address {
         RegisterScope::State, 32, 64, 16, 0, 32, 2, 1536}; // Unpacker 0 source/Tile context 4 address (aligned to 16B word) (32b)
     static constexpr Field Base_cntx5_address {
@@ -257,6 +262,7 @@ public:
 class ThconReg5Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Dest_cntx0_address {RegisterScope::State, 32, 64, 20, 0, 16, 2, 1536};  // Unpacker 0 dest srca context 0 address (16b)
     static constexpr Field Dest_cntx1_address {RegisterScope::State, 32, 64, 20, 16, 16, 2, 1536}; // Unpacker 0 dest srca context 1 address (16b)
     static constexpr Field Dest_cntx2_address {RegisterScope::State, 32, 64, 21, 0, 16, 2, 1536};  // Unpacker 0 dest srca context 2 address (16b)
@@ -270,6 +276,7 @@ public:
 class ThconReg6Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Source_address {RegisterScope::State, 32, 64, 24, 0, 32, 2, 1536};      // Mover 0 Source address, aligned to 16B (32b)
     static constexpr Field Destination_address {RegisterScope::State, 32, 64, 25, 0, 32, 2, 1536}; // Mover 0 Destination address, aligned to 16B (32b)
     static constexpr Field Buffer_size {RegisterScope::State, 32, 64, 26, 0, 30, 2, 1536};         // Mover 0 Buffer size in 16B chunks (max 64k) (30b)
@@ -283,6 +290,7 @@ public:
 class ThconReg7Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Offset_address {RegisterScope::State, 32, 64, 28, 0, 16, 2, 1536};           // Unpacker 0/1 offset context 0 address (16b)
     static constexpr Field Unpack_data_format_cntx0 {RegisterScope::State, 32, 64, 28, 16, 4, 2, 1536}; // Unpacker 0/1 input data format for context 0 (4b)
     static constexpr Field Unpack_out_data_format_cntx0 {
@@ -310,6 +318,7 @@ public:
 class ThconReg8Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Row_start_section_size {
         RegisterScope::State, 32, 64, 32, 0, 16, 2, 1536}; // Packer row-start section size (aligned to 16B word) - regs sets 1/3 (16b)
     static constexpr Field Exp_section_size {
@@ -355,6 +364,7 @@ public:
 class ThconReg9Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Pack_0_2_limit_address {
         RegisterScope::State, 32, 64, 36, 0, 17, 2, 1536}; // Packer dest limit address used for wraparound. Wraparound address is computed based on the fifo
                                                            // size below - regs sets 0/2 (17b)
@@ -368,6 +378,7 @@ public:
 class ThconReg10Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Unpack_limit_address {
         RegisterScope::State, 32, 64, 40, 0, 17, 2, 1536}; // Unpacker source/tile extra limit address used by cntx1 for wraparound ;  used when
                                                            // REG10_Unpack_limit_address_en is set. Wraparound address is computed based on the fifo size below.
@@ -382,6 +393,7 @@ public:
 class ThconReg11Fields
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Metadata_l1_addr {RegisterScope::State, 32, 64, 44, 0, 32, 2, 1536};    // Metadata Tile L1 addr (32b)
     static constexpr Field Metadata_limit_addr {RegisterScope::State, 32, 64, 45, 0, 32, 2, 1536}; // Metadata Limit addr (32b)
     static constexpr Field Metadata_fifo_size {RegisterScope::State, 32, 64, 46, 0, 32, 2, 1536};  // Metadata FIFO size (32b)

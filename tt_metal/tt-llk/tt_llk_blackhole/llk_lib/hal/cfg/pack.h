@@ -32,6 +32,7 @@ inline constexpr std::uint32_t TileSetMappingEntryCount    = 16;
 class Pck0AddrCtrlXyReg0
 { // Packer Address control register 0
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Xstride {RegisterScope::State, 32, 12, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Ystride {RegisterScope::State, 32, 12, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
@@ -39,6 +40,7 @@ public:
 class Pck0AddrCtrlZwReg0
 { // Packer Address control register 0
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Zstride {RegisterScope::State, 32, 13, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Wstride {RegisterScope::State, 32, 13, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
@@ -46,6 +48,7 @@ public:
 class Pck0AddrCtrlXyReg1
 { // Packer Address control register 1
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Xstride {RegisterScope::State, 32, 14, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Ystride {RegisterScope::State, 32, 14, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
@@ -53,6 +56,7 @@ public:
 class Pck0AddrCtrlZwReg1
 { // Packer Address control register 1
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Zstride {RegisterScope::State, 32, 15, 0, 0, 16, 1, 0};  // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
     static constexpr Field Wstride {RegisterScope::State, 32, 15, 0, 16, 16, 1, 0}; // Address = Base + X*Xstride + Y*Ystride + Z*Zstride + W*Wstride (16b)
 };
@@ -60,12 +64,14 @@ public:
 class Pck0AddrBaseReg0
 { // Packer address space base register 0
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base {RegisterScope::State, 32, 16, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
 };
 
 class Pck0AddrBaseReg1
 { // Packer address space base register 1
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Base {RegisterScope::State, 32, 17, 0, 0, 18, 1, 0}; // Base 0 (of 0-8) used in X-Y addressing (18b)
 };
 
@@ -220,6 +226,7 @@ inline constexpr PackerFields Packer {};
 class PckDestRdCtrl
 { // Packer dest regs read control
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field Read_32b_data {RegisterScope::State, 32, 18, 0, 0, 1, 1, 0}; // Read 32bit data from dest (fp32 or int32) (1b)
     static constexpr Field Read_unsigned {RegisterScope::State, 32, 18, 0, 1, 1, 1, 0}; // Read unsigned data (applicable with int8 read only) (1b)
     static constexpr Field Read_int8 {RegisterScope::State, 32, 18, 0, 2, 1, 1, 0};     // Read int8 data, produced by SFPU (1b)
@@ -230,6 +237,7 @@ public:
 class PckEdgeTileFaceSetSelect
 { // Packer face set mapping select and enable - 4 reg sets
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field select {RegisterScope::State, 32, 19, 0, 0, 8, 1, 0}; // Select: (8b)
     static constexpr Field enable {RegisterScope::State, 32, 19, 0, 8, 1, 1, 0}; // Enable per face set mapping (1b)
 };
@@ -247,6 +255,7 @@ private:
         static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile row-set mapping index out of range");
         static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile row-set set index out of range");
 
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Value {RegisterScope::State, 32, 20 + MappingIndex, 0, 2 * SetIndex, 2, 1, 0}; // Two Bit Mask Set Index (2b)
     };
 
@@ -339,36 +348,42 @@ inline constexpr TileRowSetMappingFields TileRowSetMapping {};
 class PckEdgeOffsetSec0
 { // Packer edge offset masks
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field mask {RegisterScope::State, 32, 24, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
 class PckEdgeMode
 { // Packer edge offset mode
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field mode {RegisterScope::State, 32, 24, 0, 16, 1, 1, 0}; // Mode: (1b)
 };
 
 class PckEdgeTileRowSetSelect
 { // Packer row set mapping select - 4 reg sets
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field select {RegisterScope::State, 32, 24, 0, 17, 8, 1, 0}; // Select: (8b)
 };
 
 class PckEdgeOffsetSec1
 { // Packer edge offset masks
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field mask {RegisterScope::State, 32, 25, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
 class PckEdgeOffsetSec2
 { // Packer edge offset masks
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field mask {RegisterScope::State, 32, 26, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
 class PckEdgeOffsetSec3
 { // Packer edge offset masks
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field mask {RegisterScope::State, 32, 27, 0, 0, 16, 1, 0}; // Row mask (16b)
 };
 
@@ -379,6 +394,7 @@ public:
 class PackCounters
 {
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field pack_per_xy_plane {RegisterScope::State, 32, 28, 0, 0, 8, 4, 32}; // Number of pack instructions per one XY plane (8b)
     static constexpr Field pack_reads_per_xy_plane {
         RegisterScope::State, 32, 28, 0, 8, 8, 4, 32}; // Number of pack reads from destination registers per XY plane (8b)
@@ -391,6 +407,7 @@ public:
 class PackConcatMask
 { // Concat mask per xy plane for blob packing Pack per face edge mask select mapping
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field pack_concat_mask {RegisterScope::State, 32, 32, 0, 0, 16, 4, 32}; // Concat mask per xy plane (16b)
 };
 
@@ -407,6 +424,7 @@ private:
         static_assert(MappingIndex < detail::TileSetMappingRegisterCount, "tile face-set mapping index out of range");
         static_assert(SetIndex < detail::TileSetMappingEntryCount, "tile face-set set index out of range");
 
+        // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
         static constexpr Field Value {RegisterScope::State, 32, 36 + MappingIndex, 0, 2 * SetIndex, 2, 1, 0}; // Two Bit Face Mask Set Index (2b)
     };
 
@@ -499,6 +517,7 @@ inline constexpr TileFaceSetMappingFields TileFaceSetMapping {};
 class PackGlobalCfgCtl
 { // Global packer config control across all contexts
 public:
+    // Field {scope, word_size, base, word, shamt0, width, count, sec_bits}
     static constexpr Field pack_disable_fast_tile_end_drain {
         RegisterScope::State, 32, 40, 0, 0, 1, 1, 0}; // Disable fast tile end drain for PackerConcat mask per xy plane for blob packing (1b)
 };
