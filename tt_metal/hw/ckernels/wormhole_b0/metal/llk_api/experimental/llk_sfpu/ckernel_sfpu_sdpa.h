@@ -36,14 +36,13 @@ inline void calculate_recip_first_column() {
     if constexpr (legacy_compat) {
         for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
             sfpi::vFloat in = sfpi::dst_reg[0];
-            // _reciprocal_compat_signed_ is the bare _reciprocal_compat_ plus the sign restore
-            // the primitive drops; this path used to call the primitive directly and so returned
-            // 1/|x| rather than 1/x. The one consumer that still takes it bare is
-            // sampling_recip_value in blackhole's ckernel_sfpu_sampling.h, which keeps |1/x|
-            // deliberately because its legacy path has to stay bit-identical for blaze. No such
-            // contract covers legacy_compat here -- it selects the algorithm, nothing pins the
-            // output bits -- so the sign is restored rather than documented.
-            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_signed_<APPROX ? 2 : 3>(in);
+            // Bare _reciprocal_compat_ (1/|x|), the pre-#53791 behaviour of this branch. #53791
+            // routed it through _reciprocal_compat_signed_ (1/x); the Llama 3.3-70B Galaxy
+            // decode token-matching test dropped from >= 94.5 % to 7.0 % Top-1 at exactly that
+            // commit (parent green, commit red, reproduced on three hosts), so some production
+            // caller does feed this branch a negative or -0.0 denominator. Restore the magnitude
+            // reciprocal here until that caller is identified; see PR #56495.
+            sfpi::vFloat out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
             if constexpr (!(is_fp32_dest_acc_en || APPROX)) {
                 out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
             }
