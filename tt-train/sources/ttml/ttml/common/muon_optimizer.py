@@ -61,7 +61,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
     resume see the correct per-optimizer base LRs.
     """
 
-    # TODO(#tt-metal issue pending): what contract should get_lr/set_lr (and
+    # TODO(https://github.com/tenstorrent/tt-metal/issues/56027): what contract should get_lr/set_lr (and
     # get_adamw_lr/set_adamw_lr) honor on this fused optimizer? Today they
     # address only one of the two internal LRs, which is why schedulers are
     # rejected on the wrapper (see supports_lr_scheduling) — but the same
