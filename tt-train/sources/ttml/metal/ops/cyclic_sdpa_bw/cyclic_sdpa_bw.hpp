@@ -6,6 +6,7 @@
 
 #include <tuple>
 
+#include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal {
@@ -35,7 +36,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     const ttnn::Tensor& log_sum_exp,
     const ttnn::Tensor& row_scalar,
     uint32_t rows_per_block_tiles = 1U,
-    bool use_barrier = false);
+    bool use_barrier = false,
+    AttentionMaskType mask_type = AttentionMaskType::Causal);
 
 // The same thing, taking what a forward pass actually hands back.
 //
@@ -52,6 +54,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw_from_forward
     const ttnn::Tensor& attn_output,
     const ttnn::Tensor& log_sum_exp,
     uint32_t rows_per_block_tiles = 1U,
-    bool use_barrier = false);
+    bool use_barrier = false,
+    AttentionMaskType mask_type = AttentionMaskType::Causal);
 
 }  // namespace ttml::metal

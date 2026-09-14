@@ -60,6 +60,10 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
             enchantum::to_string(t->dtype()));
     }
 
+    TT_FATAL(
+        args.mask_type != ttml::metal::AttentionMaskType::Arbitrary,
+        "cyclic_sdpa_bw has no mask-tensor path: use Causal for the triangle or None for a full block");
+
     const auto shape = query.logical_shape();
     TT_FATAL(shape.rank() == 4U, "cyclic_sdpa_bw takes rank-4 tensors (batch, head, sequence, head dim)");
     const uint32_t N = static_cast<uint32_t>(shape[2]);
@@ -128,6 +132,8 @@ CyclicSDPABackwardDeviceOperation::tensor_return_value_t CyclicSDPABackwardDevic
 
 ttsl::hash::hash_t CyclicSDPABackwardDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // args carries rows_per_block_tiles, the mask type and the barrier flag,
+    // all of which change the compiled kernels, so they must be in the hash.
     return tt::tt_metal::operation::hash_operation<CyclicSDPABackwardDeviceOperation>(
         args, tensor_args.query.dtype(), tensor_args.query.logical_shape());
 }
@@ -146,13 +152,14 @@ ttml_cyclic_sdpa_bw(
     const ttnn::Tensor& row_scalar,
     uint32_t rows_per_block_tiles,
     bool use_barrier,
+    ttml::metal::AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_bw::device::CyclicSDPABackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
-        .rows_per_block_tiles = rows_per_block_tiles, .use_barrier = use_barrier};
+        .rows_per_block_tiles = rows_per_block_tiles, .mask_type = mask_type, .use_barrier = use_barrier};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,

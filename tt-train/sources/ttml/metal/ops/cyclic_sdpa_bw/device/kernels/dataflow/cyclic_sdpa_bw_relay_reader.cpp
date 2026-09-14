@@ -101,6 +101,21 @@
 #define ENDPOINT_SYNC 0
 #endif
 
+// DENSE_MODE selects the unmasked schedule: every block pair is live, which
+// is what a ring-attention step needs when the visiting key/value chunk is
+// earlier in the sequence than the local query chunk. It changes the schedule
+// (2T timesteps in two passes rather than T + 1) and, in the compute kernel,
+// removes the intra-block mask; nothing else about the relay changes.
+#ifndef DENSE_MODE
+#define DENSE_MODE 0
+#endif
+
+#if DENSE_MODE
+constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
+#else
+constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
@@ -184,8 +199,8 @@ void kernel_main() {
     constexpr uint32_t cb_column_progress = tt::CBIndex::c_26;
 
     using namespace ttml::metal::ops::cyclic_sdpa_bw;
-    constexpr CyclicSchedule sched(kCores);
-    constexpr uint32_t kTimesteps = 2u * kCores + 1u;
+    constexpr CyclicSchedule sched(kCores, kMaskMode);
+    constexpr uint32_t kTimesteps = sched.num_timesteps();
     const auto neighbors = snake_neighbors(kCores, my_core);
 
     const uint32_t tile_bytes = get_tile_size(cb_query);

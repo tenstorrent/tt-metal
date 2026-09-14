@@ -109,6 +109,21 @@
 #define FOLD_SCALE_INTO_KEY 0
 #endif
 
+// DENSE_MODE selects the unmasked schedule: every block pair is live, which
+// is what a ring-attention step needs when the visiting key/value chunk is
+// earlier in the sequence than the local query chunk. It changes the schedule
+// (2T timesteps in two passes rather than T + 1) and, in the compute kernel,
+// removes the intra-block mask; nothing else about the relay changes.
+#ifndef DENSE_MODE
+#define DENSE_MODE 0
+#endif
+
+#if DENSE_MODE
+constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
+#else
+constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
+#endif
+
 // RELEASE_TOKEN: publish a token once this timestep's packet slot has been
 // popped, so the relay reader knows the slot is free and can hand its
 // producer the credit at the release -- the paper's timing -- instead of two
@@ -340,8 +355,8 @@ void kernel_main() {
     const uint32_t my_core = get_arg_val<uint32_t>(0);
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
-    constexpr CyclicSchedule sched(kCores);
-    constexpr uint32_t kTimesteps = 2u * kCores + 1u;
+    constexpr CyclicSchedule sched(kCores, kMaskMode);
+    constexpr uint32_t kTimesteps = sched.num_timesteps();
 
 #if COLUMN_RESIDENT
     // Which columns this core owns, whether each has been resident before --
@@ -364,7 +379,9 @@ void kernel_main() {
 
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
-        const bool diagonal = pair.i == pair.j;
+        // Dense mode masks nothing, so a pair with i == j is an ordinary
+        // full block there and must not take the triangular mask.
+        const bool diagonal = (DENSE_MODE == 0) && (pair.i == pair.j);
 
 #if COLUMN_RESIDENT
         // Popped only when the column changes, which releases the storage for
