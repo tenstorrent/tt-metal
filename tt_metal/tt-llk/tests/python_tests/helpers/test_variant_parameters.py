@@ -22,7 +22,6 @@ from .llk_params import (
     DstRoundingMode,
     EltwiseBinaryReuseDestType,
     FastMode,
-    FusedSort,
     ImpliedMathFormat,
     L1Accumulation,
     MathFidelity,
@@ -671,14 +670,6 @@ class STABLE_SORT(TemplateParameter):
 
 
 @dataclass
-class FUSED_SORT(TemplateParameter):
-    fused_sort: FusedSort = FusedSort.No
-
-    def convert_to_cpp(self) -> str:
-        return f"constexpr bool FUSED_SORT = {str(self.fused_sort.value).lower()};"
-
-
-@dataclass
 class DEST_SYNC(TemplateParameter):
     dest_sync: DestSync = DestSync.Half
 
@@ -801,16 +792,6 @@ class TOPK(TemplateParameter):
     topk_matrix_width: int = 0
     topk_sort_direction: TopKSortDirection = TopKSortDirection.Descending
     topk_stable_sort: bool = False
-    # Fused-key stable mode: [bf16 value | u16 index] packed 32-bit keys sorted by the unstable
-    # network (requires dest_acc=Yes; mutually exclusive with topk_stable_sort).
-    topk_fused_stable: bool = False
-    # Rank-stamped stable mode: sign-conditioned local-rank tags in the value words' lo16, true
-    # indices riding index tracking; the unstable network sorts the tagged keys (requires
-    # dest_acc=Yes; mutually exclusive with both other stable modes).
-    topk_rank_stamped: bool = False
-    # Rank-stamped only: rank tag field width in the value word's low bits (16 for bf16 values,
-    # narrower for fp32 keys whose low mantissa bits are zero).
-    topk_tag_bits: int = 16
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -819,9 +800,6 @@ class TOPK(TemplateParameter):
             f"constexpr std::uint32_t TOPK_NUM_ITERATIONS = {int(math.log2(self.topk_matrix_width // TILE_DIMENSIONS[1] // 2))};",
             f"constexpr std::uint32_t TOPK_SORT_DIRECTION = {self.topk_sort_direction.value};",
             f"constexpr bool TOPK_STABLE_SORT = {str(self.topk_stable_sort).lower()};",
-            f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
-            f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
-            f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
         ]
         return "\n".join(lines)
 
@@ -832,11 +810,8 @@ class TOPK(TemplateParameter):
             "std::uint32_t TOPK_NUM_ITERATIONS;",
             "std::uint32_t TOPK_SORT_DIRECTION;",
             "bool TOPK_STABLE_SORT;",
-            "bool TOPK_FUSED_STABLE;",
-            "bool TOPK_RANK_STAMPED;",
-            "std::uint32_t TOPK_TAG_BITS;",
         ]
-        return "\n".join(lines), "IIII???I"
+        return "\n".join(lines), "IIII?"
 
 
 @dataclass

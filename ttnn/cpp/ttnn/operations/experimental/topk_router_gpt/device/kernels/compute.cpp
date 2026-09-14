@@ -12,7 +12,6 @@
 
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/topk.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/tile_move_copy.h"

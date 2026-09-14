@@ -162,7 +162,7 @@ PERF_TEST_SCHEMAS = {
         },
     },
     "perf_eltwise_unary_sfpu": {
-        "version": 4,
+        "version": 3,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -175,7 +175,6 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",
@@ -652,7 +651,7 @@ PERF_TEST_SCHEMAS = {
         "test_name_aliases": {"perf_sfpu_ternary": "perf_sfpu_ternary"},
     },
     "perf_vif_targets": {
-        "version": 2,
+        "version": 1,
         "columns": [
             "approx_mode",
             "clamp_negative",
@@ -665,7 +664,6 @@ PERF_TEST_SCHEMAS = {
             "formats.register_B",
             "formats.sfpu_src",
             "formats.sfpu_dst",
-            "fused_sort",
             "iterations",
             "loop_factor",
             "marker",

@@ -103,7 +103,6 @@ enum class SfpuType {
     topk_local_sort,
     topk_merge,
     topk_rebuild,
-    topk_defuse,
     unary_ne,
     unary_eq,
     unary_gt,

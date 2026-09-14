@@ -390,8 +390,8 @@ def test_topk_quasar(
 ):
     if stable_sort:
         pytest.skip(
-            "Quasar LLK implements no stable-sort bitonic network; ttnn rejects stable sort on Quasar by design."
-        )
+            "Stable sort is currently broken in LLK API."
+        )  # TODO: Check tenstorrent/tt-metal#33492 and remove this once fixed.
 
     run_topk_quasar_case(
         formats,
