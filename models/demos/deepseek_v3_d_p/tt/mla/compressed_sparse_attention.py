@@ -167,7 +167,10 @@ class TtCSA(TtV4AttentionBase):
         """One compression window per row of a tile. At ratio 4 that is 128 tokens, and it buys three
         things at once: the compressed append offset (entry_count = tokens/4) lands tile-aligned so
         fill_cache can take it directly, the carry slice start (real_len - 128) is tile-aligned, and a
-        chunk always holds a whole sliding window for the next one to carry."""
+        chunk always holds a whole sliding window for the next one to carry.
+
+        This is the granularity of the SLAB WIDTH, not of a chunk's real length: forward requires every
+        non-final chunk to be a whole slab, which is stricter. See its own assert for why."""
         return self.compressor.compress_rate * ttnn.TILE_SIZE
 
     @property
@@ -431,11 +434,7 @@ class TtCSA(TtV4AttentionBase):
 
     def _build_index(self, state, top_k):
         """This chunk's index list: overwrite the source's top-k block, then gather through the
-        permutation the chunk's position calls for.
-
-        The gather is what compacts; see ``_build_index_consts`` for why only the first chunk needs it.
-        Both operands are persistent, and ``ttnn.gather`` is out-of-place, so neither is written
-        through."""
+        permutation the chunk's position calls for."""
         source, rows, k = self._index_source, self._index_source.shape[2], top_k.shape[3]
         ttnn.experimental.slice_write(
             top_k,
@@ -444,7 +443,20 @@ class TtCSA(TtV4AttentionBase):
             end=[1, 1, rows, self.sliding_window + k],
             step=[1, 1, 1, 1],
         )
-        return ttnn.gather(source, -1, self._index_perm[0 if state.kv_actual == 0 else 1])
+        return self.index_list(first_chunk=state.kv_actual == 0)
+
+    def index_list(self, *, first_chunk: bool):
+        """The index list attention reads, gathered from the persistent source buffer.
+
+        The gather is what compacts; see ``index_tables`` for why only the first chunk needs it. Both
+        operands are persistent and ``ttnn.gather`` is out-of-place, so neither is written through --
+        which is also why this can be called again after a chunk to get that chunk's list back.
+
+        Public because the list is the one intermediate a caller cannot otherwise see: ``forward``
+        deallocates its copy, while the source buffer keeps the top-k it gathered from. ``first_chunk``
+        has to be passed rather than read off the state, because ``forward`` has already advanced
+        ``kv_actual`` by the time a caller gets here."""
+        return ttnn.gather(self._index_source, -1, self._index_perm[0 if first_chunk else 1])
 
     def _sparse_attention(self, q, table, index, cos, sin):
         """One ``sparse_sdpa`` over the joint table, then V's RoPE undone.
@@ -510,12 +522,20 @@ class TtCSA(TtV4AttentionBase):
             f"context longer than the state was allocated for: {state.kv_actual + real_len} tokens > "
             f"max_seq_len {state.max_seq_len}"
         )
-        # A non-final chunk off the chunk_align grid strands its leftover tokens -- they never join a
-        # compression window -- and takes the append offset off its tile boundary for every chunk after.
-        # Checked on tokens, where a dropped partial window is still visible.
-        assert state.kv_actual % self.chunk_align == 0, (
-            f"cannot append after a chunk that left {state.kv_actual % self.chunk_align} tokens past a "
-            f"{self.chunk_align}-token boundary; only the final chunk may be ragged"
+        # Every chunk before this one must have been WHOLE, not merely chunk_align-aligned. A short
+        # non-final chunk leaves kv_actual mid-slab, and the indexer's key cache is block-cyclic:
+        # update_padded_kv_cache ROTATES which chip owns which slab as soon as the write offset is not a
+        # whole number of slabs (it only checks tile alignment, so it takes this silently), and indexer_score's
+        # causal geometry rotates with it -- while the hidden states arrive SP-sharded linearly. Queries
+        # then score keys at other tokens' positions, and under a saturating top-k that shows up as a
+        # wrong causal threshold rather than a wrong ranking: the picks name entries the query must not
+        # see. A slab here IS the padded chunk width, so "slab-aligned" and "every earlier chunk was
+        # whole" are the same condition, and it is the one the prefill runtime already meets by only
+        # ever ragging the last chunk. Checked on tokens, where a stranded partial window is visible too.
+        assert state.kv_actual % seq_pad_global == 0, (
+            f"cannot append after a ragged chunk: {state.kv_actual} tokens is not a multiple of the "
+            f"{seq_pad_global}-token slab, so the indexer's block-cyclic cache and its causal geometry "
+            f"would rotate away from the queries; only the final chunk may be ragged"
         )
 
         n_new = real_len // rate
