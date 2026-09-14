@@ -1208,8 +1208,18 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixBufferTrackingMatchesAllocator)
         // Allocate distinctive amounts so a coincidental match is unlikely.
         constexpr DeviceAddr kDramBytes = 64 * 1024;
         constexpr DeviceAddr kL1Bytes = 16 * 1024;
-        auto dram_buffer = Buffer::create(device, kDramBytes, kDramBytes, BufferType::DRAM);
-        auto l1_buffer = Buffer::create(device, kL1Bytes, kL1Bytes, BufferType::L1);
+        auto dram_buffer = CreateBuffer(BufferConfig{
+            .device = device,
+            .size = kDramBytes,
+            .page_size = kDramBytes,
+            .buffer_type = BufferType::DRAM,
+        });
+        auto l1_buffer = CreateBuffer(BufferConfig{
+            .device = device,
+            .size = kL1Bytes,
+            .page_size = kL1Bytes,
+            .buffer_type = BufferType::L1,
+        });
 
         const auto allocator_dram_after = device->allocator()->get_statistics(BufferType::DRAM).total_allocated_bytes;
         const auto allocator_l1_after = device->allocator()->get_statistics(BufferType::L1).total_allocated_bytes;
@@ -1272,7 +1282,12 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixBufferTrackingSeesOtherThreads)
         uint64_t during = 0;
 
         std::thread worker([&] {
-            auto buffer = Buffer::create(device, kDramBytes, kDramBytes, BufferType::DRAM);
+            auto buffer = CreateBuffer(BufferConfig{
+                .device = device,
+                .size = kDramBytes,
+                .page_size = kDramBytes,
+                .buffer_type = BufferType::DRAM,
+            });
             during = shm_dram();
         });
         worker.join();
