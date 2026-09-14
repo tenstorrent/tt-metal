@@ -402,12 +402,10 @@ def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
     got = state[0, :, :, 32] * scale + torch.log(state[0, :, :, 0])
 
     logits = (q.float() @ k.float().transpose(-1, -2)) * scale  # [1,H,S,T]
+    ids = indices[0].to(torch.int64)  # [H, n_q_tiles, W], sentinel-tailed
     listed = torch.zeros(heads, n_q_tiles, n_blocks, dtype=torch.bool)
-    for h in range(heads):
-        for r in range(n_q_tiles):
-            for b in indices[h, r]:
-                if int(b) != 0xFFFFFFFF:
-                    listed[h, r, int(b)] = True
+    real = ids != SENTINEL
+    listed.scatter_(2, ids.masked_fill(~real, 0), real)
     key_ok = listed.repeat_interleave(BLOCK, dim=2) & token_valid[None, None, :]
     key_ok = key_ok.repeat_interleave(BLOCK, dim=1)  # q tile -> q row
     want = torch.logsumexp(logits[0].masked_fill(~key_ok, float("-inf")), dim=-1)
