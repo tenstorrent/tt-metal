@@ -630,7 +630,7 @@ ALWI void sdpa_tail_l_block(
     tile_regs_wait();
     if constexpr (untilize) {
         if constexpr (explicit_untilize_geometry) {
-            custom_pack_untilize_dest<block_size, block_size * num_blocks, dense>(
+            custom_pack_untilize_dest<block_size, block_size * num_blocks, false, TILE_C_DIM, dense>(
                 cb_l_out, 8, dense ? 2 : 4, 1, block_index);
         } else {
             pack_untilize_dest<block_size, block_size * num_blocks, false, false, TILE_C_DIM, 0, dense>(

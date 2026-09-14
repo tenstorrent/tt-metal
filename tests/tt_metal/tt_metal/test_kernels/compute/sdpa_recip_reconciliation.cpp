@@ -35,7 +35,11 @@ void kernel_main() {
         MATH((t6_semaphore_post<p_stall::MATH>(semaphore::FPU_SFPU)));
         PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
         PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
-        PACK((_llk_math_eltwise_unary_sfpu_init_<SfpuType::unused>()));
+        // This LLK unit fixture seeds the cached row sums consumed by the
+        // public compute_sdpa_recip API, independently of QK/exp/reduce. The
+        // guarded LLK initializer rejects sanitizer builds; direct register
+        // setup is confined to this fixture so the signaling can be isolated.
+        PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::unused, DST_ACCUM_MODE>()));
         PACK((sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vFloat(2.0f)));
         PACK((sfpi::l_reg[sfpi::LRegs::LReg2] = sfpi::vFloat(2.0f)));
 

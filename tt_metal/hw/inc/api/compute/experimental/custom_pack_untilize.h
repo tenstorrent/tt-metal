@@ -20,20 +20,29 @@ template <
 inline void configure_explicit_geometry(std::uint32_t ocb, std::uint32_t face_r_dim, std::uint32_t num_faces) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(ocb);
+    // Match the geometry-to-tile mapping used by JitBuildOptions: one/two
+    // faces occupy one face row; four faces occupy two face rows.
+    const std::uint32_t tile_r_dim = face_r_dim * (num_faces > 2 ? 2 : 1);
+    const std::uint32_t tile_c_dim = num_faces == 1 ? FACE_C_DIM : TILE_C_DIM;
     _llk_pack_hw_configure_<DST_ACCUM_MODE, PackMode::Default>(
         pack_src_format[output_id],
         pack_dst_format[output_id],
         get_local_cb_interface(output_id).fifo_page_size,
         face_r_dim,
-        get_output_tile_c_dim(output_id),
+        tile_c_dim,
         num_faces,
-        get_output_partial_face(output_id),
+        tile_r_dim < TILE_R_DIM,
         0);
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         pack_src_format[output_id], pack_dst_format[output_id], face_r_dim, num_faces);
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim, bool dense>
+template <
+    std::uint32_t block_ct_dim,
+    std::uint32_t full_ct_dim,
+    bool narrow_row,
+    std::uint32_t row_num_datums,
+    bool dense>
 inline void pack_explicit_geometry(
     std::uint32_t ocb,
     std::uint32_t face_r_dim,
@@ -43,7 +52,7 @@ inline void pack_explicit_geometry(
     std::uint32_t tile_dst_rt_offset) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(ocb);
-    llk_pack_untilize_impl<block_ct_dim, full_ct_dim, false, TILE_C_DIM, 0, dense>(
+    llk_pack_untilize_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, 0, dense>(
         block_rt_dim,
         get_local_cb_interface(output_id).fifo_wr_ptr - 1,
         pack_src_format[output_id],
@@ -62,6 +71,7 @@ inline void pack_explicit_geometry(
 // Does not reconfigure math/remap or reset destination synchronization.
 // face_r_dim must be 1..16; num_faces must be 1, 2, or 4. Block width must fit
 // the caller's acquired DEST capacity and divide full_ct_dim.
+// As with pack_untilize_dest, block-float output is unsupported.
 template <
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
@@ -81,9 +91,15 @@ ALWI void custom_pack_untilize_dest_init(
     PACK((llk_init_packer_dest_offset_registers<PackMode::Untilize, false>(ocb)));
 }
 
-// Pair with custom_pack_untilize_dest_init using the same face geometry.
+// Pair with custom_pack_untilize_dest_init using the same template parameters
+// and face geometry.
 // The ordinary pack_untilize_dest reads num_faces from CB metadata again.
-template <std::uint32_t block_ct_dim = 8, std::uint32_t full_ct_dim = block_ct_dim, bool dense = false>
+template <
+    std::uint32_t block_ct_dim = 8,
+    std::uint32_t full_ct_dim = block_ct_dim,
+    bool narrow_row = false,
+    std::uint32_t row_num_datums = TILE_C_DIM,
+    bool dense = false>
 ALWI void custom_pack_untilize_dest(
     std::uint32_t ocb,
     std::uint32_t face_r_dim,
@@ -91,7 +107,7 @@ ALWI void custom_pack_untilize_dest(
     std::uint32_t block_rt_dim = 1,
     std::uint32_t block_c_index = 0,
     std::uint32_t tile_dst_rt_offset = 0) {
-    PACK((pack_untilize_detail::pack_explicit_geometry<block_ct_dim, full_ct_dim, dense>(
+    PACK((pack_untilize_detail::pack_explicit_geometry<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense>(
         ocb, face_r_dim, num_faces, block_rt_dim, block_c_index, tile_dst_rt_offset)));
 }
 

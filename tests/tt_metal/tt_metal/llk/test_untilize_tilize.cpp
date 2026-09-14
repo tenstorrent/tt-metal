@@ -87,6 +87,7 @@ struct TestConfig {
     bool fast_untilize = false;
     // Exercise explicit geometry while the output metadata describes a full tile.
     bool explicit_untilize_geometry = false;
+    bool explicit_untilize_narrow_row = false;
     // UNPACK_A tilize only: tilize the whole block with a nonzero input_tile_index per tile-row
     // (via tilize_across_tile_rows.cpp) so the cross-tile-row stride in llk_unpack_tilize_block is
     // exercised, instead of the default tilize.cpp which uses input_tile_index=0 + pop_front.
@@ -338,6 +339,7 @@ void run_single_core_tilize_program(distributed::MeshDevice& mesh_device, const 
     if (test_config.explicit_untilize_geometry) {
         compute_defines.emplace("EXPLICIT_FACE_R_DIM", std::to_string(test_config.face_r_dim));
         compute_defines.emplace("EXPLICIT_NUM_FACES", std::to_string(test_config.num_faces_per_tile));
+        compute_defines.emplace("EXPLICIT_NARROW_ROW", test_config.explicit_untilize_narrow_row ? "1" : "0");
     }
     if (test_config.fp32_dest_acc_en) {
         compute_defines.emplace("DST_ACCUM_MODE", "1");
@@ -1635,24 +1637,33 @@ TEST_F(LLKBlackholeSingleCardFixture, TensixCustomPackUntilizeExplicitGeometry) 
         // copy_tile populates full 16x16 face slots. One/two-face tiny tiles
         // select their leading rows; the four-face case uses the full shape.
         // Short four-face SDPA layouts require a different DEST producer.
-        const auto face_heights = num_faces == 4 ? vector<std::uint32_t>{16} : vector<std::uint32_t>{1, 8};
+        const auto face_heights = num_faces == 4 ? vector<std::uint32_t>{16} : vector<std::uint32_t>{1, 8, 16};
+        const auto narrow_modes = num_faces == 1 ? vector<bool>{false, true} : vector<bool>{false};
         for (const auto face_rows : face_heights) {
             for (const auto width : {1u, 12u}) {
                 for (const bool full_sync : {false, true}) {
-                    SCOPED_TRACE(fmt::format(
-                        "faces={}, rows={}, width={}, full_sync={}", num_faces, face_rows, width, full_sync));
-                    unit_tests::compute::tilize::TestConfig config{
-                        .dst_full_sync_en = full_sync,
-                        .explicit_untilize_geometry = true,
-                        .input_single_tile_size = 2048,
-                        .output_single_tile_size = 2 * num_faces * face_rows * 16,
-                        .num_tiles_r = 3,
-                        .num_tiles_c = width,
-                        .num_faces_per_tile = num_faces,
-                        .face_r_dim = face_rows,
-                        .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
-                        .golden_function = ::unit_tests::compute::gold_standard_untilize};
-                    unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+                    for (const bool narrow_row : narrow_modes) {
+                        SCOPED_TRACE(fmt::format(
+                            "faces={}, rows={}, width={}, full_sync={}, narrow_row={}",
+                            num_faces,
+                            face_rows,
+                            width,
+                            full_sync,
+                            narrow_row));
+                        unit_tests::compute::tilize::TestConfig config{
+                            .dst_full_sync_en = full_sync,
+                            .explicit_untilize_geometry = true,
+                            .explicit_untilize_narrow_row = narrow_row,
+                            .input_single_tile_size = 2048,
+                            .output_single_tile_size = 2 * num_faces * face_rows * 16,
+                            .num_tiles_r = 3,
+                            .num_tiles_c = width,
+                            .num_faces_per_tile = num_faces,
+                            .face_r_dim = face_rows,
+                            .untilize_type = unit_tests::compute::tilize::UntilizeType::DST,
+                            .golden_function = ::unit_tests::compute::gold_standard_untilize};
+                        unit_tests::compute::tilize::run_single_core_tilize_program(*devices_.at(0), config);
+                    }
                 }
             }
         }

@@ -13,6 +13,8 @@ void kernel_main() {
     constexpr std::uint32_t rows = get_arg(args::per_core_block_cnt);
     constexpr std::uint32_t full_width = get_arg(args::per_core_block_tile_cnt);
     constexpr std::uint32_t block_width = full_width == 1 ? 1 : 4;
+    constexpr bool narrow_row = EXPLICIT_NARROW_ROW;
+    constexpr std::uint32_t row_num_datums = narrow_row ? FACE_C_DIM : TILE_C_DIM;
     static_assert(full_width % block_width == 0);
     DataflowBuffer input(dfb::in);
     DataflowBuffer output(dfb::out);
@@ -33,8 +35,9 @@ void kernel_main() {
             }
             tile_regs_commit();
             tile_regs_wait();
-            custom_pack_untilize_dest_init<block_width, full_width>(dfb::out, EXPLICIT_FACE_R_DIM, EXPLICIT_NUM_FACES);
-            custom_pack_untilize_dest<block_width, full_width>(
+            custom_pack_untilize_dest_init<block_width, full_width, narrow_row, row_num_datums>(
+                dfb::out, EXPLICIT_FACE_R_DIM, EXPLICIT_NUM_FACES);
+            custom_pack_untilize_dest<block_width, full_width, narrow_row, row_num_datums>(
                 dfb::out, EXPLICIT_FACE_R_DIM, EXPLICIT_NUM_FACES, 1, block);
             tile_regs_release();
             input.pop_front(block_width);
