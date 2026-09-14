@@ -146,7 +146,17 @@ extern "C" std::uint32_t _start1() {
     internal_::init_hw_thread_idx();
     // DEVICE_PRINT and WAYPOINT index their per-thread slots via get_hw_thread_idx(), so they have to
     // come after the cache is filled.
+    //
+    // Firmware-level prints are opt-in (-DQUASAR_TRISC_FW_DPRINT). The 16 TRISCs of a Tensix core share
+    // ONE print buffer whose lock is an amoswap on the cached L1 alias, released by a plain store
+    // (api/debug/device_print.h acquire_lock/release_lock). On the qsr.s1 emulator model that protocol
+    // wedges: one TRISC per NEO wins the lock and the rest spin forever in acquire_lock on their very
+    // first print, so they never reach the RUN_SYNC_MSG_DONE store below and DM0's wait_subordinates
+    // never completes - every run with any TT_METAL_DPRINT_* set hangs in device init. Kernel prints
+    // are unaffected by this gate. The real fix is a per-TRISC print buffer (no shared lock).
+#if defined(QUASAR_TRISC_FW_DPRINT)
     DEVICE_PRINT("hartid: {}\n", hartid);
+#endif
     WAYPOINT("I");
 
     while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[MaxDMProcessorsPerCoreType + trisc_id] !=
@@ -163,7 +173,9 @@ extern "C" std::uint32_t _start1() {
     setup_isr_csrs();
     enable_cc_stack();
     DeviceProfilerInit();
+#if defined(QUASAR_TRISC_FW_DPRINT)
     DPRINT("TRISC-FW: initialized\n");
+#endif
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
@@ -246,10 +258,14 @@ extern "C" std::uint32_t _start1() {
 #endif
 
             // Signal completion
+#if defined(QUASAR_TRISC_FW_DPRINT)
             DPRINT("SIGNALING COMPLETION {:x}\n", (std::uint32_t)*trisc_run);
+#endif
             tensix_sync();
         }
         *trisc_run = RUN_SYNC_MSG_DONE;
+#if defined(QUASAR_TRISC_FW_DPRINT)
         DPRINT("COMPLETION SIGNED OFF {:x}\n", (std::uint32_t)*trisc_run);
+#endif
     }
 }
