@@ -124,6 +124,131 @@ def _golden_function(input_tensor: ttnn.Tensor, weight=None, *, epsilon=1e-12, *
 
 ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 
+
+def _golden_function_batch_norm(
+    input,
+    *,
+    running_mean=None,
+    running_var=None,
+    training=False,
+    eps=1e-05,
+    momentum=0.1,
+    weight=None,
+    bias=None,
+    **_,
+):
+    import torch
+
+    return torch.nn.functional.batch_norm(
+        input,
+        running_mean,
+        running_var,
+        weight,
+        bias,
+        training,
+        momentum,
+        eps,
+    )
+
+
+ttnn.attach_golden_function(ttnn.batch_norm, golden_function=_golden_function_batch_norm)
+
+
+def _golden_function_layer_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+    import torch
+
+    # Computes partial mean(x) and mean(x^2) over the last dim (the device uses an AVG reduce).
+    # The stats tensor is two tiles wide: mean(x^2) rides the leftmost column of tile 0, mean(x) tile 1.
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
+    *batch_dims, _ = input_tensor.shape
+    stats = torch.zeros((*batch_dims, 64), dtype=torch.float32)
+    stats[..., 0] = (input_tensor**2).mean(dim=-1)
+    stats[..., 32] = input_tensor.mean(dim=-1)
+    # Only the two leading stat columns are well-defined; the rest of the tile row is padding.
+    mask = torch.zeros((*batch_dims, 64), dtype=torch.bool)
+    mask[..., 0] = True
+    mask[..., 32] = True
+    ttnn.decorators.set_golden_comparison_config(stats, method="allclose", scope="all", rtol=1e-2, atol=1e-2, mask=mask)
+    return stats
+
+
+ttnn.attach_golden_function(ttnn.layer_norm_pre_all_gather, golden_function=_golden_function_layer_norm_pre_all_gather)
+
+
+def _golden_function_layer_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+    import torch
+
+    # stats holds per-device partial sum(x^2)/sum(x) averaged across devices: tile column 0 of each
+    # 64-wide device block is sum(x^2), column 32 is sum(x).
+    num_devices = stats.shape[-1] // 64
+    ex2 = sum(stats[..., d * 64] for d in range(num_devices)) / num_devices
+    ex = sum(stats[..., d * 64 + 32] for d in range(num_devices)) / num_devices
+    var = ex2 - ex**2
+    normalized = (input_tensor - ex.unsqueeze(-1)) * torch.rsqrt(var.unsqueeze(-1) + epsilon)
+    if weight is not None:
+        normalized = normalized * weight
+    if bias is not None:
+        normalized = normalized + bias
+    return normalized
+
+
+ttnn.attach_golden_function(
+    ttnn.layer_norm_post_all_gather, golden_function=_golden_function_layer_norm_post_all_gather
+)
+
+
+def _golden_function_rms_norm_pre_all_gather(input_tensor, *, residual_input_tensor=None, **_):
+    import torch
+
+    # RMS norm only needs mean(x^2); the stats tensor is a single tile wide with mean(x^2) at column 0.
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
+    *batch_dims, _ = input_tensor.shape
+    stats = torch.zeros((*batch_dims, 32), dtype=torch.float32)
+    stats[..., 0] = (input_tensor**2).mean(dim=-1)
+    mask = torch.zeros((*batch_dims, 32), dtype=torch.bool)
+    mask[..., 0] = True
+    ttnn.decorators.set_golden_comparison_config(stats, method="allclose", scope="all", rtol=1e-2, atol=1e-2, mask=mask)
+    return stats
+
+
+ttnn.attach_golden_function(ttnn.rms_norm_pre_all_gather, golden_function=_golden_function_rms_norm_pre_all_gather)
+
+
+def _golden_function_rms_norm_post_all_gather(input_tensor, stats, *, epsilon=1e-12, weight=None, bias=None, **_):
+    import torch
+
+    # stats holds per-device partial sum(x^2) averaged across devices: column 0 of each 32-wide block.
+    num_devices = stats.shape[-1] // 32
+    ex2 = sum(stats[..., d * 32] for d in range(num_devices)) / num_devices
+    normalized = input_tensor * torch.rsqrt(ex2.unsqueeze(-1) + epsilon)
+    if weight is not None:
+        normalized = normalized * weight
+    if bias is not None:
+        normalized = normalized + bias
+    return normalized
+
+
+ttnn.attach_golden_function(ttnn.rms_norm_post_all_gather, golden_function=_golden_function_rms_norm_post_all_gather)
+
+
+def _golden_function_fused_rms_minimal(input_tensor, *_, residual_input_tensor=None, epsilon=1e-12, weight=None, **__):
+    import torch
+
+    # Fused distributed RMS norm: optional residual add, then RMS norm over the hidden dim with gamma scaling.
+    if residual_input_tensor is not None:
+        input_tensor = input_tensor + residual_input_tensor
+    variance = input_tensor.to(torch.float32).pow(2).mean(-1, keepdim=True)
+    normalized = input_tensor * torch.rsqrt(variance + epsilon)
+    if weight is not None:
+        normalized = normalized * weight
+    return normalized
+
+
+ttnn.attach_golden_function(ttnn.fused_rms_minimal, golden_function=_golden_function_fused_rms_minimal)
+
+
 LayerNormProgramConfig = ttnn._ttnn.operations.normalization.LayerNormProgramConfig
 LayerNormDefaultProgramConfig = ttnn._ttnn.operations.normalization.LayerNormDefaultProgramConfig
 LayerNormShardedMultiCoreProgramConfig = ttnn._ttnn.operations.normalization.LayerNormShardedMultiCoreProgramConfig

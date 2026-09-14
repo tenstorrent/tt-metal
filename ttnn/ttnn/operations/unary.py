@@ -1032,6 +1032,90 @@ def _golden_function_alt_complex_rotate90(input_tensor_a, *args, **kwargs):
 
 ttnn.attach_golden_function(ttnn.alt_complex_rotate90, golden_function=_golden_function_alt_complex_rotate90)
 
+
+def _get_unary_chain_torch_op(op_type):
+    """Map a UnaryOpType to a torch callable taking (x, *params). Covers the ops commonly fused via unary_chain."""
+    import torch
+
+    no_param_ops = {
+        ttnn.UnaryOpType.EXP: torch.exp,
+        ttnn.UnaryOpType.RECIP: torch.reciprocal,
+        ttnn.UnaryOpType.RELU: torch.relu,
+        ttnn.UnaryOpType.RELU6: torch.nn.functional.relu6,
+        ttnn.UnaryOpType.SQRT: torch.sqrt,
+        ttnn.UnaryOpType.RSQRT: torch.rsqrt,
+        ttnn.UnaryOpType.SIGMOID: torch.sigmoid,
+        ttnn.UnaryOpType.LOG: torch.log,
+        ttnn.UnaryOpType.LOG1P: torch.log1p,
+        ttnn.UnaryOpType.LOG2: torch.log2,
+        ttnn.UnaryOpType.LOG10: torch.log10,
+        ttnn.UnaryOpType.TANH: torch.tanh,
+        ttnn.UnaryOpType.SIN: torch.sin,
+        ttnn.UnaryOpType.COS: torch.cos,
+        ttnn.UnaryOpType.COSH: torch.cosh,
+        ttnn.UnaryOpType.SINH: torch.sinh,
+        ttnn.UnaryOpType.TAN: torch.tan,
+        ttnn.UnaryOpType.ABS: torch.abs,
+        ttnn.UnaryOpType.SIGN: torch.sign,
+        ttnn.UnaryOpType.SQUARE: torch.square,
+        ttnn.UnaryOpType.NEG: torch.neg,
+        ttnn.UnaryOpType.FLOOR: torch.floor,
+        ttnn.UnaryOpType.CEIL: torch.ceil,
+        ttnn.UnaryOpType.TRUNC: torch.trunc,
+        ttnn.UnaryOpType.FRAC: torch.frac,
+        ttnn.UnaryOpType.ROUND: torch.round,
+        ttnn.UnaryOpType.ERF: torch.erf,
+        ttnn.UnaryOpType.ERFC: torch.erfc,
+        ttnn.UnaryOpType.ERFINV: torch.erfinv,
+        ttnn.UnaryOpType.EXP2: torch.exp2,
+        ttnn.UnaryOpType.EXPM1: torch.expm1,
+        ttnn.UnaryOpType.SILU: torch.nn.functional.silu,
+        ttnn.UnaryOpType.MISH: torch.nn.functional.mish,
+        ttnn.UnaryOpType.GELU: torch.nn.functional.gelu,
+        ttnn.UnaryOpType.GELU_TANH: lambda x: torch.nn.functional.gelu(x, approximate="tanh"),
+        ttnn.UnaryOpType.SOFTPLUS: torch.nn.functional.softplus,
+        ttnn.UnaryOpType.IDENTITY: torch.clone,
+        ttnn.UnaryOpType.LOGICAL_NOT_UNARY: torch.logical_not,
+        ttnn.UnaryOpType.ISNAN: torch.isnan,
+        ttnn.UnaryOpType.ISINF: torch.isinf,
+        ttnn.UnaryOpType.ISFINITE: torch.isfinite,
+        ttnn.UnaryOpType.ISPOSINF: torch.isposinf,
+        ttnn.UnaryOpType.ISNEGINF: torch.isneginf,
+        ttnn.UnaryOpType.SIGNBIT: torch.signbit,
+        ttnn.UnaryOpType.EQZ: lambda x: torch.eq(x, 0),
+        ttnn.UnaryOpType.NEZ: lambda x: torch.ne(x, 0),
+        ttnn.UnaryOpType.GTZ: lambda x: torch.gt(x, 0),
+        ttnn.UnaryOpType.LTZ: lambda x: torch.lt(x, 0),
+        ttnn.UnaryOpType.GEZ: lambda x: torch.ge(x, 0),
+        ttnn.UnaryOpType.LEZ: lambda x: torch.le(x, 0),
+    }
+    param_ops = {
+        ttnn.UnaryOpType.ADD_UNARY_SFPU: lambda x, p: x + p,
+        ttnn.UnaryOpType.SUB_UNARY_SFPU: lambda x, p: x - p,
+        ttnn.UnaryOpType.MUL_UNARY_SFPU: lambda x, p: x * p,
+        ttnn.UnaryOpType.DIV_UNARY_SFPU: lambda x, p: x / p,
+        ttnn.UnaryOpType.RSUB: lambda x, p: p - x,
+        ttnn.UnaryOpType.RDIV: lambda x, p: p / x,
+        ttnn.UnaryOpType.POWER: lambda x, p: torch.pow(x, p),
+    }
+    if op_type in no_param_ops:
+        return no_param_ops[op_type], False
+    if op_type in param_ops:
+        return param_ops[op_type], True
+    raise NotImplementedError(f"unary_chain golden does not support UnaryOpType.{op_type}")
+
+
+def _golden_function_unary_chain(input_tensor, ops_chain, *args, **kwargs):
+    output = input_tensor
+    for op in ops_chain:
+        torch_op, takes_param = _get_unary_chain_torch_op(op.op_type)
+        params = list(op.params) if takes_param else []
+        output = torch_op(output, *params)
+    return output
+
+
+ttnn.attach_golden_function(ttnn.unary_chain, golden_function=_golden_function_unary_chain)
+
 SigmoidMode = ttnn._ttnn.operations.unary.SigmoidMode
 GeluVariant = ttnn._ttnn.operations.unary.GeluVariant
 

@@ -255,4 +255,119 @@ ttnn.attach_golden_function(
     golden_function=_golden_function,
 )
 
+
+def _golden_function_conv1d(
+    *,
+    input_tensor,
+    weight_tensor,
+    in_channels: int,
+    out_channels: int,
+    batch_size: int,
+    input_length: int,
+    kernel_size: int,
+    stride: int = 1,
+    padding: int = 0,
+    dilation: int = 1,
+    groups: int = 1,
+    bias_tensor=None,
+    conv_config=None,
+    return_output_dim=False,
+    return_weights_and_bias=False,
+    **_,
+):
+    import torch
+
+    # Input arrives as NLC [batch, length, channels]; torch conv1d expects NCL [batch, channels, length].
+    input_tensor = input_tensor.reshape(batch_size, input_length, in_channels).permute(0, 2, 1)
+
+    bias = bias_tensor.reshape(-1) if bias_tensor is not None else None
+    output_tensor = torch.nn.functional.conv1d(
+        input_tensor.float(),
+        weight_tensor.float(),
+        bias=bias.float() if bias is not None else None,
+        stride=stride,
+        padding=padding,
+        dilation=dilation,
+        groups=groups,
+    )
+
+    activation = None
+    if conv_config is not None:
+        activation = getattr(conv_config, "activation", None)
+    act_func = get_golden_function_for_activation(activation)
+    output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
+
+    N, C, L = output_tensor.shape
+    output_tensor = output_tensor.permute(0, 2, 1).reshape(1, 1, N * L, C)  # N, C, L -> 1, 1, N*L, C
+
+    if return_output_dim or return_weights_and_bias:
+        return [output_tensor]
+    return output_tensor
+
+
+ttnn.attach_golden_function(ttnn.conv1d, golden_function=_golden_function_conv1d)
+
+
+def _golden_function_conv_transpose2d(
+    *,
+    input_tensor,
+    weight_tensor,
+    in_channels: int,
+    out_channels: int,
+    batch_size: int,
+    input_height: int,
+    input_width: int,
+    kernel_size,
+    stride=(1, 1),
+    padding=(0, 0),
+    output_padding=(0, 0),
+    dilation=(1, 1),
+    groups: int = 1,
+    bias_tensor=None,
+    conv_config=None,
+    mirror_kernel: bool = True,
+    return_output_dim=False,
+    return_weights_and_bias=False,
+    **_,
+):
+    import torch
+
+    # Input arrives as NHWC flattened to [1, 1, N*H*W, C]; torch expects NCHW.
+    input_tensor = input_tensor.reshape(batch_size, input_height, input_width, -1)[:, :, :, :in_channels].permute(
+        0, 3, 1, 2
+    )
+
+    # When mirror_kernel=False the caller pre-mirrors the kernel spatially, so flip it back to the
+    # standard torch layout before running the reference conv_transpose2d.
+    if not mirror_kernel:
+        weight_tensor = torch.flip(weight_tensor, [2, 3])
+
+    bias = bias_tensor.reshape(-1) if bias_tensor is not None else None
+    output_tensor = torch.nn.functional.conv_transpose2d(
+        input_tensor.float(),
+        weight_tensor.float(),
+        bias=bias.float() if bias is not None else None,
+        stride=stride,
+        padding=padding,
+        output_padding=output_padding,
+        dilation=dilation,
+        groups=groups,
+    )
+
+    activation = None
+    if conv_config is not None:
+        activation = getattr(conv_config, "activation", None)
+    act_func = get_golden_function_for_activation(activation)
+    output_tensor = act_func(output_tensor) if act_func is not None else output_tensor
+
+    N, C, H, W = output_tensor.shape
+    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
+
+    if return_output_dim or return_weights_and_bias:
+        return [output_tensor]
+    return output_tensor
+
+
+ttnn.attach_golden_function(ttnn.conv_transpose2d, golden_function=_golden_function_conv_transpose2d)
+
 __all__ = []

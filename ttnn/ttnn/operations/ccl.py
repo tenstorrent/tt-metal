@@ -155,6 +155,78 @@ ttnn.attach_golden_function(
 )
 
 
+def _golden_function_broadcast(
+    input_tensor,
+    sender_coord,
+    *args,
+    cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
+    **kwargs,
+):
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
+        return None
+
+    # Copy the sender's shard to every device in the sender's cluster-axis group; other groups are untouched.
+    sender_index = _mesh_coordinate_to_index(sender_coord, _ttnn_golden_mesh_shape)
+    source = input_tensor[sender_index]
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        for device_index in group:
+            per_device_outputs[device_index] = source if sender_index in group else input_tensor[device_index]
+
+    # After broadcast the tensor is replicated along the cluster axis.
+    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is None:
+        output_shard_dims = [None] * len(output_shard_dims)
+    else:
+        output_shard_dims[cluster_axis] = None
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
+
+
+ttnn.attach_golden_function(
+    ttnn.broadcast,
+    golden_function=_golden_function_broadcast,
+    preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
+)
+
+
+def _golden_function_mesh_partition(
+    input_tensor,
+    dim,
+    *args,
+    cluster_axis=None,
+    _ttnn_golden_mesh_shape=None,
+    _ttnn_golden_mesh_shard_dims=None,
+    **kwargs,
+):
+    import torch
+
+    if _ttnn_golden_mesh_shape is None or _ttnn_golden_mesh_shard_dims is None:
+        return None
+
+    # The input is replicated across each cluster-axis group; every device takes its slice along dim.
+    per_device_outputs = [None] * len(input_tensor)
+    for group in _get_collective_groups(_ttnn_golden_mesh_shape, cluster_axis):
+        full = input_tensor[group[0]]
+        chunks = torch.chunk(full, len(group), dim=dim)
+        for position, device_index in enumerate(group):
+            per_device_outputs[device_index] = chunks[position]
+
+    # After partition the tensor is sharded along dim across the cluster axis.
+    output_shard_dims = list(_ttnn_golden_mesh_shard_dims)
+    if cluster_axis is not None:
+        output_shard_dims[cluster_axis] = _normalize_dim(dim, input_tensor[0].ndim)
+    return _compose_mesh_golden_outputs(per_device_outputs, _ttnn_golden_mesh_shape, output_shard_dims)
+
+
+ttnn.attach_golden_function(
+    ttnn.mesh_partition,
+    golden_function=_golden_function_mesh_partition,
+    preprocess_golden_function_inputs=_preprocess_collective_golden_inputs,
+)
+
+
 def _golden_function_all_gather(
     input_tensor,
     dim,

@@ -5,6 +5,7 @@
 from typing import Tuple, Union, Optional
 
 import ttnn
+from ttnn.operations.golden_common import golden_compute_gradients, golden_prepare_grad_inputs
 
 
 def _create_golden_function(torch_function_name):
@@ -47,6 +48,97 @@ ttnn.attach_golden_function(ttnn.std, golden_function=_create_golden_function("s
 ttnn.attach_golden_function(ttnn.argmax, golden_function=_create_golden_function("argmax"))
 
 ttnn.attach_golden_function(ttnn.topk, golden_function=_create_golden_function_topk())
+
+# prod reduces over all dims when dim is None, matching the generic factory's dim handling.
+ttnn.attach_golden_function(ttnn.prod, golden_function=_create_golden_function("prod"))
+
+
+def _golden_function_prod_bw(grad_tensor, input_tensor, dim=None, *_, **__):
+    import torch
+
+    (input_tensor,) = golden_prepare_grad_inputs(input_tensor)
+    # The forward reduces over dim (or all dims); keepdim keeps the reduced axis broadcastable for backward.
+    if dim is None:
+        forward_output = torch.prod(input_tensor)
+    else:
+        forward_output = torch.prod(input_tensor, dim=dim, keepdim=True)
+    return golden_compute_gradients(forward_output, (input_tensor,), grad_tensor)
+
+
+ttnn.attach_golden_function(ttnn.prod_bw, golden_function=_golden_function_prod_bw)
+
+
+def _create_accumulation_golden_function(torch_function_name):
+    def golden_function(input_tensor, dim, *_, dtype=None, reverse_order=False, **__):
+        import torch
+
+        torch_function = getattr(torch, torch_function_name)
+        if reverse_order:
+            # Reverse accumulation: flip along dim, accumulate, then flip back.
+            output = torch_function(torch.flip(input_tensor, dims=[dim]), dim=dim)
+            output = torch.flip(output, dims=[dim])
+        else:
+            output = torch_function(input_tensor, dim=dim)
+        if dtype is not None:
+            output = output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+        return output
+
+    return golden_function
+
+
+ttnn.attach_golden_function(ttnn.cumsum, golden_function=_create_accumulation_golden_function("cumsum"))
+ttnn.attach_golden_function(ttnn.cumprod, golden_function=_create_accumulation_golden_function("cumprod"))
+
+
+def _golden_function_ema(input_tensor, alpha, *_, **__):
+    import torch
+
+    # Exponential moving average along the last (sequence) axis: out[t] = alpha*out[t-1] + (1-alpha)*in[t].
+    sequence_length = input_tensor.shape[-1]
+    output = torch.empty_like(input_tensor)
+    previous = torch.zeros_like(input_tensor[..., 0])
+    for t in range(sequence_length):
+        previous = previous * alpha + (1 - alpha) * input_tensor[..., t]
+        output[..., t] = previous
+    return output
+
+
+ttnn.attach_golden_function(ttnn.ema, golden_function=_golden_function_ema)
+
+
+def _golden_function_var_hw(input_tensor, *_, **__):
+    import torch
+
+    # Biased variance (correction=0) over the H and W dims, keeping the reduced axes as size 1.
+    return torch.var(input_tensor, dim=(-2, -1), keepdim=True, correction=0)
+
+
+ttnn.attach_golden_function(ttnn.var_hw, golden_function=_golden_function_var_hw)
+
+
+def _golden_function_std_hw(input_tensor, *_, **__):
+    import torch
+
+    return torch.std(input_tensor, dim=(-2, -1), keepdim=True, correction=0)
+
+
+ttnn.attach_golden_function(ttnn.std_hw, golden_function=_golden_function_std_hw)
+
+
+def _golden_function_sampling(input_values_tensor, *_, **__):
+    import torch
+
+    # Stochastic top-k/top-p sampler; only the output shape [1, 1, 1, num_users] is deterministic.
+    num_users = input_values_tensor.shape[-2]
+    output = torch.zeros((1, 1, 1, num_users), dtype=torch.int32)
+    ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
+    return output
+
+
+ttnn.attach_golden_function(ttnn.sampling, golden_function=_golden_function_sampling)
+
+# manual_seed only seeds the device RNG and returns None; there is no output value to compare.
+ttnn.attach_golden_function(ttnn.manual_seed, golden_function=None)
 
 
 __all__ = []

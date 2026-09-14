@@ -123,6 +123,46 @@ ttnn.attach_golden_function(
     golden_function=_golden_function,
 )
 
+
+def _golden_function_matmul_batched_weights(input_tensor_a, input_tensors_b, *_, **__):
+    import torch
+
+    # One input tensor a multiplied against each of the batched weight tensors b.
+    return [torch.matmul(input_tensor_a, b.to(input_tensor_a.dtype)) for b in input_tensors_b]
+
+
+ttnn.attach_golden_function(ttnn.matmul_batched_weights, golden_function=_golden_function_matmul_batched_weights)
+
+
+def _golden_function_sparse_matmul(
+    input_tensor_a,
+    input_tensor_b,
+    *,
+    sparsity,
+    is_input_a_sparse=False,
+    is_input_b_sparse=True,
+    nnz=None,
+    indices=None,
+    **__,
+):
+    import torch
+
+    # Expanded (zero-filled) sparse matmul: dense matmul over every batch pair, masked by sparsity.
+    # The output batch layout is a's batch dims followed by b's batch dims.
+    # Note: the compact (nnz) and indexed/gather output layouts are not modeled here.
+    a, b = input_tensor_a, input_tensor_b
+    m, k, n = a.shape[-2], a.shape[-1], b.shape[-1]
+    a_batch, b_batch = a.shape[:-2], b.shape[:-2]
+    a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), m, k)
+    b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, n)
+    dense = torch.matmul(a_exp, b_exp)
+    mask = (sparsity != 0).reshape(*a_batch, *b_batch)
+    return dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
+
+
+ttnn.attach_golden_function(ttnn.sparse_matmul, golden_function=_golden_function_sparse_matmul)
+
+
 ttnn.Tensor.__matmul__ = lambda self, *args, **kwargs: ttnn.matmul(self, *args, **kwargs)
 
 

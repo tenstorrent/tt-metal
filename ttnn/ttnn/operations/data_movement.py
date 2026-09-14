@@ -544,6 +544,113 @@ def _golden_function(cache, input, update_index, batch_offset=0, *args, **kwargs
 ttnn.attach_golden_function(ttnn.kv_cache.update_cache_for_token_, golden_function=_golden_function)
 
 
+def _golden_function_copy(input_a, input_b, *_, **__):
+    # copy writes input_a into input_b in place and returns input_b; the value is input_a cast to input_b's dtype.
+    return input_a.to(input_b.dtype)
+
+
+ttnn.attach_golden_function(ttnn.copy, golden_function=_golden_function_copy)
+
+
+def _golden_function_sort(input_tensor, dim=-1, descending=False, stable=False, *_, **__):
+    import torch
+
+    # torch.sort returns (values, indices); indices are int64 here and cast to the ttnn index dtype on comparison.
+    return torch.sort(input_tensor, dim=dim, descending=descending, stable=stable)
+
+
+ttnn.attach_golden_function(ttnn.sort, golden_function=_golden_function_sort)
+
+
+def _golden_function_nonzero(input_tensor, *_, **__):
+    import torch
+
+    # The op returns (count, indices): count is [1, 1, 1, 8] with the non-zero count at [0, 0, 0, 0],
+    # indices is [1, 1, 1, volume * 4] holding one flat (b, n, h, c) 4-tuple per non-zero element.
+    # Both outputs are padded to a data-independent upper bound, so only the leading valid region is compared.
+    coordinates = torch.nonzero(input_tensor, as_tuple=False)
+    num_nonzero = coordinates.shape[0]
+
+    count = torch.zeros((1, 1, 1, 8), dtype=torch.int64)
+    count[0, 0, 0, 0] = num_nonzero
+    count_mask = torch.zeros((1, 1, 1, 8), dtype=torch.bool)
+    count_mask[0, 0, 0, 0] = True
+    ttnn.decorators.set_golden_comparison_config(count, method="allclose", scope="all", mask=count_mask)
+
+    flat_n = input_tensor.numel()
+    indices = torch.zeros((1, 1, 1, flat_n * 4), dtype=torch.int64)
+    if num_nonzero > 0:
+        indices[0, 0, 0, : num_nonzero * 4] = coordinates.reshape(-1)
+    indices_mask = torch.zeros((1, 1, 1, flat_n * 4), dtype=torch.bool)
+    indices_mask[0, 0, 0, : num_nonzero * 4] = True
+    ttnn.decorators.set_golden_comparison_config(indices, method="allclose", scope="all", mask=indices_mask)
+
+    return [count, indices]
+
+
+ttnn.attach_golden_function(ttnn.nonzero, golden_function=_golden_function_nonzero)
+
+
+def _broadcast_quantization_arg(arg, input_tensor, axis):
+    """Reshape a 1D per-channel scale/zero_point so it broadcasts against the input along `axis`."""
+    import torch
+
+    if not isinstance(arg, torch.Tensor) or axis is None:
+        return arg
+    rank = input_tensor.ndim
+    axis_normalized = axis % rank
+    broadcast_shape = [1] * rank
+    broadcast_shape[axis_normalized] = arg.numel()
+    return arg.reshape(broadcast_shape)
+
+
+def _golden_function_quantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, **__):
+    import torch
+
+    # q = round(x / scale + zero_point); per-channel args broadcast along `axis`.
+    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
+    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
+    output = torch.round(torch.div(input_tensor, scale) + zero_point)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    return output.to(torch_dtype)
+
+
+ttnn.attach_golden_function(ttnn.quantize, golden_function=_golden_function_quantize)
+
+
+def _golden_function_dequantize(input_tensor, scale, zero_point, *_, axis=None, dtype=None, **__):
+    import torch
+
+    # x = (q - zero_point) * scale; per-channel args broadcast along `axis`.
+    scale = _broadcast_quantization_arg(scale, input_tensor, axis)
+    zero_point = _broadcast_quantization_arg(zero_point, input_tensor, axis)
+    output = (input_tensor - zero_point) * scale
+    if dtype is not None:
+        output = output.to(ttnn.ttnn_dtype_to_torch_dtype(dtype))
+    return output
+
+
+ttnn.attach_golden_function(ttnn.dequantize, golden_function=_golden_function_dequantize)
+
+
+def _golden_function_requantize(
+    input_tensor, in_scale, in_zero_point, out_scale, out_zero_point, *_, axis=None, dtype=None, **__
+):
+    import torch
+
+    # q' = round((x - in_zero_point) * in_scale / out_scale + out_zero_point).
+    in_scale = _broadcast_quantization_arg(in_scale, input_tensor, axis)
+    in_zero_point = _broadcast_quantization_arg(in_zero_point, input_tensor, axis)
+    out_scale = _broadcast_quantization_arg(out_scale, input_tensor, axis)
+    out_zero_point = _broadcast_quantization_arg(out_zero_point, input_tensor, axis)
+    output = torch.round((input_tensor - in_zero_point) * (in_scale / out_scale) + out_zero_point)
+    torch_dtype = ttnn.ttnn_dtype_to_torch_dtype(dtype) if dtype is not None else torch.int32
+    return output.to(torch_dtype)
+
+
+ttnn.attach_golden_function(ttnn.requantize, golden_function=_golden_function_requantize)
+
+
 SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
 SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
 SliceDeviceOperation = ttnn._ttnn.operations.data_movement.SliceDeviceOperation
