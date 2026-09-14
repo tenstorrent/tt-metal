@@ -44,7 +44,7 @@
 - **Compute config**: `default_compute_kernel_config()` = HiFi4 + fp32_dest_acc_en=True + math_approx_mode=False; `math_fidelity` / `math_approx_mode` pass through ungated
 - **Golden baseline**: see `verification_report.md` → Verifier CLI Summary (all loud categories 0)
 
-### [ ] Refinement 1 — Numerical configurability: 16-bit DEST accumulation + bfloat8_b
+### [x] Refinement 1 — Numerical configurability: 16-bit DEST accumulation + bfloat8_b
 
 **Goal**: add `False` to `SUPPORTED["fp32_dest_acc_en"]` (for bfloat16 and bfloat8_b input — `{float32, False}` stays in `EXCLUSIONS`, natively refused forever), add `ttnn.bfloat8_b` to `SUPPORTED["dtype"]` and to `SUPPORTED["gamma_dtype"]`. `compute_kernel_config` is already exposed and passed as-is; the work is making every accumulated-intermediate page format and every DEST-capacity-dependent quantity follow the config instead of assuming fp32 DEST. Cells that fail out of the box for a structural reason land in `EXCLUSIONS`, not in their own refinement (`bfloat8_b + ROW_MAJOR` on either tensor is already INVALID, so no exclusion is needed there).
 
@@ -60,6 +60,8 @@
 - Dependency: none. Ordering: first, because R2 (perf) cannot measure the flagged config until this lands.
 
 **Done when**: every golden cell with `fp32_dest_acc_en=False` (bf16, bf8b) and every `bfloat8_b` / `gamma_dtype=bfloat8_b` cell passes; `{float32, fp32_dest_acc_en=False}` is still refused with `ExcludedCell`; all `_PERF_BASE` loose cases pass their soft PCC gate; `python3 -m eval.verify_supported` reports `supported_fail = xpass_drift = xfail_wrong_mode = 0`; the acceptance directory (`tests/ttnn/unit_tests/operations/rms_norm/`) is green.
+
+**Landed** (2026-09-14): SUPPORTED `dtype`/`gamma_dtype` += bfloat8_b, `fp32_dest_acc_en` += False; `{float32, False}` still `ExcludedCell`. Whole golden directory 1708 passed / 388 xfailed / 0 failed / 0 xpass (Phase 0: 656 passing). Post-R1 device baseline for Refinement 2 at the flagged config (`test_rms_norm_perf_shape_flagged_config[decode_7168]`): **9208 ns**, 26 cores (Phase 0 HiFi4/fp32 DEST: 10288 ns). No `EXCLUSIONS` were needed — every named cell passed out of the box (bf16 / 16-bit DEST rel-RMS ≤ 0.0072 at HiFi2, bf8b ≤ 0.011 at HiFi4; the LoFi corner is the only place the error approaches the gates and it is fidelity-, not DEST-width-, bound).
 
 ### [ ] Refinement 2 — Speed up the perf-flagged decode profile (32 × 7168, interleaved)
 
