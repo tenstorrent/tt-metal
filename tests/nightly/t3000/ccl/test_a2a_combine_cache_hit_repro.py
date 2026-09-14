@@ -8,6 +8,11 @@ buffers are reused (trace replay / static KV / a loop over the same tensors).
 
 Existing nightlies reallocate tensors every iteration, so they miss this path.
 This helper builds inputs once and dispatches num_iters times on those tensors.
+
+reuse_optional_output without poisoning is not a #47108 oracle: if the writer
+skips on a cache hit, leftover iter-0 data still matches golden. Poison the
+persistent output (and optionally rescale the same input buffers) so a skipped
+write cannot hide.
 """
 
 import pytest
@@ -31,6 +36,27 @@ def _agg_combine_output(tt_out, mesh_device, mesh_shape, axis):
     return ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
 
+def _logical_shape_list(tensor):
+    shape = getattr(tensor, "logical_shape", None)
+    if shape is None:
+        shape = tensor.shape
+    return [int(d) for d in shape]
+
+
+def _poison_output_tensor(tt_out, mesh_device, fill_value=1.0):
+    """Overwrite a persistent combine output so a skipped writer cannot reuse iter-0 data."""
+    sentinel = ttnn.moreh_full(
+        _logical_shape_list(tt_out),
+        fill_value,
+        mesh_device,
+        dtype=tt_out.dtype,
+        layout=tt_out.layout,
+        memory_config=tt_out.memory_config(),
+    )
+    ttnn.copy(sentinel, tt_out)
+    ttnn.synchronize_device(mesh_device)
+
+
 def run_a2a_combine_static_buffer_cache_hit_repro(
     mesh_device,
     mesh_shape,
@@ -47,6 +73,8 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
     input_memory_config=None,
     output_memory_config=None,
     reuse_optional_output=False,
+    mutate_inputs=False,
+    poison_output=None,
 ):
     torch.manual_seed(2005)
     mesh_device.enable_program_cache()
@@ -56,12 +84,15 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
     batch = batches_per_device * mesh_shape[axis]
     input_memory_config = input_memory_config or ttnn.DRAM_MEMORY_CONFIG
     output_memory_config = output_memory_config or ttnn.L1_MEMORY_CONFIG
+    if poison_output is None:
+        poison_output = reuse_optional_output
 
     logger.info(
         f"#47108 static-buffer repro: mesh={mesh_shape} axis={axis} batch={batch} seq={seq} "
         f"experts={experts} k={select_experts_k} hidden={hidden_size} "
         f"local_reduce={local_reduce} num_links={num_links} num_iters={num_iters} "
-        f"reuse_optional_output={reuse_optional_output}"
+        f"reuse_optional_output={reuse_optional_output} mutate_inputs={mutate_inputs} "
+        f"poison_output={poison_output}"
     )
 
     _, input_contrib, expert_mapping, metadata_tensor, golden_out, data_map = gen_tensors(
@@ -105,9 +136,31 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
     optional_output = None
     outputs = []
     abs_sums = []
+    goldens = []
+    combine_cache_growth = []
+    input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
 
     with mesh_device.cache_entries_counter.measure():
         for i in range(num_iters):
+            scale = float(i + 1) if mutate_inputs else 1.0
+            iter_golden = golden_out * scale if mutate_inputs else golden_out
+            goldens.append(iter_golden)
+
+            if mutate_inputs and i > 0:
+                scaled = ttnn.from_torch(
+                    input_contrib * scale,
+                    device=mesh_device,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    memory_config=input_memory_config,
+                    mesh_mapper=input_mapper,
+                )
+                ttnn.copy(scaled, tt_input)
+                ttnn.synchronize_device(mesh_device)
+
+            if poison_output and optional_output is not None:
+                _poison_output_tensor(optional_output, mesh_device, fill_value=1.0)
+
             kwargs = dict(
                 num_links=num_links,
                 topology=topology,
@@ -118,7 +171,10 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
             if reuse_optional_output and optional_output is not None:
                 kwargs["output_tensor"] = optional_output
 
+            before_entries = mesh_device.num_program_cache_entries()
             tt_out = ttnn.all_to_all_combine(tt_input, tt_meta, tt_map, **kwargs)
+            after_entries = mesh_device.num_program_cache_entries()
+            combine_cache_growth.append(after_entries - before_entries)
             if reuse_optional_output and optional_output is None:
                 optional_output = tt_out
 
@@ -127,29 +183,39 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
             outputs.append(out_agg.clone())
             nz = out_agg.float().abs().sum().item()
             abs_sums.append(nz)
-            logger.info(f"iter {i}: output abs-sum = {nz:.3f}  cache_entries={mesh_device.num_program_cache_entries()}")
+            logger.info(
+                f"iter {i}: output abs-sum = {nz:.3f}  cache_entries={after_entries} "
+                f"combine_growth={combine_cache_growth[-1]} scale={scale}"
+            )
 
     cache_delta = mesh_device.cache_entries_counter.total
-    logger.info(f"program cache delta across {num_iters} reuse dispatches = {cache_delta}")
+    logger.info(
+        f"program cache delta across {num_iters} reuse dispatches = {cache_delta} "
+        f"combine_growth={combine_cache_growth}"
+    )
 
-    # combine + moreh_full on the first alloc (iter 0 still goes through moreh_full even
-    # when later iters reuse that tensor). A genuine keying miss every dispatch would be >2.
-    expected_cache_entries = 2
     failures = []
-    if cache_delta != expected_cache_entries:
-        failures.append(f"expected {expected_cache_entries} program cache entries on reuse hits, got {cache_delta}")
+    # Iter 0 may compile combine + moreh_full. Later combine() calls must cache-hit.
+    for i, growth in enumerate(combine_cache_growth):
+        if i > 0 and growth != 0:
+            failures.append(f"iter {i} expected combine cache HIT (growth 0), got growth={growth}")
 
     for i in range(num_iters):
         all_zero = abs_sums[i] == 0.0
         try:
-            check_results(outputs[i], golden_out, data_map)
+            check_results(outputs[i], goldens[i], data_map)
         except AssertionError as e:
             tag = "MISS" if i == 0 else "HIT"
             extra = " ALL-ZEROS" if all_zero else ""
-            failures.append(f"iter {i} (cache {tag}{extra}) != golden: {str(e)[:200]}")
-        if i > 0 and not torch.equal(outputs[i], outputs[0]):
+            scale_tag = i + 1 if mutate_inputs else 1
+            failures.append(f"iter {i} (cache {tag}{extra}, scale={scale_tag}) != golden: {str(e)[:200]}")
+        if not mutate_inputs and i > 0 and not torch.equal(outputs[i], outputs[0]):
             failures.append(
                 f"iter {i} (cache HIT, abs-sum={abs_sums[i]:.3f}) != iter 0 " f"(cache MISS, abs-sum={abs_sums[0]:.3f})"
+            )
+        if mutate_inputs and i > 0 and torch.equal(outputs[i], outputs[0]):
+            failures.append(
+                f"iter {i} output identical to iter 0 after in-place input scale={i + 1} — writer likely skipped"
             )
 
     if failures:
@@ -157,10 +223,14 @@ def run_a2a_combine_static_buffer_cache_hit_repro(
             logger.error(f)
         pytest.fail(
             "all_to_all_combine is wrong on program-cache HIT with static (reused) input buffers "
-            f"(#47108). cache_delta={cache_delta} abs_sums={abs_sums}\n  " + "\n  ".join(failures)
+            f"(#47108). cache_delta={cache_delta} combine_growth={combine_cache_growth} "
+            f"abs_sums={abs_sums}\n  " + "\n  ".join(failures)
         )
 
-    logger.info(f"All iterations matched golden and iter 0. cache_delta={cache_delta} abs_sums={abs_sums}")
+    logger.info(
+        f"All iterations matched golden. cache_delta={cache_delta} "
+        f"combine_growth={combine_cache_growth} abs_sums={abs_sums}"
+    )
 
 
 def run_a2a_combine_static_buffer_cache_hit_trace_repro(
@@ -259,16 +329,18 @@ def run_a2a_combine_static_buffer_cache_hit_trace_repro(
     logger.info(f"compile (eager miss): output abs-sum = {compile_sum:.3f}")
     check_results(compile_out, golden_out, data_map)
 
-    logger.info(f"Capturing {num_iters} combine launches on persistent output")
+    # Capture a single combine. Multiple launches in one trace can hide a hit-path
+    # skip: the first captured launch would still leave golden in persistent.
+    logger.info("Capturing 1 combine launch on persistent output")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for _ in range(num_iters):
-        _combine(output_tensor=persistent)
+    _combine(output_tensor=persistent)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
     failures = []
     abs_sums = []
     for replay in range(num_replays):
+        _poison_output_tensor(persistent, mesh_device, fill_value=1.0)
         ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         ttnn.synchronize_device(mesh_device)
         out_agg = _agg_combine_output(persistent, mesh_device, mesh_shape, axis)

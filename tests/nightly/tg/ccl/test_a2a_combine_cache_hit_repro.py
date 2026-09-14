@@ -133,3 +133,120 @@ def test_a2a_combine_cache_hit_trace_repro(
         num_iters,
         num_links,
     )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+        },
+    ],
+    ids=["fabric_1d_ring"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [pytest.param((8, 4), (8, 4), id="8x4_grid")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("axis", [1])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
+@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("num_links", [4])
+def test_a2a_combine_cache_hit_repro_ring(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    seq,
+    local_reduce,
+    experts,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    num_links,
+):
+    # Ring completion credits were racy (#50273). Reuse+poison so a skipped writer
+    # cannot hide behind leftover golden data.
+    run_a2a_combine_static_buffer_cache_hit_repro(
+        mesh_device,
+        mesh_shape,
+        axis,
+        batches_per_device,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links,
+        reuse_optional_output=True,
+        poison_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        },
+    ],
+    ids=["fabric_1d_line"],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device",
+    [pytest.param((8, 4), (8, 4), id="8x4_grid")],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("axis", [0, 1], ids=["axis0", "axis1"])
+@pytest.mark.parametrize("batches_per_device", [8])
+@pytest.mark.parametrize("seq", [2])
+@pytest.mark.parametrize("local_reduce", [True], ids=["sparse"])
+@pytest.mark.parametrize("experts", [256])
+@pytest.mark.parametrize("select_experts_k", [8])
+@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("num_links", [4])
+def test_a2a_combine_cache_hit_repro_mutate_inputs(
+    mesh_device,
+    mesh_shape,
+    axis,
+    batches_per_device,
+    seq,
+    local_reduce,
+    experts,
+    select_experts_k,
+    hidden_size,
+    num_iters,
+    num_links,
+):
+    # Same device addresses, new magnitudes each iter. A skipped cache-hit writer
+    # keeps the previous scale and fails golden.
+    run_a2a_combine_static_buffer_cache_hit_repro(
+        mesh_device,
+        mesh_shape,
+        axis,
+        batches_per_device,
+        seq,
+        local_reduce,
+        experts,
+        select_experts_k,
+        hidden_size,
+        num_iters,
+        num_links,
+        reuse_optional_output=True,
+        mutate_inputs=True,
+        poison_output=True,
+    )
