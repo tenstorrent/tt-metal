@@ -155,22 +155,8 @@ void kernel_main() {
             rm_input_dfb.pop_front(TILE_H);
             tilize_uninit(dfb::rm_input, dfb::input_tensor);
 
-            // Re-initialise compute hardware for the sort phase.
-            //
-            // tilize_uninit does not reset the PACK side on WormholeB0 (the
-            // Blackhole-only llk_pack_init path is skipped), so the packer is
-            // still configured for the out-of-order tilize writes it just
-            // performed. This compute_kernel_hw_startup re-arms the MATH-PACK DST
-            // semaphore (llk_math_pack_sync_init + llk_pack_dest_init) and resets
-            // PACK to normal mode so that pack_tile / pack_reconfig_data_format
-            // inside sort_Wt_tiles_row_to_bitonic_sequence work correctly. This is
-            // a deliberate mid-kernel re-init that preserves the pre-cleanup
-            // binary_op_init_common behaviour (same pattern as
-            // layernorm_large_tensor.cpp's TILIZE_IN path). NOTE: compute_kernel_hw_startup
-            // is documented call-once; correcting this re-init pattern is out of scope
-            // for the init-cleanup rename and left to the sort kernel owners.
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+            reconfig_data_format_srca(dfb::input_tensor);
+            rearm_dest_sync(dfb::input_tensor_transposed);
             ckernel::topk_tile_init();
             transpose_init(dfb::input_tensor);
         }
@@ -317,8 +303,8 @@ void kernel_main() {
             transpose_and_pack(index_tensor_transposed_dfb, rm_post_sort_index_dfb, Wt);
 
             // Untilize values: Wt tiles → TILE_HEIGHT RM pages in rm_value_output_dfb.
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::input_tensor, dfb::index_tensor, dfb::rm_value_output);
+            reconfig_data_format_srca(dfb::input_tensor);
+            rearm_dest_sync(dfb::rm_value_output);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::input_tensor, dfb::rm_value_output);
             input_tensor_dfb.wait_front(Wt);
             rm_value_output_dfb.reserve_back(TILE_H);
@@ -330,9 +316,8 @@ void kernel_main() {
             pack_untilize_uninit(dfb::rm_value_output);
 
             // Untilize indices: same chunked pack_untilize pattern but operating on the PACK-only
-            // rm_post_sort_index_dfb
-            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-            compute_kernel_hw_startup(dfb::rm_post_sort_index, dfb::input_tensor, dfb::rm_index_output);
+            reconfig_data_format_srca(dfb::rm_post_sort_index);
+            rearm_dest_sync(dfb::rm_index_output);
             pack_untilize_init<SUB_BLOCK_DIM, Wt>(dfb::rm_post_sort_index, dfb::rm_index_output);
             rm_post_sort_index_dfb.wait_front(Wt);
             rm_index_output_dfb.reserve_back(TILE_H);
