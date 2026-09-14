@@ -169,34 +169,50 @@
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 1"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 3 --group 1 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 33
     bh_p100:
-      timeout: 40
+      timeout: 38
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 38
     sim_wh_n150:
-      timeout: 60
+      timeout: 40
     sim_bh_p150:
-      timeout: 60
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
 - name: "ttnn fused group 2"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 2 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 3 --group 2 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      timeout: 33
     bh_p100:
-      timeout: 40
+      timeout: 38
     bh_p150b_civ2:
-      timeout: 40
+      timeout: 38
     sim_wh_n150:
-      timeout: 60
+      timeout: 40
     sim_bh_p150:
-      timeout: 60
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+
+- name: "ttnn fused group 3"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv --splits 3 --group 3 --splitting-algorithm least_duration -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 33
+    bh_p100:
+      timeout: 38
+    bh_p150b_civ2:
+      timeout: 38
+    sim_wh_n150:
+      timeout: 40
+    sim_bh_p150:
+      timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
 
