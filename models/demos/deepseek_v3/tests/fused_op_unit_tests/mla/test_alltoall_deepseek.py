@@ -4,11 +4,11 @@
 
 import pytest
 import torch
-import ttnn
 from loguru import logger
-from models.perf.benchmarking_utils import BenchmarkProfiler
 from tracy import signpost
 
+import ttnn
+from models.perf.benchmarking_utils import BenchmarkProfiler
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
 
 
