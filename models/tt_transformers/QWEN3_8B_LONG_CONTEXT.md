@@ -76,7 +76,7 @@ cd <tt-metal-dir> && export PYTHONPATH=$(pwd)
 TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
   pytest models/tt_transformers/demo/long_context_demo.py -s -k 32k
 
-# 64k prompt, all three user counts — 4 users is skipped (KV cache would exceed 8 GB per chip)
+# 64k prompt — about 4½ minutes; the 4-user row is skipped (KV cache would exceed 8 GB per chip)
 TT_VISIBLE_DEVICES=0 HF_MODEL=Qwen/Qwen3-8B \
   pytest models/tt_transformers/demo/long_context_demo.py -s -k 64k
 ```
@@ -100,21 +100,45 @@ No `-k` at all runs everything. The first run is much longer because it download
 
 ## What you should see
 
-One summary table at the end. Real output from this card:
+One summary table at the end of each run. These are the actual tables from one n300, from
+exactly the two commands above, on 2026-09-14. Yours should land within a few tenths of a
+millisecond of the `decode ms` column and within a few percent on `TTFT ms`.
+
+`-k 32k` — 3 minutes 59 seconds:
 
 ```
 ctx    users block prompt tok  build s    TTFT ms  compile ms  decode ms  tok/s/u   tok/s  rope        mode   status
-32k        1   256      32768      5.4   12856.40       30.20      28.75     34.8    34.8  native      bench  ok
-64k        1   256      65536      6.5   39087.78       36.32      34.89     28.7    28.7  yarn x1.61  bench  ok
+32k        1   256      32768      5.4   12885.55       30.56      28.68     34.9    34.9  native      bench  ok
+32k        2   256      32768      5.7   25862.46       36.17      34.84     28.7    57.4  native      bench  ok
+32k        4   256      32768      7.3   51884.31       48.37      46.90     21.3    85.3  native      bench  ok
 ```
 
-- **`decode ms`** — milliseconds per generated token, the number the tuning improves. Expect
-  about 28.7 at 32k and 34.9 at 64k.
+`-k 64k` — 4 minutes 36 seconds; the 4-user row is skipped before anything is built
+(`KV cache needs 9.6 GiB per chip, over the 8 GiB budget`):
+
+```
+ctx    users block prompt tok  build s    TTFT ms  compile ms  decode ms  tok/s/u   tok/s  rope        mode   status
+64k        1   256      65536      6.4   39149.41       36.46      34.87     28.7    28.7  yarn x1.61  bench  ok
+64k        2   256      65536      7.3   78446.51       48.15      46.93     21.3    42.6  yarn x1.61  bench  ok
+```
+
+Reading the columns:
+
+- **`decode ms`** — milliseconds per generated token, the number the tuning improves.
+  **`tok/s/u`** is the same figure as a per-user rate; **`tok/s`** is all users combined.
 - **`TTFT ms`** — time to first token: reading the whole prompt before anything comes out.
-  About 13 seconds at 32k, 39 at 64k. Governed by prompt length; the tuning does not address it.
+  Prompts are read one user at a time, so this grows in proportion to the user count:
+  12.9, 25.9, 51.9 seconds for 1, 2, 4 users at 32k. The tuning does not address it.
 - **`rope`** — `native` means the prompt fits the model's trained 40,960-token window.
   `yarn x1.61` means it was stretched past that with YaRN. See limit 1 below.
 - **`compile ms`** — one-off cost on the first token, excluded from `decode ms`. Ignore it.
+
+Two patterns worth knowing before you size a deployment. Each extra concurrent user costs
+about 6 milliseconds per token at 32k (28.68 → 34.84 → 46.90) while combined throughput
+keeps rising (34.9 → 57.4 → 85.3 tokens per second), so more users is more total work done
+at a slower rate each. And doubling the prompt from 32k to 64k at the same user count costs
+about the same as doubling the users at the same prompt: one user at 64k (34.87) matches
+two users at 32k (34.84), and two at 64k (46.93) matches four at 32k (46.90).
 
 ## Known limits
 
