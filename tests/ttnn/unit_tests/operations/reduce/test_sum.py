@@ -38,7 +38,7 @@ def test_sum(device, batch_size, h, w, dim, keepdim):
     assert_numeric_metrics(
         torch_output_tensor,
         output_tensor,
-        pcc_threshold=0.999,
+        pcc_threshold=1.999,
         rtol=2.471,
         atol=65.280,
         frobenius_threshold=0.007,
