@@ -259,7 +259,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_batch_sharded_spe
         .data_format_metadata = output_data_format,
         .tile_format_metadata = output_tile,
     };
-    const bool share_out_interm_buffer = interm0_data_format == output_data_format;
+    const bool share_out_interm_buffer =
+        interm0_data_format == output_data_format && (!packer_l1_acc_en || out_num_entries == interm0_num_entries);
     DataflowBufferSpec intermed0_dfb_spec{
         .unique_id = INTERMED0_DFB,
         .entry_size = interm0_single_tile_size,
