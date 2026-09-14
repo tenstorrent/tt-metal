@@ -161,7 +161,7 @@ card:
 
     ## Benchmarks
 
-    * Box: one P300x2 (4 Blackhole chips, TP=4). Client: tt-inference-server's `vllm bench serve` (random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming), measured 2026-09-13/14. Plain-decode figures are the same box with speculation off ([changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) has plain decode up to 32 users).
+    * Box: one P300x2 (4 Blackhole chips, TP=4). Client: tt-inference-server's `vllm bench serve` (random prompts of exactly ISL tokens, `ignore_eos`, temperature 0, streaming), measured 2026-09-13 to 15. Plain-decode figures are the same box with speculation off ([changh95/qwen3.8-27b-p300x2](https://huggingface.co/changh95/qwen3.8-27b-p300x2) has plain decode up to 32 users).
     * `t/s` = aggregate output tokens per second; `t/s/u` = tokens per second per user (= OSL / mean end-to-end latency); TTFT = mean time to first token (for speculative profiles, the first streamed block).
     * Random-token prompts are the hardest case for a drafter (2 to 2.5 of 7 drafts accepted per step). On real chat and code the speculative profiles gain more: ~45 t/s/u on prose and ~90 t/s/u on code at one user vs 33 plain.
 
@@ -214,19 +214,19 @@ card:
     | 8,192 | 1024 | 1,197 | 17.9 | 52.5 | 31.1 |
     | 10,000 | 1024 | 1,515 | 14.3 | 63.6 | 30.9 |
 
-    `batch8-dflash2` (default) at 1, 4 and 8 users (t/s, with t/s/u in parentheses):
+    `batch8-dflash2` (default) at 1 and 8 users (t/s, with t/s/u in parentheses; the 128k row ran at 4 users, the most the KV pool seats at that length):
 
-    | ISL | OSL | 1 user | 4 users | 8 users | plain 1 user (t/s) |
-    |---|---|---|---|---|---|
-    | 128 | 128 | 55.9 (55.9) | – | 271.7 (34.9) | 32.3 |
-    | 1,024 | 128 | 53.6 (53.6) | – | 244.3 (31.4) | 31.3 |
-    | 2,048 | 128 | 51.2 (51.2) | – | 193.8 (24.9) | 30.7 |
-    | 4,096 | 128 | 45.8 (45.8) | – | 135.1 (17.1) | 28.8 |
-    | 8,192 | 128 | 34.8 (34.8) | – | 80.6 (10.4) | 25.9 |
-    | 16,384 | 128 | 26.1 (26.1) | – | 45.4 (5.7) | 21.2 |
-    | 32,768 | 128 | 16.3 (16.3) | – | 23.4 (2.9) | 15.1 |
-    | 65,536 | 128 | 9.7 (9.7) | – | 9.9 (1.3) | 9.2 |
-    | 131,072 | 128 | 4.4 (4.4) | 4.7 (1.2) | – | 4.6 |
-    | 128 | 1024 | 51.4 (51.4) | – | 296.6 (41.7) | 32.6 |
-    | 8,192 | 1024 | 57.5 (57.5) | – | 198.4 (30.1) | 31.1 |
-    | 10,000 | 1024 | 58.5 (58.5) | – | 186.1 (26.4) | 30.9 |
+    | ISL | OSL | 1 user | 8 users | plain 1 user (t/s) |
+    |---|---|---|---|---|
+    | 128 | 128 | 55.9 (55.9) | 271.7 (34.9) | 32.3 |
+    | 1,024 | 128 | 53.6 (53.6) | 244.3 (31.4) | 31.3 |
+    | 2,048 | 128 | 51.2 (51.2) | 193.8 (24.9) | 30.7 |
+    | 4,096 | 128 | 45.8 (45.8) | 135.1 (17.1) | 28.8 |
+    | 8,192 | 128 | 34.8 (34.8) | 80.6 (10.4) | 25.9 |
+    | 16,384 | 128 | 26.1 (26.1) | 45.4 (5.7) | 21.2 |
+    | 32,768 | 128 | 16.3 (16.3) | 23.4 (2.9) | 15.1 |
+    | 65,536 | 128 | 9.7 (9.7) | 9.9 (1.3) | 9.2 |
+    | 131,072 | 128 | 4.4 (4.4) | 4.7 (1.2) at 4 users | 4.6 |
+    | 128 | 1024 | 51.4 (51.4) | 296.6 (41.7) | 32.6 |
+    | 8,192 | 1024 | 57.5 (57.5) | 198.4 (30.1) | 31.1 |
+    | 10,000 | 1024 | 58.5 (58.5) | 186.1 (26.4) | 30.9 |
