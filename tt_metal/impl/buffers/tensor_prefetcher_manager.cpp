@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <utility>
 #include <vector>
@@ -47,10 +48,25 @@ constexpr uint32_t kRemoteCBId = 31;
 constexpr uint32_t kNumGddrSubchannelsPerBank = 3;
 constexpr uint32_t kFirstMpfePort = 1;
 constexpr uint32_t kMpfePortSum = 1 + 2 + 3;
+constexpr uint32_t kProductionActiveMpfeWeight = 0;
+constexpr const char* kBenchmarkActiveWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT";
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
 inline uint32_t align_up(uint32_t a, uint32_t align) { return (a + align - 1) & ~(align - 1); }
+
+uint32_t get_active_mpfe_weight() {
+    const char* value = std::getenv(kBenchmarkActiveWeightEnv);
+    if (value == nullptr) {
+        return kProductionActiveMpfeWeight;
+    }
+    TT_FATAL(
+        value[0] >= '0' && value[0] <= '7' && value[1] == '\0',
+        "{} must be one digit from 0 through 7, got '{}'",
+        kBenchmarkActiveWeightEnv,
+        value);
+    return static_cast<uint32_t>(value[0] - '0');
+}
 
 uint32_t get_mpfe_port(const metal_SocDescriptor& soc_desc, uint32_t bank_id, const CoreCoord& sender_logical_core) {
     const uint32_t num_subchannels = soc_desc.get_grid_size(tt::CoreType::DRAM).y;
@@ -533,6 +549,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t socket_page_size = align_up(kRequestPageBytes, pcie_alignment);
+    const uint32_t active_mpfe_weight = get_active_mpfe_weight();
 
     programs_.clear();
     for (uint32_t d = 0; d < devices_.size(); ++d) {
@@ -586,6 +603,7 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 shutdown_semaphore_id,
+                active_mpfe_weight,
             };
 
             KernelHandle kernel_id = CreateKernel(

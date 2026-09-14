@@ -69,7 +69,6 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 namespace {
 
 constexpr uint32_t kInactiveMpfeWeight = 7;
-constexpr uint32_t kActiveMpfeWeight = 0;
 
 FORCE_INLINE void set_mpfe_weight(uint32_t port, uint32_t weight) {
     gddr_mc_write_mpfe_weight(port, weight);
@@ -232,6 +231,7 @@ void kernel_main() {
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
     constexpr uint32_t cq_signal_slot_stride = get_compile_time_arg_val(5);
     constexpr uint32_t shutdown_semaphore_id = get_compile_time_arg_val(6);
+    constexpr uint32_t active_mpfe_weight = get_compile_time_arg_val(7);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -338,7 +338,7 @@ void kernel_main() {
             continue;
         }
         // DRAM_PREFETCHER_CMD_PREFETCH
-        set_mpfe_weight(own_mpfe_port, kActiveMpfeWeight);
+        set_mpfe_weight(own_mpfe_port, active_mpfe_weight);
 
         const uint32_t req_num_entries = req->prefetch.num_entries;
         const uint32_t gcb_state_addr = req->prefetch.gcb_state_addr;
