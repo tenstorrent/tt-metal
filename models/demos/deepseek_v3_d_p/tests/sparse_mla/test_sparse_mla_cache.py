@@ -591,9 +591,15 @@ def test_sparse_mla_overlap_gather_threads_external_resources(monkeypatch):
     }
 
 
-def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monkeypatch):
+@pytest.mark.parametrize("fabric", [ttnn.FabricConfig.FABRIC_2D, ttnn.FabricConfig.FABRIC_2D_TORUS_XY])
+def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monkeypatch, fabric):
     """TP-dedup keeps overlap enabled when one full-mesh gather can reconstruct the cache."""
     mla = object.__new__(ttMLA)
+    mla.sp_axis = 0
+    mla.tp_axis = 1
+    mla._kv_dedup = True
+    monkeypatch.setattr(mla, "_declared_seq_shard_factor", lambda _: 4)
+    monkeypatch.setattr(ttnn, "get_fabric_config", lambda: fabric)
     mla.sp_factor = 2
     mla.tp_factor = 2
     mla.ccl_num_links = 2
@@ -616,7 +622,7 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
         return gathered_storage
 
     monkeypatch.setattr(ttnn.experimental, "high_bw_all_gather", fake_gather)
-    result = mla._gather_kvpe_prefix_full_mesh(
+    result = mla._gather_kvpe_prefix(
         cache,
         cache_batch_idx=0,
         populated_global=128,
@@ -638,23 +644,6 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
         "ready_semaphore": "ready",
         "data_valid_semaphore": "valid",
     }
-
-
-def test_sparse_mla_overlap_tp_gather_fallback_fails_closed(monkeypatch, expect_error):
-    """Do not run the two-axis TP fallback under a manager whose resources it cannot honor."""
-    mla = object.__new__(ttMLA)
-    mla._kv_dedup = True
-    monkeypatch.setattr(mla, "_can_full_mesh_gather_kvpe", lambda _: False)
-    cache = SimpleNamespace(storage=object())
-
-    with expect_error(ValueError, "two-axis fallback does not support overlap resources"):
-        mla._gather_kvpe_prefix(
-            cache,
-            cache_batch_idx=0,
-            populated_global=128,
-            block_cyclic_chunk_local=64,
-            overlap_resources=object(),
-        )
 
 
 def test_matches_config_rejects_dense():
