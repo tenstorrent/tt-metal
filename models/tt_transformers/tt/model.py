@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import torch
 from tqdm import tqdm
 
@@ -19,6 +21,50 @@ from models.tt_transformers.tt.embedding import Embedding, ScaledEmbedding
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.rope import HfRotarySetup, RotarySetup
+
+
+def _get_trace_rope_table_len(max_seq_len, trace_prefill_seq_lens):
+    if not trace_prefill_seq_lens:
+        return max_seq_len
+
+    slice_alignment = math.lcm(*trace_prefill_seq_lens)
+    min_table_len = max_seq_len + max(trace_prefill_seq_lens)
+    return ((min_table_len + slice_alignment - 1) // slice_alignment) * slice_alignment
+
+
+def _prefill_rope_setups_to_pad(rope_setup, rope_local_setup, rope_setup_class):
+    """Select the RoPE setups whose shared prefill tables Transformer slices.
+
+    A caller-supplied rope_setup_class builds its prefill cosine and sine mats
+    per request on the host, inside its own prepare_inputs_prefill, and its
+    forward never calls Transformer._slice_prefill_rot_mats. Such a setup owns
+    no cos_matrix_prefill to pad. rope_local_setup always comes from the
+    built-in classes, so it always owns one.
+    """
+    rope_setups = [] if rope_setup_class is not None else [rope_setup]
+    if rope_local_setup is not None:
+        rope_setups.append(rope_local_setup)
+    return rope_setups
+
+
+def _pad_prefill_rope_tables(rope_setups, max_seq_len, trace_prefill_seq_lens):
+    table_len = _get_trace_rope_table_len(max_seq_len, trace_prefill_seq_lens)
+    pad_len = table_len - max_seq_len
+    if pad_len == 0:
+        return
+
+    padding = [(0, 0), (0, 0), (0, pad_len), (0, 0)]
+    for rope_setup in rope_setups:
+        rope_setup.cos_matrix_prefill = ttnn.pad(
+            rope_setup.cos_matrix_prefill,
+            padding=padding,
+            value=0.0,
+        )
+        rope_setup.sin_matrix_prefill = ttnn.pad(
+            rope_setup.sin_matrix_prefill,
+            padding=padding,
+            value=0.0,
+        )
 
 
 class Transformer(LightweightModule):
@@ -48,6 +94,21 @@ class Transformer(LightweightModule):
         self.decoders_optimizations = args.decoders_optimizations
         self.prefetcher = prefetcher
         self.tt_ccl = TT_CCL(self.mesh_device)
+        # Runtime bounds for the post-prefill tail's slice. Allocated here, before any trace exists,
+        # and rewritten in place per call - see process_logits_after_prefill_trace.
+        # These buffers belong to this model/DP lane. Calls on a lane enqueue the
+        # copy and slice on the same command queue, in order. Concurrent host
+        # calls on the same model instance are not supported.
+        self._tail_slice_start = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        self._tail_slice_end = ttnn.from_torch(
+            torch.zeros(4, dtype=torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
         embd_kwargs = {
             "mesh_device": mesh_device,
@@ -98,6 +159,19 @@ class Transformer(LightweightModule):
                 use_qk_fused=args.use_qk_fused,
                 prefetcher=None,
             )
+
+        # Dynamic starts share one table across fixed-width trace buckets. The
+        # tail prevents out-of-range reads and the common multiple preserves
+        # the tensor-bound slice partition geometry for every traced length.
+        _pad_prefill_rope_tables(
+            _prefill_rope_setups_to_pad(
+                self.rope_setup,
+                getattr(self, "rope_local_setup", None),
+                rope_setup_class,
+            ),
+            args.max_seq_len,
+            args.trace_prefill_supported_seq_lens,
+        )
 
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -246,11 +320,42 @@ class Transformer(LightweightModule):
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         get_last_token = (last_token_idx // 32) * 32
-        logits = ttnn.slice(
-            logits,
-            (0, 0, get_last_token, 0),
-            (1, 1, get_last_token + 32, logits.shape[-1]),
-        )
+        seq_len = int(logits.shape[-2])
+        # Pass the offset as a runtime argument rather than a compile-time attribute. With literal
+        # bounds every distinct prompt offset compiles its own slice program, and since this runs
+        # after the prefill traces are captured - once per data-parallel group - that was the single
+        # largest source of buffers left live across trace replays on a DP run. Warmup cannot cover
+        # it either: it only ever sees bucket-length mock prompts, and real prompts are shorter.
+        #
+        # The tensor-args path needs the slice tile-aligned, which this one already is: it takes 32
+        # rows starting at a multiple of 32. num_devices splits the sequence into equal parts, so
+        # seq_len // 32 gives exactly the 32-row window, and the program then keys on the padded
+        # prefill bucket instead of the offset.
+        if seq_len % 32 == 0:
+            for device_tensor, values in (
+                (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                (self._tail_slice_end, [1, 1, get_last_token + 32, int(logits.shape[-1])]),
+            ):
+                ttnn.copy_host_to_device_tensor(
+                    ttnn.from_torch(
+                        torch.tensor(values, dtype=torch.int32),
+                        mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                    ),
+                    device_tensor,
+                )
+            logits = ttnn.slice(
+                input_tensor=logits,
+                starts=self._tail_slice_start,
+                ends=self._tail_slice_end,
+                slice_dim=2,
+                num_devices=seq_len // 32,
+            )
+        else:
+            logits = ttnn.slice(
+                logits,
+                (0, 0, get_last_token, 0),
+                (1, 1, get_last_token + 32, logits.shape[-1]),
+            )
         logits = self._apply_norm_and_lm_head(logits)
         return logits
 
@@ -464,7 +569,8 @@ class Transformer(LightweightModule):
             tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
-        mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
+        trace_mat_len = self.rope_setup.cos_matrix_prefill.shape[2]
+        mat_len = self.args.max_seq_len
         seq_len = last_token_idx + 1 if last_token_idx is not None else S
         assert mat_len >= seq_len, f"Sequence length {seq_len} exceeds max seq len {mat_len}"
 
@@ -474,7 +580,7 @@ class Transformer(LightweightModule):
         # We set the end_pos to max_seq_len so that we don't create a new tensor for the whole cos_matrix and sin_matrix
         # In case of trace, we will use the whole matrix for all seq_lens supported by trace
         prefill_start_pos = 0 if trace_enabled else start_pos
-        slice_end = self.args.max_seq_len if trace_enabled else min(mat_len, required_end)
+        slice_end = trace_mat_len if trace_enabled else min(mat_len, required_end)
 
         cos_slice = self.rope_setup.cos_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
         sin_slice = self.rope_setup.sin_matrix_prefill[:, :, prefill_start_pos:slice_end, :]
@@ -489,10 +595,11 @@ class Transformer(LightweightModule):
         tt_rot_mats_prefill_global = [cos_slice, sin_slice]
 
         if hasattr(self, "rope_local_setup"):
-            local_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
+            local_trace_mat_len = self.rope_local_setup.cos_matrix_prefill.shape[2]
+            local_mat_len = self.args.max_seq_len
             local_required_end = start_pos + S
             local_pad_len = max(0, local_required_end - local_mat_len)
-            local_slice_end = self.args.max_seq_len if trace_enabled else min(local_mat_len, local_required_end)
+            local_slice_end = local_trace_mat_len if trace_enabled else min(local_mat_len, local_required_end)
 
             local_cos_slice = self.rope_local_setup.cos_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
             local_sin_slice = self.rope_local_setup.sin_matrix_prefill[:, :, prefill_start_pos:local_slice_end, :]
@@ -837,15 +944,30 @@ class Transformer(LightweightModule):
         ttnn.plus_one(current_pos, skip_negative_entries=True)
         ttnn.plus_one(rot_mat_idxs)
 
-    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx):
-        """Slices full prefill RoPE mats on device to [chunk_start_idx, max_seq_len)."""
+    def _slice_prefill_rot_mats(self, rot_mats, chunk_start_idx, prefill_seq_len):
+        """Slice full prefill RoPE mats to the traced prefill sequence length."""
         if rot_mats is None or chunk_start_idx is None or not isinstance(chunk_start_idx, ttnn.Tensor):
             return rot_mats
 
         full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
-        if full_rot_cos.shape[2] != self.args.max_seq_len:
-            # Already sliced in input prep path; leave as-is.
+        full_seq_len = full_rot_cos.shape[2]
+        if prefill_seq_len <= 0:
+            raise ValueError(f"Prefill sequence length must be positive, got {prefill_seq_len}")
+        if full_rot_sin.shape[2] != full_seq_len:
+            raise ValueError(
+                f"Prefill RoPE cosine and sine sequence lengths must match, got "
+                f"{full_seq_len} and {full_rot_sin.shape[2]}"
+            )
+        if full_seq_len == prefill_seq_len:
             return rot_mats
+        if full_seq_len % prefill_seq_len != 0:
+            raise ValueError(
+                f"Full RoPE sequence length {full_seq_len} must be evenly divisible by "
+                f"prefill sequence length {prefill_seq_len}"
+            )
+        # Tensor-bound slice fixes output geometry as input length divided by
+        # num_devices; this argument is a partition count, not the mesh width.
+        num_partitions = full_seq_len // prefill_seq_len
 
         z = self._tt_slice_start_zeros_4
         tt_slice_starts = ttnn.concat([z[0:2], chunk_start_idx, z[3:4]], dim=0)
@@ -855,14 +977,14 @@ class Transformer(LightweightModule):
             starts=tt_slice_starts,
             ends=self._tt_seq_len_buffer,
             slice_dim=2,
-            num_devices=self.args.num_devices,
+            num_devices=num_partitions,
         )
         rot_sin_slice = ttnn.slice(
             input_tensor=full_rot_sin,
             starts=tt_slice_starts,
             ends=self._tt_seq_len_buffer,
             slice_dim=2,
-            num_devices=self.args.num_devices,
+            num_devices=num_partitions,
         )
         return (rot_cos_slice, rot_sin_slice)
 
@@ -967,10 +1089,14 @@ class Transformer(LightweightModule):
 
         if mode == Mode.PREFILL:
             # For traced prefill, keep RoPE slicing in-graph and driven by the
-            # on-device chunk_start_idx input.
-            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx)
+            # on-device chunk_start_idx input. Batched prefill arrives flattened
+            # to [1, 1, batch_size * S_per_user, dim] and each TransformerBlock
+            # restores the batch dimension before attention, so the RoPE slice
+            # width is the per-user length, not the flattened one.
+            prefill_seq_len = x.shape[2] // batch_size
+            rot_mats_global = self._slice_prefill_rot_mats(rot_mats_global, chunk_start_idx, prefill_seq_len)
             if rot_mats_local is not None:
-                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx)
+                rot_mats_local = self._slice_prefill_rot_mats(rot_mats_local, chunk_start_idx, prefill_seq_len)
 
         if page_tables_per_layer is not None and len(page_tables_per_layer) != len(self.layers):
             raise ValueError(
@@ -1024,7 +1150,33 @@ class Transformer(LightweightModule):
 
         # Slicing the tensor to the nearest ceiling/floor multiples of 32 for the prefill_len, to get the last token
         if get_last_token != -1:
-            x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
+            seq_len = int(x.shape[2])
+            if seq_len % 32 == 0:
+                # Runtime bounds, as in process_logits_after_prefill_trace: with literal bounds every
+                # distinct prompt offset compiles its own slice program. Untraced-prefill models
+                # (Gemma-3) reach this slice on every real request, after warmup has recorded their
+                # decode traces, and warmup only ever sees bucket-length mock prompts - measured on
+                # Gemma-3-27B DP-4 as the last 8 buffers left live across trace replays.
+                for device_tensor, values in (
+                    (self._tail_slice_start, [0, 0, get_last_token, 0]),
+                    (self._tail_slice_end, [1, 1, get_last_token + 32, int(x.shape[-1])]),
+                ):
+                    ttnn.copy_host_to_device_tensor(
+                        ttnn.from_torch(
+                            torch.tensor(values, dtype=torch.int32),
+                            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                        ),
+                        device_tensor,
+                    )
+                x = ttnn.slice(
+                    input_tensor=x,
+                    starts=self._tail_slice_start,
+                    ends=self._tail_slice_end,
+                    slice_dim=2,
+                    num_devices=seq_len // 32,
+                )
+            else:
+                x = ttnn.slice(x, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, x.shape[-1]))
 
         # Output norm
         x = self.norm(x, mode=mode, norm_config=self.args.get_norm_config("lm_head", mode, self.prefetcher))

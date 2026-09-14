@@ -69,6 +69,7 @@
 #include <tt-metalium/hal_types.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "hostdevcommon/fabric_common.h"  // routing_l1_info_t — identity field layout
 #include "llrt/metal_soc_descriptor.hpp"
 #include "umd/device/chip/sw_emule_chip.hpp"
 #include "umd/device/chip_helpers/simulation_sysmem_manager.hpp"
@@ -3474,6 +3475,10 @@ static void setup_core_state(
     std::map<CoreCoord, std::vector<KernelInfo>>& core_kernels,
     uint32_t emule_sem_base,
     std::vector<CoreSetup>& core_setups) {
+    auto& metal_ctx = MetalContext::instance(impl.get_context_id());
+    const auto fabric_node = metal_ctx.get_control_plane().get_fabric_node_id_from_physical_chip_id(device->id());
+    const uint32_t routing_table_base = static_cast<uint32_t>(
+        metal_ctx.hal().get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::ROUTING_TABLE));
     for (auto& [logical_core, ki_list] : core_kernels) {
         if (!sw_emu) {
             continue;
@@ -3483,6 +3488,11 @@ static void setup_core_state(
         if (!core) {
             continue;
         }
+        // Fabric initialization writes this routing-table identity on silicon. Mirror it here because
+        // SWEmule's launch-owned worker L1 does not retain the earlier control-plane broadcast.
+        auto* routing_info = reinterpret_cast<tt::tt_fabric::routing_l1_info_t*>(core->l1_ptr(routing_table_base));
+        routing_info->my_mesh_id = static_cast<uint16_t>(*fabric_node.mesh_id);
+        routing_info->my_device_id = static_cast<uint16_t>(fabric_node.chip_id);
         uint8_t phys_x = static_cast<uint8_t>(phys.x);
         uint8_t phys_y = static_cast<uint8_t>(phys.y);
 
