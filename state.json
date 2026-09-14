@@ -1,7 +1,7 @@
 {
   "last_run": {
-    "run_id": "34774628700",
-    "timestamp": "2026-09-13T18:29:00Z"
+    "run_id": "34794636070",
+    "timestamp": "2026-09-14T01:06:00Z"
   },
   "run_id": "34757305667",
   "open_prs": {
@@ -350,8 +350,8 @@
     "56290": "bounty issue, multiple community PRs already open (56296/56301/56309/56325/56326/56327), no repo-assist action",
     "56281": "already labeled bug, tracking issue referencing 54630, no action",
     "56277": "bounty feature request, already labeled, no action",
-    "56385": "bitwise_right_shift UINT32 sign-propagation, external fix PR #56394 already open, confirmed no dup needed 2026-09-13 (re-confirmed from prior run)",
-    "56371": "moreh_softmin all-zero rows on +-inf, external fix PR #56386 already open, confirmed no dup needed 2026-09-13 (re-confirmed from prior run)"
+    "56385": "already labeled bug/community; open external fix PR #56394 (MyDude92), no repo-assist dup needed",
+    "56371": "already labeled bug/community; open external fix PR #56386, no repo-assist dup needed"
   },
   "dropped_fix_targets": {
     "51845": "maintainer jasondavies rejected both proposed remedies 2026-08-05 -- do not attempt fix",
@@ -881,6 +881,21 @@
       "date": "2026-09-13",
       "type": "codeowners_ping",
       "note": "xlogy fix, 9 requested reviewers pending, zero reviews, never previously pinged"
+    },
+    "49659": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "behind main, 5 pending reviewers, 2 stale COMMENTED reviews"
+    },
+    "49699": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "CHANGES_REQUESTED outstanding, mixed reviews, blocked mergeable_state"
+    },
+    "50358": {
+      "last_ping": "2026-09-14",
+      "type": "author_checkin",
+      "note": "dirty/conflicting, ci-experiment PR"
     }
   },
   "backlog_cursor": {
@@ -904,7 +919,8 @@
     "task1_task2_2026_09_12c": "reviewed pages 2-4 of newest-created issue list (56133 down through 55587); all already covered/labeled from prior runs except 55664 (confirmed covered by open PR #55807, no dup) and 55749/55705/55672 (KV-cache TP sharding proposal, Quasar re-init guard proposal, semaphore-alignment infra proposal - all design/feature proposals, no confirmed defect, correctly left unlabeled). Next run continue scanning below #55587 (page5+).",
     "task1_task2_2026_09_13": "reviewed newest issues 56390 down to 55929 (page1) + 55928 down to 55443 (page2, continuing from prior cursor #55587); confirmed #56348 already covered by open PR #56375 (opened last run); investigated and fixed #56383 (ttnn.pow_bw lez vs ltz mismatch, confirmed against golden in unary_backward.py, opened fix PR); labeled #55541 infra-ci (/codeowners mixed team+individual handling, confirmed as real defect); reviewed #56385 (bitwise_right_shift sign-propagation, plausible but not yet verified against kernel source - candidate for next run), #56371 (moreh_softmin all-zero on inf, candidate for next run - needs kernel investigation), #55571/#55539 (test-coverage tracking issues, no defect, left unlabeled). Next run continue below #55443 or investigate #56385/#56371 root causes.",
     "task1_task2_2026_09_13b": "labeled 55378/56385/56371; scanned unlabeled-issue list 55539 down to 55022 - all tracking/design/productization issues (Voxtral, Whisper, Qwen3-TTS/ASR, DS Prefill, allocator design decisions), no confirmed defects; 55429 is a design follow-up (dispatch telemetry ACTIVE_ETH accounting), not a quick fix; next run continue below #55022 or re-scan newest issues for anything created since this run",
-    "task1_task2_2026_09_13c": "reviewed fresh issues #56424/#56414 (appeared since prior run's newest-scan of #56390); both investigated (56424 fixed via PR, 56414 confirmed+labeled+commented no fix); next run resume newest-issue scan from #56424 downward or continue prior gap below #55443"
+    "task1_task2_2026_09_13c": "reviewed fresh issues #56424/#56414 (appeared since prior run's newest-scan of #56390); both investigated (56424 fixed via PR, 56414 confirmed+labeled+commented no fix); next run resume newest-issue scan from #56424 downward or continue prior gap below #55443",
+    "task1_task2_2026_09_14": "reviewed newest issues #56424 down to #56371 (fresh since prior run); all already labeled/covered or non-defect (#56388 test-coverage tracking); next run continue newest-scan below #56371 or resume prior gap below #55443"
   },
   "labeled_issues": {
     "53866": {
@@ -1209,6 +1225,11 @@
   },
   "run_history": [
     {
+      "run_id": "34794636070",
+      "date": "2026-09-14T01:06:00Z",
+      "summary": "Task7: welcomed genuinely new contributor @luciademoja-lab on #56424 (verified 0 prior issues/PRs/comments via search_issues/search_pull_requests); heroxcreed and Lanochu checked but excluded (both have extensive prior issue history, not new). Task1/2: reviewed newest issues down to #56371; confirmed #56385 (bitwise_right_shift UINT32 sign-propagation) and #56371 (moreh_softmin \u00b1inf) already labeled bug/community with existing open external fix PRs #56394/#56386, no duplicate; #56388 is a test-coverage tracking issue (BF16 sweep coverage), no defect, left unlabeled; #56424 already has repo-assist fix PR #56428 from last run, confirmed no dup needed. Task5: re-verified all tracked repo-assist PRs (52106/51868/53113/53690/54246/54666/54792/54932/55670/55688/55847/56195/56383/56424/56428/56417/56396) via pull_request_read get - no CI/mergeable_state regressions, all unchanged (behind/blocked/dirty/clean as before last run). Task6: 3 author-check-in nudges on never-before-pinged stale non-repo-assist PRs found via sort:updated-asc search: #49659 (behind main, 2 stale COMMENTED reviews, 5 pending reviewers), #49699 (CHANGES_REQUESTED outstanding + mixed reviews, blocked mergeable_state), #50358 (dirty/conflicting, ci-experiment PR by blozano-tt). Task8: refreshed monthly summary #55015 with current suggested actions (added #56428/#56396/#56414 follow-up) and prepended new run history entry; trimmed condensed section slightly to control size."
+    },
+    {
       "run_id": "34774628700",
       "date": "2026-09-13T18:29:00Z",
       "summary": "Task3: opened fix PR #56424 (branch repo-assist/fix-issue-56424-quantize-per-tensor-scale-dtype) for issue #56424 (quantize/dequantize accept bf16 per-tensor scale then abort in binary_ng); root cause verified against current quantization.cpp (reshape_per_channel_arg only casts to out_dtype when axis.has_value()); fix makes per-tensor Tensor scale/zero-point cast to out_dtype same as per-channel path; commented on issue linking fix. Task1/2: reviewed newest issues 56424/56414 (fresh since last run); investigated #56414 (BF16 trunc/floor/ceil/frac -> +-inf instead of NaN) - confirmed root cause against current _trunc_body_ in ckernel_sfpu_rounding_ops.h (no NaN/inf guard before bit-mask path), labeled bug and commented, but did NOT attempt a fix - this is raw SFPU intrinsic kernel code shared by 3+ other LLKs (binary_fmod/rdiv/binary_remainder) and sfpi.h is not vendored in this checkout so bit-level semantics can't be safely verified/compiled here; confirmed #56385/#56371 (candidates flagged last run) already have external fix PRs #56394/#56386, no duplicate needed. Task5: posted CI-green confirmation comments on PR #56396 (pow_bw fix, 5/5 checks) and PR #56375 (dispatch log fix, 5/5 checks) since both had 'unverified' Test Status and CI has since completed successfully; spot-checked #56195 (still RTL Sim failing) and #55847 (still CodeOwners-pending) - unchanged. Task6: 3 /codeowners ping actions on never-before-pinged reviewer-blocked stale PRs from oldest-updated-first non-draft PR search: #49170 (MOP/replay optimizer tech report, approved by amahmudTT but 7 reviewers pending), #52145 (tril/triu NaN fix, no codeowners bot comment yet despite dirty->behind state and quiet reviewer thread), #52149 (xlogy fix, 9 reviewers requested, zero reviews). Task8: rewrote monthly summary #55015 (had regrown to ~82KB) to canonical trimmed format with refreshed suggested actions including new PR #56424 and #56414 comment."
@@ -1355,5 +1376,20 @@
   "monthly_summary_issue": 55015,
   "task5_maintain_20260911": "re-verified check-runs + mergeable_state on all 13 tracked PRs (56195/55847/55688/55670/55435/54932/54862/54792/54666/54246/53690/53113/52106/51868) - no CI regressions found (55435 RTL Sim CI still failing since 09-04, pre-existing, noted); 51868 confirmed green after 09-10 test-add push; 55847 author (mmoscickiTT) actively iterating with reviewer directly, no repo-assist action needed",
   "task5_maintain_2026_09_12": "re-verified all 14 tracked repo-assist PRs via pull_request_read - no regressions; 55847 PR Gate now green (still CodeOwners-pending 2 groups, no new action); all others unchanged (behind/blocked/dirty as before)",
-  "task5_maintain_2026_09_13": "spot-checked 5 tracked PRs (56195 still RTL Sim failing, 56375 all green, 55847 notify-slack success rest skipped still codeowners-pending, 55435 RTL Sim failure persists known, 56348 PR object 404 superseded by 56375)"
+  "task5_maintain_2026_09_13": "spot-checked 5 tracked PRs (56195 still RTL Sim failing, 56375 all green, 55847 notify-slack success rest skipped still codeowners-pending, 55435 RTL Sim failure persists known, 56348 PR object 404 superseded by 56375)",
+  "welcomed_contributors": {
+    "luciademoja-lab": {
+      "date": "2026-09-14",
+      "issue": 56424,
+      "note": "verified 0 prior issues/PRs/comments"
+    },
+    "heroxcreed_excluded": {
+      "date": "2026-09-14",
+      "note": "has 8+ prior issues, not new, excluded from welcome"
+    },
+    "Lanochu_excluded": {
+      "date": "2026-09-14",
+      "note": "has 12+ prior issues, not new, excluded from welcome"
+    }
+  }
 }
