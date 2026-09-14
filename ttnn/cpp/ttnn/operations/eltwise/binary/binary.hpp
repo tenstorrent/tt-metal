@@ -396,6 +396,18 @@ Tensor divide(
     const std::optional<bool>& fast_and_approximate_mode = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+Tensor floor_div(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+Tensor floor_div(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 Tensor divide_(
     const Tensor& lhs,
     const Tensor& rhs,

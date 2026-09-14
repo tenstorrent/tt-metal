@@ -7,12 +7,18 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
+#include <cmath>
+#include <limits>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_device_operation.hpp"
+#include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"
+#include <tt-metalium/hal.hpp>
 
 // Implementation macros for binary operations (must match declarations in binary.hpp)
 #define TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(NAME, OP_TYPE)                             \
@@ -1212,6 +1218,86 @@ Tensor divide(
         lhs_activations,
         rhs_activations,
         fast_and_approximate_mode,
+        sub_core_grids,
+        sub_device_id);
+}
+Tensor floor_div(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        !(tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR && tt::tt_metal::is_floating_point(lhs.dtype())),
+        "ttnn.floor_div is not supported for floating-point dtypes on Quasar: SFPU floor is unimplemented.");
+    return ttnn::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::DIV_FLOOR,
+        std::nullopt,
+        memory_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        /*fast_and_approximate_mode=*/false,
+        sub_core_grids,
+        sub_device_id);
+}
+Tensor floor_div(
+    const Tensor& lhs,
+    operations::unary::ScalarVariant rhs,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
+    TT_FATAL(
+        !(tt::tt_metal::hal::get_arch() == tt::ARCH::QUASAR && tt::tt_metal::is_floating_point(lhs.dtype())),
+        "ttnn.floor_div is not supported for floating-point dtypes on Quasar: SFPU floor is unimplemented.");
+    const float rhs_f = std::visit([](auto value) -> float { return static_cast<float>(value); }, rhs);
+    if (std::isnan(rhs_f)) {
+        return ttnn::full(
+            lhs.logical_shape(),
+            std::numeric_limits<float>::quiet_NaN(),
+            lhs.dtype(),
+            lhs.layout(),
+            *lhs.device(),
+            memory_config.value_or(lhs.memory_config()));
+    }
+    if (rhs_f == 0.0f) {
+        auto resolved_sub_core_grids = sub_core_grids;
+        if (sub_device_id.has_value()) {
+            TT_FATAL(!sub_core_grids.has_value(), "Cannot specify both sub_core_grids and sub_device_id");
+            resolved_sub_core_grids =
+                lhs.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id.value());
+        }
+        const float infinity = std::numeric_limits<float>::infinity();
+        const float nan = std::nanf("");
+        return ttnn::where(
+            ttnn::eqz(lhs, memory_config, /*optional_output_tensor=*/std::nullopt, resolved_sub_core_grids),
+            nan,
+            ttnn::multiply(
+                ttnn::sign(lhs, memory_config, /*optional_output_tensor=*/std::nullopt, resolved_sub_core_grids),
+                infinity,
+                std::nullopt,
+                memory_config,
+                std::nullopt,
+                {},
+                {},
+                {},
+                std::nullopt,
+                resolved_sub_core_grids));
+    }
+    return ttnn::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        operations::binary::BinaryOpType::DIV_FLOOR,
+        std::nullopt,
+        memory_config,
+        std::nullopt,
+        {},
+        {},
+        {},
+        /*fast_and_approximate_mode=*/false,
         sub_core_grids,
         sub_device_id);
 }
