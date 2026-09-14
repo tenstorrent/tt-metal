@@ -1,0 +1,144 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# Container (v5.1) package for Gemma-4-12B-it on a single Blackhole P150.
+#
+# The default profile (p150-eval) is a field-for-field transcription of the
+# launch that was actually scored on hardware:
+#   /home/stisi/gemma_p150_eval_serve.sh + /home/stisi/gemma_p150_env.sh
+# -> 71.72% GPQA Diamond (thinking mode, exact_match) on 99/198 docs
+#    (CI nightly 10-sample subset: 10/10). Published Google score: 78.8% on 198.
+#
+# Keeping the default identical to that recipe is what lets the accuracy claim
+# transfer to a consumer. Async scheduling is OFF on purpose: on a single P150
+# (TP=1) the 262144-token vocab is wider than ttnn topk's on-device sampling
+# (64k), so every decode step host-samples and host-restages the token; under
+# async lag that restage re-processes the previous token ("TheThe user user...")
+# and degrades output. Do not re-enable it for this SKU.
+#
+# Author it with:   tt-model package --container models/demos/gemma4/tt-model.yaml
+# Prove it locally: tt-model serve   build/gemma-4-12b-it-p150/tt_kernel_manifest.json
+# Publish:          tt-model push    build/gemma-4-12b-it-p150 --public --publish
+
+schema: "5.1"
+repo: stisi/gemma-4-12B-it-p150
+name: gemma-4-12b-it-p150
+kind: vllm-plugin
+arch: blackhole
+
+# A POINTER, pinned to the revision the recipe was validated against. Downloaded
+# to the consumer's own HF cache at pull time; never baked into the image.
+weights:
+  repo: google/gemma-4-12B-it
+  revision: 707f0a3b8a3c7ad586ed01e27eafbad8a27dd0f7
+
+source:
+  # Local, hermetic: packages exactly the validated tree (dirty tree included --
+  # this ships the GEMMA4_FABRIC=off single-die fix in demo/text_demo_v2.py).
+  # tt-metal @ 7d54a363f0cb5ccb0fc0ff8a63fb35398a4ba0b4.
+  tt_metal: /home/stisi/tt-metal
+  # EXACTLY what ships as the image's `models` package. An allowlist, not a
+  # denylist -- these are the paths the serve path imports (reproduces the code/
+  # tree of the 2026-09-09 build byte-for-byte).
+  code:
+    - models/common
+    - models/demos/gemma4
+    - models/demos/utils
+    - models/perf
+    - models/tt_transformers
+  ubuntu: "22.04"   # build/repair on 22.04 (glibc 2.35) -> runs on 22.04 and 24.04
+  python: "3.12"
+
+runtime:
+  # Stock vLLM from PyPI, built VLLM_TARGET_DEVICE=empty in the image.
+  vllm: {version: "0.26.0"}
+  # The Tenstorrent platform plugin, pinned to the validated sha (must be pushed).
+  # No extra_models_dir: Gemma4ForCausalLM comes from the plugin's builtin registry.
+  plugin: {repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: bef89e429e202caa38d3e3c8a24da4e8cc02405a}
+  # tt_transformers pins a transformers floor; relax to a range vLLM can satisfy.
+  overrides: ["transformers>=5.5.3,<5.15.0"]
+  # No `lock:` on this build: setuptools-scm stamps the in-image ttnn with a
+  # version string that shifts as tt-metal's tags move, so an exact ttnn== pin
+  # from a prior build becomes unsatisfiable against a freshly-built ttnn. The
+  # first build resolves live under `overrides`; `package` then emits a fresh
+  # requirements.lock in the staged dir. Commit that and add `lock:
+  # requirements.lock` back for byte-reproducible rebuilds from the same tree.
+
+# Defaults every profile inherits; each profile deep-merges over these.
+serve:
+  hardware: p150
+  mesh_device: P150
+  port: 8000
+  block_size: 64
+  max_num_seqs: 1
+  capabilities:
+    reasoning_parser: gemma4     # renders --reasoning_parser gemma4
+    tool_parser: gemma4
+  additional_config:
+    tt:
+      trace_region_size: 536870912   # 512 MiB, matches the eval server
+  # Passed through verbatim after the composed flags. These are the eval recipe's
+  # flags that have no first-class field.
+  args:
+    - --enable-chunked-prefill
+    - --no-async-scheduling
+    - ["--max-num-batched-tokens", "4096"]
+    - ["--long-prefill-token-threshold", "4096"]
+    - ["--default-chat-template-kwargs", '{"enable_thinking": true}']
+  # Process env. MESH_DEVICE is NOT listed -- it is derived from mesh_device.
+  # HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE are intentionally NOT baked: the
+  # consumer's first serve must be able to fetch weights.
+  env:
+    ARCH_NAME: blackhole
+    TT_METAL_VISIBLE_DEVICES: "0"       # single die; harmless on a 1-board host
+    GEMMA4_FABRIC: "off"                # single-die: no cross-chip CCL, no fabric
+    GEMMA4_BOUNDED_SLIDING_KV_CACHE: "1"
+    G4_FORCE_BATCH_PREFILL: "0"
+    GEMMA4_PAGE_BLOCK_SIZE: "64"
+
+serve_profiles:
+  - name: p150-eval
+    description: >
+      Validated accuracy recipe: 64k context, single user, thinking on, async
+      off, bounded sliding + 4k chunked prefill. 71.7% GPQA Diamond (99/198).
+    max_model_len: 65536
+    env:
+      GEMMA4_MAX_TOKENS_ALL_USERS: "65536"
+  - name: p150-smoke
+    description: >
+      Short-context (4k) single-user smoke / determinism check. Not accuracy
+      validated -- for fast bring-up only.
+    max_model_len: 4096
+    env:
+      GEMMA4_MAX_TOKENS_ALL_USERS: "8192"
+
+default_profile: p150-eval
+
+# Build-time assertions run INSIDE the finished image, on top of the launcher's
+# own import checks. These catch the model's silent-failure modes.
+verify:
+  - "from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM; assert Gemma4ForCausalLM"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/demos/gemma4/precision_overrides.json').is_file(), 'gemma4 precision_overrides.json missing -> silent wrong-precision serve'"
+  - "from pathlib import Path; assert Path('/opt/tt-metal/models/demos/gemma4/configs/gemma-4-12B-it/config.json').is_file(), 'gemma4 12B config missing'"
+
+card:
+  description: >
+    Google Gemma-4-12B-it served on a single Blackhole P150 via the Tenstorrent
+    vLLM plugin, in thinking mode. Experimental community bring-up: single-user
+    (TP=1) with host sampling, so async scheduling is disabled. Accuracy:
+    71.7% GPQA Diamond (thinking, exact_match) on 99/198 docs vs Google's 78.8%
+    on the full 198.
+  quickstart: |
+    ### Serve
+    ```bash
+    tt-model pull  stisi/gemma-4-12B-it-p150 --with-weights
+    tt-model serve stisi/gemma-4-12B-it-p150            # default profile: p150-eval
+    tt-model serve stisi/gemma-4-12B-it-p150 --profile p150-smoke   # 4k smoke
+    ```
+    First serve compiles kernels for your device (several minutes) and is ready
+    when it logs `Application startup complete`. The endpoint is OpenAI-compatible.
+
+    ### Note on this SKU
+    This bundle targets one Blackhole P150 die (1x1 mesh), fabric disabled. On a
+    p300c (two P150 dies linked over ethernet) `GEMMA4_FABRIC=off` is required and
+    is baked into the default env.
