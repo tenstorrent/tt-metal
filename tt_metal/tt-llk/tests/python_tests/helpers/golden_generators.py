@@ -1636,7 +1636,11 @@ class BroadcastGolden:
         if broadcast_type not in self.broadcast_handlers:
             raise ValueError(f"Unsupported broadcast type: {broadcast_type}")
 
-        torch_format = format_dict[data_format]
+        # Hold the operand in its own format, not the output's. The hardware unpacks src_B from
+        # its L1 encoding and broadcasts that, so quantizing to the output format here rounds the
+        # value before any of it is picked: a Float16 operand into a bfloat16-backed output --
+        # every MX format among them -- loses three mantissa bits it never loses on the device.
+        torch_format = format_dict[input_format or data_format]
 
         # Convert input to tensor
         if isinstance(operand, torch.Tensor):
