@@ -34,8 +34,14 @@ void kernel_main() {
     uint32_t q_x = start_q_x;
     uint32_t q_y = start_q_y;
     uint32_t remote_q_head_idx = remote_q_head_start_idx;
-    uint32_t q_src_noc_x = in0_mcast_noc_x[q_x];
-    uint32_t q_src_noc_y = in0_mcast_noc_y[q_y];
+    // An instance with no Q heads to read is handed the coordinates the next instance starts from,
+    // which on the last core lie one row past the coordinate tables; look them up only when used.
+    uint32_t q_src_noc_x = 0;
+    uint32_t q_src_noc_y = 0;
+    if (num_q_heads > 0) {
+        q_src_noc_x = in0_mcast_noc_x[q_x];
+        q_src_noc_y = in0_mcast_noc_y[q_y];
+    }
     // The host passes only the shard base; the first head this core reads starts
     // remote_q_head_start_idx heads into the source shard.
     uint32_t q_src_addr = q_base_addr + remote_q_head_start_idx * head_size;
@@ -52,7 +58,9 @@ void kernel_main() {
         q_src_addr += head_size;
         q_write_addr += head_size;
         remote_q_head_idx++;
-        if (remote_q_head_idx == num_q_heads_per_core) {
+        // Advance to the next source core only while heads remain: after the last head the row wrap
+        // would index the coordinate tables one row past their end.
+        if (remote_q_head_idx == num_q_heads_per_core && q + 1 < num_q_heads) {
             remote_q_head_idx = 0;
             q_x++;
             if (q_x == num_x) {
@@ -102,7 +110,8 @@ void kernel_main() {
             kv_src_addr += head_size;
             kv_write_addr += head_size;
             remote_kv_head_idx++;
-            if (remote_kv_head_idx == num_kv_heads_per_core) {
+            // As above: no source-core advance after the last head.
+            if (remote_kv_head_idx == num_kv_heads_per_core && kv + 1 < num_kv_heads) {
                 remote_kv_head_idx = 0;
                 kv_x++;
                 if (kv_x == num_x) {
