@@ -23,8 +23,8 @@ duration, shape and adapter:
 |---|---|---|
 | 15 s / 1344x768 / 24 fps + audio | **6.612 s** | **18.9 s** at the current serving point |
 
-(19.9 s is job 886's figure, which this plan was first written against; 18.9 s is where the serving
-configuration stands now. Attach a job id to the 18.9 s before quoting it as a baseline.)
+(19.9 s is job 886's figure, which this plan was first written against. 18.9 s is job 247, measured
+here; **18.5 s** is the same configuration with the S1 gather narrowing.)
 
 A 3x hardware-and-engine gap, not an 11x algorithm gap. Nothing in this plan closes 3x. S1 is now
 measured at 0.41 s; what is left is a few hundred ms of cleanup plus a fidelity result we currently
@@ -93,56 +93,64 @@ Block profile, jobs 225/226, `test_minimax_h3_vsa_block_perf -k 15s_768p`, Tracy
 | **block device time** | **55,640 us** | **53,585 us** | **-2,055 us (-3.7%)** |
 
 Scaled `x50 blocks x4 forwards`: **-0.41 s of an 18.9 s run (-2.2%)**. Take the lever -- it is free of
-fidelity cost and costs nothing to keep -- but it is **half the predicted 0.74 s**, and 0.41 s sits
-far under the +-8% (~1.5 s) single-run e2e resolution. One pair of runs cannot see 0.41 s, so the
-block profile stays the number of record. This is the same situation `OPTIMIZATIONS.md` records for
-the VSA port: real in Tracy, invisible in one generation.
+fidelity cost and costs nothing to keep -- but it is **half the predicted 0.74 s**. It does survive to
+the e2e number (below), which the VSA port's block-level delta did not.
 
-**The e2e A/B was attempted and produced nothing.** Job 227, `test_zz_yuv_timing.py -k 15s` on the
-bf16 control arm: the broker killed it at 100.6 s with `[MCP killed: chips left PCIe]` -- chips 8-15
-left the PCIe bus during the *warmup* generation's VAE decode; the broker's bridge reset then failed
-(job 229, exit 8) and the host went off the network.
+### The e2e pair
 
-Job 234 then reproduced it exactly: bfp8 arm, killed at 115.4 s, **same 8 chips (8-15)**, same point
-in the stage -- immediately after `decoder weights uploaded` and the same two
-`No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
-using default 8x8x8` warnings. Two for two, both arms, and the control arm runs byte-identical code
-to pre-change (the typecast branch is skipped when the dtypes match). **The lever is not implicated;
-the 15 s yuv420 decode is.**
-
-Chips 8-15 are one row of the 4x8 -- one UBB tray, one power rail. `69e6a5d195b`'s own message already
-records the history: *"Every chip-drop incident on blx04 lands in the VAE or audio decode and none in
-the denoise... 21 of 21 prior incidents sit on one UBB tray, so the rail is marginal either way."*
-These are incidents 22 and 23. Note the cap is already active -- `get_matmul_core_grid` clamps 32-chip
-Blackhole to 11x10 and 11x10 is the grid in the warnings -- so those two shapes are *inside* the cap
-and it trips anyway. The cap reduced the rate; it did not fix the rail.
-
-**Consequence: there is no 15 s e2e number to be had on blx04 as it stands**, for either arm, and the
-sibling Galaxy blx02 was unreachable throughout. Anyone wanting an e2e A/B should run the 5 s or 10 s
-arm of the same test (`test_zz_yuv_timing.py` parametrizes 5/10/15) where the decode draw is lower --
-accepting that it is a different working point -- or wait for the tray. Registering the two matmul
-shapes in the VAE decoder blocking table is worth doing regardless (it is O4's work), but on this
-evidence the rail is marginal at 11x10 and better blocking is a mitigation, not a fix.
-
-### The e2e pair, at 10 s
-
-The 15 s arm is unobtainable on blx04 (above), so the A/B ran at 10 s / 243 frames -- same test, same
-serving configuration, same adapter, only the duration differs. Jobs 243/244, fully warm:
+Jobs 245/247, `test_zz_yuv_timing.py -k 15s` (FastH3 LoRA + VSA + `vae_output_type="yuv420"`, 5
+scheduler points / 4 forwards, 1344x768 / 362 frames), fully warm on g14blx03:
 
 | stage | bf16 control | bfp8_b | delta |
 |---|---|---|---|
 | Encoder | 0.3 s | 0.3 s | - |
-| **Denoise (4 fwd)** | **7.9 s** | **7.6 s** | **-0.3 s** |
-| VAE decode | 3.1 s | 3.1 s | - |
-| Audio decode | 1.2 s | 1.2 s | - |
-| **Total (compute)** | **12.5 s** | **12.2 s** | **-0.3 s (-2.4%)** |
-| steady ms/step | 1947 | 1873 | **-74 ms (-3.8%)** |
+| **Denoise (4 fwd)** | **12.5 s** | **12.1 s** | **-0.4 s** |
+| VAE decode | 4.6 s | 4.7 s | +0.1 s (noise) |
+| Audio decode | 1.4 s | 1.4 s | - |
+| **Total (compute)** | **18.9 s** | **18.5 s** | **-0.4 s (-2.1%)** |
+| per forward | 3132.6 ms | 3015.7 ms | **-116.9 ms (-3.7%)** |
+| steady ms/step | 3113 | 2996 | **-117 ms (-3.8%)** |
 
-**The per-step figure is the one to read: -3.8% against the block profile's -3.7%.** Two independent
-instruments on the same number. The whole delta sits in denoise and the other three stages match to
-the tenth, which is the correct signature for a change that only touches attention. One pair of runs
-against a +-8% band is still not a confirmation -- but it is *consistent with* the block measurement,
-not merely non-contradictory.
+**-3.7% per forward against the block profile's independently measured -3.7%.** The whole delta sits
+in denoise; Encoder and Audio match exactly and VAE moves +0.1 s in the wrong direction, which is the
+correct signature for a change that only touches attention. The control also reproduces the 18.9 s
+serving figure exactly, so that baseline is now attached to a job id.
+
+The same pair at 10 s / 243 frames (jobs 243/244) agrees: total 12.5 -> 12.2 s, steady 1947 -> 1873
+ms/step (**-3.8%**), again entirely in denoise.
+
+One pair per duration against a +-8% band is not a confirmation on its own. What makes it credible is
+that four instruments -- block profile, 10 s per-step, 15 s per-forward, 15 s per-step -- land within
+0.1 pp of each other.
+
+### The 15 s decode and the g14blx03 tray
+
+Getting that pair took four attempts, and the failures are worth recording because they are not about
+the lever.
+
+Jobs 227 (bf16) and 234 (bfp8) were both killed by the broker with `[MCP killed: chips left PCIe]` at
+100.6 s and 115.4 s -- **the same 8 chips (8-15)**, the same point in the stage, immediately after
+`decoder weights uploaded` and the same two
+`No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
+using default 8x8x8` warnings. Each time the broker's bridge reset failed and escalated to a **full
+power cycle**, which takes the host off the network -- so the fault costs the whole box, not just the
+job.
+
+Chips 8-15 are one row of the 4x8: one UBB tray, one power rail. `69e6a5d195b`'s own message records
+the history -- *"Every chip-drop incident on blx04 lands in the VAE or audio decode and none in the
+denoise... 21 of 21 prior incidents sit on one UBB tray, so the rail is marginal either way."* These
+were incidents 22 and 23. The cap that commit added is already active (`get_matmul_core_grid` clamps
+32-chip Blackhole to 11x10, and 11x10 is the grid in the warnings), so the shapes that trip are
+*inside* it.
+
+**Both 15 s runs succeeded after the power cycle**, on the same box, same command. So the rail is
+intermittent, not a hard limit at this shape, and a 15 s e2e is obtainable -- just not reliably.
+Registering those two matmul shapes in the VAE decoder blocking table (O4's work) lowers the draw and
+is worth doing; on this evidence it is a mitigation, not a fix.
+
+Naming note: the host these jobs ran on reports `g14blx03`. `g03blx04` is a stale `~/.ssh/config`
+alias pointing at it, and `OPTIMIZATIONS.md` plus `69e6a5d195b` both say "blx04" for the same machine.
+The sibling Galaxy, `g14blx02` (alias `g03blx02`), was unreachable for this entire session.
 
 ### Follow-ons once S1 is proven
 
@@ -283,8 +291,8 @@ on it.
 
 ## Order
 
-1. **S1** is done: -3.7% of the block, no fidelity cost, no e2e run warranted. What is left of it is
-   the typecast removal (0.08 s) and the unexplained 14 pp of gather time that does not scale with
+1. **S1** is done: **18.9 -> 18.5 s** at 15 s, -3.7% per forward, no fidelity cost. What is left of it
+   is the typecast removal (0.08 s) and the unexplained 14 pp of gather time that does not scale with
    payload - settle that before spending effort on the AGMM dtype arm.
 2. **S4** quality gate. Unblocks S2, O5 and O2's block-size question.
 3. **S2** step 1 (host oracle, no device time) - can run in parallel with S4.
