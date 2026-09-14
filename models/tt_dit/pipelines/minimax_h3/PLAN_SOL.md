@@ -19,9 +19,12 @@ batching).
 **We already run the 4-forward FastH3 adapter.** So the comparison that matters is at matched
 duration, shape and adapter:
 
-| | Sol-H3, 8x B300 | here, 4x8 BH Galaxy (job 886) |
+| | Sol-H3, 8x B300 | here, 4x8 BH Galaxy |
 |---|---|---|
-| 15 s / 1344x768 / 24 fps + audio | **6.612 s** | **19.9 s** (denoise 13.4 / VAE 4.8 / audio 1.4) |
+| 15 s / 1344x768 / 24 fps + audio | **6.612 s** | **18.9 s** at the current serving point |
+
+(19.9 s is job 886's figure, which this plan was first written against; 18.9 s is where the serving
+configuration stands now. Attach a job id to the 18.9 s before quoting it as a baseline.)
 
 A 3x hardware-and-engine gap, not an 11x algorithm gap. Nothing in this plan closes 3x. S1 is now
 measured at 0.41 s; what is left is a few hundred ms of cleanup plus a fidelity result we currently
@@ -89,11 +92,22 @@ Block profile, jobs 225/226, `test_minimax_h3_vsa_block_perf -k 15s_768p`, Tracy
 | `AllGatherMinimalMatmulAsyncOp` x4 | 14,588 us | 14,568 us | -20 us (noise) |
 | **block device time** | **55,640 us** | **53,585 us** | **-2,055 us (-3.7%)** |
 
-Scaled `x50 blocks x4 forwards`: **-0.41 s of the 19.9 s run (-2.1%)**. Take the lever -- it is free of
+Scaled `x50 blocks x4 forwards`: **-0.41 s of an 18.9 s run (-2.2%)**. Take the lever -- it is free of
 fidelity cost and costs nothing to keep -- but it is **half the predicted 0.74 s**, and 0.41 s sits
-far under the +-8% (~1.6 s) single-run e2e resolution. **Do not run an e2e A/B to "confirm" it**; one
-pair of runs cannot see 0.41 s, and the block profile is the more precise instrument. This is the
-same situation `OPTIMIZATIONS.md` records for the VSA port: real in Tracy, invisible in one generation.
+far under the +-8% (~1.5 s) single-run e2e resolution. One pair of runs cannot see 0.41 s, so the
+block profile stays the number of record. This is the same situation `OPTIMIZATIONS.md` records for
+the VSA port: real in Tracy, invisible in one generation.
+
+**The e2e A/B was attempted and produced nothing.** Job 227, `test_zz_yuv_timing.py -k 15s` on the
+bf16 control arm: the broker killed it at 100.6 s with `[MCP killed: chips left PCIe]` -- chips 8-15
+left the PCIe bus during the *warmup* generation's VAE decode, immediately after two
+`No known best blocking for (M, K, N) = (1792, 32, 2048) / (1824, 2048, 3072) on 11x10 core grid;
+using default 8x8x8` warnings. The broker's bridge reset then failed (job 229, exit 8) and the host
+went off the network. The control arm executes byte-identical code to pre-change (the typecast branch
+is skipped when the dtypes match), so the lever is not implicated; the trip is the yuv420 decode's
+power profile with default blocking on an 11x10 grid. **Anyone retrying the e2e walks back into that
+stage** -- and is retrying for a delta the instrument cannot resolve. Fix the decode blocking first if
+this stage is going to be exercised repeatedly.
 
 **The open question this raised.** 56% of the bytes bought only 70.5% of the time. O6 frames the
 gather as link-bound at 87-93 GB/s, ~90% of line rate; if that were the whole story, halving the
