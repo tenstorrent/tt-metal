@@ -373,6 +373,8 @@ TEST_F(ControlPlaneFixture, TestT3kFabricDebugManifest) {
     EXPECT_EQ(manifest["manifest_version"], FABRIC_DEBUG_MANIFEST_VERSION);
     EXPECT_EQ(manifest["kind"], "fabric_debug_manifest");
     EXPECT_EQ(manifest["run"]["arch"], "WORMHOLE_B0");
+    EXPECT_EQ(manifest["run"]["mpi_rank"], 0);
+    EXPECT_EQ(manifest["run"]["world_size"], 1);
 
     // T3K is a single 2x4 mesh, and FABRIC_2D on T3K resolves to MESH, so neither axis wraps.
     ASSERT_EQ(manifest["meshes"].size(), 1u);

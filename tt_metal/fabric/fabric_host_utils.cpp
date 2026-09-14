@@ -558,6 +558,7 @@ void serialize_fabric_debug_manifest_to_file(
         run["tensix_config"] = enum_name(control_plane.get_fabric_tensix_config());
         run["udm_mode"] = enum_name(control_plane.get_fabric_udm_mode());
         run["host_rank"] = *control_plane.get_local_host_rank_id_binding();
+        run["mpi_rank"] = *distributed_context->rank();
         run["world_size"] = *distributed_context->size();
         json local_mesh_ids = json::array();
         for (const auto& mesh_id : control_plane.get_local_mesh_id_bindings()) {
