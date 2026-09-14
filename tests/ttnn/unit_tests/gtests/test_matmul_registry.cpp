@@ -21,12 +21,6 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::Layout;
 using tt::tt_metal::TensorMemoryLayout;
 
-compact::Sha256 digest(const std::uint8_t byte) {
-    compact::Sha256 result{};
-    result.fill(byte);
-    return result;
-}
-
 TensorRequest tensor_request(const DataType dtype = DataType::BFLOAT16) {
     return TensorRequest{
         .dtype = dtype,
@@ -157,8 +151,7 @@ compact::ProgramConfigExactEntry exact_entry(
     // Schema 2 keys the compute-kernel knobs, and compact::entries_bind_key_compute_kernel
     // requires every entry's key to name exactly the knobs its recipe was measured at.
     key.compute_kernel = ckc;
-    return compact::ProgramConfigExactEntry{
-        .entry_id = digest(11), .key = key, .program_config = program, .compute_kernel_config = ckc};
+    return compact::ProgramConfigExactEntry{.key = key, .program_config = program, .compute_kernel_config = ckc};
 }
 
 TEST(MatmulConfigRegistry, BlackholeKeyUsesNativeArchitectureAndPortablePhysicalFields) {
