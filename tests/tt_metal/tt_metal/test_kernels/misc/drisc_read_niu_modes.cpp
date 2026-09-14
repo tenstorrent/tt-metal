@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// DRISC test kernel: records the NIU mode of both NOCs into DRISC L1 so the host can check that
-// firmware left NOC0 in stream mode and NOC1 in NOC2AXI mode, and that running a kernel doesn't
-// disturb either.
+// DRISC test kernel: records the NIU mode of both NOCs into DRISC L1. The host checks the modes
+// firmware assigned (NOC0 in stream mode on every Metal DRAM core; NOC1 in NOC2AXI only on cores that
+// are a DRAM view's NOC1 endpoint, stream mode elsewhere) and that running a kernel disturbs neither.
 
 #include "api/compile_time_args.h"
 #include "experimental/drisc_mode.h"
