@@ -354,3 +354,63 @@ def test_vsa_sdpa_stream_order(device, order, heads, seq_len, kv_len):
     if order == "identity":
         assert torch.equal(base, out), f"identity stream_order differs from the default (PCC vs ref {pcc})"
     assert ok, f"PCC {pcc}"
+
+
+@skip_for_wormhole_b0("vsa_sdpa is Blackhole-only")
+@pytest.mark.parametrize(
+    ("heads", "seq_len", "kv_len", "pattern", "ragged"),
+    [(2, 256, 1280, "nonuniform", True), (2, 128, 1280, "single", False), (14, 128, 2048, "nonuniform", True)],
+    ids=["nonuniform_ragged", "single_block", "h14"],
+)
+def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
+    """The exported softmax state must reconstruct the row logsumexp, and must not disturb the output.
+
+    `threshold * scale + ln(sum)` is exactly `ln(sum_j exp(scale * qk_j))` over the row's listed keys,
+    so it is checkable against torch directly. The second assertion is the one that matters for
+    shipping: turning the export on is a pure addition and the attention result has to be bit-identical.
+    """
+    torch.manual_seed(0)
+    dim = 128
+    n_q_tiles = seq_len // BLOCK
+    n_blocks = kv_len // BLOCK
+    w = ((n_blocks + 15) // 16) * 16
+    scale = dim**-0.5
+
+    q = torch.randn(1, heads, seq_len, dim, dtype=torch.bfloat16)
+    k = torch.randn(1, heads, kv_len, dim, dtype=torch.bfloat16)
+    v = torch.randn(1, heads, kv_len, dim, dtype=torch.bfloat16)
+    indices = build_indices(heads, n_q_tiles, n_blocks, w, pattern, 1)
+    counts = build_counts(n_blocks, w, ragged, 2)
+    token_valid = (torch.arange(BLOCK)[None, :] < counts[:n_blocks, None].to(torch.long)).reshape(-1)
+    k[:, :, ~token_valid] = 0
+    v[:, :, ~token_valid] = 0
+
+    dev = lambda x, lay=ttnn.TILE_LAYOUT, dt=ttnn.bfloat16: ttnn.from_torch(x, device=device, layout=lay, dtype=dt)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    tt_idx = ttnn.from_torch(indices.view(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
+    tt_counts = ttnn.from_torch(
+        counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
+    )
+    tt_lse = dev(torch.zeros(1, heads, seq_len, 64))
+
+    baseline = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True))
+    out = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True, lse_out=tt_lse))
+    assert torch.equal(baseline, out), "requesting the softmax state changed the attention output"
+
+    # tile column block 0 holds the sums, block 1 the thresholds; only column 0 of each is meaningful
+    state = ttnn.to_torch(tt_lse).float()
+    got = state[0, :, :, 32] * scale + torch.log(state[0, :, :, 0])
+
+    logits = (q.float() @ k.float().transpose(-1, -2)) * scale  # [1,H,S,T]
+    listed = torch.zeros(heads, n_q_tiles, n_blocks, dtype=torch.bool)
+    for h in range(heads):
+        for r in range(n_q_tiles):
+            for b in indices[h, r]:
+                if int(b) != 0xFFFFFFFF:
+                    listed[h, r, int(b)] = True
+    key_ok = listed.repeat_interleave(BLOCK, dim=2) & token_valid[None, None, :]
+    key_ok = key_ok.repeat_interleave(BLOCK, dim=1)  # q tile -> q row
+    want = torch.logsumexp(logits[0].masked_fill(~key_ok, float("-inf")), dim=-1)
+
+    ok, pcc = comp_pcc(want, got, 0.999)
+    assert ok, f"row logsumexp PCC {pcc}"
