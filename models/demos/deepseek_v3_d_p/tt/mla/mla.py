@@ -309,6 +309,9 @@ class ttMLA:
         idx_host = TtIndexer.extract_host_weights(state_dict)
         self.config = config
         self.mesh_device = mesh_device
+        # Optional segmented-trace controller. Sparse MLA uses it to split capture around the
+        # top-k/KV-gather sub-device-manager load and clear, which cannot occur inside one trace.
+        self._trace_controller = None
         self.layer_idx = layer_idx
         self.kv_only = kv_only
         self.is_balanced = is_balanced
@@ -665,6 +668,10 @@ class ttMLA:
     def release_sparse_mla_overlap_manager(self) -> None:
         """Forward shared sparse-MLA overlap teardown to the model-wide TT_CCL owner."""
         self.tt_ccl.release_sparse_mla_overlap_manager()
+
+    def set_trace_controller(self, controller) -> None:
+        """Route overlap-manager boundaries through a segmented trace controller when attached."""
+        self._trace_controller = controller
 
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
@@ -1811,7 +1818,11 @@ class ttMLA:
         loaded = False
         failed = False
         try:
-            self.mesh_device.load_sub_device_manager(resources.manager_id)
+            trace_controller = getattr(self, "_trace_controller", None)
+            if trace_controller is not None:
+                trace_controller.sub_device_load(resources.manager_id)
+            else:
+                self.mesh_device.load_sub_device_manager(resources.manager_id)
             loaded = True
             signpost(header="SPARSE_MLA_OVERLAP_START")
             signpost(header="SPARSE_MLA_LOCAL_TOPK")
@@ -1834,7 +1845,10 @@ class ttMLA:
             raise
         finally:
             if loaded:
-                self.mesh_device.clear_loaded_sub_device_manager()
+                if trace_controller is not None:
+                    trace_controller.sub_device_clear()
+                else:
+                    self.mesh_device.clear_loaded_sub_device_manager()
                 signpost(header="SPARSE_MLA_OVERLAP_END")
             if failed:
                 self.tt_ccl.reset_sparse_mla_overlap_semaphores()
