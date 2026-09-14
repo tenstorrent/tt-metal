@@ -380,3 +380,12 @@ remain equal to the final primary measurement, and git diff --check is clean.
 Local checkpoint below isolates stage-owned files. Operator PIPELINE_BLOCKERS.md
 and root AUTODEBUG.md remain untouched and excluded. Raw runtime evidence stays
 local as required by the autoport ignore policy. No push is performed.
+
+| Repository | Branch | Local checkpoint |
+| --- | --- | --- |
+| tt-metal | `mvasiljevic/qwen38-full-bringup` | `c901b7d879ca124559e557d05dc2b659ae4a0ed9` — Stage10 implementation/tests/reports; all commit hooks pass |
+| vllm | `mvasiljevic/qwen38-full-bringup` | `5dfd818f4f0f5444533331d85f4711c43f8f2f2b` — unchanged completed integration; no new commit needed |
+
+The checkpoint contains15 stage-owned source/test/report files. Unrelated
+operator files remain dirty and unstaged. `local_commits.json` records this
+checkpoint and the following documentation-only provenance commit; no push.
