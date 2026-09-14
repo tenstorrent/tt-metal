@@ -168,7 +168,7 @@ GTEST_SUBTORUS_4X4_PIPELINE="${GTEST_GALAXY_4X4_SPLIT_HOST_LAYOUT_CHECK}:MultiHo
 GTEST_SINGLE_GALAXY_SLICE="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}:${GTEST_PIPELINE_BUILDER_CHECK}"
 GTEST_SINGLE_GALAXY_BLITZ="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.TestBlitzDecodePipelineBuilder"
 GTEST_SINGLE_GALAXY_2X2_RING="${GTEST_GALAXY_LAYOUT_CHECK}:ControlPlaneFixture.Test2x2StageRingPipelineOnSingleGalaxy"
-GTEST_SINGLE_GALAXY_2X2_Z="ControlPlaneFixture.Test2x2StageRingForcedOntoZByConfigTorus"
+GTEST_SINGLE_GALAXY_2X2_Z="ControlPlaneFixture.Test2x2StageRingForcedOntoZByConfigTorus:ControlPlaneFixture.Test2x2StageRingZRoutersNoDeadlockAvoidanceAcrossFabricConfigs"
 # Llama 8b pod MGDs (40 host ranks): layout + corner pins + pod CP init; omit TestPipelineBuilderCheck
 # (40-stage resolve_graph_layout ring does not finish in reasonable time on these MGDs).
 GTEST_LLama_8B_POD_LAYOUT="${GTEST_GALAXY_LAYOUT_CHECK}:${GTEST_GALAXY_CORNER_PINS}"
@@ -390,6 +390,8 @@ run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_des
 # T3K 2x2 Assign Z Direction Multi-host
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionControlPlaneInit"
 run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionFabric2DSanity"
+# Z routers keep deadlock avoidance OFF under every fabric config (both ends of a Z cable must agree).
+run_test tt-run --mesh-graph-descriptor tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto --mock-cluster-rank-binding tt_metal/third_party/tt-cluster-descriptors/wormhole/t3k_cluster_desc/t3k_cluster_desc.yaml --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.T3K2x2AssignZDirectionDeadlockAvoidancePolarity"
 
 # Negative test: two assign_z boundaries contend for one chip's Z lane -> control-plane init must fail
 # (validated on every rank). Hard rank binding (4x 1x2 meshes, TT_VISIBLE_DEVICES 0..3) pins placement.

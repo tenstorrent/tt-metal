@@ -28,6 +28,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
@@ -47,6 +48,21 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
         cluster, rtoptions, hal, distributed_context, graph_desc.string(), kFabricConfig, kReliabilityMode);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+    return control_plane;
+}
+
+// Same as make_control_plane(graph_desc) but with an explicit fabric config, so a test can bring the
+// same MGD up as a mesh (FABRIC_2D) and as each torus flavour and compare the resulting FabricContext.
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane_with_fabric_config(
+    const std::filesystem::path& graph_desc, tt::tt_fabric::FabricConfig fabric_config) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().full_world_distributed_context();
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(
+        cluster, rtoptions, hal, distributed_context, graph_desc.string(), fabric_config, kReliabilityMode);
     control_plane->configure_routing_tables_for_fabric_ethernet_channels();
 
     return control_plane;
@@ -2355,6 +2371,70 @@ TEST_F(ControlPlaneFixture, Test2x2StageRingForcedOntoZByConfigTorus) {
                     << "inter-mesh channel " << +chan << " on " << exit_node << " is not a Z-direction router";
             }
         }
+    }
+
+    // Z routers never take part in the torus wrap, and the far end of a Z cable may belong to a rank that
+    // opened its mesh as plain FABRIC_2D (no deadlock avoidance). Under a torus config the Z routers of this
+    // rank must therefore compile WITHOUT deadlock avoidance / first-level ACK too, or the torus side waits
+    // for ACKs the mesh side never sends and the Z pair starves.
+    const auto& fabric_context = control_plane.get_fabric_context();
+    EXPECT_EQ(fabric_context.get_fabric_topology(), tt::tt_fabric::Topology::Torus);
+    EXPECT_FALSE(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::Z))
+        << "Z routers must not enable deadlock avoidance under FABRIC_2D_TORUS_XY";
+    // The planar torus axes keep it.
+    EXPECT_TRUE(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::EAST));
+    EXPECT_TRUE(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::NORTH));
+}
+
+// Deadlock-avoidance (DA) / first-level-ACK polarity of every router direction, per fabric config, on the
+// same 4-stage 2x2 pipeline ring. The inter-mesh Z cables in this ring are the ones that can join a torus
+// rank to a mesh rank (a heterogeneous ring may open some meshes as FABRIC_2D and the rest as
+// FABRIC_2D_TORUS_*), so the Z column of this table must be identical for every config: Z is never a
+// torus axis and both ends of a Z cable must agree.
+TEST_F(ControlPlaneFixture, Test2x2StageRingZRoutersNoDeadlockAvoidanceAcrossFabricConfigs) {
+    const char* mgd_path_env = std::getenv("TT_MESH_GRAPH_DESC_PATH");
+    if (mgd_path_env == nullptr ||
+        std::string_view(mgd_path_env).find("2x2_line_4stage_ring") == std::string_view::npos) {
+        GTEST_SKIP() << "Requires the single_galaxy_2x2_line_4stage_ring MGD via --mesh-graph-descriptor";
+    }
+    const std::filesystem::path mgd_path(mgd_path_env);
+
+    using tt::tt_fabric::FabricConfig;
+    using tt::tt_fabric::Topology;
+    struct Expected {
+        FabricConfig config;
+        Topology topology;
+        bool east_west;
+        bool north_south;
+    };
+    // Z is deliberately not a column: it must be false for every row.
+    const std::vector<Expected> table = {
+        {FabricConfig::FABRIC_2D, Topology::Mesh, /*east_west=*/false, /*north_south=*/false},
+        {FabricConfig::FABRIC_2D_TORUS_X, Topology::Torus, /*east_west=*/true, /*north_south=*/false},
+        {FabricConfig::FABRIC_2D_TORUS_Y, Topology::Torus, /*east_west=*/false, /*north_south=*/true},
+        {FabricConfig::FABRIC_2D_TORUS_XY, Topology::Torus, /*east_west=*/true, /*north_south=*/true},
+    };
+
+    std::optional<bool> z_polarity;
+    for (const auto& row : table) {
+        SCOPED_TRACE(fmt::format("fabric_config={}", enchantum::to_string(row.config)));
+        auto control_plane = make_control_plane_with_fabric_config(mgd_path, row.config);
+        const auto& fabric_context = control_plane->get_fabric_context();
+        EXPECT_EQ(fabric_context.get_fabric_topology(), row.topology);
+
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::EAST), row.east_west);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::WEST), row.east_west);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::NORTH), row.north_south);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::SOUTH), row.north_south);
+
+        const bool z_da = fabric_context.need_deadlock_avoidance_support(eth_chan_directions::Z);
+        EXPECT_FALSE(z_da) << "Z routers must never enable deadlock avoidance (Z is not a torus axis)";
+        if (!z_polarity.has_value()) {
+            z_polarity = z_da;
+        }
+        // Cross-config agreement: a FABRIC_2D rank and a FABRIC_2D_TORUS_* rank at the two ends of one Z
+        // cable must compile their Z routers with the same DA / first-level-ACK setting.
+        EXPECT_EQ(z_da, *z_polarity) << "Z deadlock-avoidance polarity differs between fabric configs";
     }
 }
 
