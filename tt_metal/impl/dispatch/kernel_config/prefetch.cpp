@@ -542,6 +542,8 @@ void PrefetchKernel::CreateKernel() {
 
     const auto& my_dispatch_constants = get_dispatch_mem_map();
     defines["PREFETCH_Q_ENTRY_BITS"] = std::to_string(my_dispatch_constants.prefetch_q_entry_size_bytes() * 8);
+    // Which CQ this prefetcher serves; tags its DPRINT banner so co-located CQs can be told apart.
+    defines["CQ_ID"] = std::to_string(cq_id_);
 
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";

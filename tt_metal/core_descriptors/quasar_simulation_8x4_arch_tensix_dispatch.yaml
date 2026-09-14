@@ -25,8 +25,12 @@ unharvested:
         end: [8, 5]
 
 
+      # Quasar co-locates every CQ's prefetch/dispatch/dispatch_s on ONE Tensix tile (like the 2x3 yaml):
+      # DispatchQueryManager::get_dispatch_core TT_FATALs "CQs sharing a dispatch core diverged" if the
+      # CQs resolve to different tiles. The tile's 6 user DMs (DM2..DM7) hold the 2 CQs x 3 kernels.
+      # The list is consumed one entry per FD kernel assignment, hence one row per (CQ, kernel-pair).
       dispatch_cores:
-        [[-1, -1], [-1, -1], [-1, -2], [-1, -2]]
+        [[-1, -1], [-1, -1], [-1, -1], [-1, -1]]
 
       dispatch_core_type:
         "tensix"

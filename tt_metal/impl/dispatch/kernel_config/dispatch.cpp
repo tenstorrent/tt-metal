@@ -578,6 +578,8 @@ void DispatchKernel::CreateKernel() {
         {"NUM_WORKER_CORES_TO_MCAST", std::to_string(device_worker_cores.size())},
         {"IS_D_VARIANT", std::to_string(static_config_.is_d_variant.value())},
         {"IS_H_VARIANT", std::to_string(static_config_.is_h_variant.value())},
+        // Which CQ this dispatcher serves; tags its DPRINT banner so co-located CQs can be told apart.
+        {"CQ_ID", std::to_string(cq_id_)},
     };
     if (!is_hd()) {
         defines["FABRIC_RELAY"] = "1";

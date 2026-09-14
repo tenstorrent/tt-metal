@@ -66,7 +66,11 @@ void DispatchSettings::init_worker_defaults(
         .prefetch_max_cmd_size(128_KB)
         .prefetch_cmddat_q_size(256_KB)
         .prefetch_scratch_db_size(128_KB)
-        .prefetch_ringbuffer_size(1024_KB)
+        // DRAM-backed CQs exist only on the Quasar simulator, where fast dispatch runs on an interim Tensix
+        // (WORKER) tile that hosts EVERY CQ's prefetch/dispatch/dispatch_s (see init_dispatch_defaults for the
+        // dispatch-engine tile). Two full 1 MiB rings plus the other per-CQ zones no longer fit the 4 MiB L1
+        // next to the enlarged kernel-config region, so shrink the ring the same way for co-located CQs.
+        .prefetch_ringbuffer_size((are_cqs_dram_backed && num_hw_cqs > 1) ? 864_KB : 1024_KB)
         .prefetch_d_buffer_size(256_KB)
 
         .dispatch_size(512_KB)

@@ -170,10 +170,37 @@ void DispatchSKernel::GenerateStaticConfigs() {
 
     // Configuration for DEVICE_PRINT dispatch.
     static_config_.device_print_dispatch_enabled = 0;
+    // TT_METAL_DPRINT_DISPATCH_AGGREGATION=0 keeps the kernel define at 0: the dprint server then
+    // never sees the DRAM ring leave STARTING_MAGIC and polls each print core's L1 buffers directly.
+    // Needed where dispatch_s cannot compose the aggregator's raw NOC_XY_ENCODING / packed-DRAM
+    // operands (Quasar under ATT).
+    // An active ATT map forces per-core L1 polling regardless of the env knob: dispatch_s cannot compose
+    // the aggregator's raw NOC_XY_ENCODING / packed-DRAM operands (their node ids are in neither ATT
+    // inverse table), so DRAM aggregation would trap dispatch_s under ATT. The env override can still
+    // force aggregation off, but never on under ATT.
+    const bool att_active = descriptor_.rtoptions().get_noc_att_map().has_value();
+    const bool aggregation_enabled =
+        descriptor_.rtoptions().get_dprint_dispatch_aggregation_enabled() && !att_active;
+    if (cq_id_ == 0 && descriptor_.metal_context().dprint_server()) {
+        if (att_active) {
+            log_info(
+                tt::LogMetal,
+                "DPRINT dispatch_s DRAM aggregation disabled on device {}: an ATT NoC map is active and "
+                "dispatch_s cannot compose the aggregator's raw NOC/DRAM operands under ATT; the dprint "
+                "server polls per-core L1 buffers.",
+                device_->id());
+        } else if (!aggregation_enabled) {
+            log_info(
+                tt::LogMetal,
+                "DPRINT dispatch_s DRAM aggregation disabled on device {} by TT_METAL_DPRINT_DISPATCH_AGGREGATION=0; "
+                "the dprint server polls per-core L1 buffers.",
+                device_->id());
+        }
+    }
     // With multiple CQs there is one dispatch_s per CQ, but they all read the same per-core
     // DEVICE_PRINT L1 buffers. Only enable the DRAM-aggregation work on cq_id 0 so the buffers
     // aren't drained twice (which would race the host's rpos updates and reorder/drop messages).
-    if (cq_id_ == 0 && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
+    if (cq_id_ == 0 && aggregation_enabled && get_dispatch_query_manager_ref().dispatch_s_enabled() &&
         descriptor_.metal_context().dprint_server()) {
         auto* dprint_server = descriptor_.metal_context().dprint_server().get();
         auto print_cores = dprint_server->get_print_cores(device_->id());
@@ -337,6 +364,8 @@ void DispatchSKernel::CreateKernel() {
         {"DISPATCH_TELEMETRY_DISABLED", std::to_string(static_config_.dispatch_telemetry_disabled.value_or(false))},
         {"DISPATCH_TELEMETRY_CONTROL_ADDR", std::to_string(static_config_.dispatch_telemetry_control_addr.value())},
         {"DEVICE_PRINT_DISPATCH_ENABLED", std::to_string(static_config_.device_print_dispatch_enabled.value_or(0))},
+        // Which CQ this dispatch_s serves; tags its DPRINT banner so co-located CQs can be told apart.
+        {"CQ_ID", std::to_string(cq_id_)},
         // For each per-device dispatch_s build, MaxNocLocations equals the actual print-core count
         // for that device — passed as a compile-time #define so DevicePrintDispatch<>'s LDM arrays
         // (rw_noc_addresses, cache_buffer_offsets, cache_buffer_sizes, noc_locations_to_process)
