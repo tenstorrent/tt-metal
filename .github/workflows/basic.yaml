@@ -140,7 +140,7 @@ jobs:
         # merge gate: the queue's temporary commit could be discarded between the create and
         # the update. Annotations attach to this job, so there is no separate SHA to go stale.
         continue-on-error: true
-        uses: mikepenz/action-junit-report@v5
+        uses: mikepenz/action-junit-report@3585e9575db828022551b4231f165eb59a0e74e3 # v5.6.2
         with:
           report_paths: /work/test-reports/*.xml
           check_name: ${{ inputs.product }} ${{ matrix.test-group.sku }} basic tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
