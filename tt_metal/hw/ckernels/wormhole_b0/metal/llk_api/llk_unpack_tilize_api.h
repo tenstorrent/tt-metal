@@ -42,8 +42,9 @@ inline void llk_unpack_tilize_init(const std::uint32_t operand, const std::uint3
 /**
  * Tear down the tilize unpacker configuration so a subsequent operation can reprogram the unpacker.
  *
- * Tile geometry comes from the operand's CB metadata, so the restore matches the operand rather
- * than a hardcoded 16x16, 4-face tile.
+ * Tile geometry comes from the operand's CB metadata, so the Tile_x_dim restore matches the operand
+ * rather than a hardcoded 16x16 face. The face count is passed for the sanitizer only: on Wormhole
+ * the teardown no longer writes the tile descriptor (tt-llk#1161).
  *
  * @param operand Input circular buffer / operand index.
  */
@@ -336,6 +337,9 @@ inline void llk_unpack_fast_tilize_block(
 /**
  * Tear down the combined tilize-A / unpack-B configuration so a subsequent operation can reprogram
  * the unpacker.
+ *
+ * Tile geometry comes from the operand's CB metadata, so the Tile_x_dim restore matches the operand
+ * rather than a hardcoded 16x16 face.
  *
  * @param operand Input circular buffer / operand index.
  */

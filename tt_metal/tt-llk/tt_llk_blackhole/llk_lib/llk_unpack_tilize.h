@@ -93,9 +93,12 @@ inline void _llk_unpack_tilize_init_(
     // programmed here.
     TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
 
-    // Descriptor Z_dim = num_faces, the per-operand baseline. It is consumed by the BFP
-    // exponent section size (XDim*YDim*ZDim*WDim), not by any address wrap: ZDim only
-    // multiplies ADC_ZW.W, which tilize clears to 0.
+    // Descriptor Z_dim = num_faces, re-asserting the per-operand baseline configure_unpack_AB
+    // programmed. Only the 8-bit path keeps this value: the non-8-bit branch below overwrites the
+    // same field with z_dim = 1, so it is that write _llk_unpack_tilize_uninit_ has to revert, not
+    // this one. On the 8-bit path nothing reads ZDim either -- it feeds the BFP exponent section
+    // size (XDim*YDim*ZDim*WDim), which 8-bit formats have no exponent section for, and otherwise
+    // only multiplies ADC_ZW.W, which both tilize paths clear to 0.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);
@@ -357,9 +360,10 @@ inline void _llk_unpack_tilize_(
 /**
  * @brief Restore unpacker state after a tilize operation.
  *
- * Reverts the config @ref _llk_unpack_tilize_init_ wrote: tile-descriptor X/Z dim, unpack config
- * word 0 (clearing tilize and haloize mode) and Tile_x_dim_cntx0. x-start/x-end and the MOP are
- * reprogrammed by the next operation's init, so they are not restored here.
+ * Reverts the config @ref _llk_unpack_tilize_init_ wrote: tile-descriptor Z dim (dropped to 1 by
+ * the non-8-bit init path) and X dim (written by that path only, never by the 8-bit one), unpack
+ * config word 0 (clearing tilize and haloize mode) and Tile_x_dim_cntx0. x-start/x-end and the MOP
+ * are reprogrammed by the next operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @param tensor_shape: Tile geometry; total_num_faces() restores the descriptor Z dimension
@@ -603,9 +607,12 @@ inline void _llk_unpack_tilizeA_B_(
 /**
  * @brief Restore unpacker state after a tilize-A-with-unpack-B operation.
  *
- * Reverts the config @ref _llk_unpack_tilizeA_B_init_ wrote: unpack config word 0 (clearing
- * haloize mode) and the SrcA Y stride. x-start/x-end and the MOP are reprogrammed by the next
- * operation's init, so they are not restored here.
+ * Reverts the SrcA Ch1 Y stride @ref _llk_unpack_tilizeA_B_init_ wrote, and zeroes the Ch0/Ch1 Y
+ * counters on both unpackers, which belong to the execute path rather than to init. The unpack
+ * config word-0 write is wider than init's: init only clears haloize_mode, while this is a
+ * full-word write that also forces out_data_format and throttle_mode and zeroes context_count,
+ * tileize_mode, unpack_src_reg_set_update and shift_amount. x-start/x-end and the MOP are
+ * reprogrammed by the next operation's init, so they are not restored here.
  *
  * @param unpack_dst_format: Destination data format to restore in the unpack config.
  * @note Call @ref _llk_unpack_tilizeA_B_init_ before this function.
