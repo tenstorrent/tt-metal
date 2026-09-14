@@ -1,5 +1,6 @@
 import contextlib
 import math
+import os
 import queue
 import threading
 from typing import Optional
@@ -36,7 +37,7 @@ from .moe import DeepSeekV4HashRouter, DeepSeekV4PreloadedExperts
 from .quant import dequantize_weight
 from .system_config import SystemConfig, load_system_config, set_active_system_config
 from .weight_cache import WeightCache, _as_cache
-from .weight_loader import DeepseekV4WeightLoader
+from .weight_loader import DeepseekV4WeightLoader, hf_to_checkpoint_name
 
 # ---------------------------------------------------------------------------- #
 # DeepSeek-V4-Flash full model (prefill, ``past_key_values is None``)
@@ -378,30 +379,36 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # is revisited for layers S, 2S, ...); under a smaller pipeline group size
             # they are the per-group rings plus the single group-to-group edge.
             self.submesh_socket_pairs = {}
-            socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, system_config.pipeline.socket_l1_bytes)
             for from_id, to_id in self.pipeline_edges:
-                from_submesh = self.submeshes[from_id]
-                to_submesh = self.submeshes[to_id]
-                socket_connections = []
-                for coord in ttnn.MeshCoordinateRange(from_submesh.shape):
-                    socket_connections.append(
-                        ttnn.SocketConnection(
-                            ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
-                            ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
-                        )
-                    )
-                    socket_connections.append(
-                        ttnn.SocketConnection(
-                            ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
-                            ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
-                        )
-                    )
-                socket_config = ttnn.SocketConfig(socket_connections, socket_memconfig)
-                sender_socket, receiver_socket = ttnn.create_socket_pair(from_submesh, to_submesh, socket_config)
-                self.submesh_socket_pairs[(from_id, to_id)] = (sender_socket, receiver_socket)
+                self.submesh_socket_pairs[(from_id, to_id)] = self._create_socket_pair(
+                    self.submeshes[from_id], self.submeshes[to_id]
+                )
         else:
             self.first_device = full_device
             self.last_device = full_device
+
+        # Idle-chip MTP (DSpark) link: one D2D socket from the submesh that owns
+        # layers 40/41/42. Those three residuals are slice-written into one packed
+        # tensor, then sent as a single socket payload. Only when the mesh is larger
+        # than the target pipeline (Galaxy 32-chip TP4 leaves 24 chips idle).
+        self.mtp_submesh = None
+        self._mtp_sender = None
+        self._mtp_receiver = None
+        self._mtp_pack = None
+        self._mtp_hiddens = None
+        self.mtp_layers: list[DeepSeekV4DecoderLayer] = []
+        self.mtp_kv_caches: list[_StaticLayerCache] = []
+        self.mtp_hc_head: Optional[DeepSeekV4HyperHead] = None
+        self.mtp_norm: Optional[DeepSeekV4RMSNorm] = None
+        self._mtp_logit_heads: Optional[dict] = None
+        self._dspark_tap_ids = tuple(i for i in (40, 41, 42) if i < self.num_layers)
+        if (
+            use_submeshes
+            and self.mesh_devices > self.pipeline_devices
+            and len(self._dspark_tap_ids) == 3
+            and len({self.layer_submesh_ids[i] for i in self._dspark_tap_ids}) == 1
+        ):
+            self._init_mtp_link()
 
         n = self.num_layers
 
@@ -549,11 +556,27 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self.norm = DeepSeekV4RMSNorm(
             self._thunk("norm.weight"), config.rms_norm_eps, self.last_device, cache.file("norm"), sharded=True
         )
+        if os.environ.get("DEEPSEEK_V4_LOAD_MTP") == "1" and self.mtp_submesh is not None:
+            self.ensure_mtp_stack()
 
     # -- weight plumbing (lazy dequant; a populated tile cache skips the read) -- #
     def _thunk(self, name: str):
         loader = self.loader
         return lambda: dequantize_weight(loader.get_tensor(name), loader.get_scale(name))
+
+    def _thunk_native(self, ckpt_name: str):
+        """Lazy dequant of a native checkpoint name (no HF ``layers.N`` rewrite)."""
+        loader = self.loader
+        return lambda: dequantize_weight(
+            loader.get_tensor(ckpt_name, translate=False),
+            loader.get_scale(ckpt_name, translate=False),
+        )
+
+    def _mtp_hf_thunk(self, stage: int, hf_suffix: str):
+        """Map an HF decoder-layer key onto ``mtp.{stage}.*`` native names."""
+        dummy = f"layers.0.{hf_suffix}"
+        ckpt = hf_to_checkpoint_name(dummy).replace("layers.0.", f"mtp.{stage}.", 1)
+        return self._thunk_native(ckpt)
 
     @staticmethod
     def _attn_keys(layer_type: str) -> list[str]:
@@ -593,6 +616,294 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for k in ("input_layernorm.weight", "post_attention_layernorm.weight"):
             weights[k] = self._thunk(f"layers.{layer_idx}.{k}")
         return weights
+
+    def _build_mtp_layer_weights(self, stage: int) -> dict:
+        """Decoder-layer weight dict for checkpoint ``mtp.{stage}`` (sliding + sparse MoE)."""
+        weights: dict = {}
+        for k in self._attn_keys("sliding_attention"):
+            weights[f"self_attn.{k}"] = self._mtp_hf_thunk(stage, f"self_attn.{k}")
+        weights["mlp.gate.weight"] = self._mtp_hf_thunk(stage, "mlp.gate.weight")
+        weights["mlp.gate.e_score_correction_bias"] = self._mtp_hf_thunk(stage, "mlp.gate.e_score_correction_bias")
+        for k in ("gate_proj.weight", "up_proj.weight", "down_proj.weight"):
+            weights[f"mlp.shared_experts.{k}"] = self._mtp_hf_thunk(stage, f"mlp.shared_experts.{k}")
+        for hc in ("attn_hc", "ffn_hc"):
+            for p in ("fn", "base", "scale"):
+                weights[f"{hc}.{p}"] = self._mtp_hf_thunk(stage, f"{hc}.{p}")
+        for k in ("input_layernorm.weight", "post_attention_layernorm.weight"):
+            weights[k] = self._mtp_hf_thunk(stage, k)
+        return weights
+
+    def _create_socket_pair(self, from_submesh, to_submesh):
+        """Directed L1 D2D socket pair, same core map as the pipeline handoffs."""
+        socket_memconfig = ttnn.SocketMemoryConfig(ttnn.BufferType.L1, self.system_config.pipeline.socket_l1_bytes)
+        socket_connections = []
+        for coord in ttnn.MeshCoordinateRange(from_submesh.shape):
+            socket_connections.append(
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 0)),
+                )
+            )
+            socket_connections.append(
+                ttnn.SocketConnection(
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
+                    ttnn.MeshCoreCoord(coord, ttnn.CoreCoord(0, 1)),
+                )
+            )
+        socket_config = ttnn.SocketConfig(socket_connections, socket_memconfig)
+        return ttnn.create_socket_pair(from_submesh, to_submesh, socket_config)
+
+    def _init_mtp_link(self) -> None:
+        """Park DSpark/MTP on the first idle 1xTP row and open one socket to it."""
+        tap_sm = self.layer_submesh_ids[self._dspark_tap_ids[0]]
+        mtp_row = self.num_submeshes
+        if self.tp_size > 1:
+            self.mtp_submesh = self.device.create_submesh(
+                ttnn.MeshShape(1, self.tp_size), ttnn.MeshCoordinate(mtp_row, 0)
+            )
+        else:
+            self.mtp_submesh = self.device.create_submesh(
+                ttnn.MeshShape(1, 1), ttnn.MeshCoordinate(0, self.pipeline_devices)
+            )
+        self._mtp_sender, self._mtp_receiver = self._create_socket_pair(self.submeshes[tap_sm], self.mtp_submesh)
+        logger.info(
+            f"DSpark MTP link: pipeline submesh {tap_sm} -> idle row {mtp_row} "
+            f"(layers {self._dspark_tap_ids} packed on one D2D socket)"
+        )
+
+    def _ensure_mtp_buffers(self, batch: int) -> None:
+        """Persistent ``[B, 3, hc, D]`` pack on the tap submesh and recv on MTP."""
+        if self.mtp_submesh is None:
+            return
+        n = len(self._dspark_tap_ids)
+        hc, d = self.config.hc_mult, self.config.hidden_size
+        shape = [batch, n, hc, d]
+        if self._mtp_pack is not None and list(self._mtp_pack.shape) == shape:
+            return
+        tap_sm = self.layer_submesh_ids[self._dspark_tap_ids[0]]
+        src = self.submeshes[tap_sm]
+        zeros = torch.zeros(shape, dtype=torch.float32)
+        self._mtp_pack = ttnn.from_torch(zeros, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=src)
+        self._mtp_hiddens = ttnn.from_torch(
+            zeros, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mtp_submesh
+        )
+
+    def _slice_write_mtp_hidden(self, streams, slot: int) -> None:
+        """Copy one layer residual ``[B, 1, hc, D]`` into slot ``slot`` of the pack."""
+        packed = ttnn.to_layout(streams, ttnn.ROW_MAJOR_LAYOUT)
+        b, _, hc, d = packed.shape
+        ttnn.experimental.slice_write(
+            packed,
+            self._mtp_pack,
+            [0, slot, 0, 0],
+            [b, slot + 1, hc, d],
+            [1, 1, 1, 1],
+        )
+        if packed is not streams:
+            packed.deallocate()
+
+    def _send_mtp_pack(self) -> None:
+        """One socket send of the packed last-3-layer residuals to the MTP chip."""
+        ttnn.experimental.send_direct_async(self._mtp_pack, self._mtp_sender)
+
+    def _recv_mtp_pack(self) -> None:
+        ttnn.experimental.recv_direct_async(self._mtp_hiddens, self._mtp_receiver)
+
+    def read_mtp_hiddens(self) -> torch.Tensor:
+        """Host copy of the packed layer-40/41/42 residuals, ``[B, 3, hc, D]``.
+
+        Rank 0 of the MTP submesh (residuals are replicated across the 1xTP stage).
+        Valid after a decode step that ran the tap (eager or traced).
+        """
+        if self._mtp_hiddens is None:
+            raise RuntimeError("MTP hidden tap is not allocated (need idle chips and layers 40-42)")
+        packed = self._mtp_hiddens
+        copies = ttnn.to_torch(packed, mesh_composer=ttnn.ConcatMeshToTensor(self.mtp_submesh, dim=0))
+        b = packed.shape[0]
+        return copies[:b].contiguous()
+
+    def _mtp_expert_provider(self, stage: int):
+        def provider(e: int):
+            base = f"mtp.{stage}.ffn.experts.{e}"
+            gate = self._thunk_native(f"{base}.w1.weight")()
+            up = self._thunk_native(f"{base}.w3.weight")()
+            down = self._thunk_native(f"{base}.w2.weight")()
+            return torch.cat([gate, up], dim=0).float(), down.float()
+
+        return provider
+
+    def ensure_mtp_stack(self) -> None:
+        """Load the three checkpoint ``mtp.*`` decoder stages onto the idle MTP submesh.
+
+        Lazy so the 32-chip greedy demo does not pay three extra MoE layers. Uses native
+        MLA + 256-expert MoE (``translate=False``), not the dense host DSpark stand-in.
+        Prefetch is off so this can run after the target prefetcher session is already open.
+        """
+        if self.mtp_layers:
+            return
+        if self.mtp_submesh is None:
+            raise RuntimeError("MTP stack needs the idle-chip MTP submesh (32-chip TP4)")
+        sliding_idx = next(i for i, t in enumerate(self.config.layer_types) if t == "sliding_attention")
+        device = self.mtp_submesh
+        logger.info("Loading checkpoint mtp.0/1/2 MLA+MoE onto the MTP submesh")
+        for stage in range(3):
+            layer_cache = self.cache.sub(f"mtp.{stage}")
+            experts = DeepSeekV4PreloadedExperts(
+                self.config,
+                self._mtp_expert_provider(stage),
+                device,
+                dtype=self.weight_dtype,
+                cache=layer_cache.sub("mlp"),
+                tp_size=self.tp_size,
+            )
+            self.mtp_layers.append(
+                DeepSeekV4DecoderLayer(
+                    self.config,
+                    sliding_idx,
+                    self._build_mtp_layer_weights(stage),
+                    device,
+                    experts=experts,
+                    gate=None,
+                    cache=layer_cache,
+                    weight_dtype=self.weight_dtype,
+                    use_prefetcher=False,
+                    prefetch_buffers=None,
+                    packed_weights=None,
+                    tp_size=self.tp_size,
+                )
+            )
+            _profile(device)
+        self.mtp_hc_head = DeepSeekV4HyperHead(
+            self.config,
+            {
+                "hc_fn": self._thunk_native("mtp.2.hc_head_fn"),
+                "hc_base": self._thunk_native("mtp.2.hc_head_base"),
+                "hc_scale": self._thunk_native("mtp.2.hc_head_scale"),
+            },
+            device,
+            cache=self.cache.sub("mtp.2.hc_head"),
+        )
+        self.mtp_norm = DeepSeekV4RMSNorm(
+            self._thunk_native("mtp.2.norm.weight"),
+            self.config.rms_norm_eps,
+            device,
+            self.cache.file("mtp.2.norm"),
+            sharded=True,
+        )
+        logger.info("Checkpoint mtp.0/1/2 resident on the MTP submesh")
+
+    def _reset_mtp_kv(self) -> None:
+        if self.mtp_submesh is None or not self.mtp_layers:
+            return
+        if self._decode_max_seq is None:
+            raise RuntimeError("call prepare_static_decode or reset_caches before MTP decode")
+        self.mtp_kv_caches = [
+            build_static_layer_cache(
+                self.mtp_submesh,
+                self.sliding_window,
+                "sliding_attention",
+                self.config.head_dim,
+                self._decode_max_seq,
+                self.config.compress_rates,
+                paged=False,
+                batch=self._decode_batch,
+            )
+            for _ in range(len(self.mtp_layers))
+        ]
+
+    def _mtp_logit_tensors(self) -> dict:
+        if self._mtp_logit_heads is None:
+
+            def dq(n: str):
+                return dequantize_weight(
+                    self.loader.get_tensor(n, translate=False),
+                    self.loader.get_scale(n, translate=False),
+                )
+
+            def raw(n: str):
+                return self.loader.get_tensor(n, translate=False).to(torch.bfloat16)
+
+            self._mtp_logit_heads = {
+                "main_proj": dq("mtp.0.main_proj.weight"),
+                "main_norm": raw("mtp.0.main_norm.weight"),
+                "embed": raw("embed.weight"),
+                "lm_head": raw("head.weight"),
+                "markov_w1": raw("mtp.2.markov_head.markov_w1.weight"),
+                "markov_w2": raw("mtp.2.markov_head.markov_w2.weight"),
+            }
+        return self._mtp_logit_heads
+
+    def _mtp_streams_from_hidden(self, hidden_b1d: torch.Tensor) -> ttnn.Tensor:
+        """``[B, 1, D]`` → HC residual ``[B, 1, hc, D]`` on the MTP submesh."""
+        b, _, d = hidden_b1d.shape
+        hc = self.config.hc_mult
+        streams_h = hidden_b1d.unsqueeze(2).expand(b, 1, hc, d).contiguous().to(torch.bfloat16)
+        return self._to_tt(streams_h, self.mtp_submesh)
+
+    def _mtp_decode_pos(self, streams, pos: int, rope: dict, kv_caches, chain: bool, rope_pos: int | None = None):
+        """Run MTP layers at cache slot ``pos``. ``rope_pos`` selects the rotary row (defaults to ``pos``).
+
+        ``chain=False`` writes each layer's KV from the same residual.
+        """
+        device = self.mtp_submesh
+        w = self.sliding_window
+        rope_idx = pos if rope_pos is None else rope_pos
+        rope_cache: dict = {}
+        cos_tt, sin_tt, neg_sin_tt, cos_win_tt, sin_win_tt = self._rope_rows_decode(
+            rope, rope_idx, "sliding_attention", None, rope_cache, device
+        )
+        mask, sdpa_cur_pos = decode_sdpa_bounds(
+            w, "sliding_attention", None, pos, self._decode_max_seq, device, batch=self._decode_batch
+        )
+        sliding_pos = int32_pos_tensor(pos % w, device)
+        compress_pos = int32_pos_tensor(pos, device)
+        out = streams
+        for i, layer in enumerate(self.mtp_layers):
+            src = out if chain else streams
+            stepped = layer.decode(
+                src,
+                cos_tt,
+                sin_tt,
+                neg_sin_tt,
+                cos_win_tt,
+                sin_win_tt,
+                mask,
+                kv_caches[i],
+                sliding_pos,
+                compress_pos,
+                pool_compressor=False,
+                sdpa_cur_pos=sdpa_cur_pos,
+            )
+            if chain:
+                out = stepped
+        return out if chain else streams
+
+    def mtp_greedy_token(self, pack: torch.Tensor, anchor_id: int, pos: int, rope: dict) -> int:
+        """First draft token: fused 40/41/42 as extra K/V, ``embed(anchor)`` as the query.
+
+        Causal S=1 stand-in for DSpark's first block position. Cache slots are 0
+        (context) then 1 (query) on a fresh MTP window so SDPA does not attend zeros.
+        """
+        from models.experimental.deepseek_v4_flash.dspark import fuse_flash_mtp_pack, markov_bias
+
+        del pos
+        self.ensure_mtp_stack()
+        self._reset_mtp_kv()
+        heads = self._mtp_logit_tensors()
+        fused = fuse_flash_mtp_pack(pack, heads["main_proj"], heads["main_norm"], self.config.rms_norm_eps)
+        b = fused.shape[0]
+        device = self.mtp_submesh
+        ctx = self._mtp_streams_from_hidden(fused)
+        self._mtp_decode_pos(ctx, 0, rope, self.mtp_kv_caches, chain=False)
+        q = heads["embed"][anchor_id].float().view(b, 1, -1)
+        streams = self._mtp_streams_from_hidden(q)
+        streams = self._mtp_decode_pos(streams, 1, rope, self.mtp_kv_caches, chain=True)
+        hidden = self.mtp_norm(self.mtp_hc_head(streams))
+        copies = ttnn.to_torch(hidden, mesh_composer=ttnn.ConcatMeshToTensor(device, dim=0))
+        h = copies[:b].reshape(b, -1).float()
+        logits = h @ heads["lm_head"].float().T
+        logits = logits + markov_bias(torch.tensor([anchor_id]), heads["markov_w1"], heads["markov_w2"])
+        return int(logits[0].argmax().item())
 
     def _submesh_id_for_layer(self, layer_idx: int) -> int:
         """The submesh layer ``layer_idx`` lives on, per the pipeline-group placement
@@ -1359,7 +1670,14 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 win_row=win_row,
                 sdpa_cur_pos=sdpa_cur_pos,
             )
-            last_submesh_id = current_submesh_id
+            if self.mtp_submesh is not None and li in self._dspark_tap_ids:
+                self._ensure_mtp_buffers(self._decode_batch)
+                self._slice_write_mtp_hidden(streams, self._dspark_tap_ids.index(li))
+                if li == self._dspark_tap_ids[-1]:
+                    self._send_mtp_pack()
+                    self._recv_mtp_pack()
+            if self.use_submeshes:
+                last_submesh_id = current_submesh_id
             _profile(this_device)
             # Stage the next layer on this device while it is otherwise idle, but only
             # where the traced path stages it: as the stack leaves this submesh, so the
@@ -1741,6 +2059,25 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["streams_in"] = _dev_zeros([batch, 1, hc, d], device, layout=ttnn.ROW_MAJOR_LAYOUT)
                 sm["pkt_in"] = _dev_zeros([1, 1, 1, self._pkt_w], device, ttnn.int32, ttnn.ROW_MAJOR_LAYOUT)
             self.submeshes_io.append(sm)
+        if self.mtp_submesh is not None:
+            self._ensure_mtp_buffers(batch)
+            self.submeshes_io.append(
+                {
+                    "device": self.mtp_submesh,
+                    "index": "mtp",
+                    "layers": [],
+                    "mtp_recv": True,
+                    "rope_invfreq": {},
+                    "mask_gen": {},
+                    "scaches": {},
+                    "pools": {},
+                    "page_tables": {},
+                    "pool_crs": [],
+                    "traces": {},
+                    "tids": {},
+                    "outputs": {},
+                }
+            )
         # Where the global-last layer (num_layers-1) landed: its trace produces the final
         # head output, which it streams to the host over the D2H socket below.
         self._output_sm_index = self.pipeline_submesh_ids.index(ids[self.num_layers - 1])
@@ -1881,10 +2218,16 @@ class DeepSeekV4Model(DeepSeekV4Module):
             submesh holding the next layer — or, when that is this same submesh, simply
             hands them to the next iteration with no socket traffic. The global-last
             layer applies the head.
+          * On a 32-chip TP4 mesh the last-3-layer residuals are slice-written into one
+            pack and sent on a single D2D socket to the idle MTP submesh (its trace is
+            only that receive).
 
         So plain round-robin sends on every layer boundary (the ring), while a small
         pipeline group size makes a device's contiguous run of layers chain locally.
         """
+        if sm.get("mtp_recv"):
+            self._recv_mtp_pack()
+            return None
         cfg = self.config
         k = sm["index"]
         ids = self.layer_submesh_ids
@@ -2041,6 +2384,10 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 win_slot=win_slot,
                 win_row=win_row,
             )
+            if self.mtp_submesh is not None and li in self._dspark_tap_ids:
+                self._slice_write_mtp_hidden(streams, self._dspark_tap_ids.index(li))
+                if li == self._dspark_tap_ids[-1]:
+                    self._send_mtp_pack()
 
             if is_last:
                 streams = self.norm(self.hc_head(streams))
@@ -2237,7 +2584,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # the real per-step outputs all come from the replay loop.
             self.read_decoded_output()
             for out in compile_outs:
-                out.deallocate(True)
+                if out is not None:
+                    out.deallocate(True)
 
         # Pass 2 — record the captures and bind every variant to a trace.
         for variant, flags, pending in plan:
