@@ -168,3 +168,41 @@ def test_routing_density_at_h3_geometry(shape, thresh_type):
     assert per_row.min() >= 3, "the local window alone selects three blocks off the diagonal"
     assert density < 0.5, f"threshold routing selected {density:.2%}: no sparsity to exploit"
     assert float(per_row.max()) > float(per_row.min()), "the count must vary by row, or tau is inert"
+
+
+# The two tiers a device Sol-Attn is held to. The bf16 tier is the real kernel gate: it compares
+# against a reference rounded at the same points the kernel packs, so a miss is a kernel bug rather
+# than format loss. The fp32 tier is bounded by bf16 itself -- `vsa_sdpa` measures 0.99969 against
+# its fp32 reference and VSA_README calls that the bf16 floor -- so 99.999 % is not reachable there.
+DEVICE_VS_BF16_ORACLE_PCC = 0.99999
+DEVICE_VS_FP32_ORACLE_PCC = 0.9996
+
+
+@pytest.mark.parametrize("tokens", [320, 640])
+def test_bf16_emulation_brackets_the_two_gates(tokens):
+    """Calibrate the tiers: bf16 emulation must sit above the fp32 floor and below fp32 itself.
+
+    Without this, `DEVICE_VS_FP32_ORACLE_PCC` is a guess. It measures how much of the eventual
+    device-vs-fp32 gap is the number format rather than the kernel, which is the number to quote when
+    a device run lands between the two tiers.
+    """
+    q, k, v = _qkv(tokens, seed=7)
+    fp32 = sol_attention(q, k, v, tau=SOL_DEFAULT_TAU)
+    bf16 = sol_attention(q, k, v, tau=SOL_DEFAULT_TAU, emulate_bf16=True)
+
+    torch.testing.assert_close(fp32.exact, bf16.exact, rtol=0, atol=0)
+    pcc = _pcc(fp32.out, bf16.out)
+    logger.info(f"tokens={tokens}: bf16-emulated vs fp32 oracle PCC {pcc:.6f} (format-only loss)")
+    assert (
+        pcc > DEVICE_VS_FP32_ORACLE_PCC
+    ), f"format-only loss {pcc} already below the fp32 gate; the gate is too tight to be meaningful"
+    assert pcc < 1.0 - 1e-9, "bf16 emulation is a no-op; the rounding is not being applied"
+
+
+def test_bf16_emulation_is_self_consistent():
+    """The bf16 path must be deterministic, or the 99.999 % device gate has no fixed target."""
+    q, k, v = _qkv(384, seed=9)
+    a = sol_attention(q, k, v, tau=SOL_DEFAULT_TAU, emulate_bf16=True)
+    b = sol_attention(q, k, v, tau=SOL_DEFAULT_TAU, emulate_bf16=True)
+    torch.testing.assert_close(a.out, b.out, rtol=0, atol=0)
+    assert _pcc(a.out, b.out) > DEVICE_VS_BF16_ORACLE_PCC

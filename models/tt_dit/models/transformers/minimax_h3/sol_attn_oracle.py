@@ -159,6 +159,11 @@ def route(
     return exact
 
 
+def _bf16(x: torch.Tensor) -> torch.Tensor:
+    """Round through bf16 and return to fp32, standing in for a device pack."""
+    return x.to(torch.bfloat16).float()
+
+
 @dataclass
 class SolAttnResult:
     out: torch.Tensor  # [B, H, T, D]
@@ -177,13 +182,22 @@ def sol_attention(
     sink_start: int | None = None,
     sink_tokens: int = 0,
     block: int = SOL_BLOCK_SIZE,
+    emulate_bf16: bool = False,
 ) -> SolAttnResult:
-    """Sol-Attn over [B, H, T, D] Q/K/V. `tau -> -inf` reduces to dense attention."""
+    """Sol-Attn over [B, H, T, D] Q/K/V. `tau -> -inf` reduces to dense attention.
+
+    `emulate_bf16` rounds at the points a device kernel packs -- the block summaries and both
+    probability blocks -- while accumulating in fp32, as DEST does. It is the reference a device
+    implementation should be held to tightly; the default fp32 path is bounded by the format instead
+    and is the looser of the two gates.
+    """
     b, h, tokens, d = q.shape
     scale = 1.0 / math.sqrt(d) if scale is None else scale
     log2_scale = scale * _LOG2_E
 
     kc, vc = block_summaries(k, v, block=block)
+    if emulate_bf16:
+        kc, vc = _bf16(kc), _bf16(vc)
     q_bar = query_centroids(q, block=block)
     threshold = routing_threshold(q_bar, kc, tau=tau, scale=scale, thresh_type=thresh_type)
     exact = route(q_bar, kc, threshold, scale=scale, tokens=tokens, sink_start=sink_start, sink_tokens=sink_tokens)
@@ -215,6 +229,8 @@ def sol_attention(
     row_max = row_max.unsqueeze(-1)
     p_exact = torch.exp2(dense_logits - row_max).masked_fill(~exact_rowmask, 0.0)
     p_approx = torch.exp2(pooled_logits - row_max).masked_fill(~approx_blockmask, 0.0)
+    if emulate_bf16:
+        p_exact, p_approx = _bf16(p_exact), _bf16(p_approx)
 
     numerator = p_exact @ vf + p_approx @ vc
     denominator = p_exact.sum(dim=-1) + (p_approx * lengths.view(1, 1, 1, n_kv)).sum(dim=-1)
