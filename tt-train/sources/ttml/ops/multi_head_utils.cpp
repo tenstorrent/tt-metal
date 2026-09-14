@@ -5,6 +5,7 @@
 #include "multi_head_utils.hpp"
 
 #include <stdexcept>
+#include <tt-metalium/constants.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -72,6 +73,21 @@ autograd::TensorPtr split_heads(const autograd::TensorPtr& x, uint32_t num_heads
     if (x_shape[3] % num_heads != 0U) {
         throw std::invalid_argument(fmt::format(
             "split_heads expects the embedding dim ({}) to be divisible by num_heads ({}).", x_shape[3], num_heads));
+    }
+    // The kernel derives its tile count as head_dim / TILE_WIDTH, so a sub-tile head_dim silently
+    // writes nothing and returns a tile-padded tensor of garbage.
+    if ((x_shape[3] / num_heads) % tt::constants::TILE_WIDTH != 0U) {
+        throw std::invalid_argument(fmt::format(
+            "split_heads expects head_dim (embedding dim {} / num_heads {} = {}) to be a multiple of {}.",
+            x_shape[3],
+            num_heads,
+            x_shape[3] / num_heads,
+            tt::constants::TILE_WIDTH));
+    }
+    // nlp_create_qkv_heads picks its program factory from the input alone, and the sharded factory
+    // divides by num_kv_heads, which is 0 here. Reject rather than take a SIGFPE inside the kernel.
+    if (x->get_value().is_sharded()) {
+        throw std::invalid_argument("split_heads does not support sharded inputs; provide an interleaved tensor.");
     }
 
     // (B, 1, S, E) -> (B, num_heads, S, E / num_heads)
