@@ -781,3 +781,72 @@ def test_the_prefill_roof_prices_the_whole_batch_not_one_sequence():
         os.environ.pop("TT_PERF_BATCH", None)
         if _b is not None:
             os.environ["TT_PERF_BATCH"] = _b
+
+
+# ------------------------------------------ OSL disclosure, the other axis of a truncated capture --
+#
+# 2026-09-14. Layer depth already withholds/labels a truncated model via measured_depth -- but the
+# capacity bridge (before_loop.py) can ALSO shrink a profiling capture's decode length (OSL)
+# independent of layer depth, and nothing disclosed that at all: a reader of a measured tok/s/u row
+# had no way to tell a 2-token sample from the model's declared 128. measured_osl closes that gap,
+# additively -- it must never affect whether the depth-mismatch check above it withholds the number.
+#
+# _roofline_lines, not _roofline_tables -- the OSL tag is built one layer above the table renderer
+# _render() exercises, right beside the existing measured_depth mismatch check it must not disturb.
+
+_THROUGHPUT = {
+    "scope": "model",
+    "has_unit_ceiling": True,
+    "theoretical_rate": 42.67,
+    "band": [25.6, 34.1],
+    "active_bytes": 12_000_000_000,
+    "peak_bw_gbps": 512.0,
+    "tp_degree": 1,
+    "perf_layers": "",
+}
+
+
+def _render_lines(**kw):
+    base = dict(
+        throughput=_THROUGHPUT,
+        forward_ms=None,
+        profile={"device_ms": 2138.674, "buckets": []},
+        model="model",
+        task="task",
+        per_token_ms=1069.3,
+        measured_depth="",
+        measured_osl="",
+    )
+    base.update(kw)
+    return "\n".join(S._roofline_lines(**base))
+
+
+def test_measured_osl_is_disclosed_on_the_roofline_row():
+    t = _render_lines(measured_osl="2")
+    assert "measured OSL=2, not the full declared decode" in t, t
+
+
+def test_no_osl_tag_when_the_capture_was_not_shrunk():
+    for val in ("", "all", "0", "None"):
+        t = _render_lines(measured_osl=val)
+        assert "measured OSL=" not in t, (val, t)
+
+
+def test_osl_tag_is_additive_not_a_replacement_for_the_depth_tag():
+    """Both tags must be able to coexist -- a model can be BOTH layer-capped AND OSL-capped in the
+    same capture, and neither disclosure should crowd out the other."""
+    throughput_capped = dict(_THROUGHPUT, perf_layers="7")
+    t = _render_lines(throughput=throughput_capped, measured_osl="2")
+    assert "-layer window, NOT the full model" in t, t
+    assert "measured OSL=2, not the full declared decode" in t, t
+
+
+def test_osl_disclosure_does_not_touch_the_depth_mismatch_withholding():
+    """measured_osl is purely additive text; it must not change whether a depth-mismatched
+    measurement gets withheld (that logic reads measured_depth only, never measured_osl)."""
+    without_osl = _render_lines(measured_depth="")
+    with_osl = _render_lines(measured_depth="", measured_osl="2")
+    # Strip the one line that differs (the added OSL tag) and confirm everything else is identical.
+    a = [ln for ln in without_osl.splitlines() if "measured OSL=" not in ln]
+    b = [ln for ln in with_osl.splitlines() if "measured OSL=" not in ln]
+    assert a == b, (a, b)

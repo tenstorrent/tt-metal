@@ -2928,6 +2928,7 @@ def _roofline_lines(
     task: str = "",
     per_token_ms: float | None = None,
     measured_depth: str = "",
+    measured_osl: str = "",
 ) -> list:
     """The adaptive 'Roofline & utilization' table. MEASURED values (tok/s, mem BW, utilization,
     at-floor) are computed HERE from the ms actually being reported (`forward_ms`) against the STATIC
@@ -3027,6 +3028,15 @@ def _roofline_lines(
         _depth = str((throughput or {}).get("perf_layers") or "").strip()
         _partial = _depth and _depth.lower() not in ("all", "0", "none")
         _tag = "   [%s-layer window, NOT the full model]" % _depth if _partial else ""
+        # SAME DISCLOSURE, THE OTHER AXIS. Layer depth already withholds/labels a truncated model
+        # above; OSL is orthogonal (the capacity bridge can shrink a profiling capture's decode
+        # length independent of layer depth) and was going unlabelled -- a reader had no way to tell
+        # a 2-token sample from the model's declared 128 on this row. Additive, not a substitute:
+        # the depth mismatch check just above still governs whether the number is withheld at all;
+        # this only says how many tokens it came from when it is shown.
+        _osl = str(measured_osl or "").strip()
+        if _osl and _osl.lower() not in ("all", "0", "none"):
+            _tag += "   [measured OSL=%s, not the full declared decode]" % _osl
         if str(os.environ.get("PERF_MCP_ROOFLINE_TABLE", "1")).lower() not in ("0", "false", "no"):
             # NEW LAYOUT: three blocks. The old five lines conflated a roofline (spec ceiling +
             # sustained band) with overheads that have neither, so "achievable" spanned rows where it
@@ -3400,7 +3410,7 @@ def render_summary(
     # a per-profile per_token_ms (a 16-layer window) or the e2e bookend taken at the run's start. Using
     # the stale bookend reported 43.9 tok/s/u for a model the gate had already measured at 58.6.
     # Layer cap is OFF for this measurement, so it is full-model and comparable to a full-model ceiling.
-    _tok_ms, _tok_depth = None, ""
+    _tok_ms, _tok_depth, _tok_osl = None, "", ""
     try:
         import json as _j
 
@@ -3419,13 +3429,18 @@ def render_summary(
             _tok_ms = _ledger().trace_ms_from_profile(baseline_profile)
             if _tok_ms is not None and isinstance(baseline_profile, dict):
                 _tok_depth = str(baseline_profile.get("perf_layers") or "")
+                # SAME LABEL, THE OTHER AXIS. This is the ONLY branch that can read a token-shrunk
+                # measurement (the capacity bridge stamps perf_osl on THIS profile, before_loop.py);
+                # the 1cq branch above is always full-OSL ("all") and the ledger-pair branch below
+                # reads a different store that never carries this field.
+                _tok_osl = str(baseline_profile.get("perf_osl") or "")
         if _tok_ms is None:
             _row = _ledger_pair(_ledger().KIND_TRACE_PASS, model, task)[1]
             if _row:
                 _tok_ms = float(_row["value_ms"])
                 _tok_depth = str(_row.get("depth") or "")
     except Exception:  # noqa: BLE001
-        _tok_ms, _tok_depth = None, ""
+        _tok_ms, _tok_depth, _tok_osl = None, "", ""
     # For a per-token ceiling the per-profile sum is not a fallback, it is a WRONG ANSWER, so it is
     # never offered: with no per-token reading the line reads n/a instead of "3% utilisation".
     _is_decode = bool(throughput.get("has_unit_ceiling")) if isinstance(throughput, dict) else False
@@ -3442,6 +3457,7 @@ def render_summary(
             task,
             per_token_ms=_tok_ms,
             measured_depth=_tok_depth,
+            measured_osl=_tok_osl,
         )
     )
     lines.extend(_baseline_bucket_lines(baseline_profile, report_csv))

@@ -590,3 +590,26 @@ def test_capacity_scaled_osl_leaves_a_light_model_untouched():
     finally:
         probes_mod._cc_optimize = orig
     assert result is None, "a model well under budget was shrunk anyway"
+
+
+# ------------------------------------------ OSL stamped onto the baseline, mirroring perf_layers --
+#
+# 2026-09-14. perf_layers is already stamped onto the persisted baseline profile so a reader can
+# tell a truncated-depth measurement from a full-depth one (summary.py's roofline fallback reads
+# it). The capacity bridge added the same problem on the OTHER axis -- OSL -- and this closes it
+# with the SAME mechanism: absent means the full declared OSL, present means this exact value.
+
+
+def test_before_loop_stamps_perf_osl_the_same_way_as_perf_layers():
+    import inspect
+
+    import models.experimental.perf_automation.agent.before_loop as BL
+
+    src = inspect.getsource(BL.before_loop)
+    i = src.index('profile["perf_layers"] = _depth_in_force()')
+    j = src.index('profile["perf_osl"]')
+    assert i < j, "perf_osl is not stamped after perf_layers, alongside the same baseline persist"
+    window = src[i : j + 200]
+    assert (
+        'os.environ.get("TT_PERF_OSL_TOKENS")' in window
+    ), "perf_osl does not read the same env the capacity bridge sets"

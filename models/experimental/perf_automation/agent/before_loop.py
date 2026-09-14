@@ -1133,6 +1133,16 @@ def before_loop(
         from .layer_depth import depth_in_force as _depth_in_force
 
         profile["perf_layers"] = _depth_in_force()
+    # STAMP OSL THE SAME WAY, for the same reason. The capacity bridge above can shrink the decode
+    # length this measurement actually ran (TT_PERF_OSL_TOKENS), and a reader of the persisted
+    # profile has no way to tell a 2-token sample from the declared 128 without this -- summary.py's
+    # roofline fallback already discloses perf_layers when it falls back to THIS profile; it needs
+    # the token count disclosed the same way, not a second, silent cap. Absent means the full
+    # declared OSL, exactly like perf_layers absent means full depth.
+    if isinstance(profile, dict) and "perf_osl" not in profile:
+        _osl_env = os.environ.get("TT_PERF_OSL_TOKENS")
+        if _osl_env:
+            profile["perf_osl"] = _osl_env
     # Persist the tagged buckets for the loop: ROUTE reads this, not the CSVs.
     (Path(run.profiles_dir) / "baseline_profile.json").write_text(json.dumps(profile, indent=2, sort_keys=True))
     # ...and record the SAME profile as the ledger's eager anchor, right here. This file and the
