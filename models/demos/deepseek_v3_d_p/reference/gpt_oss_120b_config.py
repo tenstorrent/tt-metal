@@ -45,6 +45,11 @@ class GptOss120BConfig:
     # Weights are a softmax over the selected top-k logits; no extra route scaling.
     ROUTE_SCALE = 1.0
 
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 128 experts, top-4 floors at
+    # 0.9909 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.98
+
     # Model architecture
     NUM_LAYERS = 36
     VOCAB_SIZE = 201088

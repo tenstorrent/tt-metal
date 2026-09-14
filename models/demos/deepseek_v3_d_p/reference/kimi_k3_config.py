@@ -64,13 +64,14 @@ class KimiK3Config:
     # TtMoEGateConfig as both the default per-chip depth and a ceiling on any explicit sp_dim.
     MAX_GATE_SEQ_LEN_PER_CHIP = 3200
 
-    # Gate-test device-mode scores bar, relaxing the shared 0.93; see #52569. 896 experts under sigmoid
-    # near-tie the 16th and 17th scores often enough that device precision swaps a pick, and the
-    # spread across Blackhole Galaxies (0.886 - 0.952) straddles the shared bar.
-    GATE_SCORES_PCC_DEVICE = 0.87
     # Upstream KimiSparseMoeBlock builds ONE KimiMLP for the shared expert, not num_shared_experts of
     # them: shared_experts.gate_proj.weight is [6144, 7168].
     SHARED_EXPERT_INTERMEDIATE_SIZE = MOE_INTERMEDIATE_SIZE * NUM_SHARED_EXPERTS  # 6144
+
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 896 experts, top-16 floors at
+    # 0.9989 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.988
 
     # Model architecture
     NUM_LAYERS = 93

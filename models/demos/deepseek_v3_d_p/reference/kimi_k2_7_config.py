@@ -37,14 +37,10 @@ class KimiK27Config:
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 2.827
 
-    # Gate-test device-mode scores bar, relaxing the shared 0.93. 384 experts under sigmoid near-tie
-    # the top-8 boundary at 640 tokens/chip: every device/reference disagreement sits at an fp64
-    # selection-score margin below the bf16 matmul's own logit error, so the two sides order tied
-    # slots differently. The weights themselves are right (0.8% relative L2 vs an fp64 golden); it is
-    # the position-wise PCC that lands at 0.926-0.941 across the 8 SP chips of a Blackhole Galaxy 8x4.
-    # A test tolerance, not a checkpoint field: it follows from the expert count and the 8x4 mesh, both
-    # of which K2.7 shares, which is why the number carries over unchanged.
-    GATE_SCORES_PCC_DEVICE = 0.92
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 384 experts, top-8 floors at
+    # 0.9935 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.983
 
     # Model architecture
     NUM_LAYERS = 61

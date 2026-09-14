@@ -39,6 +39,11 @@ class GLM52Config:
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
 
+    # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
+    # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
+    # 0.9941 on a 2x4 Blackhole mesh, the tightest reachable shape.
+    GATE_SCORES_PCC_DEVICE = 0.984
+
     # Model architecture
     NUM_LAYERS = 78
     NUM_DENSE_LAYERS = 3  # first_k_dense_replace

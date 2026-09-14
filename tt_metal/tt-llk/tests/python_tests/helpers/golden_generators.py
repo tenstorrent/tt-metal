@@ -2246,7 +2246,8 @@ class PackGolden:
 @register_golden
 class UnarySFPUGolden:
     # Ops whose NaN result carries a real sign, because the kernel moves the sign bit rather
-    # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through. For every
+    # than generating a NaN: Neg flips it, Abs clears it, Identity passes it through, and
+    # Fmod copies the dividend's sign onto the remainder, including a NaN. For every
     # other op the sign of a NaN result is unspecified and torch picks it inconsistently, so
     # the golden canonicalises it and asserts the sign only where it means something.
     _NAN_SIGN_TRANSPARENT_OPS = frozenset(
@@ -2254,6 +2255,7 @@ class UnarySFPUGolden:
             MathOperation.Neg,
             MathOperation.Abs,
             MathOperation.Identity,
+            MathOperation.Fmod,
         }
     )
 
@@ -3199,9 +3201,12 @@ class UnarySFPUGolden:
         return self._torch_unary(x, lambda t: torch.pow(t, self._UNARY_POWER_EXP))
 
     def _fmod(self, x):
-        return self._torch_unary(
+        result = self._torch_unary(
             x, lambda t: torch.fmod(t, torch.tensor(self._FMOD_DIVISOR))
         )
+        # calculate_fmod applies copysgn even to inf - inf. Keep that sign when
+        # the Dest/pack path subsequently converts the NaN to a signed infinity.
+        return math.copysign(result, x)
 
     def _remainder(self, x):
         return self._torch_unary(
