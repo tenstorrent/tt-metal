@@ -229,13 +229,6 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_LongRows) {
 }
 
 TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_ManyShortRows) {
-    if (GetParam().dtype == ttnn::DataType::BFLOAT16) {
-        // TODO: fails with name "many_short_rows_non_streaming_5_tiles".
-        // Also fails for bf16 with max_abs_diff=0.72139114141464233
-        // Tracking: https://github.com/tenstorrent/tt-metal/issues/41944
-        GTEST_SKIP() << "Skipping many-short-rows shape for unsupported bf16 dtype ";
-        return;
-    }
     constexpr SoftmaxBackwardCase test_case{
         .name = "many_short_rows_non_streaming",
         .n = 1,
@@ -272,6 +265,23 @@ TEST_P(SoftmaxBackwardOpTypedTest, NIGHTLY_SoftmaxBackward_Padding_Streaming) {
         {"padded_streaming_type_a", 1, 5, 32, 300 * 32 + 3, -1, 1e-3F, 1e-3F, -10.0F, 10.0F},
         {"padded_streaming_type_b", 7, 1, 64, 300 * 32 + 16, 3, 1e-3F, 1e-3F, -10.0F, 10.0F},
         {"padded_streaming_type_c", 3, 1, 32, 300 * 32 + 19, 3, 1e-3F, 1e-3F, -10.0F, 10.0F},
+    }};
+    for (const auto& test_case : cases) {
+        SCOPED_TRACE(test_case.name);
+        run_softmax_backward_case(test_case, GetParam(), s_device);
+    }
+}
+
+TEST_P(SoftmaxBackwardOpTypedTest, SoftmaxBackward_ManyRowsPaddedWidth) {
+    constexpr std::array<SoftmaxBackwardCase, 2> cases = {{
+        // N*C*(W_padded - W) exceeds W here: a row count derived from the logical shape
+        // instead of the padded shape overcounts tile-rows and writes past the output buffer.
+        // bf16 on device measures max_abs_diff ~0.011 on both old and fixed kernels for the
+        // padded-W shapes (grad ~O(1) row sums); 2e-2 keeps margin without hiding corruption.
+        {"many_rows_padded_w", 64, 1, 32, 197, 3, 2e-2F, 1e-3F, -10.0F, 10.0F},
+        // H not tile-aligned: the padded-H tile-rows are processed too; per-lane compute
+        // must keep all logical rows exact.
+        {"unaligned_h_padded_w", 1, 2, 59, 197, 3, 2e-2F, 1e-3F, -10.0F, 10.0F},
     }};
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.name);

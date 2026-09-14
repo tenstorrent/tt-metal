@@ -153,6 +153,7 @@ class TtDistributedRmsNorm(LightweightModule):
         stats_memcfg: ttnn.MemoryConfig = None,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        output_memcfg: ttnn.MemoryConfig = None,
     ):
         """
         Initialize TtDistributedRmsNorm module.
@@ -168,6 +169,7 @@ class TtDistributedRmsNorm(LightweightModule):
             input_memcfg: Optional memory config for input (e.g., L1 sharded)
             sharded_progcfg: Optional sharded program config for layernorm
             stats_memcfg: Optional memory config for gathered stats (e.g., L1 sharded)
+            output_memcfg: Optional memory config for the normalized output
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -180,6 +182,7 @@ class TtDistributedRmsNorm(LightweightModule):
 
         # Memory configs (None = use DRAM interleaved)
         self.input_memcfg = input_memcfg
+        self.output_memcfg = output_memcfg
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
         self.weight_cache_path = weight_cache_path
@@ -273,6 +276,7 @@ class TtDistributedRmsNorm(LightweightModule):
                 epsilon=self.epsilon,
                 weight=self.weight,
                 program_config=self.sharded_progcfg,
+                memory_config=self.output_memcfg,
             )
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)
@@ -331,6 +335,7 @@ class TtDistributedRmsNorm(LightweightModule):
             epsilon=self.epsilon,
             weight=self.weight,
             dtype=ttnn.bfloat16,
+            memory_config=self.output_memcfg,
             program_config=self.sharded_progcfg,
         )
         if not use_high_bw_all_gather:

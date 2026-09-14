@@ -1,15 +1,3 @@
-# CONNECTED 4-galaxy mesh graph descriptor for the D2D-socket pipeline prefill, FABRIC_2D variant.
-#
-# Four 8x4 BH-galaxy meshes chained mesh 0 <-> 1 <-> 2 <-> 3 by inter-galaxy fabric links, one per
-# pipeline boundary (rank r sends to rank r+1).
-#
-# Host order matters: discovery maps mesh 0 -> first --host, mesh 1 -> second, etc., and the chained
-# connections require consecutive hosts to be physically cabled. List the --host slots in the order
-# the galaxies are cabled in the superpod chain.
-#
-# dim_types [LINE, LINE]: no row/column wrap, so this pairs with PREFILL_FABRIC_MODE=2d. GLM-5.2's MoE
-# all_to_all deadlocks in warmup under the torus modes on multi-galaxy pipeline prefill, which is why
-# the wrap is dropped here rather than declared and left unused.
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE

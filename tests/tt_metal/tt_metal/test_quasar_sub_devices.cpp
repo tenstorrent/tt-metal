@@ -13,6 +13,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/sub_device.hpp>
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 #include <array>
 #include <cstdint>
@@ -98,9 +99,9 @@ distributed::MeshWorkload create_l1_write_workload(
     return workload;
 }
 
-uint32_t read_l1_word(IDevice* device, const experimental::NodeCoord& node, uint32_t address) {
+uint32_t read_l1_word(distributed::MeshDevice& mesh_device, const experimental::NodeCoord& node, uint32_t address) {
     std::vector<uint32_t> output(1, 0);
-    detail::ReadFromDeviceL1(device, node, address, sizeof(uint32_t), output);
+    slow_dispatch::ReadFromL1(mesh_device, node, address, sizeof(uint32_t), output);
     return output[0];
 }
 
@@ -251,11 +252,10 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
         distributed::EnqueueMeshWorkload(cq, workloads.back(), /*blocking=*/i + 1 == partitions.size());
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x11110000u + (static_cast<uint32_t>(i) << 16);
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, address), value);
+            EXPECT_EQ(read_l1_word(*mesh_device, node, address), value);
         }
     }
 }
@@ -333,10 +333,9 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
         EXPECT_EQ(outputs[i], inputs[i]);
     }
 
-    IDevice* device = mesh_device->get_devices()[0];
     for (size_t i = 0; i < partitions.size(); ++i) {
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, buffers[i]->address()), inputs[i].front());
+            EXPECT_EQ(read_l1_word(*mesh_device, node, buffers[i]->address()), inputs[i].front());
         }
     }
 }
@@ -400,7 +399,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     const auto split_manager = mesh_device->create_sub_device_manager(split_sub_devices, kLocalL1Size);
     const uint32_t address = MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED);
-    IDevice* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     mesh_device->load_sub_device_manager(combined_manager);
@@ -417,7 +415,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
         "combined_manager");
     distributed::EnqueueMeshWorkload(cq, combined_workload, /*blocking=*/true);
     for (const auto& node : nodes) {
-        EXPECT_EQ(read_l1_word(device, node, address), 0x33330000u);
+        EXPECT_EQ(read_l1_word(*mesh_device, node, address), 0x33330000u);
     }
 
     mesh_device->load_sub_device_manager(split_manager);
@@ -441,7 +439,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
     for (size_t i = 0; i < partitions.size(); ++i) {
         const uint32_t value = 0x44440000u + (static_cast<uint32_t>(i) << 16);
         for (const auto& node : partitions[i]) {
-            EXPECT_EQ(read_l1_word(device, node, address), value);
+            EXPECT_EQ(read_l1_word(*mesh_device, node, address), value);
         }
     }
 }

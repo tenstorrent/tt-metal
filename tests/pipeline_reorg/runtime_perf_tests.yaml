@@ -1,8 +1,8 @@
 # This file defines the test matrix for the Runtime performance tests.
 # These are host-side microbenchmarks (dispatch latency, buffer R/W bandwidth,
-# and JIT-build compile throughput), each with golden comparison for regression
-# detection. The dispatch/buffer benchmarks use Google Benchmark; the JIT-build
-# benchmark drives a gtest and gates via compile_stress_ci.py.
+# JIT-build compile throughput, and PCIe mem_bench), most with golden comparison
+# for regression detection. The dispatch/buffer/PCIe benchmarks use Google
+# Benchmark; the JIT-build benchmark drives a gtest and gates via compile_stress_ci.py.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -36,6 +36,7 @@
       timeout: 30
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
 
 # --- Dispatch Buffer R/W Bandwidth Benchmark ---
 - name: runtime_perf_rw_buffer
@@ -61,6 +62,7 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
 
 # --- JIT Build (local host compile) Throughput Benchmark ---
 # Adapts DISABLED_TensixCompileStress into a runtime perf gate: real attached
@@ -80,3 +82,20 @@
       timeout: 10
   owner_id: U099A7FMKL2 # Manish Sudumbrekar
   team: runtime
+  budget_type: perf
+
+# --- PCIe host/device bandwidth (mem_bench) ---
+# Same command and CIv2 P150b SKU as the former metal-run-microbenchmarks
+# "BH P150 PCIe Performance" job. No golden gate yet; keep it off bare-metal
+# perf runners so it does not block the dispatch/buffer jobs
+# (https://github.com/tenstorrent/tt-metal/pull/28148#issuecomment-3275595011).
+- name: runtime_perf_pcie_mem_bench
+  cmd: |
+    mkdir -p generated/test_reports
+    ./build/tools/mem_bench --benchmark_filter='Device (Reading|Writing) Host'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  owner_id: U099A7FMKL2 # Manish Sudumbrekar
+  team: runtime
+  budget_type: perf

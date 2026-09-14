@@ -12,6 +12,17 @@ from math import isnan
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, assert_equal
 
 
+def test_where_golden_treats_negative_predicates_as_true():
+    predicate = torch.tensor([-2, 0, 3, -1], dtype=torch.int32)
+    true_values = torch.tensor([10, 20, 30, 40], dtype=torch.int32)
+    false_values = torch.tensor([1, 2, 3, 4], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.where)
+
+    output = golden_function(predicate, true_values, false_values)
+
+    assert torch.equal(output, torch.tensor([10, 2, 30, 40], dtype=torch.int32))
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_mac_all_tensors(device, h, w):
@@ -35,7 +46,7 @@ def test_mac_all_tensors(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -60,7 +71,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):
@@ -269,7 +280,7 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -376,7 +387,7 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
             output_tensor,
         )
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):

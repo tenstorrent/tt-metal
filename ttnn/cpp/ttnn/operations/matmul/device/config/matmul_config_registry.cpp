@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <atomic>
 #include <bit>
-#include <exception>
 #include <limits>
 #include <utility>
 
@@ -19,23 +18,6 @@ namespace {
 constexpr std::uint8_t kModeUninitialized = 0xff;
 std::atomic<std::uint8_t> frozen_mode{kModeUninitialized};
 
-struct AtomicDomainStats {
-    std::atomic<std::uint64_t> resolution_attempts{0};
-    std::atomic<std::uint64_t> certified_hits{0};
-    std::atomic<std::uint64_t> shadow_would_hits{0};
-    std::atomic<std::uint64_t> selected_hits{0};
-    std::atomic<std::uint64_t> completed_hits{0};
-    std::atomic<std::uint64_t> fallbacks{0};
-    std::atomic<std::uint64_t> circuit_breaker_activations{0};
-    std::array<std::atomic<std::uint64_t>, kResolutionReasonCount> reasons{};
-};
-
-std::array<AtomicDomainStats, kOperationDomainCount> stats;
-std::array<std::atomic<bool>, kOperationDomainCount> circuit_breakers{};
-
-constexpr std::size_t index(const OperationDomain domain) noexcept { return static_cast<std::size_t>(domain); }
-constexpr std::size_t index(const ResolutionReason reason) noexcept { return static_cast<std::size_t>(reason); }
-
 ExecutionAction execution_action(const Mode mode, const Resolution& resolution) noexcept {
     if (resolution.reason != ResolutionReason::CertifiedMatch) {
         return ExecutionAction::Fallback;
@@ -44,29 +26,6 @@ ExecutionAction execution_action(const Mode mode, const Resolution& resolution) 
         return ExecutionAction::ApplyRecipe;
     }
     return mode == Mode::Shadow ? ExecutionAction::ObserveOnly : ExecutionAction::Fallback;
-}
-
-void record_resolution(
-    const Mode mode,
-    const OperationDomain domain,
-    const Resolution& resolution,
-    const ExecutionAction action) noexcept {
-    if (mode == Mode::Off || index(domain) >= stats.size() || index(resolution.reason) >= kResolutionReasonCount) {
-        return;
-    }
-    auto& domain_stats = stats[index(domain)];
-    domain_stats.resolution_attempts.fetch_add(1, std::memory_order_relaxed);
-    domain_stats.reasons[index(resolution.reason)].fetch_add(1, std::memory_order_relaxed);
-    if (resolution.reason == ResolutionReason::CertifiedMatch) {
-        domain_stats.certified_hits.fetch_add(1, std::memory_order_relaxed);
-    }
-    switch (action) {
-        case ExecutionAction::Fallback: domain_stats.fallbacks.fetch_add(1, std::memory_order_relaxed); break;
-        case ExecutionAction::ObserveOnly:
-            domain_stats.shadow_would_hits.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case ExecutionAction::ApplyRecipe: domain_stats.selected_hits.fetch_add(1, std::memory_order_relaxed); break;
-    }
 }
 
 std::optional<compact::DataType> compact_dtype(const tt::tt_metal::DataType dtype) noexcept {
@@ -466,7 +425,6 @@ Resolution resolve(const MatmulRegistryRequest& request, const Eligibility& elig
 Resolution resolve_with_compact_table_for_testing(
     const MatmulRegistryRequest& request,
     const Eligibility& eligibility,
-    const compact::TableMetadata&,
     const std::span<const compact::ProgramConfigExactEntry> exact_entries) noexcept {
     return resolve_from_tables(request, eligibility, exact_entries);
 }
@@ -635,9 +593,7 @@ DispatchResult resolve_for_dispatch(
     const ResolverFunction resolver) {
     Resolution resolution{.reason = ResolutionReason::Disabled};
     if (mode != Mode::Off) {
-        if (is_domain_circuit_broken(eligibility.call.domain)) {
-            resolution.reason = ResolutionReason::CircuitBroken;
-        } else if (const auto preflight = preflight_v1_eligibility(eligibility);
+        if (const auto preflight = preflight_v1_eligibility(eligibility);
                    preflight != ResolutionReason::CertifiedMatch) {
             resolution.reason = preflight;
         } else if (!request || resolver == nullptr) {
@@ -656,17 +612,11 @@ DispatchResult resolve_for_dispatch(
             materialized.reset();
         }
         if (!materialized) {
-            circuit_break_domain(eligibility.call.domain);
             resolution.reason = ResolutionReason::MaterializationRejected;
             action = ExecutionAction::Fallback;
         }
-    } else if (
-        mode != Mode::Off && (resolution.reason == ResolutionReason::UnsupportedArtifact ||
-                              resolution.reason == ResolutionReason::MaterializationRejected)) {
-        circuit_break_domain(eligibility.call.domain);
     }
 
-    record_resolution(mode, eligibility.call.domain, resolution, action);
     return {.resolution = resolution, .action = action, .materialized_parameters = std::move(materialized)};
 }
 
@@ -676,82 +626,6 @@ std::optional<ttnn::prim::MatmulParams> select_registry_parameters(
     const Eligibility& eligibility,
     const ttnn::prim::MatmulParams& legacy_parameters) {
     return resolve_for_dispatch(mode, request, eligibility, legacy_parameters).materialized_parameters;
-}
-
-bool circuit_break_domain(const OperationDomain domain) noexcept {
-    if (index(domain) >= circuit_breakers.size()) {
-        return false;
-    }
-    bool expected = false;
-    if (!circuit_breakers[index(domain)].compare_exchange_strong(
-            expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
-        return false;
-    }
-    stats[index(domain)].circuit_breaker_activations.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
-
-bool is_domain_circuit_broken(const OperationDomain domain) noexcept {
-    return index(domain) < circuit_breakers.size() && circuit_breakers[index(domain)].load(std::memory_order_acquire);
-}
-
-void reset_circuit_breakers_for_testing() noexcept {
-    for (auto& breaker : circuit_breakers) {
-        breaker.store(false, std::memory_order_release);
-    }
-}
-
-SelectedExecutionGuard::SelectedExecutionGuard(const OperationDomain domain, const bool selected) noexcept :
-    domain_(domain), selected_(selected), uncaught_exceptions_(std::uncaught_exceptions()) {}
-
-SelectedExecutionGuard::~SelectedExecutionGuard() noexcept {
-    if (!selected_) {
-        return;
-    }
-    if (std::uncaught_exceptions() > uncaught_exceptions_) {
-        circuit_break_domain(domain_);
-    } else if (index(domain_) < stats.size()) {
-        stats[index(domain_)].completed_hits.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
-StatsSnapshot stats_snapshot() noexcept {
-    StatsSnapshot snapshot;
-    const auto mode = frozen_mode.load(std::memory_order_acquire);
-    snapshot.mode_is_frozen = mode != kModeUninitialized;
-    snapshot.frozen_mode = snapshot.mode_is_frozen ? static_cast<Mode>(mode) : Mode::Off;
-    snapshot.exact_entry_count = generated::program_config_exact_entries().size();
-    for (std::size_t domain = 0; domain < stats.size(); ++domain) {
-        const auto& source = stats[domain];
-        auto& destination = snapshot.domains[domain];
-        destination.resolution_attempts = source.resolution_attempts.load(std::memory_order_relaxed);
-        destination.certified_hits = source.certified_hits.load(std::memory_order_relaxed);
-        destination.shadow_would_hits = source.shadow_would_hits.load(std::memory_order_relaxed);
-        destination.selected_hits = source.selected_hits.load(std::memory_order_relaxed);
-        destination.completed_hits = source.completed_hits.load(std::memory_order_relaxed);
-        destination.fallbacks = source.fallbacks.load(std::memory_order_relaxed);
-        destination.circuit_breaker_activations = source.circuit_breaker_activations.load(std::memory_order_relaxed);
-        destination.circuit_broken = circuit_breakers[domain].load(std::memory_order_acquire);
-        for (std::size_t reason = 0; reason < kResolutionReasonCount; ++reason) {
-            destination.reasons[reason] = source.reasons[reason].load(std::memory_order_relaxed);
-        }
-    }
-    return snapshot;
-}
-
-void reset_stats_for_testing() noexcept {
-    for (auto& domain : stats) {
-        domain.resolution_attempts.store(0, std::memory_order_relaxed);
-        domain.certified_hits.store(0, std::memory_order_relaxed);
-        domain.shadow_would_hits.store(0, std::memory_order_relaxed);
-        domain.selected_hits.store(0, std::memory_order_relaxed);
-        domain.completed_hits.store(0, std::memory_order_relaxed);
-        domain.fallbacks.store(0, std::memory_order_relaxed);
-        domain.circuit_breaker_activations.store(0, std::memory_order_relaxed);
-        for (auto& reason : domain.reasons) {
-            reason.store(0, std::memory_order_relaxed);
-        }
-    }
 }
 
 }  // namespace ttnn::operations::matmul::registry

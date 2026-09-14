@@ -25,7 +25,6 @@ namespace ttnn::operations::matmul::registry {
 using Mode = ttnn::MatmulRegistryMode;
 
 enum class OperationDomain : std::uint8_t { DenseMatmul, Linear, Addmm, IneligibleSharedCaller };
-inline constexpr std::size_t kOperationDomainCount = 4;
 
 struct CallSemantics {
     OperationDomain domain = OperationDomain::IneligibleSharedCaller;
@@ -51,29 +50,10 @@ enum class ResolutionReason : std::uint8_t {
     UnsupportedSemantics,
     IncompleteRequest,
     InconsistentRequest,
-    DeviceAttestationUnavailable,
-    DeviceQueryFailed,
-    DeviceUninitialized,
-    RemoteDevice,
-    NotOneChipDevice,
-    ActiveSubDeviceManager,
-    UnsupportedArchitecture,
-    UnsupportedBoard,
-    UnsupportedCluster,
-    BoardClusterMismatch,
-    FirmwareUnavailable,
-    InvalidDeviceCapability,
-    SemanticSourceMismatch,
-    BuildIdentityMismatch,
-    RuntimeCapabilityMismatch,
-    UnsupportedArtifact,
     MaterializationRejected,
-    CircuitBroken,
     EmptyRegistry,
     CertifiedMatch,
-    Count,
 };
-inline constexpr std::size_t kResolutionReasonCount = static_cast<std::size_t>(ResolutionReason::Count);
 
 enum class ExecutionAction : std::uint8_t { Fallback, ObserveOnly, ApplyRecipe };
 
@@ -172,9 +152,8 @@ struct WorkloadRequest {
     bool operator==(const WorkloadRequest&) const = default;
 };
 
-// The request key carries only portable, per-call selection facts. Independent
-// build and live-device compatibility is attested before lookup; placement and
-// session identities are deliberately absent. The live grid selects the
+// The request key carries only portable, per-call selection facts. Placement
+// and session identities are deliberately absent. The live grid selects the
 // harvested exact cohort and bounds native candidate legality.
 struct DeviceRequest {
     std::uint32_t architecture = 0;
@@ -285,52 +264,11 @@ std::optional<compact::ComputeKernelDescriptor> compact_compute_kernel_config(
 Resolution resolve_with_compact_table_for_testing(
     const MatmulRegistryRequest& request,
     const Eligibility& eligibility,
-    const compact::TableMetadata& metadata,
     std::span<const compact::ProgramConfigExactEntry> exact_entries = {}) noexcept;
 
 // CONFIG is read exactly once at first dispatch. The test reset is not a
 // production control and must only be used while no registry call is active.
 Mode current_mode() noexcept;
 void reset_startup_mode_for_testing() noexcept;
-
-bool circuit_break_domain(OperationDomain domain) noexcept;
-bool is_domain_circuit_broken(OperationDomain domain) noexcept;
-void reset_circuit_breakers_for_testing() noexcept;
-
-struct DomainStatsSnapshot {
-    std::uint64_t resolution_attempts = 0;
-    std::uint64_t certified_hits = 0;
-    std::uint64_t shadow_would_hits = 0;
-    std::uint64_t selected_hits = 0;
-    std::uint64_t completed_hits = 0;
-    std::uint64_t fallbacks = 0;
-    std::uint64_t circuit_breaker_activations = 0;
-    bool circuit_broken = false;
-    std::array<std::uint64_t, kResolutionReasonCount> reasons{};
-};
-
-struct StatsSnapshot {
-    bool mode_is_frozen = false;
-    Mode frozen_mode = Mode::Off;
-    std::size_t exact_entry_count = 0;
-    std::array<DomainStatsSnapshot, kOperationDomainCount> domains{};
-};
-
-StatsSnapshot stats_snapshot() noexcept;
-void reset_stats_for_testing() noexcept;
-
-class SelectedExecutionGuard {
-public:
-    SelectedExecutionGuard(OperationDomain domain, bool selected) noexcept;
-    ~SelectedExecutionGuard() noexcept;
-
-    SelectedExecutionGuard(const SelectedExecutionGuard&) = delete;
-    SelectedExecutionGuard& operator=(const SelectedExecutionGuard&) = delete;
-
-private:
-    OperationDomain domain_;
-    bool selected_;
-    int uncaught_exceptions_;
-};
 
 }  // namespace ttnn::operations::matmul::registry

@@ -364,6 +364,7 @@ def get_rot_mats(
     rope_scaling: Optional[RopeScaling],
     datatype: Any = ttnn.bfloat16,
     rot_mats_layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    nope: bool = False,
 ) -> List[ttnn.Tensor]:
     cos_matrix, sin_matrix = compute_gather_cos_sin(
         dhead=head_dim,
@@ -371,6 +372,12 @@ def get_rot_mats(
         theta=theta,
         rope_scaling=rope_scaling,
     )
+    if nope:
+        # NoPE layers (e.g. EXAONE-4.x full-attention layers): rotary must be the
+        # identity. x*cos + rotate_half(x)*sin with cos=1, sin=0 is exactly x, for
+        # every rotary op variant, so keep the shapes/layout and neutralize content.
+        cos_matrix = torch.ones_like(cos_matrix)
+        sin_matrix = torch.zeros_like(sin_matrix)
 
     cos_matrix = ttnn.from_torch(
         cos_matrix,
@@ -762,6 +769,7 @@ class RotarySetup(LightweightModule):
         datatype: ttnn.DataType = ttnn.bfloat16,
         shard_batch_to_mesh_dim: Optional[int] = 1,
         prefetcher: Optional[Prefetcher] = None,
+        nope: bool = False,
     ) -> None:
         super().__init__()
 
@@ -798,6 +806,7 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
             rot_mats_layout=ttnn.ROW_MAJOR_LAYOUT,
+            nope=nope,
         )
 
         self.cos_matrix_prefill, self.sin_matrix_prefill = get_rot_mats(
@@ -808,6 +817,7 @@ class RotarySetup(LightweightModule):
             rope_scaling=rope_scaling,
             datatype=datatype,
             rot_mats_layout=ttnn.TILE_LAYOUT,
+            nope=nope,
         )
 
         def get_batch_grid(batch_size, core_grid, start_core, batch_size_per_device_group, prefetcher):

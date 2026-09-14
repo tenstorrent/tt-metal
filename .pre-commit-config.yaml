@@ -61,21 +61,19 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
-      # Generated matmul tuning table: a constexpr array compiled into libttnn,
-      # so it must be present at build time on every machine that builds
-      # tt-metal (wheels, air-gapped, external). It cannot be fetched at build
-      # time or mounted like model weights without adding a network dependency
-      # to the build itself.
+      # The generated matmul table is an intentional build input.
       exclude: ^ttnn/cpp/ttnn/operations/matmul/device/config/registry/checked_in/
-    - id: check-agent-prompt-lengths
-      name: check .agents/prompts goal objective lengths (<=4000 chars substituted)
-      entry: python3 scripts/check_agent_prompt_lengths.py
+    - id: validate-metalium-api
+      name: validate-metalium-api
+      entry: python3 scripts/validate_api/validate_api.py tt_metal/api
       language: system
-      files: ^\.agents/prompts/
-    - id: validate-metalium-includes
-      name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
+      always_run: true
+      pass_filenames: false
+    - id: test-metalium-api
+      name: test-metalium-api
+      entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
       language: system
+      files: ^scripts/validate_api/
       pass_filenames: false
 - repo: local
   hooks:

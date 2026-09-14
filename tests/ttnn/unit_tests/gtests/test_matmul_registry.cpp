@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <variant>
 
 #include <umd/device/types/arch.hpp>
@@ -111,17 +110,11 @@ Resolution invalid_materialization_resolution(
 struct RuntimeStateReset {
     MatmulRegistryMode original_mode = ttnn::CONFIG.get<"matmul_registry_mode">();
 
-    RuntimeStateReset() {
-        reset_stats_for_testing();
-        reset_circuit_breakers_for_testing();
-        reset_startup_mode_for_testing();
-    }
+    RuntimeStateReset() { reset_startup_mode_for_testing(); }
 
     ~RuntimeStateReset() {
         ttnn::CONFIG.set<"matmul_registry_mode">(original_mode);
         reset_startup_mode_for_testing();
-        reset_circuit_breakers_for_testing();
-        reset_stats_for_testing();
     }
 };
 
@@ -159,14 +152,6 @@ compact::ProgramConfigDescriptor multicast_2d_program() {
         .transpose_mcast = false};
 }
 
-compact::TableMetadata metadata(const bool exact = true) {
-    return compact::TableMetadata{
-        .lock_schema_version = 2,
-        .key_schema_version = 2,
-        .exact_recipe_evidence_schema_version = exact ? std::uint16_t{2} : std::uint16_t{0},
-        .matmul_kernel_equivalence_schema_version = exact ? std::uint16_t{1} : std::uint16_t{0}};
-}
-
 compact::ProgramConfigExactEntry exact_entry(
     const MatmulRegistryRequest& runtime_request,
     const compact::ProgramConfigDescriptor& program = reuse_program(),
@@ -199,7 +184,7 @@ TEST(MatmulConfigRegistry, ExactMatchPreservesHarvestedGridCohorts) {
         exact_entry(live, reuse_program(4), kernel(), 13)};
     for (const std::uint32_t grid_x : {11U, 12U, 13U}) {
         live.device.compute_grid_x = grid_x;
-        const auto result = resolve_with_compact_table_for_testing(live, eligibility(), metadata(), entries);
+        const auto result = resolve_with_compact_table_for_testing(live, eligibility(), entries);
         EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
         ASSERT_TRUE(result.program_config.has_value());
         EXPECT_EQ(result.program_config->compute_grid_x, grid_x - 9);
@@ -208,7 +193,7 @@ TEST(MatmulConfigRegistry, ExactMatchPreservesHarvestedGridCohorts) {
     }
     live.device.compute_grid_x = 10;
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(live, eligibility(), metadata(), entries).reason,
+        resolve_with_compact_table_for_testing(live, eligibility(), entries).reason,
         ResolutionReason::EmptyRegistry);
 }
 
@@ -218,7 +203,7 @@ TEST(MatmulConfigRegistry, ExactArchitectureNeverCrossMatches) {
     auto wrong_arch = dense;
     wrong_arch.device.architecture = static_cast<std::uint32_t>(tt::ARCH::WORMHOLE_B0);
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(wrong_arch, eligibility(), metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(wrong_arch, eligibility(), {&entry, 1}).reason,
         ResolutionReason::EmptyRegistry);
 }
 
@@ -227,28 +212,13 @@ TEST(MatmulConfigRegistry, KernelEquivalentPublicWrappersReuseDenseMeasurements)
     const auto entry = exact_entry(dense, reuse_program(4));
     for (const auto domain : {OperationDomain::Linear, OperationDomain::Addmm}) {
         const auto result = resolve_with_compact_table_for_testing(
-            request(domain), eligibility(domain), metadata(), std::span{&entry, std::size_t{1}});
+            request(domain), eligibility(domain), std::span{&entry, std::size_t{1}});
         EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
         ASSERT_TRUE(result.program_config.has_value());
         EXPECT_EQ(result.program_config->compute_grid_x, 4);
         ASSERT_TRUE(result.compute_kernel_config.has_value());
         EXPECT_EQ(*result.compute_kernel_config, kernel());
     }
-}
-
-TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackRequiresBoundEvidence) {
-    const auto dense = request();
-    const auto entry = exact_entry(dense);
-    auto unproven = metadata();
-    unproven.matmul_kernel_equivalence_schema_version = 0;
-    EXPECT_EQ(
-        resolve_with_compact_table_for_testing(
-            request(OperationDomain::Linear), eligibility(OperationDomain::Linear), unproven, {&entry, 1})
-            .reason,
-        ResolutionReason::EmptyRegistry);
-    EXPECT_EQ(
-        resolve_with_compact_table_for_testing(dense, eligibility(), unproven, {&entry, 1}).reason,
-        ResolutionReason::CertifiedMatch);
 }
 
 TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBeforeLookup) {
@@ -259,12 +229,12 @@ TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBefore
     auto linear_eligibility = eligibility(OperationDomain::Linear);
     linear_eligibility.has_bias = true;
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(linear, linear_eligibility, metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(linear, linear_eligibility, {&entry, 1}).reason,
         ResolutionReason::UnsupportedSemantics);
     linear_eligibility = eligibility(OperationDomain::Linear);
     linear_eligibility.has_activation = true;
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(linear, linear_eligibility, metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(linear, linear_eligibility, {&entry, 1}).reason,
         ResolutionReason::UnsupportedSemantics);
     // transpose_b is a KeyDescriptor field, so a transposed call keys to its own
     // entry rather than colliding with the untransposed one. It is therefore not
@@ -276,7 +246,7 @@ TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBefore
     linear.transpose_b = true;
     EXPECT_EQ(preflight_v1_eligibility(linear_eligibility), ResolutionReason::CertifiedMatch);
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(linear, linear_eligibility, metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(linear, linear_eligibility, {&entry, 1}).reason,
         ResolutionReason::EmptyRegistry);
 
     auto addmm = request(OperationDomain::Addmm);
@@ -284,12 +254,12 @@ TEST(MatmulConfigRegistry, KernelEquivalentWrapperFallbackStillFailsClosedBefore
     addmm.call = addmm_call_semantics(2.0F, 0.0F);
     addmm_eligibility.call = addmm.call;
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(addmm, addmm_eligibility, metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(addmm, addmm_eligibility, {&entry, 1}).reason,
         ResolutionReason::MalformedOperationSemantics);
     addmm.call = addmm_call_semantics(1.0F, 1.0F);
     addmm_eligibility.call = addmm.call;
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(addmm, addmm_eligibility, metadata(), {&entry, 1}).reason,
+        resolve_with_compact_table_for_testing(addmm, addmm_eligibility, {&entry, 1}).reason,
         ResolutionReason::UnsupportedSemantics);
 }
 
@@ -298,18 +268,11 @@ TEST(MatmulConfigRegistry, OperationSpecificRecipePrecedesDenseWrapperFallback) 
     const auto linear = request(OperationDomain::Linear);
     const std::array entries{exact_entry(dense, reuse_program(2)), exact_entry(linear, reuse_program(4))};
     const auto result =
-        resolve_with_compact_table_for_testing(linear, eligibility(OperationDomain::Linear), metadata(), entries);
+        resolve_with_compact_table_for_testing(linear, eligibility(OperationDomain::Linear), entries);
     EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
     ASSERT_TRUE(result.program_config.has_value());
     EXPECT_EQ(result.program_config->compute_grid_x, 4);
 
-    auto unproven = metadata();
-    unproven.matmul_kernel_equivalence_schema_version = 0;
-    const auto direct_result =
-        resolve_with_compact_table_for_testing(linear, eligibility(OperationDomain::Linear), unproven, entries);
-    EXPECT_EQ(direct_result.reason, ResolutionReason::CertifiedMatch);
-    ASSERT_TRUE(direct_result.program_config.has_value());
-    EXPECT_EQ(direct_result.program_config->compute_grid_x, 4);
 }
 
 TEST(MatmulConfigRegistry, ExactKeyBindsBothInputAndOutputDtypes) {
@@ -319,17 +282,17 @@ TEST(MatmulConfigRegistry, ExactKeyBindsBothInputAndOutputDtypes) {
         auto changed = dense;
         changed.input_a.dtype = dtype;
         EXPECT_EQ(
-            resolve_with_compact_table_for_testing(changed, eligibility(), metadata(), {&entry, 1}).reason,
+            resolve_with_compact_table_for_testing(changed, eligibility(), {&entry, 1}).reason,
             ResolutionReason::EmptyRegistry);
         changed = dense;
         changed.input_b.dtype = dtype;
         EXPECT_EQ(
-            resolve_with_compact_table_for_testing(changed, eligibility(), metadata(), {&entry, 1}).reason,
+            resolve_with_compact_table_for_testing(changed, eligibility(), {&entry, 1}).reason,
             ResolutionReason::EmptyRegistry);
         changed = dense;
         changed.output.dtype = dtype;
         EXPECT_EQ(
-            resolve_with_compact_table_for_testing(changed, eligibility(), metadata(), {&entry, 1}).reason,
+            resolve_with_compact_table_for_testing(changed, eligibility(), {&entry, 1}).reason,
             ResolutionReason::EmptyRegistry);
     }
 }
@@ -337,7 +300,7 @@ TEST(MatmulConfigRegistry, ExactKeyBindsBothInputAndOutputDtypes) {
 TEST(MatmulConfigRegistry, ExactCarriesPairedRecipe) {
     const auto req = request();
     const auto entry = exact_entry(req, reuse_program(2));
-    const auto result = resolve_with_compact_table_for_testing(req, eligibility(), metadata(), {&entry, 1});
+    const auto result = resolve_with_compact_table_for_testing(req, eligibility(), {&entry, 1});
     EXPECT_EQ(result.reason, ResolutionReason::CertifiedMatch);
     ASSERT_TRUE(result.program_config.has_value());
     EXPECT_EQ(result.program_config->compute_grid_x, 2);
@@ -354,13 +317,13 @@ TEST(MatmulConfigRegistry, CallerComputeKernelConfigIsKeyedAndMatchedExactly) {
     const auto entry = exact_entry(asked, reuse_program(2), measured);
     const auto eligible = eligibility(OperationDomain::DenseMatmul, true);
 
-    const auto hit = resolve_with_compact_table_for_testing(asked, eligible, metadata(), {&entry, 1});
+    const auto hit = resolve_with_compact_table_for_testing(asked, eligible, {&entry, 1});
     EXPECT_EQ(hit.reason, ResolutionReason::CertifiedMatch);
     ASSERT_TRUE(hit.compute_kernel_config.has_value());
     EXPECT_EQ(*hit.compute_kernel_config, measured);
 
     const auto other = request(OperationDomain::DenseMatmul, kernel(compact::ThrottleLevel::Throttle5));
-    const auto miss = resolve_with_compact_table_for_testing(other, eligible, metadata(), {&entry, 1});
+    const auto miss = resolve_with_compact_table_for_testing(other, eligible, {&entry, 1});
     EXPECT_EQ(miss.reason, ResolutionReason::EmptyRegistry);
     EXPECT_FALSE(miss.program_config.has_value());
     EXPECT_FALSE(miss.compute_kernel_config.has_value());
@@ -369,7 +332,7 @@ TEST(MatmulConfigRegistry, CallerComputeKernelConfigIsKeyedAndMatchedExactly) {
 TEST(MatmulConfigRegistry, EmptyArtifactsFallBack) {
     const auto req = request();
     EXPECT_EQ(
-        resolve_with_compact_table_for_testing(req, eligibility(), metadata(false)).reason,
+        resolve_with_compact_table_for_testing(req, eligibility()).reason,
         ResolutionReason::EmptyRegistry);
 }
 
@@ -394,8 +357,6 @@ TEST(MatmulConfigRegistry, StartupModeDefaultsOffAndFreezesOnFirstUse) {
     RuntimeStateReset reset;
     ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Off);
     EXPECT_EQ(current_mode(), Mode::Off);
-    EXPECT_TRUE(stats_snapshot().mode_is_frozen);
-    EXPECT_EQ(stats_snapshot().frozen_mode, Mode::Off);
 
     reset_startup_mode_for_testing();
     ttnn::CONFIG.set<"matmul_registry_mode">(Mode::Shadow);
@@ -404,7 +365,7 @@ TEST(MatmulConfigRegistry, StartupModeDefaultsOffAndFreezesOnFirstUse) {
     EXPECT_EQ(current_mode(), Mode::Shadow);
 }
 
-TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationAndTelemetryContracts) {
+TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationContracts) {
     RuntimeStateReset reset;
     const auto req = checked_in_request();
     const auto eligible = eligibility();
@@ -414,18 +375,11 @@ TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationAndTelemetryContrac
     EXPECT_EQ(off.resolution.reason, ResolutionReason::Disabled);
     EXPECT_EQ(off.action, ExecutionAction::Fallback);
     EXPECT_FALSE(off.materialized_parameters.has_value());
-    EXPECT_EQ(stats_snapshot().domains[0].resolution_attempts, 0U);
 
     auto shadow = resolve_for_dispatch(Mode::Shadow, req, eligible, legacy);
     EXPECT_EQ(shadow.resolution.reason, ResolutionReason::CertifiedMatch);
     EXPECT_EQ(shadow.action, ExecutionAction::ObserveOnly);
     EXPECT_FALSE(shadow.materialized_parameters.has_value());
-    auto snapshot = stats_snapshot().domains[0];
-    EXPECT_EQ(snapshot.resolution_attempts, 1U);
-    EXPECT_EQ(snapshot.certified_hits, 1U);
-    EXPECT_EQ(snapshot.shadow_would_hits, 1U);
-    EXPECT_EQ(snapshot.selected_hits, 0U);
-    EXPECT_EQ(snapshot.fallbacks, 0U);
 
     auto on = resolve_for_dispatch(Mode::On, req, eligible, legacy);
     EXPECT_EQ(on.resolution.reason, ResolutionReason::CertifiedMatch);
@@ -433,14 +387,9 @@ TEST(MatmulConfigRegistry, OffShadowAndOnHaveDistinctMutationAndTelemetryContrac
     ASSERT_TRUE(on.materialized_parameters.has_value());
     EXPECT_TRUE(on.materialized_parameters->program_config.has_value());
     EXPECT_TRUE(on.materialized_parameters->compute_kernel_config.has_value());
-    snapshot = stats_snapshot().domains[0];
-    EXPECT_EQ(snapshot.resolution_attempts, 2U);
-    EXPECT_EQ(snapshot.certified_hits, 2U);
-    EXPECT_EQ(snapshot.selected_hits, 1U);
-    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::CertifiedMatch)], 2U);
 }
 
-TEST(MatmulConfigRegistry, MaterializationFailureBreaksOnlyAffectedDomain) {
+TEST(MatmulConfigRegistry, MaterializationFailureFallsBack) {
     RuntimeStateReset reset;
     const auto req = checked_in_request();
     const auto eligible = eligibility();
@@ -450,38 +399,10 @@ TEST(MatmulConfigRegistry, MaterializationFailureBreaksOnlyAffectedDomain) {
     EXPECT_EQ(failed.resolution.reason, ResolutionReason::MaterializationRejected);
     EXPECT_EQ(failed.action, ExecutionAction::Fallback);
     EXPECT_FALSE(failed.materialized_parameters.has_value());
-    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
-    EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::Linear));
-
     const auto linear = resolve_for_dispatch(
         Mode::On, checked_in_request(OperationDomain::Linear), eligibility(OperationDomain::Linear), legacy);
     EXPECT_EQ(linear.resolution.reason, ResolutionReason::CertifiedMatch);
     EXPECT_EQ(linear.action, ExecutionAction::ApplyRecipe);
-
-    const auto broken = resolve_for_dispatch(Mode::On, req, eligible, legacy);
-    EXPECT_EQ(broken.resolution.reason, ResolutionReason::CircuitBroken);
-    const auto snapshot = stats_snapshot().domains[0];
-    EXPECT_EQ(snapshot.circuit_breaker_activations, 1U);
-    EXPECT_EQ(snapshot.fallbacks, 2U);
-    EXPECT_EQ(snapshot.reasons[static_cast<std::size_t>(ResolutionReason::CircuitBroken)], 1U);
-}
-
-TEST(MatmulConfigRegistry, SelectedExecutionGuardCompletesOrCircuitBreaks) {
-    RuntimeStateReset reset;
-    {
-        SelectedExecutionGuard guard(OperationDomain::DenseMatmul, true);
-    }
-    EXPECT_EQ(stats_snapshot().domains[0].completed_hits, 1U);
-    EXPECT_FALSE(is_domain_circuit_broken(OperationDomain::DenseMatmul));
-
-    EXPECT_THROW(
-        {
-            SelectedExecutionGuard guard(OperationDomain::Linear, true);
-            throw std::runtime_error("selected execution failed");
-        },
-        std::runtime_error);
-    EXPECT_TRUE(is_domain_circuit_broken(OperationDomain::Linear));
-    EXPECT_EQ(stats_snapshot().domains[1].circuit_breaker_activations, 1U);
 }
 
 TEST(MatmulConfigRegistry, MaterializationSupportsEveryNativeFamily) {
@@ -532,7 +453,7 @@ TEST(MatmulConfigRegistry, PairedMaterializationPreservesAllCallerOwnedState) {
     const auto req = request(OperationDomain::DenseMatmul, ckc);
     const auto entry = exact_entry(req, multicast_2d_program(), ckc);
     const auto selected = resolve_with_compact_table_for_testing(
-        req, eligibility(OperationDomain::DenseMatmul, true), metadata(), {&entry, 1});
+        req, eligibility(OperationDomain::DenseMatmul, true), {&entry, 1});
     ttnn::prim::MatmulParams legacy;
     legacy.output_dtype = DataType::FLOAT32;
     legacy.user_run_batched = false;

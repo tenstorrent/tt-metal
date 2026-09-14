@@ -45,14 +45,14 @@ _LOW_ISL_MARGIN = 0.08
 # (2026-08-20). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
 # "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k26", 0): 3_850,
-    ("kimi_k26", 128): 203_359,
-    ("kimi_k26", 256): 213_359,
-    ("kimi_k26", 512): 266_812,
-    ("kimi_k26", 1024): 377_775,
-    ("kimi_k26", 2048): 650_297,
-    ("kimi_k26", 4096): 1_278_114,
-    ("kimi_k26", 5120): 1_640_953,
+    ("kimi_k2_7", 0): 3_850,
+    ("kimi_k2_7", 128): 203_359,
+    ("kimi_k2_7", 256): 213_359,
+    ("kimi_k2_7", 512): 266_812,
+    ("kimi_k2_7", 1024): 377_775,
+    ("kimi_k2_7", 2048): 650_297,
+    ("kimi_k2_7", 4096): 1_278_114,
+    ("kimi_k2_7", 5120): 1_640_953,
     ("glm_51", 0): 3_783,
     ("glm_51", 128): 179_029,
     ("glm_51", 256): 190_571,
@@ -81,7 +81,7 @@ _K3_SITU_EXPECTED_NS: dict[int, int] = {
 }
 
 # K3's DRAM weight read is 18.58 MB against a ~162 us floor, so its knee sits a token count later
-# than kimi_k26's or glm_51's: 512 is the first case where compute starts to cover the read, and it
+# than kimi_k2_7's or glm_51's: 512 is the first case where compute starts to cover the read, and it
 # inherits the long right tail _LOW_ISL_MARGIN exists for (2% cross-sweep spread at 512 against
 # 0.1% at 128 and 256). Everything past the knee holds inside the usual 3%.
 _K3_KNEE_TOKENS = 512

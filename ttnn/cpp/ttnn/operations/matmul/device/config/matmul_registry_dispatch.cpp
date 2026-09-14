@@ -167,7 +167,7 @@ RegistryRequestInspection inspect_registry_request(
     return inspection;
 }
 
-bool try_apply_registry_parameters(
+void try_apply_registry_parameters(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
     const bool has_bias,
@@ -176,12 +176,7 @@ bool try_apply_registry_parameters(
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
     const auto mode = current_mode();
     if (mode == Mode::Off) {
-        return false;
-    }
-    if (is_domain_circuit_broken(call_semantics.domain)) {
-        const Eligibility eligibility{.call = call_semantics};
-        static_cast<void>(resolve_for_dispatch(mode, std::nullopt, eligibility, parameters));
-        return false;
+        return;
     }
 
     RegistryRequestInspection inspection;
@@ -201,11 +196,11 @@ bool try_apply_registry_parameters(
         // do. Preserve their exception timing by falling back untouched.
         const Eligibility eligibility{.call = call_semantics};
         static_cast<void>(resolve_for_dispatch(mode, std::nullopt, eligibility, parameters));
-        return false;
+        return;
     }
     if (!inspection.request.has_value()) {
         static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
-        return false;
+        return;
     }
 
     try {
@@ -213,18 +208,18 @@ bool try_apply_registry_parameters(
         if (device == nullptr || tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(device).has_value()) {
             inspection.eligibility.trace_capture_active = true;
             static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
-            return false;
+            return;
         }
     } catch (...) {
         // An unavailable trace state is indistinguishable from active capture.
         inspection.eligibility.trace_capture_active = true;
         static_cast<void>(resolve_for_dispatch(mode, std::nullopt, inspection.eligibility, parameters));
-        return false;
+        return;
     }
 
     auto dispatch = resolve_for_dispatch(mode, inspection.request, inspection.eligibility, parameters);
     if (dispatch.action != ExecutionAction::ApplyRecipe || !dispatch.materialized_parameters.has_value()) {
-        return false;
+        return;
     }
 
     auto caller_compute_kernel_config = parameters.compute_kernel_config;
@@ -234,14 +229,13 @@ bool try_apply_registry_parameters(
         // or a no-op. A partial failure restores the caller's original state.
         parameters.program_config = std::move(dispatch.materialized_parameters->program_config);
         parameters.compute_kernel_config = dispatch.materialized_parameters->compute_kernel_config;
-        return true;
+        return;
     } catch (...) {
         parameters.program_config.reset();
         // ComputeKernelConfig is six scalars: trivially copyable, so a move here
         // is a copy wearing a costume. clang-tidy performance-move-const-arg.
         parameters.compute_kernel_config = caller_compute_kernel_config;
-        circuit_break_domain(call_semantics.domain);
-        return false;
+        return;
     }
 }
 

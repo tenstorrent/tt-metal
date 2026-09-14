@@ -103,15 +103,4 @@ struct KeyDescriptor {
     auto operator<=>(const KeyDescriptor&) const = default;
 };
 
-struct TableMetadata {
-    std::uint16_t lock_schema_version{};
-    std::uint16_t key_schema_version{};
-    // Zero disables exact selection; schema 2 binds deterministic bank
-    // evidence for the complete ProgramConfig+CKC native recipe.
-    std::uint16_t exact_recipe_evidence_schema_version{};
-    // Nonzero only when exact evidence explicitly authorizes eligibility-
-    // proven linear/addmm aliases to the dense matmul kernel key.
-    std::uint16_t matmul_kernel_equivalence_schema_version{};
-};
-
 }  // namespace ttnn::operations::matmul::registry::compact
