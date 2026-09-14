@@ -5,6 +5,7 @@
 #pragma once
 
 #include "autograd/tensor.hpp"
+#include "metal/ops/ring_cyclic_sdpa_bw/ring_cyclic_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_bw/ring_sdpa_bw.hpp"
 #include "metal/ops/ring_sdpa_fw/ring_sdpa_fw.hpp"
 
@@ -45,11 +46,28 @@ namespace ttml::ops::distributed {
  * Note: KV is passed in the ring (rather than Q) because in GQA, num_groups << num_heads,
  * making KV typically lighter to transfer.
  */
+// Which per-step backward the ring runs. The forward is the same either way.
+//
+// TwoPass is ring_sdpa_bw: a dQ pass and a dK/dV pass, each recomputing the
+// score stage, with the step's bf16 gradients upcast and accumulated on the
+// host.
+//
+// Cyclic is ring_cyclic_sdpa_bw: one fused kernel per chip over a cyclic
+// schedule, the causal one on the diagonal chunk pair and the dense one on an
+// earlier chunk. It skips exactly the same (chip, step) pairs, from the same
+// helper, so the two compute the same work and only differ in how.
+enum class RingBackwardKind {
+    TwoPass,
+    Cyclic,
+};
+
 autograd::TensorPtr ring_attention_sdpa(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
     const autograd::TensorPtr& value,
     const std::optional<autograd::TensorPtr>& mask = std::nullopt,
-    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal);
+    const ttml::metal::AttentionMaskType mask_type = ttml::metal::AttentionMaskType::Causal,
+    RingBackwardKind backward_kind = RingBackwardKind::TwoPass,
+    uint32_t rows_per_block_tiles = 1U);
 
 }  // namespace ttml::ops::distributed

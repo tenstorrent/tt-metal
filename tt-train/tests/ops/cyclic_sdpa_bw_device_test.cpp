@@ -83,6 +83,26 @@ float sample(uint32_t seed) {
     return static_cast<float>(static_cast<int32_t>(h % 2001u) - 1000) / 2000.0F;
 }
 
+// The all-positive regime the ring tests draw from: uniform(0, 2) rather than
+// uniform(-0.5, 0.5). With d = 64 that makes the scores large and positive, so
+// the softmax is nearly one-hot -- a much harder numerical case than the
+// zero-mean data the rest of this file uses, and the one where a single
+// dominant attention weight decides the answer.
+float sample_positive(uint32_t seed) {
+    const uint32_t h = seed * 1664525u + 1013904223u;
+    return 2.0F * static_cast<float>(h % 2001u) / 2000.0F;
+}
+
+xt::xarray<float> random_bf16_matrix_positive(uint32_t rows, uint32_t cols, uint32_t salt) {
+    xt::xarray<float> out = xt::zeros<float>({rows, cols});
+    for (uint32_t r = 0; r < rows; ++r) {
+        for (uint32_t c = 0; c < cols; ++c) {
+            out(r, c) = to_bf16(sample_positive(salt * 7919u + r * 131u + c));
+        }
+    }
+    return out;
+}
+
 xt::xarray<float> random_bf16_matrix(uint32_t rows, uint32_t cols, uint32_t salt) {
     xt::xarray<float> out = xt::zeros<float>({rows, cols});
     for (uint32_t r = 0; r < rows; ++r) {
@@ -125,15 +145,18 @@ Reference make_reference_inputs_only(uint32_t N, uint32_t d) {
     return r;
 }
 
-Reference make_reference(uint32_t N, uint32_t d) {
+Reference make_reference(uint32_t N, uint32_t d, bool positive = false) {
     Reference r;
     r.N = N;
     r.d = d;
     const float scale = 1.0F / std::sqrt(static_cast<float>(d));
-    r.Q = random_bf16_matrix(N, d, 1);
-    r.K = random_bf16_matrix(N, d, 2);
-    r.V = random_bf16_matrix(N, d, 3);
-    r.dO = random_bf16_matrix(N, d, 4);
+    const auto draw = [&](uint32_t salt) {
+        return positive ? random_bf16_matrix_positive(N, d, salt) : random_bf16_matrix(N, d, salt);
+    };
+    r.Q = draw(1);
+    r.K = draw(2);
+    r.V = draw(3);
+    r.dO = draw(4);
 
     const xt::xarray<float> S = xt::linalg::dot(r.Q, xt::transpose(r.K)) * scale;
     xt::xarray<float> P = xt::zeros<float>({N, N});
@@ -1005,6 +1028,98 @@ void check_dense_op(uint32_t C, uint32_t Bt, uint32_t slices, bool use_barrier, 
         expect_close(dK, ref.dK, 0.06F, "dK" + at, g);
         expect_close(dV, ref.dV, 0.06F, "dV" + at, g);
     }
+}
+
+// The degenerate core count. A ring step whose chunk is short enough gives
+// C = n / (2 Bt 32) = 1: a single core owning both columns, so every packet
+// transition is a self-transition and nothing is ever forwarded. It is the
+// case a ring reaches first, and the one the multi-core tests never touch.
+// Relative error of each gradient, printed rather than asserted. The op
+// tests grade at 6% of the largest reference value, which is loose enough to
+// hide a several-fold degradation; this says what the error actually is, so a
+// regression in one configuration can be seen against its neighbours.
+void report_op_error(
+    uint32_t C, uint32_t Bt, bool dense, uint32_t d = 64, uint32_t slices = 1, bool positive = false) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t N = 2u * C * Bt * kTile;
+    const auto ref = dense ? make_dense_reference(N, d) : make_reference(N, d, positive);
+
+    const auto query = ttml::core::from_xtensor(as_4d_repeated(ref.Q, slices), device);
+    const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
+    const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
+    const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.lse_tile, slices), device);
+    const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+        repeat_4d(ref.u_tile, slices), device);
+
+    const auto [gq, gk, gv] = ttml::metal::cyclic_sdpa_bw(
+        query, key, value, grad_output, lse, row_scalar, Bt, /* use_barrier */ false,
+        dense ? ttml::metal::AttentionMaskType::None : ttml::metal::AttentionMaskType::Causal);
+
+    const auto relative = [&](const xt::xarray<float>& got, const xt::xarray<float>& want) {
+        float worst = 0.0F;
+        for (uint32_t g = 0; g < slices; ++g) {
+            float max_abs = 0.0F;
+            float max_diff = 0.0F;
+            for (uint32_t r = 0; r < want.shape()[0]; ++r) {
+                for (uint32_t c = 0; c < want.shape()[1]; ++c) {
+                    max_abs = std::max(max_abs, std::abs(want(r, c)));
+                    max_diff = std::max(max_diff, std::abs(got(0, g, r, c) - want(r, c)));
+                }
+            }
+            worst = std::max(worst, max_abs > 0.0F ? max_diff / max_abs : max_diff);
+        }
+        return worst;
+    };
+    std::cout << "  " << (dense ? "dense " : "causal") << (positive ? " uniform(0,2)" : " zero-mean ")
+              << " C=" << C << " Bt=" << Bt << " d=" << d
+              << " N=" << N << " slices=" << slices << ": dQ " << relative(ttml::core::to_xtensor(gq), ref.dQ)
+              << " dK " << relative(ttml::core::to_xtensor(gk), ref.dK) << " dV "
+              << relative(ttml::core::to_xtensor(gv), ref.dV) << "\n";
+}
+
+TEST(CyclicSdpaBwOpTest, DISABLED_ReportErrorAcrossBlockHeights) {
+    for (const bool dense : {false, true}) {
+        for (const uint32_t C : {1u, 2u, 4u}) {
+            for (const uint32_t Bt : {1u, 2u, 4u}) {
+                report_op_error(C, Bt, dense);
+            }
+        }
+    }
+    // The all-positive regime, where the softmax is nearly one-hot. This is
+    // what the ring tests draw from, and the block height is the variable
+    // under suspicion there.
+    for (const uint32_t C : {1u, 2u}) {
+        for (const uint32_t Bt : {1u, 2u, 4u}) {
+            report_op_error(C, Bt, /* dense */ false, /* d */ 64, /* slices */ 1, /* positive */ true);
+        }
+    }
+
+    // The ring's own shape: several (batch, head) slices, each on its own
+    // one-core group.
+    for (const bool dense : {false, true}) {
+        for (const uint32_t slices : {1u, 2u, 4u}) {
+            report_op_error(/* C */ 1, /* Bt */ 2, dense, /* d */ 64, slices);
+            report_op_error(/* C */ 2, /* Bt */ 1, dense, /* d */ 64, slices);
+        }
+    }
+}
+
+TEST(CyclicSdpaBwDenseOpTest, SingleCore) {
+    check_dense_op(/* C */ 1, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwDenseOpTest, SingleCoreTallBlocks) {
+    check_dense_op(/* C */ 1, /* Bt */ 2, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwOpTest, SingleCoreTallBlocks) {
+    check_op(/* C */ 1, /* Bt */ 2, /* slices */ 1, /* use_barrier */ false);
+}
+
+TEST(CyclicSdpaBwOpTest, SingleCore) {
+    check_op(/* C */ 1, /* Bt */ 1, /* slices */ 1, /* use_barrier */ false);
 }
 
 TEST(CyclicSdpaBwDenseOpTest, OneSlice) {
