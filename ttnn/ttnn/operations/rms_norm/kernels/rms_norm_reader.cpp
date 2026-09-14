@@ -94,10 +94,12 @@ void kernel_main() {
         cb_push_back(cb_gamma_sticks, core_w_tiles);
     }
 
-    // ---- publish_x_shard (R3): the shard is already resident in this core's L1 — no NoC read ----
+    // ---- publish_x_shard (R3): the shard is already resident in this core's L1 — no NoC read.
+    // The shard holds shard_w_tiles per row (>= core_w_tiles: a ragged last shard is padded). ----
     if constexpr (sharded) {
-        cb_reserve_back(cb_x_tiles, tensor_row_tiles * core_w_tiles);
-        cb_push_back(cb_x_tiles, tensor_row_tiles * core_w_tiles);
+        constexpr uint32_t shard_w_tiles = get_named_compile_time_arg_val("SHARD_W_TILES");
+        cb_reserve_back(cb_x_tiles, tensor_row_tiles * shard_w_tiles);
+        cb_push_back(cb_x_tiles, tensor_row_tiles * shard_w_tiles);
         return;
     }
 

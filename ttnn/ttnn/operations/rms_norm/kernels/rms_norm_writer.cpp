@@ -54,8 +54,9 @@ void kernel_main() {
     constexpr uint32_t mcast_rt_base = get_named_compile_time_arg_val("MCAST_RT_BASE");
     constexpr uint32_t tile_rows = 32;
 
-    // ---- positional compile-time args: [mcast CT block (6)] [output TensorAccessorArgs] ----
-    constexpr auto output_args = TensorAccessorArgs<mcast_ct_base + 6>();
+    // ---- positional compile-time args: [McastArgs CT block] [output TensorAccessorArgs] ----
+    using MulticastArgs = McastArgs<mcast_ct_base, mcast_rt_base>;
+    constexpr auto output_args = TensorAccessorArgs<MulticastArgs::next_compile_time_args_offset()>();
 
     // ---- runtime args ----
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
@@ -110,7 +111,7 @@ void kernel_main() {
     if constexpr (num_w_splits > 1) {
         Noc noc;
         Semaphore<> gather_sem(sem_gather);
-        constexpr auto mcast = McastArgs<mcast_ct_base, mcast_rt_base>();
+        constexpr auto mcast = MulticastArgs();
         auto sender = mcast.sender(noc);
         auto receiver = mcast.receiver(noc);
         // Peers address the root's cb_gather through their own base: the CB is uniform and created

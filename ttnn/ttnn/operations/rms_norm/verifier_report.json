@@ -1,0 +1,39 @@
+{
+ "source": "python3 -m eval.verify_supported generated/eval/rms_norm_phase0_verify ttnn.operations.rms_norm --output ... (full per-cell artifact in that results dir; regenerate with eval/eval_test_runner.sh + the CLI). The three bulk categories carry counts only here \u2014 see summary.",
+ "summary": {
+  "total": 11722,
+  "supported_pass": 656,
+  "supported_fail": 0,
+  "supported_marked_xfail": 0,
+  "supported_skipped": 0,
+  "supported_other": 0,
+  "xfail_expected": 1441,
+  "xpass_drift": 0,
+  "xfail_wrong_mode": 0,
+  "xfail_other": 0,
+  "invalid_skipped": 9624,
+  "invalid_unexpected": 0,
+  "infeasible_skipped": 1,
+  "no_axes_found": 0
+ },
+ "by_category": {
+  "infeasible_skipped": [
+   {
+    "nodeid": "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[100000x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=False-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-memory_layout=WIDTH_SHARDED-rank=2]",
+    "axes": {
+     "dtype": "BFLOAT16",
+     "fp32_dest_acc_en": false,
+     "gamma_mode": "gamma",
+     "gamma_dtype": "BFLOAT16",
+     "layout": "TILE",
+     "gamma_layout": "TILE",
+     "memory_layout": "WIDTH_SHARDED",
+     "rank": 2,
+     "alignment": "tile_aligned"
+    },
+    "status": "skipped",
+    "failure_category": "infeasible"
+   }
+  ]
+ }
+}

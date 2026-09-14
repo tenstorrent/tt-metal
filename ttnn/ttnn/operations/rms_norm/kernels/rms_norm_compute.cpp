@@ -13,9 +13,11 @@
 //   BroadcastDim::Row) [untilize_x_block] RM output: rows*Wc tiles -> sticks                          (untilize helper)
 //
 // R3 (WIDTH_SHARDED): x and out are the resident shard buffers. The chains address them with
-// TileOffset::Set (base = block_idx * block_rows * core_w_tiles) under caller-managed (None, None)
-// CB policies: the shard is published once by the reader and never popped; the output shard is
-// reserved once up front and pushed once at the end.
+// TileOffset::Strided (base = block_idx * block_rows * shard_w_tiles, row stride = shard_w_tiles)
+// under caller-managed (None, None) CB policies: the shard is published once by the reader and
+// never popped; the output shard is reserved once up front and pushed once at the end. The walk
+// covers only this core's core_w_tiles valid columns, so a ragged (padded) last shard never feeds
+// its padding into the sum of squares.
 
 #include <cstdint>
 
@@ -48,6 +50,7 @@ void kernel_main() {
     constexpr uint32_t gamma_mode = get_named_compile_time_arg_val("GAMMA_MODE");  // 0 none, 1 TILE, 2 RM
     constexpr bool has_gamma = gamma_mode != 0;
     constexpr bool sharded = get_named_compile_time_arg_val("SHARDED") != 0;
+    constexpr uint32_t shard_w_tiles = get_named_compile_time_arg_val("SHARD_W_TILES");  // R3 in-shard row stride
     constexpr uint32_t num_w_splits = get_named_compile_time_arg_val("NUM_W_SPLITS");
     constexpr uint32_t core_w_tiles = get_named_compile_time_arg_val("CORE_W_TILES");
 
@@ -75,8 +78,8 @@ void kernel_main() {
 
     // ---- publish_x_shard (R3): the whole resident shard is the block source; reserve the whole output shard ----
     if constexpr (sharded) {
-        cb_wait_front(cb_x_tiles, tensor_row_tiles * core_w_tiles);
-        cb_reserve_back(cb_output_tiles, tensor_row_tiles * core_w_tiles);
+        cb_wait_front(cb_x_tiles, tensor_row_tiles * shard_w_tiles);
+        cb_reserve_back(cb_output_tiles, tensor_row_tiles * shard_w_tiles);
     }
 
     // combine_block post-op: DEST holds the raw cross-core SUM (Skip: no SFPU armed) -> mean -> +eps -> rsqrt.
@@ -91,7 +94,8 @@ void kernel_main() {
     for (uint32_t block_idx = 0; block_idx < num_blocks_this_core; ++block_idx) {
         const uint32_t rows = (block_idx + 1 < num_blocks_this_core) ? block_rows : last_block_rows;
         const auto shape = IterationShape::grid(rows, core_w_tiles);
-        [[maybe_unused]] const uint32_t shard_base = block_idx * block_rows * core_w_tiles;
+        // R3: this block's tiles inside the resident shard — rows of shard_w_tiles, core_w_tiles valid each.
+        [[maybe_unused]] const StridedTileRange shard_range{block_idx * block_rows * shard_w_tiles, shard_w_tiles};
 
         if constexpr (input_rm) {
             tilize<core_w_tiles, cb_x_sticks, cb_x_tiles>(rows);
@@ -103,10 +107,10 @@ void kernel_main() {
                 shape,
                 BinaryFpu<
                     BinaryFpuOp::Mul,
-                    input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Set),
-                    input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Set),
+                    input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Strided),
+                    input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Strided),
                     Dst::D0,
-                    DestAccumulation::PerRow>{shard_base, shard_base},
+                    DestAccumulation::PerRow>{shard_range, shard_range},
                 PackTile<output(
                     cb_sumsq_partial,
                     ReservePolicy::PerOuter,
@@ -156,20 +160,20 @@ void kernel_main() {
                     shape,
                     BinaryFpu<
                         BinaryFpuOp::Mul,
-                        input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Set),
+                        input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Strided),
                         input(cb_rstd, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Col)>{
-                        shard_base},
+                        shard_range},
                     PackTile<output(cb_normed)>{});
             } else {
                 eltwise_chain(
                     shape,
                     BinaryFpu<
                         BinaryFpuOp::Mul,
-                        input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Set),
+                        input(cb_x_tiles, WaitPolicy::None, PopPolicy::None, OperandKind::Block, TileOffset::Strided),
                         input(cb_rstd, BroadcastDim::Col, WaitPolicy::Upfront, PopPolicy::AtEnd, OperandKind::Col)>{
-                        shard_base},
-                    PackTile<output(cb_output_tiles, ReservePolicy::None, PushPolicy::None, TileOffset::Set)>{
-                        shard_base});
+                        shard_range},
+                    PackTile<output(cb_output_tiles, ReservePolicy::None, PushPolicy::None, TileOffset::Strided)>{
+                        shard_range});
             }
         } else {
             mul<input(cb_x_tiles, WaitPolicy::None, PopPolicy::AtEnd, OperandKind::Block),
@@ -191,8 +195,8 @@ void kernel_main() {
                             WaitPolicy::Upfront,
                             PopPolicy::None,
                             OperandKind::Row)>{},
-                    PackTile<output(cb_output_tiles, ReservePolicy::None, PushPolicy::None, TileOffset::Set)>{
-                        shard_base});
+                    PackTile<output(cb_output_tiles, ReservePolicy::None, PushPolicy::None, TileOffset::Strided)>{
+                        shard_range});
             } else {
                 mul<input(cb_normed),
                     input(cb_gamma_tiles, BroadcastDim::Row, WaitPolicy::Upfront, PopPolicy::None, OperandKind::Row),
@@ -206,6 +210,6 @@ void kernel_main() {
     }
 
     if constexpr (sharded) {
-        cb_push_back(cb_output_tiles, tensor_row_tiles * core_w_tiles);
+        cb_push_back(cb_output_tiles, tensor_row_tiles * shard_w_tiles);
     }
 }

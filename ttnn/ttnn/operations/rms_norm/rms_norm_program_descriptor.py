@@ -71,6 +71,12 @@ GAMMA_MODE_RM = 2
 # Runtime-arg sentinel for a core that owns no W slice (passive bounding-box core in R3).
 NO_W_SPLIT = 0xFFFFFFFF
 
+# Argument counts consumed by the writer's `McastArgs` decoder (mcast_pipe.hpp). Asserted against
+# the real `Mcast2D` helper whenever one is built; used as-is for the NUM_W_SPLITS == 1 build,
+# where the decoder is never exercised but its slots must still exist.
+MCAST_CT_ARGS = 6  # McastArgs::next_compile_time_args_offset() - CT_BASE
+MCAST_RT_ARGS = 4  # McastArgs::num_runtime_args() for a fixed (non-rotating) sender
+
 
 def _ceil_div(a: int, b: int) -> int:
     return -(-a // b)
@@ -182,6 +188,9 @@ class Blocking:
     block_rows: int
     groups: tuple  # tuple[Group, ...]
     l1_cb_budget: int
+    shard_w_tiles: int = (
+        0  # R3: tiles per shard row (the in-shard row stride); a ragged last shard holds fewer valid tiles
+    )
 
     @property
     def all_roles(self):
@@ -272,12 +281,15 @@ def derive_blocking(
         shard_w = shard_spec.shape[1]
         if shard_w % TILE != 0:
             raise ValueError(f"rms_norm: shard width {shard_w} must be a multiple of {TILE}")
-        core_w_tiles = shard_w // TILE
-        if len(shard_cores) * core_w_tiles != wt:
+        shard_w_tiles = shard_w // TILE
+        n_shards = len(shard_cores)
+        # Shards cover W exactly, or with ONE ragged (padded) last shard that still owns a real tile.
+        if not ((n_shards - 1) * shard_w_tiles < wt <= n_shards * shard_w_tiles):
             raise ValueError(
-                f"rms_norm: shard grid ({len(shard_cores)} cores x {core_w_tiles} tiles) does not cover W tiles={wt}"
+                f"rms_norm: shard grid ({n_shards} cores x {shard_w_tiles} tiles) does not cover W tiles={wt} "
+                "(at most one ragged last shard is allowed)"
             )
-        shard_bytes = rt * core_w_tiles * t_in
+        shard_bytes = rt * shard_w_tiles * t_in
         # input + output shards are already resident (a live-L1 query already excludes them)
         budget = min(budget, ttnn.get_max_worker_l1_unreserved_size() - L1_MARGIN_BYTES - 2 * shard_bytes)
         xs = [c.x for c in shard_cores]
@@ -286,7 +298,7 @@ def derive_blocking(
         a, b = x1 - x0 + 1, y1 - y0 + 1
         cw = a * b
         num_partials = len(shard_cores)
-        block_rows_max = fp.block_rows_max(core_w_tiles, num_partials, cw > 1, budget)
+        block_rows_max = fp.block_rows_max(shard_w_tiles, num_partials, cw > 1, budget)
         if block_rows_max < 1:
             raise ValueError("rms_norm: the WIDTH_SHARDED intermediates do not fit next to the resident shards")
         block_rows = min(rt, block_rows_max)
@@ -298,7 +310,9 @@ def derive_blocking(
                 if i is None:
                     roles.append(CoreRole(x, y, 0, NO_W_SPLIT, 0, 0, 0, rt))
                 else:
-                    roles.append(CoreRole(x, y, 0, i, core_w_tiles, i * core_w_tiles, 0, rt))
+                    # the last shard may be ragged: it owns only the tiles left of W
+                    core_w_tiles = min(shard_w_tiles, wt - i * shard_w_tiles)
+                    roles.append(CoreRole(x, y, 0, i, core_w_tiles, i * shard_w_tiles, 0, rt))
         group = Group(0, _rect(x0, y0, x1, y1), shard_cores[0], tuple(roles), 0, rt)
         return Blocking(
             regime="R3_width_sharded_resident",
@@ -309,10 +323,11 @@ def derive_blocking(
             rect_a=a,
             rect_b=b,
             num_row_groups=1,
-            core_w_tiles_max=core_w_tiles,
+            core_w_tiles_max=shard_w_tiles,
             block_rows=block_rows,
             groups=(group,),
             l1_cb_budget=budget,
+            shard_w_tiles=shard_w_tiles,
         )
 
     cw, a, b = _derive_w_splits(wt, rt, grid_x, grid_y, fp, budget)
@@ -474,10 +489,11 @@ def create_program_descriptor(
         for g in blocking.groups:
             mcast_helpers[g.index] = ttnn.Mcast2D(device, g.rect, g.root, mcast_config)
         mcast_ct = list(mcast_helpers[0].compile_time_args())
+        assert len(mcast_ct) == MCAST_CT_ARGS, f"McastArgs CT layout changed: {len(mcast_ct)} != {MCAST_CT_ARGS}"
         for g in blocking.groups:
             assert list(mcast_helpers[g.index].compile_time_args()) == mcast_ct, "mcast CT args differ across groups"
     else:
-        mcast_ct = [0] * 6  # McastArgs is never instantiated in the NUM_W_SPLITS == 1 build
+        mcast_ct = [0] * MCAST_CT_ARGS  # the decoder is never exercised in the NUM_W_SPLITS == 1 build
     root_virtual = {g.index: device.worker_core_from_logical_core(g.root) for g in blocking.groups}
 
     def blocks_of(role: CoreRole):
@@ -502,6 +518,7 @@ def create_program_descriptor(
         ("INPUT_RM", 1 if input_rm else 0),
         ("GAMMA_MODE", gamma_mode),
         ("SHARDED", 1 if sharded else 0),
+        ("SHARD_W_TILES", blocking.shard_w_tiles),
         ("NUM_W_SPLITS", Cw),
         ("SEM_GATHER", SEM_GATHER),
         ("IN_TILE_BYTES", t_in),
@@ -574,15 +591,19 @@ def create_program_descriptor(
         )
 
     # ---------------- writer (every program core: passive cores still ack the rstd multicast) ----
+    # Positional CT layout: [McastArgs block][output TensorAccessorArgs]; the kernel chains the accessor
+    # decoder off McastArgs::next_compile_time_args_offset(), so nothing here restates the block size.
     writer_ct = list(mcast_ct) + list(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt = ttnn.RuntimeArgs()
+    mcast_rt_base = None  # index of the McastArgs RT block = length of the op's own RT list (derived, not restated)
     for g in blocking.groups:
         num_partials_expected = g.num_active - 1
         for r in g.cores:
             num_blocks, last_rows = blocks_of(r)
             rv = root_virtual[g.index]
-            mcast_rt = list(mcast_helpers[g.index].runtime_args(r.coord)) if Cw > 1 else [0] * 4
-            writer_rt[r.x][r.y] = [
+            mcast_rt = list(mcast_helpers[g.index].runtime_args(r.coord)) if Cw > 1 else [0] * MCAST_RT_ARGS
+            assert len(mcast_rt) == MCAST_RT_ARGS, f"McastArgs RT layout changed: {len(mcast_rt)} != {MCAST_RT_ARGS}"
+            op_rt = [
                 output_tensor.buffer_address(),
                 r.row_tile_start,
                 num_blocks,
@@ -598,7 +619,11 @@ def create_program_descriptor(
                 rv.y,
                 num_partials_expected,
                 num_partials,
-            ] + mcast_rt
+            ]
+            if mcast_rt_base is None:
+                mcast_rt_base = len(op_rt)
+            assert len(op_rt) == mcast_rt_base, "writer RT list length differs across cores"
+            writer_rt[r.x][r.y] = op_rt + mcast_rt
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
         core_ranges=all_cores,
@@ -607,7 +632,7 @@ def create_program_descriptor(
         + [
             ("OUT_PAGE_BYTES", output_tensor.buffer_page_size()),
             ("MCAST_CT_BASE", 0),
-            ("MCAST_RT_BASE", 15),
+            ("MCAST_RT_BASE", mcast_rt_base),
         ],
         runtime_args=writer_rt,
         config=ttnn.WriterConfigDescriptor(),

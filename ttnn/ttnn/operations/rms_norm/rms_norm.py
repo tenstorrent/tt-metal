@@ -30,7 +30,17 @@ def tag_rank(inputs, axes):
     return int(len(inputs[0]))
 
 
-INPUT_TAGGERS = {"rank": tag_rank}
+def tag_alignment(inputs, axes):
+    """Shape-derived axis: whether the last two dims are whole tiles. The kernel has no edge-tile
+    mask / pad path, so non-aligned shapes are refused as an unsupported axis value (a refinement
+    candidate), not as a shape error."""
+    shape = inputs[0]
+    if len(shape) >= 2 and shape[-1] % 32 == 0 and shape[-2] % 32 == 0:
+        return "tile_aligned"
+    return "non_tile_aligned"
+
+
+INPUT_TAGGERS = {"rank": tag_rank, "alignment": tag_alignment}
 
 # ---------------------------------------------------------------------------
 # 2. SUPPORTED — the Phase 0 rectangle (one entry per TARGET axis)
@@ -42,6 +52,7 @@ SUPPORTED = {
     "fp32_dest_acc_en": [True],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "rank": [2, 3, 4],
+    "alignment": ["tile_aligned"],
     "gamma_mode": ["gamma", "no_gamma"],
     # "none" is the canonical "no weight tensor" sentinel — always legal.
     "gamma_dtype": [ttnn.bfloat16, ttnn.float32, "none"],
@@ -88,8 +99,6 @@ def _shape_errors(input_tensor, gamma, epsilon, memory_config):
     shape = list(input_tensor.shape)
     if len(shape) < 2:
         raise ValueError(f"rms_norm: input rank must be >= 2, got rank {len(shape)} (shape {shape})")
-    if shape[-1] % 32 != 0 or shape[-2] % 32 != 0:
-        raise ValueError(f"rms_norm: the last two dims must be multiples of 32, got shape {shape}")
     if gamma is not None:
         gshape = list(gamma.shape)
         if gshape[-1] != shape[-1]:
