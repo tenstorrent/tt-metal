@@ -76,6 +76,9 @@ FORCE_INLINE void SenderPipe<
         consumer_ready_.wait(args_.ack_count);
         consumer_ready_.set(0);
     }
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter && !ROTATING_SENDER) {
+        ++counter_value_;
+    }
     if constexpr (MAX_RECTS == 1) {
         send_rectangle_<SENDER_MCAST_MODE>(args_.rectangles[0], src_l1, dst_l1, size);
     } else {
@@ -167,6 +170,9 @@ FORCE_INLINE void SenderPipe<
         consumer_ready_.wait(args_.ack_count);
         consumer_ready_.set(0);
     }
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter && !ROTATING_SENDER) {
+        ++counter_value_;
+    }
     if constexpr (MAX_RECTS == 1) {
         const auto& rectangle = args_.rectangles[0];
         if (rectangle.remote_count > 0) {
@@ -233,8 +239,8 @@ FORCE_INLINE void SenderPipe<
     const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
     const typename noc_traits_t<MulticastEndpoint>::dst_args_mcast_type dst_args{r.sx, r.sy, r.ex, r.ey, dst_l1};
     // Flag readiness is an unlinked write that terminates the linked payload sequence.
-    // Counter readiness is an atomic: do not leave a write path reserved for it, and ensure
-    // the payload has landed before publishing the counter on the separate atomic path.
+    // Counter readiness follows an explicit payload barrier: rotating senders use an atomic,
+    // while fixed senders publish an absolute monotonic value with a multicast write.
     constexpr bool linked = DATA_READY_SIGNAL == DataReadySignal::Flag;
     if (loopback) {
         noc_.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -267,9 +273,17 @@ FORCE_INLINE void SenderPipe<
     MAX_RECTS>::
     signal_ready_(const RectangleRuntimeArguments& rectangle, bool loopback, uint32_t mcast_dests, uint32_t value) {
     const auto& r = rectangle.bounds;  // Already in routing order, prepared by the host.
-    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter && ROTATING_SENDER) {
         data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, rectangle.remote_count);  // monotone +1
-
+    } else if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+        data_ready_.set(counter_value_);
+        if (loopback) {
+            data_ready_.template set_multicast<NocOptions::MCAST_INCL_SRC>(
+                noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
+        } else {
+            data_ready_.template set_multicast<NocOptions::DEFAULT>(
+                noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
+        }
     } else {
         // set_multicast broadcasts this core's own cell as the source, so write this round's value
         // first. A core that also receives on this cell leaves it INVALID after a receive, and a
@@ -311,13 +325,16 @@ FORCE_INLINE void SenderPipe<
         // The sender never calls receive() on itself, so it has no data-ready wait that proves its
         // destination arrived before a same-core consumer observes the caller's publication.
         noc_.async_write_barrier();
+    } else if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter && !ROTATING_SENDER) {
+        // The next round rewrites the local semaphore used as the multicast source.
+        noc_.async_write_barrier();
     } else if constexpr (
         SOURCE_GUARD == SourceL1Guard::Guard || (ROTATING_SENDER && DATA_READY_SIGNAL == DataReadySignal::Flag)) {
         // Guard waits for the remote-only payload source to depart. A rotating Flag sender also
         // needs this wait before send() resets the local semaphore cell used as the signal source.
         noc_.async_writes_flushed();
     }
-    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
+    if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter && ROTATING_SENDER) {
         // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
         // or write barrier above does not drain, so the Counter path additionally waits the atomic barrier.
         noc_.async_atomic_barrier();

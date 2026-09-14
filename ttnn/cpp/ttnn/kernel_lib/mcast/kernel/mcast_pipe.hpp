@@ -77,7 +77,7 @@ public:
     // Handle receiver readiness when enabled, then broadcast a control signal.
     // Flag sends `value`; Counter records one event. Pairs with ReceiverPipe::receive_signal(round).
     // CallerManaged requires the caller to preserve the local Flag semaphore value until the NoC
-    // has read it. Rotating Flag cleanup and Counter atomic completion remain protected in either policy.
+    // has read it. Rotating Flag cleanup and Counter signal completion remain protected in either policy.
     template <SourceL1Guard SOURCE_GUARD = SourceL1Guard::Guard>
     FORCE_INLINE void send_signal(uint32_t value = VALID);
 
@@ -104,6 +104,9 @@ private:
     SenderRuntimeArgumentsFor<MAX_RECTS> args_;
     // Sender membership selects the payload fence even when src == dst skips a local write.
     bool loopback_ = false;
+    // Fixed senders can publish an absolute monotonic value with a multicast write. Rotating
+    // senders must keep using atomics because each sender observes only its own local cell.
+    uint32_t counter_value_ = 0;
 };
 
 // =============================================================================
