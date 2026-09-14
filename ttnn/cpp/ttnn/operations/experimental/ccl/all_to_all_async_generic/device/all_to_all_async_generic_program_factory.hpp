@@ -18,8 +18,6 @@ struct AllToAllAsyncGenericProgram {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle sender_reader_kernel_id;
         std::vector<tt::tt_metal::KernelHandle> sender_writer_kernel_ids;
-        std::vector<CoreCoord> sender_worker_cores;
-        std::size_t num_senders_per_link;
         tt::tt_metal::GlobalSemaphore init_barrier_semaphore;
         tt::tt_metal::GlobalSemaphore final_barrier_semaphore;
     };

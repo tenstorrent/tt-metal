@@ -22,7 +22,8 @@ ttnn::Tensor all_to_all_async_generic(
     auto* mesh_device = input_tensor.device();
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     topology_ = ::ttnn::ccl::convert_2d_to_1d_topology(topology_);
-    uint32_t num_links_ = num_links.value_or(ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis));
+    uint32_t num_links_ =
+        num_links.has_value() ? *num_links : ttnn::operations::ccl::common::get_num_links(*mesh_device, cluster_axis);
 
     return ttnn::prim::all_to_all_async_generic(
         input_tensor,
