@@ -300,8 +300,16 @@ def _golden_function_conv1d(
     N, C, L = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 1).reshape(1, 1, N * L, C)  # N, C, L -> 1, 1, N*L, C
 
-    if return_output_dim or return_weights_and_bias:
-        return [output_tensor]
+    if return_weights_and_bias:
+        ttnn.decorators.set_golden_comparison_config(weight_tensor, method="skip", scope="all")
+        if bias_tensor is not None:
+            ttnn.decorators.set_golden_comparison_config(bias_tensor, method="skip", scope="all")
+        weights_and_bias = (weight_tensor, bias_tensor)
+        if return_output_dim:
+            return output_tensor, L, weights_and_bias
+        return output_tensor, weights_and_bias
+    if return_output_dim:
+        return output_tensor, L
     return output_tensor
 
 
@@ -363,8 +371,16 @@ def _golden_function_conv_transpose2d(
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
 
-    if return_output_dim or return_weights_and_bias:
-        return [output_tensor]
+    if return_weights_and_bias:
+        ttnn.decorators.set_golden_comparison_config(weight_tensor, method="skip", scope="all")
+        if bias_tensor is not None:
+            ttnn.decorators.set_golden_comparison_config(bias_tensor, method="skip", scope="all")
+        weights_and_bias = (weight_tensor, bias_tensor)
+        if return_output_dim:
+            return output_tensor, (H, W), weights_and_bias
+        return output_tensor, weights_and_bias
+    if return_output_dim:
+        return output_tensor, (H, W)
     return output_tensor
 
 

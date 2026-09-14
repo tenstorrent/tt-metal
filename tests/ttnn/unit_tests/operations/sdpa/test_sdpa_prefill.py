@@ -121,6 +121,34 @@ def reference_sdpa_with_attention_sinks(Q, K, V, S, is_causal=True, sliding_wind
     return output
 
 
+def test_sdpa_golden_models_noncausal_sliding_window():
+    q = torch.randn(1, 2, 5, 4)
+    k = torch.randn(1, 1, 5, 4)
+    v = torch.randn(1, 1, 5, 4)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention)
+
+    actual = golden_function(q, k, v, is_causal=False, sliding_window_size=4)
+
+    repeated_k = k.repeat_interleave(2, dim=1)
+    repeated_v = v.repeat_interleave(2, dim=1)
+    mask = create_sliding_window_mask_prefill(1, 2, 5, sliding_window=4, is_causal=False)
+    expected = torch.nn.functional.scaled_dot_product_attention(q, repeated_k, repeated_v, attn_mask=mask)
+    torch.testing.assert_close(actual, expected)
+
+
+def test_sdpa_golden_applies_causal_mask_with_attention_sink():
+    q = torch.randn(1, 2, 5, 4)
+    k = torch.randn(1, 2, 5, 4)
+    v = torch.randn(1, 2, 5, 4)
+    sink = torch.randn(1, 2, 1, 1)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention)
+
+    actual = golden_function(q, k, v, is_causal=True, attention_sink=sink)
+    expected = reference_sdpa_with_attention_sinks(q, k, v, sink, is_causal=True)
+
+    torch.testing.assert_close(actual, expected)
+
+
 def reference_flash_attention_with_sinks(Q, K, V, S, is_causal=True, q_chunk_size=32, k_chunk_size=32):
     """
     Flash Attention implementation with attention sinks using chunked processing.

@@ -127,7 +127,7 @@ def _golden_function_randn(shape, *_, dtype=ttnn.bfloat16, **__):
 ttnn.attach_golden_function(ttnn.randn, golden_function=_golden_function_randn)
 
 
-def _golden_function_uniform(input_tensor, *args, **kwargs):
+def _golden_function_uniform(input_tensor, *args, _ttnn_global_golden=False, **kwargs):
     import torch
 
     # 'from' is a Python reserved word, so it can only arrive as a positional argument or a kwargs dict entry.
@@ -135,9 +135,13 @@ def _golden_function_uniform(input_tensor, *args, **kwargs):
     to_value = kwargs["to"] if "to" in kwargs else (args[1] if len(args) > 1 else 1.0)
     output = torch.rand(input_tensor.shape, dtype=torch.float32).mul_(to_value - from_value).add_(from_value)
     output = output.to(input_tensor.dtype)
+    if _ttnn_global_golden:
+        input_tensor.copy_(output)
+        return _skip_random_comparison(input_tensor)
     return _skip_random_comparison(output)
 
 
+_golden_function_uniform._ttnn_mutates_global_inputs = True
 ttnn.attach_golden_function(ttnn.uniform, golden_function=_golden_function_uniform)
 
 

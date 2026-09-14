@@ -143,21 +143,34 @@ def _golden_function_sparse_matmul(
     is_input_b_sparse=True,
     nnz=None,
     indices=None,
+    optional_output_tensor=None,
     **__,
 ):
     import torch
 
-    # Expanded (zero-filled) sparse matmul: dense matmul over every batch pair, masked by sparsity.
-    # The output batch layout is a's batch dims followed by b's batch dims.
-    # Note: the compact (nnz) and indexed/gather output layouts are not modeled here.
     a, b = input_tensor_a, input_tensor_b
-    m, k, n = a.shape[-2], a.shape[-1], b.shape[-1]
-    a_batch, b_batch = a.shape[:-2], b.shape[:-2]
-    a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), m, k)
-    b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, n)
-    dense = torch.matmul(a_exp, b_exp)
-    mask = (sparsity != 0).reshape(*a_batch, *b_batch)
-    return dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
+    if indices is not None:
+        raise NotImplementedError("sparse_matmul golden does not support indexed/gather output")
+    if not is_input_a_sparse and not is_input_b_sparse:
+        raise ValueError("sparse_matmul requires at least one sparse input")
+
+    if is_input_a_sparse:
+        dense = torch.matmul(a, b.to(a.dtype))
+        mask = (sparsity != 0).reshape(dense.shape[:-2])
+        expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
+    else:
+        # Dense-A/sparse-B mode forms every pair from A's batch dims and B's sparse-group dims.
+        m, k, n = a.shape[-2], a.shape[-1], b.shape[-1]
+        a_batch, b_batch = a.shape[:-2], b.shape[:-2]
+        a_exp = a.reshape(*a_batch, *([1] * len(b_batch)), m, k)
+        b_exp = b.reshape(*([1] * len(a_batch)), *b_batch, k, n)
+        dense = torch.matmul(a_exp, b_exp.to(a.dtype))
+        mask = (sparsity != 0).reshape(*a_batch, *b_batch)
+        expanded_output = dense * mask.unsqueeze(-1).unsqueeze(-1).to(dense.dtype)
+
+    if optional_output_tensor is not None and optional_output_tensor.shape != expanded_output.shape:
+        raise NotImplementedError("sparse_matmul golden does not support compact nnz output")
+    return expanded_output
 
 
 ttnn.attach_golden_function(ttnn.sparse_matmul, golden_function=_golden_function_sparse_matmul)

@@ -560,10 +560,7 @@ ttnn.register_python_operation(
     name="ttnn.copy_host_to_device_tensor_partial",
     doc=doc,
 )(ttnn._ttnn.operations.core.copy_host_to_device_tensor_partial)
-# The golden does not model per-core shard filters; it mirrors the full source into the destination golden.
-ttnn.attach_golden_function(
-    ttnn.copy_host_to_device_tensor_partial, golden_function=_make_copy_transfer_golden_function(0, 1)
-)
+# Per-core partial writes have no safe dense-tensor golden without the device shard mapping.
 ttnn.register_python_operation(
     name="ttnn.copy_device_to_host_tensor",
 )(ttnn._ttnn.operations.core.copy_device_to_host_tensor)

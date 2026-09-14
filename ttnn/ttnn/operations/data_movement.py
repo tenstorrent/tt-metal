@@ -544,11 +544,16 @@ def _golden_function(cache, input, update_index, batch_offset=0, *args, **kwargs
 ttnn.attach_golden_function(ttnn.kv_cache.update_cache_for_token_, golden_function=_golden_function)
 
 
-def _golden_function_copy(input_a, input_b, *_, **__):
+def _golden_function_copy(input_a, input_b, *_, _ttnn_global_golden=False, **__):
     # copy writes input_a into input_b in place and returns input_b; the value is input_a cast to input_b's dtype.
-    return input_a.to(input_b.dtype)
+    result = input_a.to(input_b.dtype)
+    if _ttnn_global_golden:
+        input_b.copy_(result)
+        return input_b
+    return result
 
 
+_golden_function_copy._ttnn_mutates_global_inputs = True
 ttnn.attach_golden_function(ttnn.copy, golden_function=_golden_function_copy)
 
 

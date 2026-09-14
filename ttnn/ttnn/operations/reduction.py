@@ -49,8 +49,21 @@ ttnn.attach_golden_function(ttnn.argmax, golden_function=_create_golden_function
 
 ttnn.attach_golden_function(ttnn.topk, golden_function=_create_golden_function_topk())
 
-# prod reduces over all dims when dim is None, matching the generic factory's dim handling.
-ttnn.attach_golden_function(ttnn.prod, golden_function=_create_golden_function("prod"))
+
+def _golden_function_prod(input_tensor, dim=None, keepdim=False, *, dims=None, **_):
+    import torch
+
+    if dims is not None:
+        output = input_tensor
+        for reduction_dim in sorted((value % input_tensor.ndim for value in dims)):
+            output = torch.prod(output, dim=reduction_dim, keepdim=True)
+        return output
+    if dim is None:
+        return torch.prod(input_tensor)
+    return torch.prod(input_tensor, dim=dim, keepdim=keepdim)
+
+
+ttnn.attach_golden_function(ttnn.prod, golden_function=_golden_function_prod)
 
 
 def _golden_function_prod_bw(grad_tensor, input_tensor, dim=None, *_, **__):
@@ -96,8 +109,9 @@ def _golden_function_ema(input_tensor, alpha, *_, **__):
     # Exponential moving average along the last (sequence) axis: out[t] = alpha*out[t-1] + (1-alpha)*in[t].
     sequence_length = input_tensor.shape[-1]
     output = torch.empty_like(input_tensor)
-    previous = torch.zeros_like(input_tensor[..., 0])
-    for t in range(sequence_length):
+    previous = input_tensor[..., 0].clone()
+    output[..., 0] = previous
+    for t in range(1, sequence_length):
         previous = previous * alpha + (1 - alpha) * input_tensor[..., t]
         output[..., t] = previous
     return output

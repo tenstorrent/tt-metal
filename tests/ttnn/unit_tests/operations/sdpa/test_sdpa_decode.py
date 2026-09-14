@@ -30,6 +30,46 @@ def reset_seeds():
     yield
 
 
+def test_sdpa_decode_golden_preserves_layout_and_batch_positions():
+    q = torch.randn(1, 2, 2, 4)
+    k = torch.randn(2, 1, 5, 4)
+    v = torch.randn(2, 1, 5, 4)
+    cur_pos = torch.tensor([1, 3], dtype=torch.int32)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.scaled_dot_product_attention_decode)
+
+    actual = golden_function(q, k, v, cur_pos_tensor=cur_pos)
+
+    query = q.permute(1, 2, 0, 3)
+    key = k.repeat_interleave(2, dim=1)
+    value = v.repeat_interleave(2, dim=1)
+    mask = torch.zeros(2, 1, 1, 5)
+    mask[0, ..., 2:] = float("-inf")
+    mask[1, ..., 4:] = float("-inf")
+    expected = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=mask).permute(2, 0, 1, 3)
+
+    assert actual.shape == q.shape
+    torch.testing.assert_close(actual, expected)
+
+
+def test_chunked_sdpa_golden_gathers_pages_and_offsets_causal_mask():
+    q = torch.randn(1, 1, 2, 4)
+    dense_k = torch.randn(1, 1, 4, 4)
+    dense_v = torch.randn(1, 1, 4, 4)
+    logical_k_pages = dense_k.reshape(1, 1, 2, 2, 4).permute(0, 2, 1, 3, 4).squeeze(0)
+    logical_v_pages = dense_v.reshape(1, 1, 2, 2, 4).permute(0, 2, 1, 3, 4).squeeze(0)
+    page_table = torch.tensor([[1, 0]], dtype=torch.int64)
+    paged_k = logical_k_pages.flip(0)
+    paged_v = logical_v_pages.flip(0)
+    golden_function = ttnn.get_golden_function(ttnn.transformer.chunked_scaled_dot_product_attention)
+
+    actual = golden_function(q, paged_k, paged_v, page_table, 2)
+
+    mask = torch.zeros(2, 4)
+    mask[0, 3] = float("-inf")
+    expected = torch.nn.functional.scaled_dot_product_attention(q, dense_k, dense_v, attn_mask=mask)
+    torch.testing.assert_close(actual, expected)
+
+
 @pytest.mark.parametrize(
     "dtype, q_dtype",
     [

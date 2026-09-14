@@ -36,6 +36,27 @@ def run_fold_test(device, input_shape, output_size, kernel_size, dilation, paddi
     assert passing
 
 
+def test_moreh_fold_golden_accepts_bound_positional_arguments():
+    input_tensor = torch.randn(1, 4, 4)
+    output_size = (3, 3)
+    kernel_size = (2, 2)
+    golden_function = ttnn.get_golden_function(ttnn.moreh_fold)
+
+    actual = golden_function(
+        input_tensor,
+        None,
+        output_size,
+        kernel_size,
+        (1, 1),
+        (0, 0),
+        (1, 1),
+        None,
+    )
+    expected = torch.nn.functional.fold(input_tensor, output_size=output_size, kernel_size=kernel_size)
+
+    torch.testing.assert_close(actual, expected)
+
+
 @pytest.mark.parametrize(
     "input_shape,output_size,kernel_size,dilation,padding,stride",
     [

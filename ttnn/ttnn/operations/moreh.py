@@ -186,17 +186,32 @@ ttnn.attach_golden_function(ttnn.moreh_linear, golden_function=_golden_linear)
 def _golden_getitem(input, index_tensors, index_dims, *_, **__):
     import torch
 
-    # Select elements along each indexed dim using the corresponding index tensor.
-    output = input
-    for index_tensor, dim in sorted(zip(index_tensors, index_dims), key=lambda pair: pair[1]):
-        output = torch.index_select(output, dim, index_tensor.reshape(-1).long())
-    return output
+    normalized_indices = []
+    for index_tensor, dim in zip(index_tensors, index_dims):
+        index = index_tensor.reshape(-1).long()
+        normalized_indices.append(torch.where(index < 0, index + input.shape[dim], index))
+    if len(index_dims) == 1:
+        return torch.index_select(input, index_dims[0], normalized_indices[0])
+
+    selection = [slice(None)] * input.ndim
+    for dim, index in zip(index_dims, normalized_indices):
+        selection[dim] = index
+    return input[tuple(selection)]
 
 
 ttnn.attach_golden_function(ttnn.moreh_getitem, golden_function=_golden_getitem)
 
 
-def _golden_fold(input, *_, output_size, kernel_size, dilation=(1, 1), padding=(0, 0), stride=(1, 1), **__):
+def _golden_fold(
+    input,
+    output=None,
+    output_size=None,
+    kernel_size=None,
+    dilation=(1, 1),
+    padding=(0, 0),
+    stride=(1, 1),
+    memory_config=None,
+):
     import torch
 
     return torch.nn.functional.fold(
@@ -212,20 +227,61 @@ def _golden_fold(input, *_, output_size, kernel_size, dilation=(1, 1), padding=(
 ttnn.attach_golden_function(ttnn.moreh_fold, golden_function=_golden_fold)
 
 
-def _golden_layer_norm(input, normalized_dims, *_, eps=1e-5, gamma=None, beta=None, **__):
+def _golden_layer_norm(
+    input, normalized_dims, eps=1e-5, gamma=None, beta=None, *, output=None, mean=None, rstd=None, **__
+):
     import torch
 
-    normalized_shape = tuple(input.shape[-normalized_dims:]) if normalized_dims > 0 else tuple(input.shape)
-    return torch.nn.functional.layer_norm(input, normalized_shape, gamma, beta, eps)
+    normalized_shape = tuple(input.shape[-normalized_dims:])
+    gamma_value = gamma.reshape(normalized_shape) if gamma is not None else None
+    beta_value = beta.reshape(normalized_shape) if beta is not None else None
+    output_value = torch.nn.functional.layer_norm(input, normalized_shape, gamma_value, beta_value, eps)
+
+    reduced_dims = tuple(range(input.ndim - normalized_dims, input.ndim))
+    mean_value = input.mean(dim=reduced_dims)
+    expanded_mean = mean_value.reshape(*mean_value.shape, *([1] * normalized_dims))
+    rstd_value = ((input - expanded_mean).pow(2).mean(dim=reduced_dims) + eps).rsqrt()
+    if mean is not None:
+        mean_value = mean_value.reshape(mean.shape)
+    if rstd is not None:
+        rstd_value = rstd_value.reshape(rstd.shape)
+    return [output_value, mean_value if mean is not None else None, rstd_value if rstd is not None else None]
 
 
 ttnn.attach_golden_function(ttnn.moreh_layer_norm, golden_function=_golden_layer_norm)
 
 
-def _golden_group_norm(input, num_groups, *_, eps=1e-5, gamma=None, beta=None, **__):
+def _golden_group_norm(
+    input,
+    num_groups,
+    eps=1e-5,
+    gamma=None,
+    beta=None,
+    *,
+    are_required_outputs=(True, False, False),
+    output=None,
+    mean=None,
+    rstd=None,
+    **__,
+):
     import torch
 
-    return torch.nn.functional.group_norm(input, num_groups, gamma, beta, eps)
+    gamma_value = gamma.reshape(-1) if gamma is not None else None
+    beta_value = beta.reshape(-1) if beta is not None else None
+    output_value = torch.nn.functional.group_norm(input, num_groups, gamma_value, beta_value, eps)
+
+    batch_size = input.shape[0]
+    grouped_input = input.reshape(batch_size, num_groups, -1)
+    mean_value = grouped_input.mean(dim=-1)
+    rstd_value = ((grouped_input - mean_value.unsqueeze(-1)).pow(2).mean(dim=-1) + eps).rsqrt()
+    mean_value = mean_value.reshape(mean.shape if mean is not None else (1, 1, batch_size, num_groups))
+    rstd_value = rstd_value.reshape(rstd.shape if rstd is not None else (1, 1, batch_size, num_groups))
+    required = [
+        True,
+        are_required_outputs[1] or mean is not None,
+        are_required_outputs[2] or rstd is not None,
+    ]
+    return golden_select_optional_outputs([output_value, mean_value, rstd_value], required)
 
 
 ttnn.attach_golden_function(ttnn.moreh_group_norm, golden_function=_golden_group_norm)
@@ -261,9 +317,10 @@ ttnn.attach_golden_function(ttnn.moreh_logsoftmax, golden_function=_golden_logso
 def _golden_nll_loss(input_tensor, target_tensor, reduction, *_, weight_tensor=None, ignore_index=-100, **__):
     import torch
 
-    return torch.nn.functional.nll_loss(
+    output = torch.nn.functional.nll_loss(
         input_tensor, target_tensor.long(), weight=weight_tensor, reduction=reduction, ignore_index=ignore_index
     )
+    return output if reduction == "none" else output.reshape(1)
 
 
 ttnn.attach_golden_function(ttnn.moreh_nll_loss, golden_function=_golden_nll_loss)
@@ -293,18 +350,21 @@ def _golden_sum_backward(output_grad, input=None, dim=None, *_, keepdim=False, *
 ttnn.attach_golden_function(ttnn.moreh_sum_backward, golden_function=_golden_sum_backward)
 
 
-def _golden_mean_backward(output_grad, dim=None, *_, keepdim=False, input_grad_shape=None, **__):
+def _golden_mean_backward(output_grad, *, dim=None, keepdim=False, input_grad_shape=None, input_grad=None, **__):
     import torch
 
+    if input_grad_shape is None and input_grad is not None:
+        input_grad_shape = input_grad.shape
     grad = output_grad
     if dim is not None and not keepdim:
         dims = [dim] if isinstance(dim, int) else list(dim)
         for d in sorted(dims):
             grad = grad.unsqueeze(d)
     target_shape = list(input_grad_shape) if input_grad_shape is not None else list(grad.shape)
+    reduced_dims = range(len(target_shape)) if dim is None else ([dim] if isinstance(dim, int) else dim)
     count = 1
-    for a, b in zip(target_shape, grad.shape):
-        count *= a // b if b != 0 else 1
+    for reduced_dim in reduced_dims:
+        count *= target_shape[reduced_dim % len(target_shape)]
     return torch.broadcast_to(grad, target_shape).contiguous() / count
 
 
@@ -321,13 +381,11 @@ def _golden_cumsum_backward(output_grad, dim, *_, **__):
 ttnn.attach_golden_function(ttnn.moreh_cumsum_backward, golden_function=_golden_cumsum_backward)
 
 
-def _golden_dot_backward(output_grad, input, other, *_, **__):
-    import torch
-
+def _golden_dot_backward(output_grad, input, other, *, input_grad=None, other_grad=None, **__):
     # Dot backward: grad_a = output_grad * other, grad_b = output_grad * input (elementwise, then broadcast).
     grad_a = output_grad * other
     grad_b = output_grad * input
-    return [grad_a, grad_b]
+    return [grad_a if input_grad is not None else None, grad_b if other_grad is not None else None]
 
 
 ttnn.attach_golden_function(ttnn.moreh_dot_backward, golden_function=_golden_dot_backward)
@@ -361,57 +419,143 @@ def _golden_bmm_backward(output_grad, input, mat2, *_, are_required_outputs=None
 ttnn.attach_golden_function(ttnn.moreh_bmm_backward, golden_function=_golden_bmm_backward)
 
 
-def _golden_linear_backward(output_grad, input, weight, *_, are_required_outputs=None, bias=None, **__):
+def _golden_linear_backward(
+    output_grad,
+    input,
+    weight,
+    *,
+    are_required_outputs=(True, True, True),
+    bias=None,
+    input_grad=None,
+    weight_grad=None,
+    bias_grad=None,
+    **__,
+):
     import torch
 
-    inputs = [input, weight] + ([bias] if bias is not None else [])
-    prepared = golden_prepare_grad_inputs(*inputs)
-    forward = torch.nn.functional.linear(prepared[0], prepared[1], prepared[2] if bias is not None else None)
+    if bias is None:
+        bias_value = torch.zeros(weight.shape[0], dtype=weight.dtype)
+    else:
+        bias_value = bias.reshape(-1)
+    prepared = golden_prepare_grad_inputs(input, weight, bias_value)
+    forward = torch.nn.functional.linear(prepared[0], prepared[1], prepared[2])
     grads = golden_compute_gradients(forward, tuple(prepared), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    if bias_grad is not None:
+        grads[2] = grads[2].reshape(bias_grad.shape)
+    required = [
+        are_required_outputs[0] or input_grad is not None,
+        are_required_outputs[1] or weight_grad is not None,
+        are_required_outputs[2] or bias_grad is not None,
+    ]
+    return golden_select_optional_outputs(grads, required)
 
 
 ttnn.attach_golden_function(ttnn.moreh_linear_backward, golden_function=_golden_linear_backward)
 
 
-def _golden_layer_norm_backward(output_grad, input, mean, rstd, normalized_dims, *_, gamma=None, **__):
-    import torch
+def _golden_layer_norm_backward(
+    output_grad,
+    input,
+    mean,
+    rstd,
+    normalized_dims,
+    *,
+    gamma=None,
+    input_grad=None,
+    gamma_grad=None,
+    beta_grad=None,
+    **__,
+):
+    normalized_shape = tuple(input.shape[-normalized_dims:])
+    stats_shape = tuple(input.shape[:-normalized_dims])
+    expanded_shape = (*stats_shape, *([1] * normalized_dims))
+    centered = input - mean.reshape(expanded_shape)
+    normalized = centered * rstd.reshape(expanded_shape)
+    gamma_value = gamma.reshape(normalized_shape) if gamma is not None else 1.0
+    scaled_output_grad = output_grad * gamma_value
+    reduced_dims = tuple(range(input.ndim - normalized_dims, input.ndim))
+    element_count = 1
+    for size in normalized_shape:
+        element_count *= size
+    input_grad_value = rstd.reshape(expanded_shape) * (
+        scaled_output_grad
+        - scaled_output_grad.sum(dim=reduced_dims, keepdim=True) / element_count
+        - normalized * (scaled_output_grad * normalized).sum(dim=reduced_dims, keepdim=True) / element_count
+    )
 
-    (input,) = golden_prepare_grad_inputs(input)
-    normalized_shape = tuple(input.shape[-normalized_dims:]) if normalized_dims > 0 else tuple(input.shape)
-    forward = torch.nn.functional.layer_norm(input, normalized_shape, gamma, None, 1e-5)
-    grads = golden_compute_gradients(forward, (input,), output_grad)
-    return grads
+    outer_dims = tuple(range(input.ndim - normalized_dims))
+    gamma_grad_value = output_grad * normalized
+    beta_grad_value = output_grad
+    if outer_dims:
+        gamma_grad_value = gamma_grad_value.sum(dim=outer_dims)
+        beta_grad_value = beta_grad_value.sum(dim=outer_dims)
+    if gamma_grad is not None:
+        gamma_grad_value = gamma_grad_value.reshape(gamma_grad.shape)
+    if beta_grad is not None:
+        beta_grad_value = beta_grad_value.reshape(beta_grad.shape)
+    return [
+        input_grad_value if input_grad is not None else None,
+        gamma_grad_value if gamma_grad is not None else None,
+        beta_grad_value if beta_grad is not None else None,
+    ]
 
 
 ttnn.attach_golden_function(ttnn.moreh_layer_norm_backward, golden_function=_golden_layer_norm_backward)
 
 
 def _golden_group_norm_backward(
-    output_grad, input, mean, rstd, num_groups, *_, gamma=None, are_required_outputs=None, **__
+    output_grad,
+    input,
+    mean,
+    rstd,
+    num_groups,
+    *,
+    are_required_outputs=(True, False, False),
+    gamma=None,
+    input_grad=None,
+    gamma_grad=None,
+    beta_grad=None,
+    **__,
 ):
-    import torch
+    batch_size, channels = input.shape[:2]
+    grouped_input = input.reshape(batch_size, num_groups, -1)
+    normalized = (grouped_input - mean.reshape(batch_size, num_groups, 1)) * rstd.reshape(batch_size, num_groups, 1)
+    gamma_value = gamma.reshape(1, channels, *([1] * (input.ndim - 2))) if gamma is not None else 1.0
+    scaled_output_grad = (output_grad * gamma_value).reshape(batch_size, num_groups, -1)
+    elements_per_group = grouped_input.shape[-1]
+    input_grad_value = rstd.reshape(batch_size, num_groups, 1) * (
+        scaled_output_grad
+        - scaled_output_grad.sum(dim=-1, keepdim=True) / elements_per_group
+        - normalized * (scaled_output_grad * normalized).sum(dim=-1, keepdim=True) / elements_per_group
+    )
+    input_grad_value = input_grad_value.reshape(input.shape)
 
-    (input,) = golden_prepare_grad_inputs(input)
-    forward = torch.nn.functional.group_norm(input, num_groups, gamma, None)
-    grads = golden_compute_gradients(forward, (input,), output_grad)
-    if are_required_outputs is not None:
-        return golden_select_optional_outputs(grads, are_required_outputs)
-    return grads
+    normalized_input = normalized.reshape(input.shape)
+    reduction_dims = (0, *range(2, input.ndim))
+    gamma_grad_value = (output_grad * normalized_input).sum(dim=reduction_dims)
+    beta_grad_value = output_grad.sum(dim=reduction_dims)
+    if gamma_grad is not None:
+        gamma_grad_value = gamma_grad_value.reshape(gamma_grad.shape)
+    if beta_grad is not None:
+        beta_grad_value = beta_grad_value.reshape(beta_grad.shape)
+    required = [
+        are_required_outputs[0] or input_grad is not None,
+        are_required_outputs[1] or gamma_grad is not None,
+        are_required_outputs[2] or beta_grad is not None,
+    ]
+    return golden_select_optional_outputs([input_grad_value, gamma_grad_value, beta_grad_value], required)
 
 
 ttnn.attach_golden_function(ttnn.moreh_group_norm_backward, golden_function=_golden_group_norm_backward)
 
 
-def _golden_norm_backward(input, output, output_grad, p, dim=None, *_, keepdim=False, **__):
+def _golden_norm_backward(input, output, output_grad, p, *, dim=None, keepdim=False, input_grad=None, **__):
     import torch
 
     (input,) = golden_prepare_grad_inputs(input)
-    forward = torch.linalg.vector_norm(input, ord=p, dim=dim, keepdim=True)
+    forward = torch.linalg.vector_norm(input, ord=p, dim=dim, keepdim=keepdim)
     grads = golden_compute_gradients(forward, (input,), output_grad)
-    return grads
+    return grads[0]
 
 
 ttnn.attach_golden_function(ttnn.moreh_norm_backward, golden_function=_golden_norm_backward)
@@ -428,10 +572,8 @@ ttnn.attach_golden_function(ttnn.moreh_softmax_backward, golden_function=_golden
 
 
 def _golden_softmin_backward(output_tensor, output_grad_tensor, dim, *_, **__):
-    import torch
-
-    # softmin(x) = softmax(-x); its backward uses the same form with the softmin output.
-    return output_tensor * (output_grad_tensor - (output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True))
+    # softmin(x) = softmax(-x), so its derivative has the opposite sign of softmax.
+    return output_tensor * ((output_grad_tensor * output_tensor).sum(dim=dim, keepdim=True) - output_grad_tensor)
 
 
 ttnn.attach_golden_function(ttnn.moreh_softmin_backward, golden_function=_golden_softmin_backward)
@@ -535,7 +677,7 @@ def _golden_adam(
     grad,
     exp_avg_in,
     exp_avg_sq_in,
-    *_,
+    *,
     lr=0.001,
     beta1=0.9,
     beta2=0.999,
@@ -544,6 +686,9 @@ def _golden_adam(
     step=0,
     amsgrad=False,
     max_exp_avg_sq_in=None,
+    param_out=None,
+    exp_avg_out=None,
+    exp_avg_sq_out=None,
     max_exp_avg_sq_out=None,
     **__,
 ):
@@ -576,7 +721,6 @@ def _golden_adamw(
     grad,
     exp_avg_in,
     exp_avg_sq_in,
-    *_,
     lr=0.001,
     beta1=0.9,
     beta2=0.999,
@@ -584,7 +728,11 @@ def _golden_adamw(
     weight_decay=1e-2,
     step=0,
     amsgrad=False,
+    *,
     max_exp_avg_sq_in=None,
+    param_out=None,
+    exp_avg_out=None,
+    exp_avg_sq_out=None,
     max_exp_avg_sq_out=None,
     **__,
 ):
@@ -615,14 +763,15 @@ def _golden_sgd(
     param_in,
     grad,
     momentum_buffer_in=None,
-    *_,
+    param_out=None,
+    momentum_buffer_out=None,
     lr=1e-3,
     momentum=0.0,
     dampening=0.0,
     weight_decay=0.0,
     nesterov=False,
+    *,
     momentum_initialized=False,
-    momentum_buffer_out=None,
     **__,
 ):
     import torch
@@ -645,13 +794,25 @@ def _golden_sgd(
 ttnn.attach_golden_function(ttnn.moreh_sgd, golden_function=_golden_sgd)
 
 
-def _golden_clip_grad_norm(inputs, max_norm, *_, norm_type=2.0, **__):
+def _golden_clip_grad_norm(
+    inputs, max_norm, norm_type=2.0, error_if_nonfinite=False, *, _ttnn_global_golden=False, **__
+):
     import torch
 
     # Total norm across all gradient tensors: (sum_i ||g_i||_p^p)^(1/p).
     per_tensor_norms = [torch.linalg.vector_norm(inp, ord=norm_type).reshape(1) for inp in inputs]
     total_norm = torch.linalg.vector_norm(torch.cat(per_tensor_norms), ord=norm_type)
+    if error_if_nonfinite and not bool(torch.isfinite(total_norm)):
+        raise RuntimeError(
+            f"The total norm of order {norm_type} for gradients from `parameters` is non-finite, "
+            "so it cannot be clipped."
+        )
+    if _ttnn_global_golden:
+        clip_coefficient = torch.clamp(max_norm / (total_norm + 1e-6), max=1.0)
+        for input_tensor in inputs:
+            input_tensor.mul_(clip_coefficient.to(input_tensor.dtype))
     return total_norm.reshape(1)
 
 
+_golden_clip_grad_norm._ttnn_mutates_global_inputs = True
 ttnn.attach_golden_function(ttnn.moreh_clip_grad_norm, golden_function=_golden_clip_grad_norm)

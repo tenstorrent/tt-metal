@@ -426,6 +426,18 @@ def test_assign_golden_uses_nanobind_argument_names_and_casts_dtype():
     assert torch.equal(destination_result, expected)
 
 
+def test_copy_golden_propagates_positional_destination():
+    golden_function = ttnn.get_golden_function(ttnn.copy)
+    source = torch.tensor([1.25, -2.5], dtype=torch.float32)
+    destination = torch.zeros(2, dtype=torch.bfloat16)
+
+    output = golden_function(source, destination, _ttnn_global_golden=True)
+
+    assert golden_function._ttnn_mutates_global_inputs
+    assert output is destination
+    assert torch.equal(destination, source.to(torch.bfloat16))
+
+
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])

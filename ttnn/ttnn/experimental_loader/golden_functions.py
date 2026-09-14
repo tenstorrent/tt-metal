@@ -201,8 +201,10 @@ ttnn.attach_golden_function(ttnn.composite_example_multiple_return, _composite_e
 
 
 def _dram_prefetcher_golden_function(tensors, *args, **kwargs):
-    # dram_prefetcher is a performance-only prefetch; the output is a pass-through of the first input.
-    output = tensors[0]
+    import torch
+
+    # dram_prefetcher returns an otherwise unspecified 32x32 synchronization tensor.
+    output = torch.empty((32, 32), dtype=tensors[0].dtype)
     ttnn.decorators.set_golden_comparison_config(output, method="skip", scope="all")
     return output
 
