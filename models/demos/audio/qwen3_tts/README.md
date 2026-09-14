@@ -14,11 +14,16 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | Block | Component | Where | State |
 |---|---|---|---|
 | 0 | Checkpoint access (`weights.py`) | host | **done** |
-| 1 | BPE tokenizer, prompt assembly, mel front-end | host | not started |
-| 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | not started |
-| 3 | Talker (28 layers, hidden 2048, MRoPE) | device | not started |
-| 4 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
-| 5 | Codec decoder → waveform | device | not started |
+| 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
+| 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
+| 3 | BPE tokenizer and prompt assembly | host | not started |
+| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | not started |
+| 5 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
+| 6 | Codec decoder → waveform | device | not started |
+
+The speaker encoder reads a reference clip and emits one 2048-wide vector, which occupies a
+single position of the talker's prompt. Its width matches the talker's hidden size, so
+nothing projects between them.
 
 ## Hardware
 
@@ -55,14 +60,27 @@ work never materialises the talker.
 
 ## Tests
 
+The suite is self-contained: references are computed live in-process from the checkpoint, so
+it needs only the checkpoint and, for the device tests, a card. 16 tests, 9 s warm.
+
 ```bash
-pytest models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py
+pytest models/demos/audio/qwen3_tts/tests/                       # everything
+pytest models/demos/audio/qwen3_tts/tests/test_checkpoint_loading.py   # host only
+pytest models/demos/audio/qwen3_tts/tests/pcc/test_speaker_pcc.py      # speaker encoder
 ```
 
-Host only, no device. It derives every speaker-encoder tensor name and shape from `config.json`
-and checks them against the file, so a checkpoint that stops matching its own config fails here
-rather than surfacing later as a PCC miss. Nothing is skipped when the checkpoint is missing: a
-skip would turn an unreachable checkpoint into a green run.
+`test_checkpoint_loading.py` derives every speaker-encoder tensor name and shape from
+`config.json` and checks them against the file, so a checkpoint that stops matching its own
+config fails there rather than surfacing later as a PCC miss. Nothing is skipped when the
+checkpoint is missing: a skip would turn an unreachable checkpoint into a green run.
+
+`pcc/test_speaker_pcc.py` gates every block and the embedding at **0.999**, not the usual
+0.99. Upstream pads each convolution in reflect mode, which `ttnn.conv1d` cannot do, so this
+port builds the mirrored columns by hand; substituting plain zero padding still scores 0.9961,
+which a 0.99 gate would wave through. Two further tests keep the first one honest: the padding
+is compared against `torch.nn.functional.pad` for an exact match, and the angle between a low
+voice and a high one on device is checked against the same angle on the reference (0.9496 vs
+0.9497), which a graph that ignored its input could not reproduce.
 
 ## CI
 
@@ -83,4 +101,11 @@ duplicate these tests or claim coverage that does not exist.
 | Path | Role |
 |---|---|
 | `weights.py` | checkpoint resolution and the speaker-encoder weight reader |
-| `tests/` | host and PCC tests |
+| `tt/` | TTNN blocks |
+| `reference/` | CPU references (PCC oracles); `reference/qwen/` is vendored upstream, Apache-2.0 |
+| `tests/` | host tests, `tests/pcc/` for device correctness |
+
+The vendored reference exists because the `qwen-tts` package pins transformers 4.57.3, which
+conflicts with the version this repository runs. `reference/qwen/speaker_encoder.py` is a
+byte-for-byte copy of the upstream encoder apart from two mechanical deviations recorded in
+its header. Treat it as an oracle: any edit that is not a faithful copy makes it useless.

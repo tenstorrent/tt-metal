@@ -22,3 +22,4 @@ ignore:
     - models/common/reference_rope.py
     - models/common/LICENSE-Llama-3.1
     - models/experimental/xtts_v2/reference/coqui/
+    - models/demos/audio/qwen3_tts/reference/qwen/
