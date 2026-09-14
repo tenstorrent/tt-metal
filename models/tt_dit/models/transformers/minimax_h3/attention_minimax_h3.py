@@ -17,6 +17,7 @@ from ....layers.module import Module, is_preparing_for_routing
 from ....layers.normalization import DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils.matmul import get_matmul_core_grid
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
@@ -203,6 +204,10 @@ class MiniMaxH3Attention(Module):
         full_grid = mesh_device.compute_with_storage_grid_size()
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
+        # vsa_sdpa takes the grid from its caller because the op cannot see the mesh. On a Blackhole
+        # Galaxy that has to be the rail-capped grid: the kernel's draw scales with the density it is
+        # given, and a threshold-routed selection is denser than a fixed top-k.
+        self.vsa_worker_grid = get_matmul_core_grid(mesh_device)
         self._sdpa_program_configs: dict[tuple[int, bool], ttnn.SDPAProgramConfig] = {}
 
         # The exp ring op walks head-SEGMENTS (a head's Q chunks split over segs_per_head rows) as
@@ -640,6 +645,8 @@ class MiniMaxH3Attention(Module):
                 k_chunk_blocks=self.vsa_config.k_chunk_blocks,
                 streaming=self.vsa_config.streaming,
                 distributed=self.vsa_config.distributed,
+                grid_x=self.vsa_worker_grid.x,
+                grid_y=self.vsa_worker_grid.y,
                 **(
                     dict(
                         list_len=self.vsa_stage.k,

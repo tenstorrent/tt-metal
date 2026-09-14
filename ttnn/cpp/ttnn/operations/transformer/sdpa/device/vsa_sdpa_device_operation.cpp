@@ -18,6 +18,13 @@ namespace ttnn::prim {
 namespace {
 constexpr uint32_t kQChunkTokens = 64;  // one query tile = 64 tokens = one index row (fixed by the VSA contract)
 
+tt::tt_metal::CoreCoord vsa_worker_grid(const VsaSdpaParams& attrs, tt::tt_metal::IDevice* device) {
+    const tt::tt_metal::CoreCoord full = device->compute_with_storage_grid_size();
+    return {
+        attrs.grid_x ? std::min<uint32_t>(attrs.grid_x, full.x) : full.x,
+        attrs.grid_y ? std::min<uint32_t>(attrs.grid_y, full.y) : full.y};
+}
+
 void validate_common(const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
     const auto& q = t.q;
     const auto& k = t.k;
@@ -203,6 +210,8 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
         attrs.coarse_real_per_shard,
         attrs.distributed,
         attrs.dense_row_hint,
+        attrs.grid_x,
+        attrs.grid_y,
         t.dense_row_mask.has_value(),
         t.stream_order.has_value(),
         t.lse_out.has_value(),
@@ -216,10 +225,10 @@ ttsl::hash::hash_t VsaSdpaOperation::compute_program_hash(const VsaSdpaParams& a
 }
 
 VsaSdpaOperation::DispatchArgs VsaSdpaOperation::compute_dispatch_args(
-    const VsaSdpaParams& /*attrs*/, const VsaSdpaInputs& t) {
+    const VsaSdpaParams& attrs, const VsaSdpaInputs& t) {
     const uint32_t H = t.q.logical_shape()[1];
     const uint32_t S = t.q.logical_shape()[2];
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord grid = vsa_worker_grid(attrs, t.q.device());
     const uint32_t num_cores = grid.x * grid.y;
     const uint32_t total_work = H * (S / kQChunkTokens);
     return DispatchArgs{
@@ -309,7 +318,9 @@ Tensor vsa_sdpa(
     bool distributed,
     std::vector<uint32_t> dense_row_hint,
     std::optional<Tensor> stream_order,
-    std::optional<Tensor> lse_out) {
+    std::optional<Tensor> lse_out,
+    uint32_t grid_x,
+    uint32_t grid_y) {
     using OperationType = ttnn::prim::VsaSdpaOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -323,6 +334,8 @@ Tensor vsa_sdpa(
             .coarse_real_per_shard = coarse_real_per_shard,
             .distributed = distributed,
             .dense_row_hint = std::move(dense_row_hint),
+            .grid_x = grid_x,
+            .grid_y = grid_y,
             .compute_kernel_config = compute_kernel_config,
         },
         OperationType::tensor_args_t{

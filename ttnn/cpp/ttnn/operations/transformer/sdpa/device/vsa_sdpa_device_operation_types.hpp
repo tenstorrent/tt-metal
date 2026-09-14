@@ -45,6 +45,11 @@ struct VsaSdpaParams {
     // q-tile rows that MAY be dense (a superset over the mesh's shards) so the dealing can weight them.
     bool distributed = false;
     std::vector<uint32_t> dense_row_hint;
+    // Worker grid, 0 = the device's full compute grid. The op cannot see the mesh, so a caller on a
+    // Blackhole Galaxy must pass the rail-capped grid itself -- the cap is a power limit on the board,
+    // not a property of the chip, and this kernel's draw rises with the density it is given.
+    uint32_t grid_x = 0;
+    uint32_t grid_y = 0;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 

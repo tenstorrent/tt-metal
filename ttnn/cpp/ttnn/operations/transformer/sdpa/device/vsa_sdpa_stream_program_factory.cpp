@@ -256,7 +256,7 @@ tt::tt_metal::ProgramDescriptor VsaSdpaOperation::VsaSdpaStreamProgramFactory::c
     const uint32_t out_tile_bytes = tt::tile_size(out_df);
 
     auto* device = t.q.device();
-    const tt::tt_metal::CoreCoord grid = device->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord grid = vsa_worker_grid(attrs, device);
     const uint32_t num_cores = grid.x * grid.y;
     TT_FATAL(num_cores >= 2 * H, "vsa_sdpa streaming needs >= 2 cores per head (H {}, cores {})", H, num_cores);
     auto core_grid = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange({0, 0}, {grid.x - 1, grid.y - 1}));
@@ -892,7 +892,7 @@ void VsaSdpaOperation::VsaSdpaStreamProgramFactory::override_runtime_arguments(
     TT_FATAL(
         reader_ids.size() == (attrs.distributed ? 1u : 2u) && writer_ids.size() == reader_ids.size(),
         "vsa_sdpa stream: unexpected kernel set");
-    const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
+    const tt::tt_metal::CoreCoord grid = vsa_worker_grid(attrs, t.q.device());
     const uint32_t num_cores = grid.x * grid.y;
     const uint32_t v_addr = t.v.buffer()->address();
     const uint32_t idx_addr = t.indices.buffer()->address();

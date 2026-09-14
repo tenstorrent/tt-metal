@@ -53,6 +53,9 @@ ttnn::Tensor vsa_sdpa(
     std::optional<ttnn::Tensor> stream_order = std::nullopt,
     // preallocated [1,H,S,64] bf16 TILE; per query row-tile, tile 0 col 0 = row sum, tile 1 col 0 =
     // threshold. lse = threshold * scale + ln(sum).
-    std::optional<ttnn::Tensor> lse_out = std::nullopt);
+    std::optional<ttnn::Tensor> lse_out = std::nullopt,
+    // worker grid; 0 = the device's full grid. Pass the rail-capped grid on a Blackhole Galaxy.
+    uint32_t grid_x = 0,
+    uint32_t grid_y = 0);
 
 }  // namespace ttnn::transformer

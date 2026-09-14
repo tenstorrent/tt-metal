@@ -527,7 +527,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("distributed") = false,
         nb::arg("dense_row_hint") = std::vector<uint32_t>{},
         nb::arg("stream_order") = nb::none(),
-        nb::arg("lse_out") = nb::none());
+        nb::arg("lse_out") = nb::none(),
+        nb::arg("grid_x") = 0,
+        nb::arg("grid_y") = 0);
 
     const auto* const chunked_doc =
         R"doc(

@@ -14,6 +14,9 @@
 
 namespace ttnn::prim {
 
+// Worker grid for the op: attrs.grid_* when set, else the device's full compute grid.
+tt::tt_metal::CoreCoord vsa_worker_grid(const VsaSdpaParams& attrs, tt::tt_metal::IDevice* device);
+
 struct VsaSdpaOperation {
     using operation_attributes_t = VsaSdpaParams;
     using tensor_args_t = VsaSdpaInputs;
@@ -106,6 +109,8 @@ Tensor vsa_sdpa(
     bool distributed = false,
     std::vector<uint32_t> dense_row_hint = {},
     std::optional<Tensor> stream_order = std::nullopt,
-    std::optional<Tensor> lse_out = std::nullopt);
+    std::optional<Tensor> lse_out = std::nullopt,
+    uint32_t grid_x = 0,
+    uint32_t grid_y = 0);
 
 }  // namespace ttnn::prim
