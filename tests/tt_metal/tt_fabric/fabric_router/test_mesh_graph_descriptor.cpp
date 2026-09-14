@@ -269,6 +269,107 @@ TEST(MeshGraphDescriptorTests, CollapsedTorusSwitchRetainsMeshDirectionsAndEdgeP
     EXPECT_EQ(edge_ports.at({RoutingDirection::S, 0}), 4);
 }
 
+// Two meshes in one descriptor, each selecting its own 2D fabric config (issue #56561).
+namespace {
+
+std::string two_mesh_fabric_config_proto(
+    const std::string& m0_fabric_config, const std::string& m1_fabric_config) {
+    return R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 4, 4 ] dim_types: [ RING, LINE ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+          )proto" +
+           m0_fabric_config + R"proto(
+        }
+        mesh_descriptors: {
+          name: "M1"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 4, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 1 ] }
+          )proto" +
+           m1_fabric_config + R"proto(
+        }
+        graph_descriptors: {
+          name: "G0"
+          type: "FABRIC"
+          instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+          connections: {
+            nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 1 } }
+            channels: { count: 1 }
+          }
+        }
+        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+    )proto";
+}
+
+// MeshGraph is constructed from a file, so tests materialize their textproto in a temp file.
+class ScopedTextProtoFile {
+public:
+    ScopedTextProtoFile(const std::string& file_name, const std::string& text_proto) :
+        path_(std::filesystem::temp_directory_path() / file_name) {
+        std::ofstream file(path_);
+        file << text_proto;
+    }
+    ~ScopedTextProtoFile() { std::filesystem::remove(path_); }
+
+    const std::filesystem::path& path() const { return path_; }
+
+private:
+    std::filesystem::path path_;
+};
+
+}  // namespace
+
+TEST(MeshGraphDescriptorTests, PerMeshFabricConfigsResolveByMeshId) {
+    const ScopedTextProtoFile proto_file(
+        "test_per_mesh_fabric_config.textproto",
+        two_mesh_fabric_config_proto("fabric_config: FABRIC_2D_TORUS_Y", "fabric_config: FABRIC_2D"));
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::T3K, proto_file.path().string());
+
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{0}), FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{1}), FabricConfig::FABRIC_2D);
+
+    // Only the torus mesh wraps along the N/S axis: chip 0 and chip 12 are the ends of column 0.
+    const auto& torus_mesh_connectivity = mesh_graph.get_intra_mesh_connectivity().at(0);
+    EXPECT_TRUE(torus_mesh_connectivity.at(0).contains(12));
+    const auto& mesh_connectivity = mesh_graph.get_intra_mesh_connectivity().at(1);
+    EXPECT_FALSE(mesh_connectivity.at(0).contains(12));
+}
+
+TEST(MeshGraphDescriptorTests, PerMeshFabricConfigOverridesProcessWideConfig) {
+    const ScopedTextProtoFile proto_file(
+        "test_per_mesh_fabric_config_override.textproto",
+        two_mesh_fabric_config_proto("fabric_config: FABRIC_2D_TORUS_Y", ""));
+
+    tt::tt_fabric::MeshGraph mesh_graph(
+        tt::tt_metal::ClusterType::T3K, proto_file.path().string(), FabricConfig::FABRIC_2D);
+
+    // The declaring mesh keeps its own config; the other mesh follows the process-wide one.
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{0}), FabricConfig::FABRIC_2D_TORUS_Y);
+    EXPECT_EQ(mesh_graph.get_fabric_config(MeshId{1}), FabricConfig::FABRIC_2D);
+}
+
+TEST(MeshGraphDescriptorTests, RejectsPerMeshFabricConfigWithProcessWide1DConfig) {
+    const ScopedTextProtoFile proto_file(
+        "test_per_mesh_fabric_config_1d_mix.textproto",
+        two_mesh_fabric_config_proto("fabric_config: FABRIC_2D_TORUS_Y", ""));
+
+    EXPECT_ANY_THROW(tt::tt_fabric::MeshGraph(
+        tt::tt_metal::ClusterType::T3K, proto_file.path().string(), FabricConfig::FABRIC_1D));
+}
+
+TEST(MeshGraphDescriptorTests, RejectsInvalidPerMeshFabricConfig) {
+    EXPECT_ANY_THROW(MeshGraphDescriptor desc(
+        two_mesh_fabric_config_proto("fabric_config: INVALID_FABRIC_CONFIG", "fabric_config: FABRIC_2D")));
+}
+
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";

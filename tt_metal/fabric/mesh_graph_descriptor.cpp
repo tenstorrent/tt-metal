@@ -305,6 +305,23 @@ FabricType infer_declared_fabric_type_from_dim_types(const Descriptor* descripto
 
 }  // namespace
 
+std::optional<FabricConfig> MeshGraphDescriptor::get_declared_fabric_config(const proto::MeshDescriptor* mesh_desc) {
+    if (mesh_desc == nullptr || !mesh_desc->has_fabric_config()) {
+        return std::nullopt;
+    }
+    switch (mesh_desc->fabric_config()) {
+        case proto::FabricConfig::FABRIC_2D: return FabricConfig::FABRIC_2D;
+        case proto::FabricConfig::FABRIC_2D_TORUS_X: return FabricConfig::FABRIC_2D_TORUS_X;
+        case proto::FabricConfig::FABRIC_2D_TORUS_Y: return FabricConfig::FABRIC_2D_TORUS_Y;
+        case proto::FabricConfig::FABRIC_2D_TORUS_XY: return FabricConfig::FABRIC_2D_TORUS_XY;
+        default:
+            TT_THROW(
+                "MeshGraphDescriptor: Mesh {} declares an invalid fabric_config: {}",
+                mesh_desc->name(),
+                static_cast<int>(mesh_desc->fabric_config()));
+    }
+}
+
 FabricType MeshGraphDescriptor::infer_fabric_type_from_dim_types(const proto::MeshDescriptor* mesh_desc) {
     return infer_declared_fabric_type_from_dim_types(mesh_desc);
 }
@@ -389,6 +406,7 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
         validate_graph_descriptors(proto, all_errors);
         validate_graph_topology_and_connections(proto, all_errors);
         validate_pinnings(proto, all_errors);
+        validate_fabric_configs(proto, all_errors);
         if (!all_errors.empty()) {
             return all_errors;
         }
@@ -532,6 +550,30 @@ void MeshGraphDescriptor::validate_mesh_topology(
                     continue;
                 }
             }
+        }
+    }
+}
+
+void MeshGraphDescriptor::validate_fabric_configs(
+    const proto::MeshGraphDescriptor& proto, std::vector<std::string>& error_messages) {
+    // Only 2D fabric configurations may be declared per mesh: 1D configurations stay process-wide,
+    // so a descriptor can never mix a 1D and a 2D mesh.
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (!mesh.has_fabric_config()) {
+            continue;
+        }
+        if (mesh.fabric_config() == proto::FabricConfig::INVALID_FABRIC_CONFIG) {
+            error_messages.push_back(fmt::format(
+                "Fabric config must be one of FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, FABRIC_2D_TORUS_XY "
+                "(Mesh: {})",
+                mesh.name()));
+            continue;
+        }
+        if (mesh.device_topology().dims_size() != 2) {
+            error_messages.push_back(fmt::format(
+                "Fabric config can only be declared on a two dimensional mesh, got {} dimensions (Mesh: {})",
+                mesh.device_topology().dims_size(),
+                mesh.name()));
         }
     }
 }

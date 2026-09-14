@@ -5,6 +5,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "experimental/fabric/routing_table_generator.hpp"
 #include "fabric_host_utils.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include <enchantum/enchantum.hpp>
@@ -73,6 +74,38 @@ bool axis_ports_reserved_for_torus(
         return true;
     }
     return false;
+}
+
+// A mesh follows the FabricConfig its MGD declares, when it declares one, so that one descriptor can
+// hold meshes with different 2D routing modes. Only 2D configurations are declarable, so a declared
+// value combined with a process-wide 1D configuration is a mix of routing dimensionalities and is
+// rejected.
+std::optional<FabricConfig> resolve_mesh_fabric_config(
+    const std::optional<FabricConfig>& declared_fabric_config,
+    const std::optional<FabricConfig>& global_fabric_config,
+    uint32_t mesh_id,
+    const std::string& mesh_name) {
+    if (!declared_fabric_config.has_value()) {
+        return global_fabric_config;
+    }
+
+    TT_FATAL(
+        is_2d_fabric_config(*declared_fabric_config),
+        "MeshGraph: Mesh {} ({}) declares FabricConfig {}, but only 2D fabric configs can be declared per mesh",
+        mesh_id,
+        mesh_name,
+        enchantum::to_string(*declared_fabric_config));
+
+    TT_FATAL(
+        !(global_fabric_config.has_value() && is_1d_fabric_config(*global_fabric_config)),
+        "MeshGraph: Mesh {} ({}) declares 2D FabricConfig {} while the process-wide FabricConfig is 1D ({}); 1D and "
+        "2D fabric configs cannot be mixed in one mesh graph",
+        mesh_id,
+        mesh_name,
+        enchantum::to_string(*declared_fabric_config),
+        enchantum::to_string(*global_fabric_config));
+
+    return declared_fabric_config;
 }
 
 }  // namespace
@@ -437,18 +470,28 @@ void MeshGraph::initialize_from_mgd(
             }
         }
 
-        // Build intra-mesh connectivity based on FabricConfig override (if provided) or MGD's fabric type
+        // Build intra-mesh connectivity based on this mesh's FabricConfig (per-mesh value from the MGD,
+        // else the process-wide override) or, absent any config, the MGD's fabric type
+        const std::optional<FabricConfig> mesh_fabric_config = resolve_mesh_fabric_config(
+            MeshGraphDescriptor::get_declared_fabric_config(mesh_desc),
+            fabric_config,
+            *mesh_id,
+            mesh_instance.name);
+        if (mesh_fabric_config.has_value()) {
+            this->mesh_fabric_configs_[mesh_id] = *mesh_fabric_config;
+        }
+
         FabricType mgd_fabric_type = MeshGraphDescriptor::infer_fabric_type_from_dim_types(mesh_desc);
         FabricType effective_fabric_type;
 
-        if (fabric_config.has_value()) {
-            FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
+        if (mesh_fabric_config.has_value()) {
+            FabricType requested_fabric_type = get_fabric_type(*mesh_fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, mesh_shape)) {
                 TT_THROW(
                     "FabricConfig {} requests topology {} which requires more connectivity than MGD provides {}. "
                     "FabricConfig can only restrict topology (e.g., torus→mesh), not create new connections.",
-                    enchantum::to_string(*fabric_config),
+                    enchantum::to_string(*mesh_fabric_config),
                     enchantum::to_string(requested_fabric_type),
                     enchantum::to_string(mgd_fabric_type));
             }
@@ -509,7 +552,7 @@ void MeshGraph::initialize_from_mgd(
         // (see axis_ports_reserved_for_torus, issue #54650).
         std::uint32_t chan_id = 0;
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
+                effective_fabric_type, mgd_fabric_type, mesh_fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
             // North, start from NW corner
             for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
                 for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
@@ -527,7 +570,7 @@ void MeshGraph::initialize_from_mgd(
             }
         }
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
+                effective_fabric_type, mgd_fabric_type, mesh_fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
             // East, start from NE corner
             chan_id = 0;
             for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
@@ -578,6 +621,7 @@ void MeshGraph::initialize_from_mgd(
         FabricType effective_fabric_type;
 
         if (fabric_config.has_value()) {
+            this->mesh_fabric_configs_[switch_mesh_id] = *fabric_config;
             FabricType requested_fabric_type = get_fabric_type(*fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(requested_fabric_type, mgd_fabric_type, switch_shape)) {
@@ -677,6 +721,72 @@ void MeshGraph::initialize_from_mgd(
                     mesh_edge_ports_to_chip_id_[*switch_mesh_id][{RoutingDirection::Z, chan_id++}] = chip_id;
                 }
             }
+        }
+    }
+
+    this->validate_intermesh_fabric_configs();
+}
+
+std::optional<FabricConfig> MeshGraph::get_fabric_config(MeshId mesh_id) const {
+    this->validate_mesh_id(mesh_id);
+    auto it = mesh_fabric_configs_.find(mesh_id);
+    if (it == mesh_fabric_configs_.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
+void MeshGraph::validate_intermesh_fabric_configs() const {
+    // An inter-mesh link can only carry traffic when both endpoints route with the same number of
+    // dimensions; differing 2D modes are allowed, a 1D endpoint facing a 2D endpoint is not.
+    // Both directions of a link are recorded, so pairs are normalized to report each link once.
+    std::set<std::pair<uint32_t, uint32_t>> validated_mesh_pairs;
+    auto validate_endpoints = [&](uint32_t src_mesh_id, uint32_t dst_mesh_id) {
+        if (!validated_mesh_pairs
+                 .emplace(std::min(src_mesh_id, dst_mesh_id), std::max(src_mesh_id, dst_mesh_id))
+                 .second) {
+            return;
+        }
+        const auto src_config = this->get_fabric_config(MeshId{src_mesh_id});
+        const auto dst_config = this->get_fabric_config(MeshId{dst_mesh_id});
+        if (!src_config.has_value() || !dst_config.has_value()) {
+            return;
+        }
+        const bool mixes_routing_dimensions = (is_1d_fabric_config(*src_config) && is_2d_fabric_config(*dst_config)) ||
+                                              (is_2d_fabric_config(*src_config) && is_1d_fabric_config(*dst_config));
+        TT_FATAL(
+            !mixes_routing_dimensions,
+            "MeshGraph: Inter-mesh link between mesh {} (FabricConfig {}) and mesh {} (FabricConfig {}) mixes 1D and "
+            "2D fabric configs",
+            src_mesh_id,
+            enchantum::to_string(*src_config),
+            dst_mesh_id,
+            enchantum::to_string(*dst_config));
+
+        if (*src_config != *dst_config) {
+            // Each endpoint derives deadlock avoidance from its own config, so the two ends of the link
+            // can label the same direction differently (issue #54650). The torus axes themselves keep
+            // their edge ports (see axis_ports_reserved_for_torus), which leaves the link on an axis both
+            // ends treat as a mesh, but a mismatch is worth surfacing.
+            log_warning(
+                tt::LogFabric,
+                "MeshGraph: Inter-mesh link between mesh {} (FabricConfig {}) and mesh {} (FabricConfig {}) connects "
+                "meshes with different fabric configs",
+                src_mesh_id,
+                enchantum::to_string(*src_config),
+                dst_mesh_id,
+                enchantum::to_string(*dst_config));
+        }
+    };
+
+    for (const auto& [src_mesh_id, dst_meshes] : requested_intermesh_connections_) {
+        for (const auto& [dst_mesh_id, _] : dst_meshes) {
+            validate_endpoints(src_mesh_id, dst_mesh_id);
+        }
+    }
+    for (const auto& [src_mesh_id, dst_meshes] : requested_intermesh_ports_) {
+        for (const auto& [dst_mesh_id, _] : dst_meshes) {
+            validate_endpoints(src_mesh_id, dst_mesh_id);
         }
     }
 }

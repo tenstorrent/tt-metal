@@ -471,6 +471,10 @@ private:
     // Returns std::nullopt if not in multi-host context
     LocalMeshBinding initialize_local_mesh_binding();
 
+    // Adopt the FabricConfig the mesh graph resolved for the locally bound mesh, so every rank owning
+    // that mesh runs the config its MGD declares instead of a process-wide one.
+    void adopt_local_mesh_fabric_config();
+
     template <uint8_t dim, bool compressed>
     void write_all_to_all_routing_fields(MeshId mesh_id) const;
 

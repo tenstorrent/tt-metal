@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <functional>
 #include <map>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -160,6 +161,11 @@ public:
     // Check if a mesh_id corresponds to a switch mesh
     bool is_switch_mesh(MeshId mesh_id) const;
 
+    // FabricConfig that applies to every rank/device of a mesh. This is the MGD's per-mesh
+    // `fabric_config` when the descriptor declares one, otherwise the process-wide FabricConfig the
+    // MeshGraph was built with. std::nullopt means no fabric config applies to this mesh.
+    std::optional<FabricConfig> get_fabric_config(MeshId mesh_id) const;
+
     // Get the host rank that owns a given chip in a mesh
     std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, ChipId chip_id) const;
 
@@ -235,6 +241,9 @@ private:
     void initialize_from_mgd(
         const MeshGraphDescriptor& mgd, std::optional<FabricConfig> fabric_config, bool is_ubb_galaxy);
 
+    // Reject inter-mesh links whose two endpoint meshes resolve to incompatible fabric configs.
+    void validate_intermesh_fabric_configs() const;
+
     void add_to_connectivity(
         MeshId src_mesh_id,
         ChipId src_chip_id,
@@ -250,6 +259,9 @@ private:
     // For distributed context, bookkeeping of host ranks and their shapes
     std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
     std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
+
+    // Effective FabricConfig per mesh, resolved from the MGD's per-mesh value or the process-wide one.
+    std::unordered_map<MeshId, FabricConfig> mesh_fabric_configs_;
 
     std::vector<std::unordered_map<port_id_t, ChipId, hash_pair>> mesh_edge_ports_to_chip_id_;
     RequestedIntermeshConnections requested_intermesh_connections_;
