@@ -224,13 +224,9 @@ class TransformerEncoder(Module):
         if deepstack_embeds and vision_mask is None:
             msg = "deepstack_embeds needs vision_mask"
             raise ValueError(msg)
-        if vision_mask is not None:
-            if cache is not None:
-                msg = "the cache path does not support vision tokens"
-                raise ValueError(msg)
-            if batch_size != 1:
-                msg = "vision tokens are supported for a single sequence only"
-                raise ValueError(msg)
+        if vision_mask is not None and batch_size != 1:
+            msg = "vision tokens are supported for a single sequence only"
+            raise ValueError(msg)
 
         if self._sp_axis is not None:
             if cache is not None:
@@ -341,10 +337,12 @@ class TransformerEncoder(Module):
         *,
         pos_embeds: tuple[ttnn.Tensor, ttnn.Tensor],
         cache: Cache,
+        rope_offset: ttnn.Tensor | None = None,
         attn_bias: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
+        rope_index = cache.position if rope_offset is None else cache.position + rope_offset
+        rope_index = ttnn.reshape(ttnn.typecast(rope_index, ttnn.uint32), [-1, 1])
         cos, sin = pos_embeds
-        rope_index = ttnn.reshape(ttnn.typecast(cache.position, ttnn.uint32), [-1, 1])
         cos = ttnn.embedding(rope_index, cos, layout=ttnn.TILE_LAYOUT)
         sin = ttnn.embedding(rope_index, sin, layout=ttnn.TILE_LAYOUT)
 
@@ -576,6 +574,10 @@ class TransformerEncoder(Module):
         tokens: torch.Tensor,
         *,
         mask: torch.Tensor | None,
+        positions: torch.Tensor | None = None,
+        vision_embeds: ttnn.Tensor | None = None,
+        vision_mask: torch.Tensor | None = None,
+        deepstack_embeds: Sequence[ttnn.Tensor] = (),
         max_length: int,
         eos_tokens: int | Sequence[int] | None,
         top_k: int | None = None,
@@ -585,6 +587,29 @@ class TransformerEncoder(Module):
         guide: torch.Tensor | None = None,
         traced: bool = False,
     ) -> GenerationOutput:
+        """Extends the prompt `tokens` by sampling one token per step on the host, after prefilling.
+
+        Args:
+            tokens: Token ids of the prompt, of shape (batch, sequence).
+            mask: Attention mask of shape (batch, sequence), 1 where a token may be attended to.
+            positions: Rope positions of the prompt, of shape (batch, sequence) or (axes, batch,
+                sequence) with one row per multimodal rope axis; a plain range when omitted.
+                Decoding continues from the largest position given.
+            vision_embeds: Embeddings of shape (num_vision_tokens, embed_size) that replace the
+                token embeddings of the rows `vision_mask` marks, in sequence order.
+            vision_mask: Mask of shape (batch, sequence) marking the vision rows with 1.
+            deepstack_embeds: One tensor like `vision_embeds` per leading layer, added to the
+                vision rows after that layer.
+            max_length: Length of the prompt and the generated tokens together.
+            eos_tokens: Ids that end a sequence; generation stops once every sequence has ended.
+            top_k: Number of most likely tokens to sample among, or all of them when omitted.
+            top_p: Probability mass of the most likely tokens to sample among.
+            temperature: Divisor of the logits before sampling.
+            return_logits: Returns the logits of every step, of shape (batch, steps, vocab).
+            guide: Token ids of shape (batch, max_length) to take the generated tokens from
+                instead of sampling, for teacher forcing.
+            traced: Replays the decode step as a trace, which excludes `mask`.
+        """
         # The original Llama implementation starts generation after the shortest input, thereby
         # overwriting any padding tokens that are on the right, resuing that space. We use a
         # slightly simpler approach and start generation after the longest input, which is also what
@@ -629,8 +654,6 @@ class TransformerEncoder(Module):
 
         logits = [] if return_logits else None
 
-        cos, sin = self._get_pos_embeds(start=0, sequence_length=padded_seq_len)
-
         if traced:
             trace = self._get_decode_trace(batch_size=batch_size, size=padded_seq_len)
             cache = trace.cache
@@ -648,6 +671,24 @@ class TransformerEncoder(Module):
             )
 
         tt_input_tokens = tensor.from_torch(tokens, dtype=ttnn.uint32, device=device)
+        tt_positions = (
+            tensor.from_torch(positions.float(), dtype=ttnn.float32, device=device) if positions is not None else None
+        )
+        tt_vision_mask = tensor.from_torch(vision_mask, device=device) if vision_mask is not None else None
+
+        if positions is None:
+            rope_offset = torch.zeros([batch_size], dtype=torch.int32)
+        else:
+            last = positions.transpose(0, -2).reshape(batch_size, -1).amax(dim=1)
+            rope_offset = (last + 1 - input_length).to(torch.int32)
+
+        tt_rope_offset = tensor.from_torch(
+            rope_offset,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            on_host=traced,
+        )
 
         decode_attn_bias = (
             self._prepare_attn_bias(
@@ -663,18 +704,29 @@ class TransformerEncoder(Module):
 
         for pos in range(input_length, max_length):
             if prev_pos == 0:
+                if tt_positions is None:
+                    cos, sin = self._get_pos_embeds(start=0, sequence_length=padded_seq_len)
+                    pos_embeds = (cos[:, :pos], sin[:, :pos])
+                else:
+                    pos_embeds = None
+
                 # The prefill is currently not traced as the performance gain is small.
                 x = self.forward(
                     tokens=tt_input_tokens,
                     mask=mask[:, :pos] if mask is not None else None,
-                    pos_embeds=(cos[:, :pos], sin[:, :pos]),
+                    positions=tt_positions,
+                    pos_embeds=pos_embeds,
                     cache=cache,
+                    vision_embeds=vision_embeds,
+                    vision_mask=tt_vision_mask,
+                    deepstack_embeds=deepstack_embeds,
                     skip_final_linear=True,
                 )
                 step_output = self._last_token_logits(x, index=pos - 1)
             else:
                 step_output = decode_step(
                     tt_input_tokens,
+                    rope_offset=tt_rope_offset,
                     attn_bias=decode_attn_bias[:, :, prev_pos : prev_pos + 1, :]
                     if decode_attn_bias is not None
                     else None,

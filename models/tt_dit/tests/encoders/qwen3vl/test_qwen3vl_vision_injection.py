@@ -30,6 +30,7 @@ TEXT_BEFORE = 5
 IMAGE_GRID = (1, 8, 4)  # 8 tokens after the 2x2 merge
 TEXT_AFTER = 37
 SEQ = TEXT_BEFORE + IMAGE_GRID[1] * IMAGE_GRID[2] // SPATIAL_MERGE_SIZE**2 + TEXT_AFTER
+EXTRA = 8  # tokens generated after the prompt
 
 MESH = [
     pytest.param((1, 1), (1, 0), {"l1_small_size": 32768}, id="1x1"),
@@ -59,13 +60,16 @@ def _reference_text_model(layers: int) -> transformers.PreTrainedModel:
 
 
 def _encoder(
-    reference: transformers.PreTrainedModel, mesh_device: ttnn.MeshDevice, tp: tuple[int, int]
+    reference: transformers.PreTrainedModel, mesh_device: ttnn.MeshDevice, tp: tuple[int, int], *, head: bool = False
 ) -> Qwen3VlEncoder:
+    """The encoder of `reference`, with a language-model head tied to the token embedding if `head`."""
     parallel_config = EncoderParallelConfig.from_tuples(tp=tp, sp=None)
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    config = dataclasses.replace(Qwen3VlEncoder.config_from_hf(reference.config), final_linear=False)
+    config = dataclasses.replace(Qwen3VlEncoder.config_from_hf(reference.config), final_linear=head)
     encoder = Qwen3VlEncoder(config, device=mesh_device, parallel_config=parallel_config, ccl_manager=ccl_manager)
     state = {f"model.language_model.{k}": v for k, v in reference.state_dict().items()}
+    if head:
+        state["lm_head.weight"] = state["model.language_model.embed_tokens.weight"]
     encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(state))
     return encoder
 
@@ -161,3 +165,56 @@ def test_vision_injection_matches_reference(
     )
     assert torch.equal(text_only[:, :TEXT_BEFORE], actual[:, :TEXT_BEFORE])
     assert not torch.allclose(text_only[:, TEXT_BEFORE:], actual[:, TEXT_BEFORE:], atol=1e-2)
+
+
+@pytest.mark.parametrize(("mesh_device", "tp", "device_params"), MESH[:1], indirect=["mesh_device", "device_params"])
+def test_generation_after_image_matches_reference(*, mesh_device: ttnn.MeshDevice, tp: tuple[int, int]) -> None:
+    """Teacher-forced decoding after an image prompt.
+
+    The generated text continues from the largest prompt position, which the image leaves behind
+    the sequence length, so the reference is the model over the whole sequence with its positions.
+    """
+    reference = _reference_text_model(4)
+    encoder = _encoder(reference, mesh_device, tp, head=True)
+    ids, mask, _ = _prompt()
+    num_image_tokens = int(mask.sum())
+
+    torch.manual_seed(3)
+    extra = torch.randint(0, VOCAB_SIZE, [1, EXTRA])
+    full_ids = torch.cat([ids, extra], dim=1)
+    full_mask = torch.cat([mask, torch.zeros_like(extra, dtype=torch.bool)], dim=1)
+    position_ids = mrope_position_ids(
+        full_mask.long(), image_grid_thw=torch.tensor([IMAGE_GRID]), spatial_merge_size=SPATIAL_MERGE_SIZE
+    )
+    vision_embeds = torch.randn(num_image_tokens, HIDDEN)
+    deepstack_embeds = [torch.randn(num_image_tokens, HIDDEN) for _ in range(2)]
+
+    logger.info("running torch model...")
+    with torch.no_grad():
+        inputs_embeds = reference.embed_tokens(full_ids)
+        inputs_embeds[full_mask] = vision_embeds
+        hidden = reference.forward(
+            inputs_embeds=inputs_embeds,
+            position_ids=position_ids,
+            visual_pos_masks=full_mask,
+            deepstack_visual_embeds=deepstack_embeds,
+        ).last_hidden_state
+        expected = hidden[:, SEQ - 1 : SEQ + EXTRA - 1] @ reference.embed_tokens.weight.T
+
+    logger.info("running ttnn model...")
+    torch.set_num_threads(1)
+    out = encoder.generate(
+        ids,
+        mask=None,
+        max_length=SEQ + EXTRA,
+        eos_tokens=None,
+        guide=full_ids,
+        return_logits=True,
+        positions=position_ids[..., :SEQ],
+        vision_embeds=tensor.from_torch(vision_embeds, device=mesh_device),
+        vision_mask=mask,
+        deepstack_embeds=[tensor.from_torch(e, device=mesh_device) for e in deepstack_embeds],
+    )
+
+    assert torch.equal(out.tokens, full_ids)
+    assert_quality(expected, out.logits, pcc=0.995)
