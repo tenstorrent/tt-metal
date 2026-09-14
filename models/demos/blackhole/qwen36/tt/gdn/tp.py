@@ -6,6 +6,7 @@ Recurrence is per value-head (no cross-device comms inside); all-reduce after ro
 Reuses `recurrent_gated_delta_rule_decode_ttnn`; weights interleaved. GDN norm uses raw weight
 (no +1) + SiLU(z) gate — distinct from QK/layer norms.
 """
+
 import math
 import os
 
@@ -49,6 +50,7 @@ def _silu_mul(x, z, memory_config):
 
 
 HOLD_SENTINEL = 0xFFFFFFFF  # block index that makes the ring-mode op skip a head's state writes
+_SPEC_FUSED_LOGGED = False  # one [gdn-spec-fused] log line per process (evidence in the gate logs)
 
 
 def spec_state_blk_idx(mi, n_users, nv, hold=None):
@@ -112,6 +114,40 @@ def spec_conv_sel(mi, n_users, T, kc, hold=None):
         for j in range(T):
             sel[u, kc - 1 + j, (kc - 1 + T) + j] = 1.0
     return sel
+
+
+def spec_ctrl_words(n_users, nv):
+    """Words in one ``gdn_spec_step`` ctrl page: 1 (window parity) + B (mi) + B*Nv (ring block per (user, head)),
+    rounded up to a multiple of 16 so the page is a whole number of 64 B lines (the op's N*4 % 64 == 0 contract)."""
+    n = 1 + n_users + n_users * nv
+    return (n + 15) // 16 * 16
+
+
+def spec_ctrl_page(mi, n_users, nv, parity, hold=None):
+    """The ONE control page a fused ``gdn_spec_step`` verify reads (QWEN36_GDN_SPEC_FUSED=1) in place of the
+    (spec_state_blk_idx, spec_conv_sel) pair.
+
+    word 0        = conv-window parity: which half of the layer's window ping-pong pair is E_prev (the op reads
+                    it and writes the rebuilt window into the other half);
+    words 1..B    = mi[u], the accepted-prefix index (the carry rows are E_prev[u, mi+1 : mi+K]); 0 for a held user
+                    (unread: its window is copied through unchanged);
+    words 1+B..   = the initial ring block per (user, head), exactly ``spec_state_blk_idx`` -- the HOLD sentinel for
+                    EVERY head of a held user (the op skips that user's ring writes; the q/k window chunks are owned
+                    per key-head group, so a partial hold is not a valid page).
+    Pure data, shared by every GDN layer (all 48 flip parity in lockstep) and not a program-hash input: one trace
+    serves every commit pattern. Returns torch.int32 [1, N] (N = spec_ctrl_words); staged as uint32, where the
+    int32 -1 of the sentinel is 0xFFFFFFFF. mi is NOT range-checked here (the op clamps mi >= T to T-1 silently), so
+    callers check it against their T.
+    """
+    assert len(mi) == n_users, f"need one mi per user: got {len(mi)} for {n_users} users"
+    assert parity in (0, 1), f"window parity must be 0 or 1, got {parity}"
+    hold = set(hold or ())
+    words = torch.zeros(spec_ctrl_words(n_users, nv), dtype=torch.int32)
+    words[0] = int(parity)
+    for u in range(n_users):
+        words[1 + u] = 0 if u in hold else int(mi[u])
+    words[1 + n_users : 1 + n_users + n_users * nv] = spec_state_blk_idx(mi, n_users, nv, hold=hold)
+    return words.reshape(1, -1)
 
 
 def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
@@ -408,6 +444,22 @@ class TPGatedDeltaNet:
         # The DURABLE shift register as one [B, K, qkv_dim_tp] tensor, mirroring conv_states[0..K-1]
         # with the user axis folded in (tap j of user u == _conv_win_buf[u, j, :]).
         self._conv_win_buf = None
+        # QWEN36_GDN_SPEC_FUSED=1: the batched spec verify AND its T = 1 seed run ttnn.experimental.kda.gdn_spec_step
+        # -- ONE fused op per layer (conv-window rebuild + depthwise conv + SiLU + l2norms + gates + T-step gated delta
+        # rule with per-token ring writes + gated RMSNorm + silu(z)) in place of the composite chains of
+        # _verify_fullbatch / _seed_fullbatch. Default OFF: every OFF-path op below is untouched.
+        self._spec_fused = os.environ.get("QWEN36_GDN_SPEC_FUSED", "0") == "1"
+        # Fused mode keeps E_prev as a ping-pong PAIR [W0, W1] of [B, K-1+T, C] instead of _verify_win_buf: a verify
+        # reads pair[_spec_win_par] and writes the rebuilt window into the other half, and the host flips
+        # _spec_win_par after every replay (model.verify_traced), so pair[_spec_win_par] is always the current E_prev
+        # (verify_win_cur()). Every layer flips in lockstep: one ctrl page serves all of them.
+        self._verify_win_pair = None
+        self._spec_win_par = 0
+        # Fused-mode constants (built eagerly, once): the conv taps as one [1, K, C] tile (tap j in row j), the seed's
+        # scratch half of its [B, K, C] window pair and the seed's identity ctrl page (parity 0, mi 0, block u*Nv + h).
+        self._spec_taps = None
+        self._seed_win_scratch = None
+        self._seed_ctrl = None
         # One-hot matmul config: HiFi4 + fp32 accumulate so a 0/1 selector matmul is EXACT in bf16.
         self._cfg_onehot = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -449,6 +501,9 @@ class TPGatedDeltaNet:
         for sel in (getattr(self, "_spec_seed_sel", None) or {}).values():
             ttnn.deallocate(sel)
         self._spec_seed_sel = {}
+        for buf in getattr(self, "_verify_win_pair", None) or ():  # fused mode's window ping-pong pair
+            ttnn.deallocate(buf)
+        self._verify_win_pair = None
         self._spec_shape = None
 
     def reset_state(self):
@@ -2055,9 +2110,32 @@ class TPGatedDeltaNet:
         self._spec_ring = ttnn.zeros(
             [T * B * Nv, Dk, Dv], device=self.mesh, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, memory_config=mc
         )
-        self._verify_win_buf = ttnn.zeros(
-            [B, K - 1 + T, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
-        )
+        if self._spec_fused:
+            # QWEN36_GDN_SPEC_FUSED=1: the window ping-pong pair (see __init__) instead of the single buffer, at
+            # parity 0; plus the fused op's constants, so no host round trip is left for the traced path.
+            self._verify_win_buf = None
+            self._verify_win_pair = [
+                ttnn.zeros([B, K - 1 + T, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+                for _ in range(2)
+            ]
+            self._spec_win_par = 0
+            self._spec_taps_t()
+            self._norm_weight_1d()
+            # The fused T=1 seed's scratch window + identity ctrl page too: every fused-path allocation happens here,
+            # eagerly, so no later seed can allocate (or compile) under a parked trace.
+            self._ensure_spec_fused_seed()
+            global _SPEC_FUSED_LOGGED
+            if not _SPEC_FUSED_LOGGED:
+                _SPEC_FUSED_LOGGED = True
+                logger.info(
+                    f"[gdn-spec-fused] QWEN36_GDN_SPEC_FUSED=1: gdn_spec_step verify at (B={B}, T={T}), "
+                    f"hnew_depth={self._spec_hnew_depth(B)}, window pair [{B}, {K - 1 + T}, {C}] x2, ctrl page "
+                    f"{spec_ctrl_words(B, Nv)} words"
+                )
+        else:
+            self._verify_win_buf = ttnn.zeros(
+                [B, K - 1 + T, C], device=self.mesh, dtype=cdt, layout=ttnn.TILE_LAYOUT, memory_config=mc
+            )
         self._spec_win_pad = (
             None
             if T == 1
@@ -2068,6 +2146,117 @@ class TPGatedDeltaNet:
         for u in range(B):
             self._spec_seed_selector(u)
         self._ensure_conv_win()
+
+    def verify_win_cur(self):
+        """The conv window E_prev the NEXT verify reads -- what the seed / join / materialize paths read and write:
+        _verify_win_buf, or under QWEN36_GDN_SPEC_FUSED=1 the current half of the window ping-pong pair."""
+        if self._spec_fused:
+            assert self._verify_win_pair is not None, "spec window pair before prepare_spec_verify"
+            return self._verify_win_pair[self._spec_win_par]
+        return self._verify_win_buf
+
+    # ---- QWEN36_GDN_SPEC_FUSED=1 helpers (gdn_spec_step constants) ----
+    @staticmethod
+    def _spec_hnew_depth(B):
+        """States buffered between the op's compute and its ring writer: 4 at >= 48 cores (B >= 4), else 2 (stage 1)."""
+        return 4 if B >= 4 else 2
+
+    def _spec_taps_t(self):
+        """tw["conv_taps"] as ONE [1, K, C] bf16 tile per device (tap j in row j of this device's C channels): the
+        row-broadcast conv operand of gdn_spec_step. Host round trip, built once per layer, eagerly."""
+        if self._spec_taps is None:
+            rows = self._per_device_rows(self.tw["conv_taps"])  # K lists of per-device [C] rows
+            n_dev = len(rows[0])
+            per_dev = torch.stack([torch.stack([rows[j][d] for j in range(self.K)]) for d in range(n_dev)])
+            self._spec_taps = ttnn.from_torch(
+                per_dev.to(torch.bfloat16),  # [n_dev, K, C] -> [1, K, C] per device
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            )
+        return self._spec_taps
+
+    def _ensure_spec_fused_seed(self):
+        """Allocate (once per B) the fused seed's constants: the scratch half of its [B, K, C] window pair and its
+        identity ctrl page (parity 0, mi 0, ring block (u, h) = u*Nv + h = rec_state's own block, no holds). EAGER:
+        prepare_spec_verify (fused) forces it before any capture; the call from _seed_fullbatch_fused is only a
+        fallback for a seed that runs before prepare_spec_verify. Re-allocated if B changed under us."""
+        B, Nv, K, C = self.B, self.Nv, self.K, self.qkv_dim_tp
+        if self._seed_win_scratch is not None and tuple(self._seed_win_scratch.shape) != (B, K, C):
+            ttnn.deallocate(self._seed_win_scratch)
+            self._seed_win_scratch = None
+        if self._seed_win_scratch is None:
+            self._seed_win_scratch = ttnn.zeros(
+                [B, K, C],
+                device=self.mesh,
+                dtype=self.conv_states[0].dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if self._seed_ctrl is not None and int(self._seed_ctrl.shape[-1]) != spec_ctrl_words(B, Nv):
+            ttnn.deallocate(self._seed_ctrl)
+            self._seed_ctrl = None
+        if self._seed_ctrl is None:
+            self._seed_ctrl = ttnn.from_torch(
+                spec_ctrl_page([0] * B, B, Nv, parity=0),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.mesh,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+            )
+
+    def _gdn_spec_step(self, qkvzab, win_a, win_b, ring, ctrl, T, B):
+        """The one fused dispatch (QWEN36_GDN_SPEC_FUSED=1): raw [1, B*T, W] projection rows in, gated [1, B*T, Nv*Dv]
+        bf16 (L1) out; ring / win[1-par] updated in place. Same call for the verify (ring = _spec_ring, the staged ctrl
+        page) and the seed (ring = rec_state, the identity page, T = 1). dt_bias / neg_exp_A / norm weight and the
+        default HiFi4 + fp32-accumulate kernel config are exactly what the plain fused decode hands gdn_decode_step."""
+        tw = self.tw
+        return ttnn.experimental.kda.gdn_spec_step(
+            qkvzab,
+            win_a,
+            win_b,
+            ring,
+            ctrl,
+            self._spec_taps_t(),
+            tw["dt_bias"],
+            tw["neg_exp_A"],
+            self._norm_weight_1d(),
+            self.Nv,
+            self.Nk,
+            self.Dk,
+            self.Dv,
+            T,
+            B,
+            self.qkvz_dim_tp,
+            conv_kernel=self.K,
+            scale=self.scale,
+            hnew_depth=self._spec_hnew_depth(B),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            output_dtype=ttnn.bfloat16,
+        )
+
+    def _spec_out_tail(self, gated, R, bucket):
+        """Out-proj + all-reduce (+ the R < bucket zero pad) over the fused op's [1, R, value_dim_tp] gated rows: the
+        unchanged tail of _verify_fullbatch / _seed_fullbatch."""
+        mc, rm = ttnn.DRAM_MEMORY_CONFIG, ttnn.ROW_MAJOR_LAYOUT
+        partial = self._row_proj(gated, self.tw["out"])
+        ttnn.deallocate(gated)
+        partial = ttnn.reshape(partial, (1, 1, R, partial.shape[-1]))
+        o_red = tt_all_reduce(
+            partial, self.mesh, self.tt_ccl, cluster_axis=0, dim=3, topology=self.args.ccl_topology(), memory_config=mc
+        )
+        if R < bucket:
+            o_rm = ttnn.to_layout(o_red, rm)
+            ttnn.deallocate(o_red)
+            pad = self._verify_pad_buf(bucket - R, o_rm.shape[-1], o_rm.dtype, rm, mc)
+            o_full = ttnn.concat([o_rm, pad], dim=2, memory_config=mc)
+            ttnn.deallocate(o_rm)
+            o_red = ttnn.to_memory_config(ttnn.to_layout(o_full, ttnn.TILE_LAYOUT), mc)
+            ttnn.deallocate(o_full)
+        return o_red
 
     def seed_spec_state(self):
         """Load the live decode state into the spec buffers so the first replay can run with mi = 0.
@@ -2102,7 +2291,7 @@ class TPGatedDeltaNet:
             if self._spec_win_pad is None
             else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         )
-        ttnn.copy(full, self._verify_win_buf)  # full-shape copy: _verify_win_buf keeps its address
+        ttnn.copy(full, self.verify_win_cur())  # full-shape copy: the window buffer keeps its address
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
         # Both mirrors now hold the same (live) shift register.
@@ -2169,7 +2358,7 @@ class TPGatedDeltaNet:
             if self._spec_win_pad is None
             else ttnn.concat([self._conv_win_buf, self._spec_win_pad], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         )
-        cat = ttnn.concat([self._verify_win_buf, full], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, 2R, C]
+        cat = ttnn.concat([self.verify_win_cur(), full], dim=1, memory_config=ttnn.DRAM_MEMORY_CONFIG)  # [B, 2R, C]
         if full is not self._conv_win_buf:
             ttnn.deallocate(full)
         sel_tt = self._spec_seed_selector(u)  # cached [B, R, 2R] one-hot (persistent: do not free)
@@ -2177,7 +2366,7 @@ class TPGatedDeltaNet:
             sel_tt, cat, compute_kernel_config=self._cfg_onehot, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
         ttnn.deallocate(cat)
-        ttnn.copy(new_win, self._verify_win_buf)  # full-shape, in place
+        ttnn.copy(new_win, self.verify_win_cur())  # full-shape, in place
         ttnn.deallocate(new_win)
 
     def materialize_spec_state(self, mi):
@@ -2211,7 +2400,7 @@ class TPGatedDeltaNet:
                 ttnn.deallocate(r)
         ttnn.deallocate(new_rec)
         # --- conv window: user u's K rows starting at its own mi[u] ---
-        wins = [ttnn.slice(self._verify_win_buf, (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
+        wins = [ttnn.slice(self.verify_win_cur(), (u, int(mi[u]), 0), (u + 1, int(mi[u]) + K, C)) for u in range(B)]
         new_win = ttnn.concat(wins, dim=0) if B > 1 else wins[0]
         ttnn.copy(new_win, self._conv_win_buf)
         if B > 1:
@@ -2220,7 +2409,9 @@ class TPGatedDeltaNet:
         ttnn.deallocate(new_win)
         self._conv_taps_stale, self._conv_win_stale = True, False
 
-    def forward_verify_recurrent(self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None):
+    def forward_verify_recurrent(
+        self, x, valid_len, pre_gathered=False, n_users=1, state_blk_idx=None, conv_sel=None, spec_ctrl=None
+    ):
         """Batched hybrid spec-decode verify for GDN: advance B users x T candidate rows at once.
 
         x : [1, 1, bucket, dim] prefill-normed input; the first ``valid_len`` rows are real and
@@ -2236,6 +2427,8 @@ class TPGatedDeltaNet:
                      each (user, head)'s initial state block inside the persistent ring.
         conv_sel   : device bf16 TILE [B, K-1+T, K-1+2T] one-hot, from spec_conv_sel(mi, B, T, K).
                      Rebuilds each user's conv window from the accepted prefix + the new rows.
+        spec_ctrl  : QWEN36_GDN_SPEC_FUSED=1 only: device uint32 ROW_MAJOR [1, N] page from spec_ctrl_page
+                     ({parity, mi, ring block | HOLD}); replaces the two selectors above (both ignored).
 
         Side effects: the ring is updated IN PLACE (every candidate's state, for every user) and
         _verify_win_buf becomes the new E_prev. Neither rec_state nor conv_states moves — the host
@@ -2246,6 +2439,17 @@ class TPGatedDeltaNet:
         assert valid_len % n_users == 0, f"valid_len {valid_len} is not {n_users} whole user row-groups"
         T = valid_len // n_users
         assert n_users * T <= tpc.TILE_SIZE
+        if self._spec_fused:
+            if spec_ctrl is None:
+                raise ValueError(
+                    "QWEN36_GDN_SPEC_FUSED=1: forward_verify_recurrent needs spec_ctrl, the gdn_spec_step ctrl page "
+                    "(spec_ctrl_page); call prepare_spec_verify + seed_spec_state first"
+                )
+            assert self._spec_shape == (n_users, T), (
+                f"spec buffers are sized for {self._spec_shape}, verify asked for {(n_users, T)}; "
+                "call prepare_spec_verify(n_users, T) before capture"
+            )
+            return self._forward_verify_recurrent_fused(x, valid_len, T, n_users, spec_ctrl, pre_gathered)
         if state_blk_idx is None or conv_sel is None:
             raise ValueError(
                 "forward_verify_recurrent needs state_blk_idx and conv_sel (the deferred-select verify "
@@ -2269,13 +2473,37 @@ class TPGatedDeltaNet:
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._verify_fullbatch(qkv_all, z_all, a_all, b_all, T, n_users, bucket, state_blk_idx, conv_sel)
 
-    def _verify_project(self, x, valid_len, pre_gathered):
+    def _forward_verify_recurrent_fused(self, x, valid_len, T, n_users, spec_ctrl, pre_gathered):
+        """``_forward_verify_recurrent_batched`` under QWEN36_GDN_SPEC_FUSED=1: the same gather + ONE decode
+        projection, handed to gdn_spec_step UN-SLICED (the op reads q|k|v|z|a|b out of the projection tile itself)."""
+        qkvzab, _, _, _, bucket = self._verify_project(x, valid_len, pre_gathered, raw=True)
+        return self._verify_fullbatch_fused(qkvzab, T, n_users, bucket, spec_ctrl)
+
+    def _project_qkvzab_raw(self, x, S, out_mc=None):
+        """The decode qkvzab projection WITHOUT the four slices: [1, S, W] with q|k|v in columns [0, qkv_dim_tp), z in
+        [qkv_dim_tp, qkvz_dim_tp) and a|b in [qkvz_dim_tp, qkvz_dim_tp + 2*Nv) -- the tile gdn_decode_step (plain
+        fused decode, forward_decode) and gdn_spec_step (fused spec verify / seed) consume directly. The very
+        matmul_1d_decode call of _project_qkvzab's decode branch, so the projected values are the sliced path's."""
+        assert self._fuse_ab and getattr(self.args, "proj_1d_decode", False) and S <= tpc.TILE_SIZE, (
+            "the fused GDN spec op needs the fused [qkv|z|a|b] weight and the 1D decode projection "
+            f"(fuse_ab={self._fuse_ab}, proj_1d_decode={getattr(self.args, 'proj_1d_decode', False)}, S={S})"
+        )
+        return tpc.matmul_1d_decode(
+            x,
+            self.tw["qkvz"],
+            self.args.gdn_qkvz_decode_1d_progcfg,
+            self.cfg,
+            out_memory_config=ttnn.L1_MEMORY_CONFIG if out_mc is not None else ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _verify_project(self, x, valid_len, pre_gathered, raw=False):
         """Gather the real rows to full dim and run ONE decode qkvzab projection over them.
 
         The front half of every spec-decode GDN pass, shared by the batched verify and the T=1 seed
         so the two can never drift apart: same slice, same all-gather (or none), same
         ``_project_qkvzab`` at S = valid_len <= TILE_SIZE, which routes through matmul_1d_decode —
         the exact projection a plain decode step runs. Returns (qkv, z, a, b, bucket).
+        ``raw`` (QWEN36_GDN_SPEC_FUSED=1): the un-sliced [1, R, W] projection instead -> (qkvzab, None, None, None, bucket).
         """
         mc = ttnn.DRAM_MEMORY_CONFIG
         if self.conv_states is None:
@@ -2309,7 +2537,10 @@ class TPGatedDeltaNet:
             )
             if x_valid is not x:
                 ttnn.deallocate(x_valid)
-        qkv_all, z_all, a_all, b_all = self._project_qkvzab(xg, R, out_mc=mc)
+        if raw:
+            qkv_all, z_all, a_all, b_all = self._project_qkvzab_raw(xg, R, out_mc=mc), None, None, None
+        else:
+            qkv_all, z_all, a_all, b_all = self._project_qkvzab(xg, R, out_mc=mc)
         if xg is not x:
             ttnn.deallocate(xg)
         if _x_owned:
@@ -2337,8 +2568,55 @@ class TPGatedDeltaNet:
         assert n_users == self.B, f"the seed runs the whole decode batch: n_users={n_users}, B={self.B}"
         assert valid_len == n_users, f"the seed is one row per user: valid_len={valid_len}, n_users={n_users}"
         assert n_users <= tpc.TILE_SIZE, f"{n_users} users exceeds the {tpc.TILE_SIZE}-row decode tile"
+        if self._spec_fused:
+            qkvzab, _, _, _, bucket = self._verify_project(x, valid_len, pre_gathered, raw=True)
+            return self._seed_fullbatch_fused(qkvzab, n_users, bucket)
         qkv_all, z_all, a_all, b_all, bucket = self._verify_project(x, valid_len, pre_gathered)
         return self._seed_fullbatch(qkv_all, z_all, a_all, b_all, n_users, bucket)
+
+    def _seed_fullbatch_fused(self, qkvzab, n_users, bucket):
+        """``_seed_fullbatch`` under QWEN36_GDN_SPEC_FUSED=1: gdn_spec_step at T = 1 against the DURABLE state.
+
+        ring := rec_state itself ([B, Nv, Dk, Dv] = B*Nv blocks of [Dk, Dv]; the identity ctrl page reads block
+        u*Nv + h and the op writes block 0*B*Nv + u*Nv + h -- the same block -- so rec_state is updated IN PLACE,
+        _stable_state honoured for free). Window pair := (_conv_win_buf, a scratch) at parity 0: with mi = 0 the op
+        reads the shift register's rows 1..K-1 (the carry) + the new row, and writes the new register into the
+        scratch, which is copied back so _conv_win_buf keeps the single-mirror semantics every other conv-state path
+        relies on (sync_conv_taps / sync_conv_win untouched). Same kernel as the verify, so seed and loop share one
+        arithmetic family (T = 8 == 8 chained T = 1, bit for bit -- profiles/m2_stage1.md).
+        """
+        B = R = n_users
+        assert self.rec_state.dtype == ttnn.float32, "the fused GDN spec op needs the fp32 recurrent state"
+        self._ensure_conv_win()  # the mirror current from the live taps (prefill / reset / plain decode move them)
+        self._ensure_spec_fused_seed()
+        gated = self._gdn_spec_step(
+            qkvzab, self._conv_win_buf, self._seed_win_scratch, self.rec_state, self._seed_ctrl, 1, B
+        )
+        ttnn.deallocate(qkvzab)
+        ttnn.copy(self._seed_win_scratch, self._conv_win_buf)  # the new shift register, in place
+        # Same flag handling as _seed_fullbatch: push the window back out to the K taps now (both mirrors current).
+        self._conv_taps_stale, self._conv_win_stale = True, False
+        self.sync_conv_taps()
+        return self._spec_out_tail(gated, R, bucket)
+
+    def _verify_fullbatch_fused(self, qkvzab, T, n_users, bucket, ctrl):
+        """``_verify_fullbatch`` under QWEN36_GDN_SPEC_FUSED=1: ONE gdn_spec_step dispatch per layer.
+
+        The op rebuilds every user's conv window from win[par] (rows mi+1 .. mi+K-1) + its T new projection rows,
+        runs the depthwise conv + SiLU, the l2norms, the beta / decay gates, the T-step gated delta rule with each
+        token's state written to ring block (t*B + u)*Nv + h (initial block per (u, h) from the ctrl page; HOLD = no
+        ring writes, window copied through), the gated RMSNorm and the silu(z) gate, and writes the new window into
+        win[1-par]. Everything it touches is persistent (prepare_spec_verify) or produced in-trace (qkvzab), so the
+        body is trace-capturable; ctrl is DATA the host stages per replay (model.verify_traced), which also flips
+        _spec_win_par afterwards. The staleness invariant of _verify_fullbatch holds unchanged: for the whole spec loop
+        the durable conv truth is win[cur] plus the host's mi; the K taps and _conv_win_buf are behind it until
+        materialize_spec_state.
+        """
+        B, R = n_users, n_users * T
+        win = self._verify_win_pair
+        gated = self._gdn_spec_step(qkvzab, win[0], win[1], self._spec_ring, ctrl, T, B)
+        ttnn.deallocate(qkvzab)
+        return self._spec_out_tail(gated, R, bucket)
 
     def _seed_fullbatch(self, qkv_all, z_all, a_all, b_all, n_users, bucket):
         """``_verify_fullbatch`` at T = 1 against the DURABLE state instead of the ring.

@@ -118,7 +118,7 @@ def test_dflash2_serving_slots_are_lossless(mesh_device):
             Nv, Dk, Dv, K_ = gdn0.Nv, gdn0.Dk, gdn0.Dv, gdn0.K
             blk = (dec.mi[0] * B + 0) * Nv
             ring = ttnn.to_torch(ttnn.get_device_tensors(gdn0._spec_ring)[0])[blk : blk + Nv].clone()
-            win = ttnn.to_torch(ttnn.get_device_tensors(gdn0._verify_win_buf)[0])[0].clone()
+            win = ttnn.to_torch(ttnn.get_device_tensors(gdn0.verify_win_cur())[0])[0].clone()
             blocks = page_tables[0].tolist()
             kc = ttnn.to_torch(ttnn.get_device_tensors(att0.paged_k)[0])[blocks].clone()
             return ring, win, kc

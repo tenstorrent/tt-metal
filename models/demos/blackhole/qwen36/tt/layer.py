@@ -177,7 +177,10 @@ class Qwen36DecoderLayer:
         n_users=1,
         state_blk_idx=None,
         conv_sel=None,
+        spec_ctrl=None,
     ):
+        # spec_ctrl: QWEN36_GDN_SPEC_FUSED=1 -- the fused GDN spec op's ctrl page ({parity, mi, ring block | HOLD}),
+        # which replaces state_blk_idx / conv_sel for the recurrent verify; None (the default) leaves them in charge.
         # gdn_masks: persistent device (mask_f32, mask_q, conv_sel) for the traced masked-bucket
         # prefill; only the TP GDN prefill branch consumes it (None => unchanged everywhere).
         # gdn_seed: the spec loop's SEED step (one row per user, T = 1). Everything outside GDN is
@@ -285,6 +288,7 @@ class Qwen36DecoderLayer:
                             n_users=n_users,
                             state_blk_idx=state_blk_idx,
                             conv_sel=conv_sel,
+                            spec_ctrl=spec_ctrl,
                         )
                     elif gdn_collect:
                         # Batched per-user prefill: stash this user's from-scratch state for

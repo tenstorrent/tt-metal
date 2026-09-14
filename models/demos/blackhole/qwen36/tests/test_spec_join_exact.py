@@ -175,7 +175,7 @@ def test_spec_join_device_copy_is_bit_exact(mesh_device):
         assert torch.equal(got, expect), "cached selector is not the expected one-hot"
         dn0.seed_spec_state_user(1)
         ttnn.synchronize_device(device)
-        win = ttnn.to_torch(ttnn.get_device_tensors(dn0._verify_win_buf)[0])  # [B, R, C], device 0
+        win = ttnn.to_torch(ttnn.get_device_tensors(dn0.verify_win_cur())[0])  # [B, R, C], device 0
         taps = torch.stack([ttnn.to_torch(ttnn.get_device_tensors(c)[0])[0, 1] for c in dn0.conv_states])  # [K, C]
         assert torch.equal(win[1, : dn0.K], taps), "seed with the cached selector: E_prev row 1 != the slot's taps"
         assert win[1, dn0.K :].abs().sum() == 0, "seed with the cached selector: E_prev row 1 tail not zero"

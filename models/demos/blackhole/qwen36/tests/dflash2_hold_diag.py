@@ -56,7 +56,7 @@ def test_hold_diag(mesh_device):
             Nv = dn.Nv
             ring = ttnn.to_torch(ttnn.get_device_tensors(dn._spec_ring)[0])  # [T*B*Nv, Dk, Dv]
             out[f"ring L{li}"] = torch.stack([ring[(t * B + 0) * Nv : (t * B + 0) * Nv + Nv].clone() for t in range(T)])
-            out[f"win L{li}"] = ttnn.to_torch(ttnn.get_device_tensors(dn._verify_win_buf)[0])[0].clone()
+            out[f"win L{li}"] = ttnn.to_torch(ttnn.get_device_tensors(dn.verify_win_cur())[0])[0].clone()
         out["K blocks"] = ttnn.to_torch(ttnn.get_device_tensors(att0.paged_k)[0])[page_tables[0].tolist()].clone()
         return out
 
