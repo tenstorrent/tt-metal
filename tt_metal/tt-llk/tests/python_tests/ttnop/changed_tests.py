@@ -104,7 +104,7 @@ def _source_tests(repo: Path, source: Path, pytest_files: list[Path]) -> set[str
     return matches
 
 
-def select(repo: Path, base: str, arch: str, changed_paths: list[str]) -> dict:
+def select(repo: Path, arch: str, changed_paths: list[str]) -> dict:
     pytest_files = _pytest_files(repo)
     reasons: dict[str, set[str]] = defaultdict(set)
 
@@ -152,7 +152,7 @@ def main() -> None:
 
     repo = args.repo.resolve()
     changed = _changed_paths(repo, args.base)
-    result = select(repo, args.base, args.arch, changed)
+    result = select(repo, args.arch, changed)
     if args.paths:
         print("\n".join(result["tests"]))
     else:

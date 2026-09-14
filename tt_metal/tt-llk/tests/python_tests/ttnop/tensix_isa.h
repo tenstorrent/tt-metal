@@ -59,7 +59,11 @@ constexpr std::uint32_t TT_OP_STALLWAIT        = 0xa2u;
 constexpr unsigned TT_STALLWAIT_STALL_SHIFT    = 15;
 constexpr std::uint32_t TT_STALLWAIT_WAIT_MASK = 0x7fffu;
 constexpr std::uint32_t P_STALL_SFPU           = 0x100u;
-constexpr std::uint32_t P_STALL_WAIT_SFPU      = 0x4000u;
+#if defined(ARCH_BLACKHOLE)
+constexpr std::uint32_t P_STALL_WAIT_SFPU = 0x800u;
+#else
+constexpr std::uint32_t P_STALL_WAIT_SFPU = 0x4000u;
+#endif
 
 // Combine CntSetMask from every SETADCXX to find the unpackers that read L1.
 //
@@ -127,7 +131,7 @@ inline bool stallwait_touches_sfpu(std::uint32_t params)
     const std::uint32_t stall = params >> TT_STALLWAIT_STALL_SHIFT;
     const std::uint32_t wait  = params & TT_STALLWAIT_WAIT_MASK;
     // STALL_SFPU or WAIT_SFPU → SFPU nop
-    return (stall & P_STALL_SFPU) != 0u || wait == P_STALL_WAIT_SFPU;
+    return (stall & P_STALL_SFPU) != 0u || (wait & P_STALL_WAIT_SFPU) != 0u;
 }
 
 inline bool is_sfpu_opcode(std::uint32_t opcode)
