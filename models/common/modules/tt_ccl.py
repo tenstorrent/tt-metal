@@ -136,7 +136,10 @@ class TT_CCL:
 def default_topology(mesh_device: ttnn.MeshDevice) -> Optional[ttnn.Topology]:
     """Auto-detect CCL topology based on cluster type and device count."""
     num_devices = mesh_device.get_num_devices()
-    if num_devices == 8 and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.T3K:
+    cluster_type = ttnn.cluster.get_cluster_type()
+    if (num_devices == 8 and cluster_type == ttnn.cluster.ClusterType.T3K) or (
+        num_devices == 4 and cluster_type == ttnn.cluster.ClusterType.P150_X4
+    ):
         # NOTE: we always want to do ring if it is available
         return ttnn.Topology.Ring
     elif num_devices > 1:

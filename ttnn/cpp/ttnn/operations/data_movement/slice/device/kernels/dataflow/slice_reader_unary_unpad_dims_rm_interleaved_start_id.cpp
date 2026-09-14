@@ -12,35 +12,32 @@
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t padded_stick_size = get_arg_val<uint32_t>(1);
-    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(2);
-    const uint32_t stick_size_offset = get_arg_val<uint32_t>(3);
-    const uint32_t num_dims = get_arg_val<uint32_t>(4);
-    const uint32_t misalignment = get_arg_val<uint32_t>(5);
-    const uint32_t start_id = get_arg_val<uint32_t>(6);
-    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(7);
-    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(8);
-    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(9);
+    const uint32_t unpadded_stick_size = get_arg_val<uint32_t>(1);
+    const uint32_t stick_size_offset = get_arg_val<uint32_t>(2);
+    const uint32_t num_dims = get_arg_val<uint32_t>(3);
+    const uint32_t misalignment = get_arg_val<uint32_t>(4);
+    const uint32_t start_id = get_arg_val<uint32_t>(5);
+    const uint32_t num_sticks_per_core = get_arg_val<uint32_t>(6);
+    const uint32_t num_sticks_per_core_read = get_arg_val<uint32_t>(7);
+    const uint32_t num_read_per_barrier = get_arg_val<uint32_t>(8);
     // Sub-row chunking: `num_chunks_per_stick` NOC transfers of `chunk_size` per stick (last = `last_chunk_size`).
-    const uint32_t chunk_size = get_arg_val<uint32_t>(10);
-    const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(11);
-    const uint32_t last_chunk_size = get_arg_val<uint32_t>(12);
+    const uint32_t chunk_size = get_arg_val<uint32_t>(9);
+    const uint32_t num_chunks_per_stick = get_arg_val<uint32_t>(10);
+    const uint32_t last_chunk_size = get_arg_val<uint32_t>(11);
     // Byte offset of the slice's W-begin within a row, rounded down to the source buffer's alignment;
     // the leftover `misalignment` bytes are trimmed on-device by the tt_memmove below.
-    const uint32_t src_offset_bytes = get_arg_val<uint32_t>(13);
+    const uint32_t src_offset_bytes = get_arg_val<uint32_t>(12);
 
-    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(14));
+    tt_l1_ptr uint32_t* num_unpadded_sticks = (tt_l1_ptr uint32_t*)(get_arg_addr(13));
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
 
     constexpr auto src_args = TensorAccessorArgs<0>();
     uint32_t read_size = unpadded_stick_size + misalignment;
 
-    // padded_stick_size = per-shard page size (shard_W on B/W-sharded, full row otherwise);
-    // feeds `noc_async_read_sharded`'s multi-shard split via `get_aligned_page_size()`.
     // The accessor base stays the unshifted buffer base: Metal 2.0 supplies it from the tensor binding
     // and offers no seam for a pre-offset base. The W-begin shift rides each read as `src_offset_bytes`.
-    const auto s0 = TensorAccessor(src_args, src_addr, padded_stick_size);
+    const auto s0 = TensorAccessor(src_args, src_addr);
 
     constexpr uint32_t dfb_id_in0 = 0;
 

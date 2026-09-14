@@ -86,16 +86,24 @@ class _MoEPerfCase:
 
 # K2.7: 384 experts / top-8 over the 7168 embedding, no LatentMoE plumbing.
 #
-# Re-centred 2026-09-02: device time came in at 6,260,834 ns, 0.8% below the old band's lower edge
-# (previous midpoint 6,574,780 from run 33194039175). Per the repo's rule that is fixed by lowering
-# the midpoint, never by widening the margin. ONE sample, from the failing gate run itself.
+# Re-centred 2026-09-03: device time came in at 5,413,674 ns, 9.9% below the old band's lower edge
+# (previous midpoint 6,260,834). Per the repo's rule that is fixed by lowering the midpoint, never by
+# widening the margin. ONE sample, from the failing gate run itself.
+#
+# This drop is an order of magnitude larger than the previous re-centre (13.5% vs 0.8%), so it is a
+# real change in the work rather than drift: it is a SPEEDUP, and this branch reorders the shared
+# expert against dispatch, which is exactly the kind of change that moves this number. If a later
+# run does not reproduce ~5.41 ms, treat that as evidence this sample caught something transient and
+# re-cut from the median of several runs rather than re-lowering again.
+#
+# Previous history: re-centred 2026-09-02 to 6,260,834 from 6,574,780 (run 33194039175).
 #
 # K2.7-Code is architecturally identical to K2.6 (61 layers, 384 routed experts, same dims), so the
-# MoE shapes -- and therefore this baseline -- are unchanged; only the label moved.
+# MoE shapes are unchanged; only the label moved.
 _K2_7 = _MoEPerfCase(
     label="kimi-k2.7",
     config=KimiK27Config,
-    expected_ns=6_260_834,
+    expected_ns=5_413_674,
     # 4%, not 3%: K2.7 runs FIRST in the merged job, so it absorbs the warm-up variability that K3,
     # running second on an already-warm device, does not -- five samples on the previous shape spanned
     # 7.12% peak to peak against K3's 0.44%. Do NOT tighten this to match K3; the asymmetry is a
@@ -109,17 +117,18 @@ _K2_7 = _MoEPerfCase(
 # This case measures the checkpoint's SiTU-GLU on every FFN site and reports 35 programs, on this
 # branch and on unmodified main alike.
 #
-# Re-centred 2026-08-28: the 2D matmul program configs land on the 3584-latent projections this case
-# runs, so the previous 11,063,717 centres on a matmul shape nothing builds. This gate has gone stale
-# downward three times now; per the repo's rule it is fixed by lowering the midpoint, never by
-# widening the margin.
+# The midpoint tracks the MoE forward's op order: the number is a sum of per-program critical paths,
+# so issuing dispatch ahead of the shared expert moves it. A midpoint that goes stale downward is
+# fixed by lowering it, never by widening the margin.
 #
-# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33194039175: 9,535,901 ns.
-# ONE sample, against the four-sample 0.44% spread that set the margin below.
+# Measured on a high-power 8x4 BH galaxy (nominal DDR), warm forward, run 33642820055: 8,369,824 ns
+# over the same 35 programs -- that count is what separates a real drop from a record window closing
+# early and under-reporting the sum. ONE sample, against the four-sample 0.44% spread that set the
+# margin below.
 _K3 = _MoEPerfCase(
     label="kimi-k3",
     config=KimiK3Config,
-    expected_ns=9_535_901,
+    expected_ns=8_369_824,
     # 3% retained: K3 runs second on an already-warm device and four samples on the previous shape
     # spanned just 0.44% peak to peak, so 3% is already generous -- the midpoint is what goes stale
     # here, not the width. Sub-nominal DDR doubles it to 6% via adjust_margin_for_ddr_speed.

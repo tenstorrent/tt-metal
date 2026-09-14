@@ -43,9 +43,10 @@ using ttnn::prim::BlockCyclicLayout;
 // is batch-1 scratch; only cache_batch_idx is gathered. The fused program factory co-schedules the all-gather
 // (the only Linear+fuse-capable AG) into the SAME program as the indexer compute, wiring a producer->consumer
 // semaphore handshake so the reader starts scoring once the gather lands. Scalar AG config only (tensors live in
-// tensor_args). All fields and semaphore addresses are hashed because the descriptor embeds them in AG worker
-// allocation/routing/runtime arguments and the cache-hit override only rebuilds consumer kernels. ring_size /
-// ring_index are DERIVED from the mesh + coordinate (cluster_axis), not stored.
+// tensor_args). Routing fields are hashed because they shape AG worker allocation and topology. Semaphore
+// addresses and other dispatch-time values are deliberately hash-excluded; the cache-hit override re-patches
+// the four AG worker kernels and the consumer kernels. ring_size / ring_index are DERIVED from the mesh +
+// coordinate (cluster_axis), not stored.
 struct FusedRingConfig {
     uint32_t num_links{1};  // fabric links for the gather
     ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
@@ -103,6 +104,13 @@ struct operation_attributes_t {
     // cache_batch_idx * Tt * Dt). NOT hashed, re-applied each dispatch, so switching slots does NOT recompile.
     std::optional<uint32_t> cache_batch_idx{std::nullopt};
     bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Recomposition terms for the trace-safe slot select (see tensor_args::cache_batch_idx_tensor).
+    // RUNTIME args, deliberately NOT hashed: cache_batch_idx is already hash-excluded so ONE cached
+    // program serves every slot AND every layer, and hashing the layer index would fork it 78 ways.
+    // Freezing them in a capture is still correct -- they are layer-constant, and each layer is its own
+    // captured op instance. Only the per-REQUEST user id needs a tensor.
+    uint32_t index_cache_num_layers{1};
+    uint32_t index_cache_layer_idx{0};
     // Runtime KV length: the valid prefix this dispatch (rest masked). NOT hashed, so growing kv_len <= T
     // reuses ONE program. grid/work-split/output width stay keyed on the hashed T. nullopt == T.
     std::optional<uint32_t> kv_len{std::nullopt};
@@ -117,6 +125,14 @@ struct operation_attributes_t {
     // K), which selects the classic program factory and stays byte-identical.
     std::optional<FusedRingConfig> fused_ring{std::nullopt};
     bool has_fused_ring() const { return fused_ring.has_value(); }
+    // KV dedup: KEYS striped this many times finer than the queries are sharded. Deliberately NOT folded into
+    // block_cyclic -- device_causal_geometry indexes by SP-ring rank, so that would shift the causal diagonal.
+    uint32_t key_stripe_split{1};  // 1 = pre-dedup. HASHED: it bakes the reader's invP divisors.
+    // The (stripes, per-stripe chunk) pair the invP remap decodes with; the product is the global chunk either way.
+    uint32_t key_stripes() const { return block_cyclic.has_value() ? block_cyclic->sp * key_stripe_split : 1; }
+    uint32_t key_stripe_chunk() const {
+        return block_cyclic.has_value() ? block_cyclic->chunk_local / key_stripe_split : 0;
+    }
 };
 
 struct tensor_args_t {
@@ -125,6 +141,20 @@ struct tensor_args_t {
     const Tensor& weights;
     // Fused only: per-chip LOCAL K [B,1,sll,D], interleaved or ND-sharded. nullopt unfused.
     std::optional<Tensor> k_local{std::nullopt};
+    // Optional 1-element UINT32 row-major DRAM tensor used for trace-safe chunk positions. The kernel also
+    // derives kv_len from this value so the causal position and valid prefix remain consistent.
+    std::optional<Tensor> chunk_start_idx_tensor{std::nullopt};
+    bool has_chunk_start_metadata() const { return chunk_start_idx_tensor.has_value(); }
+    // TRACE-SAFE cache-slot select (fused indexed mode). `cache_batch_idx` is a host runtime arg that
+    // selects which (user, layer) slot of the persistent index-K cache this dispatch reads. A trace REPLAY
+    // never re-runs that patch, so a captured program keeps reading the slot that was live at capture time
+    // -- and capture warms user 0. The KV write is metadata-driven and lands in the right slot, so a
+    // multi-user traced request scores user N's queries against user 0's index-K cache: wrong top-k, no
+    // error. Hand over the 1-element uint32 USER id instead and the reader recomposes
+    //     cache_batch_idx = user_id * index_cache_num_layers + index_cache_layer_idx
+    // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
+    std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
+    bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

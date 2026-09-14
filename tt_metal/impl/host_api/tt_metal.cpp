@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <allocator.hpp>
+#include "impl/buffers/buffer_impl.hpp"
 #include <circular_buffer.hpp>
 #include <circular_buffer_constants.h>
 #include <tt_stl/assert.hpp>
@@ -421,7 +422,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     ZoneScoped;
 
     auto device_id = device->id();
-    const MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
+    MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
     if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
@@ -478,6 +479,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
             auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
             tt::llrt::write_launch_msg_to_core(
+                MetalEnvAccessor(metal_ctx.get_env()).impl(),
                 device_id,
                 physical_core,
                 local_launch_msg.view(),
@@ -976,10 +978,12 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
                     auto physical_core = device->virtual_core_from_logical_core(logical_core, core_type);
                     not_done_cores.insert(physical_core);
                     if (force_slow_dispatch) {
-                        tt::llrt::send_reset_go_signal(device->id(), physical_core);
+                        tt::llrt::send_reset_go_signal(
+                            MetalEnvAccessor(metal_ctx.get_env()).impl(), device->id(), physical_core);
                     }
 
                     tt::llrt::write_launch_msg_to_core(
+                        MetalEnvAccessor(metal_ctx.get_env()).impl(),
                         device->id(),
                         physical_core,
                         kg->launch_msg.view(),
@@ -989,7 +993,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
             }
             if (wait_until_cores_done) {
                 // Wait for all cores to be done
-                llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
+                llrt::internal_::wait_until_cores_done(metal_ctx, device_id, dev_msgs::RUN_MSG_GO, not_done_cores);
             }
         }
     }  // Profiler scope end
@@ -999,9 +1003,10 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 }
 
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
+    auto& metal_ctx = MetalContext::instance(extract_context_id(device));
     auto device_id = device->id();
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
-    llrt::internal_::wait_for_idle(device_id, logical_cores_used_in_program);
+    llrt::internal_::wait_for_idle(metal_ctx, device_id, logical_cores_used_in_program);
     if (read_device_profiler_results) {
         detail::ReadDeviceProfilerResults(device);
     }
@@ -1197,7 +1202,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         prefetcher_pipe_vec[base + 2] = participant.relay_dfb_id;
                     }
                     uint64_t addr = kernel_config_base + prefetcher_pipe_offset;
-                    MetalContext::instance().get_cluster().write_core(
+                    metal_ctx.get_cluster().write_core(
                         device_id, physical_core, prefetcher_pipe_vec, addr);
                 }
             }
@@ -1786,18 +1791,18 @@ GlobalSemaphore CreateGlobalSemaphore(
     return GlobalSemaphore(device, std::move(cores), initial_value, buffer_type);
 }
 
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
-    return Buffer::create(config.device, config.size, config.page_size, config.buffer_type);
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config) {
+    return BufferImpl::create(config.device, config.size, config.page_size, config.buffer_type);
 }
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(config.device, address, config.size, config.page_size, config.buffer_type);
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, DeviceAddr address) {
+    return BufferImpl::create(config.device, address, config.size, config.page_size, config.buffer_type);
 }
-std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+std::shared_ptr<Buffer> CreateBuffer(const BufferConfig& config, SubDeviceId sub_device_id) {
+    return BufferImpl::create(
         config.device, config.size, config.page_size, config.buffer_type, std::nullopt, std::nullopt, sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1805,7 +1810,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         address,
         config.size,
@@ -1814,7 +1819,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         BufferShardingArgs(config.shard_parameters, config.buffer_layout));
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return BufferImpl::create(
         config.device,
         config.size,
         config.page_size,
@@ -1824,7 +1829,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
         sub_device_id);
 }
 
-void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
+void DeallocateBuffer(Buffer& buffer) { buffer.impl().deallocate(buffer); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     const MetalContext& metal_ctx = MetalContext::instance(program.impl().get_context_id());

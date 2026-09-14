@@ -118,6 +118,7 @@ enum class EnvVarID {
     TT_METAL_DISABLE_SFPLOADMACRO,                      // Disable use of SFPLOADMACRO instructions
     TT_METAL_DRAM_BACKED_CQ,                            // Store command queues in device DRAM
     TT_METAL_SIMULATOR_DIRECT_TENSOR_WRITES,            // Simulator tensor preload bypasses FD CQ copies
+    TT_METAL_QUASAR_NOC_API_VERSION,                    // Quasar NOC API version
     TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES,  // Override Blackhole DRAM programmable cores
     TT_METAL_MEASURE_DFB_INIT_TIME,  // Temporary DFB init rdcycle instrumentation (deprecate once device profiler
                                      // covers this).
@@ -633,7 +634,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Use Ethernet cores for dispatch in tests.
         // Default: Worker cores (default dispatch type)
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
-        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
+        case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH:
+            this->dispatch_core_type_override = tt_metal::DispatchCoreType::ETH;
+            break;
 
         // TT_METAL_TENSIX_DISPATCH_CORES
         // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
@@ -852,6 +855,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             this->simulator_direct_tensor_writes = is_env_enabled(value);
             break;
 
+        // TT_METAL_QUASAR_NOC_API_VERSION
+        // Set the NOC API version for Quasar.
+        // Default: 2 (use NOC API v2)
+        // Usage: export TT_METAL_QUASAR_NOC_API_VERSION=1
+        case EnvVarID::TT_METAL_QUASAR_NOC_API_VERSION:
+            this->quasar_noc_api_version = std::stoi(value);
+            TT_FATAL(
+                this->quasar_noc_api_version == 1 || this->quasar_noc_api_version == 2,
+                "Invalid NOC API version: {}",
+                this->quasar_noc_api_version);
+            break;
+
         // TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES
         // Controls Blackhole DRAM programmable cores in the HAL:
         //   =1 → force enable, =0 → force disable, unset → auto-detect (firmware + topology)
@@ -975,8 +990,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
-                constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
-                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
+                // PROFILE_PERF_COUNTERS_L1_0 to L1_5: the six L1 mux groups, which share one set of counters.
+                constexpr uint32_t L1_GROUP_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9);
+                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_GROUP_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {
                     TT_THROW(
                         "Multiple L1 perf counter banks cannot be enabled simultaneously. "
@@ -2312,14 +2328,6 @@ std::string RunTimeOptions::get_sanitizer_hash() const {
     hash_str += optional_hash(san.fault);
     hash_str += optional_hash(san.internal);
     return hash_str;
-}
-
-// Can't create a DispatchCoreConfig as part of the RTOptions constructor because the DispatchCoreConfig constructor
-// depends on RTOptions settings.
-tt_metal::DispatchCoreConfig RunTimeOptions::get_dispatch_core_config() const {
-    tt_metal::DispatchCoreConfig dispatch_core_config = tt_metal::DispatchCoreConfig{};
-    dispatch_core_config.set_dispatch_core_type(this->dispatch_core_type);
-    return dispatch_core_config;
 }
 
 void RunTimeOptions::set_experimental_noc_debug_dump_enabled(bool enabled) {

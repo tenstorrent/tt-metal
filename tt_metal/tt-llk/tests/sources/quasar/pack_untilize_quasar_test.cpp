@@ -313,7 +313,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     // and switches the packer to the other bank.
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
+                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
                     }
                     else
                     {
@@ -331,7 +332,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     if (tensor_shape.total_num_faces() == NUM_FACES)
                     {
-                        _llk_pack_untilize_(0 /*dest_idx*/, y * y_stride_external);
+                        _llk_pack_untilize_set_dst_offset_(tensor_shape, y * y_stride_external);
+                        _llk_pack_untilize_(0 /*dest_idx*/, 0 /*l1_tile_idx*/);
                     }
                     else
                     {

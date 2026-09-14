@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <unistd.h>
 #include <cstdint>
 
 #include "risc_common.h"
@@ -110,9 +109,7 @@ inline void initialize_local_memory() {
     uint32_t* data_image = (uint32_t*)MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH;
     extern uint32_t __ldm_data_start[];
     extern uint32_t __ldm_data_end[];
-    const uint32_t ldm_data_size = (uint32_t)__ldm_data_end - (uint32_t)__ldm_data_start;
-    // Copy data from data_image in __ldm_data_start for ldm_data_size bytes
-    l1_to_local_mem_copy(__ldm_data_start, data_image, ldm_data_size);
+    l1_to_local_mem_copy(__ldm_data_start, data_image, l1_word_count_from_range(__ldm_data_start, __ldm_data_end));
 }
 
 #define STR(x) #x
