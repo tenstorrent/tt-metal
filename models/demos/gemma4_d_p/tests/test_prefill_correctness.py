@@ -135,6 +135,42 @@ def _device_logits_to_torch(logits, mesh_device, last_token_idx):
     return logits_torch[..., last_token_idx % 32, :]
 
 
+def _run_eager_prefill_on_model(mesh_device, model, tokens, user_id):
+    chunk_size = int(tokens.shape[-1])
+    mesh_config = _mesh_config(mesh_device)
+    host_tokens = _host_tensor(
+        mesh_device,
+        tokens,
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    device_tokens = ttnn.to_device(host_tokens, device=mesh_device)
+    positions = _host_tensor(
+        mesh_device,
+        torch.arange(chunk_size, dtype=torch.int32).unsqueeze(0),
+        ttnn.uint32,
+        ttnn.ROW_MAJOR_LAYOUT,
+        mesh_config=mesh_config,
+        seq_dim=-1,
+    )
+    model.set_prefill_rope_positions(ttnn.to_device(positions, device=mesh_device))
+    model._ring_metadata_external = True
+    model.ccl_manager.set_ring_metadata(slot_idx=user_id, kv_actual_global=0)
+    for semaphore in model.ccl_manager.ring_attention_ccl_semaphore_handles:
+        ttnn.reset_global_semaphore_value(semaphore, 0)
+
+    embeds = model.transform_and_embed_prefill_inputs_device(device_tokens)
+    hidden_states = model(hidden_states=embeds, chunk_start_idx=0, user_id=user_id)
+    hidden_states = model.process_logits_after_prefill_trace(hidden_states, chunk_size - 1)
+    ttnn.synchronize_device(mesh_device)
+    logits = _device_logits_to_torch(hidden_states, mesh_device, chunk_size - 1)
+    hidden_states.deallocate(True)
+    device_tokens.deallocate(True)
+    return logits
+
+
 def _run_device_prefill(mesh_device, tokens, *, traced):
     chunk_size = int(tokens.shape[-1])
     mesh_config = _mesh_config(mesh_device)
@@ -341,6 +377,37 @@ def test_device_prefill_matches_hf(mesh_device, hf_prefill_reference):
 
     pcc = _pcc(device_logits[0], reference_logits)
     assert pcc >= 0.99, f"Gemma4 D/P final-token logits diverged from HF: PCC={pcc:.5f}"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 256_000_000})
+def test_device_multi_user_prefill_isolated_by_user_id(mesh_device):
+    """Ensure two durable user slots are isolated and independent of execution order."""
+    chunk_size = 8192
+    model_path = _model_path()
+    tokens_a = _get_prefill_tokens(model_path, chunk_size, 262144, source="random")
+    tokens_b = tokens_a.roll(shifts=1, dims=-1)
+
+    isolated_a, _ = _run_device_prefill(mesh_device, tokens_a, traced=False)
+    isolated_b, _ = _run_device_prefill(mesh_device, tokens_b, traced=False)
+
+    _, shared_model, _ = _build_prefill_model(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        chunk_size=chunk_size,
+        context_len=chunk_size,
+        max_batch_size=2,
+    )
+    shared_a_first = _run_eager_prefill_on_model(mesh_device, shared_model, tokens_a, user_id=0)
+    shared_b_second = _run_eager_prefill_on_model(mesh_device, shared_model, tokens_b, user_id=1)
+    shared_b_first = _run_eager_prefill_on_model(mesh_device, shared_model, tokens_b, user_id=1)
+    shared_a_second = _run_eager_prefill_on_model(mesh_device, shared_model, tokens_a, user_id=0)
+
+    assert _pcc(isolated_a, shared_a_first) >= 0.999, "user 0 differs from isolated execution"
+    assert _pcc(isolated_b, shared_b_second) >= 0.999, "user 1 differs from isolated execution"
+    assert _pcc(shared_a_first, shared_a_second) >= 0.999, "user 0 depends on execution order"
+    assert _pcc(shared_b_second, shared_b_first) >= 0.999, "user 1 depends on execution order"
 
 
 @torch.no_grad()
