@@ -1,14 +1,14 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-// EXPERIMENTAL: runtime binary reload — Blaze-only.
+// Internal runtime binary reload metadata used by Blaze.
 
-#include <tt-metalium/experimental/blaze/reload_table.hpp>
+#include <internal/reload_table.hpp>
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-namespace tt::tt_metal::experimental::blaze {
+namespace tt::tt_metal::internal {
 
 std::optional<ReloadTable> merge_reload_tables(
     const std::optional<ReloadTable>& mine, const std::optional<ReloadTable>& other) {
@@ -36,4 +36,4 @@ std::uint64_t hash_reload_table(const std::optional<ReloadTable>& table) {
     return hash;
 }
 
-}  // namespace tt::tt_metal::experimental::blaze
+}  // namespace tt::tt_metal::internal

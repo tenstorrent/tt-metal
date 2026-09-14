@@ -1137,7 +1137,7 @@ void py_module_types(nb::module_& mod) {
             "custom_program_hash",
             &tt::tt_metal::ProgramDescriptor::custom_program_hash,
             "Optional memoized program hash (skips full descriptor walk when set)")
-        // Blaze-only experimental runtime binary reload (experimental::blaze::ReloadTable), exposed as
+        // Blaze-only internal runtime binary reload (internal::ReloadTable), exposed as
         // the two values Blaze sets. Setting the address to None drops the table.
         .def_prop_rw(
             "reload_table_addr",
@@ -1150,7 +1150,7 @@ void py_module_types(nb::module_& mod) {
                 } else if (self.reload_table) {
                     self.reload_table->address = *addr;
                 } else {
-                    self.reload_table = tt::tt_metal::experimental::blaze::ReloadTable{*addr, CoreRangeSet{}};
+                    self.reload_table = tt::tt_metal::internal::ReloadTable{*addr, CoreRangeSet{}};
                 }
             },
             "L1 address of the runtime binary-reload stage table; None if this program does not reload")
@@ -1163,7 +1163,7 @@ void py_module_types(nb::module_& mod) {
                 if (self.reload_table) {
                     self.reload_table->cores = cores;
                 } else {
-                    self.reload_table = tt::tt_metal::experimental::blaze::ReloadTable{0, cores};
+                    self.reload_table = tt::tt_metal::internal::ReloadTable{0, cores};
                 }
             },
             "Cores that walk the reload table; every other core in the program ignores it");

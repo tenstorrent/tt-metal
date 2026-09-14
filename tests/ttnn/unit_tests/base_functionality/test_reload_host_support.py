@@ -141,7 +141,7 @@ def test_program_descriptor_reload_fields_default_off_and_round_trip():
     pd.reload_core_ranges = CORE_SET
     assert pd.reload_table_addr == 0x1000
     assert pd.reload_core_ranges.num_cores() == 1
-    # The two properties are views of one experimental::blaze::ReloadTable: dropping the address
+    # The two properties are views of one internal::ReloadTable: dropping the address
     # drops the table, cores included.
     pd.reload_table_addr = None
     assert pd.reload_table_addr is None

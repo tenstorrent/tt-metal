@@ -22,10 +22,10 @@
   },
   {
     "source": "tt-metalium/program_descriptors.hpp",
-    "include": "tt-metalium/experimental/blaze/reload_table.hpp",
+    "include": "internal/reload_table.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
-    "reason": "ProgramDescriptor carries experimental runtime-reload metadata using the existing Blaze extension pattern.",
-    "remove_when": "Runtime-reload metadata is segregated from the stable descriptor or graduates through design review."
+    "reason": "ProgramDescriptor carries internal runtime-reload metadata used by Blaze.",
+    "remove_when": "Runtime-reload metadata is removed from the stable descriptor."
   },
   {
     "source": "tt-metalium/system_mesh.hpp",

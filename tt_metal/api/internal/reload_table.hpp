@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// EXPERIMENTAL: runtime binary reload — Blaze-only. A program that reloads carries the L1 address
+// Internal runtime binary reload metadata used by Blaze. A program that reloads carries the L1 address
 // of its per-core stage table into the launch message of every kernel group inside `cores`
 // (kernel_config_msg_t::reload_table_addr, 0 = no table); the Blaze firmware walks that table.
 // Same extension pattern as named_kernel_args.hpp: a member of the stable descriptor whose type,
@@ -15,7 +15,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 
-namespace tt::tt_metal::experimental::blaze {
+namespace tt::tt_metal::internal {
 
 struct ReloadTable {
     // L1 address of the table, the same on every core in `cores`.
@@ -34,4 +34,4 @@ std::optional<ReloadTable> merge_reload_tables(
 // descriptors that differ only here are different programs.
 std::uint64_t hash_reload_table(const std::optional<ReloadTable>& table);
 
-}  // namespace tt::tt_metal::experimental::blaze
+}  // namespace tt::tt_metal::internal

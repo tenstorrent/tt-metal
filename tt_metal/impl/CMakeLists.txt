@@ -92,7 +92,7 @@ add_library(Metalium::Metal::Impl ALIAS impl)
 
 # Keep the reload extension from perturbing the established unity source batches.
 set_source_files_properties(
-    ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blaze/reload_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/internal/reload_table.cpp
     PROPERTIES
         SKIP_UNITY_BUILD_INCLUSION
             TRUE
