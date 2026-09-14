@@ -9,7 +9,13 @@ example a move whose SrcA format flips between TF32 and FP32 and so writes 16-bi
 Dst addresses instead of 32-bit ones.
 
 Address-shaping config (ADDR_MOD_*, DEST_REGW_BASE_Base, DEST_TARGET_REG_CFG_MATH_Offset,
-FIDELITY_BASE_Phase, ADDR_MOD_SET_Base) is frozen at arbitration and is deliberately NOT flagged.
+FIDELITY_BASE_Phase, ADDR_MOD_SET_Base) is NOT flagged, and the reason is narrower than it looks.
+It is not immune: the addresses an instruction forms are fixed only when the instruction is accepted
+out of the issue stage, so a write to this group landing earlier in a hold changes what it takes.
+What makes it out of scope here is reachability plus evidence -- no Wormhole caller writes
+DEST_REGW_BASE_Base at all, the numeric group is the one measured to corrupt on silicon, and the
+address group has never been measured. Do not read this exclusion as a hardware guarantee; if a
+writer of one of these fields appears next to a held reader, the question is open, not settled.
 
 The guard is an ORDERING stall, not a delay:
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
@@ -57,6 +63,7 @@ Quasar has a DIFFERENT, inverted hazard (a following instruction reading a stale
 one slot of separation) which this check does not model. Pointing this check at another
 architecture produces false positives and hides the real rule.
 """
+
 import argparse
 import hashlib
 import re
@@ -67,7 +74,13 @@ import sys
 # exists in the hazard database but is contradicted by measurement, so it is deliberately omitted:
 # including it flags shipped sequences that demonstrably do not fail.
 MOVE_TO_SRCA = r"MOVD2A|MOVB2A"
-READS_DEST = r"MOVD2A|MOVD2B|ELWMUL|ELWADD|ELWSUB|MVMUL|DOTPV|GMPOOL|GAPOOL"
+# The post-move hold's held class is every arithmetic instruction that reads Dest, plus the two
+# moves out of Dest. ELWADD and ELWSUB are NOT in it: the hardware declares them as not needing
+# a Dest read and removes them from the class unconditionally, so a move does not hold them.
+# (They do read Dest in accumulate mode, which the exclusion does not account for -- but that is
+# a separate stale-Dest question, not this config one, and listing them here would assert a hold
+# that is not imposed.)
+READS_DEST = r"MOVD2A|MOVD2B|ELWMUL|MVMUL|DOTPV|GMPOOL|GAPOOL"
 ANY_MOVE = r"MOVB2D|MOVA2D|MOVB2A|MOVD2B|MOVD2A|MOVDBGA2D"
 
 INSTR = re.compile(r"\bTTI?_([A-Z][A-Z0-9_]{2,})\b")
@@ -84,11 +97,24 @@ READER = re.compile(
     r"\bTTI?_(" + ANY_MOVE + r"|MVMUL|ELWADD|ELWSUB|ELWMUL|GMPOOL|GAPOOL|DOTPV)\b"
 )
 
-# How far after the reader a config write can still land inside the hold. Calibrated against a
-# measured dose-response, not guessed: with the reader held, 1 and 2 filler instructions between it
-# and the write STILL corrupt, 3 and 4 do not. So a write up to 3 instructions after the reader is
-# in scope; 4 is out.
-WINDOW = 3
+# How far after the reader a config write can still land inside the hold. The holds are not all the
+# same length, so this is per inducer rather than one number: a move into Dest holds for 3, while a
+# move into SrcA and SHIFTXB hold for 1. Using 3 everywhere would flag a write that lands after a
+# one-cycle window has already closed.
+# The 3 is calibrated against a measured dose-response, not guessed: with the reader held by a move
+# into Dest, 1 and 2 filler instructions between it and the write STILL corrupt, 3 and 4 do not.
+HOLD_WINDOW = {
+    "MOVD2B": 3,
+    "MOVA2D": 3,
+    "MOVB2D": 3,
+    "MOVDBGA2D": 3,
+    "MOVD2A": 1,
+    "MOVB2A": 1,
+    "SHIFTXB": 1,
+}
+WINDOW = max(
+    HOLD_WINDOW.values()
+)  # widest lookback; each inducer is then checked against its own
 
 
 def opcode(line):
@@ -191,6 +217,10 @@ def scan(path):
                 continue
             ic, lc = stream[b - 1]
             rule = holds(opcode(lc), opcode(lb))
+            # Each inducer's window is its own length. The write has to land inside THIS hold,
+            # not inside the longest hold any inducer imposes.
+            if rule and (a - b) > HOLD_WINDOW.get(opcode(lc), 0):
+                continue
             if rule:
                 yield ia + 1, (ic + 1, lc), (ib + 1, lb), la, rule
                 break

@@ -5,6 +5,7 @@ Each test pins one shape the detector is designed to separate, so a future edit 
 `READER`, the adjacency rule or the window cannot silently stop detecting.
 Run: python3 -m pytest tt_metal/tt-llk/infra/tests/ -q --noconftest
 """
+
 import os
 import subprocess
 import sys
@@ -20,6 +21,8 @@ VICTIM = "    TTI_MOVA2D(0, 0, ADDR_MOD_0, 0, 0);"
 CFG = "    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(fmt);"
 NOP = "    TTI_NOP;"
 GUARD = "    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);"
+# A victim inside the held class of a move into Dest: it READS Dest.
+DEST_READER = "    TTI_MOVD2B(p_movd2b::MOV_1_ROW, 0, ADDR_MOD_0, 0, 0);"
 
 
 @pytest.fixture
@@ -91,7 +94,13 @@ def test_window_matches_the_measured_dose_response(wh, fillers, flagged):
 
 
 def test_address_shaping_config_is_not_flagged(wh):
-    """ADDR_MOD_* is frozen at arbitration, so a write to it cannot land inside the hold."""
+    """ADDR_MOD_* is out of scope here -- by reachability and evidence, NOT by immunity.
+
+    The addresses an instruction forms are fixed only when it is accepted out of the issue stage, so
+    a write to this group during a hold does reach it. It is excluded because no Wormhole caller
+    writes these fields next to a held reader, and because the numeric group is the one measured to
+    corrupt on silicon while this one has never been measured. If that changes, so does this test.
+    """
     r = run(
         wh,
         "x.h",
@@ -106,3 +115,38 @@ def test_non_wormhole_tree_is_skipped(tmp_path):
     d.mkdir()
     r = run(d, "x.h", f"{INDUCER}\n{VICTIM}\n{CFG}\n")
     assert r.returncode == 0, r.stdout
+
+
+def test_elwadd_is_not_held_by_a_move_into_dest(wh):
+    """The post-move hold's class excludes ELWADD/ELWSUB; asserting a hold hardware does not impose
+    would flag a write that lands after nothing was ever held."""
+    move_into_dest = "    TTI_MOVB2D(p_movb2d::MOV_1_ROW, 0, ADDR_MOD_0, 0, 0);"
+    r = run(
+        wh, "x.h", f"{move_into_dest}\n    TTI_ELWADD(0, 0, ADDR_MOD_0, 0);\n{CFG}\n"
+    )
+    assert r.returncode == 0, f"ELWADD is exempt from the move hold:\n{r.stdout}"
+
+
+@pytest.mark.parametrize(
+    "inducer,victim,distance,flagged",
+    [
+        # A move into Dest holds for 3, so a write 3 slots after the reader is still inside.
+        (
+            "    TTI_MOVB2D(p_movb2d::MOV_1_ROW, 0, ADDR_MOD_0, 0, 0);",
+            DEST_READER,
+            3,
+            True,
+        ),
+        # A move into SrcA holds for 1, so the same distance is outside its window.
+        ("    TTI_MOVD2A(0, 0, ADDR_MOD_0, 0, 0);", DEST_READER, 3, False),
+        # ... but immediately after, it is inside.
+        ("    TTI_MOVD2A(0, 0, ADDR_MOD_0, 0, 0);", DEST_READER, 1, True),
+    ],
+)
+def test_window_is_per_inducer_not_one_number(wh, inducer, victim, distance, flagged):
+    """Hold lengths differ by inducer. One shared window over-states the short ones."""
+    body = f"{inducer}\n{victim}\n" + f"{NOP}\n" * (distance - 1) + f"{CFG}\n"
+    r = run(wh, "x.h", body)
+    assert (
+        r.returncode == 1
+    ) is flagged, f"{inducer.strip()} at distance {distance}:\n{r.stdout}"
