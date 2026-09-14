@@ -19,6 +19,7 @@
 doc/**/*.json
 doc/**/*.txt
 readiness_*.json
+readiness_vllm/
 *.refpt
 *.commit
 *.exit_status

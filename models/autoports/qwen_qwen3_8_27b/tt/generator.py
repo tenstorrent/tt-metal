@@ -348,6 +348,67 @@ class QwenGenerator(Generator):
         self.sampler(logits, tt_out_tok=self.tokens)
         ttnn.plus_one(self.sampler.seeds_tt_tensor)
 
+    def sample_prefill(self, logits):
+        """Sample packed prompt results with the canonical token-feedback sampler."""
+        if getattr(self, "_prefill_sampling_cache", None) is not self.cache:
+            self._prefill_sampling_signatures = set()
+            self._prefill_sampling_cache = self.cache
+        signature = tuple((tuple(x.shape), x.dtype, x.layout) for x in logits)
+        warmed = getattr(self, "_prefill_sampling_signatures", set())
+        if signature not in warmed:
+            # Concat/padding can allocate persistent program buffers. Warm each
+            # packed shape before capturing decode scratch addresses again.
+            self._release_traces(keep_prefill=True)
+        packed = ttnn.concat(logits, dim=2) if len(logits) > 1 else logits[0]
+        packed = ttnn.pad(packed, [(0, 0), (0, 0), (0, 32 - len(logits)), (0, 0)], value=0.0)
+        self._sampling_step(packed)
+        warmed.add(signature)
+        self._prefill_sampling_signatures = warmed
+        return self.tokens
+
+    def reset_recurrent_slots(self, slots):
+        """Start new requests without clearing any scheduler-owned attention pages."""
+        if getattr(self, "_recurrent_reset_warmed", None) is not self.cache:
+            self._release_traces(keep_prefill=True)
+        for state in self.cache.layers:
+            for name in ("conv", "recurrent"):
+                tensor = getattr(state, name)
+                if tensor is None:
+                    continue
+                parts = [tensor[i : i + 1] for i in range(self.cache.batch_size)]
+                for slot in slots:
+                    parts[slot] = ttnn.zeros_like(parts[slot])
+                ttnn.copy(ttnn.concat(parts, dim=0) if len(parts) > 1 else parts[0], tensor)
+        # All row slices and the same-shaped zero/concat/copy programs are now
+        # warm. Their transient outputs die here, before any decode replay.
+        self._recurrent_reset_warmed = self.cache
+
+    def remap_recurrent_slots(self, remap):
+        """Move constant-size request state on device when the scheduler compacts rows."""
+        order = torch.as_tensor(remap).reshape(-1).tolist()
+        if sorted(order) != list(range(self.cache.batch_size)):
+            raise ValueError("Recurrent slot remap must be a complete permutation")
+        if order == list(range(self.cache.batch_size)):
+            return
+        self._release_traces(keep_prefill=True)
+        for state in self.cache.layers:
+            for name in ("conv", "recurrent"):
+                tensor = getattr(state, name)
+                if tensor is not None:
+                    ttnn.copy(ttnn.concat([tensor[i : i + 1] for i in order], dim=0), tensor)
+
+    def set_batch_sampling_params(self, *, top_k, top_p, temperature, seed=None):
+        """Bind scheduler sampling rows; steady replay retains device RNG state."""
+        if not all(len(values) == 32 for values in (top_k, top_p, temperature)) or (
+            seed is not None and len(seed) != 32
+        ):
+            raise ValueError("Sampling parameters must cover all 32 physical rows")
+        if any(not 1 <= k <= 32 for k in top_k) or any(t <= 0 for t in temperature):
+            raise ValueError("Device sampling requires k1..32 and positive temperature")
+        self.sampler.reset_params(top_k, top_p, [1.0 / t for t in temperature])
+        if seed is not None:
+            self._copy(torch.tensor(seed, dtype=torch.int32), self.sampler.seeds_tt_tensor, "seed_refreshes")
+
     def _capture(self, *, record_history=False):
         """Warm both graphs before capture; restore only mutable request state."""
         backups = [
