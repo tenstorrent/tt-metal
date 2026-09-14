@@ -648,7 +648,8 @@ def _compile_collected(exitstatus):
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtestloop(session):
     """INLINE mode: collect pass -> compile -> real pass, all in this session. Returns None
-    (default loop) when not inline, so the two-process flow is unchanged."""
+    (default loop) when not inline, so the standalone-collector flow (eval_test_runner.sh) is
+    unchanged."""
     global _PASS
     if not _INLINE:
         return None
@@ -679,10 +680,21 @@ def pytest_runtestloop(session):
     t1 = _time.monotonic()
     print(f"\nUP_FRONT_INLINE: collect pass over {n} item(s) took {t1 - t0:.1f}s", flush=True)
     # ---- compile (between passes). Exit status is not known yet; report 0 for attribution.
-    # JIT-server routing stays WARM-PASS-ONLY in inline mode too: the client reads
-    # TT_METAL_JIT_SERVER_ENABLE per compile call, so we raise it only around this step and pass 2's
-    # on-demand compiles stay local, exactly like the two-process flow.
-    _farm = os.environ.get("UP_FRONT_INLINE_JIT_SERVER") == "1"
+    # JIT-server routing is COMPILE-STEP-ONLY: the client reads TT_METAL_JIT_SERVER_ENABLE per
+    # compile call, so we raise it only around this step and pass 2's on-demand compiles stay local.
+    # The server is worth its per-kernel round trips only above a program-count threshold
+    # (UP_FRONT_INLINE_FARM_MIN_PROGRAMS, default 10; measured +2.5s at 1 program, -3.4s at 24),
+    # so a small session compiles locally even when a server is configured. The route taken is
+    # printed for the harness's device-timing record.
+    import ttnn
+
+    _n_unique = ttnn.graph.up_front_num_unique()
+    _farm_min = int(os.environ.get("UP_FRONT_INLINE_FARM_MIN_PROGRAMS", "10"))
+    _farm = os.environ.get("UP_FRONT_INLINE_JIT_SERVER") == "1" and _n_unique >= _farm_min
+    print(
+        f"UP_FRONT_INLINE_ROUTE: {'farm' if _farm else 'local'} programs={_n_unique} farm_min={_farm_min}",
+        flush=True,
+    )
     if _farm:
         os.environ["TT_METAL_JIT_SERVER_ENABLE"] = "1"
     try:
