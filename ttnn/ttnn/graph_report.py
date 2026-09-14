@@ -27,7 +27,7 @@ captured in a sidecar JSON file. The importer consumes that sidecar offline and
 populates the visualizer comparison tables.
 """
 
-import datetime
+import hashlib
 import json
 import math
 import re
@@ -85,9 +85,31 @@ def run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
 
     # A report was asked for but not named, so name it after the test. It has to happen here: this fixture is
     # autouse from the root conftest, so it runs before any deeper conftest (tests/ttnn) could set report_name.
-    report_name = f"{request.node.nodeid}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    with ttnn.manage_config("report_name", report_name):
+    with ttnn.manage_config("report_name", derive_report_name(request.node.nodeid)):
         yield from _run_pytest_graph_report_fixture(request)
+
+
+# ttnn::Config::get_report_path_impl keeps only the first 64 characters of report_name (then sanitizes them and
+# appends "_<mon><dd>_<HHMM>"), so a derived name must fit in that budget with its unique part intact.
+_REPORT_NAME_MAX_LENGTH = 64
+_REPORT_NAME_HASH_LENGTH = 8
+
+
+def derive_report_name(nodeid: str) -> str:
+    """Name a report after the pytest test it is generated for.
+
+    The name is ``<file stem>_<test name>_<hash>``, where the hash is over the full node id so parametrized
+    cases and tests that share a long common prefix get distinct report directories. It is deterministic: every
+    rank of a multi-process run derives the same name, and there is no timestamp to straddle a minute boundary
+    (the C++ side stamps the report path with the minute itself).
+    """
+    file_part, _, test_name = nodeid.partition("::")
+    test_name = test_name.rsplit("::", 1)[-1]
+    stem = Path(file_part).stem
+    prefix = f"{stem}_{test_name}" if test_name else stem
+    prefix = prefix[: _REPORT_NAME_MAX_LENGTH - _REPORT_NAME_HASH_LENGTH - 1]
+    digest = hashlib.sha1(nodeid.encode()).hexdigest()[:_REPORT_NAME_HASH_LENGTH]
+    return f"{prefix}_{digest}"
 
 
 def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
