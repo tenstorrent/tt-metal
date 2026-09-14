@@ -509,12 +509,7 @@ class TtTransformer(LightweightModule):
         # seeded or greedy request takes, so this is every such request. The buffers depend only on
         # the padded prefill bucket, so cache them on that signature and copy into them instead.
         cache_key = tuple(None if t is None else (tuple(t.shape), str(t.dtype), str(t.layout)) for t in host_inputs)
-        cached_inputs = self._prefill_input_cache.get(cache_key)
-        if cached_inputs is None:
-            device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
-            self._prefill_input_cache[cache_key] = device_inputs
-        else:
-            device_inputs = copy_host_to_device(host_inputs, device_tensors=cached_inputs)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # A/B: no input cache
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
