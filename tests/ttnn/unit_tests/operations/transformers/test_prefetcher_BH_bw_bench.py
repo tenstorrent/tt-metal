@@ -207,6 +207,178 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
     indirect=True,
 )
+def test_mpfe_priority_contention(device):
+    """Fast-dispatch MPFE benchmark with real, sustained Tensor Prefetcher traffic.
+
+    Two DRISC senders per bank stream an FF1-sized weight into a shallow GCB while
+    every receiver drains the GCB and issues an equal-sized ordinary NoC DRAM read
+    against that bank. The first and last layers are byte-validated; only cached
+    contention-consumer trace replays are timed.
+
+    Run each active weight in a fresh process via
+    TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT=0..7.
+    """
+    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") is not None:
+        pytest.skip("MPFE contention benchmark requires fast dispatch")
+
+    num_dram_banks = device.dram_grid_size().x
+    recv_per_bank = 8
+    ring_size = num_dram_banks * recv_per_bank
+    k_tiles_per_shard = 2
+    n_tiles_per_receiver = 7
+    K = k_tiles_per_shard * ring_size * ttnn.TILE_SIZE
+    N = ring_size * n_tiles_per_receiver * ttnn.TILE_SIZE
+    dtype = ttnn.bfloat8_b
+    tile_bytes = int((1088 / 1024.0) * ttnn.TILE_SIZE * ttnn.TILE_SIZE)
+    page_size = k_tiles_per_shard * n_tiles_per_receiver * tile_bytes
+    ordinary_read_bytes = int(os.environ.get("BENCH_ORDINARY_READ_BYTES", page_size))
+    trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "20"))
+    active_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT", "0")
+
+    assert trace_repeats > 0
+    assert ordinary_read_bytes > 0 and ordinary_read_bytes % 64 == 0
+
+    torch.manual_seed(0x4D504645)
+    pt_weight = torch.randn(1, 1, K, N)
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    weight_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            dram_core_range_set,
+            [K, N // num_dram_banks],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_weight = ttnn.as_tensor(
+        pt_weight,
+        device=device,
+        dtype=dtype,
+        memory_config=weight_mem_config,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    bank_to_receivers = [
+        (
+            bank,
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(bank, 0), ttnn.CoreCoord(bank, recv_per_bank - 1))}
+            ),
+        )
+        for bank in range(num_dram_banks)
+    ]
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, recv_per_bank - 1))}
+    )
+    gcb = ttnn.experimental.create_global_circular_buffer_for_tensor_prefetcher(
+        device,
+        bank_to_receivers,
+        4 * page_size,
+        support_multi_receiver_shards=False,
+    )
+    timing_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(receiver_core_range_set, [1, 8], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    timing_tensor = ttnn.from_torch(
+        torch.zeros((1, 1, ring_size, 8), dtype=torch.int32),
+        device=device,
+        dtype=ttnn.uint32,
+        memory_config=timing_mem_config,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    # validator + consumer warmup + timed consumers + final validator
+    num_prefetch_layers = trace_repeats + 3
+    ttnn.experimental.start_tensor_prefetcher(device)
+    try:
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
+        ttnn.experimental.queue_tensor_prefetcher_request(
+            device,
+            [(tt_weight, ring_size)] * num_prefetch_layers,
+            global_cb=gcb,
+        )
+
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=1,
+            print_stride=0,
+            global_cb=gcb,
+        )
+        ttnn.experimental.test_dram_prefetcher_contention_consumer(
+            device,
+            tt_weight,
+            timing_tensor,
+            num_iters=ring_size,
+            page_size_bytes=page_size,
+            ordinary_read_bytes=ordinary_read_bytes,
+            global_cb=gcb,
+        )
+        ttnn.synchronize_device(device)
+
+        bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+        for _ in range(trace_repeats):
+            ttnn.experimental.test_dram_prefetcher_contention_consumer(
+                device,
+                tt_weight,
+                timing_tensor,
+                num_iters=ring_size,
+                page_size_bytes=page_size,
+                ordinary_read_bytes=ordinary_read_bytes,
+                global_cb=gcb,
+            )
+        ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+        t0 = time.perf_counter()
+        ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+        ttnn.synchronize_device(device)
+        elapsed = time.perf_counter() - t0
+        ttnn.release_trace(device, bench_trace)
+
+        timing_words = ttnn.to_torch(timing_tensor).reshape(-1, 8).tolist()
+        ttnn.experimental.test_dram_prefetcher_validator(
+            device,
+            tt_weight,
+            num_layers=1,
+            print_stride=0,
+            global_cb=gcb,
+        )
+        ttnn.synchronize_device(device)
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(device)
+
+    prefetch_bytes = trace_repeats * K * N * (1088 / 1024.0)
+    ordinary_bytes = trace_repeats * ring_size * ring_size * ordinary_read_bytes
+
+    def unpack_u64(words, index):
+        return (int(words[index]) & 0xFFFFFFFF) | ((int(words[index + 1]) & 0xFFFFFFFF) << 32)
+
+    prefetch_wait_cycles = sorted(unpack_u64(words, 0) for words in timing_words)
+    ordinary_read_cycles = sorted(unpack_u64(words, 2) for words in timing_words)
+    total_cycles = sorted(unpack_u64(words, 4) for words in timing_words)
+    middle = len(timing_words) // 2
+    logger.info(
+        f"[mpfe_contention] active_weight={active_weight} banks={num_dram_banks} dual_senders=True "
+        f"K={K} N={N} ring={ring_size} repeats={trace_repeats} elapsed={elapsed * 1e3:.2f}ms "
+        f"prefetch={_gbps(prefetch_bytes, elapsed):.2f}GB/s "
+        f"ordinary={_gbps(ordinary_bytes, elapsed):.2f}GB/s "
+        f"combined={_gbps(prefetch_bytes + ordinary_bytes, elapsed):.2f}GB/s "
+        f"last_replay_cycles(wait/read/total median)="
+        f"{prefetch_wait_cycles[middle]}/{ordinary_read_cycles[middle]}/{total_cycles[middle]} "
+        f"last_replay_cycles(wait/read/total max)="
+        f"{prefetch_wait_cycles[-1]}/{ordinary_read_cycles[-1]}/{total_cycles[-1]}"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
 def test_bw_tensor_prefetcher(device, op_name, shape):
     """Tensor prefetcher → discard receiver. Prefetcher launched out-of-band with

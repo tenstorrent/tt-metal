@@ -4,7 +4,6 @@
 
 #include <gtest/gtest.h>
 #include <array>
-#include <cstdlib>
 #include <cstdint>
 #include <vector>
 #include <chrono>
@@ -676,119 +675,6 @@ TEST_F(DramKernelFixture, DramKernelDRISCRTensixParallelDRAMReads) {
                 tensix_l1_base_);
             EXPECT_EQ(result, data) << "Data mismatch on core (" << col << ", " << row << ")";
         }
-    }
-}
-
-TEST_F(DramKernelFixture, MpfePriorityWeightBenchmark) {
-    if (std::getenv("TT_METAL_RUN_BH_MPFE_BENCHMARK") == nullptr) {
-        GTEST_SKIP() << "Set TT_METAL_RUN_BH_MPFE_BENCHMARK=1 to run the MPFE weight sweep";
-    }
-
-    constexpr uint32_t bank_id = 0;
-    constexpr uint32_t bytes_per_iter = 16 * 1024;
-    constexpr uint32_t iters = 128;
-    constexpr uint64_t total_bytes = static_cast<uint64_t>(bytes_per_iter) * iters;
-
-    const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(mesh_device_->build_id());
-    const CoreCoord active_sender{bank_id, first_usable_dram_endpoint(bank_id)};
-    const uint32_t active_port = mpfe_port_for_logical_dram_core(soc_desc, bank_id, active_sender);
-    const CoreCoord ordinary_endpoint = logical_dram_endpoint_for_noc(soc_desc, bank_id, NOC::NOC_0);
-    const uint32_t ordinary_port = mpfe_port_for_logical_dram_core(soc_desc, bank_id, ordinary_endpoint);
-    TT_FATAL(active_port != ordinary_port, "Active and ordinary-operation traffic map to the same MPFE port");
-    const uint32_t inactive_port = 1 + 2 + 3 - active_port - ordinary_port;
-
-    const uint32_t dram_channel = mesh_device_->dram_channel_from_logical_core({bank_id, 0});
-    auto dram_buffer = distributed::MeshBuffer::create(
-        distributed::ReplicatedBufferConfig{.size = total_bytes},
-        {.page_size = total_bytes, .buffer_type = BufferType::DRAM},
-        mesh_device_);
-    const uint32_t dram_addr = dram_buffer->address();
-    const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-    std::vector<uint32_t> data = create_random_vector_of_bfloat16(total_bytes, 1000.0f, seed);
-    slow_dispatch::WriteToDRAMChannel(*mesh_device_, dram_channel, dram_addr, data);
-
-    struct BenchmarkCase {
-        const char* name;
-        std::array<uint32_t, 3> weights;
-    };
-    std::vector<BenchmarkCase> cases;
-    cases.push_back({"equal_0", {0, 0, 0}});
-    cases.push_back({"equal_7", {7, 7, 7}});
-    for (uint32_t active_weight = 0; active_weight <= 7; ++active_weight) {
-        std::array<uint32_t, 3> weights{};
-        weights[active_port - 1] = active_weight;
-        weights[inactive_port - 1] = 7;
-        weights[ordinary_port - 1] = 7;
-        cases.push_back({"active_sweep", weights});
-    }
-
-    const CoreCoord tensix_logical{0, 0};
-    const CoreCoord drisc_virtual = mesh_device_->virtual_core_from_logical_core(active_sender, CoreType::DRAM);
-    const CoreCoord tensix_virtual = mesh_device_->virtual_core_from_logical_core(tensix_logical, CoreType::WORKER);
-    const uint32_t clk_hz =
-        MetalContext::instance().get_cluster().get_device_aiclk(mesh_device_->build_id()) * 1000000u;
-
-    for (const auto& benchmark_case : cases) {
-        ASSERT_EQ(set_mpfe_weights(bank_id, benchmark_case.weights), benchmark_case.weights);
-        try {
-            Program program = CreateProgram();
-            const auto drisc_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/drisc_l1_dram_dma.cpp",
-                active_sender,
-                DramConfig{.noc = NOC::NOC_0});
-            SetRuntimeArgs(program, drisc_kernel, active_sender, {dram_addr, drisc_l1_base_, bytes_per_iter, iters});
-
-            const auto tensix_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/misc/tensix_dram_reads.cpp",
-                tensix_logical,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = NOC::NOC_0,
-                    .defines = {{"WRITE_TIMING", "1"}}});
-            SetRuntimeArgs(
-                program, tensix_kernel, tensix_logical, {bank_id, dram_addr, tensix_l1_base_, bytes_per_iter, iters});
-            run_workload(std::move(program));
-        } catch (...) {
-            (void)set_mpfe_weights(bank_id, {0, 0, 0});
-            throw;
-        }
-
-        const uint64_t drisc_cycles = read_timing_cycles(drisc_virtual, drisc_l1_noc_addr_ + bytes_per_iter);
-        const uint64_t ordinary_cycles = read_timing_cycles(tensix_virtual, tensix_l1_base_ + bytes_per_iter);
-        const size_t elements_per_iter = bytes_per_iter / sizeof(uint32_t);
-        std::vector<uint32_t> drisc_result(elements_per_iter);
-        std::vector<uint32_t> ordinary_result(elements_per_iter);
-        MetalContext::instance().get_cluster().read_core(
-            drisc_result.data(),
-            bytes_per_iter,
-            tt_cxy_pair(mesh_device_->build_id(), drisc_virtual),
-            drisc_l1_noc_addr_);
-        MetalContext::instance().get_cluster().read_core(
-            ordinary_result.data(),
-            bytes_per_iter,
-            tt_cxy_pair(mesh_device_->build_id(), tensix_virtual),
-            tensix_l1_base_);
-        EXPECT_TRUE(std::equal(drisc_result.begin(), drisc_result.end(), data.begin()));
-        EXPECT_TRUE(std::equal(ordinary_result.begin(), ordinary_result.end(), data.end() - elements_per_iter));
-
-        log_info(
-            LogTest,
-            "BH MPFE benchmark case={} weights={}/{}/{} active_port=P{} ordinary_port=P{} "
-            "drisc_dma={:.2f}GB/s ordinary_noc={:.2f}GB/s drisc_cycles={} ordinary_cycles={}",
-            benchmark_case.name,
-            benchmark_case.weights[0],
-            benchmark_case.weights[1],
-            benchmark_case.weights[2],
-            active_port,
-            ordinary_port,
-            compute_bw_gbs(total_bytes, drisc_cycles, clk_hz),
-            compute_bw_gbs(total_bytes, ordinary_cycles, clk_hz),
-            drisc_cycles,
-            ordinary_cycles);
-
-        EXPECT_EQ(set_mpfe_weights(bank_id, {0, 0, 0}), (std::array<uint32_t, 3>{0, 0, 0}));
     }
 }
 
