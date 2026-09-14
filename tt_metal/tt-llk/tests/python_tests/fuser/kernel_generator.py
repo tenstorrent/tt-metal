@@ -99,12 +99,19 @@ class SfpuKernelGenerator:
         if self.config.global_config.architecture != ChipArchitecture.QUASAR:
             return ""
 
+        sfpu_calls = "".join(
+            "llk_barrier::rendezvous(llk_barrier::is_action_thread());\n"
+            for op in self.config.pipeline
+            if op.needs_pack_sync
+        )
+
         return (
             f"\n"
             f"#ifdef LLK_TRISC_ISOLATE_SFPU\n"
             f"\n"
             f"void run_kernel([[maybe_unused]] const volatile struct RuntimeParams& params)\n"
             f"{{\n"
+            f"{sfpu_calls}"
             f"}}\n"
             f"\n"
             f"#endif\n"
@@ -189,6 +196,7 @@ class FusedKernelGenerator:
 
         combined = (
             f"#define FUSED_TEST\n"
+            f'#include "barrier.h"\n'
             f'#include "ckernel.h"\n'
             f'#include "llk_defs.h"\n'
             f'#include "ckernel_defs.h"\n'

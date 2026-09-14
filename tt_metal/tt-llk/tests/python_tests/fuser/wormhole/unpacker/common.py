@@ -124,9 +124,6 @@ def dvalid_init(**kwargs) -> str:
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if operation.needs_pack_sync:
-        return (
-            "t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE);\n"
-            "t6_semaphore_get<>(semaphore::PACK_DONE);\n"
-        )
-    return ""
+    if not operation.needs_pack_sync:
+        return ""
+    return "llk_barrier::rendezvous(llk_barrier::is_action_thread());\n"

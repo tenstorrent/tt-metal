@@ -82,9 +82,9 @@ def packer_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -
 
 
 def packer_sync_with_unpacker(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if operation.has_pack_consumer:
-        return "_llk_sync_post_<p_stall::PACK>(semaphore::PACK_UNPACK);\n"
-    return ""
+    if not operation.has_pack_consumer:
+        return ""
+    return "llk_barrier::rendezvous(llk_barrier::is_action_thread());\n"
 
 
 def pack_reduce_mask_config(operation) -> str:

@@ -54,6 +54,13 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            unpack_dst_format = config.sentinel.unpack_a_dst_format
+            return (
+                f"set_dst_write_addr(unp_cfg_context, {unpack_dst_format});\n"
+                f"wait_for_dest_available();\n"
+                f"unpack_to_dest_tile_done(unp_cfg_context, {unpack_dst_format});\n"
+            )
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return "_perf_unpack_loop_set_valid<true, true>(1);\n"
         elif compute_unit.broadcast_type == BroadcastType.Column:
@@ -74,6 +81,13 @@ class UnpackerA(Unpacker):
         compute_unit: FpuNode,
         block: BlockData,
     ) -> str:
+        if compute_unit.unpack_to_dest.value:
+            dst_index = f"tile_y * {block.block_tiles_x} + tile_x"
+            return (
+                f"math_unpack_to_dest_math_ready();\n"
+                f"math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>({dst_index});\n"
+                f"math::math_unpack_to_dest_tile_ready();\n"
+            )
         if compute_unit.broadcast_type == BroadcastType.Scalar:
             return "_perf_math_loop_clear_valid<true, true>(1);\n"
         elif compute_unit.broadcast_type == BroadcastType.Column:

@@ -30,6 +30,24 @@ class TransposeDestUnpacker(UnpackerA):
     ) -> str:
         return "_llk_unpack_set_srcb_dummy_valid_();\n"
 
+    def perf_set_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return "_perf_unpack_loop_set_valid<true, true>(1);\n"
+
+    def perf_clear_valid(
+        self,
+        operation: L1Operation,
+        config: GlobalConfig,
+        compute_unit: FpuNode,
+        block: BlockData,
+    ) -> str:
+        return "_perf_math_loop_clear_valid<true, true>(1);\n"
+
     def uninit(
         self,
         operation: L1Operation,
