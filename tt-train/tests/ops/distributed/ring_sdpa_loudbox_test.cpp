@@ -40,6 +40,14 @@
  * disagreement between the rows would show up as a mismatch against the
  * reference.
  *
+ * For timing rather than correctness, note that this runs two independent
+ * rings side by side, which share the fabric and the host's dispatch. That is
+ * fair between two implementations measured the same way, but it is not the
+ * cleanest absolute number; a `MeshShape(1, 4)` opened over one row with CP
+ * as the only parallelism would isolate a single ring, at the cost of leaving
+ * four boards idle. The parallelism context is a process-wide singleton, so
+ * the two cannot coexist in one binary run.
+ *
  * Correctness is against a dense host reference in float32, the same
  * convention as the Galaxy file: scale 1/sqrt(head_dim), causal mask, softmax
  * in the last dimension. The reference is written out again here rather than
@@ -271,6 +279,12 @@ public:
         if (loudbox_available()) {
             // Leaves no device open, so a later suite's lazy 1x1 open works.
             ttml::autograd::ctx().close_device();
+            // And no context saying four devices are sharing a sequence. Ops
+            // consult it: build_rope_params shards its frequencies when CP is
+            // enabled and requires the sequence length to divide cp_size, so
+            // leaving CP on fails RoPETest -- whose sequence length is 5 --
+            // several suites later, with nothing pointing back to here.
+            ttml::autograd::ctx().reset_parallelism_context();
         }
     }
 
@@ -393,6 +407,9 @@ void run_ring_attention(
     // would still pass while testing nothing distributed.
     ASSERT_TRUE(pctx.is_cp_enabled());
     ASSERT_GT(cp_size, 1U) << "a ring of one device would make this test vacuous";
+    // gather_cp() reads the CP index out of the device index as `dev % cols`,
+    // which is only the column when CP owns axis 1.
+    ASSERT_EQ(cp_axis, 1U) << "the gather assumes CP is the column axis";
     ASSERT_EQ(seq_len % cp_size, 0U) << "sequence must divide across the ring";
     const size_t seq_per_device = seq_len / cp_size;
     ASSERT_EQ(seq_per_device % 32U, 0U) << "each device's shard must be a whole number of tiles";

@@ -128,6 +128,17 @@ public:
 
     void initialize_parallelism_context(const DistributedConfig& config);
 
+    // Drop the parallelism context, so that a later initialize_parallelism_context()
+    // succeeds instead of throwing.
+    //
+    // This context is process-wide and ops consult it: build_rope_params, for one,
+    // shards its frequencies when CP is enabled and requires the sequence length to
+    // divide cp_size. A test fixture that enables CP and leaves it enabled therefore
+    // changes the behaviour of every test that runs after it in the same binary.
+    // Closing the device is not enough, and cannot be: the context outlives the mesh
+    // it was built from by design, since a caller may reopen the same topology.
+    void reset_parallelism_context();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;

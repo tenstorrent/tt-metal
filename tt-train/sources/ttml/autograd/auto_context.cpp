@@ -237,6 +237,10 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
 }
 
+void AutoContext::reset_parallelism_context() {
+    m_parallelism_context = nullptr;
+}
+
 const uint32_t ParallelismContext::get_ddp_size() const {
     if (!m_ddp_axis.has_value()) {
         return 1U;
