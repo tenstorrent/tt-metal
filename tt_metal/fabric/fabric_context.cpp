@@ -352,9 +352,13 @@ bool FabricContext::need_deadlock_avoidance_support(eth_chan_directions directio
         const bool is_north_south =
             (direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH);
         const bool is_east_west = (direction == eth_chan_directions::EAST || direction == eth_chan_directions::WEST);
+        // Z links are never part of the torus wrap, and the far end of a Z cable may be a mesh
+        // (FABRIC_2D) rank that compiles its router without deadlock avoidance. Both ends must
+        // agree, so Z never gets deadlock avoidance under torus either.
+        const bool is_z = (direction == eth_chan_directions::Z);
 
         const bool torus_mismatch = (fabric_type == FabricType::TORUS_X && is_north_south) ||
-                                    (fabric_type == FabricType::TORUS_Y && is_east_west);
+                                    (fabric_type == FabricType::TORUS_Y && is_east_west) || is_z;
 
         return !torus_mismatch;
     }
