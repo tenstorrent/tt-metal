@@ -1,295 +1,446 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-
 import pytest
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.constraints import distinct_dest_accumulation_modes
-from helpers.format_config import DataFormat
-from helpers.llk_params import (
-    ApproximationMode,
-    DestAccumulation,
-    MathOperation,
-    Transpose,
-)
-from helpers.param_config import input_output_formats, parametrize
-from helpers.perf.core import ALL_PERF_RUN_TYPES, PerfConfig
-from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import calculate_tile_and_face_counts
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    ITERATIONS,
-    LOOP_FACTOR,
-    MATH_OP,
-    NUM_FACES,
-    TILE_COUNT,
-    UNPACK_TRANS_FACES,
-    UNPACK_TRANS_WITHIN_FACE,
+import test_eltwise_binary_sfpu as _func
+from helpers.llk_params import ApproximationMode
+from helpers.param_config import parametrize
+from helpers.perf.core import ALL_PERF_RUN_TYPES
+
+_PERF_AXES = dict(
+    run_types=[ALL_PERF_RUN_TYPES],
+    loop_factor=[16],
+    iterations=[32],
+    approx_mode=[
+        ApproximationMode.Yes,
+        ApproximationMode.No,
+    ],
+    is_perf=[True],
 )
 
 
-def get_dest_accum_modes(formats):
-    if formats.input_format.is_32_bit() and formats.input_format.is_integer():
-        return [DestAccumulation.No]
-    # TestConfig promotes dest_acc=No to Yes for outlier format combos, so asking
-    # for both would record two rows with an identical key (the same kernel twice).
-    return distinct_dest_accumulation_modes(
-        formats, [DestAccumulation.Yes, DestAccumulation.No]
+def _perf_kwargs(perf_report, run_types, loop_factor, iterations, approx_mode, is_perf):
+    return dict(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        iterations=iterations,
+        approx_mode=approx_mode,
     )
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Float16,
-            DataFormat.Float16_b,
-            DataFormat.Bfp8_b,
-        ]
-    ),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
-    mathop=[
-        MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwsub,
-        MathOperation.SfpuElwmul,
-        MathOperation.SfpuElwdiv,
-        MathOperation.SfpuElwrsub,
-        MathOperation.SfpuElwpow,
-    ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],  # Number of iterations to run the test in order to minimize profiler overhead in measurement
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],  # Specifying different input sizes to cover different tile counts
+    **_func.FLOAT_SWEEP,
+    **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_float(
     perf_report,
     formats,
-    mathop,
-    approx_mode,
     dest_acc,
+    mathop,
+    bcast_dim,
+    run_types,
     loop_factor,
     iterations,
-    input_dimensions,
+    approx_mode,
+    is_perf,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_sfpu_perf.cpp",
+    _func.test_eltwise_binary_sfpu_float(
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
+        dest_acc,
+        mathop,
+        bcast_dim,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        compile_time_formats=True,
     )
-
-    configuration.run(perf_report)
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Int32,
-        ]
-    ),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
-    mathop=[
-        MathOperation.SfpuElwRightShift,
-        MathOperation.SfpuElwLeftShift,
-        MathOperation.SfpuElwLogicalRightShift,
-        MathOperation.SfpuElwadd,
-        MathOperation.SfpuElwsub,
-    ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    **_func.DIV_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_div(
+    perf_report,
+    formats,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_div(
+        formats,
+        dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.FLOAT_EXTENDED_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_float_extended(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float_extended(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.MASK_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_mask(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_mask(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.ATAN2_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_atan2(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_atan2(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.EQ_NE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_eq_ne(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_eq_ne(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.FLOAT_COMPARISON_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_float_comparison(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_float_comparison(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.ISCLOSE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_isclose(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_isclose(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.LOGSIGMOID_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_logsigmoid(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_logsigmoid(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.INT_SWEEP,
+    **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_int(
     perf_report,
     formats,
-    mathop,
-    approx_mode,
     dest_acc,
+    mathop,
+    run_types,
     loop_factor,
     iterations,
-    input_dimensions,
+    approx_mode,
+    is_perf,
 ):
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_sfpu_perf.cpp",
+    _func.test_eltwise_binary_sfpu_int(
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        compile_time_formats=True,
     )
-
-    configuration.run(perf_report)
 
 
 @pytest.mark.perf
 @parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float32,
-            DataFormat.Int32,
-            DataFormat.UInt32,
-        ],
-        same=True,
-    ),
-    approx_mode=[
-        ApproximationMode.Yes,
-        ApproximationMode.No,
-    ],
-    mathop=[
-        MathOperation.SfpuAddTopRow,
-    ],
-    dest_acc=lambda formats: get_dest_accum_modes(formats),
-    loop_factor=[
-        16,
-    ],
-    iterations=[
-        32,
-    ],
-    input_dimensions=[
-        [128, 64],  # tile_cnt: 8
-    ],
+    **_func.BITWISE_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bitwise(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_bitwise(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.INT_UNIFORM_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_int_uniform(
+    perf_report,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_int_uniform(
+        mathop,
+        dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.RSUB_INT32_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_rsub_int32(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_rsub_int32(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.EQ_NE_INT_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_eq_ne_int(
+    perf_report,
+    formats,
+    dest_acc,
+    mathop,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_eq_ne_int(
+        formats,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
+
+
+@pytest.mark.perf
+@parametrize(
+    **_func.ADD_TOP_ROW_SWEEP,
+    **_PERF_AXES,
 )
 def test_perf_eltwise_binary_sfpu_add_top_row(
     perf_report,
     formats,
-    mathop,
-    approx_mode,
     dest_acc,
+    mathop,
+    run_types,
     loop_factor,
     iterations,
-    input_dimensions,
+    approx_mode,
+    is_perf,
 ):
-    chip_arch = get_chip_architecture()
-
-    # Skip DestAccumulation.No on Blackhole for SfpuAddTopRow
-    if chip_arch == ChipArchitecture.BLACKHOLE and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            "DestAccumulation.No is not supported for SfpuAddTopRow on Blackhole"
-        )
-
-    if formats.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.Yes:
-        pytest.skip("SfpuAddTopRow does not support Float32 with DestAccumulation.Yes")
-
-    unpack_to_dest = (
-        formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No
-    )
-
-    tile_count, _, faces_to_generate = calculate_tile_and_face_counts(
-        input_dimensions, input_dimensions, face_r_dim=16, num_faces=4
-    )
-
-    configuration = PerfConfig(
-        "sources/eltwise_binary_sfpu_perf.cpp",
+    _func.test_eltwise_binary_sfpu_add_top_row(
         formats,
-        run_types=ALL_PERF_RUN_TYPES,
-        templates=[
-            MATH_OP(mathop=mathop),
-            APPROX_MODE(approx_mode),
-            ITERATIONS(iterations),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_count),
-            LOOP_FACTOR(loop_factor),
-            NUM_FACES(num_faces=faces_to_generate),
-            UNPACK_TRANS_FACES(Transpose.No),
-            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
-        ],
-        variant_stimuli=StimuliConfig(
-            None,
-            formats.input_format,
-            None,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_count,
-            tile_count_B=tile_count,
-            tile_count_res=tile_count,
+        dest_acc,
+        mathop,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
         ),
-        unpack_to_dest=unpack_to_dest,
-        dest_acc=dest_acc,
-        compile_time_formats=True,
     )
 
-    configuration.run(perf_report)
+
+@pytest.mark.perf
+@parametrize(
+    **_func.BCAST_SWEEP,
+    **_PERF_AXES,
+)
+def test_perf_eltwise_binary_sfpu_bcast(
+    perf_report,
+    formats,
+    bcast_dim,
+    mathop,
+    dest_acc,
+    run_types,
+    loop_factor,
+    iterations,
+    approx_mode,
+    is_perf,
+):
+    _func.test_eltwise_binary_sfpu_bcast(
+        formats,
+        bcast_dim,
+        mathop,
+        dest_acc,
+        **_perf_kwargs(
+            perf_report, run_types, loop_factor, iterations, approx_mode, is_perf
+        ),
+    )
