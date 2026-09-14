@@ -268,6 +268,10 @@ def test_staged_step_matches_unstaged(mesh_device, reset_seeds, ensure_gc):
                 drafter.stage_step(start, new_ctx)
                 drafter.stage_taps(kv_source, new_ctx)
                 hidden = drafter.forward(None, noise, start, staged=True)
+                # The staged path defers its append: the step wrote its context K/V to fixed
+                # staging buffers (constant offsets, so a capture can record them) and this moves
+                # them into the history at the offset that actually varies.
+                drafter.commit_staged_context(new_ctx)
             else:
                 hidden = drafter.forward(kv_source, noise, start)
             composer = dict(mesh_composer=ttnn.ConcatMeshToTensor(drafter.device, dim=0)) if drafter.multi else {}

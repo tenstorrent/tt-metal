@@ -222,6 +222,18 @@ class TtDFlashDrafter:
             # impossible without staging at all: TtTarget.embed_device does ttnn.from_torch(ids)
             # every step, and a host upload inside a capture is illegal outright -- not merely
             # baked in, but rejected.
+            # Per-layer K/V landing zones for the traced step. The commit into the history has a
+            # per-step offset (_ctx_len) and offsets are op ATTRIBUTES, so it cannot live inside a
+            # capture; the traced step writes here at a CONSTANT offset instead and
+            # commit_staged_context moves these rows afterwards.
+            "k": [
+                self._replicate(torch.zeros(1, self.nkv, ctx_pad, self.hd, dtype=torch.bfloat16))
+                for _ in range(self.cfg.num_hidden_layers)
+            ],
+            "v": [
+                self._replicate(torch.zeros(1, self.nkv, ctx_pad, self.hd, dtype=torch.bfloat16))
+                for _ in range(self.cfg.num_hidden_layers)
+            ],
             "tok": ttnn.from_torch(
                 torch.zeros(1, q_len, dtype=torch.int32),
                 dtype=ttnn.uint32,
@@ -263,6 +275,51 @@ class TtDFlashDrafter:
         mask, mask_full = self._fixed_mask_tensors(q_len, new_ctx, ctx_pad)
         self._stage_host(mask, sb["mask"])
         self._stage_host(mask_full, sb["mask_full"])
+
+    def commit_staged_context(self, new_ctx: int):
+        """Move a traced step's context K/V from the staging buffers into the history. **Eager.**
+
+        This is the half of the append that cannot be captured. ``slice_write``'s start and end are
+        operation attributes, baked when the trace records them, and the history offset advances by
+        the accept count every step -- so a replay would keep writing to whatever offset the capture
+        happened to see. Running it outside the trace costs 2 ops per layer and keeps the append
+        EXACT (arbitrary row offsets are fine, measured in test_drafter_kv_write_primitives.py), so
+        the drafter's context stays gapless and its attention is unchanged.
+
+        Mirrors what the unstaged path does inline, including WHICH rows: the real context is the
+        LAST ``new_ctx`` of the left-padded staging region.
+        """
+        assert self._sb is not None, "commit_staged_context needs alloc_step_buffers()"
+        ctx_pad = self._sb["ctx_pad"]
+        assert 0 <= new_ctx <= ctx_pad, f"staged context holds {ctx_pad} rows, got {new_ctx}"
+        if new_ctx:
+            end = self._ctx_len + new_ctx
+            assert end <= self._cap, f"drafter context would reach {end} rows, past its {self._cap}-row fixed capacity"
+            # A FULL-WIDTH slice (new_ctx == ctx_pad, i.e. the block was fully accepted) can come
+            # back as an ALIAS of the staging buffer rather than a copy -- the same hazard
+            # tp_common.matmul_1d_decode documents, where deallocating the result frees the
+            # caller's live tensor. Here that would free the staging buffer and the NEXT step would
+            # fail on `input_tensor.is_allocated()`. So slice only when it is a real subset, and
+            # free only what this loop actually allocated.
+            whole = new_ctx == ctx_pad
+            for i in range(self.cfg.num_hidden_layers):
+                for stage, hist in ((self._sb["k"][i], self._ctx_k[i]), (self._sb["v"][i], self._ctx_v[i])):
+                    rows = (
+                        stage
+                        if whole
+                        else ttnn.slice(
+                            stage,
+                            (0, 0, ctx_pad - new_ctx, 0),
+                            (1, self.nkv, ctx_pad, self.hd),
+                            memory_config=_DRAM,
+                        )
+                    )
+                    ttnn.experimental.slice_write(
+                        rows, hist, (0, 0, self._ctx_len, 0), (1, self.nkv, end, self.hd), (1, 1, 1, 1)
+                    )
+                    if not whole:
+                        ttnn.deallocate(rows)
+        self._ctx_len += new_ctx
 
     def stage_tokens(self, ids):
         """DMA the block's token ids into the fixed buffer. **Outside** trace capture.
@@ -572,6 +629,7 @@ class TtDFlashDrafter:
         mask_full=None,
         real_ctx=None,
         ctx_pad=16,
+        defer=False,
     ):
         """One layer's attention. Q from ``hidden`` (the block); K/V from ``[ctx_rm, hidden]``.
 
@@ -646,7 +704,19 @@ class TtDFlashDrafter:
             # padded context region (left-padded; see _fixed_masks), and they land at `hist_len` --
             # the length BEFORE this step, which is also why the mask still marks them invalid in
             # the history region and valid in the context region. Written once, counted once.
-            if real_ctx:
+            if defer:
+                # TRACE-SAFE form: every offset here is a compile-time constant, so the recorded op
+                # stays correct on replay. The real commit -- whose offset moves with the accept
+                # count -- happens in commit_staged_context, outside the capture.
+                # ttnn.copy, not slice_write: the destination is the staging buffer's WHOLE extent
+                # and ctx_pad (16) is a part tile, which segfaulted slice_write here. copy is the
+                # in-place equal-shape primitive and is what the GDN state save/restore already
+                # uses inside the traced verify, so it is known to survive a capture.
+                for src, dst in ((k, self._sb["k"][layer_idx]), (v, self._sb["v"][layer_idx])):
+                    rows = ttnn.slice(src, (0, 0, 0, 0), (1, self.nkv, ctx_pad, self.hd), memory_config=_DRAM)
+                    ttnn.copy(rows, dst)
+                    ttnn.deallocate(rows)
+            elif real_ctx:
                 end = hist_len + real_ctx
                 for src, dst in ((k, hist_k), (v, hist_v)):
                     rows = ttnn.slice(
@@ -855,6 +925,7 @@ class TtDFlashDrafter:
                     mask_full=mask_full,
                     real_ctx=new_ctx,
                     ctx_pad=ctx_pad,
+                    defer=staged,
                 )
                 ttnn.deallocate(normed)
                 x = ttnn.add(residual, attn, memory_config=_DRAM)
@@ -877,7 +948,11 @@ class TtDFlashDrafter:
             for t in transient:
                 if t is not None:
                     ttnn.deallocate(t)
-            self._ctx_len = hist_len + new_ctx
+            if not staged:
+                # A staged step has not committed anything yet -- its context K/V are sitting in the
+                # staging buffers. commit_staged_context advances _ctx_len when it moves them, which
+                # keeps the two in step even though they happen either side of the capture.
+                self._ctx_len = hist_len + new_ctx
             out = self._rms(x, self.weights.norm, memory_config=_DRAM)
             if x is not noise:
                 ttnn.deallocate(x)
