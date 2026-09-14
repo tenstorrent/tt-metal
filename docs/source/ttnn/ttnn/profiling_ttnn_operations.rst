@@ -146,8 +146,8 @@ Available counter groups:
 - ``fpu`` — compute utilization (FPU, SFPU, math counters)
 - ``pack`` — packer activity (dest read, packer busy, scoreboard)
 - ``unpack`` — unpacker activity, math pipeline stalls, source register writes
-- ``l1_0`` — L1 memory ports 0-7 (unpacker, packer, TDMA, NOC Ring 0)
-- ``l1_1`` — L1 memory ports 8-15 (extended unpacker, NOC Ring 1)
+- ``l1_0`` — L1 memory ports 0-7 (unpackers, TDMA bundles, NOC Ring 0; port 1 also carries the packer on Wormhole)
+- ``l1_1`` — L1 memory ports 8-15 (packer port 8, unpacker 1's extended read interfaces, NOC Ring 1)
 - ``instrn`` — per-thread instruction availability, stalls, and issue counts
 - ``all`` — all of the above (recommended starting point)
 
@@ -171,11 +171,11 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Pipeline Efficiency*
 
-- **Packer Efficiency (%)**: Fraction of packer-busy cycles where dest data was available (``PACKER_DEST_READ_AVAILABLE / PACKER_BUSY``). For workloads that don't use the packer (``PACKER_BUSY = 0``), falls back to the dest-read grant rate (``DEST_READ_GRANTED_0 / PACKER_DEST_READ_AVAILABLE``). 100% means the packer never waited for data.
-- **Math-to-Pack Handoff Ratio (%)**: Ratio of math-availability cycles to packer-busy cycles (``AVAILABLE_MATH / PACKER_BUSY``). Values >100% mean math produces output faster than packer consumes it; <100% means packer is the consumer bottleneck. Falls back to ``AVAILABLE_MATH / ref_cnt`` when the packer isn't used.
+- **Packer Efficiency (%)**: Fraction of packer-busy cycles where dest data was available (``PACKER0_DEST_READ_REQ / PACKER_BUSY``). For workloads that don't use the packer (``PACKER_BUSY = 0``), falls back to the dest-read grant rate (``DEST_READ_GRANTED_0 / PACKER0_DEST_READ_REQ``). 100% means the packer never waited for data.
+- **Math-to-Pack Handoff Ratio (%)**: Ratio of math-availability cycles to packer-busy cycles (``MATH_NOT_SCOREBOARD_STALLED / PACKER_BUSY``). Values >100% mean math produces output faster than packer consumes it; <100% means packer is the consumer bottleneck. Falls back to ``MATH_NOT_SCOREBOARD_STALLED / ref_cnt`` when the packer isn't used.
 - **Unpacker-to-Math Data Flow (%)**: Ratio of source register write availability to unpacker busy time. Higher means data flows smoothly from unpack to math.
 - **Math Pipeline Utilization (%)**: Fraction of math-available cycles where the math instruction actually issued (``MATH_INSTRN_STARTED / MATH_INSTRN_AVAILABLE``). 100% means every available math instruction issued immediately.
-- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability on thread 1 (``FPU_COUNTER / FPU_INSTRN_AVAILABLE_1``). Distinguishes compute-bound (high) from stall-bound (low) workloads.
+- **FPU Execution Efficiency (%)**: FPU active cycles as fraction of math instruction availability on thread 1 (``FPU_COUNTER / MATH_INSTRN_AVAILABLE_1``). Distinguishes compute-bound (high) from stall-bound (low) workloads.
 
 *Thread Analysis*
 
@@ -196,7 +196,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *TDMA Stall Metrics*
 
-- **Data Hazard Stall Rate (%)**: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as ``(MATH_INSTRN_AVAILABLE - DATA_HAZARD_STALLS_MOVD2A) / MATH_INSTRN_AVAILABLE``.
+- **Data Hazard Stall Rate (%)**: Fraction of math-valid cycles stalled by dest-to-src data hazards (MOVD2A/MOVD2B). Computed as ``(MATH_INSTRN_AVAILABLE - MATH_NOT_D2S_STALLED) / MATH_INSTRN_AVAILABLE``.
 - **SrcA Write Port Blocked Rate (%)**: Fraction of srcA DMA write attempts blocked by port unavailability (DMA mux contention).
 - **SrcB Write Port Blocked Rate (%)**: Same for srcB.
 - **SrcA Write Overwrite Blocked Rate (%)**: Fraction of srcA write attempts blocked by overwrite protection — math hasn't consumed the previous value yet. High values indicate math-consumer bottleneck.
@@ -213,9 +213,9 @@ The following metrics are automatically computed from raw counters. Each metric 
 
 *Write Port Analysis*
 
-- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts not blocked by port contention (``SRCA_WRITE_ACTUAL / SRCA_WRITE_AVAILABLE``). 100% = no port blocking.
-- **SrcB Write Actual Efficiency (%)**: Same for srcB (``SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_AVAILABLE``).
-- **Unpacker0 Write Efficiency (%)**: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (``SRCA_WRITE_ACTUAL / UNPACK0_BUSY_THREAD0``).
+- **SrcA Write Actual Efficiency (%)**: Fraction of srcA write attempts not blocked by port contention (``SRCA_WRITE_NOT_BLOCKED_PORT / SRCA_WRITE_REQ``). 100% = no port blocking.
+- **SrcB Write Actual Efficiency (%)**: Same for srcB (``SRCB_WRITE_NOT_BLOCKED_PORT / SRCB_WRITE_REQ``).
+- **Unpacker0 Write Efficiency (%)**: Fraction of Unpacker 0 busy cycles where the srcA write succeeded (``SRCA_WRITE_NOT_BLOCKED_PORT / UNPACK0_BUSY_THREAD0``).
 - **Unpacker1 Write Efficiency (%)**: Same for Unpacker 1 using srcB.
 - **Unpacker Write Efficiency (%)**: Average of Unpacker0/1 Write Efficiency (per core, then aggregated).
 
@@ -224,7 +224,7 @@ The following metrics are automatically computed from raw counters. Each metric 
 - **L1 Unpacker/Packer Port Util (%)**: Fraction of cycles the unpacker or packer L1 port had a transaction.
 - **L1 TDMA Bundle Util (%)**: Average utilization of the two TDMA/RISC L1 ports.
 - **NOC Ring 0/1 Outgoing/Incoming Util (%)**: Average utilization of NOC channels on each ring.
-- **RISC Core L1 Util (%)**: RISC core L1 access utilization (Blackhole only, requires L1_1 group).
+- **L1 Packer Port 8 Util (%)**: packer L1 port utilization on port 8 (``L1_1_TDMA_PACKER_2`` on Wormhole, ``L1_1_PACKER_IF_0`` on Blackhole; requires the L1_1 group).
 
 *L1 Backpressure*
 

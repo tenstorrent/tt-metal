@@ -704,17 +704,18 @@ template <
     uint32_t normalized_out_cb,
     uint32_t scale_fp32 = 0,
     bool use_attention_sink = false,
-    uint32_t cb_attention_sink = INVALID_CB>
+    uint32_t cb_attention_sink = INVALID_CB,
+    bool sink_per_row = false>
 static __attribute__((noinline, noclone)) void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t sbh,
     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
     [[maybe_unused]] uint32_t sink_row_offset = 0) {
-    // Attention sink: cb_attention_sink holds one raw per-head scalar tile. Broadcast it for each
-    // row, compute exp((sink - max)*scale), and fold it into the col-reduced denominator (DST[0]).
+    // Dense SDPA supplies one scalar tile; sparse SDPA supplies a first-column vector of head
+    // scalars per tile row. Fold exp((sink - max)*scale) into the col-reduced denominator (DST[0]).
     if constexpr (use_attention_sink) {
-        CircularBuffer(cb_attention_sink).wait_front(1);
+        CircularBuffer(cb_attention_sink).wait_front(sink_per_row ? sink_row_offset + sbh : 1);
         CircularBuffer(cur_max_cb_rt).wait_front(sink_row_offset + sbh);
     }
     configure_single_tile_pack(scratch_cb);
@@ -739,8 +740,14 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
-                sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
-                sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
+                if constexpr (sink_per_row) {
+                    // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
+                    sub_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, sink_row_offset + s, 1);
+                } else {
+                    sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
+                    sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
+                }
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));

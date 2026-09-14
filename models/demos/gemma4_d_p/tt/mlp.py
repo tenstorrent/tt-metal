@@ -96,7 +96,7 @@ class MLP:
     def __call__(self, hidden_states):
         """Apply column-parallel gate/up projections and row-parallel down projection."""
         gate = ttnn.linear(hidden_states, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        gate = ttnn.gelu(gate, fast_and_approximate_mode=True)
+        gate = ttnn.gelu(gate, variant=ttnn.GeluVariant.Tanh)
         up = ttnn.linear(hidden_states, self.up_proj, compute_kernel_config=self.compute_kernel_config)
         hidden = ttnn.mul(gate, up)
         gate.deallocate(True)

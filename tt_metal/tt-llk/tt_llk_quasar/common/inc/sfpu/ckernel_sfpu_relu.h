@@ -22,7 +22,7 @@ inline void _calculate_relu_sfp_rows_()
     TTI_SFPNONLINEAR(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpnonlinear::RELU_MODE); // Read value from lreg[0], get relu value, load back into lreg[1]
 
     // Store from lreg[1] into dest register
-    TTI_SFPSTORE(p_sfpu::LREG1, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 // Implements standard relu which does max(0, x)
@@ -49,7 +49,7 @@ inline void _calculate_lrelu_sfp_rows_()
     TTI_SFPENCC(0, 0); // clear cc result reg
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 // Implements leaky relu which return x when x > 0 and x*slope when x < 0
@@ -57,7 +57,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _calculate_lrelu_(const std::uint32_t slope)
 {
     TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, (slope >> 16)); // store slope in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                           // enable cc
+    TTI_SFPENCC(1, 2);                                                     // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -81,7 +81,7 @@ inline void _calculate_relu_min_sfp_rows_()
     TTI_SFPENCC(0, 0); // clear cc result reg
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 // Implements relu min which returns x when x > threshold, otherwise return 0
@@ -89,7 +89,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_min_(const std::uint32_t threshold)
 {
     TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                               // enable cc
+    TTI_SFPENCC(1, 2);                                              // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
@@ -117,7 +117,7 @@ inline void _calculate_relu_max_sfp_rows_()
     TTI_SFPENCC(0, 0); // reset cc
 
     // Store from lreg0 into dest register
-    TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0, 0);
+    TTI_SFPSTORE(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, 0);
 }
 
 // Implements relu max
@@ -125,7 +125,7 @@ template <int ITERATIONS = SFPU_ITERATIONS>
 inline void _relu_max_(const std::uint32_t threshold)
 {
     TT_SFPLOADI(p_sfpu::LREG2, 0 /*Float16_b*/, (threshold >> 16)); // store threshold in LREG2 (runtime imm)
-    TTI_SFPENCC(1, 2);                                               // enable cc
+    TTI_SFPENCC(1, 2);                                              // enable cc
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
