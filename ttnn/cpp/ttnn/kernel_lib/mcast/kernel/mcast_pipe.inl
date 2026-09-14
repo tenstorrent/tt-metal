@@ -425,6 +425,9 @@ FORCE_INLINE void ReceiverPipe<
     if constexpr (PRE_HANDSHAKE) {
         // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
         consumer_ready_.up(noc_, sender_x, sender_y, 1);
+        // The acknowledgement is non-posted. Complete it before blocking on the sender's
+        // data-ready signal so the two sides cannot form a NoC dependency cycle.
+        noc_.async_atomic_barrier();
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(round + 1);
@@ -456,6 +459,7 @@ FORCE_INLINE uint32_t ReceiverPipe<
             coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_X],
             coords_[mcast_wire::SENDER_COORD_WORDS * sender_index + mcast_wire::SENDER_Y],
             1);
+        noc_.async_atomic_barrier();
     }
     if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
         data_ready_.wait_min(round + 1);
