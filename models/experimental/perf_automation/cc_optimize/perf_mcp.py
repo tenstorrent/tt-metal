@@ -82,9 +82,18 @@ _MANIFEST = json.load(open(_MANIFEST_PATH)) if _MANIFEST_PATH else {}
 # mode of a multi-modal model): override which perf test profile_model/measure_candidate run, and
 # which e2e PCC test check_pcc runs, without minting a new manifest.
 if os.environ.get("PERF_MCP_PERF_TEST") and _MANIFEST:
-    _MANIFEST.setdefault("perf_test_resolved", {})["path"] = os.environ["PERF_MCP_PERF_TEST"]
+    # PERF_MCP_PERF_TEST may arrive as a full `path::case` node id (needed elsewhere to select the
+    # right pytest case). "path" here must stay the BARE file: the coverage cache and
+    # _capacity_scaled_osl's OSL-safety lookup (agent/measure.py) key on the file alone, same
+    # convention as run.py's own _node_path(). Holding the fuller form here made that lookup miss
+    # every time, so OSL silently stayed at its uncapped default and every round's profiling
+    # capture OOM'd.
+    _pt_path, _, _pt_case = os.environ["PERF_MCP_PERF_TEST"].partition("::")
+    _MANIFEST.setdefault("perf_test_resolved", {})["path"] = _pt_path
     if os.environ.get("PERF_MCP_PERF_CASE") is not None:
         _MANIFEST["perf_test_resolved"]["case"] = os.environ["PERF_MCP_PERF_CASE"]
+    elif _pt_case:
+        _MANIFEST["perf_test_resolved"]["case"] = _pt_case
 if os.environ.get("PERF_MCP_PCC_TEST") and _MANIFEST:
     _MANIFEST.setdefault("pathmap", {}).setdefault("pcc", {}).setdefault("end_to_end", {})
     _MANIFEST["pathmap"]["pcc"]["end_to_end"]["path"] = os.environ["PERF_MCP_PCC_TEST"]
