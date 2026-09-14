@@ -2,10 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage 3: does a REPLAYED drafter step emit the same tokens as an eagerly dispatched one?
 
-MEASURED 2026-09-14 (T3K, 64 tokens, eager verify, C=512): **yes -- and it is exactly 1.00x.**
+MEASURED 2026-09-14 (T3K, 64 tokens, eager verify): **yes, it is exact -- and it never pays.**
 
-    eager  drafter  4.12 tok/s  acceptance 6.300
-    TRACED drafter  4.10 tok/s  acceptance 6.300   tokens identical
+    config                traced   eager   ratio
+    unfused, C=512         4.10    4.12    1.00x
+    unfused, C=128         3.88    4.26    0.91x
+    fused commit, C=128    3.02    4.27    0.71x
+
+CONCLUSION: tracing the drafter is a dead lever, and the trend says why rather than merely that.
+The overhead a capture CANNOT hold -- staging (host I/O by definition) and the KV commit (its offset
+advances with the accept count, and offsets are op attributes) -- is comparable to the dispatch the
+trace removes. So every change that makes the eager forward cheaper makes the RATIO worse: shrinking
+C from 512 to 128 cuts the drafter's attention from 544 keys to 160 and hands that saving entirely
+to the eager arm. There is no tuning path from here to a win.
+
+Keep the capture anyway: it is exact, it costs nothing when unused, and the staging work underneath
+it (stages 1 and 2) is what made the drafter's step legible enough to find the readback and argmax
+wins, which DID pay and are independent of tracing.
 
 The capture is CORRECT and buys nothing yet. Per-phase timing
 (tests/perf/test_dflash_drafter_trace_breakdown.py) says why, and it is not subtle: of a 75 ms
@@ -13,15 +26,27 @@ traced step the replay is 10 ms, while staging (14.5 ms) and commit_staged_conte
 back roughly what the forward's ~174 eager dispatches cost. A trace can hold neither -- staging is
 host I/O by definition, and the commit's offset advances with the accept count.
 
-    lm_head + readback  33.3 ms  (44 %)   <- device-side argmax would take most of this
-    commit              17.2 ms  (23 %)   <- 20 dispatches a capture cannot hold
-    replay              10.1 ms  (13 %)
-    stage_step           8.9 ms  (12 %)   <- two [1,1,16,C+32] masks, scales with C not context
-    stage_taps           4.8 ms
-    stage_tokens         0.8 ms
+    phase               first    after argmax + C=128
+    lm_head + readback  33.3 ms   5.3 ms   <- device argmax in ROW_MAJOR, 4.5x, and it shipped
+    commit              17.2 ms  17.9 ms   <- 20 dispatches; fusing them to 4 made it WORSE
+    replay              10.1 ms   9.8 ms
+    stage_step           8.9 ms   4.6 ms
+    stage_taps           4.8 ms   4.0 ms
+    stage_tokens         0.8 ms   1.4 ms
+    TOTAL               75.1 ms  48.4 ms
 
-So the remaining work is ordered by that table, not by intuition: argmax, then the commit, then
-capacity. Do not read the trace as a failure -- it is the precondition, and it is now exact.
+A whole traced step went 75.1 -> 48.4 ms and the ratio still fell, because the eager arm improved
+at least as much. That is the shape of a lever that does not pay.
+
+TWO THINGS THE MICROBENCHMARK GOT WRONG, both caught only end to end:
+
+* Fusing the per-layer KV buffers cut the commit from 20 dispatches to 4 and its phase timing from
+  17.9 to 9.5 ms -- and moved the loop from 1.00x to 0.71x. Dispatch count is a proxy; fusing
+  turned contiguous per-layer writes into a strided scatter (each layer's slab sits C rows apart)
+  and added a full history-slab copy per layer per replay. At C=512 the same code measured 93.2 ms
+  for that phase. Reverted.
+* Phase timings sit behind their own synchronize_device, which prices dispatch well and locality
+  badly. Use them to LOCATE cost, never to validate a change.
 
 Two measurement traps hit while producing those numbers, both mine:
 
@@ -82,7 +107,7 @@ PAGED_BLOCK_SIZE = 64
 NUM_BLOCKS = 64
 TRACE_REGION = 250_000_000  # must hold the verify trace AND the drafter trace
 MAX_NEW_TOKENS = 64
-CAPACITY = 512
+CAPACITY = 128  # see test_dflash_drafter_trace_breakdown: the fused commit is stride-bound, so C is load-bearing
 PROMPT = "The capital of France is"
 
 

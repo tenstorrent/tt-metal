@@ -133,7 +133,11 @@ def test_traced_drafter_breakdown(mesh_device, device_params, reset_seeds, ensur
 
             _t("replay", _replay)
             _t("commit", lambda: tt.commit_staged_context(16))
-            _t("lm_head", lambda: target.lm_head_device(drafter._trace_hidden, keep_rows=BLOCK - 1))
+            # draft_ids_device, not lm_head_device: greedy propose argmaxes on device now, so this
+            # must time the call the product makes. Timing the old one would report a cost the
+            # drafter has stopped paying -- the exact defect that made an earlier verify breakdown
+            # report 609 ms for a readback that had already been narrowed.
+            _t("lm_head", lambda: target.draft_ids_device(drafter._trace_hidden, keep_rows=BLOCK - 1))
 
         total = sum(phases.values()) / iters
         mask_kb = 2 * BLOCK * (cap + 32) * 2 / 1024
