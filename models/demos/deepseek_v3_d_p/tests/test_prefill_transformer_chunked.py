@@ -643,7 +643,11 @@ def run_chunked_transformer_padded(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
-    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
@@ -844,7 +848,11 @@ def run_chunked_transformer(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
-    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
@@ -1683,7 +1691,11 @@ def run_chunked_transformer_updated(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
-    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     profiler.start("tt_transformer_creation")
     transformer = TtPrefillTransformer(
@@ -2698,7 +2710,11 @@ def run_chunked_transformer_padded_trace(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
-    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     transformer = TtPrefillTransformer(
         mesh_device=mesh_device,

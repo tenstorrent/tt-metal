@@ -74,6 +74,7 @@ class TtMoe(LightweightModule):
         use_latent_moe: bool = False,
         latent_use_norm: bool = True,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_weights_dram_sharded: bool = False,
     ) -> bool:
         """Check if MoE cache is complete (gate + routed experts + shared expert [+ latent proj]).
 
@@ -84,12 +85,21 @@ class TtMoe(LightweightModule):
         as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
         same value it will later request -- otherwise a stale cache at another dtype reports
         complete and the empty placeholder is loaded as the weights.
+
+        ``routed_expert_weights_dram_sharded`` additionally demands the ND-sharded files. An
+        interleaved-only cache is still USABLE when they are absent -- construction reshards into
+        the ND placement and writes them -- so this is the knob that turns that silent per-expert
+        reshard into a visible incomplete cache.
         """
         prefix = f"layer_{layer_idx}"
         if not TtMoEGatePrefill.check_cache_complete(cache_path, f"{prefix}.gate"):
             return False
         if not TtRoutedExpert.check_cache_complete(
-            cache_path, f"{prefix}.routed_expert", experts_per_chip, routed_expert_weights_dtype
+            cache_path,
+            f"{prefix}.routed_expert",
+            experts_per_chip,
+            routed_expert_weights_dtype,
+            dram_sharded=routed_expert_weights_dram_sharded,
         ):
             return False
         if not TtSharedExpert.check_cache_complete(cache_path, f"{prefix}.shared_expert"):

@@ -201,6 +201,15 @@ def test_moe_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
     assert TtMoe.check_cache_complete(
         CACHE_DIR, layer_idx=0, experts_per_chip=experts_per_chip, routed_expert_weights_dtype=ttnn.bfloat16
     ), "Cache should be complete after build"
+    # An interleaved build is still loadable, so the ND-sharded ask must be what makes it incomplete --
+    # otherwise a cache that reshards on every process start reports itself as the fast path.
+    assert not TtMoe.check_cache_complete(
+        CACHE_DIR,
+        layer_idx=0,
+        experts_per_chip=experts_per_chip,
+        routed_expert_weights_dtype=ttnn.bfloat16,
+        routed_expert_weights_dram_sharded=True,
+    ), "Interleaved-only cache reported complete for ND-sharded weights"
 
     logger.info("Path 2: Creating TtMoe from cold cache...")
     profiler.start("cold_load")

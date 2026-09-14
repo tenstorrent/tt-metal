@@ -58,6 +58,7 @@ class TtPrefillTransformer(LightweightModule):
         kv_only_last_layer: bool = False,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_weights_dram_sharded: Optional[bool] = None,
     ) -> bool:
         """
         Top-level cache completeness check for the full transformer.
@@ -85,6 +86,10 @@ class TtPrefillTransformer(LightweightModule):
                 so existing callers are unaffected, but MUST be passed for a LatentMoE model
                 (Kimi-K3): without it the block check cannot know to look for the
                 latent-projection cache files and reports a cache missing them as complete.
+            routed_expert_weights_dram_sharded: also require the routed experts' ND-sharded
+                tensorbins. None resolves from ``model_cfg``. A cache without them still runs --
+                construction reshards into the ND placement on every process start -- so pass this
+                where the point is to catch that cost rather than to gate weight loading.
 
         Returns:
             True if all expected cache files exist, False otherwise
@@ -111,6 +116,7 @@ class TtPrefillTransformer(LightweightModule):
                 experts_per_chip,
                 model_cfg=model_cfg,
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                routed_expert_weights_dram_sharded=routed_expert_weights_dram_sharded,
             ):
                 return False
 

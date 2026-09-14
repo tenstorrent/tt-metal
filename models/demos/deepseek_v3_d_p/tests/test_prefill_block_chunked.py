@@ -198,8 +198,15 @@ def run_chunked_block(
     init_checker(effective_cache_path)
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
     assert TtPrefillBlock.check_cache_complete(
-        effective_cache_path, layer_idx, is_dense=is_dense, experts_per_chip=experts_per_chip
-    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
+        effective_cache_path,
+        layer_idx,
+        is_dense=is_dense,
+        experts_per_chip=experts_per_chip,
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     block_kwargs = dict(
         mesh_device=mesh_device,
@@ -439,8 +446,15 @@ def run_chunked_block_multiuser(
     init_checker(effective_cache_path)
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
     assert TtPrefillBlock.check_cache_complete(
-        effective_cache_path, layer_idx, is_dense=is_dense, experts_per_chip=experts_per_chip
-    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
+        effective_cache_path,
+        layer_idx,
+        is_dense=is_dense,
+        experts_per_chip=experts_per_chip,
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     block_kwargs = dict(
         mesh_device=mesh_device,
@@ -650,8 +664,15 @@ def run_chunked_block_padded(
     init_checker(effective_cache_path)
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
     assert TtPrefillBlock.check_cache_complete(
-        effective_cache_path, layer_idx, is_dense=is_dense, experts_per_chip=experts_per_chip
-    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
+        effective_cache_path,
+        layer_idx,
+        is_dense=is_dense,
+        experts_per_chip=experts_per_chip,
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     block_kwargs = dict(
         mesh_device=mesh_device,
@@ -1005,8 +1026,15 @@ def run_chunked_block_glm_indexer(
     init_checker(effective_cache_path)
     experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
     assert TtPrefillBlock.check_cache_complete(
-        effective_cache_path, layer_idx, is_dense=is_dense, experts_per_chip=experts_per_chip
-    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path}"
+        effective_cache_path,
+        layer_idx,
+        is_dense=is_dense,
+        experts_per_chip=experts_per_chip,
+        # This leg never builds a cache, so what the config asks for is demanded here or not at all:
+        # model_cfg carries both the latent projections and the ND-sharded routed-expert files, and
+        # without the latter every process start silently reshards those weights on device.
+        model_cfg=variant.model_config,
+    ), f"TTNN cache incomplete for layer {layer_idx} at {effective_cache_path} (ND-sharded routed-expert weights included)"
 
     block = TtPrefillBlock(
         mesh_device=mesh_device,

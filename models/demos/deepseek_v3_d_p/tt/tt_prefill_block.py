@@ -90,6 +90,7 @@ class TtPrefillBlock(LightweightModule):
         *,
         model_cfg: type | None = None,
         routed_expert_weights_dtype: ttnn.DataType = DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
+        routed_expert_weights_dram_sharded: Optional[bool] = None,
     ) -> bool:
         """Check if block cache is complete (norms + MLA + FFN/MoE).
 
@@ -101,6 +102,11 @@ class TtPrefillBlock(LightweightModule):
         as_tensor stamps it into the tensorbin filename, so the completeness check must pin the
         same value it will later request -- otherwise a stale cache at another dtype reports
         complete and the empty placeholder is loaded as the weights.
+
+        ``routed_expert_weights_dram_sharded`` resolves the same way it does for the build (config
+        unless overridden), so the check demands exactly the files the build writes. It defaults to
+        False when no ``model_cfg`` is given, which keeps a caller that only wants to know whether
+        the weights are loadable at all from being told an ND-less cache is incomplete.
         """
         prefix = f"layer_{layer_idx}"
 
@@ -123,6 +129,9 @@ class TtPrefillBlock(LightweightModule):
                 not in (None, getattr(model_cfg, "EMB_SIZE", None)),
                 latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
                 routed_expert_weights_dtype=routed_expert_weights_dtype,
+                routed_expert_weights_dram_sharded=_resolve_routed_expert_dram_sharded(
+                    model_cfg, routed_expert_weights_dram_sharded
+                ),
             ):
                 return False
 
