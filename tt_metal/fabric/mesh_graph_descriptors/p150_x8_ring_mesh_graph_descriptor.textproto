@@ -1,0 +1,31 @@
+# Eight p150b boards as a single ring of eight, rather than as the 2 x 4 mesh
+# of p150_x8_mesh_graph_descriptor.textproto.
+#
+# The cabling of this host is a 2 x 4 grid:
+#
+#     chip 0 -- chip 3 -- chip 4 -- chip 7
+#       |         |         |         |
+#     chip 1 -- chip 2 -- chip 5 -- chip 6
+#
+# which contains the Hamiltonian cycle
+#
+#     0 - 3 - 4 - 7 - 6 - 5 - 2 - 1 - 0
+#
+# so every edge a 1 x 8 ring needs is a physical link. Declaring the mesh this
+# way gives context parallelism a ring of eight along one axis, where the 2 x 4
+# descriptor caps it at four.
+#
+# Cost: with one axis of extent 1 this is a line topology, so only one
+# parallelism can be enabled at a time; the 2 x 4 descriptor can carry DDP and
+# CP together.
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 1, 8 ] dim_types: [ LINE, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
