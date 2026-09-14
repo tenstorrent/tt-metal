@@ -114,7 +114,109 @@ bool check_connection_requested(
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
+std::string describe_mesh_host_rank(uint32_t mesh_host_rank) {
+    return mesh_host_rank == *MESH_HOST_RANK_UNSET ? std::string("UNSET") : std::to_string(mesh_host_rank);
+}
+
+std::string describe_observations(tt::stl::Span<const MeshFabricConfigObservation> observations) {
+    std::string description;
+    for (const auto& observation : observations) {
+        description += fmt::format(
+            "\n  mesh_id={}, mesh_host_rank={}, rank={}, fabric_config={}",
+            *observation.mesh_id,
+            describe_mesh_host_rank(observation.mesh_host_rank),
+            observation.rank,
+            enchantum::to_string(observation.fabric_config));
+    }
+    return description;
+}
+
 }  // namespace
+
+void validate_fabric_config_consistency(
+    tt::stl::Span<const MeshFabricConfigObservation> observations,
+    const InterMeshConnectivity& inter_mesh_connectivity,
+    const std::string& mesh_graph_desc_path) {
+    // Per-mesh policy: all ranks that own a slice of a logical mesh must agree (big mesh).
+    std::map<MeshId, std::vector<MeshFabricConfigObservation>> observations_per_mesh;
+    for (const auto& observation : observations) {
+        observations_per_mesh[observation.mesh_id].push_back(observation);
+    }
+
+    for (const auto& [mesh_id, mesh_observations] : observations_per_mesh) {
+        const auto reference_config = mesh_observations.front().fabric_config;
+        const bool all_agree = std::all_of(
+            mesh_observations.begin(), mesh_observations.end(), [reference_config](const auto& observation) {
+                return observation.fabric_config == reference_config;
+            });
+        TT_FATAL(
+            all_agree,
+            "All ranks bound to mesh {} must use the same FabricConfig, but they disagree. MGD path: {}. Observed: "
+            "{}\nHeterogeneous per-mesh FabricConfig is not supported yet, see "
+            "https://github.com/tenstorrent/tt-metal/issues/56561.",
+            *mesh_id,
+            mesh_graph_desc_path,
+            describe_observations(mesh_observations));
+    }
+
+    // Intermesh policy: meshes connected through the MGD must all use the same FabricConfig, since the
+    // routers on both sides of an inter-mesh link must agree on topology and deadlock avoidance.
+    std::map<MeshId, std::set<MeshId>> mesh_neighbors;
+    for (std::uint32_t mesh_id = 0; mesh_id < inter_mesh_connectivity.size(); mesh_id++) {
+        for (const auto& chip_connectivity : inter_mesh_connectivity[mesh_id]) {
+            for (const auto& [neighbor_mesh_id, _] : chip_connectivity) {
+                mesh_neighbors[MeshId{mesh_id}].insert(neighbor_mesh_id);
+                mesh_neighbors[neighbor_mesh_id].insert(MeshId{mesh_id});
+            }
+        }
+    }
+
+    std::set<MeshId> visited;
+    for (const auto& [seed_mesh_id, _] : observations_per_mesh) {
+        if (visited.contains(seed_mesh_id)) {
+            continue;
+        }
+        // Collect one connected component of the inter-mesh graph, plus the observations made for it.
+        std::vector<MeshFabricConfigObservation> component_observations;
+        std::queue<MeshId> to_visit;
+        to_visit.push(seed_mesh_id);
+        visited.insert(seed_mesh_id);
+        while (!to_visit.empty()) {
+            const auto mesh_id = to_visit.front();
+            to_visit.pop();
+            auto mesh_observations = observations_per_mesh.find(mesh_id);
+            if (mesh_observations != observations_per_mesh.end()) {
+                component_observations.insert(
+                    component_observations.end(), mesh_observations->second.begin(), mesh_observations->second.end());
+            }
+            auto neighbors = mesh_neighbors.find(mesh_id);
+            if (neighbors == mesh_neighbors.end()) {
+                continue;
+            }
+            for (const auto& neighbor_mesh_id : neighbors->second) {
+                if (visited.insert(neighbor_mesh_id).second) {
+                    to_visit.push(neighbor_mesh_id);
+                }
+            }
+        }
+
+        if (component_observations.empty()) {
+            continue;
+        }
+        const auto reference_config = component_observations.front().fabric_config;
+        const bool all_agree = std::all_of(
+            component_observations.begin(), component_observations.end(), [reference_config](const auto& observation) {
+                return observation.fabric_config == reference_config;
+            });
+        TT_FATAL(
+            all_agree,
+            "All meshes connected by inter-mesh links must use the same FabricConfig, but they disagree. MGD path: "
+            "{}. Observed: {}\nHeterogeneous per-mesh FabricConfig is not supported yet, see "
+            "https://github.com/tenstorrent/tt-metal/issues/56561.",
+            mesh_graph_desc_path,
+            describe_observations(component_observations));
+    }
+}
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
@@ -521,6 +623,11 @@ void ControlPlane::init_control_plane(
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
+
+    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
+    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
+    this->validate_fabric_config_across_ranks();
+
     this->generate_intermesh_connectivity();
 
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
@@ -635,6 +742,11 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     // Initialize distributed contexts after topology_mapper is created so we can use its helper function
     this->initialize_distributed_contexts();
+
+    // Mesh and rank identity are known at this point; enforce one consistent FabricConfig before
+    // inter-mesh setup, routing table configuration, FabricContext, or router launch.
+    this->validate_fabric_config_across_ranks();
+
     this->generate_intermesh_connectivity();
 
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
@@ -734,7 +846,56 @@ ControlPlane::ControlPlane(
     initialize_fabric_context();
 }
 
+void ControlPlane::validate_fabric_config_across_ranks() {
+    const auto& distributed_context = this->distributed_context_.get();
+    const auto world_size = static_cast<uint32_t>(*distributed_context.size());
+    const auto rank = static_cast<uint32_t>(*distributed_context.rank());
+
+    TT_FATAL(!this->local_mesh_binding_.mesh_ids.empty(), "Local mesh binding must be initialized before validation");
+
+    static_assert(
+        std::is_trivially_copyable_v<MeshFabricConfigObservation>,
+        "MeshFabricConfigObservation is exchanged as raw bytes between ranks");
+
+    // A rank applies its single process-level FabricConfig to every mesh it binds to, so one fixed-size
+    // record per rank is enough for the exchange; the extra local bindings are appended afterwards.
+    MeshFabricConfigObservation local_observation{
+        .mesh_id = this->local_mesh_binding_.mesh_ids.front(),
+        .rank = rank,
+        .mesh_host_rank = *this->local_mesh_binding_.host_rank,
+        .fabric_config = this->fabric_config_};
+
+    std::vector<MeshFabricConfigObservation> observations(world_size);
+    distributed_context.all_gather(
+        ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&local_observation), sizeof(MeshFabricConfigObservation)),
+        ttsl::as_writable_bytes(ttsl::Span<MeshFabricConfigObservation>{observations.data(), observations.size()}));
+
+    for (auto mesh_id = std::next(this->local_mesh_binding_.mesh_ids.begin());
+         mesh_id != this->local_mesh_binding_.mesh_ids.end();
+         ++mesh_id) {
+        observations.push_back(MeshFabricConfigObservation{
+            .mesh_id = *mesh_id,
+            .rank = rank,
+            .mesh_host_rank = *this->local_mesh_binding_.host_rank,
+            .fabric_config = this->fabric_config_});
+    }
+
+    const auto& mesh_graph_desc_path = this->mesh_graph_->get_mesh_graph_descriptor_path();
+    validate_fabric_config_consistency(
+        observations,
+        this->mesh_graph_->get_inter_mesh_connectivity(),
+        mesh_graph_desc_path.has_value() ? mesh_graph_desc_path->string() : std::string("<auto-discovered>"));
+
+    this->validated_fabric_config_ = this->fabric_config_;
+}
+
 void ControlPlane::initialize_fabric_context() {
+    // Defensive check for callers that drive Fabric initialization directly: the config the routers are
+    // about to be built with must be the one all ranks agreed on.
+    TT_FATAL(
+        this->validated_fabric_config_.has_value() && *this->validated_fabric_config_ == this->fabric_config_,
+        "FabricConfig {} was not validated for consistency across ranks before fabric initialization",
+        enchantum::to_string(this->fabric_config_));
     if (tt::tt_fabric::is_tt_fabric_config(fabric_config_)) {
         this->fabric_context_ = std::make_unique<FabricContext>(
             *this, hal_, cluster_.get().arch(), cluster_.get().is_ubb_galaxy(), fabric_config_, fabric_router_config_);

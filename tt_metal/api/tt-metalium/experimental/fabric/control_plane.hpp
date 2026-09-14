@@ -92,6 +92,26 @@ struct PortDescriptor {
     FabricNodeId dst_node{MeshId{0}, 0};
 };
 
+// One rank's view of the FabricConfig it is about to initialize for one logical mesh it binds to.
+// Gathered from every rank before routing tables, FabricContext or router launch, so that a
+// disagreement is reported locally instead of hanging in the fabric peer handshake (see #56298).
+struct MeshFabricConfigObservation {
+    MeshId mesh_id{0};
+    uint32_t rank = 0;
+    uint32_t mesh_host_rank = 0;
+    FabricConfig fabric_config = FabricConfig::DISABLED;
+};
+
+// Enforces the immediate policy for heterogeneous FabricConfig:
+//   1. every rank bound to a logical mesh must report the same FabricConfig (big mesh);
+//   2. every mesh connected through the mesh graph descriptor must report the same FabricConfig
+//      (intermesh, e.g. M0=FABRIC_2D with M1=FABRIC_2D_TORUS_Y is rejected).
+// Throws with the offending observations on violation. Per-mesh configs are tracked by #56561.
+void validate_fabric_config_consistency(
+    tt::stl::Span<const MeshFabricConfigObservation> observations,
+    const InterMeshConnectivity& inter_mesh_connectivity,
+    const std::string& mesh_graph_desc_path);
+
 // Stores the gathered inter-mesh cable records between the src mesh and its neighbor meshes.
 // Keyed src_mesh -> neighbor_mesh -> one PortDescriptor per physical cable channel.
 using PortDescriptorTable = std::unordered_map<MeshId, std::unordered_map<MeshId, std::vector<PortDescriptor>>>;
@@ -336,6 +356,11 @@ private:
 
     void init_control_plane_auto_discovery();
 
+    // Gathers the FabricConfig of every rank and enforces one consistent FabricConfig per logical mesh
+    // and across all meshes connected by the mesh graph descriptor. Must run after the local mesh
+    // binding and distributed contexts are known, and before routing tables or FabricContext are built.
+    void validate_fabric_config_across_ranks();
+
     // Initialize fabric context if fabric is enabled
     void initialize_fabric_context();
 
@@ -347,6 +372,10 @@ private:
 
     // Fabric Settings
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+
+    // FabricConfig that was agreed on by all ranks in validate_fabric_config_across_ranks(). Fabric
+    // initialization is only allowed to proceed with this value.
+    std::optional<tt_fabric::FabricConfig> validated_fabric_config_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
     // is expected that any downed devices/links will result in some sort of error condition being
