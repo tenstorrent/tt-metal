@@ -124,6 +124,26 @@ accepting that it is a different working point -- or wait for the tray. Register
 shapes in the VAE decoder blocking table is worth doing regardless (it is O4's work), but on this
 evidence the rail is marginal at 11x10 and better blocking is a mitigation, not a fix.
 
+### The e2e pair, at 10 s
+
+The 15 s arm is unobtainable on blx04 (above), so the A/B ran at 10 s / 243 frames -- same test, same
+serving configuration, same adapter, only the duration differs. Jobs 243/244, fully warm:
+
+| stage | bf16 control | bfp8_b | delta |
+|---|---|---|---|
+| Encoder | 0.3 s | 0.3 s | - |
+| **Denoise (4 fwd)** | **7.9 s** | **7.6 s** | **-0.3 s** |
+| VAE decode | 3.1 s | 3.1 s | - |
+| Audio decode | 1.2 s | 1.2 s | - |
+| **Total (compute)** | **12.5 s** | **12.2 s** | **-0.3 s (-2.4%)** |
+| steady ms/step | 1947 | 1873 | **-74 ms (-3.8%)** |
+
+**The per-step figure is the one to read: -3.8% against the block profile's -3.7%.** Two independent
+instruments on the same number. The whole delta sits in denoise and the other three stages match to
+the tenth, which is the correct signature for a change that only touches attention. One pair of runs
+against a +-8% band is still not a confirmation -- but it is *consistent with* the block measurement,
+not merely non-contradictory.
+
 ### Follow-ons once S1 is proven
 
 * **Kill the typecast**, worth the measured **406 us/block (0.08 s)**. The QKV projection writes K/V
