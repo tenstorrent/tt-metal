@@ -1,0 +1,2 @@
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/rms_norm/probes/probe_001.py","note":"device probe: compute grid 13x10 (Blackhole), L1 unreserved 1531904 B, virtual x skips 8-9","ts":"2026-09-14T17:22:14+00:00"}
+{"event":"test_run","status":"pass","test":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py::test_rms_norm[no_gamma-bf16-tile-2d_single_tile]","note":"first R1 cell passes; only compile fix needed was ckernel::PoolType namespace in reader","ts":"2026-09-14T17:37:01+00:00"}
