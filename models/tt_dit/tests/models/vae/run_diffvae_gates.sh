@@ -15,6 +15,11 @@
 #   DIFFVAE_GATES_TOL     max allowed PCC drop vs baseline    (default 0.0002)
 #   RECORD_BASELINE       1 -> record this run as the new baseline instead of comparing
 #
+# A full run is ~15 min; the w480_h272 production-width row alone is ~8 min of host reference
+# and carries its own 1800 s pytest timeout. --record replaces the baseline with THIS run's
+# ledger, so record only from a run that selected every gate -- or run the parts with -k, cat
+# the ledgers, and record the merged file with diffvae_gate_compare.py --record.
+#
 # LTX_CORE_SRC must point at the directory CONTAINING the ltx_core package, i.e. the trailing
 # packages/ltx-core/src -- the repo root alone gives ModuleNotFoundError, since the stage-5 gate
 # just sys.path.insert()s this value. ltx_core is upstream's own implementation (the parity

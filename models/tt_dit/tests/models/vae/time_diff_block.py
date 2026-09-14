@@ -97,7 +97,7 @@ def main() -> None:
         )
         tables = model.rope_tables(GRID)
         band_tables = tuple(tables.frames(band.pad_lo, band.pad_hi) for band in bands)
-        # The stage-5 hoist: bands are aligned to the brick's T extent, so the activations have to be
+        # Stage 5 keep-bricked: bands are aligned to the brick's T extent, so the activations have to be
         # in bricked order before the block sees them, exactly as forward converts them once at entry.
         brick = model._stage5_brick(GRID) if model._keep_bricked else None
         if brick is not None:

@@ -102,6 +102,27 @@ def test_context_matches_upstream(*, decoder):
     assert_quality(expected, actual, pcc=0.99)
 
 
+@pytest.mark.diffvae_gate
+def test_decode_matches_upstream(*, decoder):
+    """Latent to pixels through the whole decoder, against upstream's own pixels.
+
+    The one gate that checks the seam end to end: the deterministic stages, the ghost pad and
+    crop, the context handoff and stage 5 on the reference's own noise, as a single number.
+    """
+    latent, noise, expected = _captured("input.latent", "stage5.noise", "output.pixels")
+
+    pixels = decoder.decode(latent, noise=noise)
+
+    assert tuple(pixels.shape) == tuple(expected.shape), f"{tuple(pixels.shape)} != {tuple(expected.shape)}"
+    if out := os.environ.get("DIFFVAE_DUMP_PIXELS"):
+        # A PCC number says the port is right; it does not say the video looks right. Keeping
+        # the device pixels lets them be viewed against the reference and the conv decoder.
+        Path(out).parent.mkdir(parents=True, exist_ok=True)
+        torch.save(pixels.cpu(), out)
+        print(f"\nwrote device pixels {tuple(pixels.shape)} to {out}")
+    assert_quality(expected, pixels, pcc=0.99)
+
+
 @pytest.mark.parametrize("t", [12, 25, 145])
 @pytest.mark.parametrize("frames", [1, 3, 8, 16, 64])
 @pytest.mark.diffvae_gate

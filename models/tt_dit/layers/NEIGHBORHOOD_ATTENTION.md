@@ -312,13 +312,54 @@ The sharded path builds **one plan per shard** and stacks the tables, uploading 
 program serves the mesh.
 
 
-### `models/tt_dit/layers/block_permute.py` -- RETIRED 2026-09-10
+### The retired block-permute path
 
-Was their equivalent of our bricking (reorder tokens so a block is contiguous). Deleted along
-with `na3d.py::_pick_block`, `DIFFVAE_BLOCK` / `DIFFVAE_GNA` and the SDPA op's `neighborhood_block`
-argument: at the production shard widths no legal block ever existed, so the reference executor
-always ran its strided mode. See `PLAN_retire_block_permute.md`. The strided executor itself
-followed on 2026-09-11.
+`models/tt_dit/layers/block_permute.py` was their equivalent of our bricking (reorder tokens so a
+block is contiguous), and `neighborhood_permute.py` implemented the same 3-D permutation a second
+time. Rather than unify the two, the older one was retired end to end, stages 2-5 moving onto the
+bricked executor:
+
+- 2026-09-10: `block_permute.py`, `na3d.py::_pick_block`, `DIFFVAE_BLOCK` / `DIFFVAE_GNA` and the
+  general SDPA op's `neighborhood_block` argument. At the production shard widths (W_local 15 and
+  30 at 1080p) no legal block ever existed, so the reference executor always ran its strided mode;
+  block order was never live in production.
+- 2026-09-11: the strided executor `neighborhood_attention_3d_op_sp_w_sharded` (kernel name
+  `op_sp_w_sharded`: full-W K/V all-gather + `wrow` retile into the general SDPA op) and, once no
+  executor was left, the general op's C++ neighborhood mode (see "Their SDPA kernels" below).
+- 2026-09-13: `na3d.py` itself; its gather backend became `neighborhood_attention_3d_linear_order`
+  and its planner moved to `neighborhood_attention_plan.py`.
+
+Naming: the deleted path is the **block-permute executor**, the surviving one the **bricked
+executor**. Neither is "fused" -- both fuse the gather into the kernel, and the word already names
+`DIFFVAE_SP_FUSED`, fused RoPE/qkv and the `fused-sdpa` timing-tree row.
+
+Decisions taken on the way, still in force:
+
+- **TP stays over heads for the deterministic stages.** The bricked executor reassembles heads with
+  a real site-major -> head-major permute before the head all-gather when a chip holds more than
+  one head. Dropping TP was rejected: up to 4x attention compute per chip to save a 10-line change.
+- **Shard widths that are not brick-aligned (stages 2 and 3) are handled by brick width 1**, found
+  by `_choose_sharded_brick`'s odd-width search. The alternative, swapping the SP and TP mesh axes
+  for the deterministic stages, was priced with `DIFFVAE_STAGES_SP_AXIS` and rejected: it costs
+  2.2 s per decode because stage 5 cannot follow (4 heads do not TP 8 ways), so the W-sharded
+  deterministic -> stage-5 context handoff becomes a gather and reshard.
+- Stage 1 (index 0) stays on the replicated linear-order backend: W=60 does not divide the size-8
+  mesh axis.
+
+The gate baseline (`tests/models/vae/diffvae_gate_baseline.json`) carries all 15 gates, bricked
+included. A full `run_diffvae_gates.sh` takes about 15 min: the w480_h272 production-width row
+alone is ~8 min, most of it the ltx_core reference on the host, and it carries its own 1800 s
+pytest timeout. On the device broker, whose jobs cap at 1500 s, split the run with `-k` and merge
+the ledgers before `diffvae_gate_compare.py --record`.
+
+Open, optional speed work: running the deterministic stages keep-bricked (convert to bricked
+order once at stage entry and back at exit, as stage 5 does), and stage 1, which is ~1000 ms of the decode on
+the replicated backend.
+
+Two things that bit during the migration and will again: kernel sources are JIT-only, so the host
+syntax check never sees them (run the JIT compile command with `-fsyntax-only` after a kernel edit,
+before touching the device); and the pipeline scripts' `DIFFVAE_*` exports change executor paths,
+so never carry them into a unit-test shell.
 
 ### `models/tt_dit/utils/timing_tree.py` (~360 lines)
 
@@ -417,23 +458,30 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 latent
   └─ conv_in (denormalisation folded into the weights)
   └─ DeterministicStages           stages 1-4, NABlocks + upsamples
-       └─ neighborhood_attention_3d_linear_order  -> neighborhood_attention.py (plan: neighborhood_attention_plan.py)
-  └─ DiffVAEStage5.forward
+       ├─ stage 1: replicated, neighborhood_attention_3d_linear_order
+       └─ stages 2-4: W-sharded, "bricked_sp_w_sharded" PER CALL -- every block does
+            to_bricked -> halo exchange -> neighborhood_sdpa -> to_natural on its own
+  └─ DiffVAEStage5.forward          KEEP-BRICKED: the volume is converted once, not per block
        ├─ bands = _bands(t, DIFFVAE_SLAB_FRAMES, kernel)
+       ├─ brick x + context           (_brick_activation, once per band; RoPE tables built bricked)
        ├─ rope tables (factored: frame piece + time piece)
-       └─ for band in bands:
-            for block in 8 x DiffusionNABlock:
+       └─ for block in 8 x DiffusionNABlock, for band in bands:
               context-inject -> AdaLN -> attention -> residual
                                   |
-                                  └─ "bricked_sp_w_sharded" -> neighborhood_attention.py
-                                       ├─ neighbor_pad          (halo exchange)
-                                       ├─ to_bricked            (natural -> bricked)
-                                       ├─ neighborhood_sdpa     (our op)
-                                       ├─ to_natural
-                                       └─ slice off the halo
+                                  └─ "bricked_sp_w_sharded", already_bricked=True
+                                       ├─ neighbor_pad on W_br    (halo exchange, whole bricks)
+                                       ├─ neighborhood_sdpa       (our op)
+                                       └─ head all-gather         (TP; stays bricked, no to_natural)
               -> AdaLN -> SwiGLU -> residual
+       ├─ norm_out -> conv_out        (still bricked)
+       └─ unbrick                     (_unbrick_activation, once per band, ghosts cropped)
   └─ unpatchify -> pixels
 ```
+
+Keep-bricked is the `keep_bricked` flag on `NAKernel`: the stage converts its activation to
+bricked site order at entry and back at exit, so the eight blocks and the executor
+(`already_bricked=True`) never pay the 7-D permute. The deterministic stages do not do this yet;
+their per-block `to_bricked` / `to_natural` is the open item in section 3.
 
 ---
 

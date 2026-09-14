@@ -179,7 +179,7 @@ class NAKernel:
     w_sharded: bool = False
     #: Our op: sites in bricked order, one tile row per 3D brick.
     bricked: bool = False
-    #: Hoist the brick conversion to stage entry/exit instead of paying it per block.
+    #: Convert to bricked order once at stage entry and back at exit instead of per block.
     keep_bricked: bool = False
 
 
@@ -963,7 +963,7 @@ class _NeighborhoodAttention3D(Module):
         attention is still told the full W (its executor gathers the missing columns). ``tables``
         must be W-sharded to match ``y`` in that mode (frame piece over this chip's H×(W/sp) rows).
 
-        ``brick`` set means ``y`` is already in bricked site order (stage-5 hoist): Q/K/V stay
+        ``brick`` set means ``y`` is already in bricked site order (stage 5 keep-bricked): Q/K/V stay
         bricked, RoPE uses the fused bricked table, and the op is told ``already_bricked``.
         """
         cfg = self.config
@@ -1410,7 +1410,7 @@ class DiffVAEStage5(Module):
         # W-shard above -- the two use orthogonal mesh axes.
         self.tp_axis = tp_axis
         self._w_sharded = self.kernel.w_sharded
-        # Hoist brick conversion to stage entry/exit rather than paying it per block: that 7-D
+        # Keep-bricked: convert once at stage entry and back at exit rather than per block. That 7-D
         # permute was 735 ms of the decode on the one path that needs it.
         self._keep_bricked = self.kernel.keep_bricked
         self._brick: tuple[int, int, int] | None = None

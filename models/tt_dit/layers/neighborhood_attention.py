@@ -32,10 +32,10 @@ live in ``neighborhood_attention_plan``.
   shard owns while the collective moves only the 16/76 that crosses a seam. Not filling it at all
   is the only thing that helps.
 
-  It converts in and out PER CALL unless ``already_bricked=True``. That flag is the hoist: Q/K/V
+  It converts in and out PER CALL unless ``already_bricked=True``. That flag is the keep-bricked path: Q/K/V
   arrive in bricked site order from a conversion at stage entry, so this call only halo-exchanges
   K/V on the ``W_br`` axis (whole bricks, no 7-D permute) and returns still-bricked. Stage 5
-  converts back once at exit. The per-call spans remain so an un-hoisted run still names the
+  converts back once at exit. The per-call spans remain so a per-call run still names the
   permute it is paying for.
 """
 
@@ -471,7 +471,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
     The op is SITE-major, so at more than one head per chip the flat form is transposed here
     (see ``as_volume``); at one head the two layouts are the same bytes.
 
-    ``already_bricked``: sites are already in bricked order (a caller-side hoist). Q/K/V are
+    ``already_bricked``: sites are already in bricked order (the caller's keep-bricked path). Q/K/V are
     site-major buffers labelled ``(batch, heads, bricked_sites, head_dim)`` -- read as
     ``(batch, 1, sites, heads * head_dim)`` -- the W halo is ``neighbor_pad`` on ``W_br``, and
     the return stays bricked. ``brick`` is then required so the caller and the op cannot disagree.
@@ -607,7 +607,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         return out
 
     def widened_bricked(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-        """K/V halo for the hoisted path: the sites are already bricked, so this is a reshape into
+        """K/V halo for the keep-bricked path: the sites are already bricked, so this is a reshape into
         the brick grid and the exchange -- no 7-D permute."""
         _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
         with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
@@ -692,7 +692,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         merged = ttnn.reshape(rows, (batch, query_bricked_sites, channels))
         # Already the owned region: the op wrote only the queries this shard owns, so there is no
         # halo left to slice off -- that slice, and the queries behind it, are what this bought.
-        # The hoisted path stays bricked; natural order is restored once at stage exit.
+        # The keep-bricked path stays bricked; natural order is restored once at stage exit.
         owned = merged if already_bricked else to_natural(merged, volume=owned_volume, brick=brick)
 
     if tp_axis is not None:

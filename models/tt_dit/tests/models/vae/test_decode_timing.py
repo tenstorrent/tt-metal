@@ -100,9 +100,10 @@ def test_decode_wsp_timing(*, mesh_device, latent_hw, timing_tree):
     stage5_b = os.environ.get("DIFFVAE_STAGE5_BACKEND", "bricked_sp_w_sharded")
     # DIFFVAE_STAGES_SP_AXIS / DIFFVAE_STAGES_TP_AXIS move the deterministic stages' W-shard and
     # head-TP onto the other mesh axes (0 = the size-4 rows, 1 = the size-8 cols) without touching
-    # stage 5. Prices PLAN_retire_block_permute.md D1 option 1: W over the size-4 axis gives a local
-    # width of 30 at 1080p stages 2-3 (brick-alignable) but breaks the same-axis W-sharded
-    # deterministic->stage-5 handoff, so the context is gathered and re-sharded instead.
+    # stage 5. Prices the SP/TP axis swap, rejected in NEIGHBORHOOD_ATTENTION.md ("The retired
+    # block-permute path"): W over the size-4 axis gives a local width of 30 at 1080p stages 2-3
+    # (brick-alignable) but breaks the same-axis W-sharded deterministic->stage-5 handoff, so the
+    # context is gathered and re-sharded instead.
     stages_sp_axis = int(os.environ.get("DIFFVAE_STAGES_SP_AXIS", 1))
     stages_tp_axis = int(os.environ["DIFFVAE_STAGES_TP_AXIS"]) if "DIFFVAE_STAGES_TP_AXIS" in os.environ else tp_axis
     dec = DiffVAEDecoder(
