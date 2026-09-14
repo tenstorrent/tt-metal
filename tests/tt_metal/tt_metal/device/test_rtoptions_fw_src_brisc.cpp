@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// TT_METAL_FW_SRC_BRISC names a BRISC firmware source to JIT-build instead of the in-tree one.
-// Only the JIT build can use it, so a non-empty value also disables the precompiled firmware: the
-// two switches cannot disagree, and a caller does not have to remember a second variable.
+// TT_METAL_FW_SRC_BRISC selects a supported BRISC firmware variant to JIT-build instead of the
+// in-tree one. Only the JIT build can use it, so a non-empty value also disables the precompiled
+// firmware: the two switches cannot disagree, and a caller does not have to remember a second variable.
 
 #include <gtest/gtest.h>
 
@@ -41,11 +41,11 @@ private:
 
 }  // namespace
 
-TEST(RunTimeOptionsFirmwareSource, CPU_BriscSourceOverrideImpliesThePrecompiledFirmwareBypass) {
-    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "/somewhere/else/brisc.cc");
+TEST(RunTimeOptionsFirmwareSource, CPU_BlazeVariantImpliesThePrecompiledFirmwareBypass) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "blaze");
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
-    EXPECT_EQ(opts.get_fw_src_brisc(), "/somewhere/else/brisc.cc");
+    EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Blaze);
     EXPECT_TRUE(opts.get_disable_precompiled_fw()) << "a source override without the bypass would run stock firmware";
 }
 
@@ -53,7 +53,7 @@ TEST(RunTimeOptionsFirmwareSource, CPU_NoOverrideLeavesTheInTreeSourceAndPrecomp
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", std::nullopt);
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
-    EXPECT_TRUE(opts.get_fw_src_brisc().empty());
+    EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Default);
     EXPECT_FALSE(opts.get_disable_precompiled_fw());
 }
 
@@ -61,6 +61,16 @@ TEST(RunTimeOptionsFirmwareSource, CPU_AnEmptyOverrideIsNoOverride) {
     ScopedEnv src("TT_METAL_FW_SRC_BRISC", "");
     ScopedEnv bypass("TT_METAL_DISABLE_PRECOMPILED_FW", std::nullopt);
     tt::llrt::RunTimeOptions opts;
-    EXPECT_TRUE(opts.get_fw_src_brisc().empty());
+    EXPECT_EQ(opts.get_brisc_firmware_variant(), tt::llrt::BriscFirmwareVariant::Default);
     EXPECT_FALSE(opts.get_disable_precompiled_fw());
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_ArbitrarySourcePathIsRejected) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "/somewhere/else/brisc.cc");
+    EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
+}
+
+TEST(RunTimeOptionsFirmwareSource, CPU_UnsupportedTtLangVariantIsRejected) {
+    ScopedEnv src("TT_METAL_FW_SRC_BRISC", "ttlang");
+    EXPECT_ANY_THROW(tt::llrt::RunTimeOptions{});
 }
