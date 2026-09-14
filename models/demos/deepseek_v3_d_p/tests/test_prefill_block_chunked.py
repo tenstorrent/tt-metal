@@ -1066,6 +1066,7 @@ def test_kimi_prefill_block_chunked_padded(
 # expected ~1.0) isolates the per-layer op accuracy; contrast it with the chained transformer's per-layer
 # PCC (which accumulates) to confirm the deep-layer sag is accumulation, not an indexer bug. The indexer_k
 # golden is captured only for the DSA full-indexer layers (glm_5_1: all; glm_5_2: 0-2 + every 4th).
+# Dense coverage is L2 (glm_5_2 dense FFN is layers 0-2); L0 cannot be teacher-forced (needs layer -1).
 
 
 def run_chunked_block_glm_indexer(
@@ -1228,7 +1229,11 @@ def run_chunked_block_glm_indexer(
 
 
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
-@pytest.mark.parametrize("layer_idx", [2, 6, 30, 62, 74], ids=lambda l: f"L{l}")
+@pytest.mark.parametrize(
+    "layer_idx",
+    [2, 6, 30, 62, 74],
+    ids=["dense-L2", "moe-L6", "moe-L30", "moe-L62", "moe-L74"],
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
