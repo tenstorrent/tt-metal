@@ -28,13 +28,13 @@ void kernel_main() {
 
     const auto s1 = TensorAccessor(tensor::input_indices);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer input_values_dfb(dfb::input_values);
     DataflowBuffer input_indices_dfb(dfb::input_indices);
     const uint32_t tile_bytes_input_values = input_values_dfb.get_entry_size();
 
     uint32_t tile_id_input_values = 0;
-    uint32_t tile_id_input_indices = 0;
+    const uint32_t tile_id_input_indices = 0;
     for (uint32_t i = 0; i < Ht; ++i) {
         // input values TILE
         for (uint32_t j = 0; j < Wt; ++j) {

@@ -12,6 +12,7 @@ from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
@@ -266,6 +267,7 @@ class TtPrefillBlock(LightweightModule):
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
+        tp_shard_kv: bool = False,
     ):
         super().__init__()
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
@@ -301,6 +303,14 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- Attention norm ---
+        use_glm52_l1_attn_norm = (
+            is_blackhole()
+            and is_chunked
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 64
+            and config.q_lora_rank == 2048
+            and getattr(config, "indexer_types", None) is not None
+        )
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -311,6 +321,7 @@ class TtPrefillBlock(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm52_l1_attn_norm else None,
         )
 
         # --- MLA ---
@@ -337,6 +348,7 @@ class TtPrefillBlock(LightweightModule):
             kv_only=kv_only,
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
+            tp_shard_kv=tp_shard_kv,
         )
 
         if kv_only:
@@ -460,6 +472,9 @@ class TtPrefillBlock(LightweightModule):
             hidden_dim=model_cfg.MOE_INTERMEDIATE_SIZE,
             # getattr because every other model config lacks these; None makes TtMoe fall back.
             routed_emb_dim=getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None),
+            # Absent on the models whose routed-expert shape never favours the composite, so
+            # they keep the single-op path rather than paying a second dispatch for nothing.
+            routed_expert_hybrid_token_threshold=getattr(model_cfg, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None),
             shared_hidden_dim=getattr(model_cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None),
             latent_weights=state_dict.get("latent_weights"),  # None if cache exists
             latent_use_norm=getattr(model_cfg, "LATENT_MOE_USE_NORM", True),
@@ -500,18 +515,8 @@ class TtPrefillBlock(LightweightModule):
         its MLA (per-layer migration-ack segmentation; only acts when the controller carries an ack
         callback). No-op for dense / kv-only FFNs, whose FFN has no sub-device overlap to trace around.
 
-        DENSE-MLA ONLY — see TtPrefillTransformer.set_trace_controller for why. Re-asserted here so a
-        caller that drives a single block (the block-level tests) is caught too, not just whole-model
-        callers."""
-        mla = getattr(self, "mla", None)
-        if controller is not None and mla is not None and getattr(mla, "_has_indexer", False):
-            raise AssertionError(
-                f"trace capture is not supported for sparse/DSA (indexer) attention (layer "
-                f"{getattr(self.mla, 'layer_idx', '?')} resolved has_indexer=True). Supported today: "
-                "the dense-MLA models (deepseek_v3, kimi_k2_6, kimi_k2_7). GLM (glm_5_1 / glm_5_2) and "
-                "other sparse variants need their indexer ops ported to the per-element-tensor metadata "
-                "form first — run them untraced until then."
-            )
+        Both dense-MLA and sparse/DSA (indexer) blocks are traceable — see
+        TtPrefillTransformer.set_trace_controller."""
         # Stored so the block's migration-ack site (below, in forward) can route through the controller
         # (trace path) instead of calling on_layer_complete directly — see the ack comment in forward.
         self._trace_controller = controller
@@ -537,7 +542,7 @@ class TtPrefillBlock(LightweightModule):
         return_kv_cache: bool = False,
         return_intermediates: bool = False,
         d2h_service=None,
-        record_dev: Optional[ttnn.Tensor] = None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
         on_layer_complete: Optional[Callable[[int], None]] = None,
         on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
         actual_start: Optional[int] = None,
@@ -564,8 +569,8 @@ class TtPrefillBlock(LightweightModule):
                 the chunk this block zeros the pad window past actual_end, then enqueues the ack via the
                 outbound_socket_service_sync device op on the same CQ — no host sync. This is the
                 single-host (LayerAckService) ack path; mutually exclusive with on_layer_complete.
-            record_dev: the chunk's PrefillMetadata device tensor sent as the ack record; required when
-                d2h_service is set. Distinct from `metadata`: record_dev is the socket record handed to
+            metadata_msg: the chunk's PrefillMetadata device tensor sent as the ack record; required when
+                d2h_service is set. Distinct from `metadata`: metadata_msg is the socket record handed to
                 the host, `metadata` is the per-element scalar triple read by the on-device ops.
             on_layer_complete: optional per-layer migration ack fired on the HOST. In chunked prefill,
                 after MLA writes the chunk this block zeros the pad window past actual_end, flushes, then
@@ -610,6 +615,7 @@ class TtPrefillBlock(LightweightModule):
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             actual_start=actual_start,
+            actual_end=actual_end,
             cache_user_id=cache_user_id,
             return_kv_intermediates=return_kv_intermediates,
             indexer_indices=indexer_indices,
@@ -645,7 +651,7 @@ class TtPrefillBlock(LightweightModule):
         # cache_layer_idx is the LOCAL per-rank cache slot in both.
         if d2h_service is not None or on_layer_complete is not None:
             assert actual_end is not None or metadata is not None, "actual_end or metadata required for zero_pad"
-            assert d2h_service is None or record_dev is not None, "record_dev required when d2h_service is set"
+            assert d2h_service is None or metadata_msg is not None, "metadata_msg required when d2h_service is set"
             # zero_padded_kv_cache is a DENSE (TILE) kvpe-cache op. A DSA-sparse model's kvpe cache is
             # bf16/fp8 ROW_MAJOR (sparse_sdpa reads it natively) and the op asserts TILE, so skip it for
             # sparse.
@@ -677,10 +683,11 @@ class TtPrefillBlock(LightweightModule):
                 # Device-op ack, enqueued on the same CQ right after the zero: the record cannot reach the
                 # host before the zero has executed, so the ack implies zero-complete with no host sync —
                 # unlike the host-callback path below, which needs an explicit flush.
-                # NOT used under trace: record_dev is the per-chunk socket metadata tensor, so its address
-                # changes every chunk and a capture would bake in a stale one. TtPrefillRuntime.prefill_chunk
-                # asserts d2h_service is None when use_trace.
-                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=record_dev)
+                # Capture-safe only because metadata_msg is at a fixed address: the op registers it as a
+                # buffer binding, which trace replay does not re-patch. A traced caller must therefore
+                # pass a persistent record (TtPrefillRuntime._trace_metadata_msg), never the per-chunk
+                # socket tensor, whose address moves every chunk.
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h_service, metadata=metadata_msg)
             else:
                 # Trace path: route the ack through the controller. At capture it splits the trace here (a host
                 # shm bump cannot live inside a trace); at replay the controller fires the ack between the two

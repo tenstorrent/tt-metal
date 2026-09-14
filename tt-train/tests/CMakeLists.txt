@@ -55,6 +55,7 @@ set(SOURCES
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
     ops/distributed/ring_sdpa_test.cpp
+    ops/distributed/ring_sdpa_schedule_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -78,7 +79,7 @@ set(SOURCES
     ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
-    ops/mla_qkv_assemble_op_test.cpp
+    ops/mla_kv_assemble_op_test.cpp
     ops/variable_matmul_test.cpp
     utils/memory_utils_test.cpp
     ops/mla_q_rope_op_test.cpp
@@ -187,7 +188,7 @@ if(TARGET benchmark::benchmark)
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
         benchmark/mla_q_rope_benchmark.cpp
-        benchmark/mla_qkv_assemble_benchmark.cpp
+        benchmark/mla_kv_assemble_benchmark.cpp
         benchmark/transpose_matmul_benchmark.cpp
     )
 

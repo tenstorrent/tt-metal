@@ -96,6 +96,7 @@ DB_SCHEMA = [
     Column("fast_mode", "string", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
+    Column("fused_sort", "string", True, "configuration"),
     Column("in0_c_dim", "int64", True, "configuration"),
     Column("in0_r_dim", "int64", True, "configuration"),
     Column("in1_c_dim", "int64", True, "configuration"),
@@ -124,6 +125,7 @@ DB_SCHEMA = [
     Column("pool_type", "string", True, "configuration"),
     Column("r_dimm", "int64", True, "configuration"),
     Column("reduce_pool_type", "string", True, "configuration"),
+    Column("relu_config", "int64", True, "configuration"),
     Column("srca_reuse_count", "int64", True, "configuration"),
     Column("stable_sort", "string", True, "configuration"),
     Column("ternary_mathop", "string", True, "configuration"),
@@ -141,7 +143,7 @@ DB_SCHEMA = [
     Column("arch", "string", False, "provenance", origin="ci"),
     Column("run_id", "string", False, "provenance", origin="ci"),
     Column("timestamp", "string", False, "provenance", origin="ci"),
-    Column("pipeline", "string", False, "provenance", origin="ci"),  # PR | nightly
+    Column("pipeline", "string", False, "provenance", origin="ci"),  # pr | nightly
     Column("pr_number", "string", True, "provenance", origin="ci"),  # NULL for nightly
 ]
 

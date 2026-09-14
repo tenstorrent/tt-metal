@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto K = get_arg(args::K);
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : (K / 32) + 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -25,7 +25,7 @@ void kernel_main() {
 
     const auto s2 = TensorAccessor(tensor::expert_mask);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::input);
     DataflowBuffer dfb_topk(dfb::topk_mask);
     DataflowBuffer dfb_expert(dfb::expert_mask);

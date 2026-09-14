@@ -153,7 +153,10 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 30;
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(30);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(31);
+
+    constexpr uint32_t x_accessor_offset = 32;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -324,7 +327,10 @@ void kernel_main() {
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        const uint32_t count_value = counts_ptr[global_expert_id];
+        // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+        // op and are dropped here exactly like a zero count.
+        const uint32_t count_value =
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also

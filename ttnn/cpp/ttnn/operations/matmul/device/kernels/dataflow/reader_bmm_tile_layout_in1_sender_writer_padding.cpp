@@ -19,33 +19,33 @@ void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args
-    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t in1_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // in1 mcast args
-    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in1_mcast_dest_noc_start_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_dest_noc_start_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_dest_noc_end_x = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in1_mcast_dest_noc_end_y = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // sparsity args
-    const uint32_t sparsity_addr = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t sparsity_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // WRITER
     // out tensor args
-    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    uint32_t out_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // padding args (READER)
-    const uint32_t last_block_w = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_block_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
     // padding args (WRITER)
-    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t out_num_nonzero_subblocks_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_last_subblock_h = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t padded_block_tiles_h_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_last_num_nonzero_subblocks_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t out_last_subblock_w = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t padded_subblock_tiles_addr_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     // COMPILE TIME ARGS
     // READER
@@ -110,8 +110,8 @@ void kernel_main() {
 
 #ifdef FUSE_BIAS
     // in3 mcast args
-    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
-    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
+    const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 
     constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
@@ -135,11 +135,11 @@ void kernel_main() {
     rt_args_idx += 2;  // Skip over placeholders
 #endif  // FUSE_BIAS
 #ifndef OUT_SHARDED
-    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(static_cast<int>(rt_args_idx++));
 #endif  // OUT_SHARDED
 
-    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
+    constexpr bool fuse_op_all_gather = static_cast<bool>(get_compile_time_arg_val(30));
+    constexpr bool fuse_op_reduce_scatter = static_cast<bool>(get_compile_time_arg_val(31));
 
     MatmulOpReceiver fused_op_receiver;
     OpSignaler op_signaler;
@@ -155,13 +155,13 @@ void kernel_main() {
     }
 
     constexpr auto in1_args = TensorAccessorArgs<33>();
-    constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
-    constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
+    constexpr auto sparsity_args = TensorAccessorArgs<decltype(in1_args)::next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<decltype(sparsity_args)::next_compile_time_args_offset()>();
 #ifdef FUSE_BIAS
-    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto after_bias_offset = bias_args.next_compile_time_args_offset();
+    constexpr auto bias_args = TensorAccessorArgs<decltype(out_args)::next_compile_time_args_offset()>();
+    constexpr auto after_bias_offset = decltype(bias_args)::next_compile_time_args_offset();
 #else
-    constexpr auto after_bias_offset = out_args.next_compile_time_args_offset();
+    constexpr auto after_bias_offset = decltype(out_args)::next_compile_time_args_offset();
 #endif  // FUSE_BIAS
 
 // RT and COMPILE TIME ARGS for DRAM sharded weights
@@ -169,8 +169,10 @@ void kernel_main() {
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t num_dram_shards_to_read = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t dram_tensor_start_offset = get_arg_val<uint32_t>(rt_args_idx++);
-    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
-    tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
+    tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx++)));
+    tt_l1_ptr uint32_t* current_dram_bank_id =
+        reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(static_cast<int>(rt_args_idx++)));
 
     constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
     constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
@@ -206,7 +208,7 @@ void kernel_main() {
     constexpr uint32_t dfb_id_out0 = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(dfb_id_out0);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in1(dfb_id_in1);
     DataflowBuffer dfb_out(dfb_id_out0);
     Semaphore<> sender_sem(get_compile_time_arg_val(10));
@@ -316,7 +318,7 @@ void kernel_main() {
                 }
             }
 
-            uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
+            const uint32_t in1_tensor_current_h_dim_block_tile_id = in1_batch_tile_id;
             uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
             for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
                 uint32_t in1_tensor_current_w_dim_block_tile_id = in1_tensor_current_h_dim_block_tile_id;
@@ -436,7 +438,7 @@ void kernel_main() {
                         // Operand 1 - interleaved
                         dfb_in1.reserve_back(in1_block_num_tiles);
                         uint32_t in1_write_offset = 0;
-                        uint64_t in1_start_address =
+                        const uint64_t in1_start_address =
                             dfb_in1.get_write_ptr();  // copy start address of block, to be used for mcasting
 
                         // Copy in1 block into CB, as the default kernel
@@ -471,7 +473,7 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
+                        const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in1_start_address)),
@@ -535,7 +537,7 @@ void kernel_main() {
                         dfb_in3.reserve_back(in1_block_w);
                         uint32_t in3_write_offset = 0;
 
-                        uint64_t in3_start_address =
+                        const uint64_t in3_start_address =
                             dfb_in3.get_write_ptr();        // copy start address of block, to be used for mcasting
                         uint32_t in3_block_size_bytes = 0;  // can be optimized later, pass it to kernel
 
@@ -614,7 +616,7 @@ void kernel_main() {
                         sender_sem.set(0);
 
                         // Now we have the block in the CB address, we can mcast to dests!
-                        MulticastEndpoint mcast_dst;
+                        const MulticastEndpoint mcast_dst;
                         // num_dests must not include source, since we are NOT really doing a local copy!
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(static_cast<uint32_t>(in3_start_address)),
@@ -658,9 +660,9 @@ void kernel_main() {
 
 #ifndef OUT_SHARDED
                     // WRITER
-                    uint32_t num_blocks_w_dim_ =
+                    const uint32_t num_blocks_w_dim_ =
                         bw >= last_num_blocks_w_dim - 1 ? last_num_blocks_w_dim : num_blocks_w_dim;
-                    uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
+                    const uint32_t out_num_nonzero_subblocks_h_ = out_num_nonzero_subblocks_h;
                     uint32_t out_num_nonzero_subblocks_w_ = out_num_nonzero_subblocks_w;
                     if (bw == num_blocks_w_dim_ - 1) {
                         out_num_nonzero_subblocks_w_ = out_last_num_nonzero_subblocks_w;
@@ -712,15 +714,15 @@ void kernel_main() {
                         }
                         // Pop fully padded subblocks along the row
                         if (bw == num_blocks_w_dim_ - 1) {
-                            dfb_out.wait_front(padded_block_tiles_w_skip);
-                            dfb_out.pop_front(padded_block_tiles_w_skip);
+                            dfb_out.wait_front(static_cast<uint16_t>(padded_block_tiles_w_skip));
+                            dfb_out.pop_front(static_cast<uint16_t>(padded_block_tiles_w_skip));
                         }
                         out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
                     }
                     // Pop row(s) of fully padded subblocks
                     if (bh == num_blocks_h_dim - 1) {
-                        dfb_out.wait_front(padded_block_tiles_h_skip);
-                        dfb_out.pop_front(padded_block_tiles_h_skip);
+                        dfb_out.wait_front(static_cast<uint16_t>(padded_block_tiles_h_skip));
+                        dfb_out.pop_front(static_cast<uint16_t>(padded_block_tiles_h_skip));
                     }
 
 #endif
@@ -749,13 +751,17 @@ void kernel_main() {
         }
     }
 
-#if OUT_SHARDED
-    dfb_out.wait_front(
-        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
+#ifdef OUT_SHARDED
+    dfb_out.wait_front(static_cast<uint16_t>(
+        batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h));
 #endif
 #ifdef ENABLE_GLOBAL_CB
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
-    noc.async_atomic_barrier();
 #endif
+    // #53329: this kernel issues non-posted NOC atomics (multicast semaphore increments, and
+    // OpSignaler in the fused reduce-scatter path). Flushing only writes lets the kernel retire
+    // with atomics still unacknowledged -> watcher reports an inter-kernel data race under load.
+    // Barrier both, unconditionally, mirroring the CCL reader fix in #53595.
+    noc.async_atomic_barrier();
     noc.async_write_barrier();
 }
