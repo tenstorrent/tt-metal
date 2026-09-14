@@ -96,6 +96,20 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             total_slabs = len(self._my_mla_layer_ids())
         return list(mla_ids[:total_slabs])
 
+    def warmup_ack_count(self) -> int:
+        """One record per KV-WRITING layer, not per layer.
+
+        `capture_trace()`'s warm pass fires the ack from `zero_pad_and_ack`, which a block only calls
+        when its attention wrote a KV slab. Kimi-K3 is hybrid: a 24-layer rank owns 6 MLA layers and
+        69 of the model's 93 layers are KDA and ack nothing. The shared implementation reports the
+        rank's LAYER count, so the runner's drain loop asked the FIFO for 24 records when 6 exist and
+        blocked on the seventh -- every traced 4-rank run hung after capture, before the request loop,
+        spinning at ~76% CPU with no log line after "layer-completion routing up".
+        """
+        if not self.config.use_trace or self._trace_d2h_service is None:
+            return 0
+        return len(self._my_mla_layer_ids())
+
     def prefill_chunk(self, *args, **kwargs):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.
 
