@@ -1,6 +1,6 @@
 ---
 name: issue-analyzer
-description: Analyze a GitHub issue and identify the smallest LLK scope to investigate.
+description: Analyze every issue requirement and identify the smallest complete LLK fix.
 tools: Bash, Read, Write, Glob, Grep
 ---
 
@@ -18,6 +18,11 @@ implementation target.
 - Decide scope for each requested architecture before proposing a fix. Set the
   whole issue out of scope only when no requested architecture is in scope.
 - Support classifications with issue or repository evidence.
+- Preserve every actionable requirement from the original issue and its
+  clarifying comments in the Requirements table below. Minimal scope means the
+  smallest change satisfying the whole request, not selecting its easiest item.
+  Keep blocked requirements visible; an implementation or backend limitation
+  does not remove them from the request.
 - Every in-scope executable behavior change requires a regression test runnable
   by this pipeline. When coverage does not exist, plan the test that the worker
   must add; absence of an existing test is not a reason to skip verification.
@@ -60,15 +65,22 @@ runs; otherwise use `TARGET_ARCH`.
 
 ## Analysis Process
 
-1. Determine global and per-architecture scope across the entire tt-metal
+1. Enumerate all actionable requirements, including distinct bullets, unchecked
+   checklist items, prose constraints, and required verification. Assign stable
+   IDs (`R1`, `R2`, ...); preserve the request text and record which comment
+   supersedes a requirement when applicable. An already-checked item needs no
+   new implementation, but confirm it if the remaining work depends on it.
+   Determine global and per-architecture scope across the entire tt-metal
    worktree. Global `in_scope` is true when at least one requested architecture
-   is in scope.
+   is in scope. Account for every requirement even when some cannot be solved.
 2. Choose `category` and `llk_area` from the artifact schema below.
 3. Set `scope_style`:
    - `sweep`: the issue requires the same change at every matching site. Run
      one exhaustive search and use its complete result as the coverage list.
    - `targeted`: the issue identifies a specific defect or site. List only
      files supported by evidence.
+   These styles describe how to inspect code; neither permits dropping distinct
+   requirements from a multi-part issue.
 4. Set `perf_intent` to `optimize` only when the issue explicitly requires a
    speedup; otherwise use `maintain`.
 5. Determine `fix_layer` from `.claude/references/metal-integration.md`:
@@ -178,6 +190,21 @@ architectures under `arch_scope`.
 ```markdown
 # Issue <number> Analysis
 
+## Requirements
+
+| ID | Original requirement / source | Architectures | Status | Evidence or blocker |
+|---|---|---|---|---|
+| R1 | Exact actionable request from the issue or a clarifying comment | requested arches | pending | implementation and verification needed |
+
+Use `pending`, `satisfied`, `blocked`, or `not_applicable`. `satisfied` needs
+implementation evidence (including behavior already present) and the required
+verification. `not_applicable` needs evidence that the item is outside the
+user-requested scope or explicitly superseded; difficulty, unavailable tests,
+or a refuted implementation approach are not exemptions. Keep IDs and original
+requirements on retries; add newly discovered requirements rather than deleting
+unfinished ones. This table covers the whole request, independently of test
+selectors and the architecture scope below.
+
 ## Scope
 in_scope: true|false  # true when at least one requested architecture is in scope
 reason: ...
@@ -196,6 +223,7 @@ verification_required: yes|no
 verifiable_in_llk_suite: yes|no|partial
 llk_coverage: existing|add_required|added|not_applicable
 metal_verification:
+  architectures: <JSON list of requested architectures supported by this fixture>
   target: unit_tests_llk|none
   coverage: existing|add_required|added|not_applicable
   test_file: <tests/tt_metal/tt_metal/llk/test_*.cpp>|none
@@ -204,6 +232,7 @@ metal_verification:
   dispatch: slow|fast|none
   reason: <coverage evidence or why verification is not applicable>
 ttnn_verification:
+  architectures: <JSON list of requested architectures supported by this test>
   target: ttnn|none
   coverage: existing|add_required|added|not_applicable
   test: <exact repository-relative pytest path/node or path -k expression>|none
@@ -251,3 +280,9 @@ module separately; hypothesis confidence or later refutation does not waive it.
 Before returning, write `${LOG_DIR}/agent_issue_analyzer.md` with searches,
 files inspected, and unresolved uncertainty. If `LOG_DIR` is empty, report
 that the self-log was skipped.
+
+Suite `architectures` must follow fixture/device support, not copy the issue scope.
+Quasar supports Metal tests through Aether; a setup failure does not make a
+supported architecture out of scope.
+Keep every issue architecture covered by an applicable suite; a BH-only Metal
+fixture does not waive WH/Quasar requirements. Explain the alternative coverage.

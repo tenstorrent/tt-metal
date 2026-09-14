@@ -268,7 +268,18 @@ Spawn `reviewer.md`, then call `execute_step_record_review`. Read
   spawn `issue-worker.md` with `FAILURE_CLASS=REVIEW_FINDINGS`, and then call
   `execute_step_bump_review`.
 - Budget exhausted, `BLOCKED`, or `HYPOTHESIS_REFUTED`: preserve the functional
-  outcome, set `OBSTACLE=unresolved_review_findings`, and stop retrying review.
+  evidence, set `OBSTACLE=unresolved_review_findings`, mark the run failed, and
+  stop retrying review. Passing tests do not override incomplete requirements
+  or other blocking findings.
+
+For issue solves, review must also report `requirements_complete: true` before
+the run can succeed. A false or missing value is not a clean completion review;
+return to the existing review/worker loop with the missing requirement evidence.
+If the reviewer omitted the check, have it finish the original-issue comparison
+instead of sending an unspecified code change to the worker.
+An explicit null is allowed only when the reviewer identifies a required
+measurement sealed for the upcoming performance stage. Continue to performance
+and finish the completion review at finalization; null cannot authorize success.
 
 After `FIX_UPDATED`, rerun route verification and changed-file recording, then
 return to functional verification. Do not reuse the earlier review.
@@ -311,6 +322,13 @@ When the performance budget is exhausted:
 This section is only for in-scope runs. Out-of-scope runs already returned
 through `execute_step_finalize_out_of_scope`.
 
+If the run has not already failed and review deferred `requirements_complete`
+as null for scheduled performance evidence, invoke the same reviewer to finish
+only the outstanding requirement comparison against the recorded perf results,
+then call `execute_step_record_review`. Do not repeat its full diff review.
+If requirements remain incomplete or blocked, mark the run failed and retain
+the completed work and remaining requirement IDs in the final message.
+
 Choose the final functional verdict from the latest valid functional evidence:
 `SUCCESS` for real passing verification, or `COMPILED_ONLY` /
 `UNVERIFIABLE_IN_LLK_SUITE` only when runtime verification was explicitly not
@@ -341,3 +359,5 @@ packaging gap instead of claiming success.
 
 Return the summary from `$LOG_DIR/run.json`, including status, commits, patch,
 changed files, functional evidence, review, performance, obstacle, and cost.
+Name completed and remaining requirement IDs. Never describe a subset as the
+whole issue solved.

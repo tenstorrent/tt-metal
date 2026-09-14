@@ -61,7 +61,7 @@ Optional environment:
 - `HW_TEST_SESSION`: dispatch session name.
 - `QSR_SIM_BACKEND`: Quasar Aether backend, `emu` (default) or `vcs`.
 - `QSR_EMU_SIM_PATH` / `QSR_VCS_SIM_PATH`: runner-local UMD build directories.
-- `QSR_AETHER_LOCK`: shared-filesystem lock used by every compute runner.
+- `QSR_AETHER_LOCK`: shared lock base, qualified by reservation host as in `run_test.sh`.
 - `QSR_AETHER_HOST`: remote Aether host (default `soc-l-12`).
 - `TT_METAL_LLK_ASSERTS=1`: enable device assertions and
   `TT_METAL_WATCHER=1` for local execution. The current queue request does not
@@ -81,13 +81,14 @@ mkdir -p "$LOG_DIR"
    `MISSING_TEST_COVERAGE: <specific evidence>`. `METAL_TARGET=none` is valid
    only when verification is not required and must not reach this agent.
    Also require the checksummed `REQUIRED_VERIFICATION_MANIFEST` from run state
-   to contain exactly one `suite=metal` leaf for each in-scope architecture,
+   to contain exactly one `suite=metal` leaf for each architecture covered by
+   `metal_verification.architectures`,
    with `selector.test` exactly equal to `METAL_FILTER`. Export its `run_id`,
    `attempt_id`, and leaf `requirement_id` as `CODEGEN_RUN_ID`,
    `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for local or queued
    execution. A missing or ambiguous leaf is an environment error; do not run.
-2. Normalize the ordered architecture list from `TARGET_ARCHES_JSON` or
-   `TARGET_ARCH`.
+2. Execute only the architectures with a sealed Metal leaf. Other suites
+   cover the remaining issue architectures.
 3. Build locally. A failed build returns `COMPILE_FAILED` without submitting
    silicon work.
 4. Choose the execution route:
@@ -100,18 +101,13 @@ mkdir -p "$LOG_DIR"
    `metal_verification` block.
 
 ```bash
-if [ "$(sg RUN_MODE)" = multi ]; then
-  mapfile -t ARCHES < <(
-    python - "$(sg TARGET_ARCHES_JSON)" <<'PY'
-import json
-import sys
-
-print(*json.loads(sys.argv[1]), sep="\n")
-PY
-  )
-else
-  ARCHES=("$(sg TARGET_ARCH)")
-fi
+mapfile -t ARCHES < <(python - "$(sg REQUIRED_VERIFICATION_MANIFEST)" <<'PYCODE'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+print(*dict.fromkeys(r["architecture"] for r in manifest["requirements"]
+                    if r["suite"] == "metal"), sep="\n")
+PYCODE
+)
 
 METAL_VERIFY_HOME="${METAL_VERIFY_HOME:-${CODEGEN_METAL_VERIFY_HOME:-}}"
 METAL_VERIFY_BUILD_DIR="${METAL_VERIFY_BUILD_DIR:-${CODEGEN_METAL_VERIFY_BUILD_DIR:-}}"
@@ -193,6 +189,9 @@ git -C "$METAL_VERIFY_HOME" status --porcelain | rg -q . &&
 git -C "$METAL_VERIFY_HOME" apply --check "$FIX_PATCH" ||
   { echo "ENV_ERROR: fix does not apply to the verification tree base"; exit 3; }
 git -C "$METAL_VERIFY_HOME" apply "$FIX_PATCH"
+cd "$METAL_VERIFY_HOME"
+python -m dashboard.hw_test.builder --prepare-workspace "$METAL_VERIFY_HOME" --kind metal \
+  2>&1 | tee -a "$LOG_DIR/metal_build.log"
 
 # Incremental build. Fast/no-op for a pure Compute-API (JIT-side) header change; a real
 # rebuild only when host-compiled metal code changed. Build failure => COMPILE_FAILED.
@@ -216,6 +215,8 @@ Use when no suitable warm tree exists or the fix adds files:
 ```bash
 set -euo pipefail
 cd "$WORKTREE_DIR"
+python -m dashboard.hw_test.builder --prepare-workspace "$WORKTREE_DIR" --kind metal \
+  2>&1 | tee -a "$LOG_DIR/metal_build.log"
 CACHE_USER="${USER:-$(id -un)}"
 export CCACHE_DIR="${CCACHE_DIR:-/localdev/$CACHE_USER/ccache}"
 export CCACHE_BASEDIR="$WORKTREE_DIR"
@@ -398,8 +399,8 @@ PY
   env_args+=( TT_METAL_SIMULATOR="$SIM_SO" TT_METAL_SLOW_DISPATCH_MODE=1 )
 elif [ "$arch" = quasar ]; then
   # Quasar has no local card. The wrapper resolves QSR_SIM_BACKEND=emu|vcs,
-  # serializes both compute hosts on QSR_AETHER_LOCK, and reaps orphaned remote
-  # Aether work before starting.
+  # resolves the IRD callback, shares run_test.sh's reservation lock, and
+  # limits cleanup to this run's NNG tag.
   set +e
   bash "$WORKTREE_DIR/tt_metal/tt-llk/.claude/scripts/run_qsr_metal_test.sh" \
     --bin "$BIN" \
@@ -457,8 +458,8 @@ counting a pass; an empty selection is `MISSING_TEST_COVERAGE`, not `SUCCESS`.
 `SIM_ISA_GAP` is a simulator limitation, not a fix failure — report the
 opcode/test and stop that arch.
 
-If Quasar ttsim cannot implement or boot the metal program, report
-`SIM_ISA_GAP` with the exact evidence.
+For Quasar, callback or Aether startup failures are `ENV_ERROR`; report the
+exact evidence.
 
 ## Output Format
 

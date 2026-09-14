@@ -52,8 +52,9 @@ leaf for `TARGET_ARCH`, require exactly one and take `PERF_TEST`, its optional
 `-k` filter, minimum execution count, and required measurements from that leaf.
 Export its run, attempt, and requirement IDs as `CODEGEN_RUN_ID`,
 `CODEGEN_ATTEMPT_ID`, and `CODEGEN_REQUIREMENT_ID` for every local or queued
-invocation. With no perf leaf, retain the existing applicability check and do
-not invent a measurement requirement. Never drop a leaf because a hypothesis
+invocation. With no perf leaf, write `PERF_NOT_APPLICABLE` and return without
+submitting a job. An explicitly requested measurement missing from the manifest
+is `PERF_ENV_ERROR`; return it to the worker to correct the plan before resealing. Never drop a leaf because a hypothesis
 was refuted; a refuted run remains failed until the orchestrator reducer handles
 the unexecuted requirement.
 
@@ -117,9 +118,10 @@ when any of these is true:
 
 ## Select the Perf Test
 
-Read the fix plan's `## Scope`, `## Implementation`, and `## Test Strategy`.
-Inspect the candidate perf module before selecting it; the table is a routing
-guide, not evidence that the operation is covered.
+Use the sealed leaf's selector unchanged. Read the fix plan to confirm its
+coverage; the table below is a planning reference, not permission to replace
+the selector after sealing. If it is unsuitable, return `PERF_ENV_ERROR` with
+the coverage mismatch so the worker can correct the plan.
 
 | Changed operation | Candidate module |
 |---|---|
@@ -137,12 +139,12 @@ guide, not evidence that the operation is covered.
 | fast untilize | `perf_fast_untilize.py` |
 | broadcast / unpack-a broadcast | `perf_eltwise_bcast_col_custom.py` / `perf_unpack_a_bcast_eltwise.py` |
 
-Set:
+Derive these values from that leaf:
 
 ```bash
-PERF_TEST="perf_<module>.py"
+PERF_TEST="<sealed selector test>"
 PERF_MODULE="${PERF_TEST%.py}"
-PERF_K="<exact op expression or empty>"
+PERF_K="<sealed selector k or empty>"
 PERF_OP="<mathop value for CSV filtering or empty>"
 ```
 

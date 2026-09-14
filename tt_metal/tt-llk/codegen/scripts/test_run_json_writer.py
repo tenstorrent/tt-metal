@@ -364,6 +364,52 @@ verifiable_in_llk_suite: yes
     ]
 
 
+def test_required_verification_keeps_bh_fixture_off_wh(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+  wormhole: in_scope
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: partial
+llk_coverage: existing
+metal_verification:
+  architectures: ["blackhole"]
+  target: unit_tests_llk
+  coverage: existing
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: 'BlackholeFixture.Reduce'
+  dispatch: fast
+"""
+    plan = (
+        "## Test Strategy\nreproduction_tests:\n- arch: all\n  test: test_reduce.py\n"
+    )
+    _, output = _required_manifest(
+        tmp_path, analysis, plan, "--architectures-json", '["blackhole", "wormhole"]'
+    )
+    requirements = json.loads(output.read_text())["requirements"]
+    assert {(r["architecture"], r["suite"]) for r in requirements} == {
+        ("blackhole", "llk"),
+        ("wormhole", "llk"),
+        ("blackhole", "metal"),
+    }
+
+    missing_coverage = analysis.replace(
+        "verifiable_in_llk_suite: partial", "verifiable_in_llk_suite: no"
+    )
+    proc, _ = _required_manifest(
+        tmp_path / "missing",
+        missing_coverage,
+        "## Test Strategy\n",
+        "--architectures-json",
+        '["blackhole", "wormhole"]',
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "no executable requirement for: wormhole" in proc.stderr
+
+
 def test_required_verification_infers_llk_from_old_plan_without_verification_section(
     tmp_path,
 ):

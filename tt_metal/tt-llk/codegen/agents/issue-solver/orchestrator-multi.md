@@ -143,6 +143,10 @@ may finish, but any in-scope terminal failure makes the final combined status
 Review the shared diff once. One review retry worker handles all blocking
 findings. After it edits the fix, rerun functional verification for all
 in-scope architectures and review the new shared diff before performance.
+The review must check all original requirements across the requested scope,
+including any omitted from the analysis. Apply the shared
+`requirements_complete` check; success on the selected architectures or the
+first requirement alone is not completion of the issue.
 
 ## Performance
 
@@ -169,6 +173,10 @@ optimization issue.
 ## Finalize
 
 This section is only for runs with at least one in-scope architecture.
+
+Apply the shared final completion review when `requirements_complete` was
+deferred for performance. It must cover every requested measurement across
+architectures before this run can succeed.
 
 Use the multi-architecture finalizer instead of the single-architecture verdict
 mapping:

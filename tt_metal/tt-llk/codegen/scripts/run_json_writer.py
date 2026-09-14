@@ -1436,6 +1436,22 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
     ttnn_test = _markdown_scalar(ttnn, "test")
     ttnn_dispatch = _markdown_scalar(ttnn, "dispatch")
 
+    def suite_arches(section: str) -> list[str]:
+        value = _markdown_scalar(section, "architectures")
+        if not value:
+            return arches
+        selected = json.loads(value)
+        if (
+            not isinstance(selected, list)
+            or not selected
+            or any(arch not in arches for arch in selected)
+            or len(set(selected)) != len(selected)
+        ):
+            raise ValueError(
+                "suite architectures must be a nonempty subset of issue scope"
+            )
+        return selected
+
     applicable_candidates = [
         item
         for item in candidates
@@ -1559,7 +1575,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
             raise ValueError(
                 f"Metal selector names a missing file: {worktree / metal_path}"
             )
-        for arch in arches:
+        for arch in suite_arches(metal):
             add_requirement(
                 arch,
                 "metal",
@@ -1573,7 +1589,7 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
         if ttnn_dispatch not in {"slow", "fast"}:
             raise ValueError("TTNN verification dispatch must be slow|fast")
         selector = _normalize_ttnn_pytest_selector(ttnn_test, worktree)
-        for arch in arches:
+        for arch in suite_arches(ttnn):
             add_requirement(
                 arch,
                 "ttnn",
@@ -1646,10 +1662,13 @@ def cmd_required_verification(args: argparse.Namespace) -> None:
                 measurements,
             )
 
-    if verify_required == "yes" and not requirements:
-        raise ValueError(
-            "verification is required but no executable requirement exists"
-        )
+    if verify_required == "yes":
+        uncovered = set(arches) - {r["architecture"] for r in requirements}
+        if uncovered:
+            raise ValueError(
+                "verification has no executable requirement for: "
+                + ", ".join(sorted(uncovered))
+            )
     if not requirements and verify_required != "no":
         raise ValueError("unsupported or missing verification route")
 
