@@ -1018,6 +1018,107 @@ TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
     }
 }
 
+// The per-step op of each implementation alone, swept in size until the
+// kernel's own time is visible above dispatch. The breakdown above found the
+// step ops flat between 128 and 512 rows per chip, which means neither kernel
+// was doing enough work to show; this finds where that stops being true, and
+// what each costs per unit of work once it does. Step 0 is the diagonal, so
+// every chip runs the causal schedule. A fixed dispatch floor plus a term
+// linear in the work is what to expect; the floor is the number to beat.
+TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    auto& rng = autograd::ctx().get_generator();
+
+    const auto median_us = [&](const std::function<void()>& f) {
+        f();
+        std::vector<double> samples;
+        for (uint32_t k = 0; k < 5; ++k) {
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            const auto start = std::chrono::steady_clock::now();
+            f();
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2] * 1e6;
+    };
+
+    std::cout << "one diagonal step on " << cp_size << " chips (us, median of 5); work = heads * rows^2 * d\n";
+    for (const auto& cfg : std::vector<std::array<size_t, 3>>{
+             // heads, rows per chip, head dim
+             {4, 128, 64},
+             {4, 256, 64},
+             {4, 512, 64},
+             {4, 1024, 64},
+             {4, 2048, 64},
+             {8, 1024, 64},
+             {16, 1024, 64},
+             {4, 1024, 128},
+         }) {
+        const size_t heads = cfg[0], rows = cfg[1], d = cfg[2];
+        const std::array<std::size_t, 4> shape{1UL, heads, rows * cp_size, d};
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+        const auto bf16 = [&](const xt::xarray<float>& x) {
+            return core::from_xtensor<float, ttnn::DataType::BFLOAT16>(x, device, ttnn::Layout::TILE, mapper.get());
+        };
+        const auto q = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto k = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto v = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto dO = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const auto O = bf16(ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()));
+        const ttnn::Tensor lse = ttnn::full(
+            ttnn::Shape{1U, heads, rows, 32U}, 4.0F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE, std::ref(*device));
+        const ttnn::Tensor D = ttnn::full(
+            ttnn::Shape{1U, heads, rows, 32U}, 0.5F, ttnn::DataType::FLOAT32, ttnn::Layout::TILE, std::ref(*device));
+        ttnn::Tensor step_bf16 = ttnn::zeros_like(q);
+        ttnn::Tensor acc_q = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+        ttnn::Tensor acc_k = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+        ttnn::Tensor acc_v = ttnn::zeros_like(q, ttnn::DataType::FLOAT32);
+
+        const double two_pass = median_us([&]() {
+            (void)ttml::metal::ring_sdpa_bw(
+                dO, O, q, k, v, lse, cp_size, cp_axis, 0, ttml::metal::AttentionMaskType::Causal,
+                ttml::metal::ops::ring_sdpa_bw::RingDirection::Backward, step_bf16, step_bf16, step_bf16);
+        });
+        std::cout << "  heads=" << heads << " rows/chip=" << rows << " d=" << d << ": two-pass " << two_pass;
+        // Largest block height the chunk allows, up to 4, and C from it.
+        for (const uint32_t Bt : {1u, 2u, 4u}) {
+            if (rows % (2u * Bt * 32u) != 0u) {
+                continue;
+            }
+            const uint32_t C = static_cast<uint32_t>(rows) / (2u * Bt * 32u);
+            // The op runs one schedule per (batch, head) slice on its own
+            // C-core rectangle and does not loop slices, so heads x C must
+            // fit the grid. Where it does not, say so rather than abort the
+            // sweep: that limit is itself one of the findings.
+            const auto grid = device->compute_with_storage_grid_size();
+            if (heads * C > static_cast<size_t>(grid.x) * grid.y) {
+                std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") needs " << heads * C << " cores, grid has "
+                          << grid.x * grid.y;
+                continue;
+            }
+            double cyclic = 0.0;
+            try {
+                cyclic = median_us([&]() {
+                    (void)ttml::metal::ring_cyclic_sdpa_bw(
+                        q, k, v, dO, lse, D, cp_size, cp_axis, 0, ttml::metal::AttentionMaskType::Causal,
+                        ttml::metal::RingCyclicDirection::Backward, Bt, false, /* accumulate */ true, acc_q, acc_k,
+                        acc_v);
+                });
+            } catch (const std::exception&) {
+                std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") no rectangle of area " << C << " fits";
+                continue;
+            }
+            std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") " << cyclic;
+        }
+        std::cout << "\n";
+    }
+}
+
 // Disabled by default: it is a measurement, not an assertion, and it costs a
 // few seconds per shape. Run with --gtest_also_run_disabled_tests.
 TEST_F(LoudboxRingSDPATest, DISABLED_TimeTheBaselineBackward) {
