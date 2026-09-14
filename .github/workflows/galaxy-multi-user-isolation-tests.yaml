@@ -289,7 +289,9 @@ jobs:
         # iteration before any container could write its marker file.
         timeout-minutes: 15
         run: |
-          docker compose -p multi-user -f multi-user-dc.yaml pull
+          # --ignore-pull-failures: `up -d` below pulls when the image is
+          # missing, so a registry blip must not fail a cache-warm job.
+          docker compose -p multi-user -f multi-user-dc.yaml pull --ignore-pull-failures
       - name: Run Docker Compose
         timeout-minutes: 15
         run: |
@@ -378,7 +380,11 @@ jobs:
 
       - name: Run reset isolation test
         if: matrix.scenario == 'tray_reset' || matrix.scenario == 'asic_reset'
-        timeout-minutes: 15
+        # Two suite passes per survivor, not one: the reset_done flag is only
+        # checked between pytest invocations, so a survivor caught mid-run
+        # finishes that run before its confirming run. 2x the 15min of "Run the
+        # tests", plus the pre-reset wait and the reset itself.
+        timeout-minutes: 35
         run: |
           if [ "${{ matrix.scenario }}" = "tray_reset" ]; then
             RESET_DEVICE_IDS=$(python3 -c "

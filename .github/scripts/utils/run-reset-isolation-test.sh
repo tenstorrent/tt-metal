@@ -38,14 +38,14 @@ TEST_PATH="${3:?TEST_PATH required}"
 TEST_ARGS="${4}"
 RESET_DEVICE_IDS="${5:?RESET_DEVICE_IDS required}"
 RESET_WAIT_SECS="${6:-60}"
-# Grace for the driver to re-enumerate the reset boards, matching
-# ResetUtil.post_reset_settle_seconds in tests/sweep_framework/framework/tt_smi_util.py.
+# Matches ResetUtil.post_reset_settle_seconds in tests/sweep_framework/framework/tt_smi_util.py.
 POST_RESET_SETTLE_SECS=10
 
 RESULTS_DIR=".multi-user-test-results"
 RESET_DONE_FLAG="${RESULTS_DIR}/reset_done"
+CONTAINER0_EXITED_FLAG="${RESULTS_DIR}/container0_pre_reset_exited"
 mkdir -p "$RESULTS_DIR"
-rm -f "$RESET_DONE_FLAG"
+rm -f "$RESET_DONE_FLAG" "$CONTAINER0_EXITED_FLAG"
 
 # Run the workload in a loop until the reset_done flag appears, then run once
 # more to confirm the container survived the reset. Writes exit status on completion.
@@ -85,8 +85,9 @@ done
 container0="${CONTAINER_PREFIX}-0"
 echo ">>> Starting workload in ${container0}"
 (
-    docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}"
-    # This run is intentionally killed; exit status is ignored.
+    # `|| true`: set -e would otherwise skip the flag when pytest fails.
+    docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
+    touch "$CONTAINER0_EXITED_FLAG"
 ) &
 container0_initial_pid=$!
 
@@ -94,31 +95,39 @@ container0_initial_pid=$!
 echo ">>> Waiting ${RESET_WAIT_SECS}s before reset..."
 sleep "$RESET_WAIT_SECS"
 
-echo ">>> Stopping workload in ${container0}..."
-docker exec "$container0" pkill -f pytest || true
-
-# Give the process time to terminate and release device handles.
-sleep 5
-
-# Collect the initial container-0 job (ignore its exit status — it was killed).
-wait "$container0_initial_pid" || true
-
-# No fallback: `-r` is the only reset that takes a device list, and the galaxy
-# resets (-glx_reset*) would reset the survivor trays too, so a failed -r means
-# the test cannot run at all.
-echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
 reset_ok=1
-# timeout runs inside the container: `timeout <n> docker exec` would kill only
-# the local client and leave tt-smi running on the devices.
-if ! docker exec "${container0}" timeout 120 tt-smi -r "$RESET_DEVICE_IDS"; then
-    echo ">>> ERROR: 'tt-smi -r ${RESET_DEVICE_IDS}' failed or timed out in ${container0}."
+if [ -f "$CONTAINER0_EXITED_FLAG" ]; then
+    # Not a skip: a post-reset-only green would not have tested interruption.
+    echo ">>> ERROR: ${container0}'s pre-reset workload exited within ${RESET_WAIT_SECS}s;"
+    echo ">>>        there is no active workload for the reset to interrupt."
     reset_ok=0
 else
-    # Without this, the confirming runs below can fail on device re-enumeration
-    # rather than on ETH state ("Cannot access soc descriptor ... before device
-    # driver is initialized").
-    echo ">>> Reset complete. Settling ${POST_RESET_SETTLE_SECS}s..."
-    sleep "$POST_RESET_SETTLE_SECS"
+    echo ">>> Stopping workload in ${container0}..."
+    docker exec "$container0" pkill -f pytest || true
+
+    # Give the process time to terminate and release device handles.
+    sleep 5
+
+    # Collect the initial container-0 job (ignore its exit status — it was killed).
+    wait "$container0_initial_pid" || true
+
+    # Whether -r takes these tray-mapping ids or its own per-container
+    # enumeration is untested on WH, where the two differ. Log both to settle it.
+    echo ">>> ${container0} holds /dev/tenstorrent/: $(docker exec "$container0" bash -c 'ls /dev/tenstorrent | sort -n | paste -sd,')"
+
+    # No fallback: -r is the only reset taking a device list, and the galaxy
+    # resets would reset the survivor trays too.
+    echo ">>> Resetting device(s): ${RESET_DEVICE_IDS} via tt-smi -r ..."
+    # timeout belongs inside: docker exec does not forward signals, so an outer
+    # timeout would kill the client and leave tt-smi running.
+    if ! docker exec "${container0}" timeout 120 tt-smi -r "$RESET_DEVICE_IDS"; then
+        echo ">>> ERROR: 'tt-smi -r ${RESET_DEVICE_IDS}' failed or timed out in ${container0}."
+        reset_ok=0
+    else
+        # Without this the confirming runs can fail on re-enumeration, not ETH state.
+        echo ">>> Reset complete. Settling ${POST_RESET_SETTLE_SECS}s..."
+        sleep "$POST_RESET_SETTLE_SECS"
+    fi
 fi
 
 # Unblock the survivor loops so they perform their final confirming run.
@@ -134,7 +143,7 @@ if [ "$reset_ok" = "1" ]; then
     ) &
     bg_pids+=($!)
 else
-    # Reset failed entirely; mark container-0 as failed and skip its post-reset run.
+    # No reset happened, so container-0 has nothing to confirm.
     echo 1 > "${RESULTS_DIR}/${container0}.status"
 fi
 
