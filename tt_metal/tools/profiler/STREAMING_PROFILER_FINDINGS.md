@@ -31,7 +31,7 @@ The record was written against the earlier designs (§3) and their knobs, and it
 | `TT_METAL_PERF_DEBUG_DECODE_THREADS` | `TT_METAL_STREAMING_PROFILER_DECODE_THREADS` |
 | `TT_METAL_PERF_DEBUG_WRITER_TIMEOUT_S` | gone — the receiver's no-progress warning fires after a fixed 120 s |
 | ship threshold (compile arg 39), `TT_METAL_PERF_DEBUG_CV_FIRST` | `TT_METAL_STREAMING_PROFILER_SHIP_MIN_PCT` (per lane), since folded into the relay constant `kShipMinPct`; CV-first is the only path |
-| `TT_METAL_PERF_DEBUG_ROLE_SPLIT`, `TT_METAL_PERF_DEBUG_FILLERS`, `kNSockets`, `kNFillers`, `kRole` | gone — there is one kind of DRISC, the relay; its count is `TT_METAL_STREAMING_PROFILER_NRELAYS` |
+| `TT_METAL_PERF_DEBUG_ROLE_SPLIT`, `TT_METAL_PERF_DEBUG_FILLERS`, `kNSockets`, `kNFillers`, `kRole` | gone — there is one kind of DRISC, the relay, one per DRAM view |
 | `TT_METAL_PERF_DEBUG_ROLE_RING_MB`, `_ROLE_RING_BANKS`, `_DMA_MOVER`, the DRAM frame ring, `ring-room waits`, `mv_tail`, `max batch` | gone with the movers; the only device-side buffer is the per-relay GDDR spool, `TT_METAL_STREAMING_PROFILER_DRAM_MB` (0 = direct push) |
 | `TT_METAL_PERF_DEBUG_RAW_ONLY`, HIGH-production raw mode (§N+72) | not in the relay; `SPSC_SPAN_RAW_FLAG` remains in the wire format |
 | `TT_METAL_PERF_DEBUG_DRISC_ZONES`, `_DRISC_ZONE_DETAIL`, `_DRISC_ZONE_IDLE`, `_DRISC_ZONE_HOLD_US`, `_DRISC_ZONE_FRAMES`, `_NOC_FOOTPRINT`, `_SYNC_EVENT`, `_SYNC_EVENT_GAP_MS`, `_CLK_SYNC_ROLES`, `_PER_CORE_FREQ` | drainer self-instrumentation and clock-validation knobs of the fillers/movers kernel; removed with it. What they validated — the per-core anchor and the shared frequency (§N+46–§N+49) — is now unconditional |

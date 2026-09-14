@@ -135,7 +135,6 @@ enum class EnvVarID {
     TT_METAL_STREAMING_PROFILER_FIFO_MB,           // Streaming profiler host FIFO per D2H socket, MiB
     TT_METAL_STREAMING_PROFILER_OPS_CSV,           // Streaming profiler ops CSV path
     TT_METAL_STREAMING_PROFILER_ZONE_CSV,          // Streaming profiler zone CSV path
-    TT_METAL_STREAMING_PROFILER_NRELAYS,           // Streaming profiler DRISC relay count (0 = auto)
     TT_METAL_DEVICE_PROFILER_DISPATCH,             // Enable dispatch core profiling
     TT_METAL_PROFILER_SYNC,                        // Enable synchronous profiling
     TT_METAL_DEVICE_PROFILER_NOC_EVENTS,           // Enable NoC events profiling
@@ -1007,23 +1006,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_STREAMING_PROFILER_TRACY:
             this->streaming_profiler_tracy_enabled = is_env_enabled(value);
             break;
-
-        // TT_METAL_STREAMING_PROFILER_NRELAYS
-        // Forces the number of DRISC relays, one per DRAM view. 0 leaves it to bring-up, which takes
-        // min(the profiler's relay cap, the part's DRAM views); a forced value above the view count is
-        // clamped there.
-        // Default: 0 (auto)
-        // Usage: export TT_METAL_STREAMING_PROFILER_NRELAYS=4
-        case EnvVarID::TT_METAL_STREAMING_PROFILER_NRELAYS: {
-            const unsigned long n = std::stoul(value);
-            TT_FATAL(
-                n >= 1 && n <= STREAMING_PROFILER_MAX_RELAYS,
-                "TT_METAL_STREAMING_PROFILER_NRELAYS='{}' is not an integer in [1, {}]",
-                value,
-                STREAMING_PROFILER_MAX_RELAYS);
-            this->streaming_profiler_num_relays = n;
-            break;
-        }
 
         // TT_METAL_STREAMING_PROFILER_DRAM_MB
         // Per-relay GDDR spool ring, in MiB. Non-zero makes each relay DMA frames into a ring in its own

@@ -176,8 +176,6 @@ inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
 // Streaming profiler sizing defaults and bounds (TT_METAL_STREAMING_PROFILER_*). Sizes stay under 4 GiB
 // because the device addresses them with 32-bit offsets.
-inline constexpr uint32_t STREAMING_PROFILER_MAX_RELAYS = 8;    // one per DRAM bank; Blackhole has 8
-inline constexpr uint32_t STREAMING_PROFILER_NRELAYS_AUTO = 0;  // TT_METAL_STREAMING_PROFILER_NRELAYS unset
 inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
 inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
 inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 256;
@@ -254,7 +252,6 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool streaming_profiler_tracy_enabled = false;
-    uint32_t streaming_profiler_num_relays = STREAMING_PROFILER_NRELAYS_AUTO;
     uint32_t streaming_profiler_spool_mb = STREAMING_PROFILER_SPOOL_MB_DEFAULT;
     uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
     std::string streaming_profiler_ops_csv_path;
@@ -719,7 +716,6 @@ public:
     bool get_profiler_disable_dump_to_files() const { return profiler_disable_dump_to_files; }
     bool get_profiler_disable_push_to_tracy() const { return profiler_disable_push_to_tracy; }
     bool get_streaming_profiler_tracy_enabled() const { return streaming_profiler_tracy_enabled; }
-    uint32_t get_streaming_profiler_num_relays() const { return streaming_profiler_num_relays; }
     uint32_t get_streaming_profiler_spool_mb() const { return streaming_profiler_spool_mb; }
     uint32_t get_streaming_profiler_fifo_mb() const { return streaming_profiler_fifo_mb; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }

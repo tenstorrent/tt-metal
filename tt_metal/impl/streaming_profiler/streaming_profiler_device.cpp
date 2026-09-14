@@ -383,7 +383,6 @@ void Devices::enumerate_worker_grid(const std::shared_ptr<distributed::MeshDevic
 
 bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>& mesh_device, DeviceCtx& ctx) {
     auto& cluster = MetalContext::instance(context_id_).get_cluster();
-    const auto& rtopts = MetalContext::instance(context_id_).rtoptions();
     const uint32_t chip = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(chip);
 
@@ -397,22 +396,8 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
         return false;
     }
 
-    const uint32_t view_cap = std::min<uint32_t>(kMaxRelays, nbanks);
-    static_assert(
-        kMaxRelays == tt::llrt::STREAMING_PROFILER_MAX_RELAYS,
-        "rtoptions bounds TT_METAL_STREAMING_PROFILER_NRELAYS at the relay cap");
-    const uint32_t requested = rtopts.get_streaming_profiler_num_relays();
-    ctx.n_relays = requested == tt::llrt::STREAMING_PROFILER_NRELAYS_AUTO ? view_cap : std::min(requested, view_cap);
-    if (requested > view_cap) {
-        log_warning(
-            tt::LogMetal,
-            "[streaming profiler] Device {}: TT_METAL_STREAMING_PROFILER_NRELAYS={} exceeds this part's {} DRAM "
-            "views (one relay each); CLAMPED to {} relays",
-            chip,
-            requested,
-            nbanks,
-            ctx.n_relays);
-    }
+    // One relay per DRAM view, up to the relay cap.
+    ctx.n_relays = std::min<uint32_t>(kMaxRelays, nbanks);
 
     std::vector<uint32_t> banks;
     for (const uint32_t b : kRelayBankRoster) {
@@ -541,14 +526,15 @@ bool Devices::launch_relay(
     if (my_cores > kMaxRelayCores) {
         log_error(
             tt::LogMetal,
-            "[streaming profiler] Device {}: relay {} would own {} cores but a relay holds at most {}; set "
-            "TT_METAL_STREAMING_PROFILER_NRELAYS to at least {} for this {}-core grid",
+            "[streaming profiler] Device {}: relay {} would own {} cores but a relay holds at most {}; this "
+            "{}-core grid needs {} relays and the part has {}",
             chip,
             d,
             my_cores,
             kMaxRelayCores,
+            num_cores,
             (num_cores + kMaxRelayCores - 1) / kMaxRelayCores,
-            num_cores);
+            ctx.n_relays);
         return false;
     }
     if (my_cores == 0) {

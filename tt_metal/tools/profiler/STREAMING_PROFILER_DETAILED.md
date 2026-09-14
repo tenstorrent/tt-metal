@@ -180,7 +180,6 @@ Everything except `TT_METAL_STREAMING_PROFILER` itself applies in mode 3 only.
 
 | variable | default | effect |
 |---|---|---|
-| `TT_METAL_STREAMING_PROFILER_NRELAYS` | 0 (auto) | Forces the number of DRISC relays, one per DRAM view, in `[1, 8]`. 0 leaves it to bring-up, which takes `min(relay cap, DRAM views)`; a forced value above the view count is clamped there. |
 | `TT_METAL_STREAMING_PROFILER_DRAM_MB` | 128 | Per-relay GDDR spool ring, MiB. Non-zero makes each relay DMA frames into a ring in its own DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep interval. **0 selects direct push.** Capped at 4095 (32-bit ring arithmetic). |
 | `TT_METAL_STREAMING_PROFILER_FIFO_MB` | 64 | Host FIFO per D2H socket, MiB, `[1, 3584]`. The pipeline's only elasticity in a direct-push run. Plain mmap + IOMMU host RAM reached by a full 64-bit NoC/PCIe address: costs no TLB window and has no channel cap. The 3.5 GiB cap is the socket's 32-bit byte size and the device's wrap-safe 32-bit credit arithmetic. |
 | `TT_METAL_STREAMING_PROFILER_RING_MB` | 512 | Host-side verbatim-frame ring the receiver thread fills and the decode threads drain, MiB. The capture's elastic buffer; at ~9.8 wire bytes per zone the default holds ~55 M zones per stream. |
