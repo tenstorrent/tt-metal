@@ -46,24 +46,21 @@ def _flat_row_index(row_ids: torch.Tensor, device) -> ttnn.Tensor:
     )
 
 
-def _index_dtype(num_rows: int):
-    """Use the narrowest scatter index that covers all rows."""
-    return ttnn.uint16 if num_rows <= 0xFFFF else ttnn.uint32
-
-
 @dataclass(frozen=True)
 class SCARebatchPlan:
     """Per-frame SCA rebatch plan shared by every encoder layer.
 
     The plan is valid only for the reference points, visibility mask, tensor shapes, and device used to build it.
-    Tensor fields are ``None`` when ``is_empty`` is true.
+    Tensor fields are ``None`` and ``inverse_index`` is empty when ``is_empty`` is true.
 
     Attributes:
         rebatch_len: Tile-aligned number of query rows processed per camera.
         query_index: Gather indices for query rows.
         reference_points_batched: Rebatched camera reference points with shape
             ``[batch_size * num_cams, rebatch_len, num_depth_levels, 2]``.
-        scatter_index: Expanded query indices used to accumulate camera outputs.
+        row_mask: Per-camera-row validity with shape ``[batch_size * num_cams, rebatch_len, 1]``.
+        inverse_index: One gather index per contribution slot, each selecting the camera row that
+            feeds a query. Slots a query does not fill point at a padded row.
         count: Camera-contributor count with shape ``[batch_size, num_queries, 1]``.
         is_empty: Whether the visibility mask contains no valid query-camera pairs.
     """
@@ -71,12 +68,13 @@ class SCARebatchPlan:
     rebatch_len: int
     query_index: Optional[ttnn.Tensor]
     reference_points_batched: Optional[ttnn.Tensor]
-    scatter_index: Optional[ttnn.Tensor]
+    row_mask: Optional[ttnn.Tensor]
+    inverse_index: tuple[ttnn.Tensor, ...]
     count: Optional[ttnn.Tensor]
     is_empty: bool = False
 
 
-def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) -> SCARebatchPlan:
+def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan:
     """Build a rebatch plan for one frame's camera projections.
 
     Args:
@@ -84,17 +82,16 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) 
             ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``.
         bev_mask: Device tensor with shape
             ``[num_cams, batch_size, num_queries, num_depth_levels]``.
-        embed_dims: Query embedding width used to expand scatter indices.
         device: Device on which plan tensors are allocated. It must match the input tensors.
 
     Returns:
         A plan owned by these frame inputs. If no query-camera pair is valid, ``is_empty`` is true,
-        ``rebatch_len`` is zero, and all tensor fields are ``None``.
+        ``rebatch_len`` is zero, and the plan carries no tensors.
     """
     num_cams, bs, num_queries, num_depth_levels = bev_mask.shape
 
     # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
-    # the contributor count stay on the host; the gathers and the scatter run on device.
+    # the contributor count stay on the host; every gather runs on device.
     valid_per_cam = ttnn.to_torch(bev_mask).sum(-1) > 0  # [num_cams, B, num_queries]
     max_len = int(valid_per_cam.sum(-1).max().item())
 
@@ -106,26 +103,41 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) 
             rebatch_len=0,
             query_index=None,
             reference_points_batched=None,
-            scatter_index=None,
+            row_mask=None,
+            inverse_index=(),
             count=None,
             is_empty=True,
         )
 
     # Tile-align so folding num_cams into the row dim stays a view; unaligned would move data.
-    # Costs up to TILE_SIZE - 1 padded rows per camera through MSDA, discarded afterwards.
-    rebatch_len = ((max_len + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+    # Costs up to TILE_SIZE padded rows per camera through MSDA, discarded afterwards. Aligning
+    # max_len + 1 keeps at least one padded row per camera, which aggregation needs as a zero
+    # source for queries that fewer than max_count cameras see.
+    rebatch_len = ((max_len // ttnn.TILE_SIZE) + 1) * ttnn.TILE_SIZE
 
     # Compact each camera to the queries it sees, so MSDA runs on rebatch_len rows, not all of
-    # them. IDs are batch-local; num_queries is the padding sentinel — scatter_ids keeps it to
-    # dump padding in a sink row sliced off later, gather_ids clamps it since embedding rejects
-    # out-of-range indices.
+    # them. IDs are batch-local; num_queries marks padding, clamped away because embedding
+    # rejects out-of-range indices.
     # TODO: vectorize this index construction off the host
-    scatter_ids = torch.full((bs, num_cams, rebatch_len), num_queries, dtype=torch.int32)
+    compact_ids = torch.full((bs, num_cams, rebatch_len), num_queries, dtype=torch.int32)
+
+    # Invert the compaction: for every query, the rows of queries_output that contribute to it.
+    # Row (j, i, p) of the compacted output is flat row (j * num_cams + i) * rebatch_len + p.
+    # Unfilled slots read the last row of the first camera, which is always padding.
+    max_count = int(valid_per_cam.sum(0).max().item())
+    inverse_ids = torch.full((max_count, bs, num_queries), rebatch_len - 1, dtype=torch.int32)
+    next_slot = torch.zeros((bs, num_queries), dtype=torch.int64)
     for j in range(bs):
         for i in range(num_cams):
             valid_indices = torch.nonzero(valid_per_cam[i, j], as_tuple=False).squeeze(-1)
-            scatter_ids[j, i, : valid_indices.numel()] = valid_indices.to(torch.int32)
-    gather_ids = scatter_ids.clamp(max=num_queries - 1)
+            num_valid = valid_indices.numel()
+            compact_ids[j, i, :num_valid] = valid_indices.to(torch.int32)
+            base = (j * num_cams + i) * rebatch_len
+            inverse_ids[next_slot[j, valid_indices], j, valid_indices] = base + torch.arange(
+                num_valid, dtype=torch.int32
+            )
+            next_slot[j, valid_indices] += 1
+    gather_ids = compact_ids.clamp(max=num_queries - 1)
 
     reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
     assert (
@@ -155,15 +167,9 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) 
         ttnn.TILE_LAYOUT,
     )
 
-    # Expand row IDs on device to avoid transferring a full-width index.
-    scatter_index = ttnn.repeat(
-        ttnn.from_torch(
-            scatter_ids.reshape(bs, num_cams * rebatch_len, 1),
-            device=device,
-            dtype=_index_dtype(num_queries + 1),
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        ),
-        ttnn.Shape((1, 1, embed_dims)),
+    row_mask = torch.arange(rebatch_len) < valid_per_cam.sum(-1).t().reshape(bs * num_cams, 1)
+    row_mask = ttnn.from_torch(
+        row_mask.to(torch.bfloat16).unsqueeze(-1), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
     )
 
     count = torch.clamp(valid_per_cam.permute(1, 2, 0).sum(-1), min=1.0)
@@ -173,7 +179,8 @@ def build_rebatch_plan(reference_points_cam, bev_mask, embed_dims: int, device) 
         rebatch_len=rebatch_len,
         query_index=_flat_row_index(gather_ids + _batch_offsets(bs, num_queries), device),
         reference_points_batched=reference_points_batched,
-        scatter_index=scatter_index,
+        row_mask=row_mask,
+        inverse_index=tuple(_flat_row_index(inverse_ids[slot], device) for slot in range(max_count)),
         count=count,
     )
 
@@ -304,7 +311,7 @@ class TTSpatialCrossAttention:
 
         # Every encoder layer in a forward shares one plan; building it here is the standalone path.
         if rebatch_plan is None:
-            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
+            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device)
 
         if rebatch_plan.is_empty:
             if ENABLE_LOGGING:
@@ -361,24 +368,23 @@ class TTSpatialCrossAttention:
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Start")
 
-        # Accumulate camera features by query ID. Unclamped IDs, so padding lands in the sink row
-        # the slice below drops.
-        scatter_src = ttnn.to_layout(
-            ttnn.reshape(queries_output, (bs, self.num_cams * rebatch_len, self.embed_dims)),
-            ttnn.ROW_MAJOR_LAYOUT,
+        # Accumulate camera features by query ID. The plan inverts the compaction, so this is a
+        # gather per contribution slot rather than a scatter: ttnn.scatter only writes along the
+        # last dimension and transposes all three operands to get there.
+        #
+        # Zeroing the padded rows first makes the row every unfilled slot points at the neutral
+        # element of the sum. Their values are finite because the plan clamps reference points.
+        contribution_rows = ttnn.reshape(
+            ttnn.to_layout(ttnn.multiply(queries_output, rebatch_plan.row_mask), ttnn.ROW_MAJOR_LAYOUT),
+            (1, 1, bs * self.num_cams * rebatch_len, self.embed_dims),
         )
-        slots = ttnn.scatter_add(
-            ttnn.zeros(
-                (bs, num_queries + 1, self.embed_dims),
-                device=self.device,
-                dtype=queries_output.dtype,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-            ),
-            dim=1,
-            index=rebatch_plan.scatter_index,
-            src=scatter_src,
-        )
-        slots = ttnn.to_layout(ttnn.slice(slots, (0, 0, 0), (bs, num_queries, self.embed_dims)), ttnn.TILE_LAYOUT)
+        slots = None
+        for index in rebatch_plan.inverse_index:
+            gathered = ttnn.to_layout(
+                ttnn.reshape(ttnn.embedding(index, contribution_rows), (bs, num_queries, self.embed_dims)),
+                ttnn.TILE_LAYOUT,
+            )
+            slots = gathered if slots is None else ttnn.add(slots, gathered)
 
         if ENABLE_LOGGING:
             logger.info("SCA Feature Aggregation Complete")

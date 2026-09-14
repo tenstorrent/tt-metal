@@ -516,11 +516,7 @@ class TTBEVFormerEncoder:
             )
 
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-        rebatch_plan = (
-            build_rebatch_plan(reference_points_cam, bev_mask, self.embed_dims, self.device)
-            if bev_mask is not None
-            else None
-        )
+        rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
         if use_signpost:
             signpost(header="BEVEncoder Reference Points Complete")

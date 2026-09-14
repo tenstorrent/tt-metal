@@ -172,7 +172,7 @@ def build_layer_fixture(device, config, bev_size, batch_size: int, dtype=ttnn.bf
         "reference_points_cam": tt_points_cam,
         "bev_mask": tt_bev_mask,
         "bev_reference_points": bev_reference_points,
-        "rebatch_plan": build_rebatch_plan(tt_points_cam, tt_bev_mask, embed_dims, device),
+        "rebatch_plan": build_rebatch_plan(tt_points_cam, tt_bev_mask, device),
     }
     return LayerFixture(
         ref_model=ref_model,
