@@ -681,7 +681,6 @@ Backward operations
    ttnn.erfinv_bw
    ttnn.exp2_bw
    ttnn.exp_bw
-   ttnn.experimental.gelu_bw
    ttnn.expm1_bw
    ttnn.fill_bw
    ttnn.fill_zero_bw
