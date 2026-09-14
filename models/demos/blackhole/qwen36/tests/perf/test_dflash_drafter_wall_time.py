@@ -34,6 +34,28 @@ per-step spread is wide (58–177 ms in the reference run). It prints, and the c
 spread means this cannot resolve a difference of a few percent: use it to establish the REGIME
 (host- vs device-bound), not to A/B a handful of ops.
 
+THAT WARNING WAS TESTED, 2026-09-14, and it holds. Swapping the attention head-concat from
+transpose+reshape to nlp_concat_heads removes ~5 dispatches/step, which the 0.69 ms/op exchange rate
+above predicts as ~3.4 ms. Five interleaved A/B pairs:
+
+    pair       1        2        3        4        5     mean    sd
+    baseline  131.66  128.48  130.22  129.40  124.98   128.9   2.6
+    concat    128.30  116.58  106.54  106.68  131.18   117.9  11.4
+
+No demonstrated benefit: the baseline is tight, the concat arm swings 106-131, and pair 5 lands
+ABOVE the baseline. The first pair alone read -3.36 ms, agreeing with the prediction almost exactly
+-- and that agreement was coincidence. A prediction matching a SINGLE measurement is weak evidence
+when the measurement's own spread is four times the effect.
+
+Pairs 2-4 then declined monotonically, and cache warming was the obvious story; pair 5 falsified it,
+because warming does not reverse. Run A/B pairs interleaved, and repeat until they converge or
+contradict.
+
+The wider consequence: the drafter's entire available op-count reduction is ~25 ops (a fused QKV
+projection, -20, plus this one) ~= 17 ms ~= 1.06x end to end, which sits under this instrument's
+noise floor AND under the end-to-end test's. Op trimming is not a lever that can be validated here,
+whatever its true sign.
+
 Run::
 
     MESH_DEVICE=T3K DFLASH_HF_MODEL=z-lab/Qwen3.6-27B-DFlash \\
