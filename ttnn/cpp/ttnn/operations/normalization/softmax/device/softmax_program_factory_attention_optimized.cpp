@@ -488,12 +488,15 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                 gen1.unpack_modes.insert({name, tt::tt_metal::UnpackMode::UnpackToSrc});
             }
         };
+        // Each DFB registers under the format it was declared with. The sum accumulators
+        // follow acc_cb_data_format, the bulk buffers follow im_cb_data_format, and the two
+        // differ for a non-fp32 input.
         add_unpack(IN0, in0_cb_data_format);
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
         add_unpack(MASK_PADDED, mask_cb_data_format);
         add_unpack(EXPS, im_cb_data_format);
-        add_unpack(RECIP_SUM_EXPS, im_cb_data_format);
+        add_unpack(RECIP_SUM_EXPS, acc_cb_data_format);
         if (has_mask) {
             add_unpack(FUSED_SCALE, tt::DataFormat::Float16_b);
             add_unpack(FUSED_ATTN, mask_cb_data_format);
@@ -506,9 +509,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             add_unpack(X, im_cb_data_format);
         }
         if (use_large_kernel) {
-            add_unpack(PREV_REDUCE, im_cb_data_format);
+            add_unpack(PREV_REDUCE, acc_cb_data_format);
             add_unpack(PREV_MAX, im_cb_data_format);
-            add_unpack(RECIP, im_cb_data_format);
+            add_unpack(RECIP, acc_cb_data_format);
         }
     }
 
