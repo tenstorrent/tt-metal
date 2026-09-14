@@ -62,6 +62,7 @@ def test_sinkhorn_restores_lconst_neg1():
 
     src_A = _inputs()
     src_B = torch.zeros(ELEMENTS_PER_TILE, dtype=torch.float32)
+    tilized_A = tilize(src_A, formats.input_format).flatten()
 
     configuration = TestConfig(
         "sources/sinkhorn_lconst_neg1_regression_test.cpp",
@@ -69,7 +70,7 @@ def test_sinkhorn_restores_lconst_neg1():
         templates=[generate_input_dim([32, 32], [32, 32])],
         runtimes=[],
         variant_stimuli=StimuliConfig(
-            tilize(src_A, formats.input_format).flatten(),
+            tilized_A,
             formats.input_format,
             src_B,
             formats.input_format,
@@ -87,10 +88,8 @@ def test_sinkhorn_restores_lconst_neg1():
         dtype=format_dict[formats.output_format],
     ).to(torch.float32)
 
-    golden = torch.floor(
-        tilize(src_A, formats.input_format).flatten().to(torch.float32)
-    )
-    trunc = torch.trunc(tilize(src_A, formats.input_format).flatten().to(torch.float32))
+    golden = torch.floor(tilized_A.to(torch.float32))
+    trunc = torch.trunc(tilized_A.to(torch.float32))
 
     degenerated = (res == trunc) & (golden != trunc)
     assert not degenerated.any(), (
