@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
+from models.demos.deepseek_v3_d_p.utils.test_utils import token_normalized
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_1K_PATH,
     ReferenceCacheKey,
