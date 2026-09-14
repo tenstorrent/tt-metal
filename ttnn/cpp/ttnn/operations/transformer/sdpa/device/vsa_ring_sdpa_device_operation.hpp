@@ -36,11 +36,12 @@ struct VsaRingSdpaOperation {
 
 Tensor vsa_ring_sdpa(
     const Tensor& q,
-    const Tensor&
-        kv,  // local flat K|V shard [1, 1, T_local, 2*H*d] (K of head h at columns [h*d, (h+1)*d), V at (H+h)*d)
+    const Tensor& k,  // this device's K shard [1, H, T_local, d]
+    const Tensor& v,  // and V shard
     const Tensor& indices,
     const Tensor& block_counts,
-    const Tensor& persistent_output_buffer_kv,  // [1, 1, T_local*ring_size, 2*H*d]
+    const Tensor& persistent_output_buffer_k,  // [1, H, T_local*ring_size, d] gathered K
+    const Tensor& persistent_output_buffer_v,  // and V
     float scale,
     uint32_t block_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,

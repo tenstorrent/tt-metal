@@ -112,40 +112,19 @@ def _run(
     )
     tt_q = to_dev(q, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
 
-    # the ring op takes each device's K/V as one FLAT tensor [1, 1, T_local, 2*H_local*d] (K of head h at columns
-    # [h*d, (h+1)*d), V at (H_local+h)*d): build it per TP shard so that sharding dim 3 across the TP devices hands
-    # every device its own [k_local | v_local]
-    def flat(x):  # [1, Hl, T, d] -> [1, 1, T, Hl*d]
-        return x.permute(0, 2, 1, 3).reshape(1, 1, x.shape[2], x.shape[1] * x.shape[3])
-
-    kv = torch.cat(
-        [
-            torch.cat(
-                [
-                    flat(k[:, t * heads_local : (t + 1) * heads_local]),
-                    flat(v[:, t * heads_local : (t + 1) * heads_local]),
-                ],
-                dim=3,
-            )
-            for t in range(tp)
-        ],
-        dim=3,
-    )
-    shard_kv = [None, None]
-    shard_kv[tp_axis] = 3
-    shard_kv[sp_axis] = 2
-    tt_kv = to_dev(kv, shard_kv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+    # the ring op takes this device's K and V shards in the plain head-split layout
+    tt_k = to_dev(k, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
+    tt_v = to_dev(v, shard_qkv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
     tt_idx = to_dev(idx.to(torch.uint32).view(torch.int32), shard_qkv, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     replicate = [None, None]
     tt_counts = to_dev(counts, replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
     tt_mask = to_dev(mask.to(torch.int32).reshape(1, 1, 1, dense_words), replicate, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32)
-    shard_gkv = [None, None]
-    shard_gkv[tp_axis] = 3  # gathered flat K|V: [1, 1, t_total, 2*H_local*d] per device (sequence replicated)
-    tt_gkv = to_dev(
-        torch.zeros(1, 1, t_total, 2 * heads_total * DIM, dtype=torch.bfloat16),
-        shard_gkv,
-        ttnn.TILE_LAYOUT,
-        ttnn.bfloat16,
+    # gathered K/V buffers: [1, heads_local, t_total, d] per device (heads sharded, sequence replicated)
+    tt_gk = to_dev(
+        torch.zeros(1, heads_total, t_total, DIM, dtype=torch.bfloat16), shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16
+    )
+    tt_gv = to_dev(
+        torch.zeros(1, heads_total, t_total, DIM, dtype=torch.bfloat16), shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16
     )
     # plain vsa_sdpa reference input: the full K/V on every device
     tt_kfull = to_dev(k, shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16)
@@ -164,10 +143,12 @@ def _run(
     def ring(sems):
         return ttnn.transformer.vsa_ring_sdpa(
             tt_q,
-            tt_kv,
+            tt_k,
+            tt_v,
             tt_idx,
             tt_counts,
-            tt_gkv,
+            tt_gk,
+            tt_gv,
             multi_device_global_semaphore=sems,
             num_links=num_links,
             cluster_axis=sp_axis,

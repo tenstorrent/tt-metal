@@ -102,37 +102,7 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
         torch.zeros(1, heads_total, t_total, DIM, dtype=torch.bfloat16), shard_heads, ttnn.TILE_LAYOUT, ttnn.bfloat16
     )
 
-    # the ring op takes each device's K/V as one FLAT tensor [1, 1, T_local, 2*H_local*d] (K of head h at columns
-    # [h*d, (h+1)*d), V at (H_local+h)*d): build it per TP shard so that sharding dim 3 across the TP devices hands
-    # every device its own [k_local | v_local]
-    def flat(x):  # [1, Hl, T, d] -> [1, 1, T, Hl*d]
-        return x.permute(0, 2, 1, 3).reshape(1, 1, x.shape[2], x.shape[1] * x.shape[3])
-
-    kv = torch.cat(
-        [
-            torch.cat(
-                [
-                    flat(k[:, t * heads_local : (t + 1) * heads_local]),
-                    flat(v[:, t * heads_local : (t + 1) * heads_local]),
-                ],
-                dim=3,
-            )
-            for t in range(tp)
-        ],
-        dim=3,
-    )
-    shard_kv = [None, None]
-    shard_kv[tp_axis] = 3
-    shard_kv[sp_axis] = 2
-    tt_kv = to_dev(kv, shard_kv, ttnn.TILE_LAYOUT, ttnn.bfloat16)
-    shard_gkv = [None, None]
-    shard_gkv[tp_axis] = 3  # gathered flat K|V: [1, 1, t_total, 2*H_local*d] per device (sequence replicated)
-    tt_gkv = to_dev(
-        torch.zeros(1, 1, t_total, 2 * heads_total * DIM, dtype=torch.bfloat16),
-        shard_gkv,
-        ttnn.TILE_LAYOUT,
-        ttnn.bfloat16,
-    )
+    # the ring op takes tt_k / tt_v (head-split) and the two gathered buffers the two-op path uses
     workers = int(os.environ.get("VSA_RING_WORKERS", "2"))
     grid = mesh_device.compute_with_storage_grid_size()
     crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -159,10 +129,12 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
     def ring(i):
         return ttnn.transformer.vsa_ring_sdpa(
             tt_q,
-            tt_kv,
+            tt_k,
+            tt_v,
             tt_idx,
             tt_counts,
-            tt_gkv,
+            tt_gk,
+            tt_gv,
             multi_device_global_semaphore=next_sems(),
             num_links=num_links,
             cluster_axis=sp_axis,
@@ -171,14 +143,6 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
             num_workers_per_link=workers,
             **common,
         )
-
-    tt_vflat = ttnn.experimental.nlp_concat_heads(tt_v)  # the model has V flat for free (pre-head-split projection)
-
-    def concat_only(i):  # the model's extra ops for the fused path: K to flat, then [K | V] on the last dim
-        kf = ttnn.experimental.nlp_concat_heads(tt_k)
-        out = ttnn.concat([kf, tt_vflat], dim=3)
-        ttnn.deallocate(kf)
-        return out
 
     def two_op(i):
         gk = ttnn.experimental.all_gather_async(
@@ -238,7 +202,7 @@ def test_vsa_ring_sdpa_perf_15s(mesh_device, sp_axis, tp_axis, num_links, reset_
     # VSA_RING_PERF_ONLY=1: skip the baselines (sweeps of the fused op's knobs); the reference output then comes
     # from one two-op call so the PCC check still runs.
     only = os.environ.get("VSA_RING_PERF_ONLY") == "1"
-    ms_cat, _ = (float("nan"), None) if only else bench(concat_only, "concat(k, v) alone")
+    ms_cat = 0.0  # the fused path needs no extra model ops (plain head-split K/V in)
     ms_ag, _ = (float("nan"), None) if only else bench(ag_only, "all_gather x2 alone")
     ms_vsa, _ = (float("nan"), None) if only else bench(vsa_only, "vsa_sdpa alone (pre-gathered K/V)")
     if only:

@@ -531,24 +531,26 @@ void bind_sdpa(nb::module_& mod) {
         R"doc(
         VSA fine-stage attention fused with the SP-ring all-gather of K/V (Blackhole mesh). Equivalent to
         ``vsa_sdpa(q, all_gather(k, dim=2), all_gather(v, dim=2), ...)`` in raw-selection streaming mode, up
-        to bf16 rounding order: the flat K|V shard is forwarded around the ring by the multi-worker
-        all-gather's kernels while the attention consumes the shards that have already landed. One program per
-        device: the sender cores fill the compute grid's first rows, the VSA leader/worker engine the rest.
+        to bf16 rounding order: this device's K and V shards are forwarded around the ring by the op's own
+        multi-worker gather (token-major, so every head's blocks land progressively) while the attention
+        consumes the blocks that have already landed. One program per device: the gather's sender cores fill
+        the compute grid's first rows, the VSA leader/worker engine the rest.
 
         Args:
             q: [1, H, S_local, d] bf16 TILE, this device's query rows.
-            kv: [1, 1, T_local, 2*H*d] bf16 TILE, this device's flat K|V shard: K of head h at columns [h*d, (h+1)*d), V at (H+h)*d (ttnn.concat([nlp_concat_heads(k), v_flat], 3);[k, v], 1)).
+            k, v: [1, H, T_local, d] bf16 TILE, this device's K and V shards (the create_heads layout).
             indices: [1, H, S_local/64, W] uint32 ROW_MAJOR global block ids (padded-per-shard numbering
                 with coarse_slots_shift), exactly as vsa_sdpa raw-selection mode.
             block_counts: [1, 1, 1, Wc] uint32 ROW_MAJOR, global.
-            persistent_output_buffer_kv: [1, 1, T_local*ring_size, 2*H*d] all-gather ping-pong buffer for kv
-                (shard s at rows [s*T_local, (s+1)*T_local)); the local shard is read from kv, never written here.
+            persistent_output_buffer_k, persistent_output_buffer_v: [1, H, T_local*ring_size, d] all-gather
+                ping-pong buffers (shard s at rows [s*T_local, (s+1)*T_local)); the local shard is read from
+                k/v, never written here.
 
         Keyword args:
-            multi_device_global_semaphore: two GlobalSemaphores [backward, forward] for the all-gather.
+            multi_device_global_semaphore: two GlobalSemaphores [direction 0, direction 1] for the gather.
             num_links, cluster_axis, mesh_device, topology (Ring): the ring geometry.
-            num_workers_per_link: all-gather workers per direction per link (default 2; senders =
-                2*links*(workers+1) cores from the grid's first rows).
+            num_workers_per_link: gather workers per direction per link (default 2; behind a fabric MUX when
+                > 1; senders = 2*links*(workers + 1) cores from the grid's first rows).
             subdevice_id: optional sub-device the sender cores are chosen from.
             scale, block_size, compute_kernel_config, list_len, exempt_ids, dense_row_mask,
             coarse_slots_shift, coarse_real_per_shard, dense_row_hint: as vsa_sdpa.
@@ -558,10 +560,12 @@ void bind_sdpa(nb::module_& mod) {
         )doc",
         &ttnn::transformer::vsa_ring_sdpa,
         nb::arg("q").noconvert(),
-        nb::arg("kv").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
         nb::arg("indices").noconvert(),
         nb::arg("block_counts").noconvert(),
-        nb::arg("persistent_output_buffer_kv").noconvert(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
         nb::kw_only(),
         nb::arg("multi_device_global_semaphore"),
         nb::arg("num_links"),

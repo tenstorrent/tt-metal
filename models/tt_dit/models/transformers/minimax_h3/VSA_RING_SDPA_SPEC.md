@@ -1,9 +1,9 @@
 # vsa_ring_sdpa: fused ring all-gather + VSA fine-stage attention
 
-Status: IMPLEMENTED, correct, overlapped. The flat token-major K|V layout, the per-block landing gate (section 13),
+Status: IMPLEMENTED, correct, overlapped. The op's own token-major K/V gather (section 15; plain head-split K/V in), the per-block landing gate (section 13),
 dense rows dealt into pass 0 and landing-order runs (section 14) hide the K/V gather to within ~1.5 ms in the real
-15 s block: fused op 23.5 ms vs 27.1 (+0.9 of extra ops) for the two-op path, block period 62.4 -> 60.5 ms, denoise
-2.692 -> 2.553 s/step (-5.2 %). The op is now compute-bound (~22 ms on its 108-core grid). Sections 11-12 record the
+15 s block: fused op ~23.5 ms vs 27.1 for the two-op path with no extra model ops, block period 62.3 -> 59.5 ms,
+denoise 2.727 -> 2.569 s/step (-5.8 %). The op is now compute-bound (~22 ms on its 108-core grid). Sections 11-12 record the
 earlier (parity, then small-win) versions. Companion to `VSA_STREAM_DESIGN.md` (section 13 has the motivating measurements).
 
 ## 1. Problem
@@ -373,3 +373,47 @@ itself is done. Standalone (random lists, 4 dense rows, slowest device): two-op 
 Headroom now lives in the compute, not the overlap: (a) L1 for depth 12+ at 18 rows (~60 KB: `cb_out` single-buffering
 and a shallower row-sum tile ring give ~32 KB; the rest from the compute kernel's per-row tiles); (b) the 12 sender
 cores; (c) the flat K straight from the norm/RoPE op (-0.3 ms of the 0.9).
+
+## 15. Own K/V gather: plain head-split inputs, multi-worker MUX, token-major walk (2026-09-14)
+
+The flat `[1, 1, T, 2Hd]` layout of section 13 was only a way to get a token-major wire order out of an unmodified
+`all_gather_async` kernel (its page walk is head-major on `[1, H, T, d]`), and it cost 0.9 ms of model ops per block
+(K flatten + K|V concat). The op now owns its gather instead: `vsa_kv_gather_reader/writer.cpp` (forked from the
+multi-worker `minimal_default` kernels; host builder `vsa_kv_gather.cpp`), which
+
+- takes this device's K and V as two plain head-split `[1, H, T_local, d]` tensors (the create_heads / norm+RoPE
+  output, no preprocessing) into two persistent `[1, H, T_local*ring_size, d]` buffers (the CCL manager's ping-pong
+  pair, alternated per call as the two-op path's gathers do);
+- walks the pages TOKEN-MAJOR with a stride between heads -- for each tile row of a slice, K of head 0..H-1 (DHt
+  contiguous pages each, one scatter packet), then V of head 0..H-1 -- which is byte-for-byte the wire order the
+  flat layout produced, so RingGate, the poll table and the pass layout are unchanged (a tile's index within the
+  slice is `row * 2*H*DHt + (tensor*H + head) * DHt + col`; each worker owns a range of tile ROWS);
+- keeps the multi-worker machinery: `num_workers_per_link` workers per direction per link behind a fabric MUX
+  (the same core placement as before: link, direction, MUX, workers from (0, 0) row-major; 1 worker per link
+  runs direct fabric connections without a MUX), per-`chunks_per_sync` out_ready_sem increments, the per-slice
+  fused-op signal; drops Linear topology, sharded tensors, the barrier semaphore and split forwarding; does not
+  write the local slice into the local gathered buffer (the leaders read their own shard from the local tensors).
+
+`ring_attention_all_gather_async` and `all_gather_async` are untouched. The VSA leaders address K/V head-major
+again (block b of head h: `h*Ht*DHt + b*Skt*DHt` contiguous pages, local or gathered); the ring common args carry
+both gathered addresses, `Ht_local` and `Ht_total` (layout in `vsa_sdpa_stream_descriptor.hpp`).
+
+Results (15 s, 4 dense rows, 18/10, runs of 32, 2 workers/link; slowest device):
+
+| | ms |
+|---|---|
+| two-op path (all_gather x2 8.4 + vsa_sdpa 18.3) | 26.15 |
+| vsa_ring_sdpa, extra model ops | 20.13, none |
+| traced block period, two-op / ring | 62.30 / 59.48 |
+
+Six unit variants pass bit-exact (PCC 1.0 vs vsa_sdpa on the gathered K/V) on the first run of the new kernels;
+the traced block passes at PCC 100 %. Per-block saving 6.0 ms standalone (was 5.1 incl. the extra ops), 2.8 ms in the
+traced block (was 1.9). End to end (15 s / 768p, real weights, 8 steps, same session): denoise 2.727 s/step in vsa
+mode vs 2.569 in ring mode, -158 ms/step (-5.8 %; the flat-layout version measured -139 ms/step, -5.2 %, on its day).
+
+Workers per link (`num_workers_per_link`, 15 s, 18/10): 1 worker (no MUX, direct fabric connections) 23.0 ms --
+comm-bound again; 2 workers (12 senders = one grid row) 20.1 ms, the default; 3 and 4 workers per link run and pass
+with ONE link (8 / 10 senders), but 2 links x 3+ workers (16+ senders, spilling into the grid's second row) hang, as
+4 workers did with the stock builder in section 12. The MUX with 3-4 clients is therefore fine and the hang is tied
+to the second-row placement (root cause open); the op refuses such configurations at validation instead of timing
+out on the device.

@@ -392,9 +392,9 @@ void kernel_main() {
         const uint32_t wcoord_argi = argi;
         argi += 2 * n_workers;
 #ifdef VSA_RING
-        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring into the gathered buffer; the own
-        // shard is read from the local tensor. Both are FLAT K|V ([1, 1, T, 2*H*d]: K of head h at column tiles
-        // [h*DHt, (h+1)*DHt), V at (H+h)*DHt), so the all-gather's token-major tile stream lands every head's blocks
+        // Ring mode (vsa_ring_sdpa): K/V arrive shard by shard over the SP ring into the gathered buffers; the own
+        // shard is read from the local tensors. All are plain head-split [1, H, T, d]; the op's gather forwards
+        // every slice TOKEN-MAJOR (per tile row: K of every head, then V of every head), so every head's blocks land
         // progressively and pass 0 can gate per block (RingGate) instead of per shard. The per-device constants are
         // COMMON runtime args (identical on every core; the addresses are re-applied on program-cache hits): see
         // kRingCommonArg* in vsa_sdpa_stream_descriptor.hpp.
@@ -402,22 +402,26 @@ void kernel_main() {
             counts_args.next_compile_time_args_offset(),
             counts_args.next_common_runtime_args_offset()>();
         constexpr uint32_t ring_crt = gv_args.next_common_runtime_args_offset();
-        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 0);           // gathered flat K|V
+        const uint32_t gv_addr = get_common_arg_val<uint32_t>(ring_crt + 12);          // gathered V buffer
         const uint32_t ring_index = get_common_arg_val<uint32_t>(ring_crt + 1);        // this device's SP shard
         const uint32_t blocks_per_shard = get_common_arg_val<uint32_t>(ring_crt + 2);  // T_local / block_size
-        const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);             // tiles per flat K|V row
+        const uint32_t kv_wt = get_common_arg_val<uint32_t>(ring_crt + 3);  // tiles per sequence row (2*H*DHt)
         const uint32_t dht = get_common_arg_val<uint32_t>(ring_crt + 4);               // d / 32
         const uint32_t n_heads = get_common_arg_val<uint32_t>(ring_crt + 5);           // H
         const uint32_t skt = get_common_arg_val<uint32_t>(ring_crt + 6);               // block_size / 32
         const uint32_t poll_tpp = get_common_arg_val<uint32_t>(ring_crt + 7);          // tiles per fabric packet
         const uint32_t poll_cps = get_common_arg_val<uint32_t>(ring_crt + 8);          // packets per count step
         const uint32_t poll_G = get_common_arg_val<uint32_t>(ring_crt + 9);            // workers per direction
-        const uint32_t poll_table = ring_crt + 12;
+        const uint32_t ht_local = get_common_arg_val<uint32_t>(ring_crt + 13);         // tile rows per shard
+        const uint32_t ht_total = get_common_arg_val<uint32_t>(ring_crt + 14);         // tile rows gathered
+        const uint32_t poll_table = ring_crt + 16;
         // RingSDPAOpReceiver args (9 words) follow the poll table; re-parsed per pass through a copy of this index.
-        const uint32_t ring_rt_argi = ring_crt + 12 + 6 * poll_G;
+        const uint32_t ring_rt_argi = ring_crt + 16 + 6 * poll_G;
         const auto gv = TensorAccessor(gv_args, gv_addr);
-        const uint32_t k_col0 = head * dht;              // this head's K column tile
-        const uint32_t v_col0 = (n_heads + head) * dht;  // and V column tile
+        const uint32_t k_col0 = head * dht;                   // this head's K position in a sequence row (gate)
+        const uint32_t v_col0 = (n_heads + head) * dht;       // and V position
+        const uint32_t v_local_base = head * ht_local * dht;  // V of this head: local tensor (head-split layout)
+        const uint32_t v_gath_base = head * ht_total * dht;   // and gathered buffer
         const uint32_t ring_size = get_common_arg_val<uint32_t>(ring_rt_argi);
         RingGate ring_gate;
         ring_gate.init(
@@ -752,31 +756,27 @@ void kernel_main() {
                 const uint32_t slot = fetched % stream_depth;
                 experimental::set_read_trid(noc, (fetched % 8) + 1);
 #ifdef VSA_RING
-                // flat K|V: the block's Skt x DHt V tiles sit at (row0 + r) * Wt + v_col0 + c; the own shard is read
-                // from the local tensor (local rows), every other shard from the gathered buffer (global rows)
-                const bool own = bs[j] / blocks_per_shard == ring_index;
-                uint32_t page = (own ? bs[j] - ring_index * blocks_per_shard : bs[j]) * skt * kv_wt + v_col0;
-                for (uint32_t i = 0, c = 0; i < v_tiles_per_block; ++i) {
-                    if (own) {
+                // head-split layout: a block's Skt x DHt V tiles are contiguous pages of this head; the own shard is
+                // read from the local tensor (local block id), every other shard from the gathered buffer (global id)
+                if (bs[j] / blocks_per_shard == ring_index) {
+                    const uint32_t v_tile0 = v_local_base + (bs[j] - ring_index * blocks_per_shard) * v_tiles_per_block;
+                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
                         noc.async_read(
                             v,
                             v_cb,
                             v_tile_bytes,
-                            {.page_id = page},
+                            {.page_id = v_tile0 + i},
                             {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
-                    } else {
+                    }
+                } else {
+                    const uint32_t v_tile0 = v_gath_base + bs[j] * v_tiles_per_block;
+                    for (uint32_t i = 0; i < v_tiles_per_block; ++i) {
                         noc.async_read(
                             gv,
                             v_cb,
                             v_tile_bytes,
-                            {.page_id = page},
+                            {.page_id = v_tile0 + i},
                             {.offset_bytes = (slot * v_tiles_per_block + i) * v_tile_bytes});
-                    }
-                    if (++c == dht) {  // next tile row of the block
-                        c = 0;
-                        page += kv_wt - dht + 1;
-                    } else {
-                        ++page;
                     }
                 }
 #else

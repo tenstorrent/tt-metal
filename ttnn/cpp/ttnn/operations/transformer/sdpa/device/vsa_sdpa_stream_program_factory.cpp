@@ -217,7 +217,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     const uint32_t H = t.q.logical_shape()[1];
     const uint32_t S = t.q.logical_shape()[2];
     const uint32_t d = t.q.logical_shape()[3];
-    const uint32_t T = ring_mode ? ring->gathered_kv->logical_shape()[2] : t.k.logical_shape()[2];
+    const uint32_t T = ring_mode ? ring->gathered_k->logical_shape()[2] : t.k.logical_shape()[2];
     const uint32_t T_local = t.k.logical_shape()[2];  // == T unless ring_mode
     const uint32_t W = t.indices.logical_shape()[3];
     const uint32_t block_size = attrs.block_size;
@@ -418,8 +418,8 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     tt::tt_metal::TensorAccessorArgs(t.v.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.indices.buffer()).append_to(reader_ct, reader_crt);
     tt::tt_metal::TensorAccessorArgs(t.block_counts.buffer()).append_to(reader_ct, reader_crt);
-    if (ring_mode) {
-        tt::tt_metal::TensorAccessorArgs(ring->gathered_kv->buffer()).append_to(reader_ct, reader_crt);
+    if (ring_mode) {  // the reader streams V: the gathered V buffer
+        tt::tt_metal::TensorAccessorArgs(ring->gathered_v->buffer()).append_to(reader_ct, reader_crt);
     }
 
     std::vector<uint32_t> writer_ct = {
@@ -443,8 +443,8 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.k.buffer()).append_to(writer_ct, writer_crt);
     tt::tt_metal::TensorAccessorArgs(t.q.buffer()).append_to(writer_ct, writer_crt);
-    if (ring_mode) {
-        tt::tt_metal::TensorAccessorArgs(ring->gathered_kv->buffer()).append_to(writer_ct, writer_crt);
+    if (ring_mode) {  // the writer streams K: the gathered K buffer
+        tt::tt_metal::TensorAccessorArgs(ring->gathered_k->buffer()).append_to(writer_ct, writer_crt);
     }
 
     std::vector<uint32_t> compute_ct = {
@@ -603,13 +603,14 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
             n_kv_blocks,
             ring->ring_size,
             blocks_per_shard);
-        // Flat K|V: [1, 1, T, 2*H*d], K of head h at columns [h*d, (h+1)*d), V at (H+h)*d. Its tiles are token-major,
-        // so the all-gather lands every head's blocks progressively (VSA_RING_SDPA_SPEC.md section 13).
+        // Plain head-split K and V ([1, H, T_local, d]) and their gathered buffers ([1, H, T, d]); the gather
+        // forwards them token-major so the leaders can gate per block (VSA_RING_SDPA_SPEC.md sections 13-15).
         const auto ks = t.k.logical_shape();
-        const auto gs = ring->gathered_kv->logical_shape();
+        const auto gs = ring->gathered_k->logical_shape();
         TT_FATAL(
-            ks[1] == 1 && ks[3] == 2 * H * d && gs[1] == 1 && gs[3] == 2 * H * d,
-            "vsa_ring_sdpa: local ({}) and gathered ({}) K/V must be flat [1, 1, T, 2*H*d] (H {}, d {})",
+            ks[1] == H && ks[3] == d && t.v.logical_shape() == ks && gs[1] == H && gs[3] == d &&
+                ring->gathered_v->logical_shape() == gs,
+            "vsa_ring_sdpa: k/v ({}) and gathered k/v ({}) must be [1, H, T, d] (H {}, d {})",
             ks,
             gs,
             H,
@@ -646,7 +647,7 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
         // cores are placed.
         const uint32_t G = ring->workers_per_direction;
         std::vector<uint32_t> ring_common = {
-            static_cast<uint32_t>(ring->gathered_kv->buffer()->address()),
+            static_cast<uint32_t>(ring->gathered_k->buffer()->address()),
             ring->device_index,
             blocks_per_shard,
             2 * H * DHt,
@@ -657,6 +658,10 @@ tt::tt_metal::ProgramDescriptor build_vsa_sdpa_stream_descriptor(
             0,
             G,
             0,
+            0,
+            static_cast<uint32_t>(ring->gathered_v->buffer()->address()),
+            T_local / tt::constants::TILE_HEIGHT,
+            T / tt::constants::TILE_HEIGHT,
             0};
         TT_FATAL(ring_common.size() == kRingCommonArgPollTable, "vsa_ring_sdpa: ring common-arg layout drifted");
         ring_common.resize(kRingCommonArgPollTable + 2 * G * kRingPollWordsPerWorker, 0);

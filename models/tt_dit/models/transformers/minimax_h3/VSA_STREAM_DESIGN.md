@@ -740,3 +740,8 @@ gather) and balances the later passes by cost; the leader streams runs of 32 con
 18/10. In-block ring op 23.5 ms (compute floor ~22, gather hidden to within ~1.5 ms) vs 27.1 for the two-op path;
 traced block period 62.36 -> 60.50 ms. The remaining gap to the plain op's 18.3 ms compute is the 108-core grid, the
 two-pass depth-10 structure and gather contention -- compute, not overlap.
+
+2026-09-14 (spec section 15): vsa_ring_sdpa owns its K/V gather now (vsa_kv_gather_*.cpp, forked from the
+multi-worker all_gather_async kernels): plain head-split K and V in, two persistent buffers, MUX workers per link,
+and a token-major page walk with a stride between heads -- the same wire order the flat layout gave, without the
+0.9 ms of flatten + concat. Standalone two-op 26.15 vs ring 20.13 ms; traced block 62.30 -> 59.48 ms.

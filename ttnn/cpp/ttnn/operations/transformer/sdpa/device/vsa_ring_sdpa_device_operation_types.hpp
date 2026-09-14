@@ -14,12 +14,12 @@ namespace ttnn::prim {
 
 // vsa_ring_sdpa: the VSA fine stage fused with the SP-ring all-gather of K/V (VSA_RING_SDPA_SPEC.md).
 // `vsa` is the plain vsa_sdpa contract (raw-selection streaming kernel); `ag` carries the ring geometry
-// (links, topology, cluster axis, the two GlobalSemaphores [backward, forward]); the sender cores start
-// at `ccl_core_grid_offset`, which must be the first row of the grid's last column.
+// (links, topology, cluster axis, the two GlobalSemaphores [direction 0, direction 1]); the gather's sender
+// cores fill the compute grid's first row(s), the VSA engine the rest.
 struct VsaRingSdpaParams {
     VsaSdpaParams vsa;
     ttnn::experimental::prim::RingAttentionAllGatherAsyncParams ag;  // ring geometry: links, topology, axis, semaphores
-    uint32_t num_workers_per_link = 2;  // all-gather workers per direction per link (senders = 2*links*(w+1) cores)
+    uint32_t num_workers_per_link = 2;  // gather workers per direction per link (senders = 2*links*(w + mux) cores)
 
     // Explicit reflection: `ag` is not an aggregate (constructor-only), so the framework's automatic
     // member introspection cannot describe this struct; the hash is custom (compute_program_hash).
@@ -28,12 +28,11 @@ struct VsaRingSdpaParams {
 };
 
 struct VsaRingSdpaInputs {
-    // vsa.k and vsa.v are BOTH the local flat K|V shard [1, 1, T_local, 2*H*d] (K of head h at columns
-    // [h*d, (h+1)*d), V at (H+h)*d): token-major tiles, so the gather lands every head progressively.
+    // vsa.k / vsa.v: this device's K and V shards, the plain head-split [1, H, T_local, d] (create_heads output).
     // indices/counts index the global sequence.
     VsaSdpaInputs vsa;
-    Tensor gathered_kv;  // [1, 1, T_local*ring_size, 2*H*d] persistent all-gather buffer (shard s at rows
-                         //   [s*T_local, (s+1)*T_local)); the local shard is never written into it
+    Tensor gathered_k;  // [1, H, T_local*ring_size, d] persistent all-gather buffers (shard s at rows
+    Tensor gathered_v;  //   [s*T_local, (s+1)*T_local)); the local shard is never written into them
 };
 
 }  // namespace ttnn::prim

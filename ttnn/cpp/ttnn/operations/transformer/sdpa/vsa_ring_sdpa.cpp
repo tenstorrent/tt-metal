@@ -14,10 +14,12 @@ namespace ttnn::transformer {
 
 ttnn::Tensor vsa_ring_sdpa(
     const ttnn::Tensor& q,
-    const ttnn::Tensor& kv,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
     const ttnn::Tensor& indices,
     const ttnn::Tensor& block_counts,
-    const ttnn::Tensor& persistent_output_buffer_kv,
+    const ttnn::Tensor& persistent_output_buffer_k,
+    const ttnn::Tensor& persistent_output_buffer_v,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     uint32_t num_links,
     uint32_t cluster_axis,
@@ -46,10 +48,12 @@ ttnn::Tensor vsa_ring_sdpa(
         /*default_l1_acc=*/false);
     return ttnn::prim::vsa_ring_sdpa(
         q,
-        kv,
+        k,
+        v,
         indices,
         block_counts,
-        persistent_output_buffer_kv,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
         resolved_scale,
         block_size,
         kernel_config,
