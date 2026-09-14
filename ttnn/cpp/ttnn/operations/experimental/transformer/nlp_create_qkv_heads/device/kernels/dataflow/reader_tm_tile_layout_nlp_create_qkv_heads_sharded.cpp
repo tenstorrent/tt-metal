@@ -5,9 +5,9 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/tensor/local_tensor_accessor.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -29,7 +29,9 @@ void kernel_main() {
     auto in0_mcast_noc_x = [](uint32_t x) { return get_vararg(x); };
     auto in0_mcast_noc_y = [num_x](uint32_t y) { return get_vararg(num_x + y); };
 
-    DataflowBuffer dfb_q_out(dfb::q_out);
+    // This core's Q output shard, written by base address (this instance's heads start q_offset in); the
+    // kernel never dereferences it, only hands the address to the NoC.
+    LocalTensorAccessor<uint8_t> q_out(tensor::q_out);
     UnicastEndpoint src_ep;
 
     uint32_t q_x = start_q_x;
@@ -46,7 +48,7 @@ void kernel_main() {
     // The host passes only the shard base; the first head this core reads starts
     // remote_q_head_start_idx heads into the source shard.
     uint32_t q_src_addr = q_base_addr + remote_q_head_start_idx * head_size;
-    uint32_t q_write_addr = dfb_q_out.get_write_ptr() + q_offset;
+    uint32_t q_write_addr = q_out.get_bank_base_address() + q_offset;
 
     for (uint32_t q = 0; q < num_q_heads; ++q) {
         // Q
@@ -78,7 +80,7 @@ void kernel_main() {
 #ifdef READ_KV_HEADS
     // K/V heads are read only on the cores that also hold a K/V output shard (the leading cores of the Q
     // grid, in row-major order).  The remaining Q cores are built without this block, and without the K/V
-    // output buffer it fills.
+    // output tensor it fills.
     {
         uint32_t num_kv_heads = get_arg(args::num_kv_heads);
         uint32_t num_kv_heads_per_core = get_arg(args::num_kv_heads_per_core);
@@ -91,9 +93,9 @@ void kernel_main() {
         uint32_t kv_buffer_addr = q_base_addr;  // fused QKV: the K/V sections live in the Q shard
 #endif
         uint32_t kv_section_offset = get_arg(args::kv_section_offset);  // byte offset of the K/V section in that shard
-        uint32_t num_kv_tiles = get_arg(args::num_kv_tiles);
 
-        DataflowBuffer dfb_kv_out(dfb::kv_out);
+        // This core's K (reader instance) or V (writer instance) output shard, filled once from its base.
+        LocalTensorAccessor<uint8_t> kv_out(tensor::kv_out);
 
         uint32_t kv_x = start_kv_x;
         uint32_t kv_y = start_kv_y;
@@ -104,8 +106,7 @@ void kernel_main() {
         // this core reads, both derived on device from the bare shard base.
         uint32_t kv_base_addr = kv_buffer_addr + kv_section_offset;
         uint32_t kv_src_addr = kv_base_addr + remote_kv_head_start_idx * head_size;
-        dfb_kv_out.reserve_back(num_kv_tiles);
-        uint32_t kv_write_addr = dfb_kv_out.get_write_ptr();
+        uint32_t kv_write_addr = kv_out.get_bank_base_address();
 
         // K or V
         for (uint32_t kv = 0; kv < num_kv_heads; ++kv) {
@@ -132,7 +133,6 @@ void kernel_main() {
             }
             noc.async_read_barrier();
         }
-        dfb_kv_out.push_back(num_kv_tiles);
     }
 #endif
 }

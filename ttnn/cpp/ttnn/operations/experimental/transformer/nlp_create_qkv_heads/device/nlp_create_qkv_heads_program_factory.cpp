@@ -287,6 +287,19 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
             // and a Float32 input buffer the mode has to be stated explicitly; this is the same mode.
             compute_hw.unpack_modes.emplace(K_IN, UnpackMode::UnpackToSrc);
         }
+        // Gen2 (Quasar): the spec validator requires the target generation's alternative in hw_config
+        // (program_spec.cpp: "targets Gen2 (Quasar) but its ComputeHardwareConfig holds a
+        // ComputeGen1Config").  Copy across only the fields the Gen1 config sets; bfp_pack_precision_mode has
+        // no Gen2 counterpart and the Gen2-only enable_2x_src_register stays at its default.  WH/BH take the
+        // Gen1 config unchanged.
+        ComputeHardwareConfig compute_hw_config = compute_hw;
+        if (arch == tt::ARCH::QUASAR) {
+            // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+            compute_hw_config = ComputeGen2Config{
+                .enable_32_bit_dest = compute_hw.enable_32_bit_dest,
+                .unpack_modes = compute_hw.unpack_modes,
+            };
+        }
 
         // One compute spec per work-split core group: the block count is a compile-time argument, so
         // each group compiles its own instance.
@@ -310,7 +323,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Interlea
                         },
                     },
                 .compile_time_args = {{"NHtWt", NHtWt}},
-                .hw_config = ComputeHardwareConfig{compute_hw},
+                .hw_config = compute_hw_config,
             };
         };
         kernels.push_back(make_compute(COMPUTE_G1, num_blocks_per_core_group_1 * kv_num_tiles));
@@ -464,7 +477,6 @@ struct ShardedArgs {
     uint32_t per_core_in_kv_heads = 0;
     uint32_t k_section_offset = 0;  // byte offset of the K section inside the (fused or separate) input shard
     uint32_t v_section_offset = 0;  // byte offset of the V section
-    uint32_t k_num_tiles = 0;
     uint32_t num_cores_x = 0;
     std::vector<uint32_t> noc_x_coords;
     std::vector<uint32_t> noc_y_coords;
@@ -496,9 +508,7 @@ ShardedArgs build_sharded_core_args(
     uint32_t per_risc1_out_q_heads = per_core_out_q_heads / 2;
     uint32_t per_core_in_q_heads = num_q_heads / input_tensor.shard_spec().value().num_cores();
 
-    auto k_shard_spec = std::get<1>(output).shard_spec().value();
-    auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
+    auto k_cores = std::get<1>(output).shard_spec().value().grid;
 
     uint32_t per_core_out_kv_heads = num_kv_heads / k_cores.num_cores();
     uint32_t per_core_in_kv_heads =
@@ -528,7 +538,6 @@ ShardedArgs build_sharded_core_args(
     args.per_core_in_kv_heads = per_core_in_kv_heads;
     args.k_section_offset = k_section_offset;
     args.v_section_offset = v_section_offset;
-    args.k_num_tiles = k_num_tiles;
     args.num_cores_x = num_cores_x;
 
     args.noc_x_coords.reserve(num_cores_x);
@@ -615,9 +624,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     const KernelSpecName WRITER_KV{"writer_kv"};
     const KernelSpecName READER_Q{"reader_q"};
     const KernelSpecName WRITER_Q{"writer_q"};
-    const DFBSpecName Q_OUT{"q_out"};
-    const DFBSpecName K_OUT{"k_out"};
-    const DFBSpecName V_OUT{"v_out"};
     const TensorParamName INPUT_Q{"input_q"};
     const TensorParamName INPUT_KV{"input_kv"};
     const TensorParamName Q{"q"};
@@ -632,47 +638,16 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     IDevice* device = input_tensor.device();
     const tt::ARCH arch = device->arch();
 
-    tt::DataFormat data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
+    const CoreRangeSet q_cores = std::get<0>(output).shard_spec().value().grid;
+    const CoreRangeSet k_cores = std::get<1>(output).shard_spec().value().grid;
 
-    uint32_t single_tile_size = tt::tile_size(data_format);
-
-    auto q_shard_spec = std::get<0>(output).shard_spec().value();
-    auto q_cores = q_shard_spec.grid;
-    auto q_num_tiles = q_shard_spec.shape[0] * q_shard_spec.shape[1] / TILE_HW;
-
-    auto k_shard_spec = std::get<1>(output).shard_spec().value();
-    auto k_cores = k_shard_spec.grid;
-    auto k_num_tiles = k_shard_spec.shape[0] * k_shard_spec.shape[1] / TILE_HW;
-
-    auto v_shard_spec = std::get<2>(output).shard_spec().value();
-    auto v_num_tiles = v_shard_spec.shape[0] * v_shard_spec.shape[1] / TILE_HW;
-
-    // The three output buffers are borrowed as dataflow buffers: each kernel instance writes its heads
-    // straight into the output shard.  Their L1 addresses resolve from the q/k/v tensor arguments.
-    Group<DataflowBufferSpec> dataflow_buffers = {
-        DataflowBufferSpec{
-            .unique_id = Q_OUT,
-            .entry_size = single_tile_size,
-            .num_entries = q_num_tiles,
-            .data_format_metadata = data_format,
-            .borrowed_from = Q,
-        },
-        DataflowBufferSpec{
-            .unique_id = K_OUT,
-            .entry_size = single_tile_size,
-            .num_entries = k_num_tiles,
-            .data_format_metadata = data_format,
-            .borrowed_from = K,
-        },
-        DataflowBufferSpec{
-            .unique_id = V_OUT,
-            .entry_size = single_tile_size,
-            .num_entries = v_num_tiles,
-            .data_format_metadata = data_format,
-            .borrowed_from = V,
-        },
-    };
-
+    // The three output shards are reached by base address only: each kernel instance writes its heads
+    // straight into this core's resident Q (and K or V) output shard, with no FIFO traffic anywhere.  So
+    // the outputs are bound as tensors (q_out / kv_out) and the kernel views them through a
+    // LocalTensorAccessor; their L1 bases resolve from the q/k/v tensor arguments.  (The Metal 2.0 port
+    // first expressed them as borrowed DataflowBuffers -- sync-free q_out, and k_out / v_out each bound
+    // PRODUCER + CONSUMER by one data-movement kernel -- which Gen2 rejects: "Self-loop DFBs are not
+    // supported for data-movement kernels".)
     Group<TensorParameter> tensor_parameters = {
         TensorParameter{.unique_id = INPUT_Q, .spec = input_tensor.tensor_spec()},
         TensorParameter{.unique_id = Q, .spec = std::get<0>(output).tensor_spec()},
@@ -707,21 +682,16 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
             .source =
                 "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads/device/kernels/dataflow/"
                 "reader_tm_tile_layout_nlp_create_qkv_heads_sharded.cpp",
-            // Both instances write disjoint head ranges of the Q output shard through its write pointer,
-            // with no FIFO traffic: the producer / consumer roles only satisfy the one-of-each rule.
-            .dfb_bindings =
-                {
-                    DFBBinding{
-                        .dfb_spec_name = Q_OUT,
-                        .accessor_name = "q_out",
-                        .endpoint_type = is_reader_instance ? DFBEndpointType::PRODUCER : DFBEndpointType::CONSUMER,
-                    },
-                },
+            // Both instances write disjoint head ranges of this core's Q output shard (q_offset apart).
             .tensor_bindings =
                 {
                     TensorBinding{
                         .tensor_parameter_name = INPUT_Q,
                         .accessor_name = "input_q",
+                    },
+                    TensorBinding{
+                        .tensor_parameter_name = Q,
+                        .accessor_name = "q_out",
                     },
                 },
             .runtime_arg_schema =
@@ -740,18 +710,10 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
         };
         if (reads_kv_heads) {
             instance.compiler_options.defines.emplace("READ_KV_HEADS", "1");
-            // The reader instance fills the K output shard, the writer instance the V output shard; nothing
-            // drains either (they are the outputs), so each is bound at both ends by its one writer.
-            const DFBSpecName& kv_out = is_reader_instance ? K_OUT : V_OUT;
-            instance.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = kv_out,
+            // The reader instance fills this core's K output shard, the writer instance its V output shard.
+            instance.tensor_bindings.push_back(TensorBinding{
+                .tensor_parameter_name = is_reader_instance ? K : V,
                 .accessor_name = "kv_out",
-                .endpoint_type = DFBEndpointType::PRODUCER,
-            });
-            instance.dfb_bindings.push_back(DFBBinding{
-                .dfb_spec_name = kv_out,
-                .accessor_name = "kv_out",
-                .endpoint_type = DFBEndpointType::CONSUMER,
             });
             if (read_from_input_tensor_kv) {
                 instance.compiler_options.defines.emplace("READ_FROM_INPUT_TENSOR_KV", "1");
@@ -766,8 +728,7 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
                   "remote_kv_head_start_idx",
                   "start_kv_x",
                   "start_kv_y",
-                  "kv_section_offset",
-                  "num_kv_tiles"}) {
+                  "kv_section_offset"}) {
                 instance.runtime_arg_schema.runtime_arg_names.push_back(name);
             }
         }
@@ -827,7 +788,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
                         {"start_kv_x", e.start_kv_x},
                         {"start_kv_y", e.start_kv_y},
                         {"kv_section_offset", kv_section_offset},
-                        {"num_kv_tiles", args.k_num_tiles},
                     });
             }
             run_args.advanced_options.runtime_varargs.emplace(e.core, noc_coords);
@@ -844,7 +804,6 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     ProgramSpec spec{
         .name = "nlp_create_qkv_heads_sharded",
         .kernels = std::move(kernels),
-        .dataflow_buffers = std::move(dataflow_buffers),
         .tensor_parameters = std::move(tensor_parameters),
         .work_units = std::move(work_units),
     };
@@ -868,8 +827,8 @@ ttnn::device_operation::ProgramArtifacts NlpCreateHeadsDeviceOperation::Sharded:
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// Only per-dispatch state is re-applied: the tensor bindings, which carry the input shard bases and
-// re-point the three borrowed output buffers.  Every other runtime arg derives from the operation
+// Only per-dispatch state is re-applied: the tensor bindings, which carry the input shard bases and the
+// three output shard bases.  Every other runtime arg derives from the operation
 // attributes or the input/output TensorSpecs, which the program hash covers, so a cache hit means they are
 // identical by construction.
 tt::tt_metal::experimental::ProgramRunArgs NlpCreateHeadsDeviceOperation::Sharded::override_runtime_arguments(
