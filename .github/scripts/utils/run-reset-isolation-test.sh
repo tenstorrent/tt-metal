@@ -43,6 +43,10 @@ POST_RESET_SETTLE_SECS=10
 # The host's tt-smi is a venv console script, not on PATH. Its shebang points at
 # the venv python, so the absolute path needs no activation.
 HOST_TT_SMI=/opt/tt_metal_infra/provisioning/provisioning_env/bin/tt-smi
+# Bound on pytest's SIGINT teardown, and on the post-reset run so a device that
+# never comes back cannot burn the whole step budget and lose the survivors' results.
+STOP_TIMEOUT_SECS=120
+POST_RESET_RUN_TIMEOUT_SECS=900
 
 RESULTS_DIR=".multi-user-test-results"
 RESET_DONE_FLAG="${RESULTS_DIR}/reset_done"
@@ -51,20 +55,28 @@ C0_STOP_FLAG="${RESULTS_DIR}/container0_stop"
 mkdir -p "$RESULTS_DIR"
 rm -f "$RESET_DONE_FLAG" "$CONTAINER0_EXITED_FLAG" "$C0_STOP_FLAG"
 
+# Prefix every line so the output of N parallel containers stays attributable.
+run_in_container() {
+    local container="$1" tmo="${2:-}"
+    local cmd="pytest -v ${TEST_PATH} ${TEST_ARGS}"
+    [ -n "$tmo" ] && cmd="timeout ${tmo} ${cmd}"
+    docker exec "$container" bash -c "$cmd" 2>&1 | sed -u "s/^/[${container}] /"
+}
+
 # Run the workload in a loop until the reset_done flag appears, then run once
 # more to confirm the container survived the reset. Writes exit status on completion.
 run_survivor_loop() {
     local container="$1"
     (
         while [ ! -f "$RESET_DONE_FLAG" ]; do
-            if ! docker exec "$container" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}"; then
+            if ! run_in_container "$container"; then
                 echo 1 > "${RESULTS_DIR}/${container}.status"
                 exit 1
             fi
         done
         # Final run after reset to confirm ETH survived.
         rc=0
-        docker exec "$container" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
+        run_in_container "$container" || rc=$?
         echo "$rc" > "${RESULTS_DIR}/${container}.status"
     ) &
 }
@@ -93,7 +105,7 @@ echo ">>> Starting workload in ${container0}"
     # RESET_WAIT_SECS, leaving the reset nothing live to interrupt. `break` (not
     # `|| true`) so a genuine failure still reports via the flag.
     while [ ! -f "$C0_STOP_FLAG" ]; do
-        docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || break
+        run_in_container "$container0" || break
     done
     touch "$CONTAINER0_EXITED_FLAG"
 ) &
@@ -110,12 +122,25 @@ if [ -f "$CONTAINER0_EXITED_FLAG" ]; then
     echo ">>>        there is no active workload for the reset to interrupt."
     reset_ok=0
 else
-    echo ">>> Stopping workload in ${container0}..."
+    # SIGINT, not the default SIGTERM: CPython installs no SIGTERM handler, so
+    # pytest would die instantly without fixture teardown, leaving the eth/fabric
+    # firmware live on a board we are about to reset. SIGINT raises
+    # KeyboardInterrupt, which tears the session down and closes the device.
+    echo ">>> Stopping workload in ${container0} (SIGINT)..."
     touch "$C0_STOP_FLAG"
-    docker exec "$container0" pkill -f pytest || true
+    docker exec "$container0" pkill -INT -f pytest || true
 
-    # Give the process time to terminate and release device handles.
-    sleep 5
+    # Wait for the teardown rather than guessing at it.
+    for _ in $(seq "$STOP_TIMEOUT_SECS"); do
+        docker exec "$container0" pgrep -f pytest >/dev/null 2>&1 || break
+        sleep 1
+    done
+    if docker exec "$container0" pgrep -f pytest >/dev/null 2>&1; then
+        echo ">>> WARNING: pytest still running after ${STOP_TIMEOUT_SECS}s; sending SIGKILL."
+        echo ">>>          The device will NOT have been closed cleanly."
+        docker exec "$container0" pkill -KILL -f pytest || true
+        sleep 2
+    fi
 
     # Collect the initial container-0 job (ignore its exit status — it was killed).
     wait "$container0_initial_pid" || true
@@ -149,7 +174,7 @@ if [ "$reset_ok" = "1" ]; then
     echo ">>> Restarting workload in ${container0}..."
     (
         rc=0
-        docker exec "$container0" bash -c "pytest -v ${TEST_PATH} ${TEST_ARGS}" || rc=$?
+        run_in_container "$container0" "$POST_RESET_RUN_TIMEOUT_SECS" || rc=$?
         echo "$rc" > "${RESULTS_DIR}/${container0}.status"
     ) &
     bg_pids+=($!)
