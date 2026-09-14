@@ -11,26 +11,35 @@ share a file without taking a lock.
 import json
 import os
 import shlex
+import shutil
 import socket
 import subprocess
+import tempfile
 from collections import defaultdict
 from functools import lru_cache
 from pathlib import Path
 
 TTNOP_DIR = Path(__file__).resolve().parent
+LLK_DIR = TTNOP_DIR.parents[2]
 TT_METAL_DIR = TTNOP_DIR.parents[3]
 SFPI_BIN = Path("tests/sfpi/compiler/bin")
 SFPI_VERSION = Path("tests/sfpi/sfpi.version")
 TENSTORRENT_DEVICES = Path("/sys/class/tenstorrent")
 REPO_PATH_MARKER = f"/{TT_METAL_DIR.name}/"
+TTNOP_ELF_NAMES = frozenset({"unpack.elf", "math.elf", "pack.elf", "sfpu.elf"})
+ADDR2LINE_ELF_NAME = "kernel.elf"
+ADDR2LINE_COMMAND = (
+    str(LLK_DIR / SFPI_BIN / "riscv-tt-elf-addr2line"),
+    "-e",
+    ADDR2LINE_ELF_NAME,
+    "-f",
+    "-C",
+    "-i",
+)
 
 FAILURES = "failures.jsonl"
 SKIPS = "skips.jsonl"
 MARKDOWN = "report.md"
-
-
-def _sfpi_bin() -> Path:
-    return Path(os.environ.get("LLK_HOME") or TT_METAL_DIR) / SFPI_BIN
 
 
 def compile_path_to_repo_path(location: str) -> str:
@@ -44,14 +53,28 @@ def compile_path_to_repo_path(location: str) -> str:
 @lru_cache(maxsize=None)
 def source_chain(elf: str, vaddr: int) -> tuple:
     """Inline C++ call chain for a site (innermost first): "function  file:line"."""
-    addr2line = _sfpi_bin() / "riscv-tt-elf-addr2line"
+    elf_path = Path(elf).resolve()
+    build_root = Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
+    if (
+        elf_path.name not in TTNOP_ELF_NAMES
+        or not elf_path.is_file()
+        or not elf_path.is_relative_to((build_root / "tt-llk-build").resolve())
+        or not isinstance(vaddr, int)
+        or vaddr < 0
+    ):
+        return ()
     try:
-        out = subprocess.run(
-            [str(addr2line), "-e", elf, "-f", "-C", "-i", f"0x{vaddr:x}"],
-            capture_output=True,
-            text=True,
-            timeout=60,
-        ).stdout
+        with tempfile.TemporaryDirectory(prefix="ttnop-addr2line-") as temp_dir:
+            shutil.copyfile(elf_path, Path(temp_dir) / ADDR2LINE_ELF_NAME)
+            out = subprocess.run(
+                ADDR2LINE_COMMAND,
+                cwd=temp_dir,
+                input=f"0x{vaddr:x}\n",
+                capture_output=True,
+                text=True,
+                timeout=60,
+                shell=False,
+            ).stdout
     except (OSError, subprocess.SubprocessError):
         # Missing DWARF tooling should not stop the sweep.
         return ()
@@ -73,8 +96,7 @@ def _run(*command) -> str:
 
 
 def environment(arch: str, site_mode: str, filler: str, drift: bool = True) -> dict:
-    llk_home = Path(os.environ.get("LLK_HOME") or TT_METAL_DIR)
-    sfpi_version = llk_home / SFPI_VERSION
+    sfpi_version = LLK_DIR / SFPI_VERSION
     boards = sorted(TENSTORRENT_DEVICES.glob("*/device/device"))
     return {
         "arch": arch,

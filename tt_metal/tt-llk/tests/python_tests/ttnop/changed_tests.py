@@ -122,8 +122,7 @@ def select(repo: Path, base: str, arch: str, changed_paths: list[str]) -> dict:
             changed.startswith("tt_metal/tt-llk/tests/sources/")
             and changed_path.suffix == ".cpp"
         ):
-            if changed_path.is_file():
-                sources.add(changed_path)
+            sources.add(changed_path)
         elif _is_kernel_header(changed, arch):
             sources = _kernel_sources(repo, changed, arch)
 

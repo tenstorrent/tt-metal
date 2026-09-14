@@ -11,14 +11,8 @@
 #           [--device-jobs N] [--collect-to FILE] [--nodeids FILE]
 #           [--changed-since SHA] [--enable-unpacr-nop]
 #
-# --test . (from python_tests/) runs the whole suite. --splits/--group divide
-# one suite across machines, pytest-split style. Give each machine its own
-# --report-dir.
-#
-# Env (see README): TTNOP_DELAYS TTNOP_THREADS TTNOP_SITE_MODE TTNOP_FILLER
-# Markers also accepted via PYTEST_MARKERS / TTNOP_MARKERS (CI sets PYTEST_MARKERS).
-# TTNOP_CHANGED_SINCE maps changed tests, C++ sources, and LLK headers to the
-# pytest files that use them.
+# --splits/--group shard one suite across machines (each
+# machine needs its own --report-dir). --markers defaults to $PYTEST_MARKERS.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/env.sh"
 
@@ -128,7 +122,7 @@ if [[ -z "$NODEIDS" ]]; then
     trap 'rm -rf "$STATE_DIR"; [[ -n "${COLLECT_TO:-}" ]] || rm -f "$NODEIDS"' EXIT
     python3 -m pytest --collect-only -q --compile-consumer \
         "${QUIET_ARGS[@]}" "${PYTEST_SIM_ARGS[@]}" "${SPLIT_ARGS[@]}" "${FILTER_ARGS[@]}" "${TESTS[@]}" \
-        | grep '::' > "$NODEIDS" || true
+        | awk '/::/' > "$NODEIDS"
     CASE_COUNT="$(grep -c . "$NODEIDS" || true)"
     echo ">> $CASE_COUNT case(s)"
     if [[ "$CASE_COUNT" -eq 0 ]]; then

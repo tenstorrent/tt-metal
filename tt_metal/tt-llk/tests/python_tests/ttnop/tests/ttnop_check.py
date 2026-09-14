@@ -222,11 +222,8 @@ def check_hang(config, baseline, injector, scans):
 def reset_after_hang():
     """`tt-smi -r` is what actually clears a jal-self hang on this card."""
     print("running tt-smi -r (that is what clears the hang)")
-    try:
-        subprocess.run(["tt-smi", "-r"], check=True)
-        print("    tt-smi -r done. Check complete.")
-    except Exception as err:
-        print(f"    tt-smi -r failed ({err}). Run it by hand")
+    subprocess.run(["tt-smi", "-r"], check=True, timeout=180)
+    print("    tt-smi -r done. Check complete.")
 
 
 def main():

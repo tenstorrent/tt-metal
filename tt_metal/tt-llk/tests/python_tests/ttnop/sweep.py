@@ -214,10 +214,11 @@ def run(config: Config, variants: list, runtime, record_sink) -> list:
     """Run every variant `repeats` times. Returns (label, tags) per recorded variant."""
     failing = []
     for variant in variants:
-        fails, tags, first_error = 0, set(), ""
+        attempts, fails, tags, first_error = 0, 0, set(), ""
         # A hang ends the case, so save its finding before the exception leaves.
         try:
             for _ in range(config.repeats):
+                attempts += 1
                 tag, error = runtime.run(variant)
                 if tag is None:
                     continue
@@ -229,7 +230,7 @@ def run(config: Config, variants: list, runtime, record_sink) -> list:
         finally:
             if fails:
                 failing.append((f"{variant.label()} {','.join(sorted(tags))}", tags))
-                record_sink(variant, fails, tags, first_error)
+                record_sink(variant, attempts, fails, tags, first_error)
     return failing
 
 

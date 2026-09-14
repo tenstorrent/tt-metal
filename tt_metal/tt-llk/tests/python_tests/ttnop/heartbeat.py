@@ -4,11 +4,9 @@
 """Progress files the supervisor watches, the done-log it resumes from, and the
 per-case result log the junit report is built out of.
 
-A wedged worker is blocked inside a device read. It cannot raise, log, or run a
-signal handler, so there is nothing we could ask it to tell us. The only usable
-signal is one it stops producing: every worker rewrites a small file before each
-variant, and `supervise.py` calls a wedge when every live worker's file has
-stopped moving.
+A wedged worker may be unable to raise, log, or run a signal handler. Each
+worker therefore rewrites a small file before every variant, and `supervise.py`
+acts when an active worker stops updating it.
 
 Writes are atomic (temp + rename) so a reader never sees half a record. Both
 sides no-op when TTNOP_STATE_DIR is unset, which is how focus.sh and a bare
@@ -235,6 +233,18 @@ def live_workers(root: Path) -> list:
         record["age"] = time.time() - record["ts"]
         records.append(record)
     return records
+
+
+def clear_heartbeat(root: Path, worker: dict) -> None:
+    """Remove a terminated worker's heartbeat without touching its replacement."""
+    path = root / f"{_HEARTBEAT_PREFIX}{worker.get('worker', '')}"
+    record = _read(path)
+    if record is None or record.get("pid") != worker.get("pid"):
+        return
+    try:
+        path.unlink()
+    except OSError:
+        pass
 
 
 def stalled(workers, timeout: float) -> list:

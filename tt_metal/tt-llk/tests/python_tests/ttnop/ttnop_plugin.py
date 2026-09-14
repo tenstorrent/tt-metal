@@ -344,8 +344,8 @@ class Perturber:
                 self.config,
                 variants,
                 self,
-                lambda variant, fails, tags, error: self._record(
-                    item, variant, fails, tags, error
+                lambda variant, runs, fails, tags, error: self._record(
+                    item, variant, runs, fails, tags, error
                 ),
             )
         finally:
@@ -362,7 +362,7 @@ class Perturber:
             # an L1 image the harness still believes is pristine.
             self._forget_kernel_image()
 
-    def _record(self, item, variant, fails, tags, error) -> None:
+    def _record(self, item, variant, runs, fails, tags, error) -> None:
         scan = self.scans[variant.thread]
         report.append(
             self.config.report_dir,
@@ -380,7 +380,7 @@ class Perturber:
                 # Plan position, so a log several workers appended to can still be
                 # read in sweep order.
                 "seq": variant.seq,
-                "runs": self.config.repeats,
+                "runs": runs,
                 "fails": fails,
                 "tag": ",".join(sorted(tags)),
                 # First line only: a mismatch drags the whole offending tensor

@@ -173,6 +173,10 @@ class Injector:
         self._displaced.clear()
 
     def arm(self, thread: str, scan, site, delay: int, filler_word: int) -> None:
+        for other in list(self._displaced):
+            if other != thread:
+                self._restore(other)
+
         cave = self.cave_for(scan)
         displaced = self._displaced.get(thread)
         new_site = displaced is None or displaced.addr != site.addr

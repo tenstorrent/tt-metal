@@ -5,12 +5,25 @@
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SCANNER = HERE / f"scan-{os.environ.get('CHIP_ARCH', 'wormhole').strip().lower()}"
+ARCH = os.environ.get("CHIP_ARCH", "wormhole").strip().lower()
+SCANNERS = {arch: HERE / f"scan-{arch}" for arch in ("wormhole", "blackhole", "quasar")}
+SCANNER = SCANNERS[ARCH]
+SCANNER_ELF_NAME = "kernel.elf"
+TTNOP_ELF_NAMES = {
+    name: SCANNER_ELF_NAME
+    for name in ("unpack.elf", "math.elf", "pack.elf", "sfpu.elf")
+}
+SCAN_COMMANDS = {
+    "sync": (str(SCANNER), "--mode", "sync", SCANNER_ELF_NAME),
+    "all": (str(SCANNER), "--mode", "all", SCANNER_ELF_NAME),
+}
 
 
 @dataclass(frozen=True)
@@ -44,20 +57,36 @@ _cache: dict = {}
 
 
 def _build() -> None:
-    subprocess.run(["make", "--silent", SCANNER.name], cwd=HERE, check=True)
+    subprocess.run(
+        ["make", "--silent", SCANNER.name], cwd=HERE, check=True, shell=False
+    )
 
 
 def scan(elf: str, mode: str = "sync") -> Scan:
     """Scan one thread ELF. Cached on (path, mtime, mode) so a sweep pays for it once."""
-    elf = str(Path(elf).resolve())
-    key = (elf, Path(elf).stat().st_mtime_ns, mode)
+    command = SCAN_COMMANDS[mode]
+    elf_path = Path(elf).resolve()
+    build_root = (
+        Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()) / "tt-llk-build"
+    ).resolve()
+    elf_path.relative_to(build_root)
+    safe_elf_name = TTNOP_ELF_NAMES[elf_path.name]
+    elf = str(elf_path)
+    key = (elf, elf_path.stat().st_mtime_ns, mode)
     if key in _cache:
         return _cache[key]
 
     _build()
-    out = subprocess.run(
-        [str(SCANNER), "--mode", mode, elf], capture_output=True, text=True, check=True
-    ).stdout
+    with tempfile.TemporaryDirectory(prefix="ttnop-scan-") as temp_dir:
+        shutil.copyfile(elf_path, Path(temp_dir) / safe_elf_name)
+        out = subprocess.run(
+            command,
+            cwd=temp_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+            shell=False,
+        ).stdout
     raw = json.loads(out)
 
     cave = raw["cave"] or {"start": 0, "limit": 0}

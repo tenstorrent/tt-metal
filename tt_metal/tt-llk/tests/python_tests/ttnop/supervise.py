@@ -1,58 +1,16 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Watchdog around a sweep: reset the card when it wedges, resume on what is left.
+"""Watch a TTNOP sweep, recover wedged workers, and resume unfinished cases.
 
-There are two ways a sweep loses a core, and they arrive here differently.
-
-The first is a device that still answers: mailbox poll raises TimeoutError, the
-worker records the hang, drops it from the resume list, and calls
-heartbeat.request_recovery. It cannot unstick the core — a soft reset from
-inside reboots BRISC and poisons the rest of the session — but it only lost its
-own, and the card has spares. Same as a silent wedge below: kill the worker,
-let xdist replace it on a spare, never address the wedged core again. Card reset
-used to happen here too; it costs every other worker's in-flight case (six hangs
-spent the reset budget and abandoned 1478 of 2418). It is now the fallback when
-no spare cores are left.
-
-The second is a read that never returns at all, because the poll's deadline is
-only checked between reads — the worker is blocked inside one, where it can
-neither raise nor log nor run a signal handler, and so cannot ask for anything.
-
-How far that spreads varies. A card wedged below the NoC takes every worker with
-it; a NoC path wedged under one core strands that worker alone while the others
-carry on. Both are fatal to the worker involved, so one silent worker is enough
-to act on: waiting for the rest to agree would defer recovery until they had
-drained the whole queue, which is hours on a full shard. Left alone this costs
-the shard outright — the run that prompted this burned six to eight hours per
-shard that way and produced no report at all.
-
-So the detector lives outside the pytest process. Workers publish what they are
-about to attempt (heartbeat.py), and when one goes quiet mid-case for longer
-than any real variant could take, we:
-
-  1. record the variant it was sitting on — the one that wedged the core is
-     precisely the race the sweep exists to find, and it is the one finding the
-     in-process recorder can never write, because the call never returns;
-  2. kill that worker alone. xdist replaces a crashed worker under a new gateway
-     id, and gwN maps to the Nth functional core, so the replacement comes up on
-     a core the sweep was not using. The card has many more Tensix than a sweep
-     occupies, so a lost core costs a spare rather than any throughput, and the
-     wedged one is simply never addressed again;
-  3. only if that worker will not die — the usual outcome when it is parked in an
-     uninterruptible driver call — fall back to killing the run and resetting the
-     card, then resume on the cases nobody finished yet. That reset costs every
-     healthy worker's in-flight case, so it waits until it would actually pay for
-     itself (see should_reset_now).
-
-The wedging cases are marked covered as soon as they are detected, on the grounds
-that re-running a case that just wedged a core mostly wedges the next one.
-Sibling params of the same test are marked covered too: one hang is the race,
-and the rest of that family cooks the card the same way.
+Workers publish heartbeats before each variant. A silent worker is recorded and
+evicted so xdist can use a spare core. If eviction or spare capacity fails, the
+supervisor resets the card and resumes from the done log.
 
     python3 supervise.py IDS_FILE [pytest args...]
 """
 
+import json
 import os
 import shutil
 import signal
@@ -66,68 +24,23 @@ import heartbeat
 import junit
 import report
 import sweep as sweep_module
+from _pytest_runner import run as run_pytest
 
 HERE = Path(__file__).resolve().parent
 RUNNER = HERE / "_pytest_runner.py"
 
-# Beats are per variant, not per case, so this is not sized by how long a case
-# takes — a slow case is still many fast variants. Nor is it sized by the tests,
-# which are quick (run 31714492632 implies 0.13-1.65s per variant).
-#
-# What sets the floor is the reporting path: a *failing* variant resolves its
-# inline chain before the next beat, and report.source_chain allows addr2line up
-# to 60s, so the worst legitimate silence is one variant plus that. 120 leaves
-# roughly double. Anyone tempted to tighten this toward the 2s the tests
-# actually take has to bound addr2line first, and should weigh that a false
-# wedge costs a card reset, a skipped case and a red shard, while detecting a
-# real one slowly costs seconds.
-#
-# That sizing was always about a single worker, which is now also how it is
-# applied: one silent worker calls a wedge. So the exposure is every worker's
-# chance of a slow beat rather than all of them coinciding, and the guard
-# against the obvious false positive — a worker idle between cases — is the
-# ALIVE/IDLE split in heartbeat.py rather than this number.
+# Includes the 60-second addr2line timeout on failing variants.
 WEDGE_TIMEOUT = float(os.environ.get("TTNOP_WEDGE_TIMEOUT", "120"))
-# Collection of a full suite is minutes, so this only fires on a real stall
-# before the first beat or after the last one.
 QUIET_TIMEOUT = float(os.environ.get("TTNOP_QUIET_TIMEOUT", "900"))
 MAX_RESETS = int(os.environ.get("TTNOP_MAX_RESETS", "5"))
 POLL_SECONDS = float(os.environ.get("TTNOP_POLL_SECONDS", "5"))
-# The sweep itself reports nothing per case (ci.sh turns the per-test reporters
-# off; at this scale they cost more than they tell anyone), so this is the only
-# sign of life in a log that otherwise sits silent for hours. Cheap enough to be
-# frequent -- it counts files once per interval -- but kept coarse so it stays
-# skimmable over an eight-hour shard.
 PROGRESS_SECONDS = float(os.environ.get("TTNOP_PROGRESS_SECONDS", "300"))
-# Killing only the wedged worker is worth trying before resetting the whole card.
-# xdist replaces a crashed worker with a *new* gateway id (dsession._clone_node
-# clears spec.id and reallocates), and gwN maps to the Nth functional core, so the
-# replacement comes up on a core the sweep was not using — the card has far more
-# Tensix than a sweep occupies. The wedged core is then simply never addressed
-# again, which is why this needs no blacklist.
-#
-# An eviction costs a spare core, not width, so the real bound is how many spare
-# cores the card has; this is only the fallback for when we cannot ask it. Running
-# the pool dry would be worse than a reset: the replacement worker would raise on
-# a core that does not exist, crash, be replaced, and crash again until xdist gave
-# up on the session.
+# xdist replacements consume successive functional cores.
 MAX_EVICTIONS = int(os.environ.get("TTNOP_MAX_EVICTIONS", "8"))
-# The floor on working cores. Only unkillable workers count against it — an
-# evicted one is replaced and costs no width — so this is how many losses we
-# absorb before the card has to be reset to get those cores back.
 MIN_WORKERS = int(os.environ.get("TTNOP_MIN_WORKERS", "5"))
-# How long to wait after the reset for a run that outlived SIGKILL to finally go.
-# Generous because it is waiting on a device call to return, not on scheduling.
 REAP_TIMEOUT = float(os.environ.get("TTNOP_REAP_TIMEOUT", "120"))
-# How long to give a SIGKILL before concluding the worker cannot be killed at all,
-# which is the expected outcome when it is parked in an uninterruptible driver
-# call — precisely the case only a card reset can clear.
 EVICT_GRACE = float(os.environ.get("TTNOP_EVICT_GRACE", "30"))
-# A wedged card can also wedge tt-smi, so never let recovery block forever.
 RESET_TIMEOUT = float(os.environ.get("TTNOP_RESET_TIMEOUT", "180"))
-# What a reset costs before the sweep is back at full speed: tt-smi -r, plus
-# starting pytest again and re-collecting the resume list. Only ever compared
-# against the cost of carrying on short-handed, so a rough figure is enough.
 RESET_COST = float(os.environ.get("TTNOP_RESET_COST", "240"))
 
 
@@ -159,12 +72,7 @@ def read_ids(path) -> list:
 
 
 def skip_hang_family(root: Path, hung: str, all_ids: list, report_dir: Path) -> None:
-    """Step over the other params of a test that just hung.
-
-    The hung case is already on the done-log. What used to happen next is the
-    resume ran the next format of the same test, hit the same site, and paid
-    another `tt-smi -r`. Other tests are a different race and stay queued.
-    """
+    """Skip unfinished parameters of a test that just hung."""
     siblings = heartbeat.unrun_family(root, hung, all_ids)
     if not siblings:
         return
@@ -183,7 +91,6 @@ def record_wedge(config, workers) -> None:
         variant = worker.get("variant") or {}
         if not variant:
             continue
-        # Variant beats are atomic and written by this code, so their schema is complete.
         report.append(
             config.report_dir,
             {
@@ -204,8 +111,7 @@ def record_wedge(config, workers) -> None:
                     f"card stopped answering for {worker['age']:.0f}s on "
                     f"{variant['label']}"
                 ),
-                # Resolved here because the ELF is still on disk; after the reset
-                # and the next attempt's rebuild it may not be.
+                # Resolve before the next attempt rebuilds this ELF.
                 "chain": list(report.source_chain(variant["elf"], variant["addr"])),
             },
         )
@@ -229,20 +135,11 @@ def terminate(child) -> None:
             return
         except subprocess.TimeoutExpired:
             continue
-    # A worker parked in an uninterruptible device call cannot be signalled at
-    # all. Resetting the card is what usually lets that call return, so this is
-    # reported rather than treated as fatal.
     log("run did not die on SIGKILL; continuing to the reset anyway")
 
 
 def _pid_alive(pid: int) -> bool:
-    """Whether the process is still running, counting a zombie as gone.
-
-    A worker is a child of pytest, not of us, so a killed one lingers unreaped for
-    a moment and still answers signals; treating that as alive would send us to a
-    card reset we had just avoided needing. Linux-only: silicon CI and dev
-    machines are Linux, and only /proc tells a zombie from a live process.
-    """
+    """Whether a Linux process is running, counting a zombie as gone."""
     try:
         state = Path(f"/proc/{pid}/stat").read_text().rsplit(") ", 1)[1][:1]
         return state != "Z"
@@ -250,16 +147,13 @@ def _pid_alive(pid: int) -> bool:
         return False
 
 
-def evict(worker) -> bool:
-    """Kill one wedged worker so xdist can replace it on a spare core.
-
-    False if it will not die, which is not a surprise: a thread inside a device
-    read that never returns cannot take a signal until the read does.
-    """
+def evict(root: Path, worker) -> bool:
+    """Kill a wedged worker; return whether it exited."""
     pid = worker["pid"]
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
+        heartbeat.clear_heartbeat(root, worker)
         return True
     except OSError as err:
         log(f"could not signal pid {pid}: {err}")
@@ -268,19 +162,14 @@ def evict(worker) -> bool:
     deadline = time.time() + EVICT_GRACE
     while time.time() < deadline:
         if not _pid_alive(pid):
+            heartbeat.clear_heartbeat(root, worker)
             return True
         time.sleep(POLL_SECONDS)
     return False
 
 
 def core_pool() -> int:
-    """How many Tensix the card has, or 0 if it could not be asked.
-
-    Deliberately called once at startup rather than when a wedge happens. It opens
-    a device context, and doing that while a core is wedged risks hanging the
-    watchdog on the very fault it exists to recover from. The answer is a static
-    property of the part (harvesting), so nothing is lost by asking early.
-    """
+    """Return the functional Tensix count, or 0 when unavailable."""
     try:
         from helpers.device import get_functional_tensix_locations
 
@@ -291,39 +180,22 @@ def core_pool() -> int:
 
 
 def should_reset_now(root: Path, total: int, started, baseline, lost, healthy) -> bool:
-    """Whether resetting now beats finishing the run short-handed.
-
-    Only asked about cores we could not evict, since those stay lost until the
-    card is reset. Resetting buys their throughput back but costs every healthy
-    worker's in-flight case, so it is worth it early in a long run and not worth
-    it near the end.
-    """
+    """Whether recovering lost cores is cheaper than finishing short-handed."""
     if healthy <= 0:
         return True
     done = len(heartbeat.completed(root))
     progressed = done - baseline
     elapsed = time.time() - started
     if progressed <= 0 or elapsed <= 0:
-        # Nothing to extrapolate from, which only happens early, when the whole
-        # shard is still ahead and a reset always pays for itself.
         return True
     remaining = total - done
     if remaining <= 0:
         return False
-    # Time to finish at the rate we are actually managing, times the share of the
-    # capacity the wedge took away: what carrying on would forfeit.
     return (remaining * elapsed / progressed) * (lost / (lost + healthy)) > RESET_COST
 
 
 def reap(child, timeout: float) -> bool:
-    """Wait for a run we already signalled, and all it spawned, to really be gone.
-
-    start_new_session gave the run its own process group, so its pid doubles as
-    the group id. Worth confirming rather than assuming: a worker stuck in a
-    device call only dies once that call returns, which is what the reset is for,
-    and starting the next attempt while one still holds a Tensix would put two
-    sweeps on the same core.
-    """
+    """Wait until a terminated run's process group is gone."""
     deadline = time.time() + timeout
     try:
         child.wait(timeout=timeout)
@@ -352,14 +224,7 @@ def reset_card() -> bool:
 
 
 def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
-    """Block until the run ends or the card has to be reset.
-
-    Returns (outcome, returncode, wedged workers). Outcome is "exited" if the run
-    finished on its own, which it still can after a worker was evicted since xdist
-    carries on with a replacement, or "wedged" if a core we could not clear makes
-    a reset the cheaper option. The wedge list comes back either way: a run that
-    completed around an evicted worker is not a clean run.
-    """
+    """Return (outcome, returncode, wedged workers) for one attempt."""
     started = quiet_since = last_progress = time.time()
     baseline = len(heartbeat.completed(root))
     newest = 0.0
@@ -367,9 +232,7 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
     records = []
     lost = 0
     evicted = 0
-    # Peak rather than current: at the tail workers legitimately finish and drop
-    # out, and measuring the floor against a shrinking live count would call a
-    # healthy end-of-run degraded.
+    # Keep peak width because workers leave normally as the queue drains.
     width = 0
     budget = MAX_EVICTIONS
     while True:
@@ -381,36 +244,27 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             last_progress = now
             log(f"{len(heartbeat.completed(root))}/{total} case(s) done")
 
-        workers = heartbeat.live_workers(root)
+        workers = [
+            worker
+            for worker in heartbeat.live_workers(root)
+            if _pid_alive(worker["pid"])
+        ]
         if len(workers) > width:
             width = len(workers)
-            # Every replacement takes the next core in the enumeration, so this is
-            # exactly how many we can lose before asking for one that is not there.
             budget = max(0, pool - width) if pool else MAX_EVICTIONS
 
-        # A worker that hung a core says so and then parks. It has already
-        # recorded the finding and taken its case off the resume list, so the only
-        # thing left is to get it off that core — the same problem the silent
-        # wedge below has, and it takes the same answer. Parked means sitting in
-        # a plain sleep, so unlike a silent wedge this one always dies when asked.
         for request_path, request in heartbeat.recovery_requests(root):
             heartbeat.clear_recovery_request(request_path)
             name = request.get("worker", "?")
             label = request.get("variant") or "an unknown variant"
-            # One hang is the race. The other formats of this test hit the same
-            # site; letting them run costs another core each.
             skip_hang_family(root, request.get("case", ""), all_ids, config.report_dir)
-            if evicted < budget and evict(request):
+            if evicted < budget and evict(root, request):
                 evicted += 1
                 log(f"{name} hung on {label}; killed, xdist replaces it on a spare")
             else:
                 log(f"{name} hung on {label}; no spare core left, resetting the card")
                 return "wedged", None, records
 
-        # One silent worker is enough to act on. Workers sit on separate cores, so
-        # a NoC path wedged under one of them strands that worker alone while the
-        # rest carry on, and waiting for the others to agree would defer this
-        # until they had drained the queue — hours on a full shard.
         for worker in heartbeat.stalled(workers, WEDGE_TIMEOUT):
             name = worker.get("worker", "?")
             if name in seen:
@@ -418,23 +272,14 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             seen.add(name)
             records.append(worker)
             log(f"{name} silent mid-case for >{WEDGE_TIMEOUT:.0f}s")
-            # Both done here rather than after the run stops: the ELF that
-            # resolves the chain is still on disk, and the case never finished,
-            # so without this a later resume would retry it and wedge another core.
             record_wedge(config, [worker])
             heartbeat.record_skipped(root, [worker.get("case", "")])
             skip_hang_family(root, worker.get("case", ""), all_ids, config.report_dir)
 
-            # Only evictions spend the budget: a worker we fail to kill is never
-            # replaced, so it takes no new core from the pool.
             if evicted >= budget:
-                # Killing it now would buy a replacement that has nowhere to run,
-                # and that worker would crash on startup, be replaced, and crash
-                # again until xdist gave up on the session. Better to hold the
-                # width we have and let the reset below hand the cores back.
                 lost += 1
                 log(f"{name} wedged and the card has no spare core left")
-            elif evict(worker):
+            elif evict(root, worker):
                 evicted += 1
                 log(f"{name} killed; xdist replaces it on a spare core")
             else:
@@ -442,9 +287,6 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
                 log(f"{name} would not die; only a card reset frees that core")
 
         if lost:
-            # The floor first, as the thing we refuse to run below whatever the
-            # arithmetic says. Then the economics, because sitting at 7 of 8 for
-            # the rest of a long shard costs far more than the reset would.
             if width - lost < MIN_WORKERS:
                 log(
                     f"resetting: {width - lost} working core(s), floor is {MIN_WORKERS}"
@@ -454,9 +296,6 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
                 log(f"resetting: {lost} lost core(s) cost more than a reset would")
                 return "wedged", None, records
 
-        # Progress means a beat newer than any we have seen, not merely the
-        # existence of workers: at the tail they are all idle but present, and a
-        # master that stalls there would otherwise never be noticed.
         beat = heartbeat.newest_beat(workers)
         if beat > newest:
             newest, quiet_since = beat, now
@@ -464,11 +303,6 @@ def watch(child, root: Path, total: int, config, pool: int, all_ids: list):
             log(f"no worker progress for >{QUIET_TIMEOUT:.0f}s — calling it a wedge")
             return "wedged", None, records
 
-        # After a string of evictions xdist can sit on "bringing up nodes": the
-        # replacement hangs in device setup (before the first ALIVE beat) and
-        # every surviving worker has already published DONE. QUIET_TIMEOUT is
-        # 15 minutes; this is the same hole on WEDGE_TIMEOUT, because cases are
-        # still queued and nobody is running one.
         alive = any(worker.get("status") == heartbeat.ALIVE for worker in workers)
         left = total - len(heartbeat.completed(root))
         if left > 0 and not alive and now - quiet_since > WEDGE_TIMEOUT:
@@ -513,19 +347,17 @@ def main(argv) -> ExitStatus:
     root = heartbeat.state_dir()
     if root is None:
         log(f"{heartbeat.STATE_DIR_ENV} unset; running unsupervised")
-        return ExitStatus.from_code(
-            subprocess.call([sys.executable, str(RUNNER), argv[1], *pytest_args])
-        )
+        return ExitStatus.from_code(run_pytest(argv[1], pytest_args))
     root.mkdir(parents=True, exist_ok=True)
 
     config = sweep_module.Config.from_env()
     remaining_path = root / "remaining.txt"
+    pytest_args_path = root / "pytest-args.json"
+    pytest_args_path.write_text(json.dumps(pytest_args))
     status = ExitStatus.CLEAN
     wedged = []
     aborted = False
-    # Asked now, while the card is known good — the workflow resets it just before
-    # this — because the answer is only ever needed once a core has wedged, and
-    # that is the moment we least want to be talking to the device.
+    # Query before any wedge can make device discovery hang.
     pool = core_pool()
     log(f"card has {pool} functional Tensix" if pool else "core pool unknown")
 
@@ -542,17 +374,15 @@ def main(argv) -> ExitStatus:
         heartbeat.clear_heartbeats(root)
         heartbeat.clear_recovery_requests(root)
         child = subprocess.Popen(
-            [sys.executable, str(RUNNER), str(remaining_path), *pytest_args],
-            # Its own process group, so a wedge can be cleared with one killpg.
+            [sys.executable, str(RUNNER), str(remaining_path), str(pytest_args_path)],
             start_new_session=True,
+            shell=False,
         )
         log(f"run started (pid {child.pid})")
         outcome, code, payload = watch(child, root, len(all_ids), config, pool, all_ids)
         wedged.extend(payload)
 
         if outcome == "exited":
-            # Reached even after an eviction: xdist replaced the worker and the
-            # run finished around it. The wedges still count, so the shard is red.
             status = ExitStatus.from_code(code)
             break
 
@@ -567,9 +397,6 @@ def main(argv) -> ExitStatus:
         if not reset_card():
             aborted = True
             break
-        # The reset is what lets a stuck device call return, so this is where a
-        # worker we could not kill finally dies. Confirm it before handing the
-        # cores to a new run.
         if not reap(child, REAP_TIMEOUT):
             log(
                 "previous run outlived the reset; stopping rather than putting a "
@@ -577,9 +404,6 @@ def main(argv) -> ExitStatus:
             )
             aborted = True
             break
-        # The hung case and the rest of its test are already on the done-log, so
-        # the resume starts at a different test; nothing to do here but go again.
-
     path = report.write_markdown(
         config.report_dir,
         report.environment(config.arch, config.site_mode, config.filler, config.drift),
@@ -587,10 +411,6 @@ def main(argv) -> ExitStatus:
     if path:
         log(f"findings -> {path}")
 
-    # Assembled here rather than by pytest because only this process has seen the
-    # whole run: the result log spans every attempt, including ones whose session
-    # was killed before it could write anything, and the wedges are cases that no
-    # pytest worker survived to report.
     results = heartbeat.results(root)
     junit_path = junit.render(results, wedged, Path(config.report_dir) / "junit.xml")
     log(f"{len(results)} case result(s) + {len(wedged)} wedge(s) -> {junit_path}")
@@ -604,14 +424,7 @@ def main(argv) -> ExitStatus:
             f"exiting {status.value}"
         )
     elif status == ExitStatus.WEDGED:
-        # Overrides whatever the last attempt exited with, including a clean 0: the
-        # wedges are recorded in the junit file above, but nothing carries them into
-        # pytest's exit code, and the attempt that mopped up the remainder can easily
-        # look perfectly healthy on its own.
         log(f"{len(wedged)} wedge(s) recorded; exiting {status.value}")
-    # Resume files (hb.gwN, done.*, remaining.txt) only exist so this process can
-    # pick up after a reset. The report dir should hold what a human reads:
-    # report.md, failures.jsonl, junit.xml.
     shutil.rmtree(root, ignore_errors=True)
     return status
 
