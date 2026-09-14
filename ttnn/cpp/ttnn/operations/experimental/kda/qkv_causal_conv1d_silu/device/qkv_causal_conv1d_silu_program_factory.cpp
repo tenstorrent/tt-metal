@@ -26,10 +26,13 @@ constexpr uint32_t tap_count = 4;
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
-    const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
+ttnn::device_operation::ProgramArtifacts build_qkv_causal_conv1d_silu_artifacts(
+    const QkvCausalConv1dSiluParams& attrs,
+    const QkvCausalConv1dSiluInputs& in,
+    std::vector<Tensor>& outputs,
+    bool use_initial_history) {
     const auto& input = in.input.mesh_tensor();
-    const auto& history = in.history.mesh_tensor();
+    const auto& history = (use_initial_history ? in.history : in.predecessor_history).mesh_tensor();
     const auto& state_source = in.state_source.mesh_tensor();
     const auto& tap0 = in.tap0.mesh_tensor();
     const auto& tap1 = in.tap1.mesh_tensor();
@@ -65,7 +68,8 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const tt::tt_metal::experimental::DFBSpecName state_copy_dfb_name{"state_copy"};
 
     const tt::tt_metal::experimental::TensorParamName input_tensor_name{"input"};
-    const tt::tt_metal::experimental::TensorParamName history_tensor_name{"history"};
+    const tt::tt_metal::experimental::TensorParamName history_tensor_name{
+        use_initial_history ? "history" : "predecessor_history"};
     const tt::tt_metal::experimental::TensorParamName state_source_tensor_name{"state_source"};
     const tt::tt_metal::experimental::TensorParamName tap0_tensor_name{"tap0"};
     const tt::tt_metal::experimental::TensorParamName tap1_tensor_name{"tap1"};
@@ -251,6 +255,32 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
+}
+
+ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::create_program_artifacts(
+    const QkvCausalConv1dSiluParams& attrs, const QkvCausalConv1dSiluInputs& in, std::vector<Tensor>& outputs) {
+    return build_qkv_causal_conv1d_silu_artifacts(attrs, in, outputs, true);
+}
+
+ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluMeshWorkloadFactory::create_mesh_workload_artifacts(
+    const QkvCausalConv1dSiluParams& attrs,
+    const QkvCausalConv1dSiluInputs& in,
+    std::vector<Tensor>& outputs,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    TT_FATAL(
+        attrs.history_sequence_parallel_axis.has_value(),
+        "qkv_causal_conv1d_silu: mesh workload requires history_sequence_parallel_axis");
+    const uint32_t sp_axis = attrs.history_sequence_parallel_axis.value();
+    ttnn::device_operation::MeshWorkloadArtifacts artifacts;
+    for (const auto& coord : tensor_coords.coords()) {
+        auto per_coord = build_qkv_causal_conv1d_silu_artifacts(attrs, in, outputs, coord[sp_axis] == 0);
+        artifacts.programs.push_back({
+            .range = ttnn::MeshCoordinateRange(coord),
+            .spec = std::move(per_coord.spec),
+            .run_params = std::move(per_coord.run_params),
+        });
+    }
+    return artifacts;
 }
 
 }  // namespace ttnn::experimental::prim

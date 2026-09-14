@@ -16,7 +16,10 @@ using namespace tt::tt_metal;
 namespace ttnn::experimental::prim {
 
 QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::select_program_factory(
-    const operation_attributes_t&, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t&) {
+    if (attrs.history_sequence_parallel_axis.has_value()) {
+        return QkvCausalConv1dSiluMeshWorkloadFactory{};
+    }
     return QkvCausalConv1dSiluProgramFactory{};
 }
 
@@ -31,6 +34,10 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_allocated_device_tensor(in.history, operation_name, "history");
     check_layout(in.history, Layout::ROW_MAJOR, operation_name, "history");
     check_dtype(in.history, DataType::BFLOAT16, operation_name, "history");
+    check_allocated_device_tensor(in.predecessor_history, operation_name, "predecessor_history");
+    check_layout(in.predecessor_history, Layout::ROW_MAJOR, operation_name, "predecessor_history");
+    check_dtype(in.predecessor_history, DataType::BFLOAT16, operation_name, "predecessor_history");
+    check_interleaved(in.predecessor_history, operation_name, "predecessor_history");
     check_allocated_device_tensor(in.state_source, operation_name, "state_source");
     check_layout(in.state_source, Layout::ROW_MAJOR, operation_name, "state_source");
     check_dtype(in.state_source, DataType::BFLOAT16, operation_name, "state_source");
@@ -52,6 +59,7 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_dtype(in.tap3, DataType::BFLOAT16, operation_name, "tap3");
     check_interleaved(in.tap3, operation_name, "tap3");
     check_same_device(in.input, in.history, operation_name, "history");
+    check_same_device(in.input, in.predecessor_history, operation_name, "predecessor_history");
     check_same_device(in.input, in.state_source, operation_name, "state_source");
     check_same_device(in.input, in.tap0, operation_name, "tap0");
     check_same_device(in.input, in.tap1, operation_name, "tap1");
@@ -79,6 +87,7 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
 
     const auto& input_shape = in.input.logical_shape();
     const auto& history_shape = in.history.logical_shape();
+    const auto& predecessor_history_shape = in.predecessor_history.logical_shape();
     const auto& state_source_shape = in.state_source.logical_shape();
     TT_FATAL(
         input_shape.rank() == 3 && input_shape[0] == 1 && input_shape[1] == attrs.sequence &&
@@ -88,11 +97,19 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == 3 && history_shape[2] == channels,
         "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V]");
     TT_FATAL(
+        predecessor_history_shape == history_shape,
+        "qkv_causal_conv1d_silu: predecessor_history must match history shape [1,3,Q+K+V]");
+    TT_FATAL(
         state_source_shape == history_shape,
         "qkv_causal_conv1d_silu: state_source must match history shape [1,3,Q+K+V]");
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
+    if (attrs.history_sequence_parallel_axis.has_value()) {
+        TT_FATAL(
+            in.input.device()->shape().dims() > attrs.history_sequence_parallel_axis.value(),
+            "qkv_causal_conv1d_silu: history_sequence_parallel_axis must index the mesh shape");
+    }
 
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},
@@ -146,14 +163,15 @@ QkvCausalConv1dSiluOperation::create_op_performance_model(
         .fpu_multiply_ops = 4.0 * elements,
         .fpu_add_ops = 3.0 * elements,
     };
-    const std::array<const Tensor*, 7> inputs = {
-        &in.input, &in.history, &in.state_source, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
+    const std::array<const Tensor*, 8> inputs = {
+        &in.input, &in.history, &in.predecessor_history, &in.state_source, &in.tap0, &in.tap1, &in.tap2, &in.tap3};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
 std::vector<Tensor> qkv_causal_conv1d_silu(
     const Tensor& input,
     const Tensor& history,
+    const Tensor& predecessor_history,
     const Tensor& state_source,
     const Tensor& tap0,
     const Tensor& tap1,
@@ -163,6 +181,7 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t k_width,
     uint32_t v_width,
     uint32_t channel_chunk_size,
+    std::optional<uint32_t> history_sequence_parallel_axis,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const tt::tt_metal::MemoryConfig& state_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
@@ -175,12 +194,14 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .k_width = k_width,
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
+            .history_sequence_parallel_axis = history_sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .state_mem_config = state_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
             .input = input,
             .history = history,
+            .predecessor_history = predecessor_history,
             .state_source = state_source,
             .tap0 = tap0,
             .tap1 = tap1,

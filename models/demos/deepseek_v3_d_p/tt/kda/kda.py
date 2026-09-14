@@ -274,6 +274,7 @@ class ttKDA:
         q, k, v, new_state = ttnn.experimental.kda.qkv_causal_conv1d_silu(
             qkv_row_major,
             convolution_history,
+            convolution_history,
             state_source,
             *self.weights.convolution_taps,
             config.q_dim,

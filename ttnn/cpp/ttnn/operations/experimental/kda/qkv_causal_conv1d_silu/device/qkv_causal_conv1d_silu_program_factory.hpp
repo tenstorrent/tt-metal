@@ -13,4 +13,12 @@ struct QkvCausalConv1dSiluProgramFactory {
         const QkvCausalConv1dSiluParams&, const QkvCausalConv1dSiluInputs&, std::vector<Tensor>&);
 };
 
+struct QkvCausalConv1dSiluMeshWorkloadFactory {
+    static ttnn::device_operation::MeshWorkloadArtifacts create_mesh_workload_artifacts(
+        const QkvCausalConv1dSiluParams&,
+        const QkvCausalConv1dSiluInputs&,
+        std::vector<Tensor>&,
+        const ttnn::MeshCoordinateRangeSet&);
+};
+
 }  // namespace ttnn::experimental::prim

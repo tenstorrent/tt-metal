@@ -197,20 +197,26 @@ def _run(
     history_tt: ttnn.Tensor,
     taps_tt: tuple[ttnn.Tensor, ...],
     *,
+    predecessor_history_tt: ttnn.Tensor | None = None,
     channel_chunk_size: int,
     widths: tuple[int, int, int] = _DEFAULT_WIDTHS,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    return ttnn.experimental.kda.qkv_causal_conv1d_silu(
+    if predecessor_history_tt is None:
+        predecessor_history_tt = history_tt
+    q, k, v, _ = ttnn.experimental.kda.qkv_causal_conv1d_silu(
         input_tt,
         history_tt,
+        predecessor_history_tt,
+        predecessor_history_tt,
         *taps_tt,
         *widths,
         program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=channel_chunk_size),
         memory_config=memory_config,
         compute_kernel_config=compute_kernel_config,
     )
+    return q, k, v
 
 
 @pytest.mark.parametrize(
@@ -281,10 +287,18 @@ def test_qkv_causal_conv1d_silu_reads_nd_sharded_history(device: ttnn.Device) ->
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=history_memory_config,
     )
+    predecessor_history_tt = _to_device(history, device, layout=ttnn.ROW_MAJOR_LAYOUT)
     taps_tt = tuple(_to_device(tap, device, layout=ttnn.TILE_LAYOUT) for tap in taps)
 
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        outputs = _run(input_tt, history_tt, taps_tt, widths=widths, channel_chunk_size=sum(widths))
+        outputs = _run(
+            input_tt,
+            history_tt,
+            taps_tt,
+            predecessor_history_tt=predecessor_history_tt,
+            widths=widths,
+            channel_chunk_size=sum(widths),
+        )
 
     assert history_tt.memory_config() == history_memory_config
     for name, expected, actual in zip(("q", "k", "v"), _reference(inputs, history, taps, widths), outputs, strict=True):
