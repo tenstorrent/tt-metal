@@ -17,6 +17,9 @@ import torch
 
 import ttnn
 from models.demos.gemma4_d_p.tt.model import Gemma4Model
+from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
+from models.demos.gemma4_d_p.tt.runners.kv_chunk_table import build_kv_chunk_address_table
 
 from ..demo.text_demo_prefill import _build_prefill_model, _get_prefill_tokens, _host_tensor, _mesh_config, _model_path
 from .test_factory import parametrize_mesh_with_fabric
@@ -408,6 +411,47 @@ def test_device_multi_user_prefill_isolated_by_user_id(mesh_device):
     assert _pcc(isolated_b, shared_b_second) >= 0.999, "user 1 differs from isolated execution"
     assert _pcc(shared_a_first, shared_a_second) >= 0.999, "user 0 depends on execution order"
     assert _pcc(shared_b_second, shared_b_first) >= 0.999, "user 1 depends on execution order"
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": 256_000_000})
+def test_device_external_ring_caches_match_internal_prefill(mesh_device):
+    """Ensure externally allocated ring caches are usable by prefill and migration table generation."""
+    chunk_size = 8192
+    model_path = _model_path()
+    tokens = _get_prefill_tokens(model_path, chunk_size, 262144, source="random")
+    internal_logits, _ = _run_device_prefill(mesh_device, tokens, traced=False)
+
+    mesh_config = _mesh_config(mesh_device)
+    hf_config = Gemma4ModelArgs.load_hf_config(model_path)
+    model_args = Gemma4ModelArgs.from_hf_config(hf_config)
+    external_caches = allocate_ring_kv_caches(
+        mesh_device,
+        model_args,
+        mesh_config,
+        num_users=1,
+        max_seq_len=chunk_size,
+        prefill_chunk_size=chunk_size,
+    )
+    address_table = build_kv_chunk_address_table(
+        mesh_device=mesh_device,
+        kv_caches=external_caches,
+        chunk_size=chunk_size,
+    )
+    assert address_table.num_configs() == 36
+    assert address_table.total_entries() > 0
+
+    _, external_model, _ = _build_prefill_model(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        chunk_size=chunk_size,
+        context_len=chunk_size,
+        ring_kv_caches=external_caches,
+    )
+    external_logits = _run_eager_prefill_on_model(mesh_device, external_model, tokens, user_id=0)
+
+    assert _pcc(internal_logits, external_logits) >= 0.999, "external ring caches changed prefill logits"
 
 
 @torch.no_grad()
