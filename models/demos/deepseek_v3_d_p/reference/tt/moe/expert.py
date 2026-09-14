@@ -21,6 +21,12 @@ import torch.nn.functional as F
 # Activation selectors accepted by TorchExpert / apply_glu_activation.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
+ACTIVATION_SWIGLUOAI = "swiglu_oai"
+
+# The device kernel bakes SwiGLUConfigGPTOSS rather than taking these as arguments, so a reference
+# that let callers vary them could grade against an activation the kernel cannot run.
+SWIGLUOAI_ALPHA = 1.702
+SWIGLUOAI_LIMIT = 7.0
 
 
 def apply_glu_activation(
@@ -40,10 +46,11 @@ def apply_glu_activation(
     separate arguments avoids a concat the device path would not do either. Computed in fp32 to match
     upstream, which casts both halves up before the tanh/sigmoid.
 
-    NOTE: the fused routed-expert kernel implements SiTU on Blackhole
-    (``ttnn.RoutedExpertActivation.SituGlu``, issue #51351); everywhere else -- shared expert,
-    dense FFN, Wormhole -- the device path still runs SiLU, so those comparisons must run
-    ``silu`` on both sides.
+    NOTE: every K3 FFN site runs SiTU on device -- the routed experts through the fused kernel
+    (``ttnn.RoutedExpertActivation.SituGlu``), the shared expert and the layer-0 dense FFN through
+    the composed path in ``TtSharedExpert`` / ``TtFfn``. All three are Blackhole-only, and K3 names
+    SiTU unconditionally, so there is no Wormhole configuration of K3 to compare against; ``silu``
+    here serves the other models.
     """
     if activation == ACTIVATION_SILU:
         return F.silu(gate_out) * up_out
@@ -54,7 +61,14 @@ def apply_glu_activation(
         if situ_linear_beta is not None:
             up = situ_linear_beta * torch.tanh(up / situ_linear_beta)
         return (situ_a * up).to(gate_out.dtype)
-    raise ValueError(f"unknown activation {activation!r}; expected {ACTIVATION_SILU!r} or {ACTIVATION_SITU!r}")
+    if activation == ACTIVATION_SWIGLUOAI:
+        gate = gate_out.float().clamp(max=SWIGLUOAI_LIMIT)
+        up = up_out.float().clamp(min=-SWIGLUOAI_LIMIT, max=SWIGLUOAI_LIMIT)
+        return ((up + 1.0) * gate * torch.sigmoid(SWIGLUOAI_ALPHA * gate)).to(gate_out.dtype)
+    raise ValueError(
+        f"unknown activation {activation!r}; expected {ACTIVATION_SILU!r}, {ACTIVATION_SITU!r} "
+        f"or {ACTIVATION_SWIGLUOAI!r}"
+    )
 
 
 class TorchExpert(nn.Module):

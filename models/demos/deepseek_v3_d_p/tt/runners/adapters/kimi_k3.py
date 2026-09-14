@@ -18,9 +18,10 @@ and ``allocate_kv_cache`` are inherited but would size the KV cache to ``params.
 is wrong for 24-of-93; they are overridden to fail loudly rather than mislead.
 
 MoE scope (issue #51336): the latent-MoE structure -- routed experts at the reduced 3584 hidden,
-896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. The routed experts run the
-checkpoint's **SiTU-GLU** on device (#51351); the shared expert and the dense FFN still run SiLU,
-having no SiTU kernel at their widths. One deliberate limit remains:
+896 experts / top-16, a latent RMSNorm, and one shared expert at 6144. Every FFN site runs the
+checkpoint's **SiTU-GLU** on device: the routed experts through the fused kernel (#51351), the
+shared expert and the layer-0 dense FFN through ttnn-level softcap/sigmoid/multiply (#53625), which
+is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit remains:
   * only the **gate** uses real checkpoint weights. Experts, shared expert and the latent
     projections use seeded random weights, because everything routed is MXFP4 and no dequantizer
     exists yet. Device PCC is therefore TT-vs-torch on identical seeded weights.
@@ -99,10 +100,8 @@ class KimiK3Adapter(MLAPrefillAdapter):
     def reference_moe_cls(self):
         """K3's MoE block: DeepSeek-V3's, wrapped in the shared low-rank latent projection pair.
 
-        The block applies one activation to routed and shared experts alike, while the device has a
-        SiTU-GLU kernel for the routed expert only (#51351). ``run_reference_moe`` therefore builds
-        it with hidden_act="situ" and pins the shared half back to SiLU, so both sides of a device
-        comparison split the same way.
+        The block applies one activation to routed and shared experts alike, which matches the
+        device: ``run_reference_moe`` builds it with hidden_act="situ" for both halves.
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3.modeling_kimi_moe import KimiSparseMoeBlock
 

@@ -14,9 +14,9 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init() {
-    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
+    MATH(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
 // clang-format off
@@ -34,30 +34,34 @@ ALWI void gelu_tile_init() {
  * | fast_and_approx  | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 #ifndef ARCH_QUASAR
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_init_pack() {
-    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, DST_ACCUM_MODE)));
+    PACK(SFPU_UNARY_INIT_FN(gelu, sfpu::gelu_init, (fast_and_approx, is_fp32_dest_acc_en)));
 }
 
-template <bool fast_and_approx = true>
+template <bool fast_and_approx = true, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tile_pack(uint32_t idst) {
     PACK(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu, (fast_and_approx, DST_ACCUM_MODE), idst, VectorMode::RC));
+        DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu, (fast_and_approx, is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 /**
  * Init for gelu_tanh_tile. See gelu_tanh_tile() for semantics.
  */
-ALWI void gelu_tanh_tile_init() { MATH(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
+ALWI void gelu_tanh_tile_init() {
+    MATH(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+}
 
-ALWI void gelu_tanh_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::gelu_tanh_init, (DST_ACCUM_MODE))); }
+ALWI void gelu_tanh_tile_init_pack() {
+    PACK(llk_math_eltwise_unary_sfpu_init<SfpuType::gelu_tanh>(sfpu::gelu_tanh_init));
+}
 
 // clang-format off
 /**
@@ -74,12 +78,14 @@ ALWI void gelu_tanh_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::
  * | tile_index       | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
+    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
+template <bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_tanh_tile_pack(uint32_t idst) {
-    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_gelu_tanh, (DST_ACCUM_MODE), idst, VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(DST_SYNC_MODE, is_fp32_dest_acc_en, calculate_gelu_tanh, (is_fp32_dest_acc_en), idst, VectorMode::RC));
 }
 
 /**
@@ -112,13 +118,13 @@ ALWI void gelu_derivative_tile_init() {
  * | fast_and_approx  | Computation to be done faster and approximate                              | bool     |                                                       | False    |
  */
 // clang-format on
-template <bool fast_and_approx = false>
+template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void gelu_derivative_tile(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
-        DST_ACCUM_MODE,
+        is_fp32_dest_acc_en,
         calculate_gelu_derivative_polynomial,
-        (fast_and_approx, DST_ACCUM_MODE),
+        (fast_and_approx, is_fp32_dest_acc_en),
         idst,
         VectorMode::RC));
 }

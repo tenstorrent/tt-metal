@@ -153,6 +153,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     cfg[DISABLE_IMPLIED_SRCS_FORMAT_ADDR32 + TRISC_ID] = !IMPLIED_MATH_FORMAT;
 
+    // SFPU load reads what UNP_S wrote; store writes what PACK1 will read.
+    const std::uint32_t load_sfpmem  = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.unpack_S_dst));
+    const std::uint32_t store_sfpmem = _sfpu_sfpmem_type_(static_cast<DataFormat>(formats.pack_S_src));
+
     const int in0_base = ckernel::math::SFPU_SRCS_BASE_ADDR;
     const int in1_base = ckernel::math::SFPU_SRCS_BASE_ADDR + PARAM_SRCS_YDIM;
     const int out_base = ckernel::math::SFPU_SRCS_BASE_ADDR + 2 * PARAM_SRCS_YDIM;
@@ -165,18 +169,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
         false /*exec_while_loading*/,
         0 /*set_mutex*/,
         0 /*last*/,
-        [in0_base, in1_base, out_base, num_sfpu_iterations]
+        [in0_base, in1_base, out_base, num_sfpu_iterations, load_sfpmem, store_sfpmem]
         {
 #pragma GCC unroll 4
             for (int d = 0; d < num_sfpu_iterations; d++)
             {
-                TT_SFPLOAD(p_sfpu::LREG0, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in0_base + (d << 1));
-                TT_SFPLOAD(p_sfpu::LREG1, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, in1_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG0, load_sfpmem, ADDR_MOD_7, 0, in0_base + (d << 1));
+                TT_SFPLOAD(p_sfpu::LREG1, load_sfpmem, ADDR_MOD_7, 0, in1_base + (d << 1));
                 TTI_SFPADD(p_sfpu::LCONST_1, p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, 0x0);
-                TT_SFPSTORE(p_sfpu::LREG2, p_sfpu::sfpmem::DEFAULT, ADDR_MOD_7, 0, out_base + (d << 1));
+                TT_SFPSTORE(p_sfpu::LREG2, store_sfpmem, ADDR_MOD_7, 0, out_base + (d << 1));
             }
         });
 
+    // UNPACR2 is issued manually below, so the auto-loop must not replay it. This register is not
+    // reset between tests, so a preceding tile-at-a-time SrcS test would otherwise leave it set.
+    _llk_unpack_srcs_config_<PARAM_SRCS_INSTRN_COUNT, 1 /*INSTRN_LOOP_COUNT*/>();
     _llk_pack_srcs_config_for_tile_<PARAM_SRCS_INSTRN_COUNT>(PARAM_SRCS_32BIT_MODE);
     _llk_math_eltwise_sfpu_init_();
 

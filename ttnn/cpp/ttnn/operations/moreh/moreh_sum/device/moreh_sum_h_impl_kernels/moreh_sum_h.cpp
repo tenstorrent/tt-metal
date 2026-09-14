@@ -53,7 +53,7 @@ void kernel_main() {
 #if defined FP32_DEST_ACC_EN
                 reconfig_data_format_srca(dfb::input);
 #endif
-                copy_tile_to_dst_init_short(dfb::input);
+                copy_init(dfb::input);
                 copy_tile(dfb::input, 0, reduce_dst_idx);
                 copy_tile(dfb::mask_h, 0, mask_dst_idx);
                 mask_tile_init();

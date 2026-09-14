@@ -15,6 +15,8 @@ from typing import Annotated, ClassVar, List, Union
 
 from fuser.validator import (
     ELTWISE_DIMS,
+    IN0_REQUIRED,
+    IN1_REQUIRED,
     INT32_NEEDS_UNPACK_TO_DEST,
     L1_ACC_FORMAT_SUPPORTED,
     LOFI_ONLY,
@@ -31,7 +33,6 @@ from fuser.validator import (
     PACK_NO_L1_ACC,
     REDUCE_PARAMS_REQUIRED,
     SRC_A_DIMS,
-    SRC_B_DIMS,
     TRANSPOSE_WITHIN_FACE_REQUIRED,
     BinarySfpuMathSchema,
     FpuMathSchemaBase,
@@ -41,6 +42,7 @@ from fuser.validator import (
     eltwise_unpacker_rules,
     forced_unpackers,
     reject,
+    require_dest_tiles,
     require_src_a_tiles,
 )
 from helpers.llk_params import (
@@ -104,6 +106,7 @@ UNPACKER_MAP = {
     "UnpackerA": (
         lambda s: UnpackerA(reuse_dest=s.reuse_dest),
         [
+            IN0_REQUIRED,
             INT32_NEEDS_UNPACK_TO_DEST,
             NO_TRANSPOSE_UNPACK_TO_DEST,
             _no_transpose_mismatch,
@@ -111,31 +114,39 @@ UNPACKER_MAP = {
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        [NO_BROADCAST, NO_TRANSPOSE, _block_full_width, NO_UNPACK_TO_DEST],
+        [
+            IN0_REQUIRED,
+            NO_BROADCAST,
+            NO_TRANSPOSE,
+            _block_full_width,
+            NO_UNPACK_TO_DEST,
+        ],
     ),
     "UnpackerAB": (
         lambda s: UnpackerAB(),
-        [NO_TRANSPOSE],
+        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
-        [NO_TRANSPOSE],
+        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
     ),
     "ReduceUnpacker": (
         lambda s: ReduceUnpacker(s.reduce_dim, s.reduce_pool),
-        [NO_TRANSPOSE],
+        [IN0_REQUIRED, IN1_REQUIRED, NO_TRANSPOSE],
     ),
     "TransposeDestUnpacker": (
         lambda s: TransposeDestUnpacker(),
-        None,
+        [],
     ),
     "UnaryBroadcastUnpacker": (
         lambda s: UnaryBroadcastUnpacker(),
-        [_broadcast_required, NO_TRANSPOSE, NO_UNPACK_TO_DEST],
+        [IN0_REQUIRED, _broadcast_required, NO_TRANSPOSE, NO_UNPACK_TO_DEST],
     ),
     "UnpackReduceTilize": (
         lambda s: UnpackReduceTilize(s.reduce_dim, s.reduce_pool),
         [
+            IN0_REQUIRED,
+            IN1_REQUIRED,
             NO_TRANSPOSE,
             NO_UNPACK_TO_DEST,
             _reduce_col_only,
@@ -193,7 +204,7 @@ FPU_MAP = {
             NO_BROADCAST,
             TRANSPOSE_WITHIN_FACE_REQUIRED,
             forced_unpackers("TransposeDestUnpacker"),
-            require_src_a_tiles((32, 32)),
+            require_dest_tiles((32, 32)),
         ],
     ),
     "UnaryBroadcast": (
@@ -230,7 +241,7 @@ OUTPUT_DIMS = {
     "Matmul": MATMUL_DIMS,
     "Reduce": SRC_A_DIMS,
     "TransposeDest": SRC_A_DIMS,
-    "UnaryBroadcast": SRC_B_DIMS,
+    "UnaryBroadcast": SRC_A_DIMS,
 }
 
 

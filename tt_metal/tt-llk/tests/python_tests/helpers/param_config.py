@@ -728,11 +728,30 @@ def generate_quasar_sfpu_format_variants(
 def generate_quasar_srcs_format_dest_acc_combinations(
     formats_list: List[InputOutputFormat],
 ) -> List[Tuple[InputOutputFormat, DestAccumulation]]:
-    return [
-        (variant.formats, variant.dest_acc)
-        for variant in generate_quasar_sfpu_format_variants(None, formats_list)
-        if variant.unpack_to_dest
-    ]
+    """UNP_S -> SrcS -> PACK1 combinations.
+
+    16-bit inputs stay 16-bit in SrcS (no fp16 -> TF32 conversion), so
+    16-bit-input -> 32-bit-output is dropped.
+    """
+    combinations: List[Tuple[InputOutputFormat, DestAccumulation]] = []
+
+    for fmt in formats_list:
+        in_fmt = fmt.input_format
+
+        if not in_fmt.is_32_bit() and fmt.output_format.is_32_bit():
+            continue
+
+        if in_fmt.is_32_bit():
+            dest_acc_modes = (DestAccumulation.Yes,)
+        elif in_fmt.is_mx_format():
+            dest_acc_modes = (DestAccumulation.No,)
+        else:
+            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
+
+        for dest_acc in dest_acc_modes:
+            combinations.append((fmt, dest_acc))
+
+    return combinations
 
 
 def calculate_edgecase_dest_indices(

@@ -21,6 +21,7 @@
 
 #include "chunked_prefill_utils.hpp"                                              // chunked_kv_global_tile_for_local
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_id_sequencer.hpp"  // RingIdSequencer
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
 
 namespace ttnn::operations::transformer::sdpa::ring_joint {
 
@@ -112,8 +113,9 @@ inline KvPadQMapping build_kv_pad_q_mapping_device(
 // Mirror of host build_ring_work_plan_impl (ring_joint_sdpa_program_factory.cpp:192). Walks the same
 // ring-id order via RingIdSequencer, marks ring iterations with non-padded spatial / joint KV work, and
 // applies the same causal unbalanced skip rule. logical_nt is the only per-chunk input.
+template <bool FullMesh>
 inline RingWorkMasks build_ring_work_masks_device(
-    uint32_t device_index,
+    uint32_t transport_rank,
     uint32_t ring_size,
     uint32_t backward_writes_expected,
     uint32_t forward_writes_expected,
@@ -128,16 +130,22 @@ inline RingWorkMasks build_ring_work_masks_device(
     uint32_t joint_seq_len,
     bool kv_pad_rotation_enabled,
     bool kernel_is_causal,
-    bool is_balanced) {
+    bool is_balanced,
+    uint32_t mesh_rows,
+    uint32_t mesh_cols,
+    ttnn::ccl::snake_ring::Orientation snake_orientation) {
     RingWorkMasks plan;
     plan.active_ring_iter_mask = 0;
     plan.single_valid_kv_chunk_mask = 0;
 
-    RingIdSequencer seq(device_index, ring_size, backward_writes_expected, forward_writes_expected);
+    RingIdSequencer seq(transport_rank, ring_size, backward_writes_expected, forward_writes_expected);
+    const uint32_t tensor_rank = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<FullMesh>(
+        transport_rank, mesh_rows, mesh_cols, snake_orientation);
     auto noop_sync = [](uint32_t, uint32_t) {};
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        const uint32_t ring_id = seq.get_next_ring_id(noop_sync);
+        const uint32_t ring_id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<FullMesh>(
+            seq.get_next_ring_id(noop_sync), mesh_rows, mesh_cols, snake_orientation);
         const bool joint_contributes = ring_id == ring_size - 1 && num_joint_k_chunks > 0 && joint_seq_len != 0;
         uint32_t valid_spatial_kv_chunks = 0;
         for (uint32_t k_chunk = 0; k_chunk < num_local_k_chunks; ++k_chunk) {
@@ -158,7 +166,7 @@ inline RingWorkMasks build_ring_work_masks_device(
         const uint32_t valid_kv_chunks = valid_spatial_kv_chunks + (joint_contributes ? num_joint_k_chunks : 0);
         const bool has_kv_work = (kernel_chunked && !kv_pad_rotation_enabled) || valid_spatial_kv_chunks > 0;
         const bool ring_iter_does_work =
-            (has_kv_work || joint_contributes) && !(kernel_is_causal && device_index < ring_id && !is_balanced);
+            (has_kv_work || joint_contributes) && !(kernel_is_causal && tensor_rank < ring_id && !is_balanced);
         if (ring_iter_does_work) {
             plan.active_ring_iter_mask |= (1u << ring_iter);
         }

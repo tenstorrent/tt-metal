@@ -486,9 +486,10 @@ def _tt_moe_from_kimi_block(blk, cfg, *, seq_len, dispatch_group_size, capacity_
 @pytest.mark.parametrize(
     "activation, latent_use_norm",
     [
-        # The checkpoint's real combination.
+        # The checkpoint's real combination, and what every K3 FFN site runs on Blackhole.
         ("situ", True),
-        # What the device still runs outside the routed experts (shared expert, dense FFN).
+        # Every other model's activation. K3 never runs it, but it keeps the SiLU branch of this
+        # comparison validated against upstream.
         ("silu", True),
         # Upstream's own default, even though K3's checkpoint sets it true.
         ("situ", False),
@@ -508,10 +509,10 @@ def test_kimi_k3_latent_moe_reference_pcc(activation, latent_use_norm):
     the dataflow under test from any gate-implementation difference -- gate parity is covered by the
     device-side gate tests.
 
-    Both activations are exercised: ``situ`` is what the checkpoint does and what the routed experts
-    now run on device (#51351), and ``silu`` is what the shared expert and the dense FFN still run,
-    having no SiTU kernel at their widths. Testing both means each half of that split is validated
-    against upstream rather than assumed.
+    Both activations are exercised: ``situ`` is what the checkpoint does and what the whole K3 MoE
+    runs on device -- routed experts through the fused kernel, shared expert through the composed
+    ttnn path -- while ``silu`` is every other model's. Testing both keeps the SiLU path validated
+    against upstream too.
     """
     torch.manual_seed(42)
 

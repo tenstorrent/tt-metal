@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Per-op test: ``ttnn.transformer.paged_scaled_dot_product_attention_decode``  (paged decode SDPA).
+Per-op test: ``ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode``  (paged decode SDPA).
 
 Model call site (modules/attention/attention_1d.py:836-847, _sdpa_decode_paged):
-    return ttnn.transformer.paged_scaled_dot_product_attention_decode(
+    return ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q_heads,               # [1, batch, n_heads, head_dim]
         keys,                  # paged KV cache [num_blocks, n_kv_heads, block_size, head_dim]
         values,                # paged KV cache [num_blocks, n_kv_heads, block_size, head_dim]
@@ -102,7 +102,7 @@ def test_paged_scaled_dot_product_attention_decode(ttnn_mesh_device, reset_seeds
         packer_l1_acc=False,
     )
 
-    out = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+    out = ttnn.experimental.quasar.transformer.paged_scaled_dot_product_attention_decode(
         q,
         k,
         v,

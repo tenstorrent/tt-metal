@@ -4,7 +4,7 @@
 """
 TTTv2 Mistral-7B-Instruct-v0.3 demo — accuracy and performance measurement.
 
-Uses ``EagerMistralExecutor`` / ``TracedMistralExecutor`` directly (no vLLM adapter).
+Uses the model-owned ``Mistral7BExecutor`` directly (no vLLM adapter).
 
 **Mesh note:** Mistral-7B-Instruct-v0.3 has 32 attention heads and 8 KV heads, so all of
 N150 (1), N300 (2), T3K (8) are compatible (8 divides both). PERF.md publishes all three.
@@ -53,19 +53,24 @@ from pathlib import Path
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoConfig, AutoTokenizer
+from transformers import AutoConfig
 
 import ttnn
-from models.common.models.executor import (
+from models.common.llm_runtime.config import PagedKVCacheConfig, TraceConfig, WarmupConfig
+from models.common.llm_runtime.lane_group import LaneGroupExecutor
+from models.common.models.mistral_7b.executor import Mistral7BExecutor, Mistral7BExecutorConfig
+from models.common.models.mistral_7b.hf_adaptor import from_pretrained
+from models.common.models.mistral_7b.model import MISTRAL_ACCURACY, MISTRAL_PERFORMANCE, Mistral7B
+from models.common.sampling.sampling_params import SamplingParams
+from models.common.tests.demos.cleanup_utils import cleanup_dp_model_case, cleanup_model_case
+from models.common.tests.demos.run_helpers import assert_no_special_tokens as assert_no_special_tokens_shared
+from models.common.tests.demos.run_helpers import (
     load_eval_repeat_prompts_batch32,
+    make_contiguous_page_table,
     run_eval_repeat_batch32,
     run_perf_benchmark,
     run_teacher_forcing,
 )
-from models.common.models.mistral_7b.executor import EagerMistralExecutor, TracedMistralExecutor
-from models.common.models.mistral_7b.model import MISTRAL_ACCURACY, MISTRAL_PERFORMANCE, Mistral7B
-from models.common.sampling.sampling_params import SamplingParams
-from models.common.tests.demos.cleanup_utils import cleanup_model_case
 from models.demos.utils.llm_demo_utils import create_benchmark_data
 from models.demos.utils.model_targets import resolve_accuracy_targets
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -254,7 +259,7 @@ def _ttnn_mesh_device_param_from_env() -> dict:
         )
     param = {
         "mesh_shape": shape,
-        "trace_region_size": 50_000_000,
+        "trace_region_size": 100_000_000 if env == "T3K" else 50_000_000,
         "num_command_queues": 1,
     }
     # TTTv2 multi-device executor dispatch (and the on-device sampling all-gather) stalls without
@@ -473,20 +478,89 @@ def create_model(
             max_seq_len = 4096
 
     try:
-        model = Mistral7B.from_pretrained(
+        llm = from_pretrained(
             mesh_device,
-            hf_model,
+            hf_model=hf_model,
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
-            num_layers=None,
+            n_layers=None,
             cache_dir=cache_dir,
-            precision=precision,
-            executor_mode=True,
+            optimizations=precision,
         )
     except Exception as e:
         pytest.skip(f"Could not build Mistral model (weights / memory / mesh): {e}")
 
+    model = llm.model
+    model.demo_tokenizer = llm.tokenizer
     return model
+
+
+def create_executor(
+    model: Mistral7B,
+    *,
+    traced: bool,
+    device_sampling_enabled: bool,
+    trace_mode=None,
+) -> Mistral7BExecutor:
+    block_size = 32
+    max_num_blocks = ((model.config.max_seq_len + block_size - 1) // block_size) * model.config.max_batch_size
+    attention_config = model.config.block_configs[0].attention_config
+    if trace_mode is None:
+        trace_mode = "all" if traced else "none"
+    return Mistral7BExecutor(
+        model,
+        model.model_args,
+        Mistral7BExecutorConfig(
+            trace=TraceConfig(mode=trace_mode),
+            warmup=WarmupConfig(),
+            paged_kv_cache=PagedKVCacheConfig(
+                block_size=block_size,
+                max_num_blocks=max_num_blocks,
+                num_blocks=max_num_blocks,
+                dtype=attention_config.kv_cache_dtype,
+            ),
+            device_sampling_enabled=device_sampling_enabled,
+        ),
+    )
+
+
+def _warmup_demo_executor(
+    executor,
+    *,
+    kv_cache,
+    page_table,
+    prefill_compile_case=None,
+    prefill_sampling_params=None,
+    prefill_compile_execution=None,
+):
+    config = executor.config if hasattr(executor, "config") else executor.lanes[0].config
+    can_sample_on_device = config.device_sampling_enabled
+    prefill_kwargs = {"kv_cache": kv_cache, "can_sample_on_device": can_sample_on_device}
+    decode_kwargs = {
+        "kv_cache": kv_cache,
+        "max_batch_size": int(
+            executor.max_batch_size if hasattr(executor, "max_batch_size") else executor.model.config.max_batch_size
+        ),
+        "num_blocks": int(page_table.shape[-1]),
+        "can_sample_on_device": can_sample_on_device,
+    }
+    executor.warmup_model_decode(enable_trace=False, **decode_kwargs)
+    executor.warmup_model_prefill(enable_trace=False, **prefill_kwargs)
+    if prefill_compile_case is not None:
+        tokens, prompt_lens = prefill_compile_case
+        executor.compile_prefill(
+            tokens=tokens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+            empty_slots=list(range(tokens.shape[0])),
+            sampling_params=prefill_sampling_params,
+            execution=prefill_compile_execution or executor.eager_execution,
+        )
+    if config.trace.prefill_enabled:
+        executor.warmup_model_prefill(enable_trace=True, **prefill_kwargs)
+    if config.trace.decode_enabled:
+        executor.warmup_model_decode(enable_trace=True, **decode_kwargs)
 
 
 # =============================================================================
@@ -529,7 +603,7 @@ def create_dp_submeshes(mesh_device: ttnn.MeshDevice, data_parallel: int) -> lis
         return [mesh_device]
     n = mesh_device.get_num_devices()
     assert n % data_parallel == 0, f"{n} devices not divisible by data_parallel={data_parallel}"
-    return mesh_device.create_submeshes(ttnn.MeshShape(1, n // data_parallel))
+    return list(mesh_device.create_submeshes(ttnn.MeshShape(1, n // data_parallel)))
 
 
 def _dp_or_skip(mesh_device: ttnn.MeshDevice, data_parallel: int) -> None:
@@ -551,25 +625,23 @@ def assert_no_special_tokens(
     scan. Shared by the perf path and the DP smoke; CI-gating keeps local runs finishing (warn) while
     still failing CI.
     """
-    if is_ci_env is None:
-        is_ci_env = os.environ.get("CI") == "true"
-    special = set(tokenizer.all_special_ids)
     stop = set()
     if tokenizer.eos_token_id is not None:
         stop.add(tokenizer.eos_token_id)
-    offenders = 0
+    truncated_outputs = []
     for out in generated_token_ids:
         seq = list(out)
         for i, t in enumerate(seq):
             if t in stop:
                 seq = seq[:i]
                 break
-        if any(t in special for t in seq):
-            offenders += 1
-    if offenders:
-        logger.warning(f"[{case_name}] model produced special tokens ({offenders}/{len(generated_token_ids)} users)")
-        if is_ci_env:
-            assert False, f"model produced special tokens ({offenders} users)"
+        truncated_outputs.append(seq)
+    assert_no_special_tokens_shared(
+        truncated_outputs,
+        tokenizer,
+        case_name=case_name,
+        is_ci_env=is_ci_env,
+    )
 
 
 def _run_dp_smoke(
@@ -581,24 +653,14 @@ def _run_dp_smoke(
     max_gen_tokens: int,
     stop_at_eos: bool,
 ) -> None:
-    """Single-user data-parallel scaling smoke across ``data_parallel`` submeshes.
-
-    Builds one model + one traced executor + one KV cache + one page table per submesh (one user
-    each), runs ``run_perf_benchmark`` per submesh sequentially, collects the per-submesh output,
-    and asserts no special tokens. Every executor and model is cleaned up in ``finally``.
-    """
+    """Run one user per single-device lane through the model-owned DP runtime."""
     _dp_or_skip(mesh_device, data_parallel)
-
+    mesh_device.quiesce_devices()
     hf_model = os.environ.get("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
     _skip_unless_heads_divide_mesh(mesh_device, hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
     precision = MISTRAL_PERFORMANCE if optimizations == "performance" else MISTRAL_ACCURACY
-
     submeshes = create_dp_submeshes(mesh_device, data_parallel)
-
-    # One prompt per DP group (load_input_prompts pads/truncates to the requested count).
     prompts = load_input_prompts(data_parallel)
-
     sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
     _on_device_params = {
         "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
@@ -606,78 +668,68 @@ def _run_dp_smoke(
     }
 
     models: list = []
-    executors: list = []
-    all_generated: list = []
+    lanes: list = []
+    group = None
     try:
-        for i, sm in enumerate(submeshes):
-            try:
-                model = Mistral7B.from_pretrained(
-                    sm,
-                    hf_model,
-                    max_batch_size=1,
-                    max_seq_len=max_seq_len,
-                    num_layers=None,
-                    cache_dir=cache_dir,
-                    precision=precision,
-                    executor_mode=True,
-                )
-            except Exception as e:
-                pytest.skip(f"Could not build Mistral model (weights / memory / mesh): {e}")
-            models.append((model, sm))
-
-            traced_executor = TracedMistralExecutor(model, sm)
-            executors.append(traced_executor)
-
-            ma = model.model_args
-            assert ma is not None
-
-            block_size = 32
-            n_dev_sm = sm.get_num_devices()
-            max_num_blocks_per_user = ma.max_seq_len // block_size
-            max_num_blocks = max_num_blocks_per_user * ma.max_batch_size  # max_batch_size == 1
-
-            kv_cache_shape = (max_num_blocks, ma.n_kv_heads // n_dev_sm, block_size, ma.head_dim)
-            kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-            page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(
-                ma.max_batch_size, max_num_blocks_per_user
-            )
-
-            input_tokens, prompt_lens = tokenize_prompts(prompts[i : i + 1], tokenizer)
-
-            sampling_params = (
-                _on_device_params[sampling_mode]
-                if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
-                else None
-            )
-            logger.info(
-                f"[ci-b1-DP-{data_parallel}] submesh {i} SAMPLING_MODE={sampling_mode} "
-                f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
-            )
-
-            result = run_perf_benchmark(
-                traced_executor,
-                tokens=input_tokens,
-                kv_cache=kv_cache,
-                page_table=page_table,
-                num_decode_tokens=max_gen_tokens,
+        for sm in submeshes:
+            llm = from_pretrained(
+                sm,
+                hf_model=hf_model,
                 max_batch_size=1,
-                prompt_lens=prompt_lens,
-                sampling_params=sampling_params,
+                max_seq_len=max_seq_len,
+                n_layers=None,
+                cache_dir=cache_dir,
+                optimizations=precision,
             )
-            all_generated.append(result.generated_token_ids[0])
-            log_generated_text(prompts[i : i + 1], result.generated_token_ids, tokenizer)
+            model = llm.model
+            model.demo_tokenizer = llm.tokenizer
+            models.append((model, sm))
+            lanes.append(
+                create_executor(
+                    model,
+                    traced=True,
+                    device_sampling_enabled=sampling_mode in _on_device_params,
+                )
+            )
 
-        assert_no_special_tokens(all_generated, tokenizer)
+        group = LaneGroupExecutor(lanes, mesh_device=mesh_device)
+        tokenizer = models[0][0].demo_tokenizer
+        kv_cache = group.allocate_kv_cache()
+        page_table = make_contiguous_page_table(1, max_seq_len, 32).repeat(data_parallel, 1)
+        input_tokens, prompt_lens = tokenize_prompts(prompts, tokenizer)
+        sampling_params = (
+            _on_device_params[sampling_mode]
+            if sampling_mode in _on_device_params and getattr(models[0][0], "supports_on_device_sampling", False)
+            else None
+        )
+        _warmup_demo_executor(
+            group,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=(input_tokens, prompt_lens),
+            prefill_sampling_params=sampling_params,
+            prefill_compile_execution=group.traced_prefill_execution,
+        )
+        logger.info(
+            f"[ci-b1-DP-{data_parallel}] SAMPLING_MODE={sampling_mode} "
+            f"-> sampling_params={sampling_params}, stop_at_eos={stop_at_eos}"
+        )
+        result = run_perf_benchmark(
+            group,
+            tokens=input_tokens,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            num_decode_tokens=max_gen_tokens,
+            max_batch_size=data_parallel,
+            prompt_lens=prompt_lens,
+            sampling_params=sampling_params,
+        )
+        assert len(result.generated_token_ids) == data_parallel
+        assert all(result.generated_token_ids), f"ci-b1-DP-{data_parallel}: every lane must return output"
+        log_generated_text(prompts, result.generated_token_ids, tokenizer)
+        assert_no_special_tokens(result.generated_token_ids, tokenizer, case_name=f"ci-b1-DP-{data_parallel}")
     finally:
-        for ex in executors:
-            ex.cleanup()
-        for model, sm in models:
-            cleanup_model_case(model, sm)
-        # When data_parallel > 1 we carved child submeshes off the fixture-owned parent mesh. Those
-        # submeshes share the parent's command queue, so the parent cannot be closed while they
-        # remain in use. Drain the parent + submesh CQs before teardown.
-        if data_parallel > 1:
-            mesh_device.quiesce_devices()
+        cleanup_dp_model_case(group, lanes, models, mesh_device, submeshes)
 
 
 # =============================================================================
@@ -803,6 +855,7 @@ def _run_token_accuracy(model: Mistral7B, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt``."""
     hf_model = os.environ.get("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
+    tokenizer = model.demo_tokenizer
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
@@ -823,20 +876,13 @@ def _run_token_accuracy(model: Mistral7B, mesh_device, expected):
 
     prompt_tokens = reference_tokens[:prompt_len].unsqueeze(0)
 
-    executor = EagerMistralExecutor(model, mesh_device)
-    ma = model.model_args
-    assert ma is not None
-
-    max_batch_size = ma.max_batch_size
+    executor = create_executor(model, traced=False, device_sampling_enabled=False)
+    max_batch_size = model.config.max_batch_size
     prompt_tokens = prompt_tokens.repeat(max_batch_size, 1)
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    kv_cache = executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    kv_cache = executor.allocate_kv_cache()
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     target_top5 = select_teacher_forcing_top5_slice(
         top5_tokens,
@@ -846,21 +892,24 @@ def _run_token_accuracy(model: Mistral7B, mesh_device, expected):
     )
     is_ci_env = os.environ.get("CI") == "true"
     profiler = BenchmarkProfiler()
-    profiler.start("run")
-    # run_teacher_forcing times prefill + per-step (teacher-forced) decode and, given the profiler,
-    # brackets the "inference_prefill"/"inference_decode" steps itself, so the result carries prefill/
-    # decode throughput alongside accuracy for CI benchmark-data emission.
-    result = run_teacher_forcing(
-        executor,
-        prompt_tokens=prompt_tokens,
-        reference_tokens=reference_tokens,
-        top5_tokens=target_top5,
-        kv_cache=kv_cache,
-        page_table=page_table,
-        max_batch_size=max_batch_size,
-        profiler=profiler,
-    )
-    profiler.end("run")
+    try:
+        profiler.start("run")
+        # run_teacher_forcing times prefill + per-step (teacher-forced) decode and, given the profiler,
+        # brackets the "inference_prefill"/"inference_decode" steps itself, so the result carries prefill/
+        # decode throughput alongside accuracy for CI benchmark-data emission.
+        result = run_teacher_forcing(
+            executor,
+            prompt_tokens=prompt_tokens,
+            reference_tokens=reference_tokens,
+            top5_tokens=target_top5,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            max_batch_size=max_batch_size,
+            profiler=profiler,
+        )
+        profiler.end("run")
+    finally:
+        executor.cleanup()
 
     top1 = result.top1_accuracy() * 100
     top5 = result.top5_accuracy() * 100
@@ -893,7 +942,7 @@ def _run_token_accuracy(model: Mistral7B, mesh_device, expected):
             ml_model_name=hf_model,
             ml_model_type="llm",
             device_name=get_device_name(mesh_device),
-            num_layers=ma.n_layers,
+            num_layers=model.config.n_layers,
             batch_size=1,
             input_sequence_length=prompt_len,
             output_sequence_length=num_target,
@@ -935,7 +984,7 @@ def _run_perf_benchmark(
     max_prefill_len: int | None = None,
     num_decode_tokens: int | None = None,
 ):
-    """Timed prefill + decode (``TracedMistralExecutor``).
+    """Timed prefill + decode with the traced model-owned executor.
 
     Prefill uses each prompt's natural token length (TTTv1 ``preprocess_inputs_prefill`` semantics —
     the executor buckets to ``get_padded_prefill_len``); decode runs for ``num_decode_tokens`` steps
@@ -947,14 +996,10 @@ def _run_perf_benchmark(
     position never overruns the page table (the ``batch-32-ci`` leg requests 1024).
     """
     hf_model = os.environ.get("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
+    tokenizer = model.demo_tokenizer
 
-    # Batched-prefill A/B knob (parity caveat #12): set DISABLE_BATCHED_PREFILL=1 to force the
-    # sequential per-user prefill loop (the pre-feature baseline) for before/after TTFT comparison.
-    # Companion knob (PLAN_01): DISABLE_MINIMAL_MATMUL=1 forces QKV/W2 prefill back to ttnn.linear
-    # (read at model build time, so it must be in the env before from_pretrained — it already is here).
-    if os.environ.get("DISABLE_BATCHED_PREFILL") and model.model_args is not None:
-        model.model_args.disable_batched_prefill = True
+    # The provider resolves DISABLE_BATCHED_PREFILL and DISABLE_MINIMAL_MATMUL while constructing
+    # the immutable runtime/model configs, so both established A/B knobs remain build-time policy.
 
     # On-device sampling toggle (SAMPLING_MODE):
     #   host            -> sampling_params=None (host-argmax, the default shipped path)
@@ -971,7 +1016,9 @@ def _run_perf_benchmark(
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    pipeline_readback = os.environ.get("PIPELINE_READBACK", "1").lower() not in ("0", "false", "no")
     logger.info(f"[{case_name}] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
+    logger.info(f"[{case_name}] PIPELINE_READBACK={pipeline_readback}")
 
     # Free-running perf run: enable the executor's on-device decode loop on the on-device sampling
     # path (inert on host/force-argmax; gated to the top-k path by _decode_loop_active). Mirrors
@@ -980,22 +1027,18 @@ def _run_perf_benchmark(
     # fast_prefill_last_token: slice the single consumed last-token row on device before readback so the
     # batch-1 host concat/readback moves one row instead of the full [1,1,32,vocab] tile — closes most of
     # the residual batch-1 PREFILL TTFT gap vs TTTv1 (which reads back only tokens). Inert for batch>1.
-    traced_executor = TracedMistralExecutor(
-        model, mesh_device, ondevice_decode_loop=sampling_params is not None, fast_prefill_last_token=True
+    traced_executor = create_executor(
+        model,
+        traced=True,
+        device_sampling_enabled=sampling_params is not None,
     )
     try:
-        ma = model.model_args
-        assert ma is not None
-
         block_size = 32
-        max_seq_len = ma.max_seq_len
-        max_batch_size = ma.max_batch_size
-        max_num_blocks_per_user = max_seq_len // block_size
-        max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-        kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-        kv_cache = traced_executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
-        page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+        max_seq_len = model.config.max_seq_len
+        max_batch_size = model.config.max_batch_size
+        kv_cache = traced_executor.allocate_kv_cache()
+        page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
+        _warmup_demo_executor(traced_executor, kv_cache=kv_cache, page_table=page_table)
 
         # Decode-token budget, clamped to the KV-cache headroom. Prompts bucket to ~128 and we keep a
         # 16-token margin, so the high-water decode position stays inside max_seq_len.
@@ -1027,6 +1070,7 @@ def _run_perf_benchmark(
             max_batch_size=max_batch_size,
             prompt_lens=prompt_lens,
             sampling_params=sampling_params,
+            pipeline_readback=pipeline_readback,
             profiler=profiler,
         )
         profiler.end("run")
@@ -1061,7 +1105,7 @@ def _run_perf_benchmark(
                 ml_model_name=hf_model,
                 ml_model_type="llm",
                 device_name=get_device_name(mesh_device),
-                num_layers=ma.n_layers,
+                num_layers=model.config.n_layers,
                 batch_size=result.batch_size,
                 input_sequence_length=prefill_seq_len,
                 output_sequence_length=effective_decode,
@@ -1099,32 +1143,33 @@ def _run_eval_repeat_batch32(model: Mistral7B, mesh_device):
     mesh-agnostic, the recommended default for the determinism assert).
     """
     hf_model = os.environ.get("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.3")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
-
-    ma = model.model_args
-    assert ma is not None
-
-    # Batched-prefill A/B knob (parity caveat #12): DISABLE_BATCHED_PREFILL=1 forces the pure
-    # per-bucket sequential prefill so eval-32 can be validated both ON and OFF.
-    if os.environ.get("DISABLE_BATCHED_PREFILL"):
-        ma.disable_batched_prefill = True
+    tokenizer = model.demo_tokenizer
 
     block_size = 32
-    max_seq_len = ma.max_seq_len
-    max_batch_size = ma.max_batch_size
-    max_num_blocks_per_user = max_seq_len // block_size
-    max_num_blocks = max_num_blocks_per_user * max_batch_size
-
-    kv_cache_shape = (max_num_blocks, ma.n_kv_heads // mesh_device.get_num_devices(), block_size, ma.head_dim)
-    page_table = torch.arange(max_num_blocks, dtype=torch.int32).reshape(max_batch_size, max_num_blocks_per_user)
+    max_seq_len = model.config.max_seq_len
+    max_batch_size = model.config.max_batch_size
+    page_table = make_contiguous_page_table(max_batch_size, max_seq_len, block_size)
 
     # Fresh traced executor + zeroed KV cache per repeat (driver owns the lifecycle), so the rotated
     # batches are fully independent — see run_eval_repeat_batch32 for why reuse corrupts the 3rd repeat.
     def make_executor():
-        return TracedMistralExecutor(model, mesh_device)
+        return create_executor(
+            model,
+            traced=True,
+            device_sampling_enabled=sampling_params is not None,
+            trace_mode="decode_only",
+        )
 
     def allocate_kv_cache(executor):
-        return executor.allocate_kv_cache(kv_cache_shape, torch.bfloat16, ma.n_layers)
+        kv_cache = executor.allocate_kv_cache()
+        _warmup_demo_executor(
+            executor,
+            kv_cache=kv_cache,
+            page_table=page_table,
+            prefill_compile_case=representative_prefill,
+            prefill_sampling_params=sampling_params,
+        )
+        return kv_cache
 
     # TTTv1 ci-eval-32 numeric prompts (parity).
     prompts = load_eval_repeat_prompts_batch32()
@@ -1142,6 +1187,7 @@ def _run_eval_repeat_batch32(model: Mistral7B, mesh_device):
         if sampling_mode in _on_device_params and getattr(model, "supports_on_device_sampling", False)
         else None
     )
+    representative_prefill = tokenize_fn(prompts)
     logger.info(f"[eval-32] SAMPLING_MODE={sampling_mode} -> sampling_params={sampling_params}")
 
     run_eval_repeat_batch32(

@@ -38,7 +38,9 @@ def test_executor_config_has_exact_static_policy_owners_and_is_frozen(expect_err
         "warmup",
         "paged_kv_cache",
         "device_sampling_enabled",
+        "allow_batched_prefill_with_device_sampling_for_diagnostics",
     ]
+    assert not config.allow_batched_prefill_with_device_sampling_for_diagnostics
     forbidden = {
         "model",
         "mesh_device",

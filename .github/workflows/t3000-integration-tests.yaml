@@ -12,7 +12,6 @@ on:
           - all
           - tteager
           - trace stress
-          - deepseek-modules
       platform:
         required: false
         type: choice

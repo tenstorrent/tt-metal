@@ -88,7 +88,7 @@ inline void calculate_mish() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
+template <bool APPROXIMATION_MODE>
 inline void mish_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // exp does not need an init.

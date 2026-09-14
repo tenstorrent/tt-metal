@@ -2,19 +2,23 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass
+from itertools import permutations
 
+import pytest
 import torch
 
 import models.common.llm_runtime.trace_compiler as trace_compiler_module
 import ttnn
 from models.common.llm_runtime.decode import DecodeDeviceInputs, DecodePersistentInputs
-from models.common.llm_runtime.prefill.runtime import (
-    PrefillDeviceInputs,
-    PrefillPersistentInputs,
-    PrefillPositionInputs,
-)
+from models.common.llm_runtime.prefill.inputs import PrefillDeviceInputs, PrefillPositionInputs
+from models.common.llm_runtime.prefill.trace import PrefillHiddenPersistentInputs, PrefillReplayState
 from models.common.llm_runtime.program_compiler import ProgramCompiler
-from models.common.llm_runtime.trace_compiler import InputRefreshPolicy, TraceCapturePlan, TraceCompiler
+from models.common.llm_runtime.trace_compiler import (
+    InputRefreshPolicy,
+    PersistentInputs,
+    TraceCapturePlan,
+    TraceCompiler,
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +108,62 @@ def test_trace_aliases_share_one_artifact_without_copying_program_records(monkey
     assert compiler.require_compiled(first.key) is first
     assert compiler.require_compiled(second.key) is second
     assert [event[0] for event in events].count("begin") == 1
+    assert trace.trace_count == 1
+    assert trace.trace_association_count == 2
+    assert trace.registered_coverage("decode") == ((first_key, shared_signature),)
+    assert trace.registered_coverage("prefill") == ()
+
+
+@pytest.mark.parametrize("order", tuple(permutations(("logits", "argmax", "topk"))))
+def test_hidden_trace_alias_workspaces_are_registration_order_independent(monkeypatch, order):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    programs = {
+        path: compiler.compile(_Signature("program", index), lambda context: torch.zeros(1))
+        for index, path in enumerate(("logits", "argmax", "topk"), 1)
+    }
+    trace = TraceCompiler(compiler)
+    signature = _Signature("shared-hidden", 1)
+
+    for path in order:
+        trace.register_capture_plan(
+            TraceCapturePlan(
+                programs[path].key,
+                signature,
+                "prefill",
+                lambda: "hidden-inputs",
+                lambda persistent: "hidden-output",
+                schema_fingerprint=("hidden-v2",),
+                prepare_workspace=lambda path=path: f"{path}-workspace",
+                workspace_fingerprint=("postprocess-v1", path),
+            )
+        )
+
+    trace.capture_all()
+
+    assert [event[0] for event in events].count("begin") == 1
+    assert {path: trace.workspace_for_program(program.key) for path, program in programs.items()} == {
+        "logits": "logits-workspace",
+        "argmax": "argmax-workspace",
+        "topk": "topk-workspace",
+    }
+
+
+def test_trace_alias_rejects_a_mismatched_persistent_schema(monkeypatch, expect_error):
+    compiler = ProgramCompiler("mesh", lambda: object())
+    first = _compiled_program(compiler, monkeypatch, 1)
+    second = _compiled_program(compiler, monkeypatch, 2)
+    trace = TraceCompiler(compiler)
+    signature = _Signature("trace", 1)
+    trace.register_capture_plan(
+        TraceCapturePlan(first.key, signature, "prefill", lambda: (), lambda _: (), schema_fingerprint=("v1",))
+    )
+
+    with expect_error(ValueError, "different schema fingerprint"):
+        trace.register_capture_plan(
+            TraceCapturePlan(second.key, signature, "prefill", lambda: (), lambda _: (), schema_fingerprint=("v2",))
+        )
 
 
 def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monkeypatch, expect_error):
@@ -139,6 +199,118 @@ def test_capture_allocates_every_input_before_capture_and_coordinates_gates(monk
     assert not compiler.trace_capture_in_progress
     with expect_error(RuntimeError, "after trace activation"):
         compiler.compile(_Signature("program", 3), lambda context: torch.zeros(1))
+
+
+def test_opt_in_capture_prime_runs_after_allocations_and_before_capture_gate(monkeypatch):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+
+    def prime(persistent):
+        assert not compiler.trace_capture_in_progress
+        events.append(("prime", persistent))
+        return "prime-output"
+
+    def release_prime_output(output):
+        events.append(("release-prime", output))
+        return []
+
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: events.append(("prepare", 1)) or "persistent",
+            lambda persistent: events.append(("capture", persistent)) or torch.zeros(1),
+            prepare_workspace=lambda: events.append(("workspace", 1)) or "workspace",
+            workspace_fingerprint=("workspace",),
+            prime=prime,
+            release_prime_output=release_prime_output,
+        )
+    )
+    events.clear()
+
+    trace.capture_all()
+
+    first_begin = next(index for index, event in enumerate(events) if event[0] == "begin")
+    assert events[:first_begin] == [
+        ("prepare", 1),
+        ("workspace", 1),
+        ("prime", PersistentInputs("persistent")),
+        ("sync", "mesh"),
+        ("release-prime", "prime-output"),
+        ("sync", "mesh"),
+    ]
+    assert ("capture", PersistentInputs("persistent")) in events[first_begin:]
+
+
+def test_capture_prime_failure_rolls_back_without_beginning_trace(monkeypatch, expect_error):
+    events = []
+    _patch_backend(monkeypatch, events)
+
+    class OwnedTensor:
+        pass
+
+    released = []
+    monkeypatch.setattr(ttnn, "Tensor", OwnedTensor)
+    monkeypatch.setattr(ttnn, "deallocate", released.append)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+    persistent = OwnedTensor()
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: persistent,
+            lambda _: pytest.fail("capture must not begin after prime failure"),
+            prime=lambda _: (_ for _ in ()).throw(RuntimeError("prime failed")),
+            release_prime_output=lambda _: [],
+        )
+    )
+
+    with expect_error(RuntimeError, "prime failed"):
+        trace.capture_all()
+
+    assert not any(event[0] == "begin" for event in events)
+    assert released == [persistent]
+    assert not trace.trace_active and not compiler.trace_active
+
+
+def test_capture_prime_release_failure_still_synchronizes_before_rollback(monkeypatch, expect_error):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+    release_error = RuntimeError("prime release failed")
+    trace.register_capture_plan(
+        TraceCapturePlan(
+            program.key,
+            _Signature("trace", 1),
+            "prefill",
+            lambda: (),
+            lambda _: pytest.fail("capture must not begin after prime release failure"),
+            prime=lambda _: events.append(("prime",)) or "prime-output",
+            release_prime_output=lambda output: events.append(("release-prime", output)) or [release_error],
+        )
+    )
+    events.clear()
+
+    with expect_error(RuntimeError, "prime release failed") as caught:
+        trace.capture_all()
+
+    assert caught.value is release_error
+    assert events[:4] == [
+        ("prime",),
+        ("sync", "mesh"),
+        ("release-prime", "prime-output"),
+        ("sync", "mesh"),
+    ]
+    assert not any(event[0] == "begin" for event in events)
 
 
 def test_capture_orders_decode_before_prefill_after_allocating_every_input(monkeypatch):
@@ -292,6 +464,24 @@ def test_replay_refresh_decisions_cover_first_replay_page_change_feedback_and_sw
     assert [decision.page_table for decision in decisions] == [False, True, False, False]
     assert all(decision.fields == ("position", "sampling") for decision in decisions)
     assert [event[0] for event in events].count("execute") == 4
+    assert trace.replay_count == 4
+    assert trace.replay_counts == {"prefill": 0, "decode": 4}
+
+
+def test_replay_counters_increment_only_after_successful_submission(monkeypatch, expect_error):
+    events = []
+    _patch_backend(monkeypatch, events)
+    compiler = ProgramCompiler("mesh", lambda: object())
+    program = compiler.compile(_Signature("program", 1), lambda context: torch.zeros(1))
+    trace = TraceCompiler(compiler)
+    trace.register_capture_plan(_plan(program, 1, events, operation="prefill"))
+    trace.capture_all()
+
+    monkeypatch.setattr(ttnn, "execute_trace", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("submit")))
+    with expect_error(RuntimeError, "submit"):
+        trace.replay(program.key, lambda artifact, decision: None)
+    assert trace.replay_count == 0
+    assert trace.replay_counts == {"prefill": 0, "decode": 0}
 
 
 def test_cleanup_retries_trace_release_before_deallocating_and_does_not_own_programs(monkeypatch, expect_error):
@@ -346,13 +536,13 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
     class OwnedTensor:
         pass
 
-    values = [OwnedTensor() for _ in range(19)]
+    values = [OwnedTensor() for _ in range(20)]
     decode = DecodePersistentInputs(
         DecodeDeviceInputs(*values[:4]),
         tuple(values[4:7]),
     )
-    prefill = PrefillPersistentInputs(
-        PrefillDeviceInputs(*values[7:14]),
+    prefill = PrefillHiddenPersistentInputs(PrefillDeviceInputs(*values[7:14]))
+    prefill_workspace = PrefillReplayState(
         PrefillPositionInputs(*values[14:17]),
         (values[17], values[17], values[17]),
         values[18],
@@ -368,7 +558,15 @@ def test_cleanup_releases_operation_owned_persistent_dataclasses_once(monkeypatc
         TraceCapturePlan(programs[0].key, _Signature("trace", 1), "decode", lambda: decode, lambda _: values[0])
     )
     trace.register_capture_plan(
-        TraceCapturePlan(programs[1].key, _Signature("trace", 2), "prefill", lambda: prefill, lambda _: values[18])
+        TraceCapturePlan(
+            programs[1].key,
+            _Signature("trace", 2),
+            "prefill",
+            lambda: prefill,
+            lambda _: values[19],
+            prepare_workspace=lambda: prefill_workspace,
+            workspace_fingerprint=("prefill-workspace",),
+        )
     )
 
     trace.capture_all()
