@@ -59,6 +59,12 @@ void kernel_main() {
         }
     }
     // The scratchpad now holds a tile full of padding.
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+    // Quasar DM: the fill above is CPU stores that land in L1D/L2; the NoC writes below source the pad tile
+    // from TL1 directly. Flush the filled tile so the NoC copies see the pad value. No-op on WH/BH. Matches
+    // fill_rm_interleaved.cpp (#51763).
+    flush_l2_cache_range(static_cast<uintptr_t>(l1_write_addr), static_cast<size_t>(page_size));
+#endif
 
     bool within_input_region;
     uint32_t output_page_offset = start_offset;
