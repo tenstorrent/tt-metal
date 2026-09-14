@@ -142,7 +142,7 @@ void RunSparseMcastPerPage(BaseFabricFixture* fixture, RoutingDirection dir, uin
         receiver_devices.push_back(receiver_device);
     }
 
-    tt_metal::LaunchProgram(*sender_device, std::move(sender_program), /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_device, std::move(sender_program));
     for (const auto& dev : receiver_devices) {
         fixture->WaitForSingleProgramDone(dev);
     }

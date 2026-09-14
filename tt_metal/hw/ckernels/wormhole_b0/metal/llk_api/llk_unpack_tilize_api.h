@@ -143,6 +143,7 @@ template <
     bool zero_srcA = false,
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_mop_config(const std::uint32_t num_faces = 4) {
+    SAN_HOOK(unsupported());
     _llk_unpack_tilizeA_B_mop_config_<neginf_srcA, reload_srcB, zero_srcA, zero_srcA_reduce>(num_faces);
 }
 
@@ -168,6 +169,7 @@ template <
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_init(
     const std::uint32_t operandA, const std::uint32_t operandB, const std::uint32_t ct_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -215,6 +217,7 @@ inline void llk_unpack_tilizeA_B(
     std::uint32_t tile_index_a,
     std::uint32_t tile_index_b,
     std::uint32_t block_ct_dim) {
+    SAN_HOOK(unsupported());
     std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operandA_id);
     const std::uint32_t num_faces = get_operand_num_faces(operandA_id);
@@ -272,6 +275,7 @@ template <
     bool zero_srcA_reduce = false>
 inline void llk_unpack_tilizeA_B_block(
     std::uint32_t operandA, std::uint32_t operandB, std::uint32_t block_c_tiles_a, std::uint32_t tile_idx_b) {
+    SAN_HOOK(unsupported());
     for (std::uint32_t tile_idx_a = 0; tile_idx_a < block_c_tiles_a; tile_idx_a++) {
         llk_unpack_tilizeA_B<zero_srcA>(operandA, operandB, tile_idx_a, tile_idx_b, block_c_tiles_a);
     }
@@ -288,6 +292,7 @@ inline void llk_unpack_tilizeA_B_block(
  * @param full_dim Full row dimension of the input being tilized.
  */
 inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32_t full_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
 
     _llk_unpack_fast_tilize_init_(unpack_dst_format[operand_id], full_dim);
@@ -300,6 +305,7 @@ inline void llk_unpack_fast_tilize_init(const std::uint32_t operand, std::uint32
  */
 template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_fast_tilize_uninit() {
+    SAN_HOOK(unsupported());
     _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
 }
 
@@ -321,6 +327,7 @@ inline void llk_unpack_fast_tilize_block(
     const std::uint32_t unit_dim,
     const std::uint32_t num_units,
     const std::uint32_t full_dim) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
     const std::uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr - 1;
@@ -336,6 +343,7 @@ inline void llk_unpack_fast_tilize_block(
  * @param operand Input circular buffer / operand index.
  */
 inline void llk_unpack_tilizeA_B_uninit(const std::uint32_t operand) {
+    SAN_HOOK(unsupported());
     std::uint32_t operand_id = get_operand_id(operand);
     _llk_unpack_tilizeA_B_uninit_((std::uint32_t)unpack_dst_format[operand_id]);
 }

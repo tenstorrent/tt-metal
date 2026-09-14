@@ -620,7 +620,7 @@ bool single_core_unpack_reconfig_quasar(const std::shared_ptr<distributed::MeshD
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> dest_buffer_data;
     distributed::ReadShard(cq, dest_buffer_data, out_dram, zero_coord, false);
@@ -977,7 +977,7 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
     };
     experimental::SetProgramRunArgs(program, params);
 
-    LaunchProgram(*mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<std::uint32_t> out0_data;
     std::vector<std::uint32_t> out1_data;

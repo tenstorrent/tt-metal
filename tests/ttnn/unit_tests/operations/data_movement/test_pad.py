@@ -380,6 +380,61 @@ def test_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard
         device.set_program_cache_misses_allowed(False)
 
 
+@pytest.mark.parametrize("shard_orient", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_pad_rm_sharded_height_only_non_contiguous_grid(device, shard_orient, dtype):
+    """Height-only RM pad on a shard grid with a hole in it.
+
+    Regression test for the Qwen3-32B Blackhole Galaxy decode path, where the RoPE cos/sin slices are
+    height-sharded on ``{[1-0 - 3-7], [5-0 - 6-7]}`` (columns 0 and 4 excluded) and then padded to a
+    tile-aligned height. Deriving the per-core runtime args from the grid's bounding box emitted args
+    for gap core (4, 0), where no kernel runs, and mapped source shards to the wrong cores.
+    """
+    torch.manual_seed(0)
+    compute_grid = device.compute_with_storage_grid_size()
+    if compute_grid.x < 7 or compute_grid.y < 8:
+        pytest.skip(f"needs a 7x8 compute grid, device has {compute_grid.x}x{compute_grid.y}")
+
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 7)),
+        }
+    )
+    num_cores = shard_grid.num_cores()
+    assert num_cores == 40
+
+    # The decode-path tensor: [1, 8, 8, 128] padded to [1, 8, 32, 128], shard [32, 128] on all 40 cores,
+    # so only the first 2 (input) / 8 (output) cores in grid order hold data. Core index 3 in grid order
+    # is (5, 0); a bounding-box walk puts it at (4, 0), the hole.
+    n, c, h, w = 1, 8, 8, 128
+    shard_h = 32
+    padding = ((0, 0), (0, shard_h - h), (0, 0))
+    torch_padding = (0, 0, 0, shard_h - h, 0, 0)
+    value = 0
+
+    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
+    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), shard_orient)
+    sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+    tt_output_tensor = ttnn.pad(tt_input_tensor, padding=padding, value=value, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.to_torch(ttnn.from_device(tt_output_tensor))
+
+    assert tt_output_tensor.shape == torch_output_tensor.shape
+    assert torch.equal(torch_output_tensor, tt_output_tensor)
+
+
 def test_pad_rm_sharded_height_only_override_addr_change(device):
     """Cache-hit hook (override_runtime_arguments) for the CB-bound height-sharded RM factory: buffer
     addresses are excluded from the pad hash, so a second identical pad at DIFFERENT input AND output

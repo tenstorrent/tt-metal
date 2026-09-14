@@ -1055,18 +1055,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
 
-    // OPTION C (split tilize/matmul) test toggle. When TT_METAL_QSR_CONV_SPLIT_TILIZE is set, select the
-    // conv_bmm_split_tilize_metal2.cpp compute kernel, which tilizes ALL height blocks first (one contiguous
-    // tilize phase) then matmuls them, so the compute engine transitions tilize->matmul only once (diagnostic
-    // for the Quasar per-block tilize<->matmul DEST-handshake 0x19 race). Gated to the height-sharded,
-    // single-K-block (in0_num_blocks_w == 1), single-output-width-block (num_blocks_weight_w_per_core == 1),
-    // no-split-reader / no-activation-reuse / non-depthwise path -- the resnet stem / 1x1 conv shape the split
-    // kernel implements. Requires act_tilized to hold all height blocks at once (resized below). Everything
-    // else falls back to the fused kernel even when the env is set.
-    const bool split_tilize_matmul = (std::getenv("TT_METAL_QSR_CONV_SPLIT_TILIZE") != nullptr) && height_sharded &&
-                                     !is_conv_1d_depthwise_conv && !enable_split_reader && !enable_activation_reuse &&
-                                     (in0_num_blocks_w == 1) && (num_blocks_weight_w_per_core == 1);
-
     // OPTION B — PROGRAM A (tilize-only, standalone). When TT_METAL_QSR_CONV_SPLIT_PROGRAM is set, this conv
     // op runs ONLY the gather+tilize half in a fresh tilize-oriented Metal program (conv_tilize_only_metal2.cpp)
     // and OUTPUTS the tilized activations — no matmul, no weights reader, no output writer. This isolates the
@@ -1534,19 +1522,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
             // borrowed_from OUTPUT — the op's output IS the tilized activation). No separate ACT_TILIZED DFB.
             // (fix #3 tried a fresh intermediate DFB + writer here; REVERTED — it still deadlocked identically
             // in fast_tilize_block, so the borrowed output was NOT the cause. See the WH split memory.)
-        } else if (split_tilize_matmul) {
-            // OPTION C: hold ALL height blocks of tilized activation at once (num_blocks_act_h_per_core x
-            // one block) so Phase 1 can tilize every block before Phase 2's matmul consumes them. NB: the
-            // ring extent (page_size_units x num_entries) must stay under the uint16_t limit (65,536 units
-            // = 1 MB); if the full per-core tilized activation exceeds that, the DFB spec is rejected at
-            // program creation and this path cannot be used for that conv (fall back to the fused kernel).
-            const CBInfo& tilized_info = cb(Conv2dCb::ACT_TILIZED);
-            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
-                .unique_id = DFB_ACT_TILIZED,
-                .entry_size = tilized_info.page_size,
-                .num_entries = tilized_info.num_pages * num_blocks_act_h_per_core,
-                .data_format_metadata = tilized_info.data_format,
-            });
         } else {
             spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
         }
@@ -1648,8 +1623,6 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
                                         "conv_unpack_tilize_probe_metal2.cpp"
         : split_program_tilize_only   ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_tilize_only_metal2.cpp"
-        : split_tilize_matmul         ? "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
-                                        "conv_bmm_split_tilize_metal2.cpp"
                                       : "ttnn/cpp/ttnn/operations/experimental/quasar/conv2d/device/kernels/"
                                         "conv_bmm_tilize_metal2.cpp";
     const std::string writer_sender_kernel =

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_math_matmul_api.h"  // legacy CB-id API + unified llk_math_matmul_init_impl; execute reused as-is
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK MATMUL MATH -- LLKOperand (id-free, compile-time NTTP) overload (init only)
@@ -28,6 +29,7 @@ template <
     int THROTTLE_LEVEL = 0>
 inline void llk_math_matmul_init(
     const std::uint32_t transpose = 0, const std::uint32_t ct_dim = 1, const std::uint32_t rt_dim = 1) {
+    SAN_HOOK(unsupported());
     constexpr std::uint32_t in0_tile_r_dim = IN0_DESC.shape.total_row_dim();
     constexpr std::uint32_t in0_tile_c_dim = IN0_DESC.shape.total_col_dim();
     constexpr std::uint32_t in1_tile_r_dim = IN1_DESC.shape.total_row_dim();

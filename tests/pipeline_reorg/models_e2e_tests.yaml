@@ -1808,7 +1808,10 @@
   model: bge_m3
   skus:
     wh_n150:
-      timeout: 4
+      # #54669 (2026-08-31) grew the benchmark from 5 to 10 parametrisations (5 single-request
+      # ISLs + a batch-25 sweep of 50 requests each). Model download + the first 5 cases already
+      # take ~4 min on N150, so the job was wall-clock killed every day from 2026-09-01.
+      timeout: 10
       tier: 2
   owner_id: U082LLYBLSW # Gabriel Tobar (CODEOWNERS @gtobarTT)
   team: models

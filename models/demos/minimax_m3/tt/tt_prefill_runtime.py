@@ -277,6 +277,7 @@ class TtPrefillRuntime:
         *,
         skip_lm_head: bool = True,
         get_last_token: int = -1,
+        metadata_msg=None,
     ):
         """Prefill ONE chunk into user ``slot_id``'s slice of the engine-owned ``kv_cache``. With
         ``skip_lm_head`` (the default) returns None — single-rank is headless, the populated cache is the
@@ -313,6 +314,9 @@ class TtPrefillRuntime:
                 loud error rather than silently missing acks.
             record_dev: the chunk's metadata tensor, passed on every call and unused here (it is the
                 record the D2H ack would carry).
+            metadata_msg: the chunk's raw socket metadata tensor; a runtime that captures the chunk as a
+                trace consumes it on-device (the words must sit at a fixed address). This runtime does not
+                trace, so it is accepted and ignored.
         """
         if d2h_service is not None:
             raise NotImplementedError(

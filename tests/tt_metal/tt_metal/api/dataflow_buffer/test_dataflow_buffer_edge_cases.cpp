@@ -127,7 +127,7 @@ static void run_a1_pipeline(distributed::MeshDevice& mesh_device, A1Transform tr
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(mesh_device, in_tensor, input);
 
-    LaunchProgram(mesh_device, std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(mesh_device, std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -365,7 +365,7 @@ TEST_F(UnitMeshFixture, D1_2_0_LongImplicitSync_PostCounterWrap) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);
@@ -596,7 +596,7 @@ TEST_F(UnitMeshFixture, D3_2_0_MultiCoreDFB_TwoGroupsViaDecoy) {
     slow_dispatch::WriteToBuffer(in_tensor.mesh_buffer(), input);
     m2_writeshard_barrier_uint32(this->device(), in_tensor, input);
 
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
 
     std::vector<uint32_t> output;
     slow_dispatch::ReadFromBuffer(out_tensor.mesh_buffer(), output);

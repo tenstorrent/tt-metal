@@ -1683,10 +1683,14 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
         // qk_im / sum_A / sum_B are Float32 when enable_32_bit_dest is on; the validator requires an
         // explicit unpack_modes entry for each Float32 DFB the compute consumes. Legacy defaulted to
         // UnpackToSrc (no explicit unpack_to_dest_mode), preserved here.
-        auto& gen1 = std::get<ComputeGen1Config>(compute_hw);
-        gen1.unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
-        gen1.unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
-        gen1.unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
+        // Reach unpack_modes through the generation-neutral accessor rather than
+        // std::get<ComputeGen1Config>: the helper above builds the config from device->arch(), so on
+        // Quasar it returns the Gen2 alternative and naming Gen1 here throws std::bad_variant_access.
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        auto& dfb_unpack_modes = unpack_modes(compute_hw);
+        dfb_unpack_modes.insert({QK_IM, tt::tt_metal::UnpackMode::UnpackToSrc});
+        dfb_unpack_modes.insert({SUM_A, tt::tt_metal::UnpackMode::UnpackToSrc});
+        dfb_unpack_modes.insert({SUM_B, tt::tt_metal::UnpackMode::UnpackToSrc});
     }
 
     KernelSpec compute{
