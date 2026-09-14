@@ -32,6 +32,7 @@ Two drafter implementations (QWEN36_DFLASH_TP, default 1):
   * DFlash2Drafter   (tt/dflash2.py): replicated, eager, host tap round-trips (the validated oracle
     form; QWEN36_DFLASH_TP=0).
 """
+
 import os
 
 import torch
@@ -86,13 +87,18 @@ def _dbg(msg):
 
 
 def get_drafter(model, weights_dir=None, block=None):
-    """One drafter per model (weights loaded once; the draft KV is per generate)."""
+    """One drafter per model (weights loaded once; the draft KV store / layouts are per generate or per server).
+
+    The drafter's identity is (weights_dir, tp) ONLY: ``block`` selects the DEFAULT layout's block (the demo
+    path's alloc()) and never frees or reloads the weights -- the dual-bucket serving decoder runs two
+    layouts of different blocks over one store, and a block-keyed identity would free the shared weights
+    under a live decoder (garbage / hang, not an assert)."""
     weights_dir = drafter_weights_dir(weights_dir)
     tp = use_tp_drafter()
     d = getattr(model, "_dflash2_drafter", None)
-    if d is not None and (d.weights_dir != weights_dir or (block is not None and d.block != block) or d.is_tp != tp):
-        # Different checkpoint / block / implementation: release the old weights (~0.9-3.6 GB/device)
-        # before loading the new ones.
+    if d is not None and (d.weights_dir != weights_dir or d.is_tp != tp):
+        # Different checkpoint / implementation: release the old weights (~0.9-3.6 GB/device) before
+        # loading the new ones.
         d.free_weights()
         model._dflash2_drafter = d = None
     if d is None:
@@ -123,10 +129,14 @@ def get_drafter(model, weights_dir=None, block=None):
         d.weights_dir = weights_dir
         d.is_tp = tp
         logger.info(
-            f"[dflash2] drafter {d.cfg['arch']} tp={tp}: block={d.block} K={d.K} taps={d.taps} causal={d.causal} "
-            f"windows={d.windows} conv={d.cfg['has_conv']} selector={d.has_selector}"
+            f"[dflash2] drafter {d.cfg['arch']} tp={tp}: block={d.block} K={d.K} (block_max={d.cfg['block']}) "
+            f"taps={d.taps} causal={d.causal} windows={d.windows} conv={d.cfg['has_conv']} selector={d.has_selector}"
         )
         model._dflash2_drafter = d
+    elif block is not None and int(block) != d.block:
+        # Same weights, another DEFAULT block: a layout property (TP drafter), not an identity change.
+        assert tp and hasattr(d, "set_default_block"), "the replicated oracle drafter is built for one block"
+        d.set_default_block(block)
     return d
 
 
@@ -136,7 +146,8 @@ class DFlash2Decoder(SpeculativeDecoder):
     B users share one draft forward (B*block rows, user-major) and one verify replay (B*T rows);
     the drafter keeps a private paged context KV with one block range per user (the same [B, nb]
     page tables as the target). K = block-1 per user, so B*(K+1) <= 32 binds K to the batch: K=7
-    (block 8) up to B=4, K=3 (block 4) at B=8.
+    (block 8) up to B=4, K=3 (block 4) at B=8. The demo path runs the drafter's DEFAULT layout
+    (drafter.alloc: one store, one layout, row u = user u); K <= drafter.K_max (the checkpoint's block).
     """
 
     def __init__(self, model, page_tables, draft_len=None, stop_tokens=None, weights_dir=None, sampling=None):
@@ -146,7 +157,9 @@ class DFlash2Decoder(SpeculativeDecoder):
         K = default_draft_len(weights_dir) if draft_len is None else int(draft_len)
         self._weights_dir = drafter_weights_dir(weights_dir)
         self.drafter = get_drafter(model, self._weights_dir, block=K + 1)
-        assert self.drafter.K == K
+        assert (
+            K <= self.drafter.K_max and self.drafter.K == K
+        ), f"K={K} vs drafter K={self.drafter.K} (max {self.drafter.K_max})"
         self.tp = self.drafter.is_tp
         assert (
             self.tp
@@ -265,7 +278,8 @@ class DFlash2Decoder(SpeculativeDecoder):
         rows = self.B * T
         try:
             # Another DFlash2Decoder on this model may have replaced (and freed) our drafter via
-            # get_drafter: re-resolve, and re-pin the model's tap layers to OURS.
+            # get_drafter (another checkpoint), or moved its default block: re-resolve at OUR block, and
+            # re-pin the model's tap layers to OURS.
             self.drafter = get_drafter(model, self._weights_dir, block=T)
             assert self.drafter.K == self.K and self.drafter.is_tp == self.tp
             model._dflash_tap = True

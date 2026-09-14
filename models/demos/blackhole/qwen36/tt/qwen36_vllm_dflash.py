@@ -24,10 +24,17 @@ non-negative ids. A row whose carry already holds >= W tokens (or a stop, under 
 holds this step and emits from its carry. Default off: the fixed-width contract above stays.
 
 Greedy: each request's tokens are the target's greedy trajectory from its sampled anchor (lossless,
-tested per request in tests/test_dflash2_serving.py). max_num_seqs may be 1..4 (B_max x (K+1) verify
-rows must fit one 32-row decode tile; K = 7 for DFlash2). QWEN36_DRAFTER=mtp (or
+tested per request in tests/test_dflash2_serving.py). B_max x (K+1) verify rows must fit one 32-row
+decode tile (K = 7 for DFlash2 up to 4 slots, K = 3 at 8). QWEN36_DRAFTER=mtp (or
 QWEN36_DFLASH_SERVE_BLOCK=1) turns speculation off and this class serves exactly like
 Qwen36ForCausalLM (plain batched decode), so one bundle covers both profiles.
+
+VERIFY BUCKETS (QWEN36_DFLASH_BUCKETS, e.g. '8x4,4x8'; see profiles/dual_bucket_spec.json): one server keeps
+several (B_cfg x T_cfg) verify geometries captured and verifies in the smallest bucket that seats the live
+requests -- K = 7 while <= 4 requests are live, K = 3 at 5..8 -- switching at runtime with NO recapture (the
+decoder moves every live session's GDN state between the buckets bit-exactly; the plugin never sees K).
+decode_forward decides the bucket for a step with ``dec.plan(live_after)`` BEFORE any begin()/set_table()/
+step() of that step. Unset: ONE bucket (max_num_seqs, K+1), which is byte-for-byte today's behaviour.
 
 Slots: the plugin keys a request's device state by a "state slot" and may permute decode rows
 (``slot_remap``: row i reads slot remap[i]); the base class moves its GDN state accordingly. The
@@ -36,9 +43,14 @@ row -> physical-session indirection and composes the plugin's remaps into it.
 
 Warmup (server start): after the plain traces are captured, every spec buffer is allocated and every
 spec program compiled (eager tap-capturing prefill for each mask bucket into a slot, the chunked spec
-prefill shapes, the per-slot seed, the B*block-row draft and extend), then the verify trace is
-captured ONCE and a dummy session per slot captures the drafter's draft/extend traces.
+prefill shapes, every per-bucket seed / bucket-switch variant, the draft and extend of every bucket
+layout), then the verify trace of EVERY bucket is captured ONCE and dummy sessions in every bucket
+capture the drafter's draft/extend traces. Two guards then run before the first request: the program
+cache must not grow over a repeat of the warm sweep + one traced step per bucket (a program compiling
+under a parked trace clobbers it -- a device hang at request time), and the TRACE region must stay
+under _TRACE_REGION_MAX_FRAC (an overflow only surfaces as a TT_FATAL at the next capture).
 """
+
 import json
 import os
 import time
@@ -66,8 +78,26 @@ from models.demos.blackhole.qwen36.tt.dflash2_serving import (  # noqa: E402
     serve_block_size,
 )
 from models.demos.blackhole.qwen36.tt.qwen36_vllm import Qwen36ForCausalLM, TT_Qwen3_5ProcessingInfo  # noqa: E402
+from models.demos.blackhole.qwen36.tt.spec_decode import MAX_SPEC_ROWS  # noqa: E402
+
+try:  # the multi-bucket decoder (profiles/dual_bucket_spec.json); a single bucket falls back to today's class without it
+    from models.demos.blackhole.qwen36.tt.dflash2_serving import BucketPlanner, DFlash2DualBucketDecoder  # noqa: E402
+except ImportError:  # pragma: no cover - a tree without the dual-bucket decoder
+    DFlash2DualBucketDecoder = None
+    BucketPlanner = None
 
 _W = serve_block_size() if _SPEC_ON else 1
+# Verify buckets (module doc): 'BxT[,BxT...]' -- B_cfg users x T_cfg verify rows per user (K = T-1 drafts). Unset:
+# ONE bucket (max_num_seqs, default_draft_len()+1), today's single geometry.
+_BUCKETS_ENV = "QWEN36_DFLASH_BUCKETS"
+# Startup fails (multi-bucket; a warning on the single-bucket profiles) when the device TRACE region is fuller than
+# this after every spec capture.
+_TRACE_REGION_MAX_FRAC = float(os.environ.get("QWEN36_DFLASH_TRACE_REGION_MAX_FRAC", "0.85"))
+# Make the post-capture program-cache growth guard and the trace-region guard FATAL for ANY bucket count
+# (the shipped default only fails startup for a multi-bucket profile; single-bucket profiles warn). A program
+# compiling under a parked trace is a device-hang risk regardless of bucket count, so CI / the device tests set
+# this to catch a regression on the batch4 / single-user profiles too.
+_GUARD_STRICT = os.environ.get("QWEN36_DFLASH_GUARD_STRICT", "0") == "1"
 # Stop handling inside a block. "1" (default, serving): a block that reaches a stop token is emitted at
 # once, EOS-filled past the stop (the request ends here in normal use, so no time is spent decoding
 # beyond it). "0" (benchmarks): stops are ordinary tokens, every block is W real committed tokens; vLLM
@@ -89,6 +119,81 @@ _PREFILL_CHUNK = 2048
 # verify's reach past the block (W committed positions + K+1 candidate rows).
 _MAX_DRAFT = 15
 _DEBUG = os.environ.get("QWEN36_DFLASH_DEBUG", "0") == "1"
+
+
+def parse_buckets(spec):
+    """``QWEN36_DFLASH_BUCKETS`` text ('8x4,4x8') -> ((8, 4), (4, 8)): (B_cfg, T_cfg) pairs in the order given;
+    unset / empty -> (). Host-only, no model needed (the checks are ``check_buckets``)."""
+    buckets = []
+    for tok in (spec or "").replace(";", ",").split(","):
+        tok = tok.strip().lower()
+        if not tok:
+            continue
+        parts = [p.strip() for p in tok.split("x")]
+        if len(parts) != 2 or not all(p.isdigit() for p in parts):
+            raise RuntimeError(
+                f"{_BUCKETS_ENV}: bucket {tok!r} is not of the form BxT (users x verify rows per user, e.g. 8x4,4x8)"
+            )
+        buckets.append((int(parts[0]), int(parts[1])))
+    return tuple(buckets)
+
+
+def check_buckets(buckets, max_num_seqs, k_default, ragged):
+    """The per-bucket startup checks (RuntimeError with the launch fix). Every bucket: B_cfg x T_cfg verify rows in
+    one 32-row decode tile, B_cfg <= max_num_seqs, K = T_cfg-1 in [1, min(_MAX_DRAFT, k_default)] (k_default =
+    default_draft_len(): the drafter checkpoint's block and QWEN36_DFLASH_BLOCK bound every bucket's K). Across
+    buckets: distinct B_cfg (plan() picks the smallest bucket that seats the live requests) and the largest B_cfg ==
+    max_num_seqs (every slot can be seated). More than one bucket needs the RAGGED contract: one speculative
+    iteration per decode step keeps a switch inside one step. Returns the buckets as given."""
+    buckets = tuple((int(b), int(t)) for b, t in buckets)
+    if not buckets:
+        raise RuntimeError(f"{_BUCKETS_ENV}: no verify bucket configured")
+    for b, t in buckets:
+        name = f"bucket {b}x{t}"
+        if b < 1 or t < 2:
+            raise RuntimeError(f"{_BUCKETS_ENV}: {name} needs B >= 1 users and T >= 2 rows (K = T-1 >= 1 draft)")
+        if b * t > MAX_SPEC_ROWS:
+            raise RuntimeError(
+                f"Qwen36DFlash speculative serving: {name}: {b} users x T={t} verify rows = {b * t} exceed one "
+                f"{MAX_SPEC_ROWS}-row decode tile; use B <= {MAX_SPEC_ROWS // t} for T={t} (or QWEN36_DRAFTER=mtp)"
+            )
+        if b > max_num_seqs:
+            raise RuntimeError(
+                f"{_BUCKETS_ENV}: {name} seats more users than --max-num-seqs {max_num_seqs}; every bucket's B must be "
+                f"<= max_num_seqs (and the largest == max_num_seqs)"
+            )
+        if t - 1 > _MAX_DRAFT:
+            raise RuntimeError(f"{name}: K={t - 1} exceeds the KV lookahead bound {_MAX_DRAFT}")
+        if t - 1 > k_default:
+            raise RuntimeError(
+                f"{_BUCKETS_ENV}: {name} drafts K={t - 1} but the drafter drafts at most K={k_default} "
+                f"(the checkpoint's block, or QWEN36_DFLASH_BLOCK={os.environ.get('QWEN36_DFLASH_BLOCK', 'unset')}): "
+                f"set QWEN36_DFLASH_BLOCK >= {t}"
+            )
+    bs = [b for b, _ in buckets]
+    if len(set(bs)) != len(bs):
+        raise RuntimeError(f"{_BUCKETS_ENV}: buckets must have distinct B (got {bs}): the planner picks by live users")
+    if len({b * t for b, t in buckets}) != 1:
+        raise RuntimeError(
+            f"{_BUCKETS_ENV}: buckets must share B x T verify rows (one 32-row set of tap buffers and one GDN ring): "
+            f"got {[b * t for b, t in buckets]}"
+        )
+    if max(bs) != max_num_seqs:
+        raise RuntimeError(
+            f"{_BUCKETS_ENV}: the largest bucket seats {max(bs)} users but --max-num-seqs is {max_num_seqs}; one bucket "
+            f"must seat every slot"
+        )
+    if len(buckets) > 1 and not ragged:
+        raise RuntimeError(
+            f"{_BUCKETS_ENV}: {len(buckets)} buckets need QWEN36_DFLASH_RAGGED=1 (one speculative iteration per decode "
+            f"step keeps a bucket switch inside one step)"
+        )
+    return buckets
+
+
+def bucket_id(bucket):
+    """The decoder's name for a (B_cfg, T_cfg) bucket ('8x4'), used when it exposes no registry of its own."""
+    return f"{int(bucket[0])}x{int(bucket[1])}"
 
 
 @MULTIMODAL_REGISTRY.register_processor(
@@ -135,18 +240,26 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._anchor_warned = False
         self._oov_warned = False
         self._nosession_warned = False
+        self._buckets = ()  # (B_cfg, T_cfg) verify geometries, largest B == max_num_seqs (module doc)
+        self._multi_bucket = False
+        self._last_bucket = None  # bucket id plan() last put in force (logged on change)
         if _W > 1:
             if model.num_devices <= 1:
                 raise RuntimeError("Qwen36DFlash speculative serving needs the TP mesh (MESH_DEVICE=P150x4)")
             K = default_draft_len()
-            if B * (K + 1) > 32:
+            buckets = parse_buckets(os.environ.get(_BUCKETS_ENV)) or ((B, K + 1),)
+            self._buckets = check_buckets(buckets, B, K, _RAGGED)
+            self._multi_bucket = len(self._buckets) > 1
+            if self._multi_bucket and DFlash2DualBucketDecoder is None:
                 raise RuntimeError(
-                    f"Qwen36DFlash speculative serving: max_num_seqs={B} x (K+1)={K + 1} verify rows exceed one "
-                    f"32-row decode tile; launch with --max-num-seqs <= {32 // (K + 1)} (or QWEN36_DRAFTER=mtp)"
+                    f"{_BUCKETS_ENV}={os.environ.get(_BUCKETS_ENV)!r} needs the multi-bucket decoder "
+                    "(dflash2_serving.DFlash2DualBucketDecoder), which this tree does not have"
                 )
             logger.info(
                 f"Qwen36DFlash serving: slots={B} block W={_W} tokens/step{' (ragged: one iteration/step)' if _RAGGED else ''}, "
-                f"K={K}, eos={sorted(self._eos)}, drafter={os.environ.get('DFLASH_WEIGHTS')}"
+                f"buckets={','.join(bucket_id(bt) for bt in self._buckets)} "
+                f"(K={','.join(str(t - 1) for _, t in self._buckets)}), eos={sorted(self._eos)}, "
+                f"drafter={os.environ.get('DFLASH_WEIGHTS')}"
             )
         else:
             logger.info("Qwen36DFlash serving: speculation OFF (plain Qwen36ForCausalLM behaviour)")
@@ -288,11 +401,15 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         model.set_gdn_fused_decode(True)
         # The verify trace's table width is vLLM's per-request row width, which the runner pads to the
         # whole pool: use the pool block count.
-        dec = DFlash2ServingDecoder(model, num_blocks, stop_tokens=self._eos)
-        if dec.K > _MAX_DRAFT:
-            raise RuntimeError(f"drafter K={dec.K} exceeds the KV lookahead bound {_MAX_DRAFT}")
+        dec = self._make_decoder(model, num_blocks)
+        k_max = int(getattr(dec, "K_max", dec.K))
+        if k_max > _MAX_DRAFT:
+            raise RuntimeError(f"drafter K={k_max} exceeds the KV lookahead bound {_MAX_DRAFT}")
         dec.alloc()
-        dec.warm()
+        # Eager: every bucket's verify pass (its throwaway KV writes land at S0+1, the position the capture pass
+        # uses too), every seed / switch variant, every layout's draft + extend.
+        S0 = min(model._PREFILL_MASK_BUCKETS[0], _PREFILL_CHUNK - 1)
+        dec.warm(warm_position=S0 + 1)
         B = self._B
         # Dummy per-slot page-table rows for the warm-up prefills: disjoint block ranges of the pool.
         nbu = max(1, num_blocks // B)
@@ -314,33 +431,278 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         self._warm_rows = rows
         return dec
 
+    def _make_decoder(self, model, num_blocks):
+        """The serving decoder for the configured buckets: the multi-bucket DFlash2DualBucketDecoder (a single
+        bucket degenerates to today's DFlash2ServingDecoder behaviour, row == slot, no switch path); today's class
+        itself when the dual decoder is absent from the tree and one bucket is configured."""
+        if DFlash2DualBucketDecoder is not None:
+            return DFlash2DualBucketDecoder(model, num_blocks, buckets=self._buckets, stop_tokens=self._eos)
+        assert not self._multi_bucket, "__init__ rejects several buckets without the dual-bucket decoder"
+        dec = DFlash2ServingDecoder(model, num_blocks, stop_tokens=self._eos)
+        ((_, t_cfg),) = self._buckets
+        if dec.K + 1 != t_cfg:
+            raise RuntimeError(f"Qwen36DFlash: decoder T={dec.K + 1} != configured bucket T={t_cfg}")
+        return dec
+
+    def _bucket_ids(self, dec):
+        """(B_cfg, T_cfg) -> the decoder's bucket id: from its own registry when it has one (``dec.buckets``: id ->
+        object with .B/.T), else the 'BxT' convention."""
+        ids = {}
+        reg = getattr(dec, "buckets", None)
+        if isinstance(reg, dict):
+            for bid, bk in reg.items():
+                try:
+                    ids[(int(bk.B), int(bk.T))] = bid
+                except (AttributeError, TypeError, ValueError):
+                    pass
+        for bt in self._buckets:
+            ids.setdefault(bt, bucket_id(bt))
+        return ids
+
+    @staticmethod
+    def _plan_if_available(dec, live_after):
+        """dec.plan(live_after) when the decoder has a bucket planner (host-only; the single-bucket planner is a no-op)."""
+        plan = getattr(dec, "plan", None)
+        return plan(set(live_after)) if plan is not None else None
+
+    @staticmethod
+    def _expect_bucket(dec, want, when):
+        cur = getattr(dec, "cur_id", None)
+        if cur != want:
+            raise RuntimeError(f"Qwen36DFlash warmup: verify bucket in force is {cur!r}, expected {want!r} {when}")
+
+    @staticmethod
+    def _timed_steps(dev, dec, n_steps, tag):
+        """n_steps traced steps over the live slots; returns the 'ms/step, tok/step' summary for the warm-up log."""
+        ttnn.synchronize_device(dev)
+        t1 = time.perf_counter()
+        n = 0
+        for _ in range(n_steps):
+            n += sum(len(v) for v in dec.step().values())
+        ttnn.synchronize_device(dev)
+        t2 = time.perf_counter()
+        n_live = sum(1 for a in dec.active if a)
+        return f"{tag}: {(t2 - t1) / n_steps * 1e3:.1f} ms/step, {n / n_steps:.1f} tok/step over {n_live} slot(s)"
+
+    # ---- trace-region accounting (the region is fixed and shared by the chunk / decode / sampling / spec traces)
+    @staticmethod
+    def _trace_region_total(dev):
+        try:
+            mv = ttnn.get_memory_view(dev, ttnn.BufferType.TRACE)
+            return int(mv.total_bytes_per_bank) * int(mv.num_banks)
+        except Exception:
+            return None
+
+    def _log_trace_region(self, model, tag, since=None):
+        """Log the TRACE region occupancy (and the delta since ``since`` bytes); returns bytes used or None."""
+        dev = model.mesh_device
+        used = model._trace_region_bytes(dev)
+        if used is None:
+            return None
+        total = self._trace_region_total(dev)
+        share = f" ({used / total:.0%} of {total / 2**20:.0f} MiB)" if total else ""
+        delta = f", +{(used - since) / 2**20:.1f} MiB" if since is not None else ""
+        logger.info(f"Qwen36DFlash TRACE region {tag}: {used / 2**20:.1f} MiB{share}{delta}")
+        return used
+
+    def _check_trace_region(self, model):
+        """Startup guard: the region must stay under _TRACE_REGION_MAX_FRAC once every spec trace is parked (an
+        overflow would only surface as a TT_FATAL at the next capture -- or at request time)."""
+        dev = model.mesh_device
+        used = model._trace_region_bytes(dev)
+        total = self._trace_region_total(dev)
+        if used is None or not total:
+            return
+        if used > _TRACE_REGION_MAX_FRAC * total:
+            msg = (
+                f"Qwen36DFlash: TRACE region {used / 2**20:.0f} MiB of {total / 2**20:.0f} MiB ({used / total:.0%}) "
+                f"after the spec captures exceeds {_TRACE_REGION_MAX_FRAC:.0%}: raise additional_config.tt."
+                f"trace_region_size or park fewer traces (TT_DECODE_BUCKETING=0, fewer prefill mask buckets)"
+            )
+            if self._multi_bucket or _GUARD_STRICT:
+                raise RuntimeError(msg)
+            logger.warning(msg)
+
+    def _spec_dummy_sessions_multi(self, model, dec, rows, S0):
+        """Dummy sessions that capture the drafter's draft/extend traces in EVERY bucket and exercise a switch in
+        each direction with the traces parked: every slot joins in the largest bucket (4 steps); then for each
+        smaller bucket the surplus slots leave and the decoder is switched to it EXPLICITLY (the hysteresis would
+        wait; 4 steps); then the ended slots re-join -- prefills first, ONE plan() that must force the largest bucket
+        back, then the begins, decode_forward's order -- and step once. Returns the per-bucket timing summary."""
+        dev = model.mesh_device
+        B = self._B
+        ids = self._bucket_ids(dec)
+        order = sorted(self._buckets, key=lambda bt: -bt[0])  # largest B first
+        big_id = ids[order[0]]
+        live = set()
+        for u in range(B):
+            lt = self._spec_prefill(model, dec, u, dummy_prompt(S0, seed=7 + u), S0, rows[u])
+            live.add(u)
+            dec.plan(set(live))
+            dec.begin(u, int(lt.argmax()), S0, rows[u])
+        ttnn.synchronize_device(dev)
+        self._expect_bucket(dec, big_id, f"with all {B} slots live")
+        stats = [self._timed_steps(dev, dec, 4, big_id)]
+        for bt in order[1:]:
+            bid = ids[bt]
+            for u in range(bt[0], B):
+                dec.end(u)
+                live.discard(u)
+            t = time.perf_counter()
+            dec.set_bucket(bid)
+            ttnn.synchronize_device(dev)
+            self._expect_bucket(dec, bid, f"after set_bucket({bid!r})")
+            logger.info(
+                f"Qwen36DFlash warmup: switch -> {bid} with {len(live)} live slot(s) in {(time.perf_counter() - t) * 1e3:.1f} ms"
+            )
+            stats.append(self._timed_steps(dev, dec, 4, bid))
+        rejoin = [u for u in range(B) if u not in live]
+        firsts = {
+            u: int(self._spec_prefill(model, dec, u, dummy_prompt(S0, seed=7 + u), S0, rows[u]).argmax())
+            for u in rejoin
+        }
+        t = time.perf_counter()
+        dec.plan(set(range(B)))
+        ttnn.synchronize_device(dev)
+        self._expect_bucket(dec, big_id, f"after plan() with all {B} slots live (forced up-switch)")
+        logger.info(
+            f"Qwen36DFlash warmup: plan()-forced switch -> {big_id} with {len(live)} live slot(s) in "
+            f"{(time.perf_counter() - t) * 1e3:.1f} ms"
+        )
+        for u in rejoin:
+            dec.begin(u, firsts[u], S0, rows[u])
+        dec.step()
+        for u in range(B):
+            dec.end(u)
+        ttnn.synchronize_device(dev)
+        return "; ".join(stats)
+
+    def _spec_post_capture_guard(self, model, dec, rows, S0):
+        """Nothing spec-related may compile once a trace is parked (it clobbers the trace: a device hang at request
+        time). With every trace captured: count the program cache, run the decoder's warm sweep again (every seed
+        and switch realization) plus one traced step in each bucket, and fail startup if the count changed
+        (multi-bucket; a warning on the single-bucket profiles)."""
+        dev = model.mesh_device
+        count = getattr(dev, "num_program_cache_entries", None)
+        if count is None:
+            logger.warning("Qwen36DFlash: mesh device has no num_program_cache_entries(); post-capture guard skipped")
+            return
+        ttnn.synchronize_device(dev)
+        n0 = int(count())
+        sweep = getattr(dec, "warm_sweep", None) or getattr(dec, "_warm_sweep", None)
+        if sweep is not None:
+            sweep()  # every seed (bucket, row, slot) and switch (row, mi) realization again, with the traces parked
+            ttnn.synchronize_device(dev)
+        elif self._multi_bucket:
+            logger.warning(
+                "Qwen36DFlash: decoder has no warm_sweep(); the post-capture guard covers one traced step per bucket only"
+            )
+        ids = self._bucket_ids(dec)
+        lt = self._spec_prefill(model, dec, 0, dummy_prompt(S0, seed=7), S0, rows[0])
+        self._plan_if_available(dec, {0})
+        dec.begin(0, int(lt.argmax()), S0, rows[0])
+        dec.step()
+        if self._multi_bucket:
+            # ...one traced step in every other bucket too, ending in the smallest: the bucket a lightly loaded
+            # server should start serving in (plan() forces the larger one the moment it is needed).
+            for bt in sorted(self._buckets, key=lambda bt: -bt[0]):
+                if ids[bt] != dec.cur_id:
+                    dec.set_bucket(ids[bt])
+                    dec.step()
+        dec.end(0)
+        ttnn.synchronize_device(dev)
+        n1 = int(count())
+        if n1 != n0:
+            msg = (
+                f"Qwen36DFlash: {n1 - n0} program(s) compiled AFTER the spec traces were captured (program cache "
+                f"{n0} -> {n1} entries over the warm sweep + one traced step per bucket): a seed / switch / draft "
+                f"variant is missing from the phase-1 warm-up, and at request time it would clobber a parked trace"
+            )
+            if self._multi_bucket or _GUARD_STRICT:
+                raise RuntimeError(msg)
+            logger.warning(msg)
+        else:
+            logger.info(
+                f"Qwen36DFlash post-capture guard: program cache unchanged at {n0} entries over the warm sweep + one "
+                f"traced step per bucket ({','.join(ids[bt] for bt in self._buckets)})"
+            )
+
     def _spec_capture(self):
-        """Phase 2: capture the verify trace, then a dummy session per slot (the drafter's draft/extend
-        traces are captured by the first traced step) that also proves nothing compiles any more."""
+        """Phase 2: capture the verify trace of every bucket, then dummy sessions (the drafter's draft/extend traces
+        are captured by the first traced step per bucket layout), then the two startup guards: the program cache
+        must not grow over a repeat of the warm sweep + one traced step per bucket, and the TRACE region must stay
+        under _TRACE_REGION_MAX_FRAC."""
         model = self.model[0]
         dec = self._spec_pre
         B = self._B
         t0 = time.perf_counter()
         S0 = min(model._PREFILL_MASK_BUCKETS[0], _PREFILL_CHUNK - 1)
+        used0 = self._log_trace_region(model, "before the spec captures")
         dec.capture(warm_position=S0 + 1)
+        used1 = self._log_trace_region(model, "after the verify capture(s)", used0)
         rows = self._warm_rows
-        for u in range(B):
-            lt = self._spec_prefill(model, dec, u, dummy_prompt(S0, seed=7 + u), S0, rows[u])
-            dec.begin(u, int(lt.argmax()), S0, rows[u])
-        ttnn.synchronize_device(model.mesh_device)
-        t1 = time.perf_counter()
-        n = 0
-        for _ in range(4):
-            n += sum(len(v) for v in dec.step().values())
-        ttnn.synchronize_device(model.mesh_device)
-        t2 = time.perf_counter()
-        for u in range(B):
-            dec.end(u)
+        if self._multi_bucket:
+            stats = self._spec_dummy_sessions_multi(model, dec, rows, S0)
+        else:
+            live = set()
+            for u in range(B):
+                lt = self._spec_prefill(model, dec, u, dummy_prompt(S0, seed=7 + u), S0, rows[u])
+                live.add(u)
+                self._plan_if_available(dec, live)
+                dec.begin(u, int(lt.argmax()), S0, rows[u])
+            ttnn.synchronize_device(model.mesh_device)
+            t1 = time.perf_counter()
+            n = 0
+            for _ in range(4):
+                n += sum(len(v) for v in dec.step().values())
+            ttnn.synchronize_device(model.mesh_device)
+            t2 = time.perf_counter()
+            for u in range(B):
+                dec.end(u)
+            stats = f"{(t2 - t1) / 4 * 1e3:.1f} ms/step, {n / 4:.1f} tok/step over {B} slot(s) (K={dec.K})"
+        self._log_trace_region(model, "after the drafter captures", used1)
+        self._spec_post_capture_guard(model, dec, rows, S0)
+        self._check_trace_region(model)
+        self._reset_bucket_policy(dec)
         self._spec = dec
         self._spec_pre = None
+        logger.info(f"Qwen36DFlash phase-2 warmup (captures) done in {time.perf_counter() - t0:.1f}s: {stats} (W={_W})")
+
+    def _reset_bucket_policy(self, dec):
+        """The warm-up dummy sessions and the post-capture guard drive real bucket switches (down/up with slots
+        live), so by the first request the planner has an inflated cooldown (churn back-off) and the switch
+        counters / per-bucket stats carry the synthetic warm-up traffic. Clear both so the server starts with a
+        clean hysteresis (no lingering 32-step down-cooldown for its life) and the shutdown log reports only real
+        request switches. Host-only; a no-op for a single bucket (no switch path)."""
+        if not self._multi_bucket:
+            return
+        reset = getattr(dec, "reset_bucket_policy", None)  # lane B may add a dedicated hook later
+        if callable(reset):
+            reset()
+            return
+        reg = getattr(dec, "buckets", None)
+        if BucketPlanner is not None and isinstance(reg, dict) and reg:
+            try:
+                dec._planner = BucketPlanner({b.id: b.B for b in reg.values()}, start=dec.cur_id)
+            except Exception as e:  # pragma: no cover - defensive; the planner shape is fixed
+                logger.warning(f"Qwen36DFlash: could not reset the bucket planner after warm-up: {e!r}")
+        if hasattr(dec, "switch_count"):
+            dec.switch_count = 0
+        sm = getattr(dec, "switch_ms", None)
+        if sm is not None:
+            try:
+                sm.clear()
+            except AttributeError:
+                dec.switch_ms = []
+        if hasattr(dec, "_last_switch_step"):
+            dec._last_switch_step = None
+        for b in (reg or {}).values():
+            st = getattr(b, "stats", None)
+            if isinstance(st, dict):
+                for k in list(st):
+                    st[k] = 0
         logger.info(
-            f"Qwen36DFlash phase-2 warmup (captures) done in {time.perf_counter() - t0:.1f}s: "
-            f"{(t2 - t1) / 4 * 1e3:.1f} ms/step, {n / 4:.1f} tok/step over {B} slot(s) (K={dec.K}, W={_W})"
+            "Qwen36DFlash: bucket planner and switch stats reset after warm-up (clean hysteresis at request time)"
         )
 
     # ------------------------------------------------------------------ prefill: eager, taps -> drafter rings
@@ -420,6 +782,21 @@ class Qwen36DFlashForCausalLM(Qwen36ForCausalLM):
         toks = torch.as_tensor(tokens).reshape(Bp, -1)[:, 0].tolist()
         poss = torch.as_tensor(start_pos).reshape(-1).tolist() if start_pos is not None else [0] * Bp
         pts = torch.as_tensor(page_table) if page_table is not None else None
+        # The verify bucket of THIS step is decided BEFORE any begin()/set_table()/step() of the step, from the
+        # sessions that are live after the row loop: the active ones plus the prefilled slots that begin below.
+        # plan() reseeds every live session into the bucket it picks (and only the larger bucket can seat a 5th
+        # user), so the begins below land in the geometry in force; a mis-ordering is a decoder assert, never a
+        # wrong-geometry seed. Single bucket: a host no-op.
+        plan = getattr(dec, "plan", None)
+        if plan is not None:
+            live_after = {phys for phys in range(B) if dec.active[phys]}
+            for i in range(Bp):
+                if int(poss[i]) >= 0 and self._pending[self._phys[i]] is not None:
+                    live_after.add(self._phys[i])
+            bucket = plan(live_after)
+            if bucket != self._last_bucket:
+                logger.info(f"Qwen36DFlash: verify bucket {bucket} in force ({len(live_after)} live slot(s))")
+                self._last_bucket = bucket
         live_rows = []
         nosession_rows = []  # live rows without a session: EOS so the request ends (ragged: [EOS, -1, ...])
         for i in range(Bp):
