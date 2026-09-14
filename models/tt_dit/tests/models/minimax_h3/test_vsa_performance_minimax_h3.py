@@ -133,6 +133,7 @@ def test_minimax_h3_vsa_block_perf(
         placement=placement,
         padded_pooling=os.environ.get("VSA_PADDED_POOLING", "1") == "1",
         distributed=os.environ.get("VSA_DIST", "0") == "1",  # distributed-window vsa_sdpa kernel
+        gather_dtype=os.environ.get("VSA_GATHER_DTYPE", "bfloat16"),  # bfloat8_b halves the K/V gather payload
     )
     tt_block = MiniMaxH3TransformerBlock(
         **TT_BLOCK_CONFIG,

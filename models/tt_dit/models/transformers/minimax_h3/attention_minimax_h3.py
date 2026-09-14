@@ -22,6 +22,8 @@ from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor
 from .agmm_config import agmm_block_size
 
+_VSA_GATHER_DTYPES = {"bfloat16": ttnn.bfloat16, "bfloat8_b": ttnn.bfloat8_b}
+
 
 def rope_channel_permutation(head_dim: int, rotary_dim: int) -> torch.Tensor:
     """Reorder a head's channels from MiniMax-H3's half-split RoPE layout to the interleaved one.
@@ -176,6 +178,7 @@ class MiniMaxH3Attention(Module):
         # program selection are untouched when vsa_config is None (the default).
         self.vsa_config = vsa_config
         self.vsa_stage = None  # bound per generation shape via set_vsa_stage()
+        self.vsa_gather_dtype = _VSA_GATHER_DTYPES[vsa_config.gather_dtype] if vsa_config is not None else None
         self.gate_compress_is_zero = True  # decided at weight load; a zero gate skips the O_c branch
         if vsa_config is not None:
             # ColParallel fracture of the 7168-wide output hands device d heads [d*n_local, (d+1)*n_local),
@@ -267,6 +270,11 @@ class MiniMaxH3Attention(Module):
             ),
             os.path.join(d, f"vsa_indices_call{n}.pt"),
         )
+
+    def _narrow_for_gather(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        narrowed = ttnn.typecast(x, self.vsa_gather_dtype)
+        ttnn.deallocate(x)
+        return narrowed
 
     def set_vsa_stage(self, stage) -> None:
         """Bind the geometry-specific coarse stage (shared across blocks; see MiniMaxH3VSACoarseStage)."""
@@ -612,7 +620,11 @@ class MiniMaxH3Attention(Module):
             if os.environ.get("VSA_DUMP_INDICES"):  # offline selection-statistics dumps (first calls only)
                 self._dump_vsa_indices(vsa_indices)
 
-            # R2: gathered K/V equal the concatenation of all shards' local K/V.
+            # R2: gathered K/V equal the concatenation of all shards' local K/V. The coarse stage has
+            # already scored the bf16 K, so narrowing here changes what the fine stage attends over but
+            # not which blocks it visits.
+            if self.vsa_gather_dtype != k_BHNE.get_dtype():
+                k_BHNE, v_BHNE = self._narrow_for_gather(k_BHNE), self._narrow_for_gather(v_BHNE)
             if self.parallel_config.sequence_parallel.factor > 1:
                 k_gathered = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)
                 v_gathered = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=self.sp_mesh_axis)

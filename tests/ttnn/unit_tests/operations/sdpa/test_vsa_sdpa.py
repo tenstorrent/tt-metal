@@ -75,7 +75,19 @@ def build_counts(n_blocks, w, ragged, seed):
     return padded.to(torch.uint32)
 
 
-def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0, streaming=False, distributed=False):
+def run_vsa_sdpa(
+    device,
+    heads,
+    seq_len,
+    kv_len,
+    pattern,
+    ragged,
+    m,
+    seed=0,
+    streaming=False,
+    distributed=False,
+    kv_dtype=ttnn.bfloat16,
+):
     torch.manual_seed(seed)
     dim = 128
     n_q_tiles = seq_len // BLOCK
@@ -94,8 +106,11 @@ def run_vsa_sdpa(device, heads, seq_len, kv_len, pattern, ragged, m, seed=0, str
     v[:, :, ~token_valid] = 0
 
     tt_q = ttnn.from_torch(q, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_k = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_v = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_k = ttnn.from_torch(k, device=device, layout=ttnn.TILE_LAYOUT, dtype=kv_dtype)
+    tt_v = ttnn.from_torch(v, device=device, layout=ttnn.TILE_LAYOUT, dtype=kv_dtype)
+    # the reference consumes what the kernel will actually read, so a narrow kv_dtype is measured as
+    # kernel error and not as its own input quantization
+    k, v = ttnn.to_torch(tt_k), ttnn.to_torch(tt_v)
     tt_idx = ttnn.from_torch(indices.view(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32)
     tt_counts = ttnn.from_torch(
         counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
@@ -138,6 +153,30 @@ def test_vsa_sdpa_vs_torch(device, heads, seq_len, kv_len, pattern, ragged, m, s
         pytest.skip("the streaming path has no k-chunk knob")
     out, ref = run_vsa_sdpa(
         device, heads, seq_len, kv_len, pattern, ragged, m, streaming=streaming, distributed=distributed
+    )
+    ok, pcc = comp_pcc(ref, out.float(), 0.999)
+    assert ok, f"PCC {pcc}"
+
+
+@skip_for_wormhole_b0("vsa_sdpa is Blackhole-only")
+@pytest.mark.parametrize("streaming", [False, True], ids=["v1", "stream"])
+@pytest.mark.parametrize(
+    ("heads", "seq_len", "kv_len", "pattern", "ragged"),
+    [(2, 256, 1280, "nonuniform", True), (14, 128, 2048, "nonuniform", True)],
+    ids=["nonuniform_ragged", "h14"],
+)
+def test_vsa_sdpa_bfp8_kv(device, heads, seq_len, kv_len, pattern, ragged, streaming):
+    """K/V in bfp8_b: the op validates the format, so the reader must honour its tile size."""
+    out, ref = run_vsa_sdpa(
+        device,
+        heads,
+        seq_len,
+        kv_len,
+        pattern,
+        ragged,
+        1,
+        streaming=streaming,
+        kv_dtype=ttnn.bfloat8_b,
     )
     ok, pcc = comp_pcc(ref, out.float(), 0.999)
     assert ok, f"PCC {pcc}"

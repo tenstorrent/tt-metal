@@ -29,6 +29,7 @@ def test_t2va_15s_768p_e2e_perf(mesh_device, reset_seeds):
 
     order = os.environ.get("VSA_E2E_STREAM_ORDER")  # e.g. identity | bstride4.16 (default: the config default)
     vsa_kw = {"stream_order": order} if order else {}
+    vsa_kw["gather_dtype"] = os.environ.get("VSA_GATHER_DTYPE", "bfloat16")
     vsa_config = MiniMaxH3VSAConfig(sparsity=0.9, **vsa_kw) if mode == "vsa" else None
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights, vsa_config=vsa_config)
     output = run_warm_generation(

@@ -75,6 +75,12 @@ class MiniMaxH3VSAConfig:
     # attention is built without a config, so this is the only way to hold the adapter weights fixed
     # while changing the attention.
     bypass: bool = False
+    # dtype of the SP K/V all-gather that feeds vsa_sdpa: "bfloat16" | "bfloat8_b". The gather is
+    # link-bound at ~90% of line rate, so halving the payload is the only lever left on it; the fine
+    # kernel reads either format natively. Lossy -- the fine stage's K/V drop to the bfp8_b mantissa
+    # while the coarse stage still scores the local bf16 K, so selection is unchanged and only the
+    # attended values lose precision.
+    gather_dtype: str = "bfloat16"
 
 
 def compute_topk(sparsity: float, num_candidates: int) -> int:

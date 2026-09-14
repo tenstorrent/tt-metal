@@ -256,15 +256,22 @@ _PROD_SHAPES = {
 }
 
 
+# The bf16 floor here is selection noise, not arithmetic: near-tie top-k choices flip across the
+# bf16/fp32 boundary. bfp8_b narrows the gathered K/V the fine stage attends over while the coarse
+# stage keeps scoring the local bf16 K, so selection is identical and only the attended values move.
+_GATHER_DTYPE_PCC = {"bfloat16": 0.985, "bfloat8_b": 0.97}
+
+
 @GALAXY_RING
+@pytest.mark.parametrize("gather_dtype", list(_GATHER_DTYPE_PCC), ids=list(_GATHER_DTYPE_PCC))
 @pytest.mark.parametrize("gate", ["zero", "random"])
 @pytest.mark.parametrize("shape", list(_PROD_SHAPES), ids=list(_PROD_SHAPES))
 @pytest.mark.timeout(7200)
 def test_vsa_attention_production_shape(
-    mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, shape, gate, reset_seeds
+    mesh_device, sp_axis, tp_axis, num_links, is_fsdp, topology, shape, gate, gather_dtype, reset_seeds
 ) -> None:
     """R6b/c: sparsity 0.9 vs the torch VSA oracle at production shapes (batched CPU oracle)."""
-    MIN_PCC = 0.985  # near-tie top-k selection across the bf16/fp32 boundary dominates the residual
+    MIN_PCC = _GATHER_DTYPE_PCC[gather_dtype]
     SPARSITY = 0.9
 
     skip_if_unsupported_num_links(mesh_device, num_links)
@@ -273,6 +280,8 @@ def test_vsa_attention_production_shape(
         pytest.skip("VSA v0 targets 4x8")
     if shape == "15s_768p" and gate == "random":
         pytest.skip("the random-gate branch is pinned at the cheaper 39-frame shape")
+    if gather_dtype != "bfloat16" and gate == "random":
+        pytest.skip("the gather dtype moves the fine stage only; the zero-gate arm isolates it")
 
     spec = _PROD_SHAPES[shape]
     layout, prefix_segments = _make_layout(spec["num_text"], spec["num_audio_latents"], spec["grid"])
@@ -295,7 +304,7 @@ def test_vsa_attention_production_shape(
 
     vsa_model, _ = _setup_tt_model(
         mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, geometry,
-        MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=2), state,
+        MiniMaxH3VSAConfig(sparsity=SPARSITY, k_chunk_blocks=2, gather_dtype=gather_dtype), state,
     )  # fmt: skip
     tt_out = _run_tt(vsa_model, mesh_device, sp_axis, tp_axis, geometry, x, rope_cos, rope_sin)
     tt_rows = geometry.unpack_rows(tt_out.reshape(geometry.padded_len, HIDDEN_SIZE), dim=0)

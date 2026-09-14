@@ -436,7 +436,7 @@ def vsa_config_for_adapter(lora_path: str):
         logger.info(f"{lora_path}: no gate tensors, running the dense attention path")
         return None
     logger.info(f"{lora_path}: carries gate tensors, running VSA at sparsity {VSA_SPARSITY}")
-    return MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY)
+    return MiniMaxH3VSAConfig(sparsity=VSA_SPARSITY, gather_dtype=os.environ.get("VSA_GATHER_DTYPE", "bfloat16"))
 
 
 CALIBRATED_FOX_PROMPT = (
