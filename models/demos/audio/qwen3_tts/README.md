@@ -17,7 +17,7 @@ Bring-up in progress. This directory holds what is finished, and nothing that is
 | 1 | Mel front-end, 128 bins at 24 kHz | host | **done** |
 | 2 | Speaker encoder (ECAPA-TDNN) → `[1, 2048]` | device | **done**, PCC 0.999996 |
 | 3 | BPE tokenizer and prompt assembly (`frontend.py`) | host | **done** |
-| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | not started |
+| 4 | Talker (28 layers, hidden 2048, MRoPE) | device | **done**, per-layer PCC 0.9998 |
 | 5 | Code Predictor (5 layers, 15 steps per frame) | device | not started |
 | 6 | Codec decoder → waveform | device | not started |
 
@@ -81,6 +81,15 @@ open for the model to continue, a reference transcript closes its turn, and a Vo
 instruction speaks as the user. It also pins the seam that is easiest to get wrong later:
 language never enters the text stream, and every language id falls inside the talker's
 3072-entry codec vocabulary rather than the 151k text one.
+
+`pcc/test_talker_pcc.py` gates each of the 28 layers at **0.999** with each layer fed the
+reference's own fp32 input, which is what measures the implementation. Measured 0.9998 at
+worst, 0.99996 on average. It also runs the whole stack in one pass, where PCC falls to
+0.936: a 28-layer residual stack amplifies small perturbations, and the CPU reference in
+bf16 only reaches 0.956 against itself in fp32, so that loss is the number format rather
+than the port. Raising device tensors to fp32 gives 0.9396, and fp32 weights change nothing,
+because the compute is bf16-class whatever the tensors say. The end-to-end gate is therefore
+set to catch a break, not to certify precision.
 
 `pcc/test_speaker_pcc.py` gates every block and the embedding at **0.999**, not the usual
 0.99. Upstream pads each convolution in reflect mode, which `ttnn.conv1d` cannot do, so this

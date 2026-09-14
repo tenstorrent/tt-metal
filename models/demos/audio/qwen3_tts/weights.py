@@ -38,6 +38,9 @@ CONFIG_FILE = "config.json"
 WEIGHTS_FILE = "model.safetensors"
 SPEAKER_PREFIX = "speaker_encoder."
 TALKER_PREFIX = "talker."
+# The 28-layer decoder stack alone, without the code predictor, the codec head or the
+# text projection that sit beside it under `talker.`.
+TALKER_MODEL_PREFIX = "talker.model."
 
 # What a fresh download needs: the config, the weights, and the BPE vocab the text
 # front-end reads. The 25 Hz tokenizer under speech_tokenizer/ is not pulled here.
@@ -138,6 +141,34 @@ def speaker_encoder_config(allow_download=True):
     cfg = dict(SPEAKER_ENCODER_DEFAULTS)
     cfg.update(model_config(allow_download).get("speaker_encoder_config") or {})
     return cfg
+
+
+def talker_config(allow_download=True):
+    """The talker's own config block, as a fresh dict.
+
+    Identical across the Base and CustomVoice checkpoints apart from the id tables
+    (`spk_id`, `spk_is_dialect`, and the dialect entries in `codec_language_id`), so
+    anything built from these numbers runs against either.
+    """
+    return model_config(allow_download)["talker_config"]
+
+
+def load_talker_state(dtype=torch.float32, allow_download=True):
+    """The 28-layer decoder's weights, keyed as `Qwen3TTSTalkerModel` expects them.
+
+    Reads only `talker.model.*`, so the code predictor, codec head and text projection
+    stay on disk. Defaults to fp32 because the CPU reference runs in fp32; pass
+    `dtype=None` to keep the checkpoint's own bf16.
+    """
+    state = {}
+    with safe_open(weights_path(allow_download), framework="pt") as f:
+        names = [key for key in f.keys() if key.startswith(TALKER_MODEL_PREFIX)]
+        if not names:
+            raise KeyError(f"no {TALKER_MODEL_PREFIX}* tensors in {weights_path(allow_download)}")
+        for name in names:
+            tensor = f.get_tensor(name)
+            state[name[len(TALKER_MODEL_PREFIX) :]] = tensor if dtype is None else tensor.to(dtype)
+    return state
 
 
 def expected_speaker_shapes(cfg=None):
