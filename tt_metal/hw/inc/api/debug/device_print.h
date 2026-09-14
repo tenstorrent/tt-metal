@@ -1598,6 +1598,13 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
         return 0;
     }
 
+    // Check if we should reset buffer (happening usually during startup).
+    if (read_position == DEVICE_PRINT_RESET_BUFFER_MAGIC) {
+        device_print_buffer->aux.wpos = 0;
+        device_print_buffer->aux.rpos = 0;
+        return 0;
+    }
+
     // Check if there is enough space for the message until end of the buffer.
     if (write_position + message_size > sizeof(device_print_buffer->data)) {
         // It is important not to perform wrap around while reader position is at the beginning of the buffer,
@@ -1698,7 +1705,7 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintBufferType* device_print_b
     }
 
     // Check if there is enough space between wpos and rpos
-    if (write_position < read_position) {
+    if (write_position < read_position && write_position + message_size >= read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
         // Mark that we are in stall waiting for reader

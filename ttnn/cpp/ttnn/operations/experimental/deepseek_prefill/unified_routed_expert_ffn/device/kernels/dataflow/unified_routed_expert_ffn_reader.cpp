@@ -153,7 +153,10 @@ void kernel_main() {
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
-    constexpr uint32_t x_accessor_offset = 30;
+    constexpr uint32_t min_active_tokens = get_compile_time_arg_val(30);
+    constexpr uint32_t max_active_tokens = get_compile_time_arg_val(31);
+
+    constexpr uint32_t x_accessor_offset = 32;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -324,7 +327,10 @@ void kernel_main() {
         const auto down_acc = TensorAccessor(down_args, down_addr_e, down_tile_bytes);
 
         const uint32_t global_expert_id = idx_ptr[local_expert_id];
-        const uint32_t count_value = counts_ptr[global_expert_id];
+        // Hybrid dispatch: experts outside this op's band belong to the other routed-expert
+        // op and are dropped here exactly like a zero count.
+        const uint32_t count_value =
+            adaptive_chunk::count_in_band(counts_ptr[global_expert_id], min_active_tokens, max_active_tokens);
         // counts[] is device-produced and unvalidated: bound it by the capacity
         // this program was built for (num_chunks_max * chunk_M_max tile-rows)
         // BEFORE deriving anything from it. The clamp is arithmetic so it also
@@ -878,14 +884,16 @@ void kernel_main() {
                 // linked=true keeps the multicast path RESERVED so the
                 // valid-semaphore multicast below travels the SAME path and is
                 // delivered AFTER the data at every receiver. With linked=false
-                // the path is released and the (posted) valid-sem multicast can
+                // the path is released and the valid-sem multicast can
                 // overtake the bulk data multicast at a receiver -> the receiver
                 // observes act_valid, pushes cb_in0_down_full, and compute reads
                 // stale L1 -> that core's whole down-matmul output block is wrong
-                // (run-to-run nondeterministic). A write barrier does NOT fix this
-                // on Blackhole (multicast writes are posted; no completion ack to
-                // wait on) — only path-linking orders the sem behind the data.
-                // Mirrors the canonical matmul in0 sender
+                // (run-to-run nondeterministic). Path-linking orders the sem behind
+                // the data for free; the alternative, an ack-wait before sending the
+                // sem, would stall this core on every receiver's ack. (The mcast is
+                // non-posted and ack-counted, so an ack-wait also orders it — step 5
+                // needs exactly that for the sender's own loopback copy.) Mirrors the
+                // canonical matmul in0 sender
                 // (reader_bmm_tile_layout_in0_sender_padding.cpp).
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
@@ -913,6 +921,15 @@ void kernel_main() {
             // Step 5: receivers wait for both valid sems and push.
             if (!is_act_sender) {
                 act_valid_sem.wait(ACT_VALID);
+            } else {
+                // The sender's own copy arrives via the INCL_SRC loopback, so it needs a wait
+                // too. async_writes_flushed() is not one: it polls NIU_MST_NONPOSTED_WR_REQ_SENT
+                // (request left this NIU), not the ack. The mcast is non-posted, so only the
+                // ack-wait proves the data LANDED before this core's compute reads the slot.
+                // Placed after the valid-sem mcast so receivers are not held up; note the
+                // wait is whole-queue, so it also covers that sem mcast's acks, not just
+                // the loopback copy.
+                noc.async_write_barrier();
             }
             cb_in0_down_full_obj.push_back(d_in0_block_num_tiles);
 

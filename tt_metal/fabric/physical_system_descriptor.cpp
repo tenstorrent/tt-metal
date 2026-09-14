@@ -97,7 +97,7 @@ void PhysicalSystemDescriptor::clear() {
     local_hostname_.clear();
     local_rank_ = 0;
     all_hostnames_unique_ = true;
-    ethernet_firmware_version_ = tt::umd::semver_t(0, 0, 0);
+    ethernet_firmware_version_ = tt::umd::SemVer(0, 0, 0);
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {

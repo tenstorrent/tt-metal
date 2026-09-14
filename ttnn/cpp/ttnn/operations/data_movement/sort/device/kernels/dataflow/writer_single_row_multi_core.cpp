@@ -55,7 +55,7 @@ void kernel_main() {
 #endif
 
     // Semaphore setup
-    Semaphore<> cores_to_coordinator_done_sem(sem::cores_to_coordinator_done);
+    Semaphore cores_to_coordinator_done_sem(sem::cores_to_coordinator_done);
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Get core start value

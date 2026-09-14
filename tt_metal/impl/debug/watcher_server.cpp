@@ -435,7 +435,7 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
                         valid_logical_core = false;
                     }
                     if (valid_logical_core) {
-                        auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+                        auto programmable_core_type = llrt::get_core_type(env_, device_id, virtual_core);
                         // Create the mask based on the feature
                         uint32_t processor_mask =
                             rtoptions.get_feature_processors(delay_feature).get_processor_mask(programmable_core_type);

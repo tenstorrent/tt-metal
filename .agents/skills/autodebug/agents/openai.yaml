@@ -1,6 +1,0 @@
-interface:
-  display_name: "AutoDebug"
-  short_description: "Run a fresh-context AutoDebug investigation"
-  default_prompt: "Use $autodebug to run the repo-local AutoDebug script, then read AUTODEBUG.md and act on its findings."
-policy:
-  allow_implicit_invocation: true
