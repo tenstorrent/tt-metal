@@ -41,6 +41,10 @@ _VAE_SCALE_FACTOR = 8
 _DEFAULT_CHECKPOINT = "stabilityai/stable-diffusion-3.5-large"
 
 _PRESETS: dict[tuple[int, ...], dict] = {
+    # 4-chip (single 4-chip cfg-submesh): cfg is disabled (factor 1) because the
+    # encoder/VAE require the cfg-submesh to be exactly 4 chips (reshaped to 1x4).
+    # DiT runs sp2 x tp2 on the 2x2 mesh. T5 is auto-disabled (reshape path).
+    (2, 2): {"cfg": (1, 0), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
     (2, 4): {"cfg": (2, 1), "sp": (2, 0), "tp": (2, 1), "num_links": 1},
     (4, 8): {"cfg": (2, 1), "sp": (4, 0), "tp": (4, 1), "num_links": 4},
 }
@@ -360,7 +364,10 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
     def _traced_step(self, *, cfg_enabled: bool, submesh_idx: int, latents: ttnn.Tensor, **kwargs: Any) -> ttnn.Tensor:
         if cfg_enabled and not self.dit_parallel_config.cfg_parallel.factor > 1:
-            latents = ttnn.concat([latents, latents])
+            # Single-mesh CFG (no cfg-parallel submesh split): run uncond+cond as a batch of 2.
+            # The DiT convention is [1, batch, N, C] (dim0==1, batch at dim1), so the CFG pair
+            # must be stacked on dim1 -- NOT dim0, which the fused distributed norm rejects.
+            latents = ttnn.concat([latents, latents], dim=1)
 
         return self.transformers[submesh_idx](spatial=latents, **kwargs)
 
