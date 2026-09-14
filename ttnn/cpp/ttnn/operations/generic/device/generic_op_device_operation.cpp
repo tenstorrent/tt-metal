@@ -51,7 +51,7 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
     }
 
     auto hash_kernel = [&](const KernelDescriptor& kernel) -> size_t {
-        return ttsl::hash::hash_objects_with_default_seed(
+        auto hash = ttsl::hash::hash_objects_with_default_seed(
             kernel.kernel_source,
             kernel.source_type,
             kernel.core_ranges,
@@ -68,6 +68,12 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             kernel.runtime_args.size(),
             kernel.config.index(),
             kernel.config);
+        // Positional widths determine allocation and the offsets of appended named arguments.
+        for (const auto& [core, args] : kernel.runtime_args) {
+            ttsl::hash::hash_combine(hash, core);
+            ttsl::hash::hash_combine(hash, args.size());
+        }
+        return hash;
     };
 
     auto hash_cb_format_descriptor = [&](const CBFormatDescriptor& format_descriptor) -> size_t {

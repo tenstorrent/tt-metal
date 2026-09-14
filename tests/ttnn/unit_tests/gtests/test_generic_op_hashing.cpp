@@ -83,6 +83,28 @@ TEST(GenericOpNamedArgsHash, CompileTimeValueChangesHash) {
     EXPECT_NE(program_hash(a), program_hash(b));
 }
 
+TEST(GenericOpNamedArgsHash, PositionalRuntimeLayout) {
+    using namespace genop_named_args_hash_test;
+    ProgramDescriptor descriptor{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "host-only.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(kCore0, kCore1)),
+            .runtime_args = {{kCore0, {1, 2}}, {kCore1, {3, 4}}},
+            .blaze_named_args = {.named_per_core_runtime_args = {{"layout.marker", {{kCore0, 99}, {kCore1, 99}}}}},
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    const auto hash = ttnn::operations::generic::compute_program_descriptor_hash;
+    const auto original = hash(descriptor);
+    descriptor.kernels[0].runtime_args[0].second = {11, 12};
+    EXPECT_EQ(original, hash(descriptor));
+    descriptor.kernels[0].runtime_args[0].second.push_back(13);
+    descriptor.kernels[0].runtime_args[1].second.push_back(14);
+    EXPECT_NE(original, hash(descriptor));
+
+    descriptor.kernels[0].runtime_args[0].second.pop_back();
+    EXPECT_NE(original, hash(descriptor)) << "Every core's allocation width must be hashed";
+}
+
 TEST(GenericOpNamedArgsHash, SchemaDifferenceChangesHash) {
     using namespace genop_named_args_hash_test;
     EXPECT_NE(program_hash(common_scalar("a.x", 0)), program_hash(common_scalar("a.y", 0)))

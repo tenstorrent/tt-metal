@@ -103,6 +103,27 @@ TEST(NamedArgsHashSchema, CPU_EmptyEqualsEmpty) {
         << "Two empty schemas must hash identically";
 }
 
+TEST(NamedArgsProgramHash, CPU_PositionalRuntimeLayout) {
+    ProgramDescriptor descriptor{
+        .kernels = {KernelDescriptor{
+            .kernel_source = "host-only.cpp",
+            .core_ranges = CoreRangeSet(CoreRange(kCore0, kCore1)),
+            .runtime_args = {{kCore0, {1, 2}}, {kCore1, {3, 4}}},
+            .blaze_named_args = blaze_per_core_scalar("layout.marker", {{kCore0, 99}, {kCore1, 99}}),
+            .config = DataMovementConfigDescriptor{},
+        }}};
+    const auto hash = std::hash<ProgramDescriptor>{};
+    const auto original = hash(descriptor);
+    descriptor.kernels[0].runtime_args[0].second = {11, 12};
+    EXPECT_EQ(original, hash(descriptor));
+    descriptor.kernels[0].runtime_args[0].second.push_back(13);
+    descriptor.kernels[0].runtime_args[1].second.push_back(14);
+    EXPECT_NE(original, hash(descriptor));
+
+    descriptor.kernels[0].runtime_args[0].second.pop_back();
+    EXPECT_NE(original, hash(descriptor)) << "Every core's allocation width must be hashed";
+}
+
 TEST(NamedArgsHashSchema, CPU_CompileTimeValueDiffers) {
     NamedKernelArgs a{.named_compile_time_args = {{"kernel.value", 1}}};
     NamedKernelArgs b{.named_compile_time_args = {{"kernel.value", 2}}};
