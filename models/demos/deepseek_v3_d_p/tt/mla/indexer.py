@@ -1424,7 +1424,7 @@ class TtCsaIndexer(TtIndexerBase):
         assert start_pos % self.compress_rate == 0
         prior_kv_state = self._overlap_kv_state
         prior_score_state = self._overlap_score_state
-        local_keys, _, kv_state, score_state = self._compressor(
+        local_keys, kv_state, score_state = self._compressor(
             hidden_states,
             prior_kv_state,
             prior_score_state,

@@ -282,8 +282,10 @@ def test_csa_chunked_prefill_mesh(
         ref_entries, _ = ref.compressor(
             hidden, torch.zeros(batch, total, config.q_lora_rank), position_ids, past_key_values=None, layer_idx=0
         )
+    # The compressed entries are the leading rows of the joint table; the carry and raw-key regions
+    # after them belong to the sliding path and have no counterpart in ref.compressor.
     cache = ttnn.to_torch(
-        state.compressed_kv,
+        state.joint_kv,
         mesh_composer=ttnn.create_mesh_composer(mesh_device, ttnn.MeshComposerConfig([0, 1], ttnn.MeshShape(1, 1))),
     )[:, :, : state.entry_count]
     assert cache.shape == ref_entries.shape, f"cache {tuple(cache.shape)} vs ref {tuple(ref_entries.shape)}"

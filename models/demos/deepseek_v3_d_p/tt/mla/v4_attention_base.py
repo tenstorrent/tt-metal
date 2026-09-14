@@ -86,8 +86,11 @@ class TtV4AttentionBase(LightweightModule):
 
         # Pre-divided by scale: SDPA scales BOTH QK and the sink internally, the reference scales only
         # QK -- dividing here cancels the kernel's extra multiply. TP-sharded to match the query heads.
-        sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
-        self.sinks_sdpa = self.ops.from_torch(sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
+        # sparse_sdpa documents the same convention but wants another shape, so the host copy is kept for
+        # _sparse_sinks to reshape rather than recomputed from a weight this class does not keep.
+        self._sinks_host = sinks.detach().reshape(1, self.num_heads, 1, 1) / self.scaling
+        self.sinks_sdpa = self.ops.from_torch(self._sinks_host, mesh_mapper=self.ops.mesh_mapper(tp_dim=1))
+        self._sinks_sparse = None
 
         self.wq_a = self.ops.to_tt_linear_weight(q_a_proj_weight, tp_shard_dim=2)
         self.wq_b = self.ops.to_tt_linear_weight(q_b_proj_weight, tp_shard_dim=3)
@@ -123,6 +126,53 @@ class TtV4AttentionBase(LightweightModule):
         tabulated at. Set by the variant: what it takes for both the compressed-cache write offset and the
         carry slice start to land where their ops need them."""
         raise NotImplementedError
+
+    # ----------------------------------------------------------------------------------------
+    # Sparse-attention plumbing. Only the CSA subclass reaches for these -- HCA attends to every
+    # compressed entry, so it has no index list and stays on the dense path below. They live here
+    # because both concern the head/sink layout this class owns.
+    # ----------------------------------------------------------------------------------------
+
+    @property
+    def needs_head_to_seq_reshard(self) -> bool:
+        """True when the per-chip head shard is too thin for ``sparse_sdpa``, which needs H % 32 == 0 and
+        H >= 32. V4-Flash's 64 heads at tp=4 give 16, so it does; V4-Pro's 128 give 32, so it does not.
+        Mirrors ``ttMLA._needs_head_to_seq_reshard``, which solves the same problem for GLM."""
+        heads_local = self.num_heads // self.tp_factor
+        return self.tp_factor > 1 and (heads_local < 32 or heads_local % 32 != 0)
+
+    def _reshard(self, tensor, in_dim: int, out_dim: int):
+        """Move the TP sharding from one axis of ``tensor`` to another with a single all-to-all.
+
+        Used to turn a too-thin head shard into a sequence shard for the duration of attention: each chip
+        sends only its destination sequence slice and receives every head shard of it, so there is no
+        replicated intermediate and no wasted traffic."""
+        return ttnn.experimental.all_to_all_async_generic(
+            tensor,
+            in_dim=in_dim,
+            out_dim=out_dim,
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cluster_axis=self.tp_axis,
+        )
+
+    def _sparse_sinks(self):
+        """The sink in the shape ``sparse_sdpa`` wants: ``[1, 1, 1, H]``, ROW_MAJOR, unpadded, DRAM.
+
+        Same pre-divided values as ``sinks_sdpa`` -- the op documents V4's already-scaled convention
+        explicitly -- laid out along the last dim instead of the head dim. Which H that is depends on the
+        reshard: with it every chip holds all the heads, so the sink must be replicated; without it each
+        chip holds its own TP slice and the sink is sharded to match.
+
+        Built on demand so HCA, which never calls it, allocates nothing."""
+        if self._sinks_sparse is None:
+            mapper = None if self.needs_head_to_seq_reshard else self.ops.mesh_mapper(tp_dim=3)
+            self._sinks_sparse = self.ops.from_torch(
+                self._sinks_host.reshape(1, 1, 1, self.num_heads),
+                mesh_mapper=mapper,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+        return self._sinks_sparse
 
     def _build_masks(self, seq_global: int, cap: int):
         """The persistent additive mask over the key layout ``[carry | chunk | compressed | pad]``. Carry,
@@ -304,35 +354,11 @@ class TtV4AttentionBase(LightweightModule):
         per-chip SDPA, then undoes V's RoPE. ``carry`` is the previous chunk's raw KV tail, zeros on the
         first chunk; ``kv_actual`` the global position of this chunk's first query.
 
-        Returns ``(attn, next_carry)``. The carry can only be taken here: before the gather those rows
-        live on the last SP chip alone."""
-        batch, seq_local = q.shape[0], q.shape[2]
-        seq_len = seq_local * self.sp_factor  # global query/main-key length
-        num_heads_local = self.num_heads // self.tp_factor
+        Returns ``(attn, next_carry)``."""
+        batch = q.shape[0]
 
-        # Per-chip SDPA needs every key on every chip; compressed_kv is already replicated.
-        if self.sp_factor > 1:
-            sliding_kv = ttnn.experimental.all_gather_async(
-                sliding_kv,
-                dim=2,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
-                num_links=self.ccl_num_links,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.sp_ccl_topology,
-                cluster_axis=self.sp_axis,
-            )
-
-        # The next chunk's sliding window reaches back into this one, so the carry has to be this chunk's
-        # last REAL keys -- rows [real_len - sliding_window, real_len) -- not the last rows of the padded
-        # slab, which differ as soon as real_len < seq_len. A plain slice cannot do it: its start value is
-        # part of the program, so every new real_len would compile another
-        # one. Taking the start from a device tensor keeps only its shape in the program, so one program
-        # serves every offset -- measured on 8x4 as +1 program on the first call and +0 after.
-        #
-        # Taken on the last chunk too, whose carry nobody reads: skipping it saves one op out of ~100.
-        start, end = self._carry_index[self._carry_key(real_len)]
-        next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+        sliding_kv = self._gather_sliding(sliding_kv)
+        next_carry = self._take_carry(sliding_kv, real_len)
 
         # Pad Sk to a multiple of 32 by hand: SDPA would pad it with zeros, and the mask reads its own pad
         # columns as "attend", which would pollute the softmax. The mask -infs the columns added here.
@@ -374,13 +400,49 @@ class TtV4AttentionBase(LightweightModule):
             ),
         )
 
+        return self._unrope(attn, cos, sin), next_carry
+
+    def _gather_sliding(self, sliding_kv):
+        """Per-chip attention needs every key on every chip, and ``sliding_kv`` arrives SP-sharded.
+        (``compressed_kv`` is already replicated.)"""
+        if self.sp_factor == 1:
+            return sliding_kv
+        return ttnn.experimental.all_gather_async(
+            sliding_kv,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.sp_ccl_topology,
+            cluster_axis=self.sp_axis,
+        )
+
+    def _take_carry(self, sliding_kv, real_len):
+        """This chunk's last REAL keys, which the next chunk's sliding window reaches back into.
+
+        Rows ``[real_len - sliding_window, real_len)``, not the last rows of the padded slab -- the two
+        differ as soon as ``real_len < seq_len``. A plain slice cannot do it: its start value is part of
+        the program, so every new real_len would compile another one. Taking the start from a device
+        tensor keeps only its shape in the program, so one program serves every offset -- measured on 8x4
+        as +1 program on the first call and +0 after.
+
+        Taken on the last chunk too, whose carry nobody reads: skipping it saves one op out of ~100.
+
+        Can only be taken after the gather: before it, these rows live on the last SP chip alone."""
+        start, end = self._carry_index[self._carry_key(real_len)]
+        num_devices = sliding_kv.shape[2] // self.sliding_window
+        return ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=num_devices)
+
+    def _unrope(self, attn, cos, sin):
+        """Undo V's RoPE on the attention output. Same rotation with the sign of sin flipped, so cos is
+        reused and the negation is one op on device instead of another host build."""
+        batch, heads_local, seq_local, _ = attn.shape
         nope_dim = self.head_dim - self.rope_head_dim
-        nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, num_heads_local, seq_local, nope_dim])
-        rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, num_heads_local, seq_local, self.head_dim])
-        # Undoing V's RoPE is the same rotation with the sign of sin flipped, so cos is reused and the
-        # negation is one op on device instead of another host build.
+        nope = ttnn.slice(attn, [0, 0, 0, 0], [batch, heads_local, seq_local, nope_dim])
+        rope = ttnn.slice(attn, [0, 0, 0, nope_dim], [batch, heads_local, seq_local, self.head_dim])
         rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
-        return ttnn.concat([nope, rope], dim=-1), next_carry
+        return ttnn.concat([nope, rope], dim=-1)
 
     def _carry_key(self, real_len):
         """The carry index is tabulated per whole ``chunk_align`` step. A ragged chunk rounds down, which
