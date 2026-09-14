@@ -186,10 +186,14 @@ def sol_attention(
 ) -> SolAttnResult:
     """Sol-Attn over [B, H, T, D] Q/K/V. `tau -> -inf` reduces to dense attention.
 
-    `emulate_bf16` rounds at the points a device kernel packs -- the block summaries and both
-    probability blocks -- while accumulating in fp32, as DEST does. It is the reference a device
-    implementation should be held to tightly; the default fp32 path is bounded by the format instead
-    and is the looser of the two gates.
+    `emulate_bf16` rounds at the points a device kernel packs -- the block summaries, the QK logits
+    and both probability blocks -- while accumulating in fp32, as DEST does.
+
+    It is a **lower bound on the format loss**, not a faithful device model: this computes the output
+    in one shot, so it does not model the per-visit O accumulation or the online-softmax rescale
+    chain that a streaming kernel walks hundreds of times per row. Treat a device result that beats
+    this reference tightly as evidence the kernel is right, and a device result that misses it as
+    needing the gap attributed before blaming the kernel.
     """
     b, h, tokens, d = q.shape
     scale = 1.0 / math.sqrt(d) if scale is None else scale
@@ -210,6 +214,8 @@ def sol_attention(
     token_exact = exact.repeat_interleave(block, dim=3)[..., :tokens]  # [B, H, n_q, T]
     dense_logits = (qf @ kf.transpose(-1, -2)) * log2_scale  # [B, H, T, T]
     pooled_logits = (qf @ kc.transpose(-1, -2)) * log2_scale  # [B, H, T, n_kv]
+    if emulate_bf16:  # the QK pack, which dominates the format loss over hundreds of visits
+        dense_logits, pooled_logits = _bf16(dense_logits), _bf16(pooled_logits)
 
     q_block_of_row = torch.arange(tokens, device=q.device) // block
     exact_rowmask = token_exact.gather(
