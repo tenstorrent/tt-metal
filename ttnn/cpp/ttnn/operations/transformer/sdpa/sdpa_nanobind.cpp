@@ -62,7 +62,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis,
+    std::optional<uint32_t> kv_cache_local_seq_len) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -103,7 +108,12 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        page_bundle_indices,
+        kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis,
+        kv_cache_local_seq_len);
     return outputs;
 }
 
@@ -131,7 +141,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    const std::optional<ttnn::Tensor>& page_bundle_indices,
+    uint32_t kv_cache_page_size,
+    uint32_t kv_cache_slot_idx,
+    std::optional<uint32_t> kv_cache_sp_axis) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -158,7 +172,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx);
+        kv_cache_layer_idx,
+        page_bundle_indices,
+        kv_cache_page_size,
+        kv_cache_slot_idx,
+        kv_cache_sp_axis);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -678,11 +696,28 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            page_bundle_indices (ttnn.Tensor, optional): replicated UINT32 ROW_MAJOR [slots,max_pages] allocator table
+                shared by the separate paged K and V caches. Physical pages are flattened as
+                (bundle * num_layers + layer) * num_heads + head. Each ND shard contains
+                all layers and local heads of one bundle, keeping the bundle in one DRAM bank.
+                Requires an explicit cluster_axis; full-mesh mode (cluster_axis=None) is unsupported.
+            kv_cache_page_size (int): Tokens per physical page. Must be tile aligned and match both
+                cache dimension 2 and its ND shard height. Defaults to 32.
+            kv_cache_slot_idx (int): Allocator table row. Defaults to 0; changing it reuses the program.
+            kv_cache_sp_axis (int, optional): SP mesh axis. None uses SP=1. Local page i on rank r
+                reads table[kv_cache_slot_idx,i*SP+r]. Defaults to None.
+            kv_cache_local_seq_len (int, optional): Padded KV tokens per device for paged
+                cross-attention only. Must be positive and tile aligned. None uses the page-table
+                span. Supply this when reserving extra page-table entries beyond the logical layout.
 
-        Chunked-prefill mode is entered implicitly when input_tensor_q's per-device seq
-        length is less than input_tensor_k's (Q is the latest slab; K is the populated
-        prefix from chunk 0 through the current chunk). The op derives chunk_size and
-        the absolute Q-row offset from the shapes plus sp_size — no extra args needed.
+        For paged caches, logical_n specifies the valid global KV length, independently
+        of page-table capacity. Chunked-prefill mode is selected when this length exceeds
+        Q's per-device sequence length times the ring size, or kv_actual_isl explicitly
+        enables rotation. Without paging, chunk detection compares Q and K sequence shapes.
+        For paged cross-attention, kv_cache_local_seq_len defines the padded per-device
+        KV layout; logical_n masks its valid global prefix, independently of Q length.
+        Omit kv_cache_local_seq_len only when the whole page-table span describes that layout.
+        Persistent gather buffers may be larger without changing token positions.
         Chunked prefill is mathematically causal; callers must pass is_causal=True.
         When kv_cache_batch_idx is provided, input_tensor_k and input_tensor_v may be whole caches.
         The same kv_cache_batch_idx selects the K and V cache slot, and the full K/V sequence
@@ -738,7 +773,12 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none(),
+        nb::arg("kv_cache_local_seq_len") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
@@ -749,7 +789,8 @@ void bind_sdpa(nb::module_& mod) {
 
         Args:
             input_tensor_q (ttnn.Tensor): Queries [b x nqh x N/num_devices x dh].
-            input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh].
+            input_tensor_kv (ttnn.Tensor): Shared KV tensor [b x nkv x N/num_devices x dh]. When
+                page_bundle_indices is provided, this argument holds the paged cache.
 
         Keyword args:
             persistent_output_buffer_kv (ttnn.Tensor): Persistent buffer for gathered KV tensor.
@@ -784,6 +825,18 @@ void bind_sdpa(nb::module_& mod) {
                 slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx.
             kv_cache_layer_idx (int, optional): Layer within the cache-user slot. None uses 0 and the
                 value must be less than kv_cache_num_layers.
+            page_bundle_indices (ttnn.Tensor, optional): Replicated UINT32 ROW_MAJOR [slots,max_pages]
+                allocator table. The cache shape is [num_bundles*num_layers*num_heads,1,page_size,head_dim],
+                flattened bundle-major, then layer, then head. One ND shard contains the whole bundle
+                (all layers and local heads) in one DRAM bank. Each ID addresses an allocated bundle
+                in the owning SP rank's private pool. logical_n specifies the valid global KV
+                length; unused page-table capacity does not extend the sequence.
+                Requires an explicit cluster_axis; full-mesh mode (cluster_axis=None) is unsupported.
+            kv_cache_page_size (int): Tokens per physical KV page. Must be tile aligned and match both
+                input_tensor_kv dimension 2 and its ND shard height. Defaults to 32.
+            kv_cache_slot_idx (int): Allocator table row. Defaults to 0; changing it reuses the program.
+            kv_cache_sp_axis (int, optional): SP mesh axis. None uses SP=1. Local page i on rank r
+                reads table[kv_cache_slot_idx,i*SP+r]. Defaults to None.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor):
@@ -819,7 +872,11 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
+        nb::arg("page_bundle_indices").noconvert() = nb::none(),
+        nb::arg("kv_cache_page_size") = 32,
+        nb::arg("kv_cache_slot_idx") = 0,
+        nb::arg("kv_cache_sp_axis") = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

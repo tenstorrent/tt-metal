@@ -4,10 +4,13 @@
 
 #pragma once
 
+#include <algorithm>
 #include <functional>
 #include <optional>
 #include <tuple>
 #include <utility>
+
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -38,6 +41,10 @@ struct RingJointSDPAParams {
     uint32_t latent_v_head_dim = 0;
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
+    uint32_t kv_cache_page_size = 32;
+    uint32_t kv_cache_slot_idx = 0;  // Runtime table row, excluded from the program hash.
+    std::optional<uint32_t> kv_cache_sp_axis = std::nullopt;
+    std::optional<uint32_t> kv_cache_local_seq_len = std::nullopt;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
     // Circular (bounded) sliding KV cache: the local K/V shard is a circular buffer of whole
     // Q-sized slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side).
@@ -67,7 +74,11 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
+        uint32_t kv_cache_page_size = 32,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
+        uint32_t kv_cache_slot_idx = 0,
+        std::optional<uint32_t> kv_cache_sp_axis = std::nullopt,
+        std::optional<uint32_t> kv_cache_local_seq_len = std::nullopt,
         bool circular_kv_cache = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
@@ -88,6 +99,10 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
+        kv_cache_page_size(kv_cache_page_size),
+        kv_cache_slot_idx(kv_cache_slot_idx),
+        kv_cache_sp_axis(kv_cache_sp_axis),
+        kv_cache_local_seq_len(kv_cache_local_seq_len),
         sliding_window_size(sliding_window_size),
         circular_kv_cache(circular_kv_cache) {}
 
@@ -116,6 +131,11 @@ struct RingJointSDPAParams {
         "has_kv_cache_batch_idx",
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
+        "kv_cache_num_layers",
+        "kv_cache_layer_idx",
+        "kv_cache_page_size",
+        "kv_cache_sp_axis",
+        "kv_cache_local_seq_len",
         "sliding_window_size",
         "circular_kv_cache",
         "all_gather_operation_attributes",
@@ -136,6 +156,11 @@ struct RingJointSDPAParams {
             kv_cache_batch_idx.has_value(),
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
+            std::cref(kv_cache_num_layers),
+            std::cref(kv_cache_layer_idx),
+            std::cref(kv_cache_page_size),
+            std::cref(kv_cache_sp_axis),
+            std::cref(kv_cache_local_seq_len),
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
             std::cref(all_gather_operation_attributes),
@@ -169,23 +194,83 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
+    // Replicated UINT32 ROW_MAJOR [slots,max_pages] allocator table. Global page p
+    // belongs to SP rank p % SP; its ID addresses that rank's local bundle pool.
+    std::optional<Tensor> page_bundle_indices;
+
     bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
 
-    // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
-    // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.
-    uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
+    bool has_paged_kv_cache() const { return page_bundle_indices.has_value(); }
 
-    bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+    uint32_t page_table_sp_size(std::optional<uint32_t> sp_axis) const {
+        return sp_axis.has_value() ? input_q.device()->shape()[*sp_axis] : 1u;
+    }
+
+    // Maximum per-rank capacity; validation bounds valid data by the least-populated rank.
+    uint32_t local_kv_capacity(std::optional<uint32_t> sp_axis) const {
+        const uint32_t sp = page_table_sp_size(sp_axis);
+        return has_paged_kv_cache()
+                   ? ((page_bundle_indices->logical_shape()[1] + sp - 1) / sp) * input_k.logical_shape()[2]
+                   : static_cast<uint32_t>(input_k.logical_shape()[2]);
+    }
+
+    // Local KV length including distribution and tile padding.
+    // A partial rotated chunk occupies a complete Q-sized slab on each ring rank.
+    uint32_t local_kv_padded_seq_len(const RingJointSDPAParams& args) const {
+        if (!has_paged_kv_cache()) {
+            return input_k.logical_shape()[2];
+        }
+        // Cross attention needs its own padded rank stride; neither Q length nor
+        // persistent scratch allocation describes the source KV layout.
+        if (args.is_cross) {
+            return args.kv_cache_local_seq_len.value_or(local_kv_capacity(args.kv_cache_sp_axis));
+        }
+        const uint32_t local_unit = input_q.logical_shape()[2];
+        const uint64_t global_unit = uint64_t{local_unit} * args.ring_size;
+        return ((args.logical_n + global_unit - 1) / global_unit) * local_unit;
+    }
+
+    // Rotation reuses a fixed program length while the valid prefix grows.
+    uint32_t local_kv_program_seq_len(const RingJointSDPAParams& args) const {
+        if (!has_paged_kv_cache()) {
+            return input_k.logical_shape()[2];
+        }
+        if (!args.has_kv_pad_rotation()) {
+            return local_kv_padded_seq_len(args);
+        }
+        const uint32_t capacity = local_kv_capacity(args.kv_cache_sp_axis);
+        // Sliding attention gathers only a halo, so its buffer does not bound the cache.
+        if (args.has_sliding_window()) {
+            return capacity;
+        }
+        const uint32_t gather_local_tiles =
+            gathered_k.logical_shape()[2] / (args.ring_size * tt::constants::TILE_HEIGHT);
+        return std::min(capacity, gather_local_tiles * tt::constants::TILE_HEIGHT);
+    }
+
+    bool is_chunked(const RingJointSDPAParams& args) const {
+        if (has_paged_kv_cache()) {
+            return !args.is_cross && (args.has_kv_pad_rotation() ||
+                                      args.logical_n > uint64_t{input_q.logical_shape()[2]} * args.ring_size);
+        }
+        return input_q.logical_shape()[2] < local_kv_capacity(args.kv_cache_sp_axis);
+    }
 
     // Circular sliding KV: Q-sized chunk slabs per device in the K/V cache (validation requires
     // whole slabs, and at least two of them, before this is read).
-    uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
+    uint32_t kv_slab_count() const {
+        return static_cast<uint32_t>(input_k.logical_shape()[2]) / static_cast<uint32_t>(input_q.logical_shape()[2]);
+    }
 
     // Latent-V optimization: absent V means the reader reuses K's buffer
     // and reads the first vDHt head-dim tiles (V's logical head dim).
     bool has_latent_v() const { return !input_v.has_value(); }
 
     uint32_t v_num_heads() const {
+        if (has_paged_kv_cache()) {
+            return gathered_v.has_value() ? static_cast<uint32_t>(gathered_v->logical_shape()[1])
+                                          : static_cast<uint32_t>(gathered_k.logical_shape()[1]);
+        }
         return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])
                                    : static_cast<uint32_t>(input_k.logical_shape()[1]);
     }

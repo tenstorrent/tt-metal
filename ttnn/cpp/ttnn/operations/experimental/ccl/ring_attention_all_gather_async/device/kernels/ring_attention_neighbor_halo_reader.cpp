@@ -11,6 +11,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_prefetch_utils.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/paged_kv_utils.hpp"
 
 #include <algorithm>
 #include <array>
@@ -27,6 +28,8 @@ enum CompileTimeArg : uint32_t {
     kNumInputs,
     kPrefetchPackets,
     kMetaCbId,
+    kHasPageBundles,
+    kPageTableCbId,
     kNumFixedCompileTimeArgs,
 };
 
@@ -38,6 +41,30 @@ constexpr uint32_t input_page_size = get_compile_time_arg_val(kInputPageSize);
 constexpr uint32_t num_inputs = get_compile_time_arg_val(kNumInputs);
 constexpr uint32_t prefetch_packets = get_compile_time_arg_val(kPrefetchPackets);
 constexpr uint32_t meta_cb_id = get_compile_time_arg_val(kMetaCbId);
+constexpr bool has_page_bundles = get_compile_time_arg_val(kHasPageBundles) == 1;
+constexpr uint32_t page_table_cb_id = get_compile_time_arg_val(kPageTableCbId);
+
+struct HaloInputTileAddress {
+    const AbstractTensorAccessorWrapper& accessor;
+    uint32_t table_l1;
+    uint32_t rows_per_bundle;
+    uint32_t num_layers;
+    uint32_t num_heads;
+    uint32_t layer_idx;
+    uint32_t width_tiles;
+    uint32_t head_idx;
+    uint32_t input_page_base;
+
+    uint32_t operator()(uint32_t tile) const {
+        if constexpr (has_page_bundles) {
+            const PagedKVAccessor<AbstractTensorAccessorWrapper> paged{
+                accessor, table_l1, rows_per_bundle, num_layers, num_heads, layer_idx};
+            return paged.physical_row(tile / width_tiles, head_idx) * width_tiles + tile % width_tiles;
+        } else {
+            return input_page_base + tile;
+        }
+    }
+};
 
 void kernel_main() {
     constexpr auto input_accessor_args =
@@ -57,6 +84,11 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         has_halo_metadata ? slot_meta_args.next_compile_time_args_offset() : slot_meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
+
+    constexpr uint32_t page_table_args_offset =
+        has_page_bundles ? (has_halo_metadata ? kv_meta_args.next_compile_time_args_offset() : halo_meta_flag_idx + 1)
+                         : kNumFixedCompileTimeArgs + num_inputs;
+    constexpr auto page_table_args = TensorAccessorArgs<page_table_args_offset>();
 
     uint32_t arg_idx = 0;
     const size_t incoming_ready_sem = get_arg_val<uint32_t>(arg_idx++);
@@ -116,6 +148,35 @@ void kernel_main() {
     arg_idx += num_inputs;
     auto input_accessors = make_abstract_tensor_accessor_wrappers(input_accessors_tuple);
 
+    uint32_t page_table_l1 = 0;
+    uint32_t rows_per_bundle = 1;
+    uint32_t num_layers = 1;
+    uint32_t layer_idx = 0;
+    std::array<uint32_t, num_inputs> input_width_tiles{};
+    if constexpr (has_page_bundles) {
+        const uint32_t table_addr = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t slot = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t sp_size = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t sp_rank = get_arg_val<uint32_t>(arg_idx++);
+        rows_per_bundle = get_arg_val<uint32_t>(arg_idx++);
+        num_layers = get_arg_val<uint32_t>(arg_idx++);
+        layer_idx = get_arg_val<uint32_t>(arg_idx++);
+        uint32_t first_bundle = UINT32_MAX;
+        uint32_t end_bundle = 0;
+        for (uint32_t input = 0; input < num_inputs; ++input) {
+            const uint32_t width = get_arg_val<uint32_t>(arg_idx++);
+            input_width_tiles[input] = width;
+            const uint32_t bundle_tiles = rows_per_bundle * width;
+            first_bundle = std::min(first_bundle, input_tile_start[input] / bundle_tiles);
+            end_bundle = std::max(end_bundle, (input_tile_end[input] + bundle_tiles - 1) / bundle_tiles);
+        }
+        CircularBuffer cb_table(page_table_cb_id);
+        page_table_l1 = cb_table.get_write_ptr();
+        const auto table = TensorAccessor(page_table_args, table_addr);
+        Noc table_noc;
+        load_paged_kv_table_range(table_noc, table, page_table_l1, slot, sp_size, sp_rank, first_bundle, end_bundle);
+    }
+
     OpSignaler op_signaler(arg_idx);
 
     Noc noc;
@@ -133,7 +194,16 @@ void kernel_main() {
                 cb_fifo_limit,
                 cb_fifo_size,
                 input_accessors[input],
-                [&](uint32_t tile) { return input_batch_base[input] + bh * input_stride_pages[input] + tile; });
+                HaloInputTileAddress{
+                    input_accessors[input],
+                    page_table_l1,
+                    rows_per_bundle,
+                    num_layers,
+                    input_batch_head_count[input],
+                    layer_idx,
+                    input_width_tiles[input],
+                    bh,
+                    input_batch_base[input] + bh * input_stride_pages[input]});
         }
     }
 
