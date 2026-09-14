@@ -137,7 +137,6 @@ void serialize_intermesh_port_assignment_to_file(
     const std::filesystem::path& output_file_path);
 
 // Version of the fabric debug manifest schema emitted below.
-// Schema: tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest.schema.json
 constexpr int FABRIC_DEBUG_MANIFEST_VERSION = 1;
 
 // Serialize this fabric instance's topology to a JSON file for fabric debug tooling.
