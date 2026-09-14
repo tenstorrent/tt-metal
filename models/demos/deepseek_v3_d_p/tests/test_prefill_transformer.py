@@ -1170,7 +1170,6 @@ MISTRAL4_THRESHOLDS = PrefillTransformerThresholds(
 # needs the checkpoint and a ttnn weight cache staged; without the cache it rebuilds ~65 GB in-job.
 @pytest.mark.skipif(not is_blackhole(), reason="Mistral Small 4 targets the Blackhole galaxy")
 @pytest.mark.parametrize("tokenizer", ["right"], indirect=True, ids=["right_pad"])
-@pytest.mark.parametrize("temperature", [[0.5]], ids=["temp_sweep"])
 @pytest.mark.parametrize("return_kv_cache", [True], ids=["kv_cache"])
 @pytest.mark.parametrize(
     "input_source, pcc_validation, use_pretrained",
@@ -1245,7 +1244,6 @@ def test_mistral4_prefill_transformer(
     input_source,
     use_pretrained,
     return_kv_cache,
-    temperature,
     weight_cache_path,
     is_ci_env,
     is_ci_v2_env,
@@ -1278,7 +1276,6 @@ def test_mistral4_prefill_transformer(
         input_source,
         use_pretrained,
         return_kv_cache,
-        temperature,
         weight_cache_path,
         is_ci_env,
         is_ci_v2_env,
