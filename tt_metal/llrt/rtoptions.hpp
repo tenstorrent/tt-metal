@@ -174,6 +174,15 @@ struct SanitizerSettings {
 // than a specific limit. Firmware only accepts limits in [50, 500] W, so zero is free to mean this.
 inline constexpr uint32_t TDP_LIMIT_RESTORE_DEFAULT_SENTINEL = 0;
 
+// Streaming profiler sizing defaults and bounds (TT_METAL_STREAMING_PROFILER_*). Sizes stay under 4 GiB
+// because the device addresses them with 32-bit offsets.
+inline constexpr uint32_t STREAMING_PROFILER_MAX_RELAYS = 8;    // one per DRAM bank; Blackhole has 8
+inline constexpr uint32_t STREAMING_PROFILER_NRELAYS_AUTO = 0;  // TT_METAL_STREAMING_PROFILER_NRELAYS unset
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_DEFAULT = 128;
+inline constexpr uint32_t STREAMING_PROFILER_SPOOL_MB_MAX = 4095;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_DEFAULT = 256;
+inline constexpr uint32_t STREAMING_PROFILER_FIFO_MB_MAX = 2048;  // FIFO size must be a power of two
+
 class RunTimeOptions {
     std::string root_dir;
 
@@ -245,9 +254,9 @@ class RunTimeOptions {
     bool profiler_disable_push_to_tracy = false;
     std::optional<uint32_t> profiler_program_support_count = std::nullopt;
     bool streaming_profiler_tracy_enabled = false;
-    uint32_t streaming_profiler_num_relays = 0;
-    uint32_t streaming_profiler_spool_mb = 128;
-    uint32_t streaming_profiler_fifo_mb = 256;
+    uint32_t streaming_profiler_num_relays = STREAMING_PROFILER_NRELAYS_AUTO;
+    uint32_t streaming_profiler_spool_mb = STREAMING_PROFILER_SPOOL_MB_DEFAULT;
+    uint32_t streaming_profiler_fifo_mb = STREAMING_PROFILER_FIFO_MB_DEFAULT;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
     bool experimental_noc_debug_dump_enabled = false;
@@ -575,10 +584,12 @@ public:
     bool get_feature_enabled(RunTimeDebugFeatures feature) const { return feature_targets[feature].enabled; }
     void set_feature_enabled(RunTimeDebugFeatures feature, bool enabled) { feature_targets[feature].enabled = enabled; }
     // Note: dprint cores are logical
-    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(RunTimeDebugFeatures feature) const {
+    const std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>>& get_feature_cores(
+        RunTimeDebugFeatures feature) const {
         return feature_targets[feature].cores;
     }
-    void set_feature_cores(RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
+    void set_feature_cores(
+        RunTimeDebugFeatures feature, std::map<CoreType, std::vector<tt::tt_metal::CoreCoord>> cores) {
         feature_targets[feature].cores = std::move(cores);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -589,7 +600,8 @@ public:
         return feature_targets[feature].all_cores.at(core_type);
     }
     // Note: core range is inclusive
-    void set_feature_core_range(RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
+    void set_feature_core_range(
+        RunTimeDebugFeatures feature, tt::tt_metal::CoreCoord start, tt::tt_metal::CoreCoord end, CoreType core_type) {
         feature_targets[feature].cores[core_type] = std::vector<tt::tt_metal::CoreCoord>();
         for (uint32_t x = start.x; x <= end.x; x++) {
             for (uint32_t y = start.y; y <= end.y; y++) {

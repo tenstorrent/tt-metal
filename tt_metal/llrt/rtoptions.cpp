@@ -1016,7 +1016,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_STREAMING_PROFILER_NRELAYS=4
         case EnvVarID::TT_METAL_STREAMING_PROFILER_NRELAYS: {
             const unsigned long n = std::stoul(value);
-            TT_FATAL(n >= 1 && n <= 8, "TT_METAL_STREAMING_PROFILER_NRELAYS='{}' is not an integer in [1, 8]", value);
+            TT_FATAL(
+                n >= 1 && n <= STREAMING_PROFILER_MAX_RELAYS,
+                "TT_METAL_STREAMING_PROFILER_NRELAYS='{}' is not an integer in [1, {}]",
+                value,
+                STREAMING_PROFILER_MAX_RELAYS);
             this->streaming_profiler_num_relays = n;
             break;
         }
@@ -1025,24 +1029,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Per-relay GDDR spool ring, in MiB. Non-zero makes each relay DMA frames into a ring in its own
         // DRAM bank and forward them to the host FIFO from a non-blocking pump, so the service loop never
         // touches the PCIe tile and host-side pressure lands in spool occupancy instead of in the sweep
-        // interval. 0 selects direct push. Capped at 4095: a larger ring overflows the relay kernel's
-        // 32-bit ring arithmetic (a bank is 4 GiB anyway).
-        // Default: 128
+        // interval. 0 selects direct push. Capped at STREAMING_PROFILER_SPOOL_MB_MAX: a larger ring overflows
+        // the relay kernel's 32-bit ring arithmetic (a bank is 4 GiB anyway).
+        // Default: STREAMING_PROFILER_SPOOL_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_DRAM_MB=256
         case EnvVarID::TT_METAL_STREAMING_PROFILER_DRAM_MB:
-            this->streaming_profiler_spool_mb = std::min(std::stoul(value), 4095UL);
+            this->streaming_profiler_spool_mb =
+                std::min<unsigned long>(std::stoul(value), STREAMING_PROFILER_SPOOL_MB_MAX);
             break;
 
         // TT_METAL_STREAMING_PROFILER_FIFO_MB
         // Host FIFO per D2H socket, in MiB: the device DMA-writes it and the consumers decode it in place, so it
         // is the capture's whole elastic buffer. Readers may lag by all but a 64 MiB runway (a quarter of a
         // smaller FIFO); at ~9.8 wire bytes per zone the default holds ~25 M zones per stream. A power of two,
-        // since the ring indexes it; at most 2048 (the socket's byte size and the device's credit arithmetic are
-        // 32-bit).
-        // Default: 256
+        // since the ring indexes it; at most STREAMING_PROFILER_FIFO_MB_MAX (the socket's byte size and the
+        // device's credit arithmetic are 32-bit).
+        // Default: STREAMING_PROFILER_FIFO_MB_DEFAULT
         // Usage: export TT_METAL_STREAMING_PROFILER_FIFO_MB=1024
         case EnvVarID::TT_METAL_STREAMING_PROFILER_FIFO_MB: {
-            const unsigned long mb = std::clamp(std::stoul(value), 1UL, 2048UL);
+            const unsigned long mb = std::clamp<unsigned long>(std::stoul(value), 1, STREAMING_PROFILER_FIFO_MB_MAX);
             TT_FATAL(std::has_single_bit(mb), "TT_METAL_STREAMING_PROFILER_FIFO_MB='{}' is not a power of two", value);
             this->streaming_profiler_fifo_mb = mb;
             break;
@@ -1797,27 +1802,19 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_LLK_SANITIZER_WARN
         // Usage: export TT_METAL_LLK_SANITIZER_WARN=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN:
-            this->sanitizer_settings.warn = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_WARN: this->sanitizer_settings.warn = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_ERROR
         // Usage: export TT_METAL_LLK_SANITIZER_ERROR=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR:
-            this->sanitizer_settings.error = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_ERROR: this->sanitizer_settings.error = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_INFO
         // Usage: export TT_METAL_LLK_SANITIZER_INFO=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO:
-            this->sanitizer_settings.info = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_INFO: this->sanitizer_settings.info = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_FAULT
         // Usage: export TT_METAL_LLK_SANITIZER_FAULT=1
-        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT:
-            this->sanitizer_settings.fault = is_env_enabled(value);
-            break;
+        case EnvVarID::TT_METAL_LLK_SANITIZER_FAULT: this->sanitizer_settings.fault = is_env_enabled(value); break;
 
         // TT_METAL_LLK_SANITIZER_INTERNAL
         // Enables LLK developer internal mode.
@@ -2459,7 +2456,9 @@ std::string RunTimeOptions::get_watcher_hash() const {
 }
 
 std::string RunTimeOptions::get_sanitizer_hash() const {
-    auto optional_hash = [](const std::optional<bool>& optional) { return optional.has_value() ? std::to_string(*optional) : "nullopt"; };
+    auto optional_hash = [](const std::optional<bool>& optional) {
+        return optional.has_value() ? std::to_string(*optional) : "nullopt";
+    };
 
     const auto& san = get_sanitizer_settings();
     std::string hash_str;

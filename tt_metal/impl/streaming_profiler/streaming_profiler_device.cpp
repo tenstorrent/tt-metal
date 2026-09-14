@@ -233,7 +233,6 @@ Devices::DeviceCtx::DeviceCtx() = default;
 Devices::DeviceCtx::~DeviceCtx() = default;
 Devices::DeviceCtx::DeviceCtx(DeviceCtx&&) noexcept = default;
 
-
 Devices::~Devices() = default;
 
 std::vector<CapturedDevice> Devices::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -399,9 +398,11 @@ bool Devices::choose_relay_cores(const std::shared_ptr<distributed::MeshDevice>&
     }
 
     const uint32_t view_cap = std::min<uint32_t>(kMaxRelays, nbanks);
-    static_assert(kMaxRelays == 8, "rtoptions bounds TT_METAL_STREAMING_PROFILER_NRELAYS at 8");
+    static_assert(
+        kMaxRelays == tt::llrt::STREAMING_PROFILER_MAX_RELAYS,
+        "rtoptions bounds TT_METAL_STREAMING_PROFILER_NRELAYS at the relay cap");
     const uint32_t requested = rtopts.get_streaming_profiler_num_relays();
-    ctx.n_relays = requested == 0 ? view_cap : std::min(requested, view_cap);
+    ctx.n_relays = requested == tt::llrt::STREAMING_PROFILER_NRELAYS_AUTO ? view_cap : std::min(requested, view_cap);
     if (requested > view_cap) {
         log_warning(
             tt::LogMetal,
@@ -499,8 +500,7 @@ namespace {
 // Measured on a p100a (1 GiB channel, 7 relays): 7 x 64 MiB failed 3/3, 7 x 32 MiB passed 3/3. So budget the
 // window across the sockets rather than per socket, and never raise what was asked for. The receiver
 // requires a power-of-two byte size, hence bit_floor.
-uint32_t host_fifo_bytes(
-    const tt::Cluster& cluster, uint32_t chip, uint32_t n_relays, uint32_t requested_mb) {
+uint32_t host_fifo_bytes(const tt::Cluster& cluster, uint32_t chip, uint32_t n_relays, uint32_t requested_mb) {
     constexpr uint64_t kRegionAlign = 2ull << 20;  // the carve's per-socket alignment, so budget for it
     const uint64_t requested = static_cast<uint64_t>(requested_mb) << 20;
     const uint64_t share = cluster.get_host_channel_size(chip, 0) / 4 / std::max(n_relays, 1u);
