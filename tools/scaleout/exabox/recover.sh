@@ -112,6 +112,17 @@ Optional:
                                             In --use-docker mode regen runs inside the image on the first host.
                                             Regen is skipped automatically when only --factory-descriptor-path is
                                             in use (cabling+deployment are required inputs).
+    --skip-cluster-debug                    Do not collect a cluster debug snapshot after a failed attempt.
+                                            By default every failed attempt runs run_cluster_debug.sh over the
+                                            hosts and leaves the ETH and QSFP state of every Galaxy under
+                                            <output>/cluster_debug_attempt_<N>/. Never affects the outcome.
+    --cluster-debug-tool <path>             The tt-bh-glx-cluster-debug executable for that snapshot; must be
+                                            visible at the same path on every host (default: \$TT_CLUSTER_DEBUG_TOOL,
+                                            else the one on PATH)
+    --cluster-debug-always                  Take the snapshot on every failed attempt. By default the failure is
+                                            classified from the validation log: link and cable failures get the
+                                            full snapshot, chip failures get one without the slow QSFP cage sweep,
+                                            and MPI, SSH or reset failures get none.
     --help                                  Display this help message and exit
 
 ================================================================================
@@ -155,6 +166,9 @@ RERUN_ON_RETRAIN=false
 VALIDATION_EXTRA_ARGS=()
 DOCKER_EXTRA_ARGS=()
 REGENERATE_ON_FAILURE=true
+SKIP_CLUSTER_DEBUG=false
+CLUSTER_DEBUG_TOOL=""
+CLUSTER_DEBUG_ALWAYS=false
 
 # Minimum required tt-smi/KMD/firmware versions (TT_SMI_MIN_VERSION, KMD_MIN_VERSION,
 # FW_MIN_VERSION) and the check itself live in utils/host_utils.sh, shared with run_validation.sh.
@@ -349,6 +363,22 @@ while [[ $# -gt 0 ]]; do
             REGENERATE_ON_FAILURE=false
             shift
             ;;
+        --skip-cluster-debug)
+            SKIP_CLUSTER_DEBUG=true
+            shift
+            ;;
+        --cluster-debug-tool)
+            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
+                echo "Error: --cluster-debug-tool requires a non-empty value"
+                exit 1
+            fi
+            CLUSTER_DEBUG_TOOL="$2"
+            shift 2
+            ;;
+        --cluster-debug-always)
+            CLUSTER_DEBUG_ALWAYS=true
+            shift
+            ;;
         --help)
             show_help
             exit 0
@@ -516,6 +546,7 @@ if [[ ${#VALIDATION_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "Extra validation args: ${VALIDATION_EXTRA_ARGS[*]}"
 fi
 echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
+echo "Cluster debug snapshot on failure: $([[ "$SKIP_CLUSTER_DEBUG" == true ]] && echo "skipped" || { [[ "$CLUSTER_DEBUG_ALWAYS" == true ]] && echo "every failure" || echo "link and chip failures"; })"
 echo "=========================================="
 echo ""
 
@@ -568,6 +599,51 @@ else
     echo ""
 fi
 
+# Figure out if it's a cable related failure, an infra related failure, or a chip related failure.
+# Cable failures get the full cluster debug snapshot, chip failures get one without the QSFP cage
+# sweep, infra failures get none; --cluster-debug-always forces the full snapshot regardless.
+classify_failure() {
+    local log="$1"
+    local cable='missing port/cable connections|missing channel connections'
+    cable+='|extra port/cable connections|extra channel connections'
+    cable+='|Found Unhealthy Links|FAULTY LINKS REPORT|Ethernet Links were Retrained'
+    cable+='|Global Connection.*is not found in the host connectivity graph'
+    local infra='Unable to connect to the peer.*Network is unreachable|btl_tcp_endpoint.*Unable to connect'
+    infra+='|Permission denied \(publickey\)|ssh.*Connection refused|ssh.*Connection timed out'
+
+    if [[ -f "$UNRETRAINABLE_YAML" ]] || grep -qE "$cable" "$log" 2>/dev/null; then
+        echo cable
+    elif grep -qE "$infra" "$log" 2>/dev/null; then
+        echo infra
+    else
+        echo chip
+    fi
+}
+
+collect_cluster_debug() {
+    local attempt="$1" validation_exit="$2"
+    shift 2                                # anything left is passed to the collector as-is
+    local args=(
+        --hosts "$HOSTS"
+        --mpi-if "$MPI_IF"
+        --output "$OUTPUT_DIR/cluster_debug_attempt_${attempt}"
+        --cluster-name "recover_${CONFIG}"
+        --reason "recover.sh attempt ${attempt} of ${MAX_ATTEMPTS}, validation exit ${validation_exit}, ${FAILURE_KIND:-unclassified} failure"
+    )
+    [[ -n "$FACTORY_DESCRIPTOR_PATH" ]] && args+=(--factory-descriptor-path "$FACTORY_DESCRIPTOR_PATH")
+    [[ -n "$CLUSTER_DEBUG_TOOL" ]] && args+=(--tool "$CLUSTER_DEBUG_TOOL")
+    [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]] && args+=(--mpi-args "${MPI_EXTRA_ARGS[*]}")
+    # The four UBBs' cages are read at once: about two minutes per attempt instead of four.
+    # Verified identical to the serial sweep; drop this line to go back to serial.
+    args+=(--parallelize)
+    args+=("$@")
+
+    echo ""
+    echo "Collecting a cluster debug snapshot for failed attempt $attempt..."
+    "$SCRIPT_DIR/run_cluster_debug.sh" "${args[@]}" \
+        || echo "Warning: cluster debug collection failed (see above); recovery continues"
+}
+
 # Outer recovery loop: run the full reset + validation up to MAX_ATTEMPTS times, or until
 # validation succeeds. --num-iterations controls the inner validation loop; this controls how
 # many times the whole recovery is retried. Descriptor regeneration (Step 3) runs once after the
@@ -578,6 +654,7 @@ for (( ATTEMPT=1; ATTEMPT<=MAX_ATTEMPTS; ATTEMPT++ )); do
 echo "=========================================="
 echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS"
 echo "=========================================="
+FAILURE_KIND=""          # what the validation log says this attempt's failure was; set below
 
 # All attempts share $OUTPUT_DIR, but unretrainable_channels.yaml is only (re)written on one
 # specific validation failure path. Clear any artifact from a prior attempt so Step 3 can only
@@ -693,6 +770,9 @@ elif [[ "$SKIP_VALIDATION" == false ]]; then
         echo "Ethernet links were retrained — rerunning validation to issue traffic..."
         if run_cluster_validation 2>&1 | tee "$VALIDATION_LOG"; then VALIDATION_EXIT=0; else VALIDATION_EXIT=$?; fi
     fi
+
+    # Get the type of failure based on the validation log to gate the cluster debug script.
+    FAILURE_KIND=$(classify_failure "$VALIDATION_LOG")
     rm -f "$VALIDATION_LOG"
 else
     echo "Skipping validation (--skip-validation)"
@@ -706,6 +786,31 @@ if [[ $VALIDATION_EXIT -eq 0 ]]; then
 fi
 echo ""
 echo "Recovery attempt $ATTEMPT of $MAX_ATTEMPTS failed (exit code $VALIDATION_EXIT)."
+if [[ "$SKIP_CLUSTER_DEBUG" == false ]]; then
+
+    # Edge case because validation isn't ran if the reset fails, but we classify it as an infra error.
+    [[ $RESET_EXIT -ne 0 ]] && FAILURE_KIND=infra
+
+    TAKE="$FAILURE_KIND"
+
+    # If the user specifies always running the debug script regardless of the failures, then set the override to cable.
+    [[ "$CLUSTER_DEBUG_ALWAYS" == true ]] && TAKE=cable
+
+    # Separate cases to run depending on what the classification ends up being.
+    case "$TAKE" in
+
+        # Full collection
+        cable) collect_cluster_debug "$ATTEMPT" "$VALIDATION_EXIT" ;;
+
+        # Skips the cage sweep. Pretty short test, but outputs information about
+        # every ETH port, their training states, and which ASICs haven't answered.
+        chip)  collect_cluster_debug "$ATTEMPT" "$VALIDATION_EXIT" --skip-qsfp ;;
+
+        # Essentially an infra related issue. Nothing is collected in this case.
+        *)     echo "No cluster debug snapshot: this looks like an infrastructure failure, not a link"
+               echo "(pass --cluster-debug-always to take one anyway)" ;;
+    esac
+fi
 if [[ $ATTEMPT -lt $MAX_ATTEMPTS ]]; then
     echo "Retrying full recovery..."
     echo ""
