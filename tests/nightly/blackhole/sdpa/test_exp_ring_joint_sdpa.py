@@ -98,10 +98,16 @@ HEADS_PER_DEVICE = 10  # After TP split
 
 
 def detect_devices_without_opening():
-    """Count available TT devices without opening them."""
-    import glob
+    """Count available TT devices without opening them.
 
-    return len(glob.glob("/dev/tenstorrent/*"))
+    Only the numeric nodes are devices: /dev/tenstorrent also holds a `by-id` directory, and
+    counting it reports 33 on a 32-chip Galaxy, which misses the galaxy branch below and asks for a
+    33x1 ring the system cannot supply.
+    """
+    import glob
+    import os
+
+    return len([p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()])
 
 
 def calculate_mesh_config(num_devices):
