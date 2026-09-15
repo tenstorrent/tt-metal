@@ -272,6 +272,7 @@
       tier: 2
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: unit
 
 # Single-device Blackhole (P150) coverage for the 9B -- the only unit entry for this
 # checkpoint; the Wormhole (1,2) leg is e2e-only, per review. Nothing exercised the P150
@@ -295,6 +296,7 @@
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: unit
 
 # T3K (1x8) coverage for the 27B. chunk_seq_wh.py sends 8-device meshes to upstream's fp32
 # chunk-seq relayout while N150/N300 take the bf16 fork -- a per-mesh branch no other entry
@@ -314,6 +316,7 @@
       tier: 3
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: unit
 
 - name: Mistral-7B unit tests
   cmd: |
