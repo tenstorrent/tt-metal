@@ -368,8 +368,12 @@ public:
     uint8_t num_prefetcher_pipe_slots() const { return next_prefetcher_pipe_slot_; }
 
     uint8_t add_prefetcher_pipe_attachment(
-        experimental::PrefetcherPipeImpl& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size);
+        experimental::PrefetcherPipeImpl& prefetcher_pipe,
+        const CoreRangeSet& cores,
+        uint32_t entry_size,
+        uint32_t num_pipe_consumer_threads = 1);
 
+    experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id);
     const experimental::PrefetcherPipeImpl& get_prefetcher_pipe_attachment(uint8_t prefetcher_pipe_id) const;
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
 

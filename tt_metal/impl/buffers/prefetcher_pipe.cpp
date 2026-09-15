@@ -62,18 +62,28 @@ void validate_ring_geometry(IDevice* device, uint32_t ring_size, BufferType buff
 
 struct PrefetcherPipeConfigPageLayout {
     uint32_t noc_xy_offset;
-    uint32_t counters_offset;
+    uint32_t sent_offset;   // SENT block base: [sent | wr_cursor] slot per (receiver, lane)
+    uint32_t acked_offset;  // ACKED block base: [acked] slot per (receiver, lane)
     uint32_t page_size;
 };
 
+// See remote_dfb_config_layout.h. SENT and ACKED live in separate cache lines so a core's
+// cached stores to its own counters can never write back over the peer's NoC-written ones.
 PrefetcherPipeConfigPageLayout compute_prefetcher_pipe_config_page_layout(
-    uint32_t num_receivers, uint32_t l1_alignment) {
+    uint32_t num_receivers, uint32_t num_credit_lanes, uint32_t l1_alignment) {
+    TT_FATAL(num_credit_lanes >= 1, "num_credit_lanes must be >= 1");
+    const uint32_t block_align = std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN);
     const uint32_t noc_xy_offset = prefetcher_pipe_noc_xy_byte_offset();
-    const uint32_t counters_offset =
-        tt::align(noc_xy_offset + 2 * num_receivers * static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
-    const uint32_t page_size = counters_offset + 2 * num_receivers * l1_alignment;
+    const uint32_t block_bytes = num_receivers * num_credit_lanes * l1_alignment;
+    const uint32_t sent_offset =
+        tt::align(noc_xy_offset + 2 * num_receivers * static_cast<uint32_t>(sizeof(uint32_t)), block_align);
+    const uint32_t acked_offset = tt::align(sent_offset + block_bytes, block_align);
+    const uint32_t page_size = tt::align(acked_offset + block_bytes, l1_alignment);
     return PrefetcherPipeConfigPageLayout{
-        .noc_xy_offset = noc_xy_offset, .counters_offset = counters_offset, .page_size = page_size};
+        .noc_xy_offset = noc_xy_offset,
+        .sent_offset = sent_offset,
+        .acked_offset = acked_offset,
+        .page_size = page_size};
 }
 
 }  // namespace
@@ -86,6 +96,10 @@ PrefetcherPipeImpl::PrefetcherPipeImpl(
     BufferType buffer_type) :
     device_(device), sender_core_(sender_core), receiver_cores_(receiver_cores), ring_size_(ring_size) {
     initialize_prefetcher_pipe(device, sender_core, receiver_cores_, sender_cores_, all_cores_);
+    // Quasar reserves lane slots up front; active count starts at 1 and is raised when a
+    // multi-producer relay is created (num_producers). WH/BH stay single-lane.
+    credit_lane_capacity_ = (device_->arch() == tt::ARCH::QUASAR) ? PREFETCHER_PIPE_MAX_CREDIT_LANES : 1u;
+    active_credit_lanes_ = 1;
     try {
         setup_buffers(buffer_type);
     } catch (...) {
@@ -101,9 +115,12 @@ void PrefetcherPipeImpl::build_config_pages() {
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    const auto layout = compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), l1_alignment);
+    const auto layout =
+        compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), credit_lane_capacity_, l1_alignment);
     config_page_size_ = layout.page_size;
-    credit_reset_offset_ = layout.counters_offset;
+    // Both credit blocks (and the pad between them) — zeroing this range resets every
+    // counter and every write cursor together.
+    credit_reset_offset_ = layout.sent_offset;
     credit_reset_size_ = config_page_size_ - credit_reset_offset_;
 
     const uint32_t data_base_addr = data_address_;
@@ -122,8 +139,9 @@ void PrefetcherPipeImpl::build_config_pages() {
     sender_page[si++] = data_base_addr;  // word[4]: initial fifo_ptr checkpoint
     sender_page[si++] = 0;               // word[5]: applied_entry_size; set by first Attach
     sender_page[si++] = layout.noc_xy_offset;
-    sender_page[si++] = layout.counters_offset;
-    sender_page[si++] = layout.counters_offset;
+    sender_page[si++] = layout.sent_offset;   // word[7]: local sent/wr block; same offset is the remote sent base
+    sender_page[si++] = layout.acked_offset;  // word[8]: local acked block (receivers' NoC atomics land here)
+    sender_page[si++] = active_credit_lanes_;
     for (uint32_t ri = 0; ri < num_recv; ++ri) {
         auto phys = device_->worker_core_from_logical_core(receiver_vec[ri]);
         sender_page[si++] = static_cast<uint32_t>(phys.x);
@@ -142,8 +160,13 @@ void PrefetcherPipeImpl::build_config_pages() {
         receiver_page[rci++] = data_base_addr;
         receiver_page[rci++] = 0;
         receiver_page[rci++] = layout.noc_xy_offset;
-        receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment;
-        receiver_page[rci++] = layout.counters_offset + 2 * ri * l1_alignment + l1_alignment;
+        // This receiver's lane-0 slot in each block; device adds tid * L1_ALIGNMENT for other
+        // lanes. Offsets use credit_lane_capacity_ (allocated stride), not active count. The
+        // same offsets address this receiver's mirror slots on the sender page.
+        const uint32_t slot = ri * credit_lane_capacity_ * l1_alignment;
+        receiver_page[rci++] = layout.sent_offset + slot;   // word[7]: sender's NoC atomics land here
+        receiver_page[rci++] = layout.acked_offset + slot;  // word[8]: local acked (cached stores)
+        receiver_page[rci++] = active_credit_lanes_;
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.x);
         receiver_page[rci++] = static_cast<uint32_t>(sender_phys.y);
         config_pages_[receiver_vec[ri]] = std::move(receiver_page);
@@ -170,7 +193,9 @@ void PrefetcherPipeImpl::setup_buffers(BufferType buffer_type) {
     const auto context_id = extract_context_id(device_);
     const auto& hal = MetalContext::instance(context_id).hal();
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    config_page_size_ = compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), l1_alignment).page_size;
+    config_page_size_ =
+        compute_prefetcher_pipe_config_page_layout(receiver_cores_.num_cores(), credit_lane_capacity_, l1_alignment)
+            .page_size;
 
     auto& arena = device_->allocator_impl()->persistent_l1();
     auto data_allocation = arena.allocate(all_cores_, ring_size_, l1_alignment);
@@ -181,7 +206,9 @@ void PrefetcherPipeImpl::setup_buffers(BufferType buffer_type) {
         data_allocation.address);
     data_address_ = static_cast<uint32_t>(data_allocation.address);
 
-    auto config_allocation = arena.allocate(all_cores_, config_page_size_, l1_alignment);
+    // Page-relative block offsets are only line-aligned if the page itself is.
+    auto config_allocation =
+        arena.allocate(all_cores_, config_page_size_, std::max(l1_alignment, PREFETCHER_PIPE_CREDIT_BLOCK_ALIGN));
     config_allocation_id_ = config_allocation.id;
     TT_FATAL(
         config_allocation.address <= std::numeric_limits<uint32_t>::max(),
@@ -246,6 +273,33 @@ const CoreRangeSet& PrefetcherPipeImpl::receiver_cores() const { return receiver
 
 const CoreRangeSet& PrefetcherPipeImpl::all_cores() const { return all_cores_; }
 
+void PrefetcherPipeImpl::set_active_credit_lanes(uint32_t num_lanes) {
+    TT_FATAL(num_lanes >= 1, "active credit lanes must be >= 1");
+    TT_FATAL(
+        num_lanes <= credit_lane_capacity_,
+        "active credit lanes {} exceeds allocated capacity {} "
+        "(Quasar CreatePrefetcherPipe reserves PREFETCHER_PIPE_MAX_CREDIT_LANES)",
+        num_lanes,
+        credit_lane_capacity_);
+    if (num_lanes == active_credit_lanes_) {
+        return;
+    }
+    TT_FATAL(
+        active_credit_lanes_ == 1,
+        "PrefetcherPipe num_pipe_consumer_threads already set to {}, cannot reprogram to {}",
+        active_credit_lanes_,
+        num_lanes);
+    active_credit_lanes_ = num_lanes;
+    for (auto& [core, page] : config_pages_) {
+        (void)core;
+        TT_FATAL(
+            page.size() > PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES,
+            "PrefetcherPipe config page too short to hold num_credit_lanes");
+        page[PREFETCHER_PIPE_CFG_NUM_CREDIT_LANES] = active_credit_lanes_;
+    }
+    write_config_to_device();
+}
+
 PrefetcherPipe::PrefetcherPipe(
     distributed::MeshDevice* device,
     CoreCoord sender_core,
@@ -301,8 +355,13 @@ PrefetcherPipe CreatePrefetcherPipe(
 }
 
 uint8_t AttachPrefetcherPipe(
-    Program& program, PrefetcherPipe& prefetcher_pipe, const CoreRangeSet& cores, uint32_t entry_size) {
-    return program.impl().add_prefetcher_pipe_attachment(prefetcher_pipe.impl(), cores, entry_size);
+    Program& program,
+    PrefetcherPipe& prefetcher_pipe,
+    const CoreRangeSet& cores,
+    uint32_t entry_size,
+    uint32_t num_pipe_consumer_threads) {
+    return program.impl().add_prefetcher_pipe_attachment(
+        prefetcher_pipe.impl(), cores, entry_size, num_pipe_consumer_threads);
 }
 
 uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
@@ -310,7 +369,7 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& receiver_core_spec,
     const dfb::DataflowBufferConfig& config,
     uint8_t prefetcher_pipe_id) {
-    const PrefetcherPipeImpl& pipe = program.impl().get_prefetcher_pipe_attachment(prefetcher_pipe_id);
+    PrefetcherPipeImpl& pipe = program.impl().get_prefetcher_pipe_attachment(prefetcher_pipe_id);
 
     CoreRangeSet receiver_cores;
     if (std::holds_alternative<CoreCoord>(receiver_core_spec)) {
@@ -326,6 +385,12 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
         "CreatePrefetcherPipeRelayDataflowBuffer: relay cores {} must be a subset of receiver cores {}",
         receiver_cores.str(),
         pipe.receiver_cores().str());
+    TT_FATAL(
+        config.num_producers <= pipe.credit_lane_capacity(),
+        "CreatePrefetcherPipeRelayDataflowBuffer: num_producers {} exceeds PrefetcherPipe credit lane "
+        "capacity {} (Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at pipe create)",
+        config.num_producers,
+        pipe.credit_lane_capacity());
     TT_FATAL(config.entry_size > 0, "CreatePrefetcherPipeRelayDataflowBuffer: entry_size must be > 0");
     TT_FATAL(
         pipe.ring_size() % config.entry_size == 0,
@@ -342,6 +407,7 @@ uint32_t CreatePrefetcherPipeRelayDataflowBuffer(
     relay_config.borrows_memory = true;
     relay_config.is_relay = true;
     const uint32_t relay_dfb_id = dfb::CreateDataflowBuffer(program, receiver_cores, relay_config);
+    // register_prefetcher_pipe_relay_dfb programs active credit lanes from num_producers.
     program.impl().register_prefetcher_pipe_relay_dfb(receiver_cores, prefetcher_pipe_id, relay_dfb_id);
     return relay_dfb_id;
 }

@@ -843,6 +843,13 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
             "Tensix producer count must be between 1 and 4, got {}",
             dfb->config.num_producers);
+        const auto qc = std::get<experimental::quasar::QuasarComputeConfig>(compute_producer->config());
+        TT_FATAL(
+            qc.num_threads_per_cluster == dfb->config.num_producers,
+            "DFB {}: Quasar compute producer num_threads_per_cluster ({}) must equal config.num_producers ({})",
+            dfb_id,
+            qc.num_threads_per_cluster,
+            dfb->config.num_producers);
         dfb->config.producer_risc_mask =
             static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_producer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(producer_kernel)) {
@@ -852,6 +859,12 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_producers);
         const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
+        TT_FATAL(
+            producer_dm_riscvs.size() == dfb->config.num_producers,
+            "DFB {}: Quasar DM producer processor count ({}) must equal config.num_producers ({})",
+            dfb_id,
+            producer_dm_riscvs.size(),
+            dfb->config.num_producers);
         for (DataMovementProcessor dm : producer_dm_riscvs) {
             dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
@@ -872,6 +885,13 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
             "Tensix consumer count must be between 1 and 4, got {}",
             dfb->config.num_consumers);
+        const auto qc = std::get<experimental::quasar::QuasarComputeConfig>(compute_consumer->config());
+        TT_FATAL(
+            qc.num_threads_per_cluster == dfb->config.num_consumers,
+            "DFB {}: Quasar compute consumer num_threads_per_cluster ({}) must equal config.num_consumers ({})",
+            dfb_id,
+            qc.num_threads_per_cluster,
+            dfb->config.num_consumers);
         dfb->config.consumer_risc_mask =
             static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (auto dm_consumer = std::dynamic_pointer_cast<experimental::quasar::QuasarDataMovementKernel>(consumer_kernel)) {
@@ -881,6 +901,12 @@ void BindDataflowBufferToProducerConsumerKernels(Program& program, uint32_t dfb_
             ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_consumers);
         const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
+        TT_FATAL(
+            consumer_dm_riscvs.size() == dfb->config.num_consumers,
+            "DFB {}: Quasar DM consumer processor count ({}) must equal config.num_consumers ({})",
+            dfb_id,
+            consumer_dm_riscvs.size(),
+            dfb->config.num_consumers);
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
             dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
