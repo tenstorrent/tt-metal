@@ -21,6 +21,10 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/dataflow/dataflow_buffer.h"
+#ifdef ARCH_QUASAR
+#include "api/compute/tile_move_copy.h"
+#include "internal/tt-2xx/quasar/dev_mem_map.h"
+#endif
 
 void kernel_main() {
 #ifdef UCK_CHLKC_UNPACK
@@ -36,13 +40,22 @@ void kernel_main() {
     uint32_t checksum = 0;
     for (uint32_t offset = 0; offset < total_entries; offset += batch_size) {
         relay.wait_front(batch_size);
+        // Quasar: NOC→TL1 fills are not L2-coherent; hand-read via the uncached alias.
+#ifdef ARCH_QUASAR
+        const uint32_t read_ptr = (relay.get_read_ptr() << cb_addr_shift) + MEM_L1_UNCACHED_BASE;
+#else
         const uint32_t read_ptr = relay.get_read_ptr() << cb_addr_shift;
+#endif
         const uint32_t entry_size = relay.get_entry_size();
         for (uint32_t i = 0; i < batch_size; ++i) {
             checksum += *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(read_ptr + i * entry_size);
         }
         for (volatile uint32_t delay = 0; delay < delay_iterations; ++delay) {
         }
+#ifdef ARCH_QUASAR
+        // TEN-4746: hand-read L1 (no UNPACR) since wait_front; dummy unpack orders pop.
+        ckernel::dummy_unpack(relay_dfb_id);
+#endif
         relay.pop_front(batch_size);
     }
     result[0] = total_entries;

@@ -2,10 +2,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 
 import pytest
 
+import ttnn
+from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.model_config import (
     ModelArgs,
     TensorGroup,
@@ -15,6 +17,39 @@ from models.tt_transformers.tt.model_config import (
     create_galaxy_ff1_out_reduce_scatter_memcfg,
     should_pad_sampling_logits_to_power_of_2,
 )
+
+
+@pytest.mark.parametrize("seq_len", [128, 4096])
+def test_qwen_t3k_prefill_matmul_configs_match_across_batching(monkeypatch, seq_len):
+    args = SimpleNamespace(base_model_name="Qwen3-32B", device_name="T3K", mlp2_grid=lambda _: (8, 8))
+    args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
+    args.use_minimal_qkv_prefill_matmul = MethodType(ModelArgs.use_minimal_qkv_prefill_matmul, args)
+    monkeypatch.setattr("models.tt_transformers.tt.model_config.is_blackhole", lambda: False)
+
+    assert args.use_minimal_prefill_matmul(seq_len)
+    assert args.use_minimal_qkv_prefill_matmul(seq_len)
+    qkv = ModelArgs.get_attn_qkv_program_config.__wrapped__(args, Mode.PREFILL, seq_len)
+    ff2 = ModelArgs.get_mlp_ff2_prg_config.__wrapped__(args, Mode.PREFILL, seq_len)
+    assert isinstance(qkv, ttnn.MinimalMatmulConfig)
+    assert isinstance(ff2, ttnn.MinimalMatmulConfig)
+
+
+@pytest.mark.parametrize(
+    "model_name,device_name,galaxy_row,qkv_minimal",
+    [
+        ("Qwen3-32B", "TG", False, False),
+        ("Qwen3-32B", "P150x4", False, False),
+        ("Llama-3.1-8B", "T3K", False, False),
+        ("Llama-3.1-8B", "T3K", True, True),
+    ],
+)
+def test_other_short_prefill_matmul_policies_are_preserved(model_name, device_name, galaxy_row, qkv_minimal):
+    args = SimpleNamespace(
+        base_model_name=model_name, device_name=device_name, is_galaxy_8_device_row_submesh=galaxy_row
+    )
+    args.use_minimal_prefill_matmul = MethodType(ModelArgs.use_minimal_prefill_matmul, args)
+    assert not args.use_minimal_prefill_matmul(128)
+    assert ModelArgs.use_minimal_qkv_prefill_matmul(args, 128) is qkv_minimal
 
 
 @pytest.mark.parametrize(

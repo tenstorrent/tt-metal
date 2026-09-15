@@ -5,7 +5,6 @@
 
 import json
 import os
-import re
 
 import ttnn
 
@@ -65,31 +64,29 @@ class Gemma4Precision:
         model_path: full path to the HF checkpoint; we key on the basename.
         mesh_shape: (rows, cols) tuple, formatted as "RxC" for the JSON key.
         """
-        path = str(model_path).rstrip("/")
-        model_key = os.path.basename(path)
-        # Under HF_HUB_OFFLINE vLLM replaces the repo id with the resolved
-        # snapshot directory (.../models--{org}--{name}/snapshots/{hash}), so
-        # the basename is the snapshot hash and the variant lookup silently
-        # misses every override (31B then loads all-bf16: +~7.9 GB/chip at
-        # tp=4, which OOM'd the QB2 vLLM CI cell at 256k context). Recover the
-        # repo basename from the hub layout.
-        hub_match = re.search(r"models--[^/]+--([^/]+)/snapshots/[^/]+$", path)
-        if hub_match:
-            model_key = hub_match.group(1)
-        mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
-
         try:
             with open(_PATH) as f:
                 table = json.load(f)
-        except FileNotFoundError:
-            return cls({})
+        except OSError as exc:
+            raise RuntimeError(f"Cannot read required precision configuration {_PATH}: {exc}") from exc
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise ValueError(f"Invalid JSON in precision configuration {_PATH}: {exc}") from exc
 
+        model_key = os.path.basename(str(model_path).rstrip("/"))
+        mesh_key = f"{mesh_shape[0]}x{mesh_shape[1]}"
         model_entry = table.get(model_key)
         if not model_entry:
-            return cls({})
+            raise ValueError(
+                f"No precision configuration for {model_path!r} (model key {model_key!r}) in {_PATH}; "
+                f"expected one of {sorted(table)}"
+            )
 
-        # Mesh-specific override wins over "default"
-        raw = model_entry.get(mesh_key) or model_entry.get("default") or {}
+        raw = model_entry.get(mesh_key)
+        if not raw:
+            raise ValueError(
+                f"No precision configuration for model {model_key!r}, mesh {mesh_key!r} in {_PATH}; "
+                f"expected one of {sorted(model_entry)}"
+            )
         resolved = {}
         for k, v in raw.items():
             if k not in KNOWN_MODULES:

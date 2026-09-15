@@ -160,9 +160,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
     constexpr uint32_t page_size = 32;
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
     auto mesh_device = devices_[0];
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
 
     auto pipe = experimental::CreatePrefetcherPipe(
         mesh_device.get(), CoreCoord(0, 0), CoreRangeSet(CoreRange({1, 0})), /*ring_size=*/1024);
@@ -209,9 +206,6 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceAllocationsStartAbovePers
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceManagerSealsPersistentL1UntilRemoved) {
     constexpr DeviceAddr local_l1_size = 3200;
     auto mesh_device = devices_[0];
-    if (mesh_device->arch() == tt::ARCH::QUASAR) {
-        GTEST_SKIP() << "PrefetcherPipe is not supported on Quasar yet";
-    }
 
     const CoreRangeSet cores(CoreRange({0, 0}, {1, 0}));
     SubDevice sub_device(std::array{cores});
