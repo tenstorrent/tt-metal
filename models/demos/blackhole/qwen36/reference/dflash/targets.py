@@ -422,8 +422,14 @@ class TtTarget:
         # Already trimmed on device when keep_rows applied; the tail slice is now a no-op guard.
         return (host if keep_rows is None else host[-keep_rows:]).unsqueeze(0)
 
-    def _run(self, lo: int, hi: int):
-        """Run ``[lo, hi)`` from the anchor's GDN state as one bucket at ``chunk_start=lo``."""
+    def _run(self, lo: int, hi: int, keep_rows=None):
+        """Run ``[lo, hi)`` from the anchor's GDN state as one bucket at ``chunk_start=lo``.
+
+        ``keep_rows`` is how many TRAILING rows of logits the caller will actually use. ``None``
+        means all of them (the original contract). ``0`` means none, and the LM head is skipped
+        entirely -- :meth:`forward`'s whole-bucket iterations pass 0, because ``max_block`` keeps a
+        speculative block inside the tail bucket and so their logits are discarded in full.
+        """
         assert lo % self.ANCHOR == 0, f"chunk_start {lo} is not {self.ANCHOR}-aligned"
         length = hi - lo
         assert 1 <= length <= self.ANCHOR, f"span [{lo}, {hi}) does not fit one {self.ANCHOR} bucket"
@@ -438,14 +444,19 @@ class TtTarget:
             # `length` below the bucket -- valid_len lives in the staged GDN mask's contents.
             token_buf = torch.zeros(1, self.ANCHOR, dtype=self._tokens.dtype)
             token_buf[:, :length] = self._tokens[:, lo:hi]
-            logits = self.model.verify_traced(token_buf, length, lo, self.page_table, self.ANCHOR)
+            logits = self.model.verify_traced(token_buf, length, lo, self.page_table, self.ANCHOR, keep_rows=keep_rows)
         else:
             logits = self.model.prefill_block_all_logits(
-                self._tokens[:, lo:hi], self.page_table, actual_len=length, chunk_start=lo, bucket=self.ANCHOR
+                self._tokens[:, lo:hi],
+                self.page_table,
+                actual_len=length,
+                chunk_start=lo,
+                bucket=self.ANCHOR,
+                keep_rows=keep_rows,
             )
         return logits, self.model.take_taps(length)
 
-    def enable_traced_verify(self, warm_tokens=None):
+    def enable_traced_verify(self, warm_tokens=None, narrow_head=False):
         """Capture the verify trace and route :meth:`_run` through it.
 
         Off by default: the eager path stays the default until the throughput case is measured, and
@@ -472,7 +483,10 @@ class TtTarget:
             "parked hangs the process and wedges the device. Run one dflash_generate() (8 tokens is "
             "enough) before enabling the trace."
         )
-        self.model.capture_verify_trace(self.page_table, self.ANCHOR, warm_tokens=warm_tokens)
+        # narrow_head: capture stops at the norm and the LM head runs per replay over a 32- or
+        # 64-row tile-aligned window instead of all ANCHOR rows. OFF by default -- it is a device
+        # change measured nowhere yet, and the whole-bucket head is the shipped, trusted path.
+        self.model.capture_verify_trace(self.page_table, self.ANCHOR, warm_tokens=warm_tokens, narrow_head=narrow_head)
         self._traced_verify = True
 
     def forward(self, ids, start, *, all_logits=True):
@@ -496,21 +510,40 @@ class TtTarget:
 
         first_anchor = self._anchor
         logit_parts, tap_parts = [], []
+
+        # How many trailing logit rows this call will actually return. Only these are worth
+        # computing: the LM head and its vocab all-gather are sized by the BUCKET (up to 128 rows)
+        # while `want` is at most the block, 16 -- and everything else is discarded below.
+        want = S if all_logits else 1
+        # Does `want` fit inside the tail bucket alone? It does for every speculative step, because
+        # max_block() stops a block crossing a bucket boundary, and for any all_logits=False call.
+        # A long all_logits=True prompt is the exception: it spans several buckets and genuinely
+        # needs every row, so that case keeps the original whole-bucket behaviour.
+        tail_len = end - (first_anchor + self.ANCHOR * ((end - first_anchor - 1) // self.ANCHOR))
+        narrow = want <= tail_len
+
         # Whole buckets: all-real and already committed, so each one also re-anchors the snapshot.
         while end - self._anchor > self.ANCHOR:
-            lg, tp = self._run(self._anchor, self._anchor + self.ANCHOR)
+            # keep_rows=0 when narrow: these buckets' logits are discarded in full by the slice at
+            # the end of this method, so the head never needs to run on them.
+            lg, tp = self._run(self._anchor, self._anchor + self.ANCHOR, keep_rows=0 if narrow else None)
             logit_parts.append(lg)
             tap_parts.append(tp)
             self._anchor += self.ANCHOR
             # Reuse the snapshot's buffers rather than reallocating every bucket.
             self._anchor_gdn = self.model.save_gdn_state(into=self._anchor_gdn)
         # The partial tail bucket — where a speculative block always lands.
-        lg, tp = self._run(self._anchor, end)
+        lg, tp = self._run(self._anchor, end, keep_rows=want if narrow else None)
         logit_parts.append(lg)
         tap_parts.append(tp)
 
-        logits = torch.cat(logit_parts, dim=1) if len(logit_parts) > 1 else logit_parts[0]
-        return logits[:, -S:], self.taps_tail(self._taps_cat(tap_parts), S)
+        if narrow:
+            # `lg` is already exactly the trailing `want` rows; the earlier parts are all None.
+            logits = lg
+        else:
+            logits = torch.cat(logit_parts, dim=1) if len(logit_parts) > 1 else logit_parts[0]
+            logits = logits[:, -want:]
+        return logits, self.taps_tail(self._taps_cat(tap_parts), S)
 
     def snapshot(self):
         """Nothing to capture: every forward recomputes from the anchor."""

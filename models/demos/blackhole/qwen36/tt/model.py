@@ -2377,7 +2377,7 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(_h(_mt, ttnn.bfloat16, ttnn.TILE_LAYOUT, rep), self._vt_gdn_mq)
         return self._verify_staged()
 
-    def capture_verify_trace(self, page_table, bucket, warm_tokens=None, valid_len=None):
+    def capture_verify_trace(self, page_table, bucket, warm_tokens=None, valid_len=None, narrow_head=False):
         """Capture ONE masked verify forward + norm + LM head, for speculative block verification.
 
         This is the trace the DFlash loop wants and that no existing capture provides: decode is one
@@ -2415,9 +2415,38 @@ class Qwen36Model:
             )
             normed = self.norm(hidden, mode=Mode.PREFILL)
             ttnn.deallocate(hidden)
+            if narrow_head:
+                # Stop at the norm. The head runs per replay over a tile-aligned window (see
+                # verify_traced / _run_narrow_head): it needs a slice offset that moves with
+                # valid_len, and a capture bakes slice_start/slice_end, so it CANNOT live here.
+                return normed
             logits = self._lm_head(normed)
             ttnn.deallocate(normed)
             return logits
+
+        self._vt_narrow_head = bool(narrow_head)
+        if narrow_head:
+            # EVERY head width the loop can ask for must be compiled BEFORE the capture. A program
+            # first compiled with a trace parked does not raise -- it hangs the process at ~110 %
+            # CPU and wedges the device (see DFLASH_HANDOFF.md §0; that is the bug the narrow head
+            # would otherwise re-introduce, this time in the head instead of the drafter).
+            #
+            # lm_head_window() is what makes this finite: with keep_rows <= 16 the window is always
+            # 32 or 64 rows, so there are exactly TWO widths to warm, not one per length. Warm the
+            # slice at every tile-aligned offset too, since a slice's start is an op attribute.
+            widths = sorted({w for w in (32, 64) if w <= bucket})
+            probe = self._forward_prefill_chunk_masked_tp(
+                toks, vl, 0, page_table, bucket, flex_sdpa=True, staged=staged
+            )
+            probe_n = self.norm(probe, mode=Mode.PREFILL)
+            ttnn.deallocate(probe)
+            for w in widths:
+                for off in range(0, bucket - w + 1, 32):
+                    s = ttnn.slice(probe_n, (0, 0, off, 0), (1, 1, off + w, probe_n.shape[-1]))
+                    ttnn.deallocate(self._lm_head(s))
+                    ttnn.deallocate(s)
+            ttnn.deallocate(probe_n)
+            ttnn.synchronize_device(self.device)
 
         # Warm twice: the first pass compiles, the second proves the cache is populated.
         self._reset_gdn_state_for_new_sequence()
@@ -2436,7 +2465,14 @@ class Qwen36Model:
         tid = ttnn.begin_trace_capture(self.device, cq_id=0)
         open_capture = True
         try:
-            self._vt_logits = _body()
+            out = _body()
+            # Narrow head: the trace's output is the NORM'D HIDDEN, and the head consumes it after
+            # the replay. Keep _vt_logits None so anything still reaching for it fails loudly rather
+            # than reading a stale buffer.
+            if narrow_head:
+                self._vt_hidden, self._vt_logits = out, None
+            else:
+                self._vt_hidden, self._vt_logits = None, out
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
             open_capture = False
         finally:
@@ -2454,8 +2490,43 @@ class Qwen36Model:
         self._vt_taps = dict(self._taps) if self._taps else None
         return tid
 
-    def verify_traced(self, token_buf, valid_len, chunk_start, page_table, bucket):
+    @staticmethod
+    def lm_head_window(valid_len, keep_rows, bucket, tile=32):
+        """The smallest TILE-ALIGNED row window of a bucket that contains its last ``keep_rows``.
+
+        The verify only ever uses the last ``keep_rows`` (<= block_size, 16) logits of a bucket --
+        ``TtTarget.forward`` returns ``logits[:, -S:]`` and throws the rest away -- but running the
+        LM head over just those rows was rejected for two good reasons, recorded at
+        :meth:`prefill_block_all_logits`: "a pre-head slice would need tile alignment and would
+        recompile per length".
+
+        Both objections are about the SLICE, not about the idea, and both dissolve if the window is
+        snapped out to tile boundaries instead of cut exactly:
+
+        * ``start`` is a multiple of ``tile``, so the slice never straddles a tile row -- no
+          unaligned copy, and ttnn's cheap path applies;
+        * with ``keep_rows <= 16`` and ``tile == 32`` the window spans at most two tile rows, so its
+          WIDTH is always 32 or 64. Two program shapes for the whole loop, both warmable up front,
+          instead of one per length. That is what keeps a narrow head from re-introducing the
+          compile-under-a-parked-trace hang.
+
+        Returns ``(start, width)``; the caller takes the last ``keep_rows`` rows of the window on
+        host, where the offset is free. ``width`` may exceed ``valid_len`` near the start of a
+        bucket -- the extra rows are the bucket's own padding and are discarded, exactly as the
+        full-bucket head already discards them.
+        """
+        assert 1 <= keep_rows <= valid_len, f"keep_rows {keep_rows} not in [1, {valid_len}]"
+        start = ((valid_len - keep_rows) // tile) * tile
+        width = min(bucket - start, ((valid_len - start + tile - 1) // tile) * tile)
+        return start, width
+
+    def verify_traced(self, token_buf, valid_len, chunk_start, page_table, bucket, keep_rows=None):
         """Replay the verify trace for one block. Returns host logits ``[1, valid_len, vocab]``.
+
+        ``keep_rows`` narrows the LM head: only the last ``keep_rows`` rows are ever used, so with
+        a narrow-head capture the head and its vocab all-gather run over a 32- or 64-row window
+        (see :meth:`lm_head_window`) instead of all ``bucket`` rows, and the returned logits are
+        ``[1, keep_rows, vocab]``. ``None`` keeps the original whole-bucket behaviour.
 
         Same contract as :meth:`prefill_block_all_logits` -- logits for EVERY real position, which
         is what the accept test compares against -- but the forward is a trace replay instead of
@@ -2479,7 +2550,50 @@ class Qwen36Model:
         # Re-arm the tap handles the replay just refreshed (see capture_verify_trace).
         if getattr(self, "_vt_taps", None):
             self._taps = dict(self._vt_taps)
-        return self._read_verify_logits(valid_len)
+        if getattr(self, "_vt_narrow_head", False):
+            # Narrow head: the trace stopped at `norm`, so the head runs HERE, over a tile-aligned
+            # window instead of the whole bucket. Outside the capture a moving slice offset is
+            # legal -- inside one it would be baked (capture freezes slice_start/slice_end), which
+            # is why this cannot simply be pushed back into _body().
+            return self._run_narrow_head(valid_len, keep_rows if keep_rows else valid_len, bucket)
+        # Wide head (the shipped path): the device work is unchanged -- whole-bucket norm + head --
+        # and `keep_rows` is honoured on HOST, so both paths return the same [1, keep_rows, vocab]
+        # and the caller never has to care which one ran.
+        host = self._read_verify_logits(valid_len)
+        if keep_rows:
+            host = host[:, -int(keep_rows) :]
+        return host
+
+    def _run_narrow_head(self, valid_len, keep_rows, bucket):
+        """Norm'd hidden -> last ``keep_rows`` logits, with the head over a tile-aligned window.
+
+        Slices the HIDDEN, not the logits. That distinction is the whole reason this is affordable:
+        the hidden is ``[1, 1, bucket, dim]`` (128x5120 bf16, ~1.3 MB) while ``_vt_logits`` is
+        ``[1, 1, bucket, vocab]`` (~63 MB). tests/perf/test_traced_verify_host_breakdown.py records
+        that slicing the LOGITS to 16 rows "costs vastly more than the 26.8 ms readback it
+        replaces" -- that verdict is about the 63 MB tensor and an untilize for argmax, and does not
+        carry over to a 1.3 MB tile-aligned slice with no layout change. Measure, do not assume.
+        """
+        keep_rows = max(1, min(int(keep_rows), int(valid_len)))
+        start, width = self.lm_head_window(valid_len, keep_rows, bucket)
+        hidden = self._vt_hidden
+        window = hidden
+        sliced = None
+        if (start, width) != (0, hidden.shape[-2]):
+            sliced = ttnn.slice(hidden, (0, 0, start, 0), (1, 1, start + width, hidden.shape[-1]))
+            window = sliced
+        logits = self._lm_head(window)
+        if sliced is not None:
+            ttnn.deallocate(sliced)
+        # One device's copy is the lot: the head all-gathers the vocab shards, so logits are
+        # replicated. Same narrowing _read_verify_logits already relies on.
+        host = ttnn.to_torch(ttnn.get_device_tensors(logits)[0])
+        ttnn.deallocate(logits)
+        host = host.reshape(-1, host.shape[-1])[:, : self.vocab_size]
+        # The window's rows are absolute [start, start+width); the caller wants the last keep_rows
+        # REAL rows, i.e. absolute [valid_len - keep_rows, valid_len).
+        lo = (valid_len - keep_rows) - start
+        return host[lo : lo + keep_rows].float().unsqueeze(0)
 
     def _read_verify_logits(self, valid_len):
         """Bring the traced verify's logits back to host: ``[1, valid_len, vocab]``.
@@ -2857,7 +2971,7 @@ class Qwen36Model:
                     ttnn.copy(saved["conv"], dn.fused_conv_state)
                     dn._restore_split_conv_from_fused()
 
-    def prefill_block_all_logits(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None):
+    def prefill_block_all_logits(self, token_ids, page_table, actual_len, chunk_start=0, bucket=None, keep_rows=None):
         """Masked-bucket prefill returning logits for **every** real position, not just the last.
 
         Speculative verification needs all of them: position ``i``'s logits say what the target
@@ -2889,9 +3003,29 @@ class Qwen36Model:
         ttnn.synchronize_device(self.device)
 
         # Norm + LM head over the whole bucket in one shot; the padded tail is discarded on host.
-        # A pre-head slice would need tile alignment and would recompile per length.
+        # A pre-head slice would need tile alignment and would recompile per length -- UNLESS the
+        # window is snapped out to tile boundaries, which bounds it to two widths; see
+        # :meth:`lm_head_window`. `keep_rows` opts into that, and `keep_rows == 0` skips the head
+        # altogether for a caller that discards these logits (TtTarget.forward's whole-bucket
+        # iterations do: max_block keeps a block inside the tail bucket, so the earlier buckets'
+        # logits are thrown away in full).
         normed = self.norm(hidden, mode=Mode.PREFILL)
         ttnn.deallocate(hidden)
+        if keep_rows is not None and int(keep_rows) <= 0:
+            ttnn.deallocate(normed)
+            return None
+        kr = w_start = None
+        if keep_rows is not None:
+            kr, w_start = max(1, min(int(keep_rows), actual_len)), 0
+            # Narrow the head on DEVICE only when the narrow-head path is active. Otherwise compute
+            # the whole bucket exactly as before and trim on host: same returned rows either way, so
+            # the default path's device behaviour is untouched.
+            if getattr(self, "_vt_narrow_head", False):
+                w_start, w_width = self.lm_head_window(actual_len, kr, bucket)
+                if (w_start, w_width) != (0, bucket):
+                    window = ttnn.slice(normed, (0, 0, w_start, 0), (1, 1, w_start + w_width, normed.shape[-1]))
+                    ttnn.deallocate(normed)
+                    normed = window
         logits = self._lm_head(normed)
         ttnn.deallocate(normed)
         if self.num_devices > 1:
@@ -2899,6 +3033,10 @@ class Qwen36Model:
         else:
             host = ttnn.to_torch(logits)
         ttnn.deallocate(logits)
+        if kr is not None:
+            host = host.reshape(-1, host.shape[-1])[:, : self.vocab_size]
+            lo = (actual_len - kr) - w_start
+            return host[lo : lo + kr].float().unsqueeze(0)
         host = host.reshape(-1, host.shape[-1])[:actual_len, : self.vocab_size]
         return host.float().unsqueeze(0)
 
