@@ -2346,11 +2346,7 @@ void sdpa_ring_v2(
     const uint32_t* q_work_bitmap = nullptr) {
     init_sdpa_streaming_semaphores();
 
-    // Sparse computation: mirror the reader's fully-padded-shard detection. A shard whose Q frames are
-    // all padding attends no k_frame, so the reader disables its aggregate skip and forwards/pushes
-    // every k_chunk (full data-movement participation, like dense). Compute must then DRAIN every
-    // pushed chunk rather than consult the (all-zero) aggregate — otherwise it would leave reader's
-    // pushes stranded in the CBs. This flag forces the drain paths below to drain unconditionally.
+    // Sparse computation: mirror the reader's fully-padded-shard detection.
     bool shard_attends_nothing = false;
     if constexpr (sparse_frames_enabled) {
         if constexpr (tiles_per_frame > 0 && q_local_padded_Nt > 0) {
