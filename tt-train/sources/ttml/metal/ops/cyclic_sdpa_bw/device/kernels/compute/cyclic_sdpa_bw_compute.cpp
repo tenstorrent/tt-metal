@@ -628,6 +628,10 @@ void kernel_main() {
         // Dense mode masks nothing, so a pair with i == j is an ordinary
         // full block there and must not take the triangular mask.
         const bool diagonal = (DENSE_MODE == 0) && (pair.i == pair.j);
+        // Whether this timestep has wholly masked score tiles to skip: a
+        // diagonal pair of more than one row tile. Compile-time false at
+        // Bt = 1, so that block height keeps its straight-line loops.
+        const bool skip_masked = (Bt > 1u) && diagonal;
         // Where dQ_i stands in the relay. Inside a streak the packet carries
         // dQ^T from the previous consumer and the next consumer wants dQ^T
         // back; at a row's first streak start the seed came from DRAM as dQ,
@@ -746,6 +750,16 @@ void kernel_main() {
         for (uint32_t a = 0; a < Bt; ++a) {
         for (uint32_t h = 0; h < kGroups; ++h) {
             const uint32_t b0 = h * kGroup;  // first key tile of the group
+            // On a diagonal pair the tiles whose key index exceeds the query
+            // index are wholly masked: P^T and dS^T are exact zeros there, so
+            // nothing is computed or packed for them, and the gradient
+            // updates below leave their products out. The live tiles of the
+            // group are the first n_live (key indices rise with i).
+            const uint32_t n_live =
+                !skip_masked ? kGroup : (b0 > a ? 0u : (a + 1u - b0 < kGroup ? a + 1u - b0 : kGroup));
+            if (n_live == 0u) {
+                continue;
+            }
             // reconfig_data_format takes (SrcA, SrcB); the matmul's first operand
             // goes to SrcB and its second to SrcA.
             tile_regs_acquire();
@@ -753,30 +767,30 @@ void kernel_main() {
             // remainder as a rank-one product against the column of ones,
             // then K Q^T accumulated on top. No SFPU subtract at all.
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 broadcast_statistic_rows_to_dst(score_reg(i), cb_neg_lse_row, a);
             }
             reconfig_data_format(cb_query, cb_key_operand);
             matmul_init(cb_key_operand, cb_query, /* transpose */ 1);
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 const uint32_t b = b0 + i;
                 matmul_tiles(cb_ones_column, cb_neg_lse_rem, 0, a, score_reg(i));
                 for (uint32_t k = 0; k < qWt; ++k) {
                     matmul_tiles(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(i));
                 }
             }
-            if (diagonal && b0 + kGroup > a) {
-                // The mask, added: -inf where the key index exceeds the query
-                // index on the diagonal tile (b = a), everywhere on the tiles
-                // above it (b > a). The exponential then makes exact zeros
-                // there, and every later sum runs over the whole block.
+            if (diagonal && b0 + n_live > a) {
+                // The mask, added to the diagonal tile (b = a): -inf where the
+                // key index exceeds the query index. The exponential then
+                // makes exact zeros there.
                 reconfig_data_format(cb_attn_mask, cb_zero_tile);
                 add_tiles_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
-                for (uint32_t i = 0; i < kGroup; ++i) {
-                    const uint32_t b = b0 + i;
-                    if (b >= a) {
-                        add_tiles(cb_attn_mask, cb_zero_tile, (b == a) ? kMaskTriangle : kMaskAll, 0, score_reg(i));
-                    }
-                }
+                add_tiles(cb_attn_mask, cb_zero_tile, kMaskTriangle, 0, score_reg(a - b0));
             }
 
             // S^T is complete in the registers: hand it to the pack thread's
@@ -787,11 +801,17 @@ void kernel_main() {
             // the second half, then V dO^T accumulated onto it. The FPU adds
             // into DST.
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 broadcast_statistic_rows_to_dst(grad_score_reg(i), cb_neg_u_row, a);
             }
             reconfig_data_format(cb_grad_output, cb_value);
             matmul_init(cb_value, cb_grad_output, /* transpose */ 1);
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 const uint32_t b = b0 + i;
                 for (uint32_t k = 0; k < vWt; ++k) {
                     matmul_tiles(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(i));
@@ -807,16 +827,25 @@ void kernel_main() {
             PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
             PACK((pack_sfpu::exp_prepare()));
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 PACK((pack_sfpu::exp_tile(score_reg(i))));
             }
             PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 PACK((pack_sfpu::mul_tiles(grad_score_reg(i), score_reg(i), grad_score_reg(i))));
             }
             PACK((pack_sfpu::wait_before_pack()));
             for (uint32_t i = 0; i < kGroup; ++i) {
+                if (i >= n_live) {
+                    break;  // constant trip count keeps the loop unrolled
+                }
                 const uint32_t b = b0 + i;
                 pack_tile</* out_of_order */ true>(score_reg(i), cb_attention_weights, b * Bt + a);
                 pack_tile</* out_of_order */ true>(grad_score_reg(i), cb_grad_scores, b * Bt + a);
@@ -891,7 +920,12 @@ void kernel_main() {
                     reconfig_data_format(/* SrcA */ cb_grad_scores, /* SrcB */ cb_key_operand_t);
                     matmul_init(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        // Key tiles above the query tile hold no dS^T on a
+                        // diagonal pair (see the score pass).
                         for (uint32_t b = 0; b < Bt; ++b) {
+                            if (skip_masked && b > a) {
+                                break;
+                            }
                             matmul_tiles(cb_key_operand_t, cb_grad_scores, (k0 + bi) * Bt + b, b * Bt + a, bi);
                         }
                     }
@@ -957,7 +991,12 @@ void kernel_main() {
                     reconfig_data_format(cb_grad_output, cb_attention_weights);
                     matmul_init(cb_attention_weights, cb_grad_output, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        // Query tiles below the key tile hold no P^T on a
+                        // diagonal pair (see the score pass).
                         for (uint32_t a = 0; a < Bt; ++a) {
+                            if (skip_masked && a < b) {
+                                continue;
+                            }
                             matmul_tiles(cb_attention_weights, cb_grad_output, b * Bt + a, a * vWt + k0 + bi, bi);
                         }
                     }
@@ -1006,6 +1045,9 @@ void kernel_main() {
                     matmul_init(cb_grad_scores, cb_query, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t a = 0; a < Bt; ++a) {
+                            if (skip_masked && a < b) {
+                                continue;
+                            }
                             matmul_tiles(cb_grad_scores, cb_query, b * Bt + a, a * qWt + k0 + bi, bi);
                         }
                     }
