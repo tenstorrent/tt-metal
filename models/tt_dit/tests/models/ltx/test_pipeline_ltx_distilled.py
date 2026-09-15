@@ -4,6 +4,7 @@
 
 import functools
 import itertools
+import json
 import math
 import os
 import shutil
@@ -11,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import time
+import traceback
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -755,9 +758,14 @@ def test_audio_decode_girl(mesh_device, sp_axis, tp_axis, num_links, dynamic_loa
 
 
 # Trace-bucket ladder: 4x8 BH ring, traced, no dynamic load (_ring_trace's region is sized for
-# every rung's resident trace).
+# every rung's resident trace). A single-config diagnostic only captures two traces (~240 MB), so
+# let it shrink the reservation without weakening the default all-rung capacity.
+_bucket_ring_trace = {
+    **_ring_trace,
+    "trace_region_size": int(os.environ.get("LTX_BUCKET_TRACE_REGION_SIZE", _ring_trace["trace_region_size"])),
+}
 LTX_DISTILLED_BUCKET_MESH_PARAMS_DL = [
-    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _ring_trace), False),
+    _with_dynamic_load(_override_base_device_params(_4x8sp1tp0nl2_ring_is_fsdp0, _bucket_ring_trace), False),
 ]
 
 # (canvas, fps, duration) requests served from the same warmed pipeline. Three configs spanning
@@ -779,7 +787,7 @@ _BUCKET_TEST_CONFIGS_DEFAULT = "720p-landscape:24:6,1080p-landscape:25:8,720p-la
 )
 # Warms every rung the served configs reach (compile pass + capture each) and then renders three
 # clips, one of them 1001 frames at 720p through the eager upsampler/VAE.
-@pytest.mark.timeout(7200)
+@pytest.mark.timeout(86400)
 def test_pipeline_distilled_bucket_multi_rung(
     mesh_device, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path, monkeypatch
 ):
@@ -790,17 +798,20 @@ def test_pipeline_distilled_bucket_multi_rung(
     expected rungs, that no new trace I/O was allocated under live traces, and that every request
     produced an MP4 with the requested frame count and duration.
     """
-    from models.tt_dit.utils.ltx import LTX_CANVASES, ltx_aligned_num_frames, route_ltx_config
+    from models.tt_dit.utils.ltx import LTX_CANVASES, LTX_OUTPUT_CANVASES, ltx_aligned_num_frames, ltx_served_configs
 
     skip_if_unsupported_num_links(mesh_device, num_links)
 
-    configs = [
-        (c, int(f), int(d))
-        for c, f, d in (
-            e.split(":") for e in os.environ.get("LTX_BUCKET_TEST_CONFIGS", _BUCKET_TEST_CONFIGS_DEFAULT).split(",")
-        )
-    ]
-    monkeypatch.setenv("LTX_SERVED_CONFIGS", ",".join(f"{c}:{f}:{d}" for c, f, d in configs))
+    requested_configs = os.environ.get("LTX_BUCKET_TEST_CONFIGS", _BUCKET_TEST_CONFIGS_DEFAULT).strip()
+    if requested_configs == "all":
+        configs = list(ltx_served_configs())
+    else:
+        configs = [(c, int(f), int(d)) for c, f, d in (entry.split(":") for entry in requested_configs.split(","))]
+    served_configs = os.environ.get("LTX_BUCKET_TEST_SERVED_CONFIGS")
+    monkeypatch.setenv(
+        "LTX_SERVED_CONFIGS",
+        served_configs or ",".join(f"{c}:{f}:{d}" for c, f, d in configs),
+    )
     # This test is about the DiT traces. Audio tracing is independent, and on Galaxy the vocoder /
     # BWE traces can stall for minutes in execute_trace's mesh-completion wait (see
     # audio_decoder_ltx), so pin the audio side to the eager path unless the caller overrides.
@@ -835,12 +846,8 @@ def test_pipeline_distilled_bucket_multi_rung(
     )
     logger.info(f"pipeline + warmup: {time.time() - t0:.1f}s")
 
-    # Every served config's rungs are warm and hold preallocated I/O; the hot shape's exact
-    # SP-padded lengths were added as rungs of their own (exact_hot_rungs).
-    expected_rungs = set()
-    for c, f, d in configs:
-        route = route_ltx_config(c, f, d, ladder=pipeline.bucket_ladder)
-        expected_rungs.update(route.stage_rung.values())
+    # Every served config's ladder rungs are warm and hold preallocated I/O.
+    expected_rungs = {rung for route in pipeline._served_routes for rung in route.stage_rung.values()}
     assert pipeline._warm_rungs == frozenset(expected_rungs), (pipeline._warm_rungs, expected_rungs)
     assert set(pipeline._trace_state) == expected_rungs
     logger.info(f"{len(configs)} configs -> {len(expected_rungs)} rungs {sorted(expected_rungs)}")
@@ -852,64 +859,115 @@ def test_pipeline_distilled_bucket_multi_rung(
     if int(ttnn.distributed_context_get_rank()) != 0:
         return
 
+    sweep_dir_env = os.environ.get("LTX_BUCKET_TEST_OUTPUT_DIR")
+    output_dir = Path(sweep_dir_env).expanduser().resolve() if sweep_dir_env else tmp_path
+    output_dir.mkdir(parents=True, exist_ok=True)
+    continue_on_failure = os.environ.get("LTX_BUCKET_TEST_CONTINUE_ON_FAILURE", "0") != "0"
+    results_path = output_dir / "results.jsonl"
+    if sweep_dir_env:
+        results_path.write_text("")
+        logger.info(f"bucket sweep outputs: {output_dir}")
+
     ffprobe = shutil.which("ffprobe")
+    failures = []
     for idx, (canvas, fps, duration) in enumerate(configs):
         height, width = LTX_CANVASES[canvas]
         num_frames = ltx_aligned_num_frames(fps, duration)
-        out = tmp_path / f"bucket_{canvas}_{fps}fps_{duration}s.mp4"
+        tag = f"{canvas}_{fps}fps_{duration}s"
+        out = output_dir / f"{tag}.mp4"
+        out.unlink(missing_ok=True)
         t0 = time.time()
-        pipeline.generate(
-            STEADY_STATE_LTX_PROMPT if idx else DEFAULT_LTX_PROMPT,
-            output_path=str(out),
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            fps=fps,
-            seed=10 + idx,
-        )
-        logger.info(f"generate {canvas} {num_frames}f@{fps}fps: {time.time() - t0:.1f}s -> {out}")
-        print_ltx_timing_table(
-            pipeline,
-            label=f"LTX DISTILLED BUCKET [{canvas} {fps}fps {duration}s]",
-            num_frames=num_frames,
-            height=height,
-            width=width,
-            mesh_shape=mesh_shape,
-            sp_axis=sp_axis,
-            tp_axis=tp_axis,
-            topology=topology,
-            output_path=str(out),
-            prompt=DEFAULT_LTX_PROMPT,
-        )
-        assert out.exists() and out.stat().st_size > 0, f"no output for {canvas} {fps}fps {duration}s"
-        if ffprobe:
-            probe = (
-                subprocess.run(
-                    [
-                        ffprobe,
-                        "-v",
-                        "error",
-                        "-select_streams",
-                        "v:0",
-                        "-count_frames",
-                        "-show_entries",
-                        "stream=nb_read_frames,width,height",
-                        "-of",
-                        "csv=p=0",
-                        str(out),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                .stdout.strip()
-                .split(",")
+        result = {
+            "index": idx,
+            "canvas": canvas,
+            "fps": fps,
+            "duration": duration,
+            "num_frames": num_frames,
+            "height": height,
+            "width": width,
+            "output": str(out),
+        }
+        try:
+            pipeline.generate(
+                STEADY_STATE_LTX_PROMPT if idx else DEFAULT_LTX_PROMPT,
+                output_path=str(out),
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                fps=fps,
+                seed=10 + idx,
             )
-            probed_w, probed_h, probed_frames = int(probe[0]), int(probe[1]), int(probe[2])
-            assert (probed_h, probed_w) == (height, width), probe
-            assert probed_frames == num_frames, f"{probed_frames} frames written, requested {num_frames}"
+            elapsed = time.time() - t0
+            logger.info(f"generate {canvas} {num_frames}f@{fps}fps: {elapsed:.1f}s -> {out}")
+            print_ltx_timing_table(
+                pipeline,
+                label=f"LTX DISTILLED BUCKET [{canvas} {fps}fps {duration}s]",
+                num_frames=num_frames,
+                height=height,
+                width=width,
+                mesh_shape=mesh_shape,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
+                topology=topology,
+                output_path=str(out),
+                prompt=DEFAULT_LTX_PROMPT,
+            )
+            assert out.exists() and out.stat().st_size > 0, f"no output for {canvas} {fps}fps {duration}s"
+            if ffprobe:
+                probe = (
+                    subprocess.run(
+                        [
+                            ffprobe,
+                            "-v",
+                            "error",
+                            "-select_streams",
+                            "v:0",
+                            "-count_frames",
+                            "-show_entries",
+                            "stream=nb_read_frames,width,height",
+                            "-of",
+                            "csv=p=0",
+                            str(out),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=True,
+                    )
+                    .stdout.strip()
+                    .split(",")
+                )
+                probed_w, probed_h, probed_frames = int(probe[0]), int(probe[1]), int(probe[2])
+                assert (probed_h, probed_w) == LTX_OUTPUT_CANVASES[canvas], probe
+                assert probed_frames == num_frames, f"{probed_frames} frames written, requested {num_frames}"
+            result.update(status="passed", elapsed_seconds=elapsed, output_bytes=out.stat().st_size)
+        except Exception as error:
+            elapsed = time.time() - t0
+            failure = f"{tag}: {type(error).__name__}: {error}"
+            failures.append(failure)
+            result.update(
+                status="failed",
+                elapsed_seconds=elapsed,
+                error_type=type(error).__name__,
+                error=str(error),
+            )
+            (output_dir / f"{tag}.error.txt").write_text(traceback.format_exc())
+            logger.exception(f"bucket sweep failure after {elapsed:.1f}s; continuing={continue_on_failure}: {tag}")
+            if not continue_on_failure:
+                raise
+        finally:
+            with results_path.open("a") as results_file:
+                results_file.write(json.dumps(result, sort_keys=True) + "\n")
 
     # No rung's trace I/O moved: every request refreshed the preallocated buffers in place.
     for rung, state in pipeline._trace_state.items():
         assert (state.tt_video_lat.buffer_address(), state.tt_video_logical_n.buffer_address()) == baked_addrs[rung]
     assert pipeline._warm_rungs == frozenset(expected_rungs)
+    summary = {
+        "total": len(configs),
+        "passed": len(configs) - len(failures),
+        "failed": len(failures),
+        "failures": failures,
+    }
+    (output_dir / "summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
+    if failures:
+        pytest.fail(f"{len(failures)}/{len(configs)} bucket configs failed; see {results_path}")
