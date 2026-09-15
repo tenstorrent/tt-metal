@@ -100,6 +100,14 @@ _EXPECTED_NS: dict[tuple[str, int], int] = {
     ("glm_51", 5120): 1_261_227,
 }
 
+# Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
+# whole K-row weight slice in one NoC request instead of one per tile. Kept as its own table because
+# the placement moves BOTH ops, so the minimum it gates is a different number -- and it can move the
+# two by different amounts, which is the crossover itself shifting.
+#
+# Empty until measured on the perf runner.
+_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {}
+
 
 def _threshold_of(config) -> Optional[int]:
     """The hybrid split the model ships, read as tt_prefill_block reads it. A config without one
@@ -121,8 +129,10 @@ def _margin_for(active: int) -> float:
 
 
 def _perf_params():
-    """Baseline and margin per (model, active) over the exhaustive ISL sweep, dims and threshold from
-    SINGLE_EXPERT_MODELS. No extended_model mark: the markers below already scope where these run."""
+    """Dims, threshold and margin per (model, active) over the exhaustive ISL sweep, from
+    SINGLE_EXPERT_MODELS. The baseline is not carried here -- it is keyed on the weight placement
+    too, so the test body picks the table. No extended_model mark: the markers below already scope
+    where these run."""
     params = []
     for name, config, _extended in SINGLE_EXPERT_MODELS:
         if name not in _ISL_EXHAUSTIVE_MODELS:
@@ -136,7 +146,6 @@ def _perf_params():
                     threshold,
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
-                    _EXPECTED_NS.get((name, active)),
                     _margin_for(active),
                     # "-perf" keeps ids collision-free under -k: "512-perf" is not in "5120-perf".
                     id=f"{name}-isl-{active}-perf",
@@ -145,7 +154,7 @@ def _perf_params():
     return params
 
 
-def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation):
+def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation, weights_dram_sharded: bool = False):
     """Module and forward for one case, built OUTSIDE the measured callable so a profiled window
     carries forwards rather than weight uploads.
 
@@ -181,6 +190,9 @@ def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
+        # Built once and read by both ops in turn, so the two are compared on one placement rather
+        # than each on its own.
+        weights_dram_sharded=weights_dram_sharded,
         activation=activation,
         hybrid_token_threshold=MAX_TOKENS,
     )
@@ -243,10 +255,11 @@ def _gate_best_of_both(
     margin: float,
     label: str,
     activation=ttnn.RoutedExpertActivation.Silu,
+    weights_dram_sharded: bool = False,
 ) -> None:
     """Measure both ops standalone at this shape and count, gate the faster one, and report the
     winner against the one the model's threshold predicts."""
-    tt_expert, forward = _build(device, emb_dim, hidden_dim, active_tokens, activation)
+    tt_expert, forward = _build(device, emb_dim, hidden_dim, active_tokens, activation, weights_dram_sharded)
 
     durations = {}
     for op, op_threshold in (("fused", MAX_TOKENS), ("composite", None)):
@@ -288,9 +301,11 @@ def _gate_best_of_both(
     [pytest.param(1, {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-chip")],
     indirect=True,
 )
-@pytest.mark.parametrize(
-    "model_name, active_tokens, threshold, emb_dim, hidden_dim, expected_ns, margin", _perf_params()
-)
+@pytest.mark.parametrize("model_name, active_tokens, threshold, emb_dim, hidden_dim, margin", _perf_params())
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Both placements are measured because the crossover is a property of the pair:
+# the placement can move the two ops by different amounts and so shift where they cross.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.requires_host_iommu
 @pytest.mark.skipif(not is_blackhole(), reason="the fused routed-expert path is Blackhole-only")
 @pytest.mark.skipif(not is_p150(), reason="perf baselines are P150-specific; skip on any other board")
@@ -303,17 +318,22 @@ def test_routed_expert_crossover_perf(
     threshold: Optional[int],
     emb_dim: int,
     hidden_dim: int,
-    expected_ns: Optional[int],
     margin: float,
+    weights_dram_sharded: bool,
 ):
     require_realtime_profiler("routed expert crossover perf checks")
+
+    table = _NDSHARD_EXPECTED_NS if weights_dram_sharded else _EXPECTED_NS
+    placement = "w_ndshard" if weights_dram_sharded else "w_interleaved"
+
     _gate_best_of_both(
         mesh_device,
         emb_dim,
         hidden_dim,
         active_tokens,
         threshold,
-        expected_ns,
+        table.get((model_name, active_tokens)),
         margin,
-        label=f'("{model_name}", {active_tokens})',
+        label=f'{placement} ("{model_name}", {active_tokens})',
+        weights_dram_sharded=weights_dram_sharded,
     )

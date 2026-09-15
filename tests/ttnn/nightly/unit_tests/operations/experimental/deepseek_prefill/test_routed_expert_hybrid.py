@@ -81,6 +81,7 @@ def run_routed_expert_hybrid(
     threshold: Optional[int],
     active_tokens: int = None,
     x_row_major: bool = True,
+    weights_dram_sharded: bool = False,
     activation=None,
     weight_scale: float = 0.02,
     weights_dtype=ttnn.bfloat4_b,
@@ -110,7 +111,7 @@ def run_routed_expert_hybrid(
 
     signpost(
         f"RoutedExpertHybrid {allocated_tokens=} {active_tokens=} {emb_dim=} {hidden_dim=} "
-        f"{threshold=} {owner=} {activation=}"
+        f"{threshold=} {owner=} {weights_dram_sharded=} {activation=}"
     )
 
     torch.manual_seed(42)
@@ -163,6 +164,9 @@ def run_routed_expert_hybrid(
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=weights_dtype,
+        # One weight set serves both bands, so a placement is not a per-band choice: whichever band
+        # claims the count reads the weights in whatever layout the module built them.
+        weights_dram_sharded=weights_dram_sharded,
         activation=activation,
         hybrid_token_threshold=threshold,
     )
@@ -282,6 +286,10 @@ def test_tt_routed_expert_hybrid_functional(
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
 @pytest.mark.parametrize("x_row_major", [True, False], ids=["x_rm", "x_tile"])
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Swept here rather than only per-op because the split hands the same weight
+# tensors to whichever band claims the count, so both ops must read the placement.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="the hybrid dispatch is Blackhole-only")
 def test_tt_routed_expert_hybrid_isl_sweep(
     mesh_device,
@@ -292,6 +300,7 @@ def test_tt_routed_expert_hybrid_isl_sweep(
     hidden_dim: int,
     threshold: Optional[int],
     x_row_major: bool,
+    weights_dram_sharded: bool,
 ):
     """The aligned sweep, which straddles each model's threshold in both directions: kimi_k26's
     sentinel keeps every count fused, glm_51's 1792 puts 1024 and below in the fused band and 2048
@@ -304,4 +313,5 @@ def test_tt_routed_expert_hybrid_isl_sweep(
         threshold,
         active_tokens=active_tokens,
         x_row_major=x_row_major,
+        weights_dram_sharded=weights_dram_sharded,
     )

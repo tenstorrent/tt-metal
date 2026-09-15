@@ -311,11 +311,29 @@ def test_moe_fused_swiglu_functional(
     "allocated_tokens, active_tokens, emb_dim, hidden_dim",
     _isl_params(_ISL_EXHAUSTIVE_SWEEP, only_models=_ISL_EXHAUSTIVE_MODELS),
 )
+# DRAM ND-sharded weights let a core fetch its whole K-row weight slice in one NoC request instead
+# of one per tile. Both placements are swept so the interleaved default stays covered.
+@pytest.mark.parametrize("weights_dram_sharded", [False, True], ids=["w_interleaved", "w_ndshard"])
 @pytest.mark.skipif(not is_blackhole(), reason="moe_fused_swiglu is Blackhole-only")
-def test_moe_fused_swiglu_isl_sweep(device, allocated_tokens: int, active_tokens: int, emb_dim: int, hidden_dim: int):
+def test_moe_fused_swiglu_isl_sweep(
+    device,
+    allocated_tokens: int,
+    active_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+    weights_dram_sharded: bool,
+):
     """The aligned sweep the perf baselines are keyed on, x_rm only (the production path)."""
     _skip_if_grid_too_small(device)
-    run_moe_fused_swiglu(device, allocated_tokens, emb_dim, hidden_dim, active_tokens=active_tokens, x_row_major=True)
+    run_moe_fused_swiglu(
+        device,
+        allocated_tokens,
+        emb_dim,
+        hidden_dim,
+        active_tokens=active_tokens,
+        x_row_major=True,
+        weights_dram_sharded=weights_dram_sharded,
+    )
 
 
 @pytest.mark.uncollect_if(pred=ci_pruning.tiled_x_input)
