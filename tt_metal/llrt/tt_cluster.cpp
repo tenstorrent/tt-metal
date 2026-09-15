@@ -232,7 +232,8 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     auto& cluster_desc = (*(this->driver_->get_cluster_description()));
     this->tunnels_from_mmio_device = llrt::discover_tunnels_from_mmio_device(cluster_desc);
 
-    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule) {
+    if (this->target_type_ != tt::TargetDevice::Mock && this->target_type_ != tt::TargetDevice::Emule &&
+        this->target_type_ != tt::TargetDevice::EmuAxi) {
         this->assert_risc_reset();
     }
 }
@@ -248,10 +249,14 @@ void Cluster::detect_arch_and_target() {
     if (this->target_type_ == tt::TargetDevice::Emule) {
         log_warning(tt::LogDevice, "Using emulated device mode with memory-backed I/O");
     }
+    if (this->target_type_ == tt::TargetDevice::EmuAxi) {
+        log_warning(tt::LogDevice, "Using chippy emu_axi device mode");
+    }
 
     TT_FATAL(
         this->target_type_ == tt::TargetDevice::Silicon || this->target_type_ == tt::TargetDevice::Simulator ||
-            this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule,
+            this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule ||
+            this->target_type_ == tt::TargetDevice::EmuAxi,
         "Target type={} is not supported",
         this->target_type_);
 }
@@ -276,7 +281,7 @@ void Cluster::generate_cluster_descriptor() {
             "Custom fabric mesh graph descriptor path must be specified for CUSTOM cluster type");
     }
     if (this->target_type_ == TargetDevice::Simulator || this->target_type_ == TargetDevice::Mock ||
-        this->target_type_ == TargetDevice::Emule) {
+        this->target_type_ == TargetDevice::Emule || this->target_type_ == TargetDevice::EmuAxi) {
         return;
     }
 
@@ -475,6 +480,30 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
 #else
         TT_FATAL(false, "TargetDevice::Emule requires building with TT_METAL_USE_EMULE=ON");
 #endif
+    } else if (this->target_type_ == TargetDevice::EmuAxi) {
+        const std::string& endpoint = rtoptions_.get_emu_server();
+        const size_t colon = endpoint.rfind(':');
+        TT_FATAL(
+            colon != std::string::npos && colon != 0 && colon + 1 < endpoint.size(),
+            "TT_METAL_EMU_SERVER must be host:port, got '{}'",
+            endpoint);
+        const std::string host = endpoint.substr(0, colon);
+        uint32_t port = 0;
+        try {
+            const unsigned long parsed = std::stoul(endpoint.substr(colon + 1));
+            TT_FATAL(parsed > 0 && parsed <= 65535, "Invalid emu_axi port in '{}'", endpoint);
+            port = static_cast<uint32_t>(parsed);
+        } catch (const std::exception& e) {
+            TT_THROW("Invalid TT_METAL_EMU_SERVER '{}': {}", endpoint, e.what());
+        }
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::EMU_AXI,
+            .num_host_mem_ch_per_mmio_device = 0,
+            .sdesc_path = rtoptions_.get_emu_soc_desc_path(),
+            .target_devices = {0},
+            .emu_host = host,
+            .emu_port = port,
+        });
     }
 
     this->driver_ = std::move(device_driver);

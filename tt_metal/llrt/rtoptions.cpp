@@ -54,6 +54,8 @@ enum class EnvVarID {
     TT_METAL_KERNEL_PATH,                     // Path to kernel source files
     TT_METAL_LOGS_PATH,                       // Path for generated logs and debug output
     TT_METAL_SIMULATOR,                       // Path to simulator executable
+    TT_METAL_EMU_SERVER,                      // Chippy emu_axi endpoint (host:port)
+    TT_METAL_EMU_SOC_DESC,                    // SoC descriptor for the emulated package
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
@@ -389,7 +391,8 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
     // what a real device would produce. Architecture gating still happens downstream (only Blackhole's HAL
     // acts on the flag). The simulator and emule backends cannot model dual-erisc, so force it off for them.
     if (this->runtime_target_device_ == tt::TargetDevice::Simulator ||
-        this->runtime_target_device_ == tt::TargetDevice::Emule) {
+        this->runtime_target_device_ == tt::TargetDevice::Emule ||
+        this->runtime_target_device_ == tt::TargetDevice::EmuAxi) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/emule target device");
         this->enable_2_erisc_mode = false;
     }
@@ -518,6 +521,15 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // Simulator takes precedence over Mock (will be set even if Mock was set first)
             this->runtime_target_device_ = tt::TargetDevice::Simulator;
             break;
+
+        case EnvVarID::TT_METAL_EMU_SERVER:
+            this->emu_server = std::string(value);
+            this->runtime_target_device_ = tt::TargetDevice::EmuAxi;
+            this->using_slow_dispatch = true;
+            this->fast_dispatch = false;
+            break;
+
+        case EnvVarID::TT_METAL_EMU_SOC_DESC: this->emu_soc_desc_path = std::string(value); break;
 
         // TT_METAL_MOCK_CLUSTER_DESC_PATH
         // Path to mock cluster descriptor for testing without hardware.
@@ -1982,6 +1994,9 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+    if (this->runtime_target_device_ == tt::TargetDevice::EmuAxi && this->emu_soc_desc_path.empty()) {
+        TT_THROW("TT_METAL_EMU_SERVER requires TT_METAL_EMU_SOC_DESC to be set");
     }
 
     // Set inspector log path
