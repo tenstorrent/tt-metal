@@ -9,4 +9,5 @@ from fuser.wormhole.unpacker.common import (  # noqa: F401
     is_datacopy_node,
     is_unary_unpacker,
     sync_with_packer,
+    unpack_dest_section_done,
 )

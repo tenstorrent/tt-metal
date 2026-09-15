@@ -163,21 +163,29 @@ class ComputePipeline:
 
         return code
 
-    def _zone(self, config: "GlobalConfig", name: str, body: str) -> str:
+    @staticmethod
+    def _zone_name(operation: "L1Operation", phase: str) -> str:
+        return f"{phase}{operation.stage_id}"
+
+    def _zone(
+        self, config: "GlobalConfig", operation: "L1Operation", phase: str, body: str
+    ) -> str:
         if not config.profiler_enabled:
             return body
         code = "{\n"
-        code += f'ZONE_SCOPED("{name}")\n'
+        code += f'ZONE_SCOPED("{self._zone_name(operation, phase)}")\n'
         code += body
         code += "PROFILER_SYNC();\n"
         code += "}\n"
         return code
 
-    def _zone_loop(self, config: "GlobalConfig", name: str, body: str) -> str:
+    def _zone_loop(
+        self, config: "GlobalConfig", operation: "L1Operation", phase: str, body: str
+    ) -> str:
         if not config.profiler_enabled:
             return body
         code = "{\n"
-        code += f'ZONE_SCOPED("{name}")\n'
+        code += f'ZONE_SCOPED("{self._zone_name(operation, phase)}")\n'
         code += f"for(int loop = 0; loop < {config.loop_factor}; loop++)\n"
         code += "{\n"
         code += body
@@ -204,7 +212,7 @@ class ComputePipeline:
             )
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(operation, config, None)
-        code = self._zone(config, "INIT", init_code)
+        code = self._zone(config, operation, "INIT", init_code)
 
         code += unpack_common.sync_with_packer(config, operation)
 
@@ -232,10 +240,12 @@ class ComputePipeline:
                 body += cu.unpack_run(operation, config, block)
                 if not hoist:
                     body += cu.unpack_uninit(operation, config, block)
+            body += unpack_common.unpack_dest_section_done(config, operation)
             return body
 
         code += self._zone_loop(
             config,
+            operation,
             "TILE_LOOP",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
@@ -243,7 +253,7 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             uninit_code += unpack_ops[0].unpack_uninit(operation, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, operation, "UNINIT", uninit_code)
 
         return code
 
@@ -262,7 +272,7 @@ class ComputePipeline:
             init_code += config.sentinel.configure_math(config, operation, fpu_ops[0])
         if hoist and not fpu_ops[0].fpu.per_block_init:
             init_code += fpu_ops[0].fpu_init(operation, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, operation, "INIT", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -302,6 +312,7 @@ class ComputePipeline:
 
         code += self._zone_loop(
             config,
+            operation,
             "TILE_LOOP",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
@@ -309,17 +320,23 @@ class ComputePipeline:
         uninit_code = ""
         if hoist and not fpu_ops[0].fpu.per_block_init:
             uninit_code += fpu_ops[0].fpu_uninit(operation, config, None)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, operation, "UNINIT", uninit_code)
 
         return code
 
     def sfpu_body(self, operation: "L1Operation", config: "GlobalConfig") -> str:
         code = f"// Operation {operation.stage_id}: SFPU\n"
         code += self._zone(
-            config, "INIT", sfpu_common.sfpu_sync_init(config, operation)
+            config, operation, "INIT", sfpu_common.sfpu_sync_init(config, operation)
         )
 
-        sfpu_runs = self._math_sfpu_runs()
+        # Every operation emits all three zones, even when the SFPU has no work, so the
+        # profiler can pair SFPU zones with the other threads' zones.
+        sfpu_runs = (
+            self._math_sfpu_runs()
+            if sfpu_common.sfpu_in_dest_chain(config, operation)
+            else []
+        )
 
         def batch_body(block: BlockData):
             body = ""
@@ -330,12 +347,17 @@ class ComputePipeline:
                     body += node.sfpu_run(operation, config, block)
                     body += node.sfpu_uninit(operation, config, block)
                 body += sfpu_common.sfpu_signal_math(config, operation)
-            body += sfpu_common.sfpu_dest_section_done(config, operation)
+            if sfpu_runs:
+                body += sfpu_common.sfpu_dest_section_done(config, operation)
             return body
 
         code += self._zone_loop(
-            config, "TILE_LOOP", self._batch_loop(operation, config, batch_body)
+            config,
+            operation,
+            "TILE_LOOP",
+            self._batch_loop(operation, config, batch_body),
         )
+        code += self._zone(config, operation, "UNINIT", "")
 
         return code
 
@@ -359,7 +381,7 @@ class ComputePipeline:
         init_code += pack_common.pack_dest_init(config, operation, pack_only[0])
         if hoist and not pack_only[0].packer.per_block_init:
             init_code += pack_only[0].init(operation, config, None)
-        code += self._zone(config, "INIT", init_code)
+        code += self._zone(config, operation, "INIT", init_code)
 
         init_fn = None
         uninit_fn = None
@@ -396,6 +418,7 @@ class ComputePipeline:
 
         code += self._zone_loop(
             config,
+            operation,
             "TILE_LOOP",
             self._batch_loop(operation, config, batch_body, init_fn, uninit_fn),
         )
@@ -404,7 +427,7 @@ class ComputePipeline:
         if hoist and not pack_only[0].packer.per_block_init:
             uninit_code += pack_only[0].uninit(operation, config)
         uninit_code += pack_common.pack_reduce_mask_clear(operation)
-        code += self._zone(config, "UNINIT", uninit_code)
+        code += self._zone(config, operation, "UNINIT", uninit_code)
 
         return code
 

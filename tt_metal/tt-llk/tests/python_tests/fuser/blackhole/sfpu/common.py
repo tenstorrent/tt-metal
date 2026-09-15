@@ -13,6 +13,10 @@ def sfpu_on_isolated_trisc(config: "GlobalConfig") -> bool:
     return False
 
 
+def sfpu_in_dest_chain(config: "GlobalConfig", operation: "L1Operation") -> bool:
+    return True
+
+
 def math_handoff_to_sfpu(config: "GlobalConfig", operation: "L1Operation") -> str:
     return ""
 

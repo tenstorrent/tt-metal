@@ -5,46 +5,48 @@
 
 # buongiorno
 
+quasar_use_dvalid: true
+
 operands:
-  # Q: query tile block
+  # Q: query tile block [seq_len_q, head_dim]
   - name: "Q"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
-  # KT: key transposed
+  # KT: key transposed [head_dim, seq_len_k] -- KT's row (head_dim) must match Q's col (head_dim)
   - name: "KT"
-    dims: [64, 64]
+    dims: [128, 128]
     format: "Float16_b"
     const_value: 0.01
-  # V: value matrix
+  # V: value matrix [seq_len_k, head_dim] -- V's row (seq_len_k) must match sub_exp_out's col (seq_len_k)
   - name: "V"
-    dims: [64, 64]
+    dims: [128, 128]
     format: "Float16_b"
-  # identity_scale: all-ones for reduce
+  # identity_scale: all-ones for reduce, sized to match qkt so unpacker indexing stays 1:1
   - name: "identity_scale"
-    dims: [64, 64]
+    dims: [128, 128]
     format: "Float16_b"
     const_value: 1.0
   # intermediates and outputs
   - name: "qkt"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "row_max"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "sub_exp_out"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "sub_exp_sum"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "attn_v"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "sum_recip"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
   - name: "output"
-    dims: [32, 64]
+    dims: [128, 128]
     format: "Float16_b"
 
 operations:

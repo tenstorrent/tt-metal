@@ -106,14 +106,16 @@ class SfpuKernelGenerator:
         if global_config.architecture != ChipArchitecture.QUASAR:
             return ""
 
-        emit_sfpu = sfpu_common.sfpu_on_isolated_trisc(global_config) and any(
-            op.math.has_math_sfpu() for op in self.config.pipeline
+        # With dvalid the SFPU thread must disable its handshake even when it has no work.
+        emit_sfpu = sfpu_common.sfpu_on_isolated_trisc(global_config) and (
+            global_config.quasar_use_dvalid
+            or any(op.math.has_math_sfpu() for op in self.config.pipeline)
         )
 
         includes = ""
         sfpu_calls = ""
         if emit_sfpu:
-            all_headers = set()
+            all_headers = {"llk_math_common.h"}
             for op in self.config.pipeline:
                 for node in op.math.math_nodes:
                     if isinstance(node, SfpuNode):
@@ -212,11 +214,12 @@ class FusedKernelGenerator:
                 self.config.global_config.dest_acc.value
             )
 
-        quasar_include = (
-            '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
-            if self.config.global_config.architecture == ChipArchitecture.QUASAR
-            else '#include "operand.h"\n'
-        )
+        if self.config.global_config.architecture == ChipArchitecture.QUASAR:
+            quasar_include = '#include "llk_bfd_alloc.h"\n#include "llk_sync.h"\n#include "quasar_test_common.h"\n'
+            if self.config.global_config.quasar_use_dvalid:
+                quasar_include += '#include "llk_dest_dvalid.h"\n'
+        else:
+            quasar_include = '#include "operand.h"\n'
 
         combined = (
             f"#define FUSED_TEST\n"

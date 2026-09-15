@@ -210,7 +210,7 @@ def _sfpu_has_compute_zones(raw_data: pd.DataFrame) -> bool:
     return bool(
         (
             (raw_data["thread"] == "sfpu")
-            & raw_data[MARKER].isin(("INIT", "TILE_LOOP"))
+            & raw_data[MARKER].str.startswith(("INIT", "TILE_LOOP"))
         ).any()
     )
 
@@ -448,20 +448,27 @@ class Profiler:
             return None
 
     @staticmethod
-    def _get_meta(testname: str, variant_id: str) -> dict[id, ProfilerFullMarker]:
+    def _get_meta(
+        testname: str, variant_id: str
+    ) -> dict[str, dict[int, ProfilerFullMarker]]:
+        """Marker metadata per thread: {thread: {marker_id: marker}}.
+
+        The 16-bit marker id only has to be unique within the thread that records it, so
+        markers of different threads may share an id without ambiguity."""
         profiler_data_dir = TestConfig.PROFILER_META / testname / variant_id
         metadata = {}
         for thread in TestConfig.KERNEL_COMPONENTS:
+            thread_metadata = {}
             file = profiler_data_dir / f"{thread}.meta.bin"
-            if not file.exists():
-                continue
-            with open(file, "rb") as f:
-                binary = f.read()
+            if file.exists():
+                with open(file, "rb") as f:
+                    binary = f.read()
                 strings = [s.decode("ascii") for s in binary.split(b"\0")]
                 for s in strings:
                     if marker := Profiler._parse_meta(s):
-                        Profiler._assert_no_collision(metadata, marker)
-                        metadata[marker.id] = marker
+                        Profiler._assert_no_collision(thread_metadata, marker)
+                        thread_metadata[marker.id] = marker
+            metadata[thread] = thread_metadata
 
         return metadata
 
@@ -471,7 +478,7 @@ class Profiler:
     ) -> int:
         """Look up marker ID from metadata by marker name, file suffix, and line number.
         This provides stable marker ID lookup regardless of build environment paths."""
-        for marker in metadata.values():
+        for marker in (m for thread in metadata.values() for m in thread.values()):
             if (
                 marker.marker == marker_name
                 and marker.file.endswith(file_suffix)
@@ -525,10 +532,10 @@ class Profiler:
             marker_id = (word & Profiler.ENTRY_ID_MASK) >> Profiler.ENTRY_ID_SHAMT
 
             try:
-                marker = profiler_meta[marker_id]
+                marker = profiler_meta[thread][marker_id]
             except KeyError:
                 raise AssertionError(
-                    f"Marker with ID {marker_id} not found in profiler metadata"
+                    f"Marker with ID {marker_id} not found in profiler metadata of thread {thread}"
                 )
 
             timestamp_high = word & Profiler.ENTRY_TIME_HIGH_MASK

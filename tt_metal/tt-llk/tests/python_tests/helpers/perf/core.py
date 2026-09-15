@@ -98,7 +98,8 @@ def postprocess_tile_loop(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return pd.DataFrame()
 
-    mask = frame[MARKER] == TILE_LOOP_MARKER
+    # Fused kernels suffix the phase with the operation id (TILE_LOOP1, TILE_LOOP2, ...).
+    mask = frame[MARKER].str.startswith(TILE_LOOP_MARKER)
 
     if not mask.any():
         return frame
@@ -733,7 +734,7 @@ def assert_zones_dont_overlap(profiler_data: ProfilerData) -> None:
     for row in phases.itertuples(index=False):
         if (
             prev is not None
-            and row.marker not in NON_RENDEZVOUS_MARKERS
+            and row.marker.rstrip("0123456789") not in NON_RENDEZVOUS_MARKERS
             and prev.last_close > row.first_open
         ):
             raise AssertionError(

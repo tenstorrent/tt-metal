@@ -96,13 +96,19 @@ def _upk_to_dest_sem_init(config: "GlobalConfig", operation: "L1Operation") -> s
 
 
 def dvalid_init(config: "GlobalConfig" = None, operation: "L1Operation" = None) -> str:
-    from helpers.llk_params import PerfRunType
+    from fuser.quasar import dest_dvalid
 
     if config.quasar_use_dvalid:
-        if config.perf_run_type in (None, PerfRunType.L1_TO_L1):
-            return "set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});\n"
-        return "set_up_zero_dest_dvalid_handshake_for_unpack();\n"
+        return dest_dvalid.enable(config, operation, dest_dvalid.DestClient.UNPACK)
     return _upk_to_dest_sem_init(config, operation)
+
+
+def unpack_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
+    from fuser.quasar import dest_dvalid
+
+    if not config.quasar_use_dvalid:
+        return ""
+    return dest_dvalid.signal(config, operation, dest_dvalid.DestClient.UNPACK)
 
 
 def sync_with_packer(config: "GlobalConfig", operation: "L1Operation") -> str:

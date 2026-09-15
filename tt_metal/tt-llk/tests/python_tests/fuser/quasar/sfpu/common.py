@@ -4,6 +4,7 @@
 
 from typing import TYPE_CHECKING
 
+from fuser.quasar import dest_dvalid
 from helpers.llk_params import DestSync
 
 if TYPE_CHECKING:
@@ -16,11 +17,17 @@ _SFPU_WAIT_STALL = "p_stall::STALL_SFPU | p_stall::STALL_SYNC"
 
 
 def sfpu_on_isolated_trisc(config: "GlobalConfig") -> bool:
-    return not config.quasar_use_dvalid
+    return True
+
+
+def sfpu_in_dest_chain(config: "GlobalConfig", operation: "L1Operation") -> bool:
+    if not config.quasar_use_dvalid:
+        return True
+    return dest_dvalid.in_chain(operation, dest_dvalid.DestClient.SFPU)
 
 
 def math_handoff_to_sfpu(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.skip_sync:
+    if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return (
         "_llk_sync_post_<p_stall::MATH>(semaphore::FPU_SFPU);\n"
@@ -30,7 +37,7 @@ def math_handoff_to_sfpu(config: "GlobalConfig", operation: "L1Operation") -> st
 
 
 def sfpu_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.skip_sync:
+    if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return (
         f"_llk_sync_wait_<{_SFPU_WAIT_STALL}, p_stall::STALL_ON_ZERO>(semaphore::FPU_SFPU);\n"
@@ -39,22 +46,30 @@ def sfpu_wait_for_math(config: "GlobalConfig", operation: "L1Operation") -> str:
 
 
 def sfpu_signal_math(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.skip_sync:
+    if config.skip_sync or config.quasar_use_dvalid:
         return ""
     return "_llk_sync_post_<p_stall::WAIT_SFPU>(semaphore::SFPU_FPU);\n"
 
 
 def sfpu_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if operation.stage_id != 1:
-        return ""
-    return (
-        "_reset_dest_register_offset_();\n"
-        "_set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());\n"
-    )
+    code = ""
+    if operation.stage_id == 1:
+        code += (
+            "_reset_dest_register_offset_();\n"
+            "_set_dest_section_base_<ckernel::TRISC_ID>(_get_dest_buffer_base_());\n"
+        )
+    if config.quasar_use_dvalid:
+        code += dest_dvalid.sfpu_wait_for_release(config, operation)
+        code += dest_dvalid.enable(config, operation, dest_dvalid.DestClient.SFPU)
+    return code
 
 
 def sfpu_dest_section_done(config: "GlobalConfig", operation: "L1Operation") -> str:
-    if config.skip_sync or operation.dest_sync != DestSync.Half:
+    if config.skip_sync:
+        return ""
+    if config.quasar_use_dvalid:
+        return dest_dvalid.signal(config, operation, dest_dvalid.DestClient.SFPU)
+    if operation.dest_sync != DestSync.Half:
         return ""
     dest_acc = config.dest_acc.cpp_enum_value
     return f"_llk_sync_advance_dest_section_<ckernel::TRISC_ID, {dest_acc}, p_stall::WAIT_SFPU>();\n"

@@ -35,6 +35,7 @@ class GlobalConfig:
     quasar_use_dvalid: bool = False
     skip_for_perf: bool = False
     sentinel: FuserSentinel = field(default_factory=FuserSentinel)
+    dvalid_enabled_clients: dict = field(default_factory=dict)
 
     @property
     def skip_unpack_init(self) -> bool:
