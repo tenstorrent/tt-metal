@@ -130,7 +130,7 @@ ttnn.attach_golden_function(ttnn.rms_norm, golden_function=_golden_function)
 # this file is imported twice in some trees (as `normalization` and as
 # `ttnn.operations.normalization`); unguarded, the second pass records our own wrapper as
 # the native op. The true native op is stashed on ttnn, the one namespace both passes share.
-_USE_GENERATED_RMS_NORM = True
+_USE_GENERATED_RMS_NORM = False
 
 if _USE_GENERATED_RMS_NORM and not getattr(ttnn.rms_norm, "_is_generated_rms_norm", False):
     ttnn._native_rms_norm = ttnn.rms_norm
