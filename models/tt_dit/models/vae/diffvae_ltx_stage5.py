@@ -533,6 +533,24 @@ def _reshape_retiled(x: ttnn.Tensor, shape: Sequence[int]) -> ttnn.Tensor:
     return out
 
 
+def log_ccl_cache(ccl_manager, label: str) -> None:
+    """Under ``DIFFVAE_MEM_LOG``, itemise the CCL manager's persistent buffers by kind and shape.
+
+    The ping-pong pool keeps two buffers per shape it has ever served and never frees them, so the
+    DRAM a decode leaves behind is mostly here; ``log_dram`` shows the total, this shows what it is.
+    """
+    if not os.environ.get("DIFFVAE_MEM_LOG") or ccl_manager is None:
+        return
+    rows = []
+    total = 0
+    for key, buffers in ccl_manager._ping_pong_buffer_cache.items():
+        nbytes = sum(b.volume() * b.element_size() for b in buffers)
+        total += nbytes
+        rows.append((nbytes, f"{key[0]} x{len(buffers)} {tuple(key[1])}"))
+    lines = [f"  {nbytes / 2**20:8.1f} MiB  {desc}" for nbytes, desc in sorted(rows, reverse=True)]
+    logger.info(f"[ccl-cache] {label}: {total / 2**30:.2f} GiB per chip in {len(rows)} shape(s)\n" + "\n".join(lines))
+
+
 def log_dram(mesh_device, label: str) -> None:
     """Log allocated DRAM when ``DIFFVAE_MEM_LOG`` is set.
 
@@ -1683,6 +1701,35 @@ class DiffVAEStage5(Module):
         out = self.forward_diff_step(context, x_bands, timestep, grid, bands, brick=brick)
         return self._to_pixels(out, grid, device_out=device_out, output_type=output_type)
 
+    def pull_pixels(self, vol: ttnn.Tensor, grid: Grid, output_type: str = "float", *, release: bool = True):
+        """The PCIe pull of the final pixel volume, host-shaped for the caller.
+
+        ``vol`` is what ``forward(device_out=True)`` returns: ``(1, 3, T, H, W)`` bf16 row-major in
+        ``[-1, 1]``, this chip's W-band (and H-band over the other mesh axis when H divides it).
+        ``yuv`` converts and gathers YUV 4:2:0 on device first so the pull moves 1.5 bytes per pixel
+        instead of 6. ``release=False`` keeps ``vol`` allocated, for a trace whose output buffer it is.
+        """
+        cfg = self.config
+        pv = cfg.patch_size
+        other_axis = 1 - self.sp_axis
+        other = int(list(self.mesh_device.shape)[other_axis])
+        if output_type == "yuv":
+            h_out, w_out = grid.h * pv, grid.w * pv
+            planar = fast_device_to_host_yuv(
+                vol, self.mesh_device, ccl_manager=self.ccl_manager, logical_h=h_out, logical_w=w_out
+            )
+            if release:
+                ttnn.deallocate(vol)
+            return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
+        concat_dims = [None, None]
+        concat_dims[self.sp_axis] = 4  # W-band, in pixels
+        if other > 1:
+            concat_dims[other_axis] = 3  # H-band over the other axis, see _to_pixels
+        px = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)
+        if release:
+            ttnn.deallocate(vol)
+        return px
+
     def _to_pixels(self, out, grid, *, device_out: bool = False, output_type: str = "float"):
         # The tail splits into a device->host PCIe pull and a host-side unpatchify permute; timing
         # them apart tells us which one the (large, at 1080p) tail cost actually is.
@@ -1741,36 +1788,12 @@ class DiffVAEStage5(Module):
                         vol = ttnn.reshape(vol, (1, shp[1], shp[2], wl, cfg.out_channels, pv, pv))
                         vol = ttnn.permute(vol, (0, 4, 1, 2, 6, 3, 5))  # (1, C, T, H, h_sub, W, w_sub)
                         vol = ttnn.reshape(vol, (1, cfg.out_channels, shp[1], shp[2] * pv, wl * pv))
-                        concat_dims = [None, None]
-                        concat_dims[self.sp_axis] = 4  # W-band, now in pixels
-                        if shard_other:
-                            concat_dims[other_axis] = 3
-                        if device_out:
-                            # Everything above is device work a trace can hold; the pull below is not.
-                            if shard_other:
-                                ttnn.deallocate(rm)
-                            return vol
-                        if output_type == "yuv":
-                            # vol is exactly what the YUV kernel wants: (1, 3, T, H, W) bf16 row-major
-                            # in [-1, 1], sharded {mesh axis 0: H, mesh axis 1: W}. Convert and gather
-                            # on device so the pull moves 1.5 bytes/pixel instead of 6.
-                            h_out, w_out = grid.h * pv, grid.w * pv
-                            planar = fast_device_to_host_yuv(
-                                vol,
-                                self.mesh_device,
-                                ccl_manager=self.ccl_manager,
-                                logical_h=h_out,
-                                logical_w=w_out,
-                            )
-                            ttnn.deallocate(vol)
-                            if shard_other:
-                                ttnn.deallocate(rm)
-                            return planar.reshape(planar.shape[0], h_out * 3 // 2, w_out)
-                        px = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)
-                        ttnn.deallocate(vol)
                         if shard_other:
                             ttnn.deallocate(rm)
-                        return px
+                        if device_out:
+                            # Everything above is device work a trace can hold; the pull below is not.
+                            return vol
+                        return self.pull_pixels(vol, grid, output_type)
                     gathered = fast_device_to_host(vol, self.mesh_device, concat_dims, ccl_manager=self.ccl_manager)[
                         ..., : cfg.patch_channels
                     ]  # (1, T, H, W, patch_channels)

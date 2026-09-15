@@ -44,7 +44,13 @@ export DIFFVAE_DET_COLPAR_QKV=1
 export DIFFVAE_DET_FUSED_QKV=1
 export DIFFVAE_DET_FUSED_ROPE=1
 export DIFFVAE_DET_FUSED_SWIGLU=1
-export TT_DIT_STAGE_TIMING=1
+# The decode tree. Off under LTX_TRACED=1: with the DiffVAE traced its spans would synchronise the
+# mesh inside the capture, and the decoder refuses to capture with the timers on.
+if [ "$LTX_TRACED" = 1 ]; then
+  export TT_DIT_STAGE_TIMING=${TT_DIT_STAGE_TIMING:-0}
+else
+  export TT_DIT_STAGE_TIMING=${TT_DIT_STAGE_TIMING:-1}
+fi
 # Stream one "[stage HH:MM:SS] > label" / "< label  N ms" line per decode span so a hang is visible
 # while it happens (the last ">" with no "<" names it) instead of at the timeout. Tree unchanged.
 export TT_DIT_STAGE_LOG=${TT_DIT_STAGE_LOG:-1}

@@ -631,6 +631,25 @@ def test_decode_trace_timing(*, mesh_device, device_params, region):
     assert report.identical, f"replay differs from eager by {report.max_abs_diff}"
 
 
+# The pipeline's traced path: the pipeline flips ``_vae_traced`` after warm-up and ``forward``
+# captures its device half on the first call. Needs the runner's DIFFVAE_DEVICE_* flags and
+# TT_DIT_STAGE_TIMING unset. ``time_module decoder --vae-traced`` is the CLI twin.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": bench.TRACE_REGION_SIZE}],
+    indirect=True,
+    ids=["ring"],
+)
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("output_type", ["float", "yuv"])
+def test_decode_traced_forward_matches_eager(*, mesh_device, device_params, output_type):
+    _require_checkpoint()
+    dec, config = bench.loaded_production_decoder(mesh_device)
+    latent = bench.latent(config, bench.latent_t_from_env(4))
+    report = bench.traced_forward_check(dec, latent, mesh_device, output_type=output_type)
+    assert report.identical, "traced forward differs from eager"
+
+
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": bench.TRACE_REGION_SIZE}],

@@ -31,7 +31,8 @@ from ...layers.neighborhood_attention import (
 from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_plan, plan_na3d
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
-from .diffvae_ltx_stage5 import TILE, log_dram
+from ...utils.tracing import traced_function
+from .diffvae_ltx_stage5 import TILE, log_ccl_cache, log_dram
 from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
 #: The executors that take this chip's W-band and reassemble the window across the shard seam:
@@ -1078,6 +1079,9 @@ class DiffVAEDecoder(Module):
         self.config = config
         self.mesh_device = mesh_device
         self._timestep = None
+        # Set True by the pipeline after warm-up, as for the conv decoder: forward() then captures
+        # the device half of the decode as a ttnn trace on its first call and replays it after.
+        self._vae_traced = False
         # Without a manager every chip decodes the whole volume, which is correct but costs the
         # mesh: memory per chip then scales with frame count rather than with frames/mesh size.
         self.ccl_manager = ccl_manager
@@ -1283,6 +1287,13 @@ class DiffVAEDecoder(Module):
         The whole decode is one root span: the tree hangs off it, and its total is an honesty check
         against the caller's own wall-clock measurement of the same call.
         """
+        out, _ = self._decode(
+            latent, noise=noise, seed=seed, latent_tt=latent_tt, device_out=device_out, output_type=output_type
+        )
+        return out
+
+    def _decode(self, latent, *, noise, seed, latent_tt, device_out, output_type):
+        """:meth:`decode`, also returning the stage-5 grid the pixel pull needs."""
         from .diffvae_ltx_stage5 import Grid
 
         context, dims = self.forward_context(latent, gather_output=not self._wsharded_handoff, latent_tt=latent_tt)
@@ -1315,7 +1326,7 @@ class DiffVAEDecoder(Module):
                 torch.tensor([[[[1.0]]]]), device=self.mesh_device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
             )
         timestep = self._timestep
-        return self.stage5.forward(
+        out = self.stage5.forward(
             context,
             noise,
             timestep,
@@ -1325,6 +1336,56 @@ class DiffVAEDecoder(Module):
             device_out=device_out,
             output_type=output_type,
         )
+        log_dram(self.mesh_device, "decode done")
+        log_ccl_cache(self.stage5.ccl_manager, "decode done")
+        return out, grid
+
+    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    def decode_device(self, raw: ttnn.Tensor, t: int, h: int, w: int, seed: int):
+        """The device half of the decode: raw latent buffer in, this chip's pixel volume out.
+
+        Everything between the two host boundaries -- ghost pad, conv_in, the deterministic stages,
+        the crop, stage 5 with its device-drawn noise, the channel trim and unpatchify -- so that it
+        captures as one ttnn trace; ``forward`` passes ``traced=True`` once the pipeline has flipped
+        ``_vae_traced``. ``raw`` is the ``(1, C, T, H*W)`` ROW_MAJOR upload the device-preproc path
+        reads. Returns the volume and the stage-5 grid ``(T', H', W')`` as plain ints, which the
+        tracer passes through.
+        """
+        shape_only = torch.empty(1, self.in_channels, t, h, w)  # forward_context reads it for its shape
+        vol, grid = self._decode(shape_only, noise=None, seed=seed, latent_tt=raw, device_out=True, output_type="float")
+        return vol, grid.t, grid.h, grid.w
+
+    def _pixels_traced(self, latent: torch.Tensor, *, seed: int, output_type: str):
+        """One decode through the captured trace (captured on the first call), pixels on the host.
+
+        The latent is uploaded to a fresh buffer each call; the tracer copies it into the trace's
+        own input buffer, so the fresh one is freed afterwards -- except on the capture call, where
+        the fresh buffer IS the trace's input and has to stay.
+        """
+        from .diffvae_ltx_stage5 import Grid
+
+        for flag in ("DIFFVAE_DEVICE_PREPROC", "DIFFVAE_DEVICE_NOISE", "DIFFVAE_DEVICE_UNPATCHIFY"):
+            if os.environ.get(flag) != "1":
+                msg = f"a traced DiffVAE decode needs {flag}=1: the host work it replaces cannot sit inside a trace"
+                raise ValueError(msg)
+        if timing_tree.ENABLED:
+            msg = "TT_DIT_STAGE_TIMING=1 synchronises the mesh inside every span, which a trace capture cannot hold"
+            raise RuntimeError(msg)
+
+        b, c, t, h, w = latent.shape
+        key = (c, t, h, w, seed)
+        tracer = type(self).decode_device._tracers_keyed.get(self, {}).get(key)
+        capturing = tracer is None or not tracer.trace_captured
+        raw = ttnn.from_torch(
+            latent.reshape(1, c, t, h * w).contiguous(),
+            device=self.mesh_device,
+            dtype=self.dtype,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        vol, gt, gh, gw = self.decode_device(raw, t, h, w, seed, traced=True, tracer_trace_key=key)
+        if not capturing:
+            ttnn.deallocate(raw)
+        return self.stage5.pull_pixels(vol, Grid(batch=1, t=gt, h=gh, w=gw), output_type, release=False)
 
     def forward(
         self,
@@ -1342,9 +1403,19 @@ class DiffVAEDecoder(Module):
         ``yuv`` converts and gathers YUV 4:2:0 on device, which needs
         ``DIFFVAE_DEVICE_UNPATCHIFY=1`` so the pixels exist on device in the first place.
         """
-        if output_type == "yuv":
+        # DIFFVAE_TRACED=0 keeps this decoder eager inside an otherwise traced pipeline, the
+        # configuration every traced pipeline number before 2026-09-15 was measured in.
+        if self._vae_traced and os.environ.get("DIFFVAE_TRACED", "1") != "0":
+            if noise is not None:
+                msg = "a traced decode draws its noise on device; a caller-supplied noise cannot enter the trace"
+                raise ValueError(msg)
+            pixels = self._pixels_traced(latent, seed=seed, output_type="yuv" if output_type == "yuv" else "float")
+            if output_type == "yuv":
+                return pixels
+        elif output_type == "yuv":
             return self.decode(latent, noise=noise, seed=seed, output_type="yuv")
-        pixels = self.decode(latent, noise=noise, seed=seed)
+        else:
+            pixels = self.decode(latent, noise=noise, seed=seed)
         if output_type == "float":
             return pixels
         if output_type == "rgb":
@@ -1352,4 +1423,6 @@ class DiffVAEDecoder(Module):
         raise ValueError(f"unknown output_type {output_type!r}")
 
     def release_trace(self) -> None:
-        """No-op: this decoder is not traced yet, but the pipeline releases traces blindly."""
+        """Free every captured decode trace (on shutdown, or before re-warming)."""
+        for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()

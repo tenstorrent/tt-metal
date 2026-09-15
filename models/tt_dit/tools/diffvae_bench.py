@@ -629,6 +629,50 @@ def trace_replay(
 
 
 @dataclass
+class TracedForwardReport:
+    eager_ms: float
+    capture_ms: float
+    replay_ms: list[float]
+    identical: bool
+
+
+def traced_forward_check(
+    decoder: DiffVAEDecoder, latent: torch.Tensor, mesh, *, output_type: str = "float", replays: int = 2, log=print
+) -> TracedForwardReport:
+    """The decoder's own traced ``forward`` (the pipeline's path once ``_vae_traced`` is set) against its
+    eager ``forward`` on the same latent: the first traced call captures, the rest replay, and every
+    result must equal the eager pixels exactly. Leaves the decoder untraced with its trace released.
+    """
+    eager, eager_ms = timed_decode(decoder, latent, mesh, output_type=output_type)
+    log(f"[eager] {eager_ms:8.1f} ms  out={tuple(eager.shape)}")
+
+    def same(a, b) -> bool:
+        return bool(torch.equal(a, b)) if isinstance(a, torch.Tensor) else bool((a == b).all())
+
+    decoder._vae_traced = True
+    try:
+        t0 = time.perf_counter()
+        got = decoder.forward(latent, output_type=output_type, seed=0)
+        ttnn.synchronize_device(mesh)
+        capture_ms = (time.perf_counter() - t0) * 1000
+        identical = same(eager, got)
+        log(f"[capture+run] {capture_ms:8.1f} ms  identical={identical}")
+        replay_ms = []
+        for i in range(replays):
+            t0 = time.perf_counter()
+            got = decoder.forward(latent, output_type=output_type, seed=0)
+            ttnn.synchronize_device(mesh)
+            replay_ms.append((time.perf_counter() - t0) * 1000)
+            ok = same(eager, got)
+            identical = identical and ok
+            log(f"[replay {i}] {replay_ms[-1]:8.1f} ms  identical={ok}")
+    finally:
+        decoder._vae_traced = False
+        decoder.release_trace()
+    return TracedForwardReport(eager_ms, capture_ms, replay_ms, identical)
+
+
+@dataclass
 class TraceValidation:
     eager_reproducible: bool
     replay_matches_a: bool

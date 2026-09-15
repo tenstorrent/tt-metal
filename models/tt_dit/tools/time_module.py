@@ -23,6 +23,7 @@ by the matching flag before anything is built, so ``--iters 20`` and ``ITERS=20`
     decoder      test_decode_wsp_timing           whole decode in the runner's configuration
                  test_decode_tail_timing          with --output float,yuv
                  test_decode_trace_timing[decode] with --trace
+                 test_decode_traced_forward_matches_eager  with --vae-traced (the pipeline's path)
     det_stages   test_decode_trace_timing[det_context]  (--trace is required)
     trace_check  test_trace_reexecutes            proves a captured trace re-executes
 
@@ -69,6 +70,11 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     )
     p.add_argument("--output", default="float", help="decoder: comma-separated output types to time, e.g. float,yuv")
     p.add_argument("--trace", action="store_true", help="decoder / det_stages: capture a trace and time the replay")
+    p.add_argument(
+        "--vae-traced",
+        action="store_true",
+        help="decoder: the decoder's own traced forward (the pipeline's path) against eager, per --output type",
+    )
     p.add_argument("--mesh", default="4x8", help="mesh shape RxC")
     p.add_argument(
         "--hang-dump", type=float, metavar="SECONDS", help="dump every thread's stack after this long and exit"
@@ -136,6 +142,17 @@ def _decoder_targets(args, mesh) -> int:
             print(f"\n[trace_check] {'PASS' if ok else 'FAIL'}  replay {result.replay_ms:8.1f} ms\n", flush=True)
             return 0 if ok else 1
 
+        if args.vae_traced:
+            latent = bench.latent(config, bench.latent_t_from_env(4))
+            ok = True
+            for kind in args.output.split(","):
+                print(f"[setup] latent T={latent.shape[2]}, traced forward, output_type={kind}", flush=True)
+                report = bench.traced_forward_check(
+                    dec, latent, mesh, output_type=kind, replays=bench.iters_from_env(2)
+                )
+                ok = ok and report.identical
+            return 0 if ok else 1
+
         if args.trace:
             region = "decode" if args.target == "decoder" else "det_context"
             latent = bench.latent(config, bench.latent_t_from_env(4))
@@ -178,7 +195,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.fabric
         else (ttnn.FabricConfig.FABRIC_1D if block_target else bench.fabric_for_topology())
     )
-    trace_region_size = bench.TRACE_REGION_SIZE if (args.trace or args.target == "trace_check") else None
+    trace_region_size = (
+        bench.TRACE_REGION_SIZE if (args.trace or args.vae_traced or args.target == "trace_check") else None
+    )
     shape = tuple(int(v) for v in args.mesh.lower().split("x"))
 
     with bench.open_mesh(shape, fabric=fabric, trace_region_size=trace_region_size) as mesh:
