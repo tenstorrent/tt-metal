@@ -44,11 +44,15 @@ namespace ckernel::sfpu {
 // so the per-iteration MAD already yields v + 128 and the pack needs no per-element SFPADDI.
 constexpr std::uint32_t QUANT_REPLAY_SLOT = 0;
 constexpr std::uint32_t QUANT_REPLAY_LEN = 3;
+// UINT8 out adds lower-bound clamp (SETCC/MOV/ENCC) before FP32_TO_UINT8 because that
+// conversion returns |x| for x<0 instead of saturating to 0 (issue #56290).
+constexpr std::uint32_t QUANT_REPLAY_LEN_UINT8_OUT = 6;
 constexpr std::uint32_t QUANT_REPLAY_LEN_INT8_OUT = 7;
 constexpr std::uint32_t QUANT_REPLAY_LEN_MAX = QUANT_REPLAY_LEN_INT8_OUT;
 
 constexpr std::uint32_t REQUANT_REPLAY_SLOT = QUANT_REPLAY_SLOT + QUANT_REPLAY_LEN_MAX;
 constexpr std::uint32_t REQUANT_REPLAY_LEN = 4;
+constexpr std::uint32_t REQUANT_REPLAY_LEN_UINT8_OUT = 7;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_INT8_OUT = 8;
 constexpr std::uint32_t REQUANT_REPLAY_LEN_MAX = REQUANT_REPLAY_LEN_INT8_OUT;
 
@@ -152,6 +156,45 @@ inline void calculate_quant_int32(const uint dst_index_in0, const uint dst_index
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false>
+inline void calculate_quant_uint8(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Operand A is input (fp32).
+    // Operand B is scaling factor (fp32).
+    // LREG2 holds the zero-point constant (fp32) loaded by _init_quant_int32_.
+    // Output is int32 scaled to int8 range (sign-magnitude or 2's-complement
+    // depending on SIGN_MAGNITUDE_FORMAT - the conversion is done by SFPSTORE).
+    //
+    // Tile layout in Dest: each tile occupies 64 dest-address units. Each
+    // SFPLOAD/SFPSTORE moves 4 dest rows x 8 SFPU lanes, so advancing dst_reg
+    // by +2 between iterations walks one face's eight 4-row x 8-col blocks
+    // (= one full call site, ITERATIONS == 8).
+    //
+    // The replay-buffer body at QUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
+    // slot are programmed by _init_quant_int32_, which must run before the
+    // first call here.
+    constexpr std::uint32_t dst_tile_size = 64;
+
+    constexpr InstrModLoadStore out_mode =
+        SIGN_MAGNITUDE_FORMAT ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
+
+    const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
+    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    const std::uint32_t out_off = dst_index_out * dst_tile_size;
+
+    // Per iteration: inline TT_SFPLOADs (variable addresses can't live inside
+    // the replay buffer because TT_* macros write to instrn_buffer[0]), replay
+    // the recorded compute, then SFPSTORE under ADDR_MOD_2 (real slot 6) which
+    // also auto-advances dst_reg by 2 for the next iteration's loads.
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_3, in0_off);  // operand A (fp32)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+        lltt::replay(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN_UINT8_OUT);                        // MAD + SFPNOP + STOCH_RND
+        TT_SFPSTORE(p_sfpu::LREG0, out_mode, ADDR_MOD_2, out_off);                // store + dst_reg += 2
+    }
+}
+
+
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
 inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
@@ -191,8 +234,58 @@ inline void calculate_requant_int32(const uint dst_index_in0, const uint dst_ind
     }
 }
 
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8, bool SIGN_MAGNITUDE_FORMAT = false, bool INT8_INPUT = false>
+inline void calculate_requant_uint8(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Operand A is input to requant (int32, sign-magnitude or 2's complement bits or UInt8-unpacked int8 byte).
+    // Operand B is scaling factor (fp32).
+    // LREG2 holds the zero-point constant (fp32) loaded by _init_requant_int32_.
+    // Output is int32 scaled to int8 range.
+    //
+    // The int32 in/out format conversion is done by the SFPLOAD/SFPSTORE
+    // instr_mod0 field (INT32 vs INT32_2S_COMP); the recorded compute body
+    // is identical for both SIGN_MAGNITUDE_FORMAT variants.
+    //
+    // The replay-buffer body at REQUANT_REPLAY_SLOT and ADDR_MOD_6's dest+=2
+    // slot are programmed by _init_requant_int32_, which must run before the
+    // first call here.
+    constexpr std::uint32_t dst_tile_size = 64;
+
+    constexpr InstrModLoadStore int_mode =
+        (SIGN_MAGNITUDE_FORMAT && !INT8_INPUT) ? InstrModLoadStore::INT32 : InstrModLoadStore::INT32_2S_COMP;
+
+    const std::uint32_t in0_off = dst_index_in0 * dst_tile_size;
+    const std::uint32_t in1_off = dst_index_in1 * dst_tile_size;
+    const std::uint32_t out_off = dst_index_out * dst_tile_size;
+
+    // Per iteration: hoist both TT_SFPLOADs ahead of the recorded compute
+    // (the int->fp cast doesn't touch LREG1 so reordering is safe), replay
+    // the recorded body, then SFPSTORE under ADDR_MOD_2 which auto-advances
+    // dst_reg by 2 for the next iteration.
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TT_SFPLOAD(p_sfpu::LREG0, int_mode, ADDR_MOD_3, in0_off);  // operand A (int32 -> sign-magn LREG0)
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_3, in1_off);  // operand B (fp32 scaler)
+        if constexpr (INT8_INPUT) {
+            _int8_input_unbias_();  // byte ^ 0x80 (excess-128)
+        }
+        lltt::replay(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN_UINT8_OUT);      // CAST + MAD + SFPNOP + STOCH_RND
+        TT_SFPSTORE(p_sfpu::LREG0, int_mode, ADDR_MOD_2, out_off);  // store (sign-magn -> int_mode bits) + dst_reg += 2
+    }
+}
+
+
 // Fold +128.0 into the fp32 zero-point in LREG2 so the per-iteration MAD yields v + 128 directly
 inline void _int8_bias_zero_point_() { TTI_SFPADDI(INT8_OFFSET_128_IMM16, p_sfpu::LREG2, 0); }
+
+// Clamp negative lanes to 0.0 before FP32_TO_UINT8. That conversion returns the
+// magnitude of a negative input instead of saturating to 0, which breaks uint8
+// lower-bound saturation for quantize/requantize (see issue #56290).
+inline void _uint8_clamp_neg_to_zero_() {
+    TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
 
 // Clamp / round / xor the MAD result.
 // Low 8 bits of LREG0 hold the 2's complement int8 byte.
@@ -322,7 +415,9 @@ void quant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, QUANT_REPLAY_LEN);
+    constexpr std::uint32_t REPLAY_LEN =
+        (OUTPUT_FORMAT == DataFormat::UInt8) ? QUANT_REPLAY_LEN_UINT8_OUT : QUANT_REPLAY_LEN;
+    lltt::record<lltt::NoExec>(QUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         // D(LREG0) = LREG0 * LREG1 + LREG2 (zero point)
         TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LREG2, p_sfpu::LREG0, 0 /*mod1*/);
@@ -337,6 +432,8 @@ void quant_init(const uint zero_point) {
         // descale. For unsigned (uint8) output, round into the full [0, 255]
         // range; otherwise clamp to signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            // FP32_TO_UINT8 returns |x| for x<0; clamp negatives to 0 first.
+            _uint8_clamp_neg_to_zero_();
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,
@@ -385,7 +482,9 @@ void requant_init(const uint zero_point) {
     }
     _quant_kernels_configure_dest_incr_addrmod_();
 
-    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REQUANT_REPLAY_LEN);
+    constexpr std::uint32_t REPLAY_LEN =
+        (OUTPUT_FORMAT == DataFormat::UInt8) ? REQUANT_REPLAY_LEN_UINT8_OUT : REQUANT_REPLAY_LEN;
+    lltt::record<lltt::NoExec>(REQUANT_REPLAY_SLOT, REPLAY_LEN);
     {
         // int32 sign-magnitude (loaded that way regardless of input bit
         // representation, via SFPLOAD instr_mod0) -> fp32.
@@ -400,6 +499,8 @@ void requant_init(const uint zero_point) {
         // (uint8) output, round into the full [0, 255] range; otherwise clamp to
         // signed int8 [-128, 127].
         if constexpr (OUTPUT_FORMAT == DataFormat::UInt8) {
+            // FP32_TO_UINT8 returns |x| for x<0; clamp negatives to 0 first.
+            _uint8_clamp_neg_to_zero_();
             TTI_SFP_STOCH_RND(
                 sfpi::SFPSTOCHRND_RND_EVEN,
                 0 /*imm8*/,

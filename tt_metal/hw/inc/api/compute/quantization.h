@@ -31,6 +31,12 @@ ALWI void quant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
 
+ALWI void quant_uint8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_quant_uint8, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+}
+
+
 // clang-format off
 /**
  * Quantize variant writing an int8 output tensor.
@@ -68,6 +74,24 @@ ALWI void requant_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_int32, (APPROX), idst0, idst1, odst, VectorMode::RC)));
 }
+
+ALWI void requant_uint8_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_requant_uint8, (APPROX), idst0, idst1, odst, VectorMode::RC)));
+}
+
+ALWI void requant_int8_in_uint8_out_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_requant_uint8,
+        (APPROX, 8, false, true),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC)));
+}
+
 
 // clang-format off
 /**

@@ -654,6 +654,35 @@ def test_requantize_uint8_upper_saturation(device):
 @pytest.mark.parametrize("x0", [32, 128])
 @pytest.mark.parametrize("x1", [32, 128])
 @pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_quantize_uint8_lower_saturation(device):
+    """Test quantize uint8 lower saturation to 0 (issue #56290)."""
+    scale = 0.5
+    zero_point = 0
+    # Values that round below 0 must clamp to 0, not wrap to |x|.
+    input_tr = torch.tensor([-10.0, -1.0, -0.4, 0.0, 1.0, 100.0], dtype=torch.float32)
+    expected = torch.clamp(torch.round(input_tr / scale + zero_point), 0, 255).to(torch.uint8)
+    input_tt = ttnn.from_torch(input_tr, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    out = ttnn.to_torch(out_tt).to(torch.uint8).reshape(-1)[: expected.numel()]
+    assert torch.equal(out, expected), f"got {out.tolist()} expected {expected.tolist()}"
+
+
+def test_requantize_uint8_lower_saturation(device):
+    """Test requantize uint8 lower saturation to 0 on the output side (issue #56290)."""
+    in_scale, in_zp = 1.0, 0
+    out_scale, out_zp = 2.0, 0
+    # Choose q_in so (q_in - in_zp) * in_scale / out_scale + out_zp goes negative.
+    q_in = torch.tensor([0, 1, 2, 10, 200], dtype=torch.int32)
+    expected = torch.clamp(torch.round((q_in - in_zp) * in_scale / out_scale + out_zp), 0, 255).to(torch.uint8)
+    q_in_tt = ttnn.from_torch(q_in.to(torch.uint8), dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device)
+    out_tt = ttnn.requantize(q_in_tt, in_scale, in_zp, out_scale, out_zp, dtype=ttnn.uint8)
+    assert out_tt.dtype == ttnn.uint8
+    out = ttnn.to_torch(out_tt).to(torch.uint8).reshape(-1)[: expected.numel()]
+    assert torch.equal(out, expected), f"got {out.tolist()} expected {expected.tolist()}"
+
+
+
 def test_quant_dequant_requant_int8_per_tensor_2d(device, x0, x1, input_dtype):
     """Test quantize, dequantize and requantize (per-tensor) for int8"""
     torch.manual_seed(0)
