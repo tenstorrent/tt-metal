@@ -94,7 +94,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"floor", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); floor_tile(0);"}}},
     {"trunc", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); trunc_tile(0);"}}},
     {"frac", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); frac_tile(0);"}}},
-    {"round", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); round_tile(0, 0);"}}},
+    {"round", {{"SFPU_OP_CHAIN_0", "rounding_op_tile_init(); round_tile(0, 0 /* decimals */);"}}},
 };
 
 // Binary SFPU ops driven by `run_sfpu_binary_two_input_buffer`.
