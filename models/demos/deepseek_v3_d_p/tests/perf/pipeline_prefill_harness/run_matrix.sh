@@ -45,9 +45,10 @@ declare -A CACHE=(
   [pp4]=${M4_CACHE_8x1}
 )
 # ISL -> chunks (of 5,120) | cache width | throughput request count (keeps total chunks ~50-100)
-declare -A CHUNKS=(  [5120]=1     [25600]=5     [102400]=20    [261120]=51    )
-declare -A WIDTH=(   [5120]=10240 [25600]=30720 [102400]=122880 [261120]=261120 )
-declare -A NREQ=(    [5120]=48    [25600]=10    [102400]=3     [261120]=2     )
+# 40,960 (8 chunks) is the 2026-09-15 campaign's break-even bracket cell; the rest are unchanged.
+declare -A CHUNKS=(  [5120]=1     [25600]=5     [40960]=8     [102400]=20    [261120]=51    )
+declare -A WIDTH=(   [5120]=10240 [25600]=30720 [40960]=46080 [102400]=122880 [261120]=261120 )
+declare -A NREQ=(    [5120]=48    [25600]=10    [40960]=6     [102400]=3     [261120]=2     )
 
 CONFIGS=${CONFIGS:-"1rank pp4"}
 ISLS=${ISLS:-"5120 25600 102400 261120"}
@@ -63,6 +64,11 @@ for cfg in $CONFIGS; do
     trace=1
     case "$mode" in
       ttft)      req=1; users=1; kvonly=1 ;;
+      # PROCESS-WARM latency: two requests in ONE process, report the second. Trace capture and
+      # first-chunk compile then fall outside the measured request, which `ttft` cannot achieve --
+      # running that cell twice does not help, because each run is a fresh process and re-captures.
+      # Requires the E2E_CLOCK_V2 metric fix on the branch; read with analyze_prefill_latency_v2.py.
+      lat)       req=2; users=1; kvonly=1 ;;
       # The LM-head/norm tail, eager (the only way it can run at all), with and without the token.
       # The DIFFERENCE of the two is the tail cost; neither number is meaningful on its own.
       tokentail) req=1; users=1; kvonly=0; trace=0 ;;

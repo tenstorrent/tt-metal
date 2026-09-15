@@ -41,8 +41,21 @@ for spec in "1rank_deep 0" "pp4_deep 0"; do
 done
 
 echo; echo "############ integrity: trap 1 -- rc=0 can hide a dead runner ############"
+# `grep -c` exits 1 when the count is zero, so the old `|| echo 0` appended a SECOND "0" and made
+# $n the two-line string "0\n0", which is != "0" -- every cell reported DIRTY and a real failure
+# was indistinguishable from a clean run. grep -c always prints a count, so no fallback is needed.
+#
+# TT_FATAL is also split out: rank teardown legitimately logs `TT_FATAL: cq_id 0 is out of range`
+# from the D2D stream-service destructors after the device closes, on every healthy run. Counting it
+# fails every good cell; ignoring it wholesale hides real ones. Both counts are printed.
 for d in "$RES"/*/; do
   [ -f "$d/runner.log" ] || continue
-  n=$(grep -cE "AssertionError|Traceback|TT_FATAL" "$d/runner.log" 2>/dev/null || echo 0)
-  [ "$n" != "0" ] && echo "  DIRTY $(basename $d): $n error lines" || echo "  clean $(basename $d)"
+  py=$(grep -cE "AssertionError|Traceback \(most recent call last\)" "$d/runner.log" 2>/dev/null)
+  tf=$(grep -E "TT_FATAL" "$d/runner.log" 2>/dev/null | grep -cvE "cq_id [0-9]+ is out of range")
+  bn=$(grep -cE "TT_FATAL.*cq_id [0-9]+ is out of range" "$d/runner.log" 2>/dev/null)
+  if [ "$py" -ne 0 ] || [ "$tf" -ne 0 ]; then
+    echo "  DIRTY $(basename $d): $py python-level, $tf non-benign TT_FATAL ($bn benign teardown)"
+  else
+    echo "  clean $(basename $d)  ($bn benign teardown TT_FATAL)"
+  fi
 done
