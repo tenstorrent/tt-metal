@@ -56,6 +56,11 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         # Prefix caching would need the vision splice to be cache-aware; not claimed.
         "supports_prefix_caching": False,
         "supports_async_decode": True,
+        # Measured, not assumed: produced garbage at batch 1 (CER 77-332%,
+        # finish_reason "length"), the same corruption class as qwen3_vl's
+        # #48037. Not needed either -- allow_force_argmax alone (tt/model.py)
+        # already clears the decode-rate gate.
+        "supports_sample_on_device": False,
     }
 
     def __init__(self, *args, **kwargs):

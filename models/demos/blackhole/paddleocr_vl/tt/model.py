@@ -22,6 +22,11 @@ from models.tt_transformers.tt.model import Transformer as TTTransformer
 
 
 class Transformer(TTTransformer):
+    # Inert with host sampling; kept as a prerequisite for any future attempt
+    # at on-device sampling. See supports_sample_on_device in generator_vllm.py.
+    _tt_vllm_always_refresh_decode_trace_inputs = True
+    _tt_disable_sampling_trace = True
+
     def __init__(
         self,
         args,
@@ -32,6 +37,12 @@ class Transformer(TTTransformer):
         paged_attention_config=None,
         use_paged_kv_cache=False,
     ):
+        # Route greedy through the single-gather force-argmax path, not the
+        # heavy top-k/top-p pipeline; must be set before super().__init__.
+        ag_cfg = dict(args.model_config.get("SAMPLING_AG_CONFIG", {}) or {})
+        ag_cfg["allow_force_argmax"] = True
+        args.model_config["SAMPLING_AG_CONFIG"] = ag_cfg
+
         # qwen3_vl's RotarySetup carries the per-user rope_deltas that M-RoPE needs
         # at decode time: after an image, a user's text positions are offset by how
         # much the image's 3D positions advanced, and that offset differs per user.
