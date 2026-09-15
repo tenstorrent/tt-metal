@@ -713,7 +713,17 @@ class MiniMaxH3Attention(Module):
         # The packed sequence is one attention document and logical_n masks the pad tail, so no mask.
         exp_program_config = self._exp_sdpa_program_config(q_BHNE.shape[2])
         if exp_program_config is not None:
-            spatial_BHNE, _prompt, _lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+            # SOL_RING_KEEP_EVERY routes this call through the sol_ring fork with its chunk skip on.
+            # Measurement lever only: the fork is a clone of this op plus the skip, and a strided
+            # subset is not this op's answer, so the output is wrong by construction when set.
+            sol_keep = int(os.environ.get("SOL_RING_KEEP_EVERY", "0"))
+            ring_attention_op = (
+                ttnn.transformer.sol_ring
+                if sol_keep
+                else (ttnn.transformer.exp_ring_joint_scaled_dot_product_attention)
+            )
+            sol_kwargs = {"chunk_keep_every": sol_keep} if sol_keep else {}
+            spatial_BHNE, _prompt, _lse = ring_attention_op(
                 q_BHNE,
                 k_BHNE,
                 v_BHNE,
@@ -739,6 +749,7 @@ class MiniMaxH3Attention(Module):
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 num_workers_per_link=5,
                 num_buffers_per_channel=32,
+                **sol_kwargs,
             )
         elif self.use_ring:
             spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
