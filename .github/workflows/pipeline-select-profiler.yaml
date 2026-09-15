@@ -169,19 +169,12 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   t3000-profiler-tests:
-    needs: [determine-tests, build-artifact, bake-env-dev-full]
-    # bake-env-dev-full is in needs but deliberately absent from the if:. A failed
-    # bake leaves the ref empty and the legs fall back to the artifact path; gating
-    # on it would skip the suite instead. The if: therefore restates the
-    # build-artifact dependency the bare needs list used to imply. determine-tests
-    # stays covered by the run-* check, which is empty unless that job succeeded.
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' &&
-     needs.determine-tests.outputs.run-t3k == 'true' }}
+    needs: [determine-tests, build-artifact]
+    if: ${{ needs.determine-tests.outputs.run-t3k == 'true' }}
     uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
     secrets: inherit
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      prebuilt-image: ${{ needs.bake-env-dev-full.outputs.image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
