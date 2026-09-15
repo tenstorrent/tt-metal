@@ -8,10 +8,13 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
+#include "device/rmsnorm_bw_apply_program_factory.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/generic/generic_op.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 using namespace tt::tt_metal;
@@ -186,28 +189,43 @@ Tensor to_stats_layout(const Tensor& tensor) {
     return ttnn::pad(tensor, padding, 0.0f);
 }
 
+// Fuses the apply step of RMSNorm backward:
+//   dx     = gamma * dy / rms - x * scale / rms^2
+//   dgamma = sum(dy * x / rms) over N, C, H   (only when weight is set)
+// into one reader/compute/writer program so the eltwise chain stays in L1
+// and dgamma is reduced on-chip.
 std::vector<std::optional<Tensor>> apply_backward(
     const Tensor& input,
     const Tensor& output_grad,
     const Tensor& rms,
     const Tensor& scale,
     const std::optional<const Tensor>& weight,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& /*compute_kernel_config*/) {
     auto x = to_fp32(input);
     auto dy = to_fp32(output_grad);
-    auto g = gained(dy, rms, weight);
-    auto dx =
-        cast_if_needed(ttnn::subtract(g, ttnn::multiply(x, ttnn::divide(scale, ttnn::square(rms)))), input.dtype());
+    auto inv_rms = ttnn::reciprocal(to_fp32(rms));
+    auto d = ttnn::multiply(to_fp32(scale), ttnn::square(inv_rms));
 
-    std::vector<std::optional<Tensor>> grads{std::move(dx), std::nullopt};
-    if (weight.has_value()) {
-        auto dgamma = ttnn::sum(
-            ttnn::multiply(dy, ttnn::divide(x, rms)),
-            ttsl::SmallVector<int>{0, 1, 2},
-            /*keep_dim=*/true,
-            std::nullopt,
-            compute_kernel_config);
-        grads[1] = cast_if_needed(dgamma, weight->dtype());
+    auto dx_fp32 =
+        ttnn::empty(x.logical_shape(), DataType::FLOAT32, Layout::TILE, x.device(), ttnn::DRAM_MEMORY_CONFIG);
+    const bool with_weight = weight.has_value();
+    Tensor gamma = with_weight ? to_fp32(weight.value()) : x;
+    std::optional<Tensor> dgamma_fp32;
+    if (with_weight) {
+        dgamma_fp32 =
+            ttnn::empty(weight->logical_shape(), DataType::FLOAT32, Layout::TILE, x.device(), ttnn::DRAM_MEMORY_CONFIG);
+    }
+
+    auto desc = create_rmsnorm_bw_apply_program_descriptor(x, dy, gamma, inv_rms, d, dx_fp32, dgamma_fp32);
+    std::vector<Tensor> io{x, dy, gamma, inv_rms, d, dx_fp32};
+    if (dgamma_fp32.has_value()) {
+        io.push_back(dgamma_fp32.value());
+    }
+    ttnn::generic_op(io, desc);
+
+    std::vector<std::optional<Tensor>> grads{cast_if_needed(dx_fp32, input.dtype()), std::nullopt};
+    if (dgamma_fp32.has_value()) {
+        grads[1] = cast_if_needed(dgamma_fp32.value(), weight->dtype());
     }
     return grads;
 }
