@@ -695,3 +695,63 @@ def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, k
     inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
+
+
+def test_segmented_k128_sharded_summary_rebinds_indicator(device: ttnn.Device, isolated_program_cache: None) -> None:
+    from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_affine_exclusive_scan import (
+        _height_sharded_memory_config,
+    )
+
+    groups, chunks, dim = 4, 4, 128
+    memory = _height_sharded_memory_config(device, 2 * groups, dim, dim)
+    retained = []
+    entries = None
+    for seed, boundary in ((971, True), (972, False), (973, True)):
+        host = host_protocol(2 * groups, chunks, dim, dim, bf16_names=BF16_ALLOWED, seed=seed)
+        inputs = device_protocol(host, device)
+        indicator = to_device(torch.tensor([[[float(boundary)]]]), device)
+        before = tuple(ttnn.to_torch(t).clone() for t in (*inputs, indicator))
+        outputs = run_summary(
+            inputs,
+            groups_per_head=groups,
+            wrap_indicator=indicator,
+            wrap_chunk=9,
+            emit_tail_summaries=True,
+            memory_config=memory,
+        )
+        expected = (
+            _segmented_summary_oracle(host, groups, chunks, 9)
+            if boundary
+            else (
+                *summary_oracle(host),
+                torch.eye(dim).expand(2 * groups, dim, dim),
+                torch.zeros(2 * groups, dim, dim),
+            )
+        )
+        assert len(outputs) == 4
+        assert_outputs_accurate(
+            expected,
+            outputs,
+            names=("head_a", "head_b", "tail_a", "tail_b"),
+            context=f"K128 sharded segmented boundary={boundary}",
+        )
+        addresses = {t.buffer_address() for t in (*inputs, indicator)}
+        for output in outputs:
+            assert tuple(output.shape) == (2 * groups, dim, dim)
+            assert output.dtype == ttnn.float32 and output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == memory
+            assert output.buffer_address() not in addresses
+            addresses.add(output.buffer_address())
+        for old, tensor in zip(before, (*inputs, indicator), strict=True):
+            assert_bit_identical(old, ttnn.to_torch(tensor), name="summary input immutability")
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+            assert indicator.buffer_address() != retained[-1][len(inputs)].buffer_address()
+        retained.append((*inputs, indicator))
+        for output in outputs:
+            ttnn.deallocate(output)
+    for invocation in retained:
+        for tensor in invocation:
+            ttnn.deallocate(tensor)
