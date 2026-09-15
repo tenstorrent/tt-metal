@@ -783,6 +783,10 @@ def _flat_height(shape):
     return h
 
 
+def _div_up(a, b):
+    return -(-a // b)
+
+
 def _height_concat_mem_config(shard_shape, grid, strategy, orientation):
     # With use_height_and_width_as_shard_shape, create_sharded_memory_config swaps the shard
     # shape for COL_MAJOR, so pass it pre-swapped to land on the shard spec we actually want.
@@ -815,16 +819,21 @@ def _run_height_concat(
     if strategy == ttnn.ShardStrategy.WIDTH:
         # Width sharding splits only the last dim; every core keeps the whole flattened height.
         num_cores = grid_cols * grid_rows
-        in_shards = [(fh, width // num_cores) for fh in flat_heights]
-        out_shard = (out_flat_height, width // num_cores)
+        in_shards = [(fh, _div_up(width, num_cores)) for fh in flat_heights]
+        out_shard = (out_flat_height, _div_up(width, num_cores))
     else:
         # Block sharding splits height across the grid rows and width across the grid cols --
         # the other way round for COL_MAJOR, which is the axis swap this exercises.
+        #
+        # Shard heights are rounded *up*, which is what ttnn does: when the flattened height is
+        # not a multiple of the grid rows the last shard is part padding and the capacity exceeds
+        # the real height. That is the ragged case, and it is why the factory has to take the
+        # block height from the tensor height rather than from shard_h * grid_rows.
         col_major = orientation == ttnn.ShardOrientation.COL_MAJOR
         shard_grid_h = grid_cols if col_major else grid_rows
         shard_grid_w = grid_rows if col_major else grid_cols
-        in_shards = [(fh // shard_grid_h, width // shard_grid_w) for fh in flat_heights]
-        out_shard = (out_flat_height // shard_grid_h, width // shard_grid_w)
+        in_shards = [(_div_up(fh, shard_grid_h), _div_up(width, shard_grid_w)) for fh in flat_heights]
+        out_shard = (_div_up(out_flat_height, shard_grid_h), _div_up(width, shard_grid_w))
 
     torch_inputs = [random_torch_tensor(dtype, s) for s in shapes]
     torch_out = torch.concat(torch_inputs, dim=-2)
@@ -965,6 +974,16 @@ def test_sharded_concat_height_leading_dims_width_sharded(device, shapes, num_co
             ttnn.bfloat16,
             ttnn.ShardOrientation.COL_MAJOR,
         ),
+        # --- ragged height sharding: the flattened height is not a multiple of the grid rows, so
+        # the last height shard is part padding and the shard capacity exceeds the real height.
+        # Deriving the block height from capacity folds that padding into every block. Wrong on
+        # main even at one block, so these are row-major only (a tile shard cannot be ragged). ---
+        ([(1, 1, 10, 64)] * 2, 2, 4, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32, ttnn.ShardOrientation.ROW_MAJOR),
+        ([(1, 1, 11, 64)] * 2, 2, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.ShardOrientation.ROW_MAJOR),
+        ([(2, 1, 5, 64)] * 2, 2, 4, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.ShardOrientation.ROW_MAJOR),
+        ([(3, 1, 5, 64)] * 2, 2, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.uint32, ttnn.ShardOrientation.ROW_MAJOR),
+        ([(2, 1, 4, 64), (2, 1, 6, 64)], 2, 4, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.ShardOrientation.ROW_MAJOR),
+        ([(2, 1, 5, 64)] * 2, 4, 2, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, ttnn.ShardOrientation.COL_MAJOR),
     ],
 )
 def test_sharded_concat_height_leading_dims_block_sharded(

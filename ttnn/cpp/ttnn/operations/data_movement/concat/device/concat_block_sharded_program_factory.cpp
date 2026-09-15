@@ -142,36 +142,42 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     const uint32_t out_units_w = to_units_w(output_shard_w);
     const uint32_t dst_stride_bytes = out_units_w * unit_size;
 
-    // Rows each input contributes per leading index, and the output rows one leading index spans.
-    // At num_blocks == 1 input_block_h[i] is the input's whole flattened height, which is the
-    // quantity the height loop below used to walk -- so the one-block case is bit-identical.
+    // Rows each input contributes per leading index, the output rows one leading index spans, and
+    // the output's real flattened height.
+    //
+    // These come from the tensors' own heights, not from input_shard_h * shard_grid_h. That
+    // product is the allocated shard *capacity*, and block sharding lets the last height shard be
+    // part padding -- flattened height 10 across two shards of 6 has a capacity of 12. Dividing
+    // capacity by the block count folds that padding into every block, which shifts each block
+    // after the first. Shard height is still what maps a row to its source core, just below.
+    //
+    // A tensor's flattened height is num_blocks * padded_shape[-2], so the per-block row count is
+    // simply padded_shape[-2].
     std::vector<uint32_t> input_block_h(num_input_tensors);
     uint32_t output_block_h = 0;
+    uint32_t out_total_h = 0;
     if (!width_concat) {
         for (uint32_t i = 0; i < num_input_tensors; i++) {
-            const uint32_t inp_total_h = input_shard_h[i] * shard_grid_h;
-            TT_FATAL(
-                inp_total_h % num_blocks == 0,
-                "Height concat: input {} spans {} rows across the {} grid rows, which does not "
-                "divide into the {} leading indices of shape {}.",
-                i,
-                inp_total_h,
-                shard_grid_h,
-                num_blocks,
-                input_tensors[i].padded_shape());
-            input_block_h[i] = inp_total_h / num_blocks;
+            input_block_h[i] = input_tensors[i].padded_shape()[-2];
             output_block_h += input_block_h[i];
         }
-        // The height loop walks output rows [0, output_block_h * num_blocks); anything else means
-        // the grid does not tile the output height and the row arithmetic below would drift.
+        out_total_h = output_block_h * num_blocks;
+        // Height concat sums the inputs' heights, so this is a restatement of the output spec.
         TT_FATAL(
-            output_block_h * num_blocks == output_shard_h * shard_grid_h,
-            "Height concat: inputs contribute {} rows per leading index over {} indices, but the "
-            "output shards span {} x {} rows.",
+            output_block_h == output.padded_shape()[-2],
+            "Height concat: inputs contribute {} rows per leading index but the output's height is "
+            "{} (shape {}).",
             output_block_h,
-            num_blocks,
+            output.padded_shape()[-2],
+            output.padded_shape());
+        // The shards have to be able to hold the result; they may hold more (ragged tail).
+        TT_FATAL(
+            output_shard_h * shard_grid_h >= out_total_h,
+            "Height concat: output shards span {} x {} rows, too few for the {} rows of shape {}.",
             output_shard_h,
-            shard_grid_h);
+            shard_grid_h,
+            out_total_h,
+            output.padded_shape());
     }
 
     // --- Circular Buffers ---
@@ -290,8 +296,10 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
                 // A segment's output rows are a run of the *output* height; its source rows are a
                 // run of input inp_id's flattened height starting at blk * input_block_h[inp_id].
                 // Those source rows can straddle grid rows, which the src_r loop already splits.
+                // Clipped to the real height: the last height shard can extend past it, and
+                // those rows are padding with no source row to copy from.
                 const uint32_t out_row_start = sh * output_shard_h;
-                const uint32_t out_row_end = out_row_start + output_shard_h;
+                const uint32_t out_row_end = std::min(out_row_start + output_shard_h, out_total_h);
                 const uint32_t copy_width = to_units_w(output_shard_w) * unit_size;
 
                 for (uint32_t blk = 0; blk < num_blocks; blk++) {
