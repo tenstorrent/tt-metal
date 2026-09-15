@@ -374,8 +374,15 @@ inline void reader_main(const ValueAccessor& value_acc, const AttnAccessor& attn
                             offset_bytes = 0;
                         }
                         CoreLocalMem<uint32_t> dst(value_arena_l1 + r * value_stick_nbytes);
+                        // Both page_id and offset_bytes belong to the *source* pack: async_read is
+                        // (src, dst, size, src_args, dst_args), so an offset in the 5th argument
+                        // would shift the L1 destination instead of the DRAM source page.
                         noc.async_read(
-                            value_acc, dst, value_stick_nbytes, {.page_id = page}, {.offset_bytes = offset_bytes});
+                            value_acc,
+                            dst,
+                            value_stick_nbytes,
+                            {.page_id = page, .offset_bytes = offset_bytes},
+                            {.offset_bytes = 0});
                     }
                     noc.async_read_barrier();
 
