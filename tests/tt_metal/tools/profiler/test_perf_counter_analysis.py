@@ -19,6 +19,7 @@ from tt_llk_perf import metrics as mc
 from tt_llk_perf.headers import counter_type_names
 from tracy.perf_counter_analysis import (
     COUNTER_TYPE_NAMES,
+    NEOS_PER_CORE,
     PERF_COUNTER_CSV_HEADERS,
     compute_device_only_metrics,
     compute_perf_counter_metrics,
@@ -158,9 +159,18 @@ def test_quasar_capture_produces_quasar_metrics_per_op():
     # Every Quasar metric the engine declares is a real column here (nothing read a fake 0 or None).
     quasar_labels = {mc.METRIC_LABELS[k] for k in mc.METRIC_LABELS if k.startswith("thread3_")}
     assert quasar_labels <= set(stats)
-    # Four NEO readers on four cores: the raw counts average per record, not per compute core.
+    # Util over the full grid: four cores of NEOS_PER_CORE readers each, whatever subset reported.
     fpu = df[df["counter type"] == "FPU_COUNTER"]["value"]
-    assert result["per_op_counts"]["avg_fpu_count"][(1, 0)] == pytest.approx(fpu.mean())
+    assert result["per_op_counts"]["avg_fpu_count"][(1, 0)] == pytest.approx(fpu.sum() / (4 * NEOS_PER_CORE))
+
+
+def test_sparse_quasar_capture_still_averages_over_the_whole_grid():
+    # One NEO of one core on a 64 core grid: dividing by the rows that reported would read like a busy grid.
+    df = make_capture(["FPU_COUNTER"], "QUASAR_NEO{}", 1)
+    counts = compute_perf_counter_metrics(df, "quasar", total_compute_cores=64)["per_op_counts"]
+    only_value = df["value"].iloc[0]
+    assert counts["avg_fpu_count"][(1, 0)] == pytest.approx(only_value / (64 * NEOS_PER_CORE))
+    assert counts["avg_fpu_count"][(1, 0)] < only_value / 100
 
 
 def test_quasar_capture_produces_quasar_metrics_device_only():

@@ -44,10 +44,11 @@ union PerfCounter {
         std::uint32_t counter_value, std::uint32_t ref_cnt, PerfCounterType counter_type, std::uint32_t neo = 0) :
         value_word(counter_value),
         ref_word(ref_cnt),
-        type_word(static_cast<std::uint32_t>(counter_type) | (neo << NEO_SHIFT)) {}
+        type_word(static_cast<std::uint32_t>(counter_type) | (neo << NEO_SHIFT)),
+        pad_word(0) {}
     // Raw counter_type, for the l1_client encoding above the enum.
     PerfCounter(std::uint32_t counter_value, std::uint32_t ref_cnt, std::uint32_t counter_type_raw, std::uint32_t neo) :
-        value_word(counter_value), ref_word(ref_cnt), type_word(counter_type_raw | (neo << NEO_SHIFT)) {}
+        value_word(counter_value), ref_word(ref_cnt), type_word(counter_type_raw | (neo << NEO_SHIFT)), pad_word(0) {}
 
     PerfCounter(std::uint64_t raw_data_1, std::uint64_t raw_data_2) : raw_data_1(raw_data_1), raw_data_2(raw_data_2) {}
 };

@@ -363,7 +363,7 @@ __attribute__((always_inline)) inline std::uint32_t get_zone_id(std::uint32_t ha
 static_assert(PERF_COUNTERS_LAYOUT_END <= llk_profiler::EPOCH_ADDR, "Perf counter L1 layout overflows into the profiler region");
 
 // PERF_CNT_ALL reaches only INSTRN_THREAD and FPU; the other banks take the pulse on their own control register.
-// Quasar has no L1 bank: the l1_client CSR is clear-on-read, so its window starts with a read instead.
+// Quasar has no L1 bank: l1_client_start routes the selection, enables the CSR and clears it (clear-on-read).
 inline __attribute__((always_inline)) void arm_all_counters()
 {
     ckernel::fence_compiler();
@@ -372,7 +372,7 @@ inline __attribute__((always_inline)) void arm_all_counters()
 #if defined(ARCH_QUASAR)
     if constexpr (L1_CLIENT_ENABLED)
     {
-        (void)llk::perf::l1_client_read(llk::perf::l1_client_regs());
+        llk::perf::l1_client_start(llk::perf::l1_client_regs(), static_cast<std::uint32_t>(L1_CLIENT_SEL));
     }
 #else
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::START);
@@ -386,7 +386,14 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
     ckernel::fence_compiler();
     llk::perf::stop_all();
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_UNPACK).control, llk::perf::STOP);
-#if !defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR)
+    // Before the readout below writes and reads L1: a TRISC-port selection would otherwise count those
+    // accesses into a window whose reference count is already frozen.
+    if constexpr (L1_CLIENT_ENABLED)
+    {
+        llk::perf::l1_client_stop(llk::perf::l1_client_regs());
+    }
+#else
     llk::perf::write(llk::perf::bank_regs(Bank::L1).control, llk::perf::STOP);
 #endif
     llk::perf::write(llk::perf::bank_regs(Bank::TDMA_PACK).control, llk::perf::STOP);

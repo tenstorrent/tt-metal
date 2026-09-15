@@ -15,12 +15,12 @@ from loguru import logger
 
 try:
     from tt_llk_perf import metrics as _mc
-    from tt_llk_perf.headers import counter_type_names
+    from tt_llk_perf.headers import counter_type_names, num_neos
 except ModuleNotFoundError:
     # A source tree puts the repo root and tools/ on PYTHONPATH; the package lives under tt-llk.
     sys.path.append(str(Path(__file__).resolve().parents[2] / "tt_metal" / "tt-llk" / "tools" / "python"))
     from tt_llk_perf import metrics as _mc
-    from tt_llk_perf.headers import counter_type_names
+    from tt_llk_perf.headers import counter_type_names, num_neos
 
 OpDict = Dict[str, Any]
 DeviceOpsDict = Dict[int, List[OpDict]]
@@ -139,6 +139,8 @@ def compute_metrics_per_op(perf_counter_df, device_arch=""):
 
 # Parsed from the PerfCounterType enum in tt-llk so the names cannot drift from the compiled ordinals.
 COUNTER_TYPE_NAMES = counter_type_names()
+# Quasar reports one record per NEO, so a full grid holds this many readers per compute core.
+NEOS_PER_CORE = num_neos()
 
 
 # Columns derive from METRIC_LABELS; three utilizations keep their legacy "Avg ... on full grid" name.
@@ -365,11 +367,10 @@ def compute_perf_counter_metrics(perf_counter_df, device_arch, total_compute_cor
         mask = perf_counter_df["counter type"] == cname
         if mask.any():
             grouped = perf_counter_df[mask].groupby(["run_host_id", "trace_id_count"])["value"]
-            if _is_quasar(device_arch):
-                # Four NEO readers per core: a per-core divisor would overstate the average ~4x.
-                per_op_counts[out_key] = grouped.mean().to_dict()
-            else:
-                per_op_counts[out_key] = (grouped.sum() / total_compute_cores).to_dict()
+            # These columns are util over the full grid, so the divisor counts every reader the grid has,
+            # not the ones that reported: an idle NEO contributes a zero. Quasar has NEOS_PER_CORE of them.
+            divisor = total_compute_cores * (NEOS_PER_CORE if _is_quasar(device_arch) else 1)
+            per_op_counts[out_key] = (grouped.sum() / divisor).to_dict()
 
     return {"per_op_stats": per_op_stats, "per_op_counts": per_op_counts}
 

@@ -129,6 +129,15 @@ def parse_enum(text: str, enum_name: str = "PerfCounterType") -> Dict[int, str]:
     return names
 
 
+def num_neos(include_dir=None) -> int:
+    """NUM_NEOS from registers.h: the NEO execution units a Quasar core carries."""
+    header = find_include_dir(include_dir) / "registers.h"
+    match = re.search(r"NUM_NEOS\s*=\s*(\d+)", _strip_comments(header.read_text()))
+    if match is None:
+        raise ValueError(f"NUM_NEOS not found in {header}")
+    return int(match.group(1))
+
+
 def counter_type_names(include_dir=None) -> Dict[int, str]:
     """Ordinal -> name table of PerfCounterType, parsed from types.h."""
     header = find_include_dir(include_dir) / "types.h"
