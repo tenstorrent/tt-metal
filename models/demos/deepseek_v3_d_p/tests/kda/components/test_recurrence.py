@@ -366,3 +366,50 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 
     assert_bit_identical(eager_output, traced_output, name=f"tp_axis={tensor_parallel_axis} traced output")
     assert_bit_identical(eager_state, traced_state, name=f"tp_axis={tensor_parallel_axis} traced state")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
+    mesh_device: ttnn.MeshDevice, order: tuple[int, ...]
+) -> None:
+    a = torch.eye(32).repeat(2, 4, 1, 1)
+    a[0, :, 0, 1] = 0.5
+    a[1, :, 1, 0] = 0.25
+    b = torch.stack([torch.full((4, 32, 32), 0.125 * (rank + 1)) for rank in range(2)])
+    initial = torch.stack([torch.eye(32) * (tp + 1) for tp in range(4)]).unsqueeze(0)
+    assert not torch.equal(a[0] @ a[1], a[1] @ a[0])
+
+    def to_mesh(host: torch.Tensor, dims: tuple[int | None, int | None]) -> ttnn.Tensor:
+        tensor = ttnn.from_torch(
+            host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=(2, 4)),
+        )
+        return ttnn.reshape(tensor, (1, 32, 32))
+
+    entry, final = recurrence._distributed_prefix(
+        recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
+        to_mesh(initial, (None, 1)),
+        sequence_parallel_axis=0,
+        order=order,
+        compute_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        ),
+    )
+    carry = initial[0]
+    entries = {}
+    for rank in order:
+        entries[rank] = carry
+        carry = a[rank] @ carry + b[rank]
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank, tp = divmod(index, 4)
+        assert_accurate(entries[rank][tp].unsqueeze(0), ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
+        assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
