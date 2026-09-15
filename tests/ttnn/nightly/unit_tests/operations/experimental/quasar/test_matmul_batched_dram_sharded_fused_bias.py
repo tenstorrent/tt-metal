@@ -4,6 +4,7 @@
 
 """Fused-bias batched HEIGHT_SHARDED DRAM matmul hangs if bias is pushed per batch."""
 
+import pytest
 import torch
 
 import ttnn
@@ -13,12 +14,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 qsr = ttnn._ttnn.operations.experimental.quasar
 
 
-def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device):
+@pytest.mark.parametrize(
+    "n_tiles",
+    [
+        pytest.param(1, id="bias_one_tile"),
+        pytest.param(None, id="bias_all_dram_banks"),
+    ],
+)
+def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_tiles):
     """Descriptor path with FUSE_BIAS and batches_per_core > 1. Public linear post-processes on WH."""
     workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
     num_banks = len(workers)
     tile = 32
-    m = k = n = tile
+    m = k = tile
+    n = tile * (num_banks if n_tiles is None else n_tiles)
     batches_per_core = 2
     batch = batches_per_core * num_banks
 
@@ -82,5 +91,4 @@ def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device):
     result = ttnn.generic_op([in0_t, in1_t, bias_t, output[0]], descriptor)
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     ref = torch.matmul(in0, in1) + bias
-    # Interleaved DRAM bias lives in bank 0; the kernel reads with each worker's bank_id.
-    assert_with_pcc(ref[:, :batches_per_core], got[:, :batches_per_core], pcc=0.999)
+    assert_with_pcc(ref, got, pcc=0.999)
