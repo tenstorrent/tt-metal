@@ -50,6 +50,9 @@ class DumpWaitGlobalsData:
     # Verbose fields for detailed debugging
     last_wait_count: int | None = triage_field("last_wait_count", verbose=2)
     last_wait_stream: int | None = triage_field("last_wait_stream", verbose=2)
+    last_go_token: int | None = triage_field("last_go_token", verbose=2)
+    last_fds_go_pending_mask: int | None = triage_field("last_fds_go_pending_mask", verbose=2)
+    last_fds_open_round_mask: int | None = triage_field("last_fds_open_round_mask", verbose=2)
     wait_stream_value: int | None = triage_field("wait_stream_value", verbose=2)
     cb_fence: int | None = triage_field("cb_fence", verbose=2)
     cmd_ptr: int | None = triage_field("cmd_ptr", verbose=2)
@@ -199,6 +202,13 @@ def read_wait_globals(
     last_wait_stream = _read_symbol_value(
         kernel_elf, "last_wait_stream", loc_mem_access, check_value=is_dispatcher_kernel
     )
+    last_go_token = _read_symbol_value(kernel_elf, "last_go_token", loc_mem_access, check_value=False)
+    last_fds_go_pending_mask = _read_symbol_value(
+        kernel_elf, "last_fds_go_pending_mask", loc_mem_access, check_value=False
+    )
+    last_fds_open_round_mask = _read_symbol_value(
+        kernel_elf, "last_fds_open_round_mask", loc_mem_access, check_value=False
+    )
     last_event = _read_symbol_value(
         kernel_elf, "last_event", loc_mem_access, check_value=dispatcher_core_data.kernel_name == "cq_dispatch"
     )
@@ -286,6 +296,9 @@ def read_wait_globals(
         kernel_name=dispatcher_core_data.kernel_name,
         last_wait_count=last_wait_count,
         last_wait_stream=last_wait_stream,
+        last_go_token=last_go_token,
+        last_fds_go_pending_mask=last_fds_go_pending_mask,
+        last_fds_open_round_mask=last_fds_open_round_mask,
         wait_stream_value=wait_stream_value,
         cb_fence=circular_buffer_fence,
         cmd_ptr=command_pointer,

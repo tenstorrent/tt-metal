@@ -543,3 +543,43 @@ unit_tests_dispatch:
     back2back: true
     env:
       TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoConcurrentSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoConcurrentSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoMaxSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoMaxSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoTraceTwoSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoTraceTwoSubDevices*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
+
+  - filter: "*WorkerGoSubDeviceManagerSwitch*"
+    config: 2x3_DISPATCH
+    back2back: true
+
+  - filter: "*WorkerGoSubDeviceManagerSwitch*"
+    config: 2x3_DISPATCH
+    back2back: true
+    env:
+      TT_METAL_DISABLE_FDS: 1
