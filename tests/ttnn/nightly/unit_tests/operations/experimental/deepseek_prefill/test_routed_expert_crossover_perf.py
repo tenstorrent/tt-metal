@@ -43,6 +43,7 @@ from tests.ttnn.profiling.realtime_profiler_utils import (
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill.test_single_routed_expert import (
     _ISL_ALLOCATED_TOKENS,
+    reshard_expert_weights_nd,
     _ISL_EXHAUSTIVE_MODELS,
     _ISL_EXHAUSTIVE_SWEEP,
     SINGLE_EXPERT_MODELS,
@@ -190,12 +191,13 @@ def _build(device, emb_dim: int, hidden_dim: int, active_tokens: int, activation
         torch_weights=[weights],
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
-        # Built once and read by both ops in turn, so the two are compared on one placement rather
-        # than each on its own.
-        weights_dram_sharded=weights_dram_sharded,
         activation=activation,
         hybrid_token_threshold=MAX_TOKENS,
     )
+    # Resharded once and read by both ops in turn, so the two are compared on one placement rather
+    # than each on its own.
+    if weights_dram_sharded:
+        reshard_expert_weights_nd(tt_expert, device)
     tt_input = ttnn.from_torch(
         torch_input,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device),

@@ -120,39 +120,6 @@ class TtRoutedExpert(LightweightModule):
         return True
 
     @staticmethod
-    def dram_nd_shard_spec(mesh_device, n_dim: int, k_rows: int = 1) -> "ttnn.NdShardSpec":
-        """DRAM ND shard spec that lets UnifiedRoutedExpertFfn fetch a whole (k_rows x per_core_N)
-        weight slice in ONE NoC request instead of one per tile.
-
-        The shard is k_rows tile-rows tall and per_core_N tiles wide -- exactly the slice one FFN
-        core consumes. Two properties matter:
-
-        * WIDTH: matching per_core_N is what makes the slice a single shard, hence one contiguous
-          request. per_core_N = ceil(n_tiles / GRID_X) mirrors the op's own N split; the op
-          validates the width and fails loudly if they diverge.
-        * HEIGHT trades request count against DRAM bank COVERAGE, and coverage wins -- leave it at
-          1. Shards distribute ROUND_ROBIN_1D, so a core's requests within one K-block step by the
-          shard grid's N extent, and the NUMBER of requests decides how many of the 8 banks that
-          block touches. A bank-pinned core saturates near 30 GB/s regardless of request size
-          versus ~370 GB/s rotating, so cutting request count buys nothing and hurts the moment it
-          cuts coverage. A shard as tall as the whole K-block is that endpoint: one bank per block.
-
-        n_tiles need not be a multiple of per_core_N: the last shard is partially valid and those
-        columns are dropped by the op's existing N-bounds guards.
-        """
-        grid_x = ttnn.UNIFIED_ROUTED_EXPERT_CORE_GRID.x
-        n_tiles = n_dim // ttnn.TILE_SIZE
-        per_core_n = (n_tiles + grid_x - 1) // grid_x
-        dram_grid = mesh_device.dram_grid_size()
-        return ttnn.NdShardSpec(
-            shard_shape=ttnn.Shape([k_rows * ttnn.TILE_SIZE, per_core_n * ttnn.TILE_SIZE]),
-            grid=ttnn.CoreRangeSet(
-                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid.x - 1, dram_grid.y - 1))]
-            ),
-            orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        )
-
-    @staticmethod
     def _convert_and_cache_expert_weights(
         torch_weights: list[dict] | None,
         experts_per_chip: int,
@@ -164,7 +131,6 @@ class TtRoutedExpert(LightweightModule):
         *,
         emb_dim: int | None = None,
         hidden_dim: int | None = None,
-        dram_sharded: bool = False,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -255,34 +221,6 @@ class TtRoutedExpert(LightweightModule):
                 gate_tt = ttnn.squeeze(ttnn.squeeze(gate_tt, dim=0), dim=0)
                 up_tt = ttnn.squeeze(ttnn.squeeze(up_tt, dim=0), dim=0)
                 down_tt = ttnn.squeeze(ttnn.squeeze(down_tt, dim=0), dim=0)
-
-                # Done as a device-side reshard after the interleaved build and the squeeze to 2D,
-                # rather than by handing as_tensor an ND memory config: the mesh-mapper path
-                # rank-squeezes the 4D weight and ND-sharded tensors reject that view. It also keeps
-                # the on-disk cache layout-independent, so switching layouts needs no cache rebuild.
-                if dram_sharded:
-                    gate_tt = ttnn.to_memory_config(
-                        gate_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, gate_tt.shape[-1]),
-                        ),
-                    )
-                    up_tt = ttnn.to_memory_config(
-                        up_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, up_tt.shape[-1]),
-                        ),
-                    )
-                    down_tt = ttnn.to_memory_config(
-                        down_tt,
-                        ttnn.MemoryConfig(
-                            buffer_type=ttnn.BufferType.DRAM,
-                            nd_shard_spec=TtRoutedExpert.dram_nd_shard_spec(mesh_device, down_tt.shape[-1]),
-                        ),
-                    )
-
                 gate_tensors.append(gate_tt)
                 up_tensors.append(up_tt)
                 down_tensors.append(down_tt)
@@ -386,7 +324,6 @@ class TtRoutedExpert(LightweightModule):
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
-        weights_dram_sharded: bool = False,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
         *,
@@ -433,9 +370,6 @@ class TtRoutedExpert(LightweightModule):
         self.num_devices = mesh_device.get_num_devices()
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
-        # DRAM ND-sharded weights: one NoC request per K-row slice instead of one per tile, with
-        # the shard->bank round-robin rotating banks across K-rows. See dram_nd_shard_spec.
-        self.weights_dram_sharded = weights_dram_sharded
         self.compute_kernel_config = compute_kernel_config
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
@@ -520,7 +454,6 @@ class TtRoutedExpert(LightweightModule):
                 self.weight_cache_path,
                 self.cache_name_prefix,
                 device=self.mesh_device,
-                dram_sharded=weights_dram_sharded,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -534,7 +467,6 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
-                dram_sharded=weights_dram_sharded,
             )
         else:
             logger.debug(f"Creating dummy tensors for testing ({total_experts} experts)")
@@ -555,7 +487,6 @@ class TtRoutedExpert(LightweightModule):
                 None,
                 None,
                 device=self.mesh_device,
-                dram_sharded=weights_dram_sharded,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
