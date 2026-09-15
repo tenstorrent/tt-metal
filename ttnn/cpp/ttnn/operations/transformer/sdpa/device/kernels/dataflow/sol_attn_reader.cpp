@@ -478,6 +478,15 @@ void kernel_main() {
 
             // loop while k_low < q_high
             for (uint32_t k_chunk = k_loop_start; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+#if SOL_ATTN_CHUNK_KEEP_EVERY > 1
+                // Block-sparse stride, matched with the compute kernel's is_first/is_last-over-kept
+                // logic: a skipped chunk is neither read, forwarded, received, nor mask-streamed, and
+                // the compute no longer drains it. The stride is global, so every core in the
+                // K-forwarding chain skips the same chunks and the semaphore protocol stays in step.
+                if (k_chunk != 0 && (k_chunk % SOL_ATTN_CHUNK_KEEP_EVERY) != 0) {
+                    continue;
+                }
+#endif
                 const uint32_t kv_row_start_tile = std::min(k_chunk * Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_end_tile = std::min(kv_row_start_tile + Sk_chunk_t, valid_Skt_bound);
                 const uint32_t kv_row_tile_count = kv_row_end_tile - kv_row_start_tile;

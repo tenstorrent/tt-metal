@@ -221,13 +221,9 @@ void sol_attn_inner_loop(
 
             // Block-sparse skip. Chunk 0 is always kept: the normalization after this loop is
             // unconditional, so a q chunk that selected nothing would divide by a zero accumulator.
+            // No drain: the reader applies the same stride and never pushes a skipped chunk.
             if constexpr (chunk_keep_every > 1) {
                 if (k_chunk != 0 && (k_chunk % chunk_keep_every) != 0) {
-                    cb_k_in_obj.wait_front(k_chunk_tiles);
-                    cb_v_in_obj.wait_front(v_chunk_tiles);
-                    cb_k_in_obj.pop_front(k_chunk_tiles);
-                    cb_v_in_obj.pop_front(v_chunk_tiles);
-
                     continue;
                 }
             }
@@ -983,17 +979,9 @@ void sol_attn_standard_v2(
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
             if constexpr (chunk_keep_every > 1) {
+                // The reader applies the same stride and never pushes a skipped chunk, so there is
+                // nothing to drain -- a drain here would deadlock waiting on tiles that never come.
                 if (!stride_keeps(k_chunk)) {
-                    // The reader streams every chunk regardless of selection; drain or the CBs
-                    // desync. K arrives transposed on this path, hence cb_kt_in.
-                    CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
-                    sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
-                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * vDHt);
-                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * vDHt);
-                    if constexpr (use_provided_mask) {
-                        CircularBuffer(cb_mask_in).wait_front(Sq_chunk_t * Sk_chunk_t);
-                        sdpa_cb_pop_front_out_of_line(cb_mask_in, Sq_chunk_t * Sk_chunk_t);
-                    }
                     continue;
                 }
             }
