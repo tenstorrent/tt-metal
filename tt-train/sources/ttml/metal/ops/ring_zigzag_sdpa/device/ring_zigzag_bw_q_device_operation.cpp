@@ -1,0 +1,120 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// ring_zigzag_sdpa: the ring_sdpa_fw / ring_sdpa_bw mesh wrapper over the
+// single-chip SDPA kernels, with the chips that run chosen by where this
+// step's visiting chunk comes from (ops::ZigzagVisitor) instead of by the
+// contiguous layout's causal rule. The kernels and the reference ring ops
+// are untouched; this exists so the zigzag layout can use them on one chunk
+// pair per launch.
+
+#include "ring_zigzag_bw_q_device_operation.hpp"
+
+#include <fmt/core.h>
+
+#include <tt-metalium/host_api.hpp>
+
+#include "metal/ops/common/ring_sdpa_utils.hpp"
+
+namespace ttml::metal::ops::ring_zigzag_bw::q {
+
+using namespace tt::tt_metal;
+using namespace ttnn;
+
+// ============== Backward Q Device Operation ==============
+
+void RingZigzagBwQDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    validate_ring_attributes(attrs, tensor_args.query);
+    validate_ring_qkv(tensor_args.query, tensor_args.key, tensor_args.value);
+    validate_output_like_tensor(tensor_args.grad_output, "Grad output", tensor_args.query, tensor_args.value);
+    validate_output_like_tensor(tensor_args.attn_output, "Attention output", tensor_args.query, tensor_args.value);
+    validate_intermediates_tensor(tensor_args.intermediates, tensor_args.query);
+    if (tensor_args.preallocated_grad_query.has_value()) {
+        validate_grad_like_tensor(
+            tensor_args.preallocated_grad_query.value(),
+            "Preallocated grad query",
+            tensor_args.query,
+            tensor_args.query);
+    }
+}
+
+RingZigzagBwQDeviceOperation::spec_return_value_t RingZigzagBwQDeviceOperation::compute_output_specs(
+    const operation_attributes_t& /*attrs*/, const tensor_args_t& tensor_args) {
+    tt::tt_metal::TensorSpec grad_query_spec =
+        tensor_args.preallocated_grad_query.has_value()
+            ? tensor_args.preallocated_grad_query->tensor_spec()
+            : tt::tt_metal::TensorSpec(
+                  tensor_args.query.logical_shape(),
+                  tt::tt_metal::TensorLayout(
+                      tensor_args.query.dtype(), tt::tt_metal::Layout::TILE, tensor_args.query.memory_config()));
+
+    // u_scaler: one FP32 tile per query row, shape = (1, 1, B*NH*S, TILE_WIDTH)
+    const auto [B, NH, S, E] = tensor_args.query.padded_shape().to_array_4D();
+    auto u_scaler_shape = ttnn::Shape({1, 1, B * NH * S, tt::constants::TILE_WIDTH});
+    auto mem_config =
+        tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM);
+    tt::tt_metal::TensorSpec u_scaler_spec(
+        u_scaler_shape,
+        tt::tt_metal::TensorLayout(tt::tt_metal::DataType::FLOAT32, tt::tt_metal::Layout::TILE, mem_config));
+
+    return {grad_query_spec, u_scaler_spec};
+}
+
+RingZigzagBwQDeviceOperation::tensor_return_value_t RingZigzagBwQDeviceOperation::create_output_tensors(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    auto [grad_query_spec, u_scaler_spec] = compute_output_specs(attrs, tensor_args);
+
+    ttnn::Tensor grad_query = tensor_args.preallocated_grad_query.has_value()
+                                  ? tensor_args.preallocated_grad_query.value()
+                                  : ttnn::create_device_tensor(grad_query_spec, tensor_args.query.device());
+
+    // TODO: accept preallocated_u_scaler to avoid per-step allocation in the ring loop.
+    // The tensor is small (one FP32 tile per Q row), so the overhead is negligible for now.
+    ttnn::Tensor u_scaler = ttnn::create_device_tensor(u_scaler_spec, tensor_args.query.device());
+
+    return {grad_query, u_scaler};
+}
+
+}  // namespace ttml::metal::ops::ring_zigzag_bw::q
+
+namespace ttnn::prim {
+
+ttml::metal::ops::ring_zigzag_bw::q::RingZigzagBwQDeviceOperation::tensor_return_value_t ttml_ring_zigzag_bw_q(
+    const ttnn::Tensor& grad_output,
+    const ttnn::Tensor& attn_output,
+    const ttnn::Tensor& query,
+    const ttnn::Tensor& key,
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& intermediates,
+    uint32_t ring_size,
+    uint32_t ring_axis,
+    uint32_t step,
+    ttml::metal::AttentionMaskType mask_type,
+    ttml::metal::ops::ring_zigzag_bw::RingDirection ring_direction,
+    ttml::metal::ops::ZigzagVisitor visitor,
+    const std::optional<ttnn::Tensor>& preallocated_grad_query) {
+    using OperationType = ttml::metal::ops::ring_zigzag_bw::q::RingZigzagBwQDeviceOperation;
+
+    auto operation_attributes = OperationType::operation_attributes_t{
+        .ring_size = ring_size,
+        .ring_axis = ring_axis,
+        .step = step,
+        .mask_type = mask_type,
+        .ring_direction = ring_direction,
+        .visitor = visitor};
+
+    auto tensor_args = OperationType::tensor_args_t{
+        .grad_output = grad_output,
+        .attn_output = attn_output,
+        .query = query,
+        .key = key,
+        .value = value,
+        .intermediates = intermediates,
+        .preallocated_grad_query = preallocated_grad_query};
+
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
+}
+
+}  // namespace ttnn::prim

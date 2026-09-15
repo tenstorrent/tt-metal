@@ -38,6 +38,13 @@ struct RingCyclicSDPABackwardParams {
     // any step -- and each chip runs the chunk pairs zigzag_sub_problems
     // gives it as slices of one program.
     ops::RingLayout layout{ops::RingLayout::Contiguous};
+    // Zigzag only: run just this one of the chip's pairs (0 or 1) rather
+    // than all of them as slices of one program. Two pairs of a non-diagonal
+    // step share a chunk and cannot be slices of one launch (the op refuses),
+    // so the driver issues pair 0 and pair 1 as two launches; the diagonal
+    // step's Causal pairs are disjoint and run together. kAllPairs = all.
+    static constexpr uint32_t kAllPairs = 0xFFFFFFFFU;
+    uint32_t zigzag_pair{kAllPairs};
 };
 
 struct RingCyclicSDPABackwardInputs {

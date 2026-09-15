@@ -41,7 +41,7 @@ enum class RingLayout {
 // source chip of this step (Backward direction: (r + step) mod d):
 //
 //   src == r:  (0, 0) and (1, 1) are causal triangles, (1, 0) a full block;
-//   src <  r:  (0, 0) and (1, 0) are full blocks;
+//   src <  r:  (1, 0) and (0, 0) are full blocks;
 //   src >  r:  (1, 0) and (1, 1) are full blocks.
 //
 // A launch runs one mask mode, so the caller asks for the Causal pairs (only
@@ -53,6 +53,45 @@ struct ZigzagSubProblems {
     std::vector<uint32_t> col_chunks{};
 };
 
+// Which chips a zigzag launch runs on, by where this step's visitor comes
+// from relative to the chip: Any (every chip), Earlier (src < r) or Later
+// (src > r). Used by the predicate wrappers over the single-chip forward and
+// two-pass kernels, which take whole tensors of one chunk length and so run
+// one chunk pair per launch: the (1, 0) block is uniform, the (0, 0) block
+// belongs to chips with an earlier visitor and the (1, 1) block to chips
+// with a later one.
+enum class ZigzagVisitor {
+    Any,
+    Earlier,
+    Later,
+};
+
+inline uint32_t zigzag_source_chip(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction) {
+    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
+        return (device_ring_id + step) % ring_size;
+    }
+    return (device_ring_id + ring_size - (step % ring_size)) % ring_size;
+}
+
+inline bool zigzag_visitor_runs(
+    uint32_t device_ring_id,
+    uint32_t step,
+    uint32_t ring_size,
+    ttnn_fixed::distributed::RingShiftDirection ring_direction,
+    ZigzagVisitor visitor) {
+    const uint32_t src = zigzag_source_chip(device_ring_id, step, ring_size, ring_direction);
+    switch (visitor) {
+        case ZigzagVisitor::Any: return true;
+        case ZigzagVisitor::Earlier: return src < device_ring_id;
+        case ZigzagVisitor::Later: return src > device_ring_id;
+    }
+    return false;
+}
+
 inline ZigzagSubProblems zigzag_sub_problems(
     uint32_t device_ring_id,
     uint32_t step,
@@ -60,12 +99,7 @@ inline ZigzagSubProblems zigzag_sub_problems(
     AttentionMaskType launch_mask,
     ttnn_fixed::distributed::RingShiftDirection ring_direction) {
     const uint32_t r = device_ring_id;
-    uint32_t src = 0;
-    if (ring_direction == ttnn_fixed::distributed::RingShiftDirection::Backward) {
-        src = (r + step) % ring_size;
-    } else {
-        src = (r + ring_size - (step % ring_size)) % ring_size;
-    }
+    const uint32_t src = zigzag_source_chip(device_ring_id, step, ring_size, ring_direction);
     ZigzagSubProblems out;
     const auto add = [&](uint32_t row, uint32_t col) {
         out.execute = true;
@@ -79,11 +113,14 @@ inline ZigzagSubProblems zigzag_sub_problems(
         }
         return out;
     }
+    // Pair 0 is the (1, 0) block every chip has at a non-diagonal step, so a
+    // caller running one pair per launch can issue pair 0 uniformly and pair
+    // 1 -- (0, 0) for an earlier visitor, (1, 1) for a later one -- after it.
     if (src == r) {
         add(1, 0);
     } else if (src < r) {
-        add(0, 0);
         add(1, 0);
+        add(0, 0);
     } else {
         add(1, 0);
         add(1, 1);

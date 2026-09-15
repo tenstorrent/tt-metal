@@ -49,6 +49,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
-    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous);
+    ttml::metal::ops::RingLayout layout = ttml::metal::ops::RingLayout::Contiguous,
+    uint32_t zigzag_pair = 0xFFFFFFFFU);
 
 }  // namespace ttml::metal

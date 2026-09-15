@@ -37,6 +37,17 @@ StepPlan plan_for(const operation_attributes_t& args, uint32_t device_ring_id) {
         // launch's mask type says which pairs: the triangles or the blocks.
         auto sub = ops::zigzag_sub_problems(
             device_ring_id, args.step, args.ring_size, args.mask_type, args.ring_direction);
+        if (args.zigzag_pair != operation_attributes_t::kAllPairs) {
+            if (args.zigzag_pair >= sub.row_chunks.size()) {
+                return {false, args.mask_type, 2U, {}, {}};
+            }
+            return {
+                true,
+                args.mask_type,
+                2U,
+                {sub.row_chunks[args.zigzag_pair]},
+                {sub.col_chunks[args.zigzag_pair]}};
+        }
         return {sub.execute, args.mask_type, 2U, std::move(sub.row_chunks), std::move(sub.col_chunks)};
     }
     const auto [should_execute, effective_mask_type] = ops::get_device_execution_info(

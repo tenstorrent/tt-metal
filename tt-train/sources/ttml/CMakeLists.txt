@@ -200,6 +200,13 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/ring_zigzag_sdpa.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_fw_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_fw_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_bw_q_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_bw_q_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_bw_kv_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_zigzag_sdpa/device/ring_zigzag_bw_kv_program_factory.cpp
     # SDPA Backward
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
