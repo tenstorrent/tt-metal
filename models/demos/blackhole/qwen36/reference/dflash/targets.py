@@ -220,6 +220,8 @@ class TtTarget:
         return self.ANCHOR - (start % self.ANCHOR)
 
     def reset(self) -> None:
+        # NB: _has_generated deliberately survives reset(). It tracks whether this PROCESS has
+        # compiled the loop's programs, which a sequence reset does not undo.
         self.model._reset_gdn_state_for_new_sequence()
         self._anchor = 0
         self._anchor_gdn = self.model.save_gdn_state()
@@ -448,7 +450,28 @@ class TtTarget:
 
         Off by default: the eager path stays the default until the throughput case is measured, and
         a capture costs trace memory. ``release_verify_trace`` on the model undoes it.
+
+        **CALL THIS ONLY AFTER AT LEAST ONE FULL EAGER GENERATION.** ``capture_verify_trace`` warms
+        only the programs its own dummy forward touches; the speculative loop needs more than that
+        (the drafter's projections, the tap gather, the LM head at the drafted width, the whole-
+        bucket eager fallback ``_run`` takes when ``length == ANCHOR``). Capturing first leaves those
+        uncompiled, and the first traced generation then tries to compile them with a trace parked.
+
+        That does not raise. It HANGS -- the process spins at ~110 % CPU with no output and must be
+        killed, and killing it mid-trace wedges the Ethernet cores badly enough to need ``tt-smi -r``.
+        It cost two device resets to characterise. The assert below turns a 25-minute hang plus a
+        hardware reset into an immediate, readable error.
+
+        ``tests/reference/test_dflash_traced_throughput.py`` satisfies this by accident: it runs an
+        eager arm for COMPARISON, which happens to compile everything first. Nothing documented it.
         """
+        assert self._anchor_gdn is not None, "call reset() before enabling the traced verify"
+        assert getattr(self, "_has_generated", False), (
+            "enable_traced_verify() requires at least one completed EAGER generation first -- "
+            "capture_verify_trace only warms its own forward, and compiling the rest with a trace "
+            "parked hangs the process and wedges the device. Run one dflash_generate() (8 tokens is "
+            "enough) before enabling the trace."
+        )
         self.model.capture_verify_trace(self.page_table, self.ANCHOR, warm_tokens=warm_tokens)
         self._traced_verify = True
 
@@ -458,6 +481,9 @@ class TtTarget:
         A long prompt is fed as consecutive whole buckets, each of which also re-anchors, so prompts
         are not limited to 128 tokens — only a single speculative block is, by :meth:`max_block`.
         """
+        # Observed, not assumed: enable_traced_verify() checks this to refuse a capture on a target
+        # whose programs have never been compiled. See there for what happens otherwise.
+        self._has_generated = True
         S = ids.shape[1]
         end = start + S
         assert end <= self.capacity, f"position {end} exceeds the {self.capacity}-token page table"
