@@ -491,7 +491,15 @@ turns comm-bound and pass 1 is fully exposed. The multi-worker fused gather is l
 hides the rest. Note the block test's random-data selection is uniform over shards; the real model's selections are
 front-loaded on the near shards, which is why the e2e gain (-4.0 %) exceeds what the block test shows (none).
 
-Bottom line for the merge: with the stock gather the op is a 2.7 ms/block win standalone and -4.0 % on the denoise
-step; the fused gather adds ~1.8 % on top. The stock path has no remaining lever on the gather side without touching
+Across clip lengths (denoise s/step, 8 steps; vsa baselines from section 16's same-day pairs):
+
+| clip | vsa | ring_attention gather | fused_kv gather |
+|---|---|---|---|
+| 5 s | 0.859 | 0.850 (-1.0 %) | 0.816 (-5.0 %) |
+| 10 s | 1.701 | 1.640 (-3.6 %) | 1.568 (-7.8 %) |
+| 15 s | 2.727 | 2.617 (-4.0 %) | 2.569 (-5.8 %) |
+
+Bottom line for the merge: with the stock gather the op is correct at every shape and worth 1-4 % on the denoise
+step, least at 5 s where the gather is a larger share of the block; the fused gather is worth 5-8 %. The stock path has no remaining lever on the gather side without touching
 the helper (its bandwidth and hop latency are what they are); on the compute side the only lever is L1 for a longer
 pass 0, which does not help once the gather is contention-bound.
