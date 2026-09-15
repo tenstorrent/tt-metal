@@ -20,7 +20,9 @@
 #define INT_32_1_ENABLED        0x00000000 // = 0 in decimal
 #define INT_32_1_SIGN_MAGNITUDE 0x00000000 // = 0 in decimal
 #define ENABLE_FP4_PACKING      0x00000001 // = 1 in decimal
-#define MATH_ROWS               0x00000008 // = 8 in decimal
+#ifndef MATH_ROWS
+#define MATH_ROWS 0x00000008 // = 8 in decimal
+#endif
 #define L1_CLIENT_DISC          0x00000000 // = 0 in decimal
 #define FPU_SELF_CHECK_ENABLED  0x00000000 // = 0 in decimal
 #define SFPU_SELF_CHECK_ENABLED 0x00000000 // = 0 in decimal

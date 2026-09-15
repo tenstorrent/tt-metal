@@ -4,6 +4,7 @@
 
 import pytest
 import torch
+from helpers.chip_architecture import is_4row_arch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     ReduceGapoolGolden,
@@ -35,16 +36,24 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 
+_MX_FORMATS = (
+    []
+    if is_4row_arch()
+    else [
+        DataFormat.MxFp4,
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+    ]
+)
+
 
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
+            *_MX_FORMATS,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
