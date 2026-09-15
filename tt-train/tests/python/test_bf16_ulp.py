@@ -10,7 +10,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 
-from bf16_ulp import assert_within_ulp, bf16_spacing, ulp_error
+from bf16_ulp import assert_within_bf16_ulp, bf16_spacing, bf16_ulp_error
 
 BF16_MAX = float((2.0 - 2.0**-7) * 2.0**127)
 BF16_MIN_SUBNORMAL = 2.0**-133
@@ -35,7 +35,8 @@ class TestBf16Spacing:
         rng = np.random.default_rng(0)
         sample = rng.uniform(-1, 1, 20000) * 2.0 ** rng.integers(-140, 126, 20000)
         x = np.abs(np.concatenate([grid, sample]).astype(np.float32)).astype(np.float64)
-        x = x[(x > 0) & (x < BF16_MAX)]
+        # From here up bf16 rounds to BF16_MAX, whose ml_dtypes spacing is inf, not a gap.
+        x = x[(x > 0) & (x < BF16_MAX - 2.0**119)]
 
         oracle = np.spacing(as_bf16(x)).astype(np.float64)
         mismatch = np.flatnonzero(bf16_spacing(x) != oracle)
@@ -62,7 +63,7 @@ class TestBf16Spacing:
         assert float(bf16_spacing(x)) == expected
 
     def test_stays_finite_at_the_top_of_the_range(self):
-        """``nextafter`` would report inf here. An inf denominator makes ``ulp_error`` return 0,
+        """``nextafter`` would report inf here. An inf denominator makes ``bf16_ulp_error`` return 0,
         i.e. a vacuous pass, so the grid is extrapolated instead."""
         assert np.isfinite(float(bf16_spacing(BF16_MAX)))
         assert np.isfinite(float(bf16_spacing(1e300)))
@@ -77,55 +78,69 @@ class TestBf16Spacing:
         assert np.all(np.diff(bf16_spacing(np.logspace(-45, 38, 100000))) >= 0)
 
 
-class TestUlpError:
+class TestBf16UlpError:
     def test_exact_match_scores_zero(self):
         x = np.linspace(-4.0, 4.0, 512)
-        assert ulp_error(x, x) == (0.0, 0.0)
+        assert bf16_ulp_error(x, x) == (0.0, 0.0)
 
     def test_the_two_denominators(self):
         """Hand-checkable: one absolute shift is 1 ULP at the peak but 4 ULP at the smallest
         element, so the peak-normalised and per-element numbers must disagree."""
         expected = np.array([1.0, 2.0, 4.0])
-        peak, p99 = ulp_error(expected + 2.0**-5, expected)
+        peak, p99 = bf16_ulp_error(expected + 2.0**-5, expected)
         assert peak == 1.0  # 2**-5 / spacing(4.0)
         assert p99 == pytest.approx(3.96, abs=0.01)  # 99th pct of [4, 2, 1]
 
     def test_the_peak_denominator_ignores_got(self):
         """Scale comes from ``expected`` alone; a wildly wrong output must not be able to inflate
         its own denominator and loosen the bound it is measured against."""
-        peak, _ = ulp_error(np.array([1e30]), np.array([1.0]))
+        peak, _ = bf16_ulp_error(np.array([1e30]), np.array([1.0]))
         assert peak == pytest.approx((1e30 - 1.0) / 2.0**-7, rel=1e-9)
 
     def test_survives_an_all_zero_oracle(self):
         zeros = np.zeros((4, 4))
-        assert ulp_error(zeros, zeros) == (0.0, 0.0)
-        assert np.isfinite(ulp_error(np.full((4, 4), 1e-30), zeros)).all()
+        assert bf16_ulp_error(zeros, zeros) == (0.0, 0.0)
+        assert np.isfinite(bf16_ulp_error(np.full((4, 4), 1e-30), zeros)).all()
 
     def test_the_peak_scale_is_not_floored(self):
         """A zero oracle still measures against the subnormal spacing. Flooring the scale away
         from zero divides by a spacing 2**26 too wide, which hides the error rather than
         guarding a division ``bf16_spacing`` already cannot make by zero."""
-        peak, _ = ulp_error(np.full((4, 4), 1e-30), np.zeros((4, 4)))
+        peak, _ = bf16_ulp_error(np.full((4, 4), 1e-30), np.zeros((4, 4)))
         assert peak == pytest.approx(1e-30 / BF16_MIN_SUBNORMAL, rel=1e-9)
 
     def test_normalises_before_subtracting(self):
         """Lists have no ``-``, and integer subtraction wraps: uint8 0 - 255 measures as 1."""
-        assert ulp_error([1.0, 2.0], [1.0, 2.0]) == (0.0, 0.0)
-        peak, _ = ulp_error(np.array([0], np.uint8), np.array([255], np.uint8))
+        assert bf16_ulp_error([1.0, 2.0], [1.0, 2.0]) == (0.0, 0.0)
+        peak, _ = bf16_ulp_error(np.array([0], np.uint8), np.array([255], np.uint8))
         assert peak == 255.0 / float(bf16_spacing(255.0))
 
+    def test_rejects_a_shape_mismatch_instead_of_broadcasting(self, expect_error):
+        """(4,) against (4, 1) would broadcast to a 4x4 all-zero error."""
+        with expect_error(AssertionError, "shape"):
+            bf16_ulp_error(np.ones(4), np.ones((4, 1)))
 
-class TestAssertWithinUlp:
+    def test_rejects_an_empty_oracle(self, expect_error):
+        with expect_error(AssertionError, "empty"):
+            bf16_ulp_error(np.zeros(0), np.zeros(0))
+
+    def test_rejects_a_non_finite_oracle(self, expect_error):
+        """A matched -inf (masked logits) would otherwise score nan and fail without saying why."""
+        with expect_error(AssertionError, "finite"):
+            bf16_ulp_error(np.array([1.0, -np.inf]), np.array([1.0, -np.inf]))
+
+
+class TestAssertWithinBf16Ulp:
     def test_reports_both_numbers_and_limits_on_failure(self, expect_error):
         ulp_limit = 0.5  # round-to-nearest bf16; halving every element is far outside it
         truth = np.linspace(1.0, 4.0, 256)
         pattern = rf"lbl: ulp=[\d.]+ \(limit {ulp_limit}\), ulp_p99=[\d.]+ \(limit {ulp_limit}\)"
         with expect_error(AssertionError, pattern):
-            assert_within_ulp(truth * 0.5, truth, "lbl", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+            assert_within_bf16_ulp(truth * 0.5, truth, "lbl", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
     def test_rejects_a_shape_mismatch_before_measuring(self, expect_error):
-        with expect_error(AssertionError, "shape"):
-            assert_within_ulp(np.zeros(4), np.zeros(5), "lbl", max_ulp=0.0)  # never reached
+        with expect_error(AssertionError, "lbl: shape"):
+            assert_within_bf16_ulp(np.zeros(4), np.zeros(5), "lbl", max_ulp=0.0)  # max_ulp is never evaluated
 
     def test_p99_is_opt_in(self):
         """Callers comparing against an oracle that passes near zero omit the p99 limit; flat
@@ -133,8 +148,8 @@ class TestAssertWithinUlp:
         ulp_limit = 1.0  # the noise below spans one peak ULP, so the peak number cannot exceed 1
         truth = np.random.default_rng(0).uniform(-4.0, 4.0, (64, 64))
         noisy = truth + np.random.default_rng(1).uniform(-1, 1, truth.shape) * float(bf16_spacing(np.abs(truth).max()))
-        assert ulp_error(noisy, truth)[1] > ulp_limit
-        assert_within_ulp(noisy, truth, "peak only", max_ulp=ulp_limit)
+        assert bf16_ulp_error(noisy, truth)[1] > ulp_limit
+        assert_within_bf16_ulp(noisy, truth, "peak only", max_ulp=ulp_limit)
 
 
 class TestMetricSensitivity:
@@ -149,14 +164,14 @@ class TestMetricSensitivity:
         ulp_limit = 0.5  # round-to-nearest cannot land further than half a ULP from the input
         truth = self.truth()
         rounded = truth.astype(ml_dtypes.bfloat16).astype(np.float64)
-        assert_within_ulp(rounded, truth, "bf16 round-trip", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+        assert_within_bf16_ulp(rounded, truth, "bf16 round-trip", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
     def test_rejects_uniform_rescale(self, expect_error):
         """It is the shape a wrong collective or a missing 1/tp would take."""
         ulp_limit = 0.5  # the bf16 rounding bound a correct kernel meets
         truth = self.truth()
         with expect_error(AssertionError, "ulp="):
-            assert_within_ulp(truth * 0.5, truth, "rescaled", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+            assert_within_bf16_ulp(truth * 0.5, truth, "rescaled", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
     def test_rejects_single_corrupt_element(self, expect_error):
         """One element in 4096 sits inside the p99's discarded tail, so only the peak sees it."""
@@ -164,9 +179,9 @@ class TestMetricSensitivity:
         truth = self.truth()
         corrupt = truth.copy()
         corrupt[0, 0, 7, 13] += float(np.abs(truth).max())
-        assert ulp_error(corrupt, truth)[1] == 0.0
+        assert bf16_ulp_error(corrupt, truth)[1] == 0.0
         with expect_error(AssertionError, "ulp="):
-            assert_within_ulp(corrupt, truth, "one bad element", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+            assert_within_bf16_ulp(corrupt, truth, "one bad element", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
     def test_rejects_absolute_noise_at_one_ulp_of_peak(self, expect_error):
         """Kernel error scales with each element's own magnitude; flat noise at the peak's ULP
@@ -175,10 +190,10 @@ class TestMetricSensitivity:
         truth = self.truth()
         one_ulp = float(bf16_spacing(np.abs(truth).max()))
         noise = np.random.default_rng(1).uniform(-one_ulp, one_ulp, truth.shape)
-        peak, p99 = ulp_error(truth + noise, truth)
+        peak, p99 = bf16_ulp_error(truth + noise, truth)
         assert peak <= ulp_limit < p99  # the failure text names both numbers, so only this pins which one fired
         with expect_error(AssertionError, "ulp_p99="):
-            assert_within_ulp(truth + noise, truth, "flat noise", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+            assert_within_bf16_ulp(truth + noise, truth, "flat noise", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
     @pytest.mark.parametrize("bad", [np.nan, np.inf])
     def test_rejects_a_non_finite_element(self, bad, expect_error):
@@ -186,9 +201,9 @@ class TestMetricSensitivity:
         truth = self.truth()
         corrupt = truth.copy()
         corrupt[0, 0, 0, 0] = bad
-        assert not ulp_error(corrupt, truth)[0] <= ulp_limit  # `not <=`, since NaN > limit is false too
+        assert not bf16_ulp_error(corrupt, truth)[0] <= ulp_limit  # `not <=`, since NaN > limit is false too
         with expect_error(AssertionError, "ulp="):
-            assert_within_ulp(corrupt, truth, "non-finite", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
+            assert_within_bf16_ulp(corrupt, truth, "non-finite", max_ulp=ulp_limit, max_ulp_p99=ulp_limit)
 
 
 if __name__ == "__main__":
