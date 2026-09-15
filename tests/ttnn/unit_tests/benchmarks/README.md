@@ -77,30 +77,53 @@ TTNN_MINIMAL_MATMUL_SHAPES=8192x8192x8192,32x2048x2048 ...
 About 7 minutes for the full sheet on one chip. The blockings are tuned for the 12x10 grid; pass
 `--grid-size 12x10` on a chip with a larger grid to reproduce the sheet conditions, or resweep.
 
-## 3. Compute-bound peak search
+## 3. Peak GEMM: compute-bound shapes measured by math-kernel duration
 
-The sheet shapes stream both operands from DRAM. `test_minimal_matmul_peak_search` instead sizes M and N so
-every core owns exactly one M_block x N_block output (8 or 16 tiles per axis on the grid in use), sweeps
-K in {4096, 8192, 16384} with K_block and sub-block, and writes `generated/minimal_matmul_peak_gemm.csv`
-with the best rate per data type logged at the end.
+The sheet shapes stream both operands from DRAM and are timed on the host, so they answer "time to result".
+The peak GEMM row answers "what does the FPU sustain when fed", and two things change to get it:
 
-```bash
-TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TTNN_MINIMAL_MATMUL_NUM_CHIPS=16 \
-  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and (BF16 or FP32)"
-TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TTNN_MINIMAL_MATMUL_NUM_CHIPS=16 \
-  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and (FP8 or FP4)"
-```
-
-## Device-side utilization
-
-With a build that has `ENABLE_TRACY=ON`, set `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1`
-on any of the above (single chip only) to add `device_time_ms`, `device_tflops` and `device_utilization_pct`
-columns computed from the average TRISC1 (math) kernel duration, which excludes host dispatch, with the
-theoretical peak taken at the clock the profiler reports. The mid-run dump flag is required: without it
-the device log is only written at device close and the test fails looking for it. This is the same
-measurement the `ttnn.matmul` numbers in `tech_reports/GEMM_FLOPS` use, so it is the one to compare against.
+1. **Shape.** `test_minimal_matmul_peak_search` sizes M and N so every core owns exactly one
+   M_block x N_block output (8 or 16 tiles per axis on the grid in use) and sweeps K in {4096, 8192, 16384}
+   with K_block and the sub-block. Every input tile then crosses DRAM once. K=16384 is enough to amortize
+   pipeline fill; larger blocks only matter for FP8/FP4 (BF16 fits at most 8x16 or 16x8 per core in L1,
+   FP32 only 8x8).
+2. **Timing source.** With `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1` (single chip, build with
+   `ENABLE_TRACY=ON`) every row also gets `device_time_ms`, `device_tflops`, `device_utilization_pct`: the
+   average over the 30 traced op instances of the span from the first TRISC1 (math) kernel start on any core
+   to the last TRISC1 kernel end on any core, converted at the clock the profiler reports. That excludes host
+   dispatch, the gap between ops and the writer's output drain. It is the measurement behind the published
+   `ttnn.matmul` utilization figures in `tech_reports/GEMM_FLOPS`, so it is the one to compare against them.
+   The mid-run dump flag is required: without it the device log is only written at device close and the
+   test fails looking for it.
 
 ```bash
+# BF16 first with a fresh CSV, then the others append (TF32 shares the FP32 measurement)
 TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 \
-  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and BF16 and K16384"
+TTNN_MINIMAL_MATMUL_SWEEP_RESET=1 \
+  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and K16384 and BF16"
+TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 \
+  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and K16384 and (FP32 or FP8 or FP4)"
 ```
+
+About 4 minutes for BF16 and 13 minutes for the other three on one chip. Rows land in
+`generated/minimal_matmul_peak_gemm.csv`; the best rate per data type is logged at the end. The multi-chip
+fan-out (`TTNN_MINIMAL_MATMUL_NUM_CHIPS`) does not apply here because the profiler log is per process.
+
+Reference result on a Blackhole Galaxy chip, 12x10 grid, clock 1350 MHz under load (2026-09-15). "Host" is
+the trace-timed rate of the same config, "TRISC1" the math-kernel rate; peaks are 332 / 166 / 664 TFLOP/s:
+
+| column | shape (M x N x K) | blocking (Mb/Kb/Nb, sub) | host TFLOP/s | host util | TRISC1 TFLOP/s | TRISC1 util |
+|---|---|---|---|---|---|---|
+| BF16 (HiFi2) | 2560 x 6144 x 16384 | 8/4/16, 1x8 | 271.6 | 81.9% | 302.1 | 91.0% |
+| TF32 / FP32 (HiFi4) | 2560 x 3072 x 16384 | 8/4/8, 1x4 | 137.2 | 82.7% | 154.2 | 92.9% |
+| FP8 (LoFi) | 5120 x 6144 x 16384 | 16/4/16, 1x8 | 529.0 | 79.7% | 595.3 | 89.7% |
+| FP4 (LoFi) | 5120 x 6144 x 16384 | 16/8/16, 1x8 | 564.4 | 85.0% | 603.0 | 90.9% |
+
+For comparison, `tech_reports/GEMM_FLOPS` reports `ttnn.matmul` on a P150 (13x10) at 90.2% (BF16 HiFi2),
+94.9% (BF16 HiFi4), 87.5% (BF8_B LoFi) and 90.5% (BF4_B LoFi) by the same TRISC1 measurement.
+
+## Device-side utilization on the other tests
+
+The same two profiler variables work on the block sweep and the sheet benchmark (single chip only) and add
+the same three columns. Say which timing source a utilization number uses whenever you quote one: the two
+differ by 8 to 10 points on these shapes.
