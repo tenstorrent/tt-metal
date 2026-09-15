@@ -551,8 +551,10 @@ def test_fused_msda_rejects_head_dim_not_multiple_of_16(device, expect_error, D)
 
 def test_fused_msda_rejects_packed_value_not_divisible_by_heads(device, expect_error):
     value_t, loc_t, attn_t, shapes = _valid_inputs(device, H=2, D=32)
-    # Last dim 48 is not 2 * 32, so heads cannot be recovered from attention_weights.
-    packed = _to_device(torch.randn(1, 36, 48), device)  # S = 6*5 + 3*2 = 36
+    # Last dim 49 is odd, so it cannot be split into the 2 heads attention_weights
+    # declares and head_dim is not recoverable. (An even non-H*D last dim such as 48
+    # would divide cleanly by 2 and be rejected by the head_dim % 16 check instead.)
+    packed = _to_device(torch.randn(1, 36, 49), device)  # S = 6*5 + 3*2 = 36
     with expect_error(RuntimeError, "divisible"):
         ttnn.experimental.fused_msda(packed, loc_t, attn_t, shapes)
 
