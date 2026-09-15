@@ -239,7 +239,6 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_24, 1U, tt::DataFormat::Float32);           // readiness scratch
     make_cb(tt::CBIndex::c_25, 1U, tt::DataFormat::Float32);           // release word
     make_cb(tt::CBIndex::c_26, 1U, tt::DataFormat::Float32);           // column-gradient progress
-    make_cb(tt::CBIndex::c_27, rowT, tt::DataFormat::Float16_b);  // a * K
     make_cb(tt::CBIndex::c_7, 2U, tt::DataFormat::Float32);            // slot-release tokens
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
@@ -274,24 +273,12 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";
-    // Fold the softmax scale into K where that is exact. K is bfloat16, so
-    // a * K rounds unless a is a power of two: check by round-tripping the
-    // scalar's mantissa rather than special-casing head dimensions.
+    // The softmax scale lives in the exponential and in the writer's score
+    // seed, -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
     {
-        const float a = 1.0F / std::sqrt(static_cast<float>(d));
-        const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
-        if (exact) {
-            compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
-        } else {
-            // The exponential carries the scale instead, and the writer makes
-            // the score seed -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(d))));
-            sync_defines["L_SEED_SCALE_BITS"] = buf;
-            std::snprintf(
-                buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(0.5F * std::log(static_cast<float>(d))));
-            sync_defines["L_SEED_SHIFT_BITS"] = buf;
-        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(d))));
+        sync_defines["L_SEED_SCALE_BITS"] = buf;
     }
 
     std::vector<uint32_t> reader_args = {
@@ -332,6 +319,9 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // sqrt(d): the exponential applies the softmax scale to its whole
     // argument, so the statistic it subtracts is divided by this first.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(d)));
+    // The exponential's bias constant, 127 - log2(sqrt d): ln sqrt(d) folded
+    // in, so it computes exp(a x) / sqrt(d) (see the compute kernel).
+    const uint32_t exp_bias = std::bit_cast<uint32_t>(127.0F - 0.5F * std::log2(static_cast<float>(d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     // The dQ seed -- the packet's running accumulator, and its transposed
     // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
@@ -357,7 +347,7 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
             // halves of the file and overlap. Nothing needs more than four.
             .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler, exp_bias},
             .defines = compute_defines});
 
     // Everything below is per group: the snake, and the barrier's coordinator

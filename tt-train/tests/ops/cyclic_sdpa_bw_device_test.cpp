@@ -406,29 +406,18 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_27, rowT, tt::DataFormat::Float16_b);  // a * K, where the scale folds
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // control word
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
 
-    // Fold the softmax scale into K where that is exact, as the op does, so
-    // this variant stays bitwise comparable with it (see the compute kernel).
+    // The softmax scale lives in the exponential and in the writer's score
+    // seed, as in the op (see the compute kernel).
     std::map<std::string, std::string> fold_defines;
     {
-        const float a = 1.0F / std::sqrt(static_cast<float>(ref.d));
-        if ((std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u) {
-            fold_defines["FOLD_SCALE_INTO_KEY"] = "1";
-        } else {
-            // The exponential carries the scale instead, and the writer makes
-            // the score seed -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
-            fold_defines["L_SEED_SCALE_BITS"] = buf;
-            std::snprintf(
-                buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(0.5F * std::log(static_cast<float>(ref.d))));
-            fold_defines["L_SEED_SHIFT_BITS"] = buf;
-        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
+        fold_defines["L_SEED_SCALE_BITS"] = buf;
     }
     std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
@@ -459,6 +448,9 @@ Gradients run_algorithm2(
     // sqrt(d): the kernel folds the softmax scale into the exponential, so it
     // needs the reciprocal to divide the statistic it subtracts.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
+    // The exponential's bias constant, 127 - log2(sqrt d): ln sqrt(d) folded
+    // in, so it computes exp(a x) / sqrt(d) (see the compute kernel).
+    const uint32_t exp_bias = std::bit_cast<uint32_t>(127.0F - 0.5F * std::log2(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     // The dQ seed -- the packet's running accumulator, and its transposed
     // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
@@ -484,7 +476,7 @@ Gradients run_algorithm2(
             // halves of the file and overlap. Nothing needs more than four.
             .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler, exp_bias},
             .defines = fold_defines});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
@@ -695,7 +687,6 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // readiness word
     make_cb(tt::CBIndex::c_25, 1, tt::DataFormat::Float32);  // release word
     make_cb(tt::CBIndex::c_26, 1, tt::DataFormat::Float32);  // column-gradient progress
-    make_cb(tt::CBIndex::c_27, rowT, tt::DataFormat::Float16_b);  // a * K
     make_cb(tt::CBIndex::c_7, 2, tt::DataFormat::Float32);   // slot-release tokens
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
@@ -720,24 +711,12 @@ Gradients run_relay(
     std::map<std::string, std::string> compute_defines = sync_defines;
     compute_defines["COLUMN_RESIDENT"] = "1";
     compute_defines["RELEASE_TOKEN"] = "1";
-    // Fold the softmax scale into K where that is exact. K is bfloat16, so
-    // a * K rounds unless a is a power of two: check by round-tripping the
-    // scalar's mantissa rather than special-casing head dimensions.
+    // The softmax scale lives in the exponential and in the writer's score
+    // seed (see the compute kernel).
     {
-        const float a = 1.0F / std::sqrt(static_cast<float>(ref.d));
-        const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
-        if (exact) {
-            compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
-        } else {
-            // The exponential carries the scale instead, and the writer makes
-            // the score seed -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
-            sync_defines["L_SEED_SCALE_BITS"] = buf;
-            std::snprintf(
-                buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(0.5F * std::log(static_cast<float>(ref.d))));
-            sync_defines["L_SEED_SHIFT_BITS"] = buf;
-        }
+        char buf[16];
+        std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
+        sync_defines["L_SEED_SCALE_BITS"] = buf;
     }
 
     std::vector<uint32_t> reader_args = {
@@ -778,6 +757,9 @@ Gradients run_relay(
     // sqrt(d): the kernel folds the softmax scale into the exponential, so it
     // needs the reciprocal to divide the statistic it subtracts.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
+    // The exponential's bias constant, 127 - log2(sqrt d): ln sqrt(d) folded
+    // in, so it computes exp(a x) / sqrt(d) (see the compute kernel).
+    const uint32_t exp_bias = std::bit_cast<uint32_t>(127.0F - 0.5F * std::log2(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
     // The dQ seed -- the packet's running accumulator, and its transposed
     // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
@@ -803,7 +785,7 @@ Gradients run_relay(
             // halves of the file and overlap. Nothing needs more than four.
             .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler, exp_bias},
             .defines = compute_defines});
 
     // Everything below is per group: the snake, the barrier's coordinator and

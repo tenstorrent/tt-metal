@@ -212,7 +212,12 @@ inline uint32_t f32_add_bits(uint32_t a, uint32_t b) {
 
 inline uint32_t seed_from_lse(uint32_t l_bits, uint32_t shift_bits, uint32_t scale_bits) {
     uint32_t y = (shift_bits == 0u) ? l_bits : f32_add_bits(l_bits, shift_bits);
-    if (scale_bits != 0x3F800000u) {
+    if (scale_bits == 0x3F800000u) {
+        // times 1
+    } else if ((scale_bits & 0x7FFFFFu) == 0u && (y & 0x7F800000u) != 0u) {
+        // A power of two (sqrt(d) for d = 64, 256): an exponent shift, exact.
+        y += (scale_bits & 0x7F800000u) - 0x3F800000u;
+    } else {
         y = f32_mul_bits(y, scale_bits);
     }
     return y ^ 0x80000000u;
