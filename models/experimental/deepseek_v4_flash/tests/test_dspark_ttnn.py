@@ -10,6 +10,8 @@ are unavailable. Batch=1, context length = block size = 32 (one tile).
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import torch
 
@@ -54,3 +56,51 @@ def test_dspark_ttnn_prefetcher_pcc(device):
     assert_with_pcc(ref.logits, out.logits, 0.99)
     assert_with_pcc(ref.confidence, out.confidence, 0.99)
     assert torch.equal(out.block_input_ids, ref.block_input_ids)
+
+
+@torch.no_grad()
+def test_dspark_ttnn_traced_socket_draft_matches_eager(device):
+    """The traced socket path returns the same greedy draft block as eager DSpark."""
+    torch.manual_seed(1)
+    cfg = DSparkConfig.ttnn_tiny()
+    pt_model = DSparkModel(cfg).eval()
+    tt_model = TtDSparkModel.from_torch(pt_model, device, num_prefetch_pages=2)
+
+    target_hiddens = torch.randn(1, 1, cfg.num_target_layers, cfg.hidden_size)
+    anchor = torch.randint(0, cfg.vocab_size - 1, (1,))
+    target_hiddens_2 = torch.randn_like(target_hiddens)
+    anchor_2 = torch.randint(0, cfg.vocab_size - 1, (1,))
+
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        eager = tt_model(target_hiddens, anchor, greedy=True, hoist_prefetch=True)
+        eager_2 = tt_model(target_hiddens_2, anchor_2, greedy=True, hoist_prefetch=True)
+        steps = [(target_hiddens, int(anchor.item())), (target_hiddens_2, int(anchor_2.item()))]
+        tt_model.replay_traced_ahead(steps)
+        tt_model.write_step_packet(*steps[0])
+        tt_model.write_step_packet(*steps[1])
+        draft = tt_model.read_decoded_output()
+        draft_2 = tt_model.read_decoded_output()
+
+        bench_steps = steps * 2
+        eager_start = time.perf_counter()
+        for target, anchor_id in bench_steps:
+            tt_model(target, torch.tensor([anchor_id]), greedy=True, hoist_prefetch=True)
+        eager_elapsed = time.perf_counter() - eager_start
+
+        traced_start = time.perf_counter()
+        for target, anchor_id in bench_steps:
+            tt_model.replay_traced()
+            tt_model.write_step_packet(target, anchor_id)
+            tt_model.read_decoded_output()
+        traced_elapsed = time.perf_counter() - traced_start
+        gamma = cfg.dspark_block_size
+        print(
+            f"DSPARK_TTNN_EAGER={len(bench_steps) * gamma / eager_elapsed:.2f} "
+            f"DSPARK_TTNN_TRACED={len(bench_steps) * gamma / traced_elapsed:.2f} "
+            f"speedup={eager_elapsed / traced_elapsed:.2f}x",
+            flush=True,
+        )
+
+    assert torch.equal(draft, eager.draft_ids)
+    assert torch.equal(draft_2, eager_2.draft_ids)
