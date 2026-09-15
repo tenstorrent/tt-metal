@@ -10,6 +10,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from ttnn.tools import trace_allocation_tracker
 from models.common.llama_models import (
     ChatPrediction,
     CompletionPrediction,
@@ -1403,7 +1404,7 @@ class Generator(WarmupForwardMixin):
         # Reordering warmup cannot avoid this -- capturing trace N always happens while
         # traces 1..N-1 exist -- so scope the capture window instead, which is what
         # corruptible_allocation_scope is for. No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             transformed_inputs = self.model.transform_prefill_inputs_device(*device_inputs)
             (
@@ -1780,7 +1781,7 @@ class Generator(WarmupForwardMixin):
             if prepared is None:
                 # Prefill and decode intentionally reuse this L1 space. These
                 # are trace inputs, not program-cache allocations.
-                with ttnn.corruptible_allocation_scope(self.mesh_device):
+                with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
                     prepared = self.model.prepare_inputs_decode(
                         tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
                     )
@@ -1800,7 +1801,7 @@ class Generator(WarmupForwardMixin):
         # Same reasoning as the prefill capture: everything allocated inside the capture window
         # belongs to the trace being recorded and must stay allocated for replay, so scope it
         # rather than let the trace-allocation tracker report it as a survivor.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
             tt_out_tok = self.model.ttnn_decode_forward(
                 tokens_tt,

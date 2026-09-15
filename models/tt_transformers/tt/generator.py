@@ -765,7 +765,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # the window instead. Acknowledgement, not elimination: it tells the checker the program is
         # prepared for these, it does not stop a replay writing them. Matches llama3_70b_galaxy.
         # No-op unless TT_METAL_TRACE_ALLOC_TRACKING=1.
-        with ttnn.corruptible_allocation_scope(mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             tt_out_trace = self._prefill_trace_forward(prepared, device_inputs)
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
@@ -829,7 +829,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         # count_tokens=False, because it actually executes, over dummy logits.
         # As with the prefill trace, these outputs are scratch shared with
         # other captured graphs and are consumed immediately after replay.
-        with ttnn.corruptible_allocation_scope(mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(mesh_device):
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
             logits = self.model[model_id]._apply_norm_and_lm_head(trace_input)
             tt_tokens, tt_log_probs = self.model[model_id].sampling.sample(logits, enable_trace=False)
@@ -2371,7 +2371,7 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Same reasoning as _record_trace_prefill: whatever the model allocates inside the capture
             # window belongs to the trace being recorded, and recording lane/variant N necessarily runs
             # while 1..N-1 are live. Acknowledge the window rather than flag it.
-            with ttnn.corruptible_allocation_scope(self.model_args[i].mesh_device):
+            with trace_allocation_tracker.corruptible_allocation_scope(self.model_args[i].mesh_device):
                 trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
                 trace_ids[i] = trace_id
                 user_kv_cache = kv_cache[i] if kv_cache is not None else None

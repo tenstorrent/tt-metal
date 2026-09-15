@@ -457,7 +457,7 @@ class SamplingGenerator:
         # feedback buffer is supplied) belongs to the trace being recorded and must stay allocated
         # for replay. Acknowledge the window (no-op unless TT_METAL_TRACE_ALLOC_TRACKING=1), as the
         # model decode capture does; measured: 1 buffer left live across every replay on Qwen2.5-VL.
-        with ttnn.corruptible_allocation_scope(self.mesh_device):
+        with trace_allocation_tracker.corruptible_allocation_scope(self.mesh_device):
             trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
             sampled = self._run_sampling(
                 logits,
