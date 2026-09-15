@@ -750,6 +750,23 @@ def _mc_chunk(reach_row, h, link, num_links, m):
     return total
 
 
+def _mc_region_hop(hop):
+    """Reach index a region chunk is sized at, mirroring mc_region_hop in the reader.
+
+    A page only enters a forwarding region when it still has work beyond the chip about to hold it.
+    The origin writes its one-hop destinations straight into their output pages, so a chunk landing
+    one hop out carries the hop-2 population rather than the hop-1 one.
+
+    Sizing at reach[hop + 1] instead, so every relay delivers one hop ahead, cuts DRAM transfers about
+    25% but raises link pages about 32%: a token that both delivers to the neighbour and forwards puts
+    its payload on that link twice, and low link load is the whole of multicast's advantage.
+
+    This has to track the kernel. It is the number both sides of a region derive independently, and
+    a disagreement is a deadlock rather than wrong data.
+    """
+    return max(hop, 2)
+
+
 def _mc_link_of(rank, class_size, num_links):
     """Which link a token rides, from its rank within its farthest-hop class."""
     for link in range(num_links - 1):
@@ -837,13 +854,13 @@ def test_dispatch_fabric2d_multicast_chunk_agreement(extent, num_links, capacity
                 for j in range(0, m):
                     origin = (row - j * travel) % extent
                     out.append(at)
-                    at += chunk(origin, di, j + 1, link)
+                    at += chunk(origin, di, _mc_region_hop(j + 1), link)
                 # what nbr reads: the same origins, each one hop further along
                 rd, at2 = [], 0
                 for j in range(1, m + 1):
                     origin = (nbr - j * travel) % extent
                     rd.append(at2)
-                    at2 += chunk(origin, di, j, link)
+                    at2 += chunk(origin, di, _mc_region_hop(j), link)
                 assert out == rd and at == at2, (
                     f"g={g} stream={stream}: row {row} writes {at} pages at {out} " f"but row {nbr} reads {at2} at {rd}"
                 )
