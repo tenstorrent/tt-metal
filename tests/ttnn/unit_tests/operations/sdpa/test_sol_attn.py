@@ -147,7 +147,7 @@ def test_sol_attn_density_scaling(device, keep_every):
     """
     import time
 
-    b, nh, seq, d = 1, 8, 8192, 128
+    b, nh, seq, d = 1, 8, 16384, 128
     q, k, v = _qkv(b, nh, seq, d, seed=11)
     dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
@@ -166,12 +166,15 @@ def test_sol_attn_density_scaling(device, keep_every):
         return out
 
     run()  # compile
-    times = []
-    for _ in range(10):
-        t0 = time.perf_counter()
-        run()
-        times.append((time.perf_counter() - t0) * 1e3)
-    med = sorted(times)[len(times) // 2]
+    # Batch the enqueues and sync once: per-op host wall-clock is ~2 ms of dispatch+sync latency,
+    # which buried the device time entirely in the per-iteration form of this loop.
+    reps = 50
+    t0 = time.perf_counter()
+    for _ in range(reps):
+        ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, chunk_keep_every=keep_every)
+    ttnn.synchronize_device(device)
+    med = (time.perf_counter() - t0) * 1e3 / reps
+    times = [med]
     kept = len([c for c in range(seq // 512) if c == 0 or c % keep_every == 0])
     logger.info(
         f"SOL_ATTN_DENSITY keep_every={keep_every} kept_chunks={kept}/{seq // 512} "
