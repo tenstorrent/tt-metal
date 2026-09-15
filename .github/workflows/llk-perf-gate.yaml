@@ -30,9 +30,54 @@ name: "LLK perf gate"
 #   LLK_PERF_GATE_SLACK_CHANNEL_ID    — the channel to post in. Invite the bot
 #                                       to it first; a bot cannot post to a
 #                                       private channel it is not a member of.
+# PILOT: workflow_dispatch runs one comparison from two existing perf runs. It
+# needs no measurement job, no label and no warehouse, so the gate's verdicts
+# and its Slack report can be judged before either is wired up. Remove this
+# entry point once the label path measures the PR itself.
 on:
   pull_request:
     types: [labeled, synchronize]
+  # workflow_dispatch cannot reach a workflow that is not yet on the default
+  # branch, so until this lands on main a trial is started by pushing a commit
+  # whose message carries [gate-trial]. The two run ids then come from repository
+  # variables, which are readable from any branch:
+  #   LLK_GATE_PILOT_PERF_RUN_ID      the current side
+  #   LLK_GATE_PILOT_BASELINE_RUN_ID  the baseline side
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+    inputs:
+      perf_run_id:
+        description: "Workflow run holding the CURRENT side's perf artifacts"
+        required: true
+        type: string
+      baseline_run_id:
+        description: "Workflow run holding the BASELINE side's perf artifacts"
+        required: true
+        type: string
+      arch:
+        description: "Architecture to gate on"
+        required: false
+        default: wormhole
+        type: choice
+        options:
+          - wormhole
+          - blackhole
+      run_types:
+        description: "Comma-separated run types to compare"
+        required: false
+        default: L1_TO_L1
+        type: string
+      pr_number:
+        description: "PR to name in the report (labelling only; nothing is posted to it)"
+        required: false
+        type: string
+      notify_on_success:
+        description: "Post to Slack even when the gate passes"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -45,11 +90,25 @@ jobs:
     # A fork PR carries no secrets and a read-only token, so Snowflake and the
     # PR comment would both fail. Guard on the head repo, as pr-gate.yaml does.
     if: >-
-      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push'
+       && contains(github.event.head_commit.message, '[gate-trial]')) ||
       (
-        (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
-        (github.event.action == 'synchronize'
-         && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        (
+          (github.event.action == 'labeled' && github.event.label.name == 'llk-perf-gate') ||
+          (github.event.action == 'synchronize'
+           && contains(github.event.pull_request.labels.*.name, 'llk-perf-gate'))
+        )
       )
     uses: ./.github/workflows/llk-perf-gate-impl.yaml
+    with:
+      # Empty on the label path, so the gate takes its normal warehouse route.
+      arch: ${{ inputs.arch || 'wormhole' }}
+      run_types: ${{ inputs.run_types || 'L1_TO_L1' }}
+      perf_run_id: ${{ inputs.perf_run_id || vars.LLK_GATE_PILOT_PERF_RUN_ID || '' }}
+      baseline_run_id: >-
+        ${{ inputs.baseline_run_id || vars.LLK_GATE_PILOT_BASELINE_RUN_ID || '' }}
+      pr_number: ${{ inputs.pr_number || '' }}
+      notify_on_success: ${{ inputs.notify_on_success || false }}
     secrets: inherit

@@ -27,6 +27,13 @@ on:
         required: false
         default: L1_TO_L1
         type: string
+      pr_number:
+        description: >-
+          The PR the compared runs came from. Only used to label the report and
+          the Slack message when there is no pull_request event to read it from,
+          as on a pilot dispatch. Nothing is posted to the PR.
+        required: false
+        type: string
       notify_on_success:
         description: "Also post to Slack when the gate passes (noisy; useful while testing the bot)"
         required: false
@@ -297,8 +304,12 @@ jobs:
         if: always()
         env:
           SLACK_CHANNEL_ID: ${{ secrets.LLK_PERF_GATE_SLACK_CHANNEL_ID }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PR_URL: >-
+            ${{ github.event.pull_request.html_url
+                || (inputs.pr_number
+                    && format('{0}/{1}/pull/{2}', github.server_url, github.repository, inputs.pr_number))
+                || '' }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           GATE_EXIT_CODE: ${{ steps.compare.outputs.gate_exit_code }}
