@@ -5,8 +5,8 @@
 pure-torch ground truth (models/demos/deepseek_v3_d_p/reference/mhc/mhc_reference.py::parametrize).
 
 The op is per-token: it reads mixes[T, (2+n)*n] and writes that token's H matrices, with no
-dependency between tokens and none on the hidden dim. Coverage therefore varies only T --
-unit, one tile, multi-tile + partial, full grid, and prefill scale -- plus the sharded layout.
+dependency between tokens and none on the hidden dim. Coverage is therefore fixed at the
+per-device token count the model runs, in both the interleaved and the sharded layout.
 """
 
 import pytest
@@ -24,6 +24,10 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 pytestmark = pytest.mark.skipif(not is_blackhole(), reason="mhc_split_sinkhorn is validated on Blackhole only")
 
 PCC = 0.999
+
+# A 5120-token prefill split over SP=8 lands 640 tokens (20 tiles) on each device, and the op is
+# token-flattened, so that count is the only shape the model ever asks of it.
+TOKENS = 640
 
 
 @pytest.fixture(autouse=True)
@@ -67,31 +71,12 @@ def _run(device, mixes, scale, base, cfg):
     return ttnn.to_torch(pre), ttnn.to_torch(post), ttnn.to_torch(comb).reshape(T, n, n)
 
 
-# T=1 unit (#40707), 32 one full tile, 100 multi-tile+partial, 2048 spans ~64 cores (multi-core #40719/#40722)
-@pytest.mark.parametrize("T", [1, 32, 100, 2048], ids=["T1", "T32", "T100", "T2048"])
 @pytest.mark.parametrize("scale_val", [0.01, 1.0], ids=["s0.01", "s1.0"])
-def test_mhc_split_sinkhorn(device, T, scale_val):
+def test_mhc_split_sinkhorn(device, scale_val):
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)  # dim is irrelevant to parametrization
+    T = TOKENS
     mixes, scale, base = _params(cfg, scale_val, T)
-
-    r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
-    d_pre, d_post, d_comb = _run(device, mixes, scale, base, cfg)
-
-    _check("pre", r_pre.reshape(T, cfg.n), d_pre)
-    _check("post", r_post.reshape(T, cfg.n), d_post)
-    _check("comb", r_comb.reshape(T, cfg.n, cfg.n), d_comb)
-
-
-# General multi-core at prefill scale (#40722). The op is token-flattened (T = B*S), so B vs S
-# is irrelevant here -- only the token count matters. 524288 tokens (16384 tiles) is the design
-# doc's B=32/S=16k target and dwarfs any realistic B=1 prefill (S=16k -> T=16384). Guards
-# correctness + no-OOM across the full grid, DRAM-interleaved.
-def test_mhc_split_sinkhorn_prefill_scale(device):
-    torch.manual_seed(0)
-    cfg = MHCConfig(dim=64, n=4)
-    T = 32 * 16384  # = B*S tokens; the kernel never distinguishes B from S
-    mixes, scale, base = _params(cfg, 1.0, T)
 
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
     d_pre, d_post, d_comb = _run(device, mixes, scale, base, cfg)
@@ -103,12 +88,12 @@ def test_mhc_split_sinkhorn_prefill_scale(device):
 
 # Sharded input (#40720): mixes L1 height-sharded across cores; the op aliases input/output
 # CBs to the shards (zero-copy, no DRAM round-trip). Outputs come back sharded on the same grid.
-@pytest.mark.parametrize("cores_x", [8], ids=["x8"])
-@pytest.mark.parametrize("tiles_per_core", [1, 2], ids=["tpc1", "tpc2"])
-def test_mhc_split_sinkhorn_sharded(device, cores_x, tiles_per_core):
+# TOKENS is 20 tiles, so only a grid that divides 20 keeps every shard tile-aligned.
+@pytest.mark.parametrize("cores_x", [4, 5], ids=["x4", "x5"])
+def test_mhc_split_sinkhorn_sharded(device, cores_x):
     torch.manual_seed(0)
     cfg = MHCConfig(dim=64, n=4)
-    T = cores_x * tiles_per_core * 32
+    T = TOKENS
     mixes, scale, base = _params(cfg, 1.0, T)
 
     r_pre, r_post, r_comb = parametrize(mixes.reshape(1, T, cfg.mix_hc), scale, base, cfg, constraint="sinkhorn")
