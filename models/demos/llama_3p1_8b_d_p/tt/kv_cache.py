@@ -5,15 +5,19 @@
 """Llama-3.1-8B chunked-prefill KV cache (tt-blaze#4141).
 
 One packed pair of persistent device caches (K and V), each per-chip shape
-``[num_users * num_layers, 1, seq_local, head_dim]`` in ``bfloat8_b``, DRAM NdShard, written by
-``ttnn.experimental.deepseek_prefill.update_padded_kv_cache``.
+``[num_users * num_layers, num_kv_heads_per_chip, seq_local, head_dim]`` in ``bfloat8_b``, DRAM
+NdShard, written by ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache``.
 
 The batch dim is **user-major**: ``slot = user_id * num_layers + layer_idx``, so each user's layers
 stay contiguous and the packing matches ``update_padded_kv_cache``'s ``slot_idx`` / ``layer_idx``
 indexing. At TP=8 the 8 KV heads shard one-per-chip across the TP columns, so a chip's cache holds
-exactly one head (hence the ``1`` in the per-chip shape) and a KV chunk for a given layer lives on
-exactly one chip — which is what collapses the migration layer's DeviceGroup to a single node. The
-sequence is block-cyclic over the 4 SP rows.
+exactly one head and a KV chunk for a given layer lives on exactly one chip — which is what
+collapses the migration layer's DeviceGroup to a single node. The sequence is block-cyclic over the
+4 SP rows.
+
+``num_kv_heads_per_chip`` is 1 in that production layout and exists as a parameter only so SP > 1
+is reachable on an 8-chip loudbox: TP=8 with SP=4 needs 32 chips, so validating the block-cyclic
+write and the ring cache read on one box means running a lower TP (e.g. 4x2 at TP=2, 4 heads/chip).
 
 Adapted from ``gpt_oss_d_p/tt/attention/kv_cache.py``, which has the same layout for GQA.
 **Llama needs only the single packed cache**: every one of the 32 layers is full causal attention,
@@ -102,6 +106,9 @@ class Llama31KVCache(KvCaches):
     num_layers: int
     max_seq_len: int
     sp: int
+    # KV heads held per chip. 1 in production (TP=8 over 8 KV heads), but TP < 8 leaves several
+    # heads per chip, which is the only way an 8-chip loudbox can exercise SP > 1 at all.
+    num_kv_heads_per_chip: int = 1
 
     def layer_view(self, user_id: int, layer_idx: int):
         """Where a ``(user, layer)`` lives: ``(k, v, batch_idx, capacity_tokens)``.
@@ -128,6 +135,7 @@ def allocate_kv_cache(
     head_dim: int = Llama31_8BConfig.HEAD_DIM,
     cache_dtype: ttnn.DataType = ttnn.bfloat8_b,
     chunk_size: int | None = None,
+    num_kv_heads_per_chip: int = 1,
 ) -> Llama31KVCache:
     """Allocate the packed K/V prefill caches. See :class:`Llama31KVCache`.
 
@@ -143,7 +151,14 @@ def allocate_kv_cache(
         chunk_size: the prefill chunk size this cache will be written with. Optional only because
             allocation does not strictly need it; pass it and the layout rules get checked here,
             at allocation, instead of surfacing as a wrong-position KV read much later.
+        num_kv_heads_per_chip: ``NUM_KEY_VALUE_HEADS // tp``, i.e. 1 for the production TP=8 mesh.
+            Must equal the head count of the chunks passed to :func:`write_kv_chunk`. Only reason
+            it is a parameter: SP > 1 is untestable on an 8-chip loudbox at TP=8 (that needs 4x8 =
+            32 chips), so validating the block-cyclic write and the ring cache read on one box means
+            running e.g. 4x2 at TP=2, which puts 4 KV heads on each chip.
     """
+    if num_kv_heads_per_chip < 1:
+        raise ValueError(f"num_kv_heads_per_chip must be >= 1, got {num_kv_heads_per_chip}")
     sp = mesh_device.shape[sp_axis]
     if max_seq_len % (ttnn.TILE_SIZE * sp):
         raise ValueError(
@@ -159,6 +174,8 @@ def allocate_kv_cache(
         for bank_id in range(get_num_dram_banks(mesh_device))
     ]
     nd_shard_spec = ttnn.NdShardSpec(
+        # One head's 32-token block per shard regardless of how many heads a chip holds, so the
+        # bank walk on the migration side is unchanged by num_kv_heads_per_chip.
         shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
         grid=ttnn.CoreRangeSet(core_ranges),
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -167,11 +184,11 @@ def allocate_kv_cache(
     mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
 
     def alloc():
-        # The per-chip cache holds ONE head (the 1 in dim 1). Which head a chip ends up holding is
-        # decided at write time by how the incoming chunk is mesh-mapped, not here — so every chip is
-        # allocated the same zeroed buffer and the contents diverge on the first write.
+        # Which heads a chip ends up holding is decided at write time by how the incoming chunk is
+        # mesh-mapped, not here — so every chip is allocated the same zeroed buffer and the contents
+        # diverge on the first write.
         return ttnn.from_torch(
-            torch.zeros(num_users * num_layers, 1, seq_local, head_dim),
+            torch.zeros(num_users * num_layers, num_kv_heads_per_chip, seq_local, head_dim),
             dtype=cache_dtype,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
@@ -182,7 +199,7 @@ def allocate_kv_cache(
     logger.info(
         f"Llama-3.1-8B prefill KV cache: {num_users} user(s) x {num_layers} layers = "
         f"{num_users * num_layers} slots, {max_seq_len} tok ({seq_local}/chip over sp={sp}), "
-        f"head_dim={head_dim}, {cache_dtype}"
+        f"{num_kv_heads_per_chip} KV head(s)/chip, head_dim={head_dim}, {cache_dtype}"
     )
     return Llama31KVCache(
         k=alloc(),
@@ -191,6 +208,7 @@ def allocate_kv_cache(
         num_layers=num_layers,
         max_seq_len=max_seq_len,
         sp=sp,
+        num_kv_heads_per_chip=num_kv_heads_per_chip,
     )
 
 
@@ -212,6 +230,16 @@ def write_kv_chunk(
             f"write_kv_chunk writes one user per call, got leading (batch) dim k={tt_k.shape[0]}, "
             f"v={tt_v.shape[0]}; loop over users (slot_idx + b) at the call site"
         )
+    # The write kernel indexes the cache by (slot, token, head_dim) and takes the head count from
+    # the cache buffer, so a chunk carrying a different number of heads is not rejected — it writes
+    # the wrong heads, or only some of them, and shows up as a KV PCC failure on one head only.
+    for name, tensor in (("k", tt_k), ("v", tt_v)):
+        if tensor.shape[1] != kv_cache.num_kv_heads_per_chip:
+            raise ValueError(
+                f"{name} chunk carries {tensor.shape[1]} KV head(s)/chip but the cache was "
+                f"allocated for {kv_cache.num_kv_heads_per_chip}; pass "
+                f"num_kv_heads_per_chip=NUM_KEY_VALUE_HEADS // tp to allocate_kv_cache"
+            )
     # The block-cyclic per-device write assumes a tile-aligned boundary; the op asserts this too, but
     # failing here names the caller's offset instead of a kernel argument.
     if kv_actual % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK:
