@@ -146,6 +146,35 @@ def test_std_var_hw_compact_partial_width(device, enabled_program_cache, dtype, 
                 assert torch.count_nonzero(padding) == 0
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize(
+    "shape", [(2, 3, 33, 143), (1, 1, 32, 10529)], ids=["batch_partial_height", "wide_partial_width"]
+)
+def test_std_var_hw_compact_repeated_dst_reuse(device, enabled_program_cache, dtype, shape):
+    # Repeated MATH/PACK hand-offs exposed intermittent zeroed compact records
+    # when only even columns of invalidated DST rows were written.
+    torch.manual_seed(31)
+    values = torch.randn(shape)
+    columns = torch.arange(shape[-1])
+    if shape[1] == 1:
+        values += (columns % 32).float()
+    else:
+        values = values * 2 + columns.float() * 0.125
+    values += 1024
+    values += torch.arange(shape[1]).reshape(1, shape[1], 1, 1).float() * 16
+    tt_input = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -65536.0)
+    reference_input = ttnn.to_torch(tt_input).double()
+    tolerance = 2e-4 if dtype == ttnn.float32 else 0.02 if dtype == ttnn.bfloat16 else 0.04
+    for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+        expected = torch_op(reference_input, dim=(1, 2, 3), keepdim=True, correction=0)
+        for _ in range(128):
+            actual = ttnn.to_torch(ttnn_op(tt_input, dim=(1, 2, 3), keepdim=True, correction=False)).double()
+            assert_numeric_metrics(
+                expected, actual, rtol=tolerance, atol=1e-6, frobenius_threshold=tolerance, check_pcc=False
+            )
+
+
 @pytest.mark.parametrize("batch_size", [1, 16])
 @pytest.mark.parametrize("h", [32, 64])
 @pytest.mark.parametrize("w", [32, 64])

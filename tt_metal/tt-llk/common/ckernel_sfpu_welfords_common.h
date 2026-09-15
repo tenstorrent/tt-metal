@@ -1107,10 +1107,14 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
 
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
     _two_pass_broadcast_first_lane_();
+    // ZEROACC invalidates rows rather than filling them with zeros. Define both
+    // column parities before reading or packing a row, even for scalar consumers.
     TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_anchor_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_anchor_offset + 2);
     TTI_SFPMAD(ckernel::p_sfpu::LREG11 /* -1 */, ckernel::p_sfpu::LREG0, ckernel::p_sfpu::LREG4, ckernel::p_sfpu::LREG0, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset);
+    TTI_SFPSTORE(ckernel::p_sfpu::LREG0, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, scratch_tile_offset + 2);
     // Keep the lane-variance sum unscaled so the final reciprocal applies once to both variance terms.
     TTI_SFPMOV(0, ckernel::p_sfpu::LREG5, ckernel::p_sfpu::LREG4, 0);
     _two_pass_horizontal_sum_pair_<true /*broadcast_result*/>();
@@ -1127,6 +1131,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     const std::uint32_t group_offset = group_id << 2;
     TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG7, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_MEAN_TILE_OFFSET + group_offset + 2);
     TTI_SFPMAD(ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LREG1, ckernel::p_sfpu::LCONST_0, ckernel::p_sfpu::LREG0, 0);
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     _two_pass_horizontal_sum_mean_();
@@ -1139,6 +1144,7 @@ sfpi_inline void _two_pass_store_combined_mean_var_to_dst_raw_group_(std::uint32
     }
     WELFORD_SFPU_ONLINE_HAZARD_NOP();
     TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset);
+    TT_SFPSTORE(ckernel::p_sfpu::LREG5, sfpi::SFPSTORE_MOD0_FMT_SRCB, WELFORD_SFPU_DST_ADDR_MOD, WELFORD_SFPU_M2_TILE_OFFSET + group_offset + 2);
 }
 
 /*

@@ -222,6 +222,9 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
 
     const auto reduce_batch_size = plan.reduce_batch_size;
     const auto use_sfpu_leaf_combine = plan.use_sfpu_leaf_combine;
+    // Complete-row compact stores permit overlapping MATH/PACK on Blackhole.
+    // Keep Wormhole single-buffered until equivalent hardware validation.
+    const bool compact_hw_single_buffer = use_sfpu_leaf_combine && device->arch() != tt::ARCH::BLACKHOLE;
     const auto num_cores = plan.num_cores;
     const auto& all_cores = plan.all_cores;
     const auto& core_group_1 = plan.core_group_1;
@@ -309,7 +312,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::map<std::string, std::string> reduce_defines =
         reduce_op_utils::get_defines(operation_attributes.math_op, operation_attributes.reduce_dim);
     reduce_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
-    reduce_defines["DST_SYNC_FULL"] = use_sfpu_leaf_combine || dst_full_sync_en ? "1" : "0";
+    reduce_defines["DST_SYNC_FULL"] = compact_hw_single_buffer || dst_full_sync_en ? "1" : "0";
     reduce_defines["WELFORD_TWO_PASS"] = "1";
     reduce_defines["WELFORD_TWO_PASS_STREAMING_CB_TILES"] = std::to_string(two_pass_streaming_cb_tiles);
     // Enables the SFPU post-multiplication of the reduced output by the user scalar in the
@@ -522,10 +525,7 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
     std::visit(
         [&](auto& compute_cfg) {
             compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
-            // Compact HW statistics need single-buffered DST: overlapping these
-            // sparse writes with PACK intermittently loses leaf statistics on
-            // long BF16/BFP8 streams. Retain legacy buffering on other paths.
-            compute_cfg.double_buffer_dest = !use_sfpu_leaf_combine;
+            compute_cfg.double_buffer_dest = !compact_hw_single_buffer;
             // For Float32 input with fp32_dest_acc_en, force unpack-to-dest so that
             // the unpacker writes full fp32 to DEST instead of routing through SrcA, which would
             // downcast to TF32, losing precision and even leading to large-mean fp32 variance
