@@ -15,6 +15,17 @@ import torch
 from loguru import logger
 
 import ttnn
+
+_HIST_DEBUG = os.environ.get("QWEN36_GDN_HIST_DEBUG", "0") == "1"
+
+
+def _addr(t):
+    try:
+        return hex(t.buffer_address()) if t is not None else None
+    except Exception:
+        return "?"
+
+
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
@@ -1769,6 +1780,8 @@ class TPGatedDeltaNet:
         packed_slot = self._packed_slot_tensor(rows, slot)
         self._write_index(self.conv_hist_packed, packed_slot, slot, dim=0)
         ttnn.deallocate(packed_slot)
+        if _HIST_DEBUG:
+            logger.info(f"[hist] repacked slot {slot} into {_addr(self.conv_hist_packed)}")
         self._hist_packed_valid = True
 
     def _ensure_conv_hist_packed(self):
@@ -1799,9 +1812,16 @@ class TPGatedDeltaNet:
         """Copy `packed` into conv_hist_packed in place (keeping the stable trace address) when the shape matches,
         else replace the buffer. Decode bucketing re-allocates the state at widths 1..Bmax, changing the shape."""
         if self.conv_hist_packed is not None and tuple(self.conv_hist_packed.shape) == tuple(packed.shape):
+            if _HIST_DEBUG:
+                logger.info(f"[hist] store in place at {_addr(self.conv_hist_packed)} shape={tuple(packed.shape)}")
             ttnn.copy(packed, self.conv_hist_packed)
             ttnn.deallocate(packed)
         else:
+            if _HIST_DEBUG:
+                logger.info(
+                    f"[hist] store REPLACES buffer {_addr(self.conv_hist_packed)} "
+                    f"{None if self.conv_hist_packed is None else tuple(self.conv_hist_packed.shape)} -> {_addr(packed)} {tuple(packed.shape)}"
+                )
             if self.conv_hist_packed is not None:
                 ttnn.deallocate(self.conv_hist_packed)
             self.conv_hist_packed = packed
@@ -1934,6 +1954,11 @@ class TPGatedDeltaNet:
             and self._fuse_ab
             and getattr(self.args, "proj_1d_decode", False)
         ):
+            if _HIST_DEBUG:
+                logger.info(
+                    f"[hist] forward_decode B={B} Bmax={Bmax} valid={self._hist_packed_valid} "
+                    f"packed={_addr(self.conv_hist_packed)} shape={None if self.conv_hist_packed is None else tuple(self.conv_hist_packed.shape)}"
+                )
             self._ensure_conv_hist_packed()
             qkvzab = tpc.matmul_1d_decode(
                 x, tw["qkvz"], self.args.gdn_qkvz_decode_1d_progcfg, self.cfg, out_memory_config=_L1
