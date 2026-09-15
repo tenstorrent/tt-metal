@@ -50,6 +50,19 @@ public:
     uint32_t buffer_address() const;
     uint32_t config_address() const;
     uint32_t ring_size() const { return ring_size_; }
+    // Active pipe-consumer lanes (matches relay num_producers when multi-producer).
+    uint32_t num_credit_lanes() const { return active_credit_lanes_; }
+    // Slots allocated in the config page (Quasar may reserve headroom above active).
+    uint32_t credit_lane_capacity() const { return credit_lane_capacity_; }
+    // Set active lanes from consumer geometry. Host state only: dispatch packs the value into
+    // every attached program's kernel-config slot (ordered with that program), nothing in
+    // persistent L1 is written. May upgrade from the Create-time default of 1, or no-op if
+    // already equal. Reprogramming to a different value after arming is rejected.
+    void set_active_credit_lanes(uint32_t num_lanes);
+    // Lane mode (num_lanes > 1) needs an exact entry ring whose entry count is a multiple of
+    // num_lanes; throws otherwise. Call before set_active_credit_lanes so a rejected Attach
+    // does not leave the persistent pipe re-armed.
+    void validate_lane_geometry(uint32_t entry_size, uint32_t num_lanes) const;
 
     uint32_t config_page_size() const { return config_page_size_; }
     uint32_t credit_reset_offset() const { return credit_reset_offset_; }
@@ -78,6 +91,11 @@ private:
     CoreRangeSet receiver_cores_;
     CoreRangeSet all_cores_;
     uint32_t ring_size_ = 0;
+    // Physical lane slots in the config page (Create-time allocation).
+    uint32_t credit_lane_capacity_ = 1;
+    // Active lanes for striping / wait_front (per-program kernel-config slot); set from Attach
+    // num_pipe_consumer_threads / relay num_producers.
+    uint32_t active_credit_lanes_ = 1;
     uint32_t config_page_size_ = 0;
     uint32_t credit_reset_offset_ = 0;
     uint32_t credit_reset_size_ = 0;
@@ -93,6 +111,20 @@ private:
  *
  * Declared here rather than alongside the rest of the host API because it takes a DFB config,
  * which has no public header yet.
+ *
+ * Multi-thread relay (Quasar): set `config.num_producers` / `config.num_consumers` and
+ * `pap` / `cap` (STRIDED or ALL) to match the bound kernels' `num_threads_per_cluster`.
+ * Contiguous prefetch pages: `cap=ALL` → every consumer Neo sees every entry;
+ * `cap=STRIDED` → Neo i owns entries i, i+C, …. For `num_producers>1`, registering
+ * the relay programs PrefetcherPipe lane credits from `num_producers` (must match
+ * `AttachPrefetcherPipe(..., num_pipe_consumer_threads)` if that already armed lanes).
+ * With `num_producers>1` the relay DFB is serialized lane-interleaved (producer h at entries
+ * h, h+P, …) for both `cap` values, so an ALL consumer sees entries in ring order rather than
+ * the contiguous per-producer blocks a standalone ALL DFB would use.
+ * Programming model: create the pipe first, bind sender and consumer programs, then
+ * enqueue in either order. Multi-DM *pipe sender* parallelism is separate: partition
+ * receivers (Flow C). Mid-kernel entry-size resize with `num_tcs_to_rr > 1` is
+ * unsupported (align snaps cursors only; TC geometry is fixed at DFB init).
  *
  * @return Program-unique host DFB id (distinct from `prefetcher_pipe_id`).
  */

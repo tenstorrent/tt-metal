@@ -886,6 +886,13 @@ void BindDataflowBufferToProducerConsumerKernels(
             dfb->config.num_producers >= 1 && dfb->config.num_producers <= 4,
             "Tensix producer count must be between 1 and 4, got {}",
             dfb->config.num_producers);
+        const auto qc = std::get<experimental::quasar::QuasarComputeConfig>(compute_producer->config());
+        TT_FATAL(
+            qc.num_threads_per_cluster == dfb->config.num_producers,
+            "DFB {}: Quasar compute producer num_threads_per_cluster ({}) must equal config.num_producers ({})",
+            dfb_id,
+            qc.num_threads_per_cluster,
+            dfb->config.num_producers);
         dfb->config.producer_risc_mask =
             static_cast<uint16_t>(((1u << dfb->config.num_producers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (
@@ -896,6 +903,12 @@ void BindDataflowBufferToProducerConsumerKernels(
             ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_producers);
         const auto& producer_dm_riscvs = dm_producer->get_dm_processors();
+        TT_FATAL(
+            producer_dm_riscvs.size() == dfb->config.num_producers,
+            "DFB {}: Quasar DM producer processor count ({}) must equal config.num_producers ({})",
+            dfb_id,
+            producer_dm_riscvs.size(),
+            dfb->config.num_producers);
         for (DataMovementProcessor dm : producer_dm_riscvs) {
             dfb->config.producer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
@@ -917,6 +930,13 @@ void BindDataflowBufferToProducerConsumerKernels(
             dfb->config.num_consumers >= 1 && dfb->config.num_consumers <= 4,
             "Tensix consumer count must be between 1 and 4, got {}",
             dfb->config.num_consumers);
+        const auto qc = std::get<experimental::quasar::QuasarComputeConfig>(compute_consumer->config());
+        TT_FATAL(
+            qc.num_threads_per_cluster == dfb->config.num_consumers,
+            "DFB {}: Quasar compute consumer num_threads_per_cluster ({}) must equal config.num_consumers ({})",
+            dfb_id,
+            qc.num_threads_per_cluster,
+            dfb->config.num_consumers);
         dfb->config.consumer_risc_mask =
             static_cast<uint16_t>(((1u << dfb->config.num_consumers) - 1u) << ::dfb::TENSIX_RISC_OFFSET);
     } else if (
@@ -927,6 +947,12 @@ void BindDataflowBufferToProducerConsumerKernels(
             ::dfb::MAX_PRODUCERS_PER_DFB,
             dfb->config.num_consumers);
         const auto& consumer_dm_riscvs = dm_consumer->get_dm_processors();
+        TT_FATAL(
+            consumer_dm_riscvs.size() == dfb->config.num_consumers,
+            "DFB {}: Quasar DM consumer processor count ({}) must equal config.num_consumers ({})",
+            dfb_id,
+            consumer_dm_riscvs.size(),
+            dfb->config.num_consumers);
         for (DataMovementProcessor dm : consumer_dm_riscvs) {
             dfb->config.consumer_risc_mask |= (1u << static_cast<std::underlying_type_t<DataMovementProcessor>>(dm));
         }
@@ -1231,7 +1257,12 @@ static std::pair<uint16_t, uint32_t> compute_capacity_and_stride(const DataflowB
                 config.num_entries,
                 config.num_producers);
             capacity = config.num_entries / config.num_producers;
-            stride_in_entries = 1;
+            // Each producer owns num_entries / num_producers slots. Default: one contiguous block per
+            // producer. Relay DFBs borrow a PrefetcherPipe / CrossNode ring whose producer h (pipe
+            // credit lane h) owns entries h, h+P, ..., so interleave instead (stride P) to keep the
+            // TC layout in step with the ring. TC counts are unaffected; consumers still round-robin
+            // one TC per producer and now see entries in ring order.
+            stride_in_entries = config.is_relay ? config.num_producers : 1;
             break;
         default: TT_FATAL(false, "Invalid access pattern {}", (uint32_t)config.cap);
     }
@@ -1873,7 +1904,8 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
                 config.num_entries,
                 config.num_producers);
             capacity = config.num_entries / config.num_producers;
-            dfb->stride_in_entries = 1;
+            // See compute_capacity_and_stride: relay rings are lane-interleaved, so stride P.
+            dfb->stride_in_entries = config.is_relay ? config.num_producers : 1;
             break;
         default: TT_FATAL(false, "Invalid access pattern", (uint32_t)config.cap);
     }
