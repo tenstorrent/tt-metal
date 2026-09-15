@@ -356,3 +356,137 @@ def test_two_row_timestep_equals_scalar(mesh_device, sp_axis, tp_axis, num_links
 
     del tt_model
     assert_quality(out_scalar, out_two_row, pcc=0.9999, relative_rmse=0.01)
+
+
+# ---------------------------------------------------------------------------
+# Absolute correctness against the torch reference
+# ---------------------------------------------------------------------------
+# Geometry is deliberately small so a CPU torch forward is quick, while keeping H and W even
+# (patch_size=(1,2,2) floor-divides without asserting, so an odd dim would silently drop a row).
+REF_T, REF_H, REF_W = 8, 22, 40  # -> N = 8 * 11 * 20 = 1760
+REF_PCC = 0.992_000  # repo convention for a full-model / inner_step comparison
+REF_RMSE = 0.15
+
+
+def _reference_and_tt(mesh_device, sp_axis, tp_axis, num_links, topology, *, per_token):
+    """Run the torch 5B reference and the TT model on identical inputs; return (torch, tt)."""
+    parallel_config = _parallel_config(mesh_device, sp_axis, tp_axis)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+
+    cfg, torch_model = _load_5b_config_and_state(num_layers=1)
+    state_dict = torch_model.state_dict()
+
+    torch.manual_seed(0)
+    spatial = torch.randn((1, cfg.in_channels, REF_T, REF_H, REF_W), dtype=torch.float32)
+    prompt = torch.randn((1, PROMPT_SEQ_LEN, cfg.text_dim), dtype=torch.float32)
+
+    _, ph, pw = cfg.patch_size
+    n_tokens = REF_T * (REF_H // ph) * (REF_W // pw)
+    tokens_per_frame = (REF_H // ph) * (REF_W // pw)
+
+    if per_token:
+        # 0 on the conditioned frame's tokens, t elsewhere -- the TI2V-5B schedule. The torch
+        # reference takes its ndim==2 branch (transformer_wan.py:650), flattens, and passes
+        # timestep_seq_len through to the condition embedder.
+        ts_torch = torch.full((1, n_tokens), TIMESTEP, dtype=torch.float32)
+        ts_torch[:, :tokens_per_frame] = 0.0
+    else:
+        ts_torch = torch.full((1,), TIMESTEP, dtype=torch.float32)
+
+    logger.info(f"torch reference forward: spatial {tuple(spatial.shape)}, timestep {tuple(ts_torch.shape)}")
+    with torch.no_grad():
+        torch_out = torch_model(
+            hidden_states=spatial, encoder_hidden_states=prompt, timestep=ts_torch, return_dict=False
+        )[0]
+    del torch_model
+
+    tt_model = _make_tt_transformer(
+        cfg, mesh_device=mesh_device, ccl_manager=ccl_manager, parallel_config=parallel_config, num_layers=1
+    )
+    tt_model.load_torch_state_dict(state_dict)
+
+    spatial_host, n = tt_model.preprocess_spatial_input_host(spatial)
+    assert n == n_tokens, f"token count mismatch: {n} vs {n_tokens}"
+    rope_cos, rope_sin, trans_mat = tt_model.prepare_rope_features(spatial)
+    prompt_1BLP = tt_model.prepare_text_conditioning(bf16_tensor(prompt.unsqueeze(0), device=mesh_device))
+    sp = parallel_config.sequence_parallel
+    spatial_device = from_torch(spatial_host, device=mesh_device, mesh_axes=[None, None, sp.mesh_axis, None])
+
+    if per_token:
+        padded_n = spatial_host.shape[2]
+        dim_tp = (cfg.num_attention_heads * cfg.attention_head_dim) // tuple(mesh_device.shape)[tp_axis]
+        mask = first_frame_mask(REF_T, REF_H, REF_W)
+        tokens = mask[0, 0, :, ::ph, ::pw].reshape(-1)
+        tokens = pad_timesteps_for_sequence_parallel(tokens, sp.factor, fill=1.0)
+
+        def m(width):
+            t = tokens.reshape(1, 1, -1, 1).expand(-1, -1, -1, width).contiguous()
+            return from_torch(t, device=mesh_device, mesh_axes=[None, None, sp.mesh_axis, None], dtype=ttnn.float32)
+
+        tt_model.set_per_token_timestep_masks(m(dim_tp), m(6 * dim_tp))
+        ts_tt = float32_tensor(
+            torch.tensor([0.0, TIMESTEP], dtype=torch.float32).reshape(1, 1, 2, 1), device=mesh_device
+        )
+    else:
+        ts_tt = float32_tensor(ts_torch.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=mesh_device)
+
+    tt_raw = tt_model.inner_step(
+        spatial_1BNI=spatial_device,
+        prompt_1BLP=prompt_1BLP,
+        rope_cos_1HND=rope_cos,
+        rope_sin_1HND=rope_sin,
+        trans_mat=trans_mat,
+        N=n,
+        timestep=ts_tt,
+    )
+    tt_out = tt_model.postprocess_spatial_output_host(local_device_to_torch(tt_raw), REF_T, REF_H, REF_W, n)
+    del tt_model
+    return torch_out, tt_out
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    MESH_PARAMS,
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_transformer_vs_torch_scalar_timestep(
+    mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp
+):
+    """Absolute correctness of the 5B transformer port against the torch reference.
+
+    This is the check that the other 5B tests cannot make: the equivalence tests are TT-vs-TT
+    and the pipeline gates are self-consistency, so without this nothing pins the 5B port to
+    torch in absolute terms. Scalar timestep, so it isolates the port from the conditioning.
+    """
+    if not ttnn.device.is_blackhole():
+        pytest.skip("TI2V-5B targets BH Galaxy")
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    torch_out, tt_out = _reference_and_tt(mesh_device, sp_axis, tp_axis, num_links, topology, per_token=False)
+    assert_quality(torch_out, tt_out, pcc=REF_PCC, relative_rmse=REF_RMSE)
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    MESH_PARAMS,
+    ids=["bh_4x8"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_transformer_vs_torch_per_token_timestep(
+    mesh_device, sp_axis, tp_axis, num_links, device_params, topology, is_fsdp
+):
+    """Absolute correctness of the image-conditioning path against the torch reference.
+
+    The torch model has explicit Wan2.2-TI2V branches for this: a 2-D timestep is flattened and
+    `timestep_seq_len` threaded to the condition embedder, the blocks take the `temb.ndim == 4`
+    path, and norm_out takes `temb.ndim == 3`. So the reference exercises the same per-token
+    modulation the TT two-row expansion produces, and this pins the conditioning -- not just
+    the port -- to torch.
+    """
+    if not ttnn.device.is_blackhole():
+        pytest.skip("TI2V-5B targets BH Galaxy")
+    skip_if_unsupported_num_links(mesh_device, num_links)
+
+    torch_out, tt_out = _reference_and_tt(mesh_device, sp_axis, tp_axis, num_links, topology, per_token=True)
+    assert_quality(torch_out, tt_out, pcc=REF_PCC, relative_rmse=REF_RMSE)
