@@ -521,9 +521,10 @@ def test_demo_text(
     # Override: GEMMA4_BOUNDED_SLIDING, GEMMA4_GEN_PREFILL_CHUNK.
     lc = resolve_gemma4_demo_long_context(max_seq_len, mesh_device, model_path, paged_attention=paged_attention)
     bounded_sliding = lc["bounded_sliding"]
-    # Turn on multi-chunk prefill-trace replay for unbounded batch-1 runs whose
+    # Turn on multi-chunk prefill-trace replay for unbounded runs whose
     # max_seq_len sits AT the trace ceiling (4k), which would otherwise prefill
-    # untraced. Measured -8.7% (12B) / -4.5% (31B) TTFT at long-context-4k.
+    # untraced. Measured -8.7% (12B) / -4.5% (31B) TTFT at long-context-4k. The
+    # batch-32 config's max_seq_len sits exactly AT that ceiling too.
     maybe_auto_enable_chunked_prefill_trace(
         batch_size=batch_size,
         max_seq_len=max_seq_len,
