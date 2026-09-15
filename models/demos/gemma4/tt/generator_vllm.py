@@ -2989,15 +2989,42 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
                 f"position {cur_pos}; ending the request with EOS"
             )
             return torch.full((1, self._SPEC_N), self._eos_fill_id(), dtype=torch.int32)
-        committed, m = self._spec.serving_step(cur_token, cur_pos)
-        self._spec_cur = (committed[-1], cur_pos + m + 1)
-        # Exactly-N valid tokens: MTP commits an accepted prefix + bonus, so a
-        # SHORT row happens only at a genuine stop. Fill the tail with EOS --
-        # the scheduler trims committed tokens at the first stop token, and the
-        # plugin does not accept sentinel padding (the dFlash twin does the
-        # same). A -1 tail would put an invalid id on the wire.
-        out = torch.full((1, self._SPEC_N), self._eos_fill_id(), dtype=torch.int32)
-        out[0, : len(committed)] = torch.tensor(committed, dtype=torch.int32)
+        # BLOCK LOOP: one MTP iteration commits an accepted prefix + bonus, which
+        # is VARIABLE (1..N) -- acceptance is content-dependent. Run iterations
+        # back-to-back until the step's row holds N tokens, exactly as the dFlash
+        # twin fills _SPEC_BLOCK.
+        #
+        # Without this loop a normal low-acceptance iteration returns a short row
+        # that has to be padded, and any pad value is wrong: -1 puts an invalid
+        # id on the wire, and EOS terminates the request at the first pad because
+        # the scheduler trims at the first stop token. That is not hypothetical --
+        # it capped solo generation at ~one block (osl=128 returned 6 tokens)
+        # while the batched baseline path, which never pads, ran to full length.
+        eos_id = self._eos_fill_id()
+        base_pos = cur_pos
+        block = []
+        while len(block) < self._SPEC_N:
+            if cur_pos >= self._spec_budget_end:
+                # Horizon exhausted mid-row: EOS here is a GENUINE stop.
+                block.append(eos_id)
+                break
+            committed, m = self._spec.serving_step(cur_token, cur_pos)
+            cur_pos += m + 1
+            cur_token = committed[-1]
+            block.extend(committed)
+            if eos_id in committed:
+                break
+        block = block[: self._SPEC_N]
+        # Resume from exactly what was EMITTED, not from how far the iterations
+        # ran: a final iteration may overshoot the row. The next step re-drafts
+        # those positions and overwrites them (the implicit-overwrite state
+        # rollback the plugin contract relies on), so the emitted stream and the
+        # session position stay in lockstep.
+        self._spec_cur = (block[-1], base_pos + len(block))
+        # A row shorter than N now means a genuine stop only, so EOS-filling the
+        # tail is correct: upstream trims at the first stop token.
+        out = torch.full((1, self._SPEC_N), eos_id, dtype=torch.int32)
+        out[0, : len(block)] = torch.tensor(block, dtype=torch.int32)
         return out
 
     def read_decode_output(self, tt_out, async_read=False, *_, **__):
