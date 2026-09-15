@@ -4,7 +4,8 @@ Notes for the dense (Kimi) KV-dedup `ag-before` path. Branched off
 `ipotkonjak/kimi-kv-tp-shard-ag-before` at `e01e12abe78`.
 
 **Status: the `reader` arm is correct, `tp_shard_kv` is trace-safe, and TP dedup is FREE under trace**
--- 4x less KV cache DRAM for -0.26% of model forward time (noise). The root cause of the long-standing
+-- 4x less KV cache DRAM for ~0% of model forward time, measured on two different bases (-0.26% before
+the rebase onto current main, -0.06% after; both inside noise). The root cause of the long-standing
 PCC failure is found and fixed; the traced path, previously refused outright, now works. What remains is
 cleanup and wider regression. See [Root cause](#root-cause-the-fused-ags-prefix-bound-slices-the-wrong-axis)
 and [Trace safety](#trace-safety-tp_shard_kv-under-a-captured-program).
@@ -226,27 +227,46 @@ case is the cheapest place it is real.
 A `tp_shard_kv` axis was added to that test -- no Kimi test had one ("tp_sharded has no CI job on either
 side").
 
+Measured TWICE, on two different bases. Both arms are re-run together each time: 135 upstream commits
+landed between them, so pairing a new arm against an old baseline would charge upstream's drift to the
+KV dedup.
+
+**On current main** (rebased, `2ae844e81a7`):
+
 | chunk | sp_only | tp_sharded | delta |
 | --- | --- | --- | --- |
-| 0 | 0.422 | 0.421 | -0.001 |
-| 1 | 0.430 | 0.432 | +0.002 |
-| 2 | 0.463 | 0.462 | -0.001 |
-| 3 | 0.489 | 0.489 | 0.000 |
-| 4 | 0.521 | 0.519 | -0.002 |
-| 5 | 0.553 | 0.551 | -0.002 |
-| 6 | 0.581 | 0.579 | -0.002 |
-| 7 | 0.611 | 0.609 | -0.002 |
-| 8 | 0.657 | 0.654 | -0.003 |
-| 9 | 0.693 | 0.691 | -0.002 |
-| 10 | 0.731 | 0.728 | -0.003 |
-| **total** | **6.151 s** | **6.135 s** | **-16 ms, -0.26%** |
+| 0 | 0.423 | 0.422 | -0.001 |
+| 1 | 0.432 | 0.433 | +0.001 |
+| 2 | 0.467 | 0.467 | 0.000 |
+| 3 | 0.492 | 0.495 | +0.003 |
+| 4 | 0.523 | 0.525 | +0.002 |
+| 5 | 0.554 | 0.554 | 0.000 |
+| 6 | 0.582 | 0.581 | -0.001 |
+| 7 | 0.614 | 0.613 | -0.001 |
+| 8 | 0.660 | 0.657 | -0.003 |
+| 9 | 0.695 | 0.693 | -0.002 |
+| 10 | 0.733 | 0.731 | -0.002 |
+| **total** | **6.175 s** | **6.171 s** | **-4 ms, -0.06%** |
 
-**TP dedup is free under trace.** Per-chunk stddev is <= 0.002 s and every delta is <= 0.003 s in both
-directions, so this is "indistinguishable from baseline", not "slightly faster". n=1 per arm.
+**On the pre-rebase base** (`50fa2a9b4a9`): totals 6.151 s vs 6.135 s -- **-16 ms, -0.26%**, per-chunk
+deltas 0.000 to -0.003.
 
-The one gate FAIL (chunk 1, 0.432 against a band top of 0.431) is not a regression: `sp_only` measured
-0.430 on that same chunk, so both sit on the band edge, and the recorded baselines are `sp_only`-derived
-and do not apply to this arm anyway.
+**TP dedup is free under trace.** Deltas are mixed-sign with a maximum magnitude of 0.003 s against a
+per-chunk stddev of <= 0.002 s: this is "indistinguishable from baseline", not "slightly faster". n=1 per
+arm per base, but two independent measurements on different bases both landing at zero is stronger than
+either alone.
+
+**Upstream drift, for reference:** sp_only moved 6.151 -> 6.175 s (+0.39%) across those 135 commits.
+That is main's, not ours. Quoting the old baseline against the new tp_sharded arm would have reported
++0.33% instead of ~0 -- which is the entire reason both arms get re-run.
+
+### Reading the gate on either arm
+
+Do not read the PASS/FAIL. The recorded baselines are `sp_only`-derived (no `tp_sharded` baseline exists
+yet) and upstream re-recorded them in the deeper chunks (chunk 6: 0.574 -> 0.584, chunk 10: 0.735 ->
+0.756) against a machine this one does not match there. On the rebased run BOTH arms fail the same
+band edges, in BOTH directions -- chunk 10 fails for being FASTER than its band low. The paired delta is
+the measurement; the verdict is not.
 
 ### Do not quote the notrace number
 
@@ -292,6 +312,38 @@ to these numbers; they measure the reader path's gather win alone.
   one-off torus-vs-line comparison (torus 85.6 GB/s vs line 47.2 GB/s on the shared shape, 1.82x).
 - Verify the `fabric2d-2x4` errors are environmental.
 - Decide whether `reader` becomes the default and `TT_MLA_KV_DEDUP_UNSTRIPE` goes away.
+
+## Rebasing this branch over the sliding-window series
+
+`06d5aae1523` ("[gpt_oss_d_p] Bounded sliding-window KV cache, PR2: RingJointSDPA bounded ring read")
+lands in the same places this branch does, and it is **PR2 of a series** -- expect PR3 to collide again.
+
+The twelve conflicts git FLAGGED were all additive and mechanical: both sides append a param to the same
+struct/ctor/hash lists, and both claimed reader compile slot 44 (resolved as main 44, block-cyclic
+geometry 45-48, tensor accessors 49, with the factory push order and `meta_args_offset` moved to match).
+
+**The two real defects came from what git did SILENTLY.** Watch for both next time:
+
+1. **An empty HEAD side is not "main has nothing here" -- it can be main's DELETION.** `ce240a3229e`
+   removed `_SNAKE_CLOSING_TORUS_CONFIGS` / `_snake_ring_can_close` from `mla.py` when it moved that
+   decision into the op. Taking our whole side of that hunk reintroduced all 31 lines, callerless.
+   Caught because the rebased file was 166 lines shorter than the pre-rebase tip while the helper had
+   zero callers. Diff the rebased tree against the pre-rebase tip and account for every large delta.
+2. **A clean auto-merge of a positional argument list is the dangerous one.** `06d5aae1523` inserted
+   `circular_kv_cache` into the prim signature BETWEEN `sliding_window_size` and the block-cyclic pair.
+   `sdpa.cpp` merged without a conflict, so `ring_mla`'s forwarding call never gained it and every later
+   argument shifted left -- `kv_block_cyclic_stripes` (4) landed in `circular_kv_cache`. `uint32_t` ->
+   `bool` is implicit, so it COMPILED CLEAN and failed only on device. After any rebase that touches a
+   signature, grep every call site for argument-order agreement; do not trust the build.
+
+A clean compile is necessary and nowhere near sufficient: mismatched compile slots and shifted
+positionals both build fine. Re-run the metadata PCC gate (its PCCs are bit-identical run to run, so any
+change is signal) and the L10 traced gate before trusting a rebase. Also re-run BOTH perf arms -- see the
+upstream-drift note above.
+
+Also expect a stale precompiled header after a large rebase: `cmake_pch.hxx` changes size and every
+`tt_metal` TU fails with "has been modified since the precompiled header was built". Delete
+`build_Release/**/*.pch` and rebuild; it is not a real build break.
 
 ## Environment notes
 
