@@ -1130,6 +1130,26 @@ class DiffVAEDecoder(Module):
         )
         self.dtype = dtype
 
+    def parameter_layout(self) -> str:
+        """Which parameters this decoder has, as a token for the weight-cache path.
+
+        The ``DIFFVAE_DET_*`` and ``DIFFVAE_S5_FUSED_QKV`` flags change the parameter SET, not just the
+        arithmetic: one fused ``qkv`` or three projections, one packed ``gate_up`` or ``w_gate`` +
+        ``w_up``. The weight cache is otherwise keyed by parallel config, mesh and dtype alone, so a
+        cache written under one flag set does not load under another. Per deterministic stage
+        ``q1``/``q3`` and ``m1``/``m2`` count the projections a block owns; stage 5 has ``q1``/``q3``.
+        Read off the built modules rather than the environment: a flag that never reaches a stage
+        (fused qkv without a TP axis, say) must not change its key.
+        """
+
+        def stage_token(blocks) -> str:
+            block = blocks[0]
+            return f"q{1 if block.attn.fused_qkv else 3}m{1 if block.mlp.fused else 2}"
+
+        det = "-".join(stage_token(self.stages.det_stages[i]) for i in range(len(self.stages.det_stages)))
+        stage5 = f"q{1 if self.stage5.diff_blocks[0].attn.fused_qkv else 3}"
+        return f"det-{det}_s5-{stage5}"
+
     def torch_state_from_checkpoint(self, path, *, statistics: bool = True) -> dict[str, torch.Tensor]:
         """One state dict for the whole decoder, keyed for :meth:`load_torch_state_dict`.
 

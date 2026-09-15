@@ -38,6 +38,10 @@ export DIFFVAE_DEVICE_PREPROC=1
 export DIFFVAE_DEVICE_UNPATCHIFY=1
 export DIFFVAE_TRIM_PAD_CHANNELS=1
 export DIFFVAE_DET_COLPAR_QKV=1
+# Reaches only deterministic stage 1, which runs replicated with no TP axis and so cannot take the
+# column-parallel path: without it that stage projects q/k/v separately and rotates unfused, and
+# the two rows are ~550 ms of the decode. Stages 2-4 get fused qkv from COLPAR_QKV regardless.
+export DIFFVAE_DET_FUSED_QKV=1
 export DIFFVAE_DET_FUSED_ROPE=1
 export DIFFVAE_DET_FUSED_SWIGLU=1
 export TT_DIT_STAGE_TIMING=1

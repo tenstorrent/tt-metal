@@ -1697,12 +1697,13 @@ class LTXVideoVAEAdapter:
 
         if isinstance(self._decoder, DiffVAEDecoder):
             # No conv3d blocking to key on, and the remapping (folded statistics, permuted
-            # upsample projections) lives on the decoder itself.
+            # upsample projections) lives on the decoder itself. The parameter layout is keyed
+            # because the DIFFVAE_DET_* flags change which parameters exist (see parameter_layout).
             decoder = self._decoder
             cache_module.load_model(
                 decoder,
                 model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
-                subfolder="diffvae",
+                subfolder=f"diffvae/{decoder.parameter_layout()}",
                 parallel_config=self._dit_parallel_config,
                 mesh_shape=tuple(self._mesh_device.shape),
                 mesh_device=self._mesh_device,

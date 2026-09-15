@@ -354,8 +354,11 @@ pytest timeout. On the device broker, whose jobs cap at 1500 s, split the run wi
 the ledgers before `diffvae_gate_compare.py --record`.
 
 Open, optional speed work: running the deterministic stages keep-bricked (convert to bricked
-order once at stage entry and back at exit, as stage 5 does), and stage 1, which is ~1000 ms of the decode on
-the replicated backend.
+order once at stage entry and back at exit, as stage 5 does). Stage 1, replicated on the linear-order
+executor, is ~525 ms of the decode now that the pipeline exports `DIFFVAE_DET_FUSED_QKV=1` (~630 ms
+under block profiling, ~1080 ms before with three separate projections and the unfused rotation;
+that stage has no TP axis, so the column-parallel flag the other stages get fused qkv from never
+reached it). The production pipeline's VAE decode is 12.00 s with it, from 12.2-12.35 s.
 
 Two things that bit during the migration and will again: kernel sources are JIT-only, so the host
 syntax check never sees them (run the JIT compile command with `-fsyntax-only` after a kernel edit,
@@ -447,6 +450,11 @@ once that investigation closed; the op reads only `DIFFVAE_NA_UNSAFE_CHUNK` from
 * Exact NA at 6 s 1080p does not fit co-resident with the DiT. Either band harder
   (`DIFFVAE_SLAB_FRAMES=48`) or fall back to exclusive residency (`DIFFVAE_EXCLUSIVE=1`). The
   decode-only timing test runs fine at the default banding because nothing else is resident.
+* The `DIFFVAE_DET_*` and `DIFFVAE_S5_FUSED_QKV` flags change which parameters a block owns (one fused
+  `qkv` or three projections; packed `gate_up` or `w_gate` + `w_up`), and the weight cache is keyed by
+  parallel config, mesh and dtype alone. `DiffVAEDecoder.parameter_layout()` therefore names the cache
+  subfolder (`diffvae/det-q1m1-q1m1-q1m1-q1m1_s5-q3/...`), read off the built modules. Change a flag
+  and the first run writes a fresh cache under the new token; the old directory is left behind.
 
 
 ---
