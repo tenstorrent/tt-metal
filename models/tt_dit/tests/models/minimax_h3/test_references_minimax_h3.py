@@ -9,7 +9,6 @@ own path (``diffusers.modular_pipelines.minimax_h3`` at PR #14355): host gates a
 from __future__ import annotations
 
 import os
-from itertools import groupby
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -749,7 +748,7 @@ def _build(stub, prompt, references):
 
 
 def test_presentation_orders_vision_patches_by_reference_not_by_batch():
-    """The encoder consumes tower rows in sequence order, so processor-batch order would swap blocks."""
+    """`_scatter_rows` consumes tower rows in run order, so processor-batch order would swap blocks."""
     stub = _ProcessorStub(_weights_dir())
     video = rp.reference_from_video_file(_real_media(), with_audio=False)
     image = rp.MiniMaxH3Reference(image=_image(1024, 1024))
@@ -769,6 +768,8 @@ def test_presentation_orders_vision_patches_by_reference_not_by_batch():
 
 
 def test_presentation_vision_runs_line_up_with_the_towers_rows():
+    from ....encoders.qwen3vl.model_qwen3vl import vision_token_runs
+
     stub = _ProcessorStub(_weights_dir())
     references = [
         rp.MiniMaxH3Reference(image=_image(1024, 1024)),
@@ -779,15 +780,13 @@ def test_presentation_vision_runs_line_up_with_the_towers_rows():
     input_ids, tags, type_ids, pixel_values, grid_thw, kinds = _build(stub, "a prompt", prepared)
 
     pad_ids = [stub.tokenizer.convert_tokens_to_ids(t) for t in ("<|image_pad|>", "<|video_pad|>")]
+    runs = vision_token_runs(input_ids, pad_ids)
     merge = stub.image_processor.merge_size**2
 
-    # The encoder replaces the rows the vision mask marks with the tower's rows in sequence order,
-    # so the mask must mark exactly the pad tokens, one contiguous run per image or video frame.
-    vision_rows = type_ids[0] > 0
-    assert torch.equal(vision_rows, torch.isin(input_ids[0], torch.tensor(pad_ids)))
-    runs = [len(list(group)) for is_vision, group in groupby(vision_rows.tolist()) if is_vision]
     assert len(runs) == sum(int(grid[0]) for grid in grid_thw)
-    assert sum(runs) == sum(int(grid.prod()) for grid in grid_thw) // merge
+    assert sum(length for _, length in runs) == sum(int(grid.prod()) for grid in grid_thw) // merge
+    # Runs are sorted and disjoint, which `_scatter_rows` requires outright.
+    assert all(a[0] + a[1] <= b[0] for a, b in zip(runs, runs[1:]))
     assert stub.tokenizer.decode(input_ids[0]).count("<Audio 1>") == 1
 
 

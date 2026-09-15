@@ -2,13 +2,9 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""How vision reaches the Qwen3-VL decoder, against transformers on a small random model: the
-tower's merged tokens replace the `<|image_pad|>` row embeddings before the block stack, and its
-deepstack features are added to those rows after each of the first few decoder layers."""
-
-from __future__ import annotations
-
-import dataclasses
+# How vision reaches the Qwen3-VL decoder: the tower's merged tokens REPLACE the
+# <|image_pad|> row embeddings before the block stack; its deepstack features are
+# ADDED to those same rows after each of the first len(deepstack) decoder layers.
 
 import pytest
 import torch
@@ -16,31 +12,52 @@ import transformers
 from loguru import logger
 
 import ttnn
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl import Qwen3VlEncoder, mrope_position_ids
-from models.tt_dit.parallel.config import EncoderParallelConfig
-from models.tt_dit.parallel.manager import CCLManager
-from models.tt_dit.utils import tensor
-from models.tt_dit.utils.check import assert_quality
 
-VOCAB_SIZE = 256
+from ....encoders.qwen3vl.model_qwen3vl import _scatter_rows, create_rope_tensors, vision_token_runs
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
+from ....parallel.manager import CCLManager
+from ....utils import tensor
+from ....utils.tensor import bf16_tensor
+from .common import encoder_from_hf_config
+
+IMAGE_TOKEN_ID = 151655  # <|image_pad|>
 HIDDEN = 128
-SPATIAL_MERGE_SIZE = 2
-# A prompt of text around one image, at a length that is not a multiple of the tile size.
-TEXT_BEFORE = 5
-IMAGE_GRID = (1, 8, 4)  # 8 tokens after the 2x2 merge
-TEXT_AFTER = 37
-SEQ = TEXT_BEFORE + IMAGE_GRID[1] * IMAGE_GRID[2] // SPATIAL_MERGE_SIZE**2 + TEXT_AFTER
-EXTRA = 8  # tokens generated after the prompt
-
-MESH = [
-    pytest.param((1, 1), (1, 0), {"l1_small_size": 32768}, id="1x1"),
-    pytest.param((1, 4), (4, 1), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768}, id="1x4"),
-]
+SEQ = 64
 
 
-def _reference_text_model(layers: int) -> transformers.PreTrainedModel:
+def test_vision_token_runs_finds_one_run_per_image():
+    ids = torch.tensor([[1, 2, 3] + [IMAGE_TOKEN_ID] * 4 + [9, 9] + [IMAGE_TOKEN_ID] * 6 + [7]])
+    assert vision_token_runs(ids, IMAGE_TOKEN_ID) == [(3, 4), (9, 6)]
+
+
+def test_vision_token_runs_handles_the_edges():
+    assert vision_token_runs(torch.tensor([[IMAGE_TOKEN_ID] * 3 + [1, 2]]), IMAGE_TOKEN_ID) == [(0, 3)]
+    assert vision_token_runs(torch.tensor([[1, 2] + [IMAGE_TOKEN_ID] * 3]), IMAGE_TOKEN_ID) == [(2, 3)]
+    assert vision_token_runs(torch.tensor([[1, 2, 3]]), IMAGE_TOKEN_ID) == []
+
+
+def test_vision_token_runs_rejects_a_batch(expect_error):
+    """One request is one sequence; a batch would silently take only the first row."""
+    with expect_error(ValueError, "expected a single sequence"):
+        vision_token_runs(torch.zeros(2, 8, dtype=torch.long), IMAGE_TOKEN_ID)
+
+
+_MESH = [pytest.param((1, 1), (1, 1), id="single")]
+
+
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def test_scatter_rows_rejects_a_row_count_mismatch(mesh_device, submesh_shape, expect_error):
+    """Too few or too many value rows is a caller error, not a silent partial write."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    base = bf16_tensor(torch.zeros(1, SEQ, HIDDEN), device=submesh)
+    values = bf16_tensor(torch.zeros(1, 5, HIDDEN), device=submesh)
+    with expect_error(ValueError, "runs cover 16 rows but values has 5"):
+        _scatter_rows(base, values, [(8, 16)], add=False)
+
+
+def _reference_text_model(layers):
     config = transformers.Qwen3VLTextConfig(
-        vocab_size=VOCAB_SIZE,
+        vocab_size=256,
         hidden_size=HIDDEN,
         intermediate_size=256,
         num_hidden_layers=layers,
@@ -59,162 +76,167 @@ def _reference_text_model(layers: int) -> transformers.PreTrainedModel:
     return transformers.models.qwen3_vl.modeling_qwen3_vl.Qwen3VLTextModel._from_config(config).eval()
 
 
-def _encoder(
-    reference: transformers.PreTrainedModel, mesh_device: ttnn.MeshDevice, tp: tuple[int, int], *, head: bool = False
-) -> Qwen3VlEncoder:
-    """The encoder of `reference`, with a language-model head tied to the token embedding if `head`."""
-    parallel_config = EncoderParallelConfig.from_tuples(tp=tp, sp=None)
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    config = dataclasses.replace(Qwen3VlEncoder.config_from_hf(reference.config), final_linear=head)
-    encoder = Qwen3VlEncoder(config, device=mesh_device, parallel_config=parallel_config, ccl_manager=ccl_manager)
-    state = {f"model.language_model.{k}": v for k, v in reference.state_dict().items()}
-    if head:
-        state["lm_head.weight"] = state["model.language_model.embed_tokens.weight"]
-    encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(state))
-    return encoder
-
-
-def _prompt() -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Token ids, the vision-row mask and the multimodal rope positions of the prompt."""
-    torch.manual_seed(1)
-    ids = torch.randint(0, VOCAB_SIZE, [1, SEQ])
-    num_image_tokens = IMAGE_GRID[1] * IMAGE_GRID[2] // SPATIAL_MERGE_SIZE**2
-    mask = torch.zeros([1, SEQ], dtype=torch.bool)
-    mask[:, TEXT_BEFORE : TEXT_BEFORE + num_image_tokens] = True
-    position_ids = mrope_position_ids(
-        mask.long(), image_grid_thw=torch.tensor([IMAGE_GRID]), spatial_merge_size=SPATIAL_MERGE_SIZE
+def _encoder(submesh, *, layers, activation_layers):
+    reference = _reference_text_model(layers)
+    enc = encoder_from_hf_config(
+        reference.config,
+        head_dim=32,
+        activation_layers=activation_layers,
+        device=submesh,
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=1, mesh_axis=0)),
+        ccl_manager=CCLManager(submesh, num_links=1, topology=ttnn.Topology.Linear),
     )
-    return ids, mask, position_ids
+    enc.load_torch_state_dict(reference.state_dict())
+    return enc
 
 
-@pytest.mark.parametrize(("mesh_device", "tp", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-def test_text_only_path_is_unchanged(*, mesh_device: ttnn.MeshDevice, tp: tuple[int, int]) -> None:
-    reference = _reference_text_model(2)
-    encoder = _encoder(reference, mesh_device, tp)
-    ids, _, _ = _prompt()
-    tt_ids = tensor.from_torch(ids, device=mesh_device, dtype=ttnn.uint32)
-
-    plain = encoder.forward(tt_ids, skip_final_linear=True)
-    explicit_none = encoder.forward(
-        tt_ids, vision_embeds=None, vision_mask=None, deepstack_embeds=(), skip_final_linear=True
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def test_text_only_path_is_unchanged(mesh_device, submesh_shape):
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    torch.manual_seed(0)
+    enc = _encoder(submesh, layers=4, activation_layers=(3,))
+    ids = ttnn.from_torch(
+        torch.randint(0, 256, (1, SEQ)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh
     )
-    assert torch.equal(tensor.to_torch(plain), tensor.to_torch(explicit_none))
+    cos, sin = create_rope_tensors(1, SEQ, None, 32, 10000.0, [6, 5, 5])
+    pe = (bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh))
+
+    plain = enc.forward(ids, attention_mask=None, pos_embeds=pe)[0]
+    explicit_none = enc.forward(
+        ids, attention_mask=None, pos_embeds=pe, vision_embeds=None, vision_runs=None, deepstack_embeds=None
+    )[0]
+    a = tensor.to_torch(plain, mesh_axes=[None, None, None])
+    b = tensor.to_torch(explicit_none, mesh_axes=[None, None, None])
+    assert torch.equal(a, b), "explicitly passing None diverges from omitting the arguments"
 
 
-@pytest.mark.parametrize(("mesh_device", "tp", "device_params"), MESH[:1], indirect=["mesh_device", "device_params"])
-def test_vision_arguments_must_be_paired(*, mesh_device: ttnn.MeshDevice, tp: tuple[int, int], expect_error) -> None:
-    reference = _reference_text_model(1)
-    encoder = _encoder(reference, mesh_device, tp)
-    ids, mask, _ = _prompt()
-    tt_ids = tensor.from_torch(ids, device=mesh_device, dtype=ttnn.uint32)
-    tt_mask = tensor.from_torch(mask, device=mesh_device)
-    embeds = tensor.from_torch(torch.zeros(int(mask.sum()), HIDDEN), device=mesh_device)
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def test_vision_arguments_must_be_paired(mesh_device, submesh_shape, expect_error):
+    """Embeds without runs (or the reverse) is a caller error rather than a silent no-op."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    enc = _encoder(submesh, layers=2, activation_layers=(1,))
+    ids = ttnn.from_torch(
+        torch.zeros(1, SEQ, dtype=torch.long), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh
+    )
+    cos, sin = create_rope_tensors(1, SEQ, None, 32, 10000.0, [6, 5, 5])
+    pe = (bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh))
+    embeds = bf16_tensor(torch.zeros(1, 16, HIDDEN), device=submesh)
 
     with expect_error(ValueError, "must be passed together"):
-        encoder.forward(tt_ids, vision_embeds=embeds, skip_final_linear=True)
-    with expect_error(ValueError, "must be passed together"):
-        encoder.forward(tt_ids, vision_mask=tt_mask, skip_final_linear=True)
-    with expect_error(ValueError, "needs vision_mask"):
-        encoder.forward(tt_ids, deepstack_embeds=[embeds], skip_final_linear=True)
+        enc.forward(ids, attention_mask=None, pos_embeds=pe, vision_embeds=embeds)
+    with expect_error(ValueError, "needs vision_runs"):
+        enc.forward(ids, attention_mask=None, pos_embeds=pe, deepstack_embeds=[embeds])
 
 
-@pytest.mark.parametrize(("mesh_device", "tp", "device_params"), MESH, indirect=["mesh_device", "device_params"])
-@pytest.mark.parametrize("num_deepstack", [pytest.param(0, id="no_deepstack"), pytest.param(2, id="deepstack2")])
-def test_vision_injection_matches_reference(
-    *, mesh_device: ttnn.MeshDevice, tp: tuple[int, int], num_deepstack: int
-) -> None:
-    reference = _reference_text_model(4)
-    encoder = _encoder(reference, mesh_device, tp)
-    ids, mask, position_ids = _prompt()
-    num_image_tokens = int(mask.sum())
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+def test_deepstack_is_applied_at_the_leading_layers(mesh_device, submesh_shape):
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    torch.manual_seed(0)
+    enc = _encoder(submesh, layers=4, activation_layers=(3,))
+    ids = ttnn.from_torch(
+        torch.randint(0, 256, (1, SEQ)), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh
+    )
+    cos, sin = create_rope_tensors(1, SEQ, None, 32, 10000.0, [6, 5, 5])
+    pe = (bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh))
+    runs = [(8, 16)]
+    vision = bf16_tensor(torch.randn(1, 16, HIDDEN), device=submesh)
+    feat = [bf16_tensor(torch.randn(1, 16, HIDDEN), device=submesh) for _ in range(2)]
 
-    torch.manual_seed(2)
-    vision_embeds = torch.randn(num_image_tokens, HIDDEN)
-    deepstack_embeds = [torch.randn(num_image_tokens, HIDDEN) for _ in range(num_deepstack)]
+    def run(deepstack):
+        out = enc.forward(
+            ids,
+            attention_mask=None,
+            pos_embeds=pe,
+            vision_embeds=vision,
+            vision_runs=runs,
+            deepstack_embeds=deepstack,
+        )[0]
+        return tensor.to_torch(out, mesh_axes=[None, None, None])
 
-    logger.info("running torch model...")
-    with torch.no_grad():
-        inputs_embeds = reference.embed_tokens(ids)
-        inputs_embeds[mask] = vision_embeds
-        out = reference.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            visual_pos_masks=mask,
-            deepstack_visual_embeds=deepstack_embeds or None,
+    none, one, two = run(None), run(feat[:1]), run(feat[:2])
+    assert not torch.allclose(none, one, atol=1e-2), "a deepstack feature had no effect"
+    assert not torch.allclose(one, two, atol=1e-2), "the second deepstack feature had no effect"
+
+
+HIDDEN_REAL = 5120  # real conditioner width
+
+# production keyframe runs cross 31/63 tile boundaries; runs inside one 32-row tile never exercise the slicing hazard
+_TILE_RUNS = [
+    pytest.param(1054, [(5, 1008)], HIDDEN_REAL, id="production_keyframe_crosses_31"),
+    pytest.param(2067, [(5, 1008), (1018, 1008)], HIDDEN_REAL, id="production_two_keyframes"),
+    pytest.param(SEQ, [(0, 8)], HIDDEN, id="edge_run_at_row_0"),
+    pytest.param(SEQ, [(SEQ - 8, 8)], HIDDEN, id="edge_run_at_seq_end"),
+]
+
+
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
+def test_scatter_rows_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
+    """Replace is pure data movement, so torch.equal, not PCC (PCC would tolerate rows landing a tile off)."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    total = sum(length for _, length in runs)
+    assert all(
+        start % ttnn.TILE_SIZE or length % ttnn.TILE_SIZE for start, length in runs
+    ), "every run should be unaligned on at least one end, or this gates nothing"
+
+    torch.manual_seed(0)
+    # pre-rounded through bf16 so the comparison measures the scatter, not the host's fp32 -> bf16 cast
+    base = torch.randn(1, seq, hidden).bfloat16().float()
+    values = torch.randn(1, total, hidden).bfloat16().float()
+
+    golden = base.clone()
+    taken = 0
+    for start, length in runs:
+        golden[:, start : start + length, :] = values[:, taken : taken + length, :]
+        taken += length
+
+    out = _scatter_rows(bf16_tensor(base, device=submesh), bf16_tensor(values, device=submesh), runs, add=False)
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None]).float()
+    assert actual.shape[-2:] == (seq, hidden), f"{tuple(actual.shape)} != (…, {seq}, {hidden})"
+
+    if not torch.equal(golden, actual):
+        wrong = (golden != actual).any(dim=-1).nonzero().flatten().tolist()
+        raise AssertionError(
+            f"{len(wrong)} of {seq} rows differ; first 10 at {wrong[:10]} "
+            f"(tile row-blocks {sorted({r // ttnn.TILE_SIZE for r in wrong[:10]})}), runs={runs}"
         )
-    expected = out.last_hidden_state
 
-    logger.info("running ttnn model...")
-    tt_out = encoder.forward(
-        tensor.from_torch(ids, device=mesh_device, dtype=ttnn.uint32),
-        positions=tensor.from_torch(position_ids.float(), device=mesh_device, dtype=ttnn.float32),
-        vision_embeds=tensor.from_torch(vision_embeds, device=mesh_device),
-        vision_mask=tensor.from_torch(mask, device=mesh_device),
-        deepstack_embeds=[tensor.from_torch(e, device=mesh_device) for e in deepstack_embeds],
-        skip_final_linear=True,
+
+@pytest.mark.parametrize(("mesh_device", "submesh_shape"), _MESH, indirect=["mesh_device"])
+@pytest.mark.parametrize(("seq", "runs", "hidden"), _TILE_RUNS)
+def test_scatter_rows_add_is_exact_across_tile_boundaries(mesh_device, submesh_shape, seq, runs, hidden):
+    """add=True: untouched rows bit-exact; written rows within 2 unbiased bf16 ulps (ttnn.add rounds differently)."""
+    submesh = mesh_device.create_submesh(ttnn.MeshShape(*submesh_shape))
+    total = sum(length for _, length in runs)
+
+    torch.manual_seed(0)
+    base = torch.randn(1, seq, hidden).bfloat16().float()
+    values = torch.randn(1, total, hidden).bfloat16().float()
+
+    golden = base.clone()
+    written = torch.zeros(seq, dtype=torch.bool)
+    taken = 0
+    for start, length in runs:
+        golden[:, start : start + length, :] += values[:, taken : taken + length, :]
+        written[start : start + length] = True
+        taken += length
+
+    out = _scatter_rows(bf16_tensor(base, device=submesh), bf16_tensor(values, device=submesh), runs, add=True)
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None]).float()
+
+    assert torch.equal(golden[:, ~written], actual[:, ~written]), (
+        f"pass-through rows changed under add; "
+        f"{(golden[:, ~written] != actual[:, ~written]).any(dim=-1).sum().item()} of "
+        f"{int((~written).sum())} untouched rows differ"
     )
-    actual = tensor.to_torch(tt_out)
+    expected, got = golden[:, written], actual[:, written]
+    # one bf16 ulp = 2**-7 of the binade; 2 ulps lets boundary entries fall either way
+    ulp = torch.ldexp(torch.ones_like(expected), torch.floor(torch.log2(expected.abs().clamp(min=1e-30))).int() - 7)
+    diff = (expected - got).abs()
+    worst = (diff / ulp).max().item()
+    assert worst <= 2.0, f"written rows are {worst:.2f} bf16 ulps out, past the 2-ulp floor"
 
-    assert actual.shape == expected.shape
-    assert_quality(expected, actual, pcc=0.995)
-
-    # Vision rows must have landed exactly where the reference put them: a text-only forward differs
-    # from the injected one everywhere from the first vision row onward, and nowhere before it.
-    text_only = tensor.to_torch(
-        encoder.forward(tensor.from_torch(ids, device=mesh_device, dtype=ttnn.uint32), skip_final_linear=True)
-    )
-    assert torch.equal(text_only[:, :TEXT_BEFORE], actual[:, :TEXT_BEFORE])
-    assert not torch.allclose(text_only[:, TEXT_BEFORE:], actual[:, TEXT_BEFORE:], atol=1e-2)
-
-
-@pytest.mark.parametrize(("mesh_device", "tp", "device_params"), MESH[:1], indirect=["mesh_device", "device_params"])
-def test_generation_after_image_matches_reference(*, mesh_device: ttnn.MeshDevice, tp: tuple[int, int]) -> None:
-    """Teacher-forced decoding after an image prompt.
-
-    The generated text continues from the largest prompt position, which the image leaves behind
-    the sequence length, so the reference is the model over the whole sequence with its positions.
-    """
-    reference = _reference_text_model(4)
-    encoder = _encoder(reference, mesh_device, tp, head=True)
-    ids, mask, _ = _prompt()
-    num_image_tokens = int(mask.sum())
-
-    torch.manual_seed(3)
-    extra = torch.randint(0, VOCAB_SIZE, [1, EXTRA])
-    full_ids = torch.cat([ids, extra], dim=1)
-    full_mask = torch.cat([mask, torch.zeros_like(extra, dtype=torch.bool)], dim=1)
-    position_ids = mrope_position_ids(
-        full_mask.long(), image_grid_thw=torch.tensor([IMAGE_GRID]), spatial_merge_size=SPATIAL_MERGE_SIZE
-    )
-    vision_embeds = torch.randn(num_image_tokens, HIDDEN)
-    deepstack_embeds = [torch.randn(num_image_tokens, HIDDEN) for _ in range(2)]
-
-    logger.info("running torch model...")
-    with torch.no_grad():
-        inputs_embeds = reference.embed_tokens(full_ids)
-        inputs_embeds[full_mask] = vision_embeds
-        hidden = reference.forward(
-            inputs_embeds=inputs_embeds,
-            position_ids=position_ids,
-            visual_pos_masks=full_mask,
-            deepstack_visual_embeds=deepstack_embeds,
-        ).last_hidden_state
-        expected = hidden[:, SEQ - 1 : SEQ + EXTRA - 1] @ reference.embed_tokens.weight.T
-
-    logger.info("running ttnn model...")
-    torch.set_num_threads(1)
-    out = encoder.generate(
-        ids,
-        mask=None,
-        max_length=SEQ + EXTRA,
-        eos_tokens=None,
-        guide=full_ids,
-        return_logits=True,
-        positions=position_ids[..., :SEQ],
-        vision_embeds=tensor.from_torch(vision_embeds, device=mesh_device),
-        vision_mask=mask,
-        deepstack_embeds=[tensor.from_torch(e, device=mesh_device) for e in deepstack_embeds],
-    )
-
-    assert torch.equal(out.tokens, full_ids)
-    assert_quality(expected, out.logits, pcc=0.995)
+    # No systematic bias: round-to-nearest is unbiased, truncation is not.
+    bias = ((got - expected) / ulp).mean().item()
+    assert abs(bias) < 0.1, f"mean error {bias:+.3f} ulps suggests truncation rather than round-to-nearest"
+    logger.info(f"scatter add @ seq={seq}: worst {worst:.2f} ulps, mean bias {bias:+.3f} ulps")

@@ -20,7 +20,7 @@ from PIL import Image
 
 import ttnn
 from models.common.modules.tt_ccl import default_topology
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl import Qwen3VlEncoder, mrope_position_ids
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlEncoder, mrope_position_ids
 from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
 from models.tt_dit.encoders.transformer import MAX_CHUNK_SIZE, Cache
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor

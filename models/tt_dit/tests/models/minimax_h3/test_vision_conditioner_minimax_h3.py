@@ -19,9 +19,9 @@ import ttnn
 
 from ....encoders.qwen3vl.loader_minimax_h3 import MINIMAX_H3_TEXT_ENCODER_LAYER as TAP
 from ....encoders.qwen3vl.loader_minimax_h3 import build_minimax_h3_text_encoder
-from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlEncoder, mrope_position_ids
+from ....encoders.qwen3vl.model_qwen3vl import create_rope_tensors, mrope_position_ids, vision_token_runs
 from ....encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
-from ....parallel.config import EncoderParallelConfig
+from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils import tensor
 from ....utils.check import assert_quality
@@ -140,9 +140,8 @@ def test_vision_tower_real_weights(conditioner, mesh_device, submesh_shape, tp_a
     strict=True,
     reason=(
         "Massive-activation rows disagree: the reference produces 7 rows whose norm exceeds 10x the "
-        "median (up to 79x). Measured with the HiFi4 decoder linears this loader requested before it "
-        "moved to the shared encoder (whole-tensor PCC 85.82%, against 70.89% at the tt_dit default), "
-        "we reproduce 6 of them -- rows 102 and 128 recovered, row 63 "
+        "median (up to 79x). With the HiFi4 decoder linears the pipeline now always runs (whole-tensor "
+        "PCC 85.82%, up from 70.89%), we reproduce 6 of them -- rows 102 and 128 recovered, row 63 "
         "still missing -- and invent 1 (row 156). Text rows and the median vision row both pass; the "
         "shape, content and tap are all production. strict=True so improving the conditioner's "
         "precision further forces a return here."
@@ -201,35 +200,54 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
         cu_seqlens=vision_cu_seqlens(grid),
     )
 
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+
     # the production builder; state dict truncated because `load_torch_state_dict` is strict
     encoder, _ = build_minimax_h3_text_encoder(
         path,
         mesh_device=submesh,
-        parallel_config=EncoderParallelConfig.from_tuples(tp=(tp_factor, tp_axis), sp=None),
+        parallel_config=EncoderParallelConfig(tensor_parallel=ParallelFactor(factor=tp_factor, mesh_axis=tp_axis)),
         ccl_manager=CCLManager(submesh, num_links=num_links, topology=ttnn.Topology.Linear),
+        is_fsdp=False,
         num_layers=TAP,
         load_weights=False,
     )
     layer_re = re.compile(r"^layers\.(\d+)\.")
     truncated = {
-        f"model.language_model.{key}": value
+        key: value
         for key, value in reference.language_model.state_dict().items()
-        if key != "norm.weight" and (not (m := layer_re.match(key)) or int(m.group(1)) < TAP)
+        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
     }
-    encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(truncated))
+    encoder.load_torch_state_dict(truncated)
 
+    # a vision run makes the three M-RoPE axes diverge, so the interleaved layout is load-bearing
+    assert rope_params.get("mrope_interleaved") is True, "this checkpoint is expected to be interleaved"
     position_ids = mrope_position_ids(
         type_ids, image_grid_thw=grid, spatial_merge_size=reference.visual.config.spatial_merge_size
     )
+    cos, sin = create_rope_tensors(
+        1,
+        seq_len,
+        None,
+        head_dim,
+        rope_params["rope_theta"],
+        rope_params["mrope_section"],
+        position_ids=position_ids,
+        interleaved=True,
+    )
+    runs = vision_token_runs(ids, image_pad)
+    assert runs == [(len(label) + 1, num_image_tokens)], f"unexpected vision layout: {runs}"
 
     out = encoder.forward(
-        tensor.from_torch(ids, device=submesh, dtype=ttnn.uint32),
-        positions=tensor.from_torch(position_ids.float(), device=submesh, dtype=ttnn.float32),
+        ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=submesh),
+        attention_mask=None,
+        pos_embeds=(bf16_tensor(cos, device=submesh), bf16_tensor(sin, device=submesh)),
         vision_embeds=merged,
-        vision_mask=tensor.from_torch(type_ids > 0, device=submesh),
+        vision_runs=runs,
         deepstack_embeds=deepstack,
-    )
-    actual = tensor.to_torch(out)
+    )[0]
+    actual = tensor.to_torch(out, mesh_axes=[None, None, None])
 
     logger.info(
         f"minimax-h3 fused conditioner [real] TP={tp_factor} hidden_states[{TAP}] "

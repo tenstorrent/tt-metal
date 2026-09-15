@@ -21,7 +21,7 @@ from loguru import logger
 
 import ttnn
 from models.common.modules.tt_ccl import default_topology
-from models.tt_dit.encoders.qwen3vl.model_qwen3vl import Qwen3VlCheckpoint
+from models.tt_dit.encoders.qwen3vl.model_qwen3vl_v2 import Qwen3VlCheckpoint
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import tensor

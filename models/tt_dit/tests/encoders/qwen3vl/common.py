@@ -12,6 +12,7 @@ import transformers
 
 import ttnn
 
+from ....encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder
 from ....parallel.config import EncoderParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.tensor import bf16_tensor
@@ -105,3 +106,29 @@ def capture_layer_outputs(lm, layers):
     finally:
         for h in handles:
             h.remove()
+
+
+def hf_rope_params(cfg):
+    """transformers>=5 has no top-level cfg.rope_theta, so it must not be an (eagerly evaluated) dict.get default."""
+    rope_params = getattr(cfg, "rope_parameters", None) or cfg.rope_scaling
+    mrope_section = rope_params["mrope_section"]
+    rope_theta = rope_params["rope_theta"] if "rope_theta" in rope_params else cfg.rope_theta
+    return rope_theta, mrope_section
+
+
+def encoder_from_hf_config(cfg, **overrides):
+    rope_theta, mrope_section = hf_rope_params(cfg)
+    kwargs = dict(
+        vocab_size=cfg.vocab_size,
+        hidden_size=cfg.hidden_size,
+        intermediate_size=cfg.intermediate_size,
+        hidden_act="silu",
+        num_hidden_layers=cfg.num_hidden_layers,
+        num_attention_heads=cfg.num_attention_heads,
+        num_key_value_heads=cfg.num_key_value_heads,
+        rms_norm_eps=cfg.rms_norm_eps,
+        rope_theta=rope_theta,
+        mrope_section=mrope_section,
+    )
+    kwargs.update(overrides)
+    return Qwen3VlTextEncoder(**kwargs)
