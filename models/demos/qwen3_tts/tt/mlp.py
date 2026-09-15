@@ -27,7 +27,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
-from models.demos.qwen3_tts.tt.mesh_utils import is_n150, is_n300
+from models.demos.qwen3_tts.tt.mesh_utils import is_n150, is_n300, is_wormhole
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
 # Decode gate/up core grids, keyed by (K, per-chip N) so only the exact shapes that
@@ -269,11 +269,15 @@ class MLP(LightweightModule):
         )
         # Gate/up 1D uses the full grid to match width-sharded LN in0.
         # Down is interleaved after silu·mul — pick a 1D grid for blocking.
+        # Wormhole only, for the same reason as attention's prefill 1D configs: the
+        # grids assume an 8x8 compute grid, and on Blackhole the m>32 prefill chain
+        # they feed returns garbage. Blackhole keeps both dicts empty and falls
+        # through to the short-seq / auto-routed path.
+        _prefill_1d_seqs = [m for m in PREFILL_SEQS if m > self.short_seq_limit] if is_wormhole(device) else []
         _down_gx, _down_gy = find_1d_mcast_grid(self.local_intermediate, hidden_size, grid.x, grid.y)
         self._prefill_gate_up_progcfg = {
             m: make_linear_1d_program_config(m, hidden_size, self.local_intermediate, grid.x, grid.y, _fp32)
-            for m in PREFILL_SEQS
-            if m > self.short_seq_limit
+            for m in _prefill_1d_seqs
         }
         # Prefill gate/up overrides, keyed by exact (seq, K, per-chip N) so only the
         # shapes actually tuned can match. `_prefill_gate_up_progcfg` above uses the FULL
@@ -324,8 +328,7 @@ class MLP(LightweightModule):
                     self._prefill_gate_up_in0_memcfg[_m] = _shard
         self._prefill_down_progcfg = {
             m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
-            for m in PREFILL_SEQS
-            if m > self.short_seq_limit
+            for m in _prefill_1d_seqs
         }
         # Prefill down: the GRID is already right (find_1d_mcast_grid picks 32 cores, so
         # in0_block_w = 192/32 = 6). What is wrong is the in0 LAYOUT. `hidden` arrives

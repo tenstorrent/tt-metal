@@ -150,10 +150,11 @@ class Attention(LightweightModule):
         self.rms_norm_eps = rms_norm_eps
 
         is_mesh_device_flag = device.__class__.__name__ == "MeshDevice"
-        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size, is_n150
+        from models.demos.qwen3_tts.tt.mesh_utils import get_tp_size, is_n150, is_wormhole
 
         self.tp_size = get_tp_size(device) if is_mesh_device_flag else 1
         self._n150 = is_n150(device)
+        self._wormhole = is_wormhole(device)
         self._fused_sdpa = talker_fused_sdpa_enabled(device)
         if self.tp_size > 1:
             assert num_heads % self.tp_size == 0
@@ -457,12 +458,16 @@ class Attention(LightweightModule):
         )
         # Prefill QKV / O are L1 interleaved — pick 1D grids for blocking.
         # Limit QKV to 32 cores so in0_block_w>=2 (64 cores forces in0_block_w=1).
+        # Wormhole only: these grids come off find_1d_mcast_grid on an 8x8 compute
+        # grid. Blackhole is 11x10, and the m>32 prefill chain built on them returns
+        # garbage there (talker_prefill_hidden PCC 0.009 -> silent audio corruption),
+        # so Blackhole leaves both dicts empty and falls through to auto-routing.
+        _prefill_1d_seqs = [m for m in PREFILL_SEQS if m > self.short_seq_limit] if self._wormhole else []
         _qkv_gx, _qkv_gy = find_1d_mcast_grid(hidden_size, _local_fused_qkv, _grid.x, min(_grid.y, 4))
         _wo_gx, _wo_gy = find_1d_mcast_grid(self._local_hidden, hidden_size, _grid.x, _grid.y)
         self._prefill_wqkv_progcfg = {
             m: make_linear_1d_program_config(m, hidden_size, _local_fused_qkv, _qkv_gx, _qkv_gy, _fp32_linear)
-            for m in PREFILL_SEQS
-            if m > self.short_seq_limit
+            for m in _prefill_1d_seqs
         }
         # N300 override: o_proj is 1024x2048 at TP=2, and every 1D config swept is slower
         # than plain auto-routing there (-5.8 % at seq=64, -14.7 % at seq=128 for auto).
@@ -475,8 +480,7 @@ class Attention(LightweightModule):
         )
         self._prefill_wo_progcfg = {
             m: make_linear_1d_program_config(m, self._local_hidden, hidden_size, _wo_gx, _wo_gy, _fp32_linear)
-            for m in PREFILL_SEQS
-            if m > self.short_seq_limit
+            for m in _prefill_1d_seqs
         }
         if os.environ.get("QWEN3_TTS_PREFILL_WO_OVERRIDE", "1") != "0":
             for _m in list(self._prefill_wo_progcfg):

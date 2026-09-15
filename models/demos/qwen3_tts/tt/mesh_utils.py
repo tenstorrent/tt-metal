@@ -40,6 +40,21 @@ def get_tp_size(device) -> int:
     return max(rows, cols) if min(rows, cols) == 1 else cols
 
 
+def is_wormhole(device) -> bool:
+    """True for any Wormhole SKU (N150, N300, T3K), False for Blackhole.
+
+    Gate for the Talker prefill fast path at m > SHORT_SEQ_LIMIT. Every program
+    config and shard hand-off in that chain was swept on wormhole's 8x8 compute
+    grid; on Blackhole's 11x10 grid the same 1D-mcast grids produce wrong numbers
+    (talker_prefill_hidden PCC 0.009), so Blackhole keeps the generic interleaved
+    prefill path. Unlike is_n150 / is_n300 this does not care about chip count.
+    """
+    try:
+        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+    except Exception:
+        return False
+
+
 def is_n150(device) -> bool:
     """True for a single Wormhole chip: plain Device or a 1x1 mesh (N150).
 

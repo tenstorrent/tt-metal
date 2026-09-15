@@ -87,9 +87,10 @@ class DecoderLayer(LightweightModule):
         super().__init__()
         self.device = device
         self.layer_idx = layer_idx
-        from models.demos.qwen3_tts.tt.mesh_utils import is_n150
+        from models.demos.qwen3_tts.tt.mesh_utils import is_n150, is_wormhole
 
         self._n150 = is_n150(device)
+        self._wormhole = is_wormhole(device)
 
         full_prefix = f"{layer_prefix}.layers.{layer_idx}"
 
@@ -269,7 +270,18 @@ class DecoderLayer(LightweightModule):
         """
         seq_len_at_entry = x.shape[-2]
         decode_path = mode == "decode"
-        prefill_path = mode == "prefill" and seq_len_at_entry in self._prefill_ln_configs
+        # The m>32 bucket chain — width-sharded residual adds feeding a width-sharded
+        # post-attn LN straight into the MLP — is a wormhole-only fast path. Its shard
+        # specs and the 1D matmul grids that consume them were swept on an 8x8 compute
+        # grid; on Blackhole's 11x10 grid they silently produce garbage
+        # (talker_prefill_hidden PCC 0.009, EOS never fires, WER 100%). Blackhole keeps
+        # the bucket path only at seq<=32, where DRAM-sharded QKV needs the shard, and
+        # takes the generic interleaved path above it.
+        prefill_path = (
+            mode == "prefill"
+            and seq_len_at_entry in self._prefill_ln_configs
+            and (self._wormhole or seq_len_at_entry <= SHORT_SEQ_LIMIT)
+        )
         if prefill_path:
             ln_in_memcfg, ln_progcfg = self._prefill_ln_configs[seq_len_at_entry]
         else:
