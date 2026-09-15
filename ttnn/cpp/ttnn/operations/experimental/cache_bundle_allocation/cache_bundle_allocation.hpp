@@ -1,0 +1,39 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "ttnn/tensor/tensor.hpp"
+
+namespace ttnn::experimental {
+
+// In-place update of four UINT32 cache bundle metadata tensors; returns the input page_table.
+// Request inputs must be all scalars or all tensors; mixed inputs are not supported.
+// free_list is [banks * SP, bundles_per_bank], bank-major, with bank-local free indices.
+// Each chunk assigns chunk_size / (page_size * SP) consecutive pages to each SP.
+// Banks rotate through each SP's local pages, continuously across chunks.
+// The caller must provide valid metadata and reserve capacity in every affected (SP, bank) pool.
+Tensor update_cache_bundle_allocation(
+    const Tensor& page_table,
+    const Tensor& allocated_pages,
+    const Tensor& free_list,
+    const Tensor& free_count,
+    uint32_t slot_id,
+    uint32_t actual_start,
+    uint32_t actual_end,
+    uint32_t chunk_size,
+    uint32_t page_size = 32);
+
+Tensor update_cache_bundle_allocation(
+    const Tensor& page_table,
+    const Tensor& allocated_pages,
+    const Tensor& free_list,
+    const Tensor& free_count,
+    const Tensor& slot_id,
+    const Tensor& actual_start,
+    const Tensor& actual_end,
+    uint32_t chunk_size,
+    uint32_t page_size = 32);
+
+}  // namespace ttnn::experimental
