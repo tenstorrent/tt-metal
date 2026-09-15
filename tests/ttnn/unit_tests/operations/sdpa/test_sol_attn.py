@@ -134,3 +134,46 @@ def test_sol_attn_chunk_stride_is_in_the_program_hash(device, b, nh, seq, d):
         dense, sparse
     ), "keep_every=1 and 4 gave identical output; the stride is missing from the program hash"
     assert torch.isfinite(sparse.float()).all(), "skipped-chunk output must still normalise"
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+@pytest.mark.parametrize("keep_every", [1, 2, 4, 8], ids=["d100", "d50", "d25", "d13"])
+def test_sol_attn_density_scaling(device, keep_every):
+    """Does skipping chunks convert into time on the streaming path? Timing only.
+
+    Production-like chunking (k_chunk=512) on one chip, so a skipped chunk is a whole 512-key visit.
+    The stride is an upper bound on real routing -- contiguous, chunk-granular -- and host wall-clock
+    over synchronized iterations is the instrument; read the slope, not the absolute numbers.
+    """
+    import time
+
+    b, nh, seq, d = 1, 8, 8192, 128
+    q, k, v = _qkv(b, nh, seq, d, seed=11)
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    cfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=128,
+        k_chunk_size=512,
+        exp_approx_mode=False,
+    )
+
+    def run():
+        out = ttnn.transformer.sol_attn(
+            tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, chunk_keep_every=keep_every
+        )
+        ttnn.synchronize_device(device)
+        return out
+
+    run()  # compile
+    times = []
+    for _ in range(10):
+        t0 = time.perf_counter()
+        run()
+        times.append((time.perf_counter() - t0) * 1e3)
+    med = sorted(times)[len(times) // 2]
+    kept = len([c for c in range(seq // 512) if c == 0 or c % keep_every == 0])
+    logger.info(
+        f"SOL_ATTN_DENSITY keep_every={keep_every} kept_chunks={kept}/{seq // 512} "
+        f"median={med:.3f}ms all={[round(t, 3) for t in times]}"
+    )
