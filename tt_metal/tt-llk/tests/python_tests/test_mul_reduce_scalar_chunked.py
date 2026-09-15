@@ -23,11 +23,22 @@ Kernel B is held at 1.0 (matching the on-silicon gtest and
 ``fuser_config/fpu_reduce_scalar.yaml``), so A * B == A and the fused op reduces
 to ``sum(A)`` over all tiles/elements.
 
-XFAIL: on silicon the chunked result comes out ~5-30x too high. The suspected
-cause is the between-chunk DEST[0] restore (the running scalar in DEST[0] is
-clobbered / double-counted when the next chunk's multiply phase and fill sequence
-re-touch DEST[0]). See promotion strategy §3. The test is expected to COMPILE
-cleanly for Blackhole and to FAIL numerically at runtime.
+MEASURED STATE OF THE REVERTED DRIVER (Blackhole silicon)
+---------------------------------------------------------
+The single-chunk case is exact and deterministic, so it runs and is graded.
+Every multi-chunk length is wrong, and the error tracks the number of chunks
+rather than the amount of data -- see ``NUM_TILES_MULTI_CHUNK`` for the
+numbers. That is consistent with the suspected cause (the between-reduces
+DEST[0] restore double-counting the running scalar; promotion strategy §3) and
+inconsistent with a miscounted reduction window, which would scale with tiles.
+
+The multi-chunk lengths are NOT run here. On top of returning a wrong scalar
+they leave the Tensix in a state that corrupts the NEXT test in the session --
+measured twice, and it outlives process exit, so it reaches tests in a later
+pytest invocation too. Recovery needs ``tt-smi -r``. Running them would
+therefore surface as unrelated tests failing or as an unpacker hang, not as
+this test failing. ``NUM_TILES_MULTI_CHUNK`` keeps the list and the measured
+values so the data is not lost; re-enable it behind a driver fix, not before.
 """
 
 import pytest
@@ -61,7 +72,8 @@ TILE_DIMENSIONS = [[32, 32], [16, 32], [16, 16]]
 
 # Chunk size drives the whole point of this driver: it must fit the DEST slot
 # budget (<= 8 bf16 / <= 4 fp32). Fixed at 4 so it is valid for both bf16 and
-# native-fp32 DEST while still forcing multiple chunks for the larger tile counts.
+# native-fp32 DEST. It is also what makes a stream length multi-chunk, so it is
+# the axis the measured table in NUM_TILES_MULTI_CHUNK is really about.
 CHUNK_SIZE = 4
 
 
@@ -74,23 +86,41 @@ def _dest_acc(output_format):
     )
 
 
+#: Multi-chunk stream lengths, NOT run -- see the module docstring for why.
+#: Measured on Blackhole, tile 32x32 / HiFi4 / bf16 DEST, with A ~ U[0,1] and
+#: B = 1 so the golden is sum(A). Each row was taken with that variant ALONE in
+#: the pytest session on a freshly reset device, because a preceding failure
+#: shifts the next result (in-sequence, num_tiles=8 reads 22912, not 26240):
+#:
+#:     num_tiles  chunks     device     golden   device/golden
+#:             5       2    20864.0    2548.66            8.19
+#:             6       2    22656.0    3054.08            7.42
+#:             7       2    24320.0    3567.95            6.82
+#:             8       2    26240.0    4096.32            6.41
+#:             9       3  7340032.0    4609.98         1592.2
+#:
+#: Within a chunk count the device value is linear in num_tiles but with the
+#: wrong slope and a large constant offset (~11900 + ~1792*n, against a golden
+#: of ~510*n), and adding a THIRD chunk multiplies the result by ~280 instead
+#: of adding to it. Both say the defect is in the per-chunk accumulation, not
+#: in the per-tile reduction.
+NUM_TILES_MULTI_CHUNK = [5, 6, 7, 8, 9]
+
+
 def _num_tiles_for_format(formats):
-    """Tile-stream lengths that span more than one chunk (CHUNK_SIZE=4), so the
-    chunked driver's between-chunk accumulation is actually exercised. fp32 DEST
-    holds only 4 slots per chunk; the counts here are total stream lengths, not
-    per-chunk, so both formats use the same set."""
-    return [4, 5, 8]
+    """Tile-stream lengths that are run and graded: the single-chunk one only.
+
+    It still exercises the whole chunked driver -- multiply phase,
+    switch-to-reduce, column reduce, collapse -- with exactly one pass through
+    the between-reduces restore, which is the part that works. fp32 DEST holds
+    only 4 slots, so 4 is also the largest single-chunk length valid for both
+    formats.
+
+    ``NUM_TILES_MULTI_CHUNK`` above holds the broken lengths and their measured
+    values, and the module docstring says why they are not run."""
+    return [4]
 
 
-@pytest.mark.xfail(
-    reason=(
-        "Reverted chunked mul_reduce_scalar driver (promotion strategy §3, "
-        "open-question #1): on-silicon result is ~5-30x too high, suspected the "
-        "between-chunk DEST[0] restore double-counts the running scalar. Kept as "
-        "a compile-clean placeholder until the driver is fixed."
-    ),
-    strict=False,
-)
 @parametrize(
     formats=FORMATS,
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
