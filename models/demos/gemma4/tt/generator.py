@@ -1035,6 +1035,27 @@ class ChunkedPrefillPageTableGuardMixin:
                 page_table_user_padded = page_table_user
             CHUNK_USER_ID = 0
 
+            # Hoist the page-table host->device convert out of the chunk loop.
+            # Every chunk passes the SAME full page table, so leaving it torch
+            # makes prepare_inputs_prefill re-run ttnn.from_torch once per chunk
+            # (32 times at 64k). Skipped under trace capture, where the tensor
+            # must be the one the trace writes into on replay.
+            #
+            # MEASURED NEUTRAL on 12B / T3K, so this is upstream parity, not a
+            # win: 32k warm TTFT 10264.8 (on) vs 10271.3 / 10266.1 (off), a
+            # 0.04% difference against a 0.3% noise floor. 4k is inert by
+            # construction -- it runs traced, and the hoist is skipped there.
+            # A small int32 page table simply does not cost anything next to a
+            # 10 s TTFT. Kept ON to match the reference branch and because the
+            # ttnn.Tensor pass-through it needs in prepare_inputs_prefill is the
+            # shape any future hoist wants; set 0 to restore per-chunk convert.
+            hoist_page_table = os.environ.get("GEMMA4_PREFILL_PT_HOIST", "1").lower() not in ("0", "false", "no")
+            page_table_for_chunks = (
+                self.model[model_id]._page_table_torch_to_ttnn(page_table_user_padded)
+                if hoist_page_table and not kwargs.get("trace_enabled", False)
+                else page_table_user_padded
+            )
+
             # Inject an expanded last start when adjust moves it off the chunk grid.
             last_abs = num_cached_tokens + last_chunk_start
             chunk_starts = list(range(num_cached_tokens, num_cached_tokens + seq_len, chunk_size))
@@ -1081,7 +1102,7 @@ class ChunkedPrefillPageTableGuardMixin:
                 chunk_inputs = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
-                    page_table=page_table_user_padded,
+                    page_table=page_table_for_chunks,
                     chunk_page_table=chunk_page_table,
                     batch_size=batch_size,
                     user_id=CHUNK_USER_ID,

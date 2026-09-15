@@ -1668,7 +1668,12 @@ class Gemma4Model:
         )
 
         tt_page_table = None
-        if page_table is not None:
+        if isinstance(page_table, ttnn.Tensor):
+            # Already hoisted to device by the caller (GEMMA4_PREFILL_PT_HOIST):
+            # a chunked prefill reuses one page table for every chunk, so the
+            # host->device convert belongs outside the loop.
+            tt_page_table = page_table
+        elif page_table is not None:
             tt_page_table = ttnn.from_torch(
                 page_table,
                 device=device,
@@ -1678,7 +1683,9 @@ class Gemma4Model:
             )
 
         tt_chunk_page_table = None
-        if chunk_page_table is not None:
+        if isinstance(chunk_page_table, ttnn.Tensor):
+            tt_chunk_page_table = chunk_page_table
+        elif chunk_page_table is not None:
             tt_chunk_page_table = ttnn.from_torch(
                 chunk_page_table,
                 device=device,
