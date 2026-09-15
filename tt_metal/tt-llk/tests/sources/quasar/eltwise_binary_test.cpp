@@ -6,6 +6,7 @@
 #include <cstdio>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
 #include "llk_memory_checks.h"
 #include "perf.h"
@@ -38,7 +39,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::UNPACK>();
 
         ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
@@ -54,7 +55,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -104,7 +105,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t NUM_TILES_IN_BLOCK = params.NUM_TILES_IN_BLOCK;
 #endif
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // End-to-end and math-isolate runs require FPU destination ownership.
         if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1 || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -124,7 +125,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
@@ -190,7 +191,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
 
     {
-        ZONE_SCOPED("INIT")
+        START_PERF_MEASURE("INIT")
         // Clear a stale FPU-to-PACK wait in modes without a math handshake.
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
@@ -208,7 +209,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         PROFILER_SYNC();
     }
     {
-        ZONE_SCOPED("TILE_LOOP")
+        START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE || PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
         }

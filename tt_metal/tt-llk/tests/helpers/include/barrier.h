@@ -49,7 +49,18 @@ constexpr bool is_action_thread()
 #endif
 }
 
-#if !defined(ARCH_QUASAR)
+#if defined(ARCH_QUASAR)
+
+// Quasar has 32 Tensix semaphores (tt_tensix_pkg.sv SEM_COUNT), and a TRISC reaches all of them through the
+// PC buffer (words 32 to 63), which is the path semaphore_post/get/read below take. The Tensix instructions
+// see them as four banks of eight, and t6_sem() can only build a bank-0 mask, so no LLK op can reach bank 1
+// even by accident: the pair below is out of the way by construction rather than by convention. Both indices
+// come out of reset at 0 with max 15, and the arrival drain leaves them at 0 after every rendezvous, so a
+// killed run cannot strand a count that the next one would misread as an arrival.
+constexpr std::uint8_t ARRIVE_SEM  = 8;
+constexpr std::uint8_t RELEASE_SEM = 9;
+
+#else
 
 // The only two indices no LLK op uses. Reserved below for the rest of the translation unit, because
 // the arrival drain would eat the token of any driver that also posted one.
@@ -57,7 +68,11 @@ constexpr std::uint8_t ARRIVE_SEM  = ckernel::semaphore::PACK_DONE;
 constexpr std::uint8_t RELEASE_SEM = ckernel::semaphore::UNPACK_OPERAND_SYNC;
 #pragma GCC poison PACK_DONE UNPACK_OPERAND_SYNC
 
-// A consumed token, not a level to observe, so a peer that samples late still finds its release.
+#endif
+
+// A consumed token, not a level to observe, so a peer that samples late still finds its release. Polling
+// reads the PC buffer, never the L1 being measured, which is what keeps a waiting thread out of the
+// numbers: an L1 rendezvous cost the Quasar unpack windows up to 5% until this replaced it.
 template <typename Action>
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
 {
@@ -91,51 +106,6 @@ __attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Act
 
     ckernel::fence_compiler();
 }
-
-#else // ARCH_QUASAR
-
-// Quasar has no free semaphore, so it gets an L1 rendezvous; trisc.cpp supplies the address.
-extern volatile std::uint32_t* barrier_slots;
-
-// Generations only increase, so a late thread still sees the round it missed; hence < and not ==.
-template <typename Action>
-__attribute__((always_inline)) inline void rendezvous(bool is_action_thread, Action action)
-{
-    ckernel::fence_compiler();
-
-    volatile std::uint32_t* slots = barrier_slots;
-
-    const std::uint32_t arrive_gen = slots[THREAD_ID] + 1;
-    slots[THREAD_ID]               = arrive_gen;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_THREADS; ++i)
-    {
-        while (i != THREAD_ID && slots[i] < arrive_gen)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
-
-    if (is_action_thread)
-    {
-        action();
-    }
-
-    const std::uint32_t release_gen = arrive_gen + 1;
-    slots[THREAD_ID]                = release_gen;
-    ckernel::invalidate_data_cache();
-    for (std::uint32_t i = 0; i < NUM_THREADS; ++i)
-    {
-        while (i != THREAD_ID && slots[i] < release_gen)
-        {
-            ckernel::invalidate_data_cache();
-        }
-    }
-
-    ckernel::fence_compiler();
-}
-
-#endif // !ARCH_QUASAR
 
 __attribute__((always_inline)) inline void rendezvous(bool is_action_thread)
 {

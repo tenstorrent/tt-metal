@@ -12,12 +12,20 @@
 // build.h uses p_unpacr::UNP_A etc; bring ckernel namespace into scope
 using namespace ckernel;
 
+#include "counters.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     (void)params;
-    // Stub: SFPU TRISC not used in this test; trisc.cpp will signal completion
+    // Stub: SFPU TRISC not used in this test; trisc.cpp will signal completion. It still enters the other
+    // threads' INIT and TILE_LOOP phases, because every zone boundary is a four-thread rendezvous.
+    {
+        START_PERF_MEASURE("INIT")
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+    }
 }
 
 #endif

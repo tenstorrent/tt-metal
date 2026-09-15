@@ -13,6 +13,7 @@
 #include "ckernel_helper.h" // Only for WH/BH
 #endif
 #include "boot.h"
+#include "counters.h"
 #include "profiler.h"
 
 #ifdef LLK_PROFILER
@@ -26,14 +27,6 @@ std::uint32_t write_idx            = 0;
 std::uint32_t reserved_words_count = 0;
 
 } // namespace llk_profiler
-
-#if defined(ARCH_QUASAR)
-namespace llk_barrier
-{
-// barrier.h cannot include profiler.h, so the L1 address is supplied from here.
-volatile std::uint32_t* barrier_slots = reinterpret_cast<volatile std::uint32_t*>(llk_profiler::BARRIER_START);
-} // namespace llk_barrier
-#endif
 
 #endif
 
@@ -78,6 +71,10 @@ int main(void)
     *(mailbox_base + 3) = ckernel::RESET_VAL;
 #endif
     device_setup();
+#if defined(ARCH_QUASAR) && defined(PERF_COUNTERS_COMPILED)
+    // No BRISC on Quasar: the unpack TRISC writes the counter config and arms the units while the others are still held.
+    llk_perf::configure_and_arm();
+#endif
     clear_trisc_soft_reset(); // Release the rest of the triscs
 #endif
 
