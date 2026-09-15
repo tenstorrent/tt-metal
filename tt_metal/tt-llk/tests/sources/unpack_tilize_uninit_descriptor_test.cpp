@@ -2,16 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Checks that a tilize init+uninit pair leaves the SrcA tile descriptor as the
-// contract requires, by reading the config word back on device.
+// Reads the SrcA tile descriptor back on device after a tilize init+uninit pair.
 //
-// The pre-tilize descriptor is configured with a num_faces that DIFFERS from the
-// tilize operand's, which is what the other teardown tests cannot express: they
-// configure and tear down with the same num_faces, so a teardown that rewrites
-// the descriptor and one that leaves it alone produce the same value.
+// The pre-tilize descriptor uses a num_faces that differs from the tilize operand's.
+// The other teardown tests use the same one for both, so a teardown that rewrites the
+// descriptor and one that leaves it alone give the same value there.
 //
-// WH: tilize init never writes the word, so uninit must leave it bit-identical.
-// BH: tilize init does write Z-dim, so uninit re-establishes it; Y-dim untouched.
+// WH: init never writes the word, so uninit must leave it bit-identical.
+// BH: init writes Z-dim, so uninit re-establishes it; Y-dim untouched.
 
 #include <cstdint>
 
@@ -80,7 +78,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef ARCH_WORMHOLE
     // Tilize does not own the descriptor on WH: the word must be bit-identical.
-    LLK_ASSERT(post_desc_word == pre_desc_word, "WH tilize uninit must leave the SrcA tile-descriptor Y/Z-dim word untouched (tt-llk#1161)");
+    LLK_ASSERT(post_desc_word == pre_desc_word, "WH tilize uninit must leave the SrcA tile-descriptor Y/Z-dim word untouched");
 
     // Tile_x_dim_cntx0 IS tilize's to restore. Only checked on WH: the BH test wrapper
     // cannot thread face_r_dim into uninit (it hardcodes MAX_FACE_R_DIM), so a tiny-tile

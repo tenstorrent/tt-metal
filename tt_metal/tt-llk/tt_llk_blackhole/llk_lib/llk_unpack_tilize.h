@@ -93,12 +93,8 @@ inline void _llk_unpack_tilize_init_(
     // programmed here.
     TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1111);
 
-    // Descriptor Z_dim = num_faces, re-asserting the per-operand baseline configure_unpack_AB
-    // programmed. Only the 8-bit path keeps this value: the non-8-bit branch below overwrites the
-    // same field with z_dim = 1, so it is that write _llk_unpack_tilize_uninit_ has to revert, not
-    // this one. On the 8-bit path nothing reads ZDim either -- it feeds the BFP exponent section
-    // size (XDim*YDim*ZDim*WDim), which 8-bit formats have no exponent section for, and otherwise
-    // only multiplies ADC_ZW.W, which both tilize paths clear to 0.
+    // Z_dim = num_faces, the per-operand baseline. The non-8-bit branch below overwrites it with 1,
+    // and that is the write the teardown reverts.
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 16, TILE_DESC_UPPER_HALFWORD_MASK>(num_faces);
 
     const std::uint32_t block_c_dim = ct_dim * (narrow_tile ? FACE_C_DIM : TILE_C_DIM);

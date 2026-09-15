@@ -514,8 +514,8 @@ ALWI void fast_tilize_block(
  * | XY address counters       | UNP_A/B    | Y counters stepped by the tilizeA_B row pattern       | Blackhole only: CH0/CH1 Y counters zeroed on both unpackers                                |
  * | SrcA Y stride (CH1)       | UNP0       | Per-row SrcA write stride used by the row-at-a-time tilize | Blackhole only: restored to the canonical stride for unpack_dst_format                 |
  *
- * x-start/x-end (ADCXX) and the unpacker MOP are NOT restored on either architecture: they are
- * transient and reprogrammed by the next operation's init (tt-llk#1036).
+ * x-start/x-end (ADCXX) and the unpacker MOP are not restored on either architecture: the next
+ * operation's init reprograms them.
  */
 // clang-format on
 ALWI void unpack_tilizeA_B_uninit(uint32_t icb) { UNPACK((llk_unpack_tilizeA_B_uninit(icb))); }
