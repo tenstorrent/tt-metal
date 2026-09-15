@@ -194,6 +194,12 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     dram[dspf2d::ReaderRtArg::kOutPayloadAddr] = tensor_return_value[0].buffer();
     dram[dspf2d::ReaderRtArg::kOutMetaAddr] = tensor_return_value[1].buffer();
     dram[dspf2d::ReaderRtArg::kFwdAddr] = fwd.buffer;
+    // Always bound. Non-fanout mode has no reach table, and leaving the slot null would mean a
+    // different runtime-arg layout per mode -- the host/kernel drift that is the hardest class of bug
+    // here. The stand-in is never read: the reader only touches it under the fanout compile-time arg.
+    dram[dspf2d::ReaderRtArg::kFanoutReachAddr] = tensor_args.fanout_reach.has_value()
+                                                      ? tensor_args.fanout_reach->buffer()
+                                                      : tensor_args.expert_offsets_tensor.buffer();
     for (uint32_t i = 0; i < dspf2d::ReaderRtArg::kCount; i++) {
         TT_FATAL(dram[i] != nullptr, "dispatch_fabric2d: buffer for runtime arg {} is not allocated", i);
     }

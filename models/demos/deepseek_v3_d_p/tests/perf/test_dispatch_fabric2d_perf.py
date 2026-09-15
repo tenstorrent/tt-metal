@@ -7,13 +7,16 @@
 The worker runs both ops on one set of inputs, so the CSV carries DispatchDeviceOperation and
 DispatchFabric2dDeviceOperation side by side and the ratio is free of cross-run variance.
 
-The expected values below are PLACEHOLDERS and the worker is NOT YET TRACED.
+The expected values below are PLACEHOLDERS, pending numbers from hardware qualified for perf.
 
-Untraced, every launch is dispatched from host separately, so the 32 chips start skewed and a fabric
-op's kernel duration -- which includes waiting on peers -- is bounded by that skew rather than by the
-op. Measured that way both ops land within 0.6% of each other at ~3.18 ms per launch, against a
-published `dispatch` baseline of 473k-1248k ns. Those numbers say nothing about either
-implementation. Trace capture/replay has to land before anything here is treated as a measurement.
+The metric itself is sound: device kernel duration tracks the work. Dropping seq_len_per_chip from
+640 to 64 takes both ops from ~3.18 ms to ~0.39 ms per launch, so it is measuring data movement and
+not dispatch skew or a synchronization floor. At production geometry the two ops come out at parity
+(3.18 vs 3.20 ms), which is what the analysis predicts: store-and-forward alone moves zero link
+bytes, and the win has to come from fan-out.
+
+Do not compare these against the 473k-1248k ns figures in test_dispatch_combine_perf.py. Those are
+an 8x1 LoudBox TorusY proxy replaying captured routing; this is 8x4 TORUS_XY with a uniform draw.
 """
 
 import pytest
