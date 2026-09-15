@@ -150,7 +150,17 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
         raise
 
     tokenizer = AutoTokenizer.from_pretrained(resolve_target_path())
-    token_ids = _get_prompt(seqlen, tokenizer, max_prompt_len=seqlen)
+    # DFLASH_PROMPT overrides the shared prompt file with a literal, un-padded string. The point is
+    # diagnostic: the shipped ISL-128 prompt is the condiment question repeated and clipped
+    # mid-sentence, while every acceptance figure in this work was measured on "The capital of
+    # France is". Setting this runs the demo's own loop on the reference prompt, which separates
+    # "prose is harder to draft" from "acceptance is decaying" -- they predict different numbers.
+    override = os.environ.get("DFLASH_PROMPT")
+    if override:
+        token_ids = tokenizer(override, return_tensors="pt").input_ids
+        logger.info(f"DFLASH_PROMPT override: {override!r} -> {token_ids.shape[1]} tokens")
+    else:
+        token_ids = _get_prompt(seqlen, tokenizer, max_prompt_len=seqlen)
     prompt_len = token_ids.shape[1]
     logger.info(f"prompt {prompt_len} tokens, generating {max_generated_tokens}, block_size {cfg.block_size}")
 
@@ -162,10 +172,28 @@ def test_demo_dflash(mesh_device, device_params, seqlen, max_generated_tokens, r
     # bucket eager fallback). Capturing first leaves those uncompiled and the first traced
     # generation compiles them with a trace parked -- which hangs the process and wedges the device.
     # TtTarget.enable_traced_verify now asserts this rather than letting it happen.
+    #
+    # AND ONE EAGER GENERATION IS NOT ENOUGH -- IT MUST COVER THE SHAPES THE MEASURED RUN WILL USE.
+    # A warm-up compiles only the programs ITS OWN shapes touch. Any shape first met after the
+    # capture compiles with a trace parked, which is the same hang the rule above exists to prevent.
+    # `max_new_tokens=8` was the bug: it never reaches the block widths a long generation ends on.
+    # Every step takes `verify_size = min(block_size, max_length - start, target.max_block(start))`,
+    # so a generation of `max_generated_tokens` produces narrow tail blocks (and, past the 128-row
+    # anchor, `max_block`-capped ones) that an 8-token warm-up never produces. Measured 2026-09-15:
+    # test_dflash_prose_throughput.py hung deterministically on exactly this, at a 2-wide final
+    # block, and warming at the real budget fixed it. See DFLASH_HANDOFF.md §0.
+    #
+    # So warm at the REAL token budget. This costs one eager generation of the full length, which is
+    # why `compile_s` below is large -- that is the point of reporting it separately.
     t0 = time.perf_counter()
-    dflash_generate(drafter, target, token_ids, max_new_tokens=8)
-    target.enable_traced_verify()
-    dflash_generate(drafter, target, token_ids, max_new_tokens=8)
+    dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
+    # DFLASH_NARROW_HEAD=1 runs the verify LM head over a 32/64-row tile-aligned window instead of
+    # the whole 128-row bucket (+20.8 % on the reference prompt, tokens bit-identical -- see
+    # tests/reference/test_dflash_narrow_head.py). Off by default: it is validated on one prompt at
+    # one length so far. It scales STEP TIME only, so it cannot rescue a run whose acceptance has
+    # collapsed -- throughput is acceptance / step_time.
+    target.enable_traced_verify(narrow_head=os.environ.get("DFLASH_NARROW_HEAD") == "1")
+    dflash_generate(drafter, target, token_ids, max_new_tokens=max_generated_tokens)
     compile_s = time.perf_counter() - t0
 
     # NO separate TTFT probe here, deliberately. An earlier version timed the prefill by calling
