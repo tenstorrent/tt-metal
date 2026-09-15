@@ -48,6 +48,7 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_commands.cpp
     ccl/test_ccl_helpers.cpp
+    ccl/test_llama_matmul_signaling.cpp
     ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
