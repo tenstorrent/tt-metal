@@ -1346,7 +1346,10 @@ MappingResult<TargetNode, GlobalNode> TopologyMappingEnumerationSession<TargetNo
     bool quiet_mode,
     TopologyMappingSolverEngine solver_engine,
     bool unique_shapes) {
-    using namespace tt::tt_fabric::detail;
+    using detail::make_topology_search_engine;
+    using detail::MappingValidator;
+    using detail::topology_mapping_should_use_sat_engine;
+    using detail::TopologySearchState;
     const auto next_start = std::chrono::steady_clock::now();
     auto stamp_elapsed = [&](MappingResult<TargetNode, GlobalNode> result) {
         result.stats.elapsed_time =
