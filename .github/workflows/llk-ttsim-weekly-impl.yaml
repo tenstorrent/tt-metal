@@ -180,6 +180,7 @@ jobs:
 
       - name: Require TTSIM_TOKEN
         if: ${{ steps.arch.outputs.name == 'quasar' }}
+        shell: bash
         env:
           TOKEN: ${{ secrets.TTSIM_TOKEN }}
         run: |
@@ -192,6 +193,7 @@ jobs:
       - name: Resolve ttsim-private ref
         if: ${{ steps.arch.outputs.name == 'quasar' }}
         id: pin
+        shell: bash
         env:
           OVERRIDE: ${{ inputs.quasar-ttsim-ref }}
         run: |
@@ -234,6 +236,7 @@ jobs:
 
       - name: Build Quasar libttsim.so
         if: ${{ steps.arch.outputs.name == 'quasar' }}
+        shell: bash
         working-directory: ttsim-private
         run: |
           set -euo pipefail
