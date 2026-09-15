@@ -109,6 +109,11 @@ inline uint64_t noc_v3_read_state_base[NOC_V3_STATE_CMD_BUFS] = {};
 inline uint64_t noc_v3_write_state_base[NOC_V3_STATE_CMD_BUFS] = {};
 // The inline-write pair runs on the simple command buffer only, so one base.
 inline uint64_t noc_v3_inline_write_state_base = 0;
+// The value a set_state<set_val> call latches for with_state<update_val =
+// false> issues: the RoCC inline write takes its data from the issue
+// instruction, not from a sticky register, so the reuse contract of the
+// stateful pair is kept in software.
+inline uint32_t noc_v3_inline_write_state_val = 0;
 
 // Reduce a state address to its base, reproducing V2's latch semantics
 // exactly: V2 kept only the coordinate bits of the state address and dropped
@@ -780,6 +785,9 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     // Reference recipe (cmdbuff_api.hpp): plain write, LEN = dword; see
     // noc_fast_write_dw_inline for why the INLINE_WR/BYTE_ENABLE form is wrong.
     ASSERT(be == 0xF);
+    if constexpr (set_val) {
+        noc_v3_inline_write_state_val = val;
+    }
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
@@ -824,7 +832,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8,
             noc_v3_state_operand(noc_v3_inline_write_state_base, static_cast<uint32_t>(dest_addr)));
     }
-    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
+    // update_val == false reuses the value set_state<set_val> latched.
+    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(update_val ? val : noc_v3_inline_write_state_val);
 
     if constexpr (update_counter) {
         if constexpr (posted) {
