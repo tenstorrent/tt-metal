@@ -467,13 +467,26 @@ class TtnnTransfuserBackbone:
             ttnn.deallocate(tmp)
         ttnn.synchronize_device(self._device)
 
+        capture_ended = False
         try:
             self._bb_trace_id = ttnn.begin_trace_capture(self._device, cq_id=0)
             self._bb_out = _traced()
             ttnn.end_trace_capture(self._device, self._bb_trace_id, cq_id=0)
+            capture_ended = True
         except Exception:
-            # Never leave an open trace: a leaked trace_id_ fatals every later op.
+            # Never leave an open trace. end_trace_capture() comes FIRST and is not
+            # optional: it is the only path to record_end(), which clears the command
+            # queue's recording state (trace_id_ and sysmem bypass mode). release_trace()
+            # merely drops the trace buffer, so releasing alone leaves the queue
+            # recording and every later H2D dies with
+            # "Writes are not supported during trace capture." — turning one setup
+            # failure into an unbounded run of misattributed errors.
             if self._bb_trace_id is not None:
+                if not capture_ended:
+                    try:
+                        ttnn.end_trace_capture(self._device, self._bb_trace_id, cq_id=0)
+                    except Exception:
+                        pass
                 try:
                     ttnn.release_trace(self._device, self._bb_trace_id)
                 except Exception:
