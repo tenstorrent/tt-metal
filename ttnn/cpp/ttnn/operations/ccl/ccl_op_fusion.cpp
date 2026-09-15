@@ -427,8 +427,7 @@ void MatmulFusedOpSignaler::init_llama_rs_cores_mm(
     TT_FATAL(cores.size() > privilaged_index, "Privileged index is out of range of the matmul cores");
     this->privilaged_core = cores.at(privilaged_index);
     this->privilaged_core_physical = device->worker_core_from_logical_core(this->privilaged_core);
-    // Also reserved on the RS cores so its id can never alias rs_semaphore: the privileged core has no
-    // rs_semaphore slot of its own, so it relays this semaphore's value into rs_semaphore on the RS cores.
+    // Also reserved on the RS cores so its id can never alias rs_semaphore.
     this->matmul_privilaged_semaphore =
         tt::tt_metal::CreateSemaphore(program, this->rs_cores.merge(CoreRangeSet(CoreRange(this->privilaged_core))), 0);
     this->matmul_semaphore_target = cores.size() - 1;
@@ -441,7 +440,7 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_rs(std::vector<uint32_t>& 
 void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     std::vector<uint32_t>& out_rt_args,
     CoreCoord current_core,
-    tt::tt_metal::NOC writer_noc,
+    tt::tt_metal::NOC /*writer_noc*/,
     const tt::tt_metal::IDevice* device) const {
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.x));
     out_rt_args.push_back(static_cast<uint32_t>(this->privilaged_core_physical.y));
@@ -449,25 +448,14 @@ void MatmulFusedOpSignaler::push_llama_rs_rt_args_for_mm(
     if (current_core.x == this->privilaged_core.x && current_core.y == this->privilaged_core.y) {
         out_rt_args.push_back(1);
         out_rt_args.push_back(this->matmul_semaphore_target);
-        out_rt_args.push_back(static_cast<uint32_t>(this->rs_semaphore));
-        // Signal the RS cores one rectangle at a time. Their bounding box also holds cores this program
-        // does not own (other sub-devices), which must never receive this write.
-        const auto& rs_ranges = this->rs_cores.ranges();
-        out_rt_args.push_back(static_cast<uint32_t>(rs_ranges.size()));
-        for (const auto& range : rs_ranges) {
-            const CoreCoord start = device->worker_core_from_logical_core(range.start_coord);
-            const CoreCoord end = device->worker_core_from_logical_core(range.end_coord);
-            // NOC1 walks the grid in the opposite direction, so its rectangles are given end first.
-            const bool noc1 = writer_noc == NOC::NOC_1;
-            const CoreCoord& first = noc1 ? end : start;
-            const CoreCoord& last = noc1 ? start : end;
-            out_rt_args.insert(
-                out_rt_args.end(),
-                {static_cast<uint32_t>(first.x),
-                 static_cast<uint32_t>(first.y),
-                 static_cast<uint32_t>(last.x),
-                 static_cast<uint32_t>(last.y),
-                 static_cast<uint32_t>(range.size())});
+        // Signal only participating cores. Unicast coordinates use the same convention on both NoCs.
+        const auto receiver_cores = corerange_to_cores(this->rs_cores);
+        out_rt_args.push_back(receiver_cores.size());
+        out_rt_args.push_back(this->rs_semaphore);
+        for (const auto& core : receiver_cores) {
+            const auto physical_core = device->worker_core_from_logical_core(core);
+            out_rt_args.push_back(physical_core.x);
+            out_rt_args.push_back(physical_core.y);
         }
     } else {
         out_rt_args.push_back(0);

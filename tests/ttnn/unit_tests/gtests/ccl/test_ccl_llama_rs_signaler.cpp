@@ -4,8 +4,8 @@
 
 // Host-side checks of the signaler that llama_rs_matmul fuses into its matmul: every semaphore it allocates and every
 // core its signal reaches must belong to the op. A program initializes a semaphore on every core of its range, and the
-// privileged matmul core multicasts the signal over NOC rectangles, so a range or a rectangle that grows to the RS
-// cores' bounding box writes into cores the op does not own. On Wormhole Galaxy that box holds the DRAM prefetcher's
+// privileged matmul core signals each receiver individually. Allocating or signaling the RS cores' bounding box
+// writes into cores the op does not own. On Wormhole Galaxy that box holds the DRAM prefetcher's
 // sender cores, whose live kernel text sits at the same L1 offsets.
 
 #include <algorithm>
@@ -52,21 +52,14 @@ CoreRangeSet rs_cores() {
 // The matmul ring, outside the RS bounding box. Its first core becomes the privileged core.
 CoreRangeSet matmul_cores() { return CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(6, 0))); }
 
-struct SignalRect {
-    CoreCoord first;  // NOC coordinates
-    CoreCoord last;
-    uint32_t num_dests = 0;
-};
-
-// One matmul core's signaling runtime args, in the order do_signaling in
-// reader_bmm_tile_layout_in1_ring_all_gather.cpp reads them.
+// One matmul core's signaling runtime args, in the order llama_matmul_signal_reduce_scatter reads them.
 struct SignalArgs {
     CoreCoord privileged_core;  // NOC coordinates
     uint32_t privileged_semaphore = 0;
     bool is_privileged = false;
     uint32_t target = 0;
     uint32_t signaled_semaphore = 0;
-    std::vector<SignalRect> rects;
+    std::vector<CoreCoord> receivers;  // Physical NOC coordinates
 };
 
 SignalArgs parse_signal_args(const std::vector<uint32_t>& args) {
@@ -79,11 +72,10 @@ SignalArgs parse_signal_args(const std::vector<uint32_t>& args) {
     parsed.is_privileged = args.at(i++) == 1;
     if (parsed.is_privileged) {
         parsed.target = args.at(i++);
+        const uint32_t num_receivers = args.at(i++);
         parsed.signaled_semaphore = args.at(i++);
-        const uint32_t num_rects = args.at(i++);
-        for (uint32_t r = 0; r < num_rects; ++r, i += 5) {
-            parsed.rects.push_back(
-                {CoreCoord(args.at(i), args.at(i + 1)), CoreCoord(args.at(i + 2), args.at(i + 3)), args.at(i + 4)});
+        for (uint32_t r = 0; r < num_receivers; ++r, i += 2) {
+            parsed.receivers.emplace_back(args.at(i), args.at(i + 1));
         }
     }
     EXPECT_EQ(i, args.size()) << "runtime args beyond the signaling layout";
@@ -128,20 +120,6 @@ protected:
         }
         return cores;
     }
-
-    // The worker cores whose NOC coordinates fall inside the rectangle: every core a multicast over it reaches.
-    std::vector<CoreCoord> cores_in(const SignalRect& rect) const {
-        const auto [min_x, max_x] = std::minmax(rect.first.x, rect.last.x);
-        const auto [min_y, max_y] = std::minmax(rect.first.y, rect.last.y);
-        std::vector<CoreCoord> cores;
-        for (const CoreCoord& core : all_logical_cores()) {
-            const CoreCoord noc = device_->worker_core_from_logical_core(core);
-            if (noc.x >= min_x && noc.x <= max_x && noc.y >= min_y && noc.y <= max_y) {
-                cores.push_back(core);
-            }
-        }
-        return cores;
-    }
 };
 
 }  // namespace
@@ -178,7 +156,11 @@ TEST_F(LlamaRsSignalerTest, SignalReachesEachRsCoreOnceAndNothingElse) {
     ASSERT_EQ(rs_args.size(), 1u);
     const uint32_t rs_semaphore = rs_args.at(0);
 
-    const std::vector<std::string> expected = sorted_names(tt::tt_metal::corerange_to_cores(rs_cores()));
+    std::vector<CoreCoord> expected_receivers;
+    for (const CoreCoord& core : tt::tt_metal::corerange_to_cores(rs_cores())) {
+        expected_receivers.push_back(device_->worker_core_from_logical_core(core));
+    }
+    const std::vector<std::string> expected = sorted_names(expected_receivers);
     const std::vector<CoreCoord> mm_cores = tt::tt_metal::corerange_to_cores(matmul_cores());
 
     for (const NOC noc : {NOC::NOC_0, NOC::NOC_1}) {
@@ -188,7 +170,7 @@ TEST_F(LlamaRsSignalerTest, SignalReachesEachRsCoreOnceAndNothingElse) {
             std::vector<uint32_t> args;
             signaler.push_llama_rs_rt_args_for_mm(args, core, noc, device_);
             ASSERT_NO_THROW(per_core.push_back(parse_signal_args(args)))
-                << "runtime args of core " << core.str() << " end before the layout do_signaling reads";
+                << "runtime args of core " << core.str() << " end before the signaling layout";
         }
         const auto is_privileged = [](const SignalArgs& args) { return args.is_privileged; };
         ASSERT_EQ(std::count_if(per_core.begin(), per_core.end(), is_privileged), 1);
@@ -203,20 +185,8 @@ TEST_F(LlamaRsSignalerTest, SignalReachesEachRsCoreOnceAndNothingElse) {
             EXPECT_EQ(args.privileged_semaphore, privileged->privileged_semaphore);
         }
 
-        // The privileged core then signals the semaphore the RS kernels wait on, one rectangle at a time.
+        // The privileged core then signals each RS core's semaphore exactly once on either NOC.
         EXPECT_EQ(privileged->signaled_semaphore, rs_semaphore);
-        std::vector<CoreCoord> reached;
-        for (const SignalRect& rect : privileged->rects) {
-            // NOC1 walks the grid the other way, so its rectangles start at the far corner.
-            if (noc == NOC::NOC_0) {
-                EXPECT_TRUE(rect.first.x <= rect.last.x && rect.first.y <= rect.last.y);
-            } else {
-                EXPECT_TRUE(rect.first.x >= rect.last.x && rect.first.y >= rect.last.y);
-            }
-            const std::vector<CoreCoord> cores = cores_in(rect);
-            EXPECT_EQ(rect.num_dests, cores.size()) << "multicast destination count";
-            reached.insert(reached.end(), cores.begin(), cores.end());
-        }
-        EXPECT_EQ(sorted_names(reached), expected) << "cores the signal reaches vs the RS cores";
+        EXPECT_EQ(sorted_names(privileged->receivers), expected) << "cores the signal reaches vs the RS cores";
     }
 }
