@@ -1443,8 +1443,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         "Latent-V ring attention is implemented only for streaming compute (fp32_dest_acc_en must be false)");
     TT_FATAL(
         !args.has_sparse_frames() || use_streaming_compute,
-        "Block sparse computation requires the ring-joint streaming compute path; the "
-        "compute_common.hpp path selected by fp32_dest_acc_en=true is not supported for this feature.");
+        "Block sparse computation requires the ring-joint streaming compute path.");
     log_debug(
         tt::LogOp,
         "use_streaming_compute: {} (is_causal={}, Sq_chunk_t={}, Sk_chunk_t={}, sbh={}, sbw={})",

@@ -1142,6 +1142,9 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.v_num_heads(),
         tensor_args.v_head_dim(args.latent_v_head_dim),
         args.sliding_window_size,
+        args.tokens_per_frame,
+        args.num_frames_padded,
+        args.sparse_frame_mask,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
 }
