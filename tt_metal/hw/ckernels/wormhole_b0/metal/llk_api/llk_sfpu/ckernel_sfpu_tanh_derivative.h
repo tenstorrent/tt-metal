@@ -78,7 +78,7 @@ inline void tanh_derivative_init() {
     // do not read (0, 1.0) as handling the infinities.
     //
     // UnarySFPUGolden._tanh_derivative_lut mirrors these six pairs by hand, and
-    // test_tanh_derivative_lut_consistency.py holds all three copies together.
+    // test_tanh_lut_consistency.py holds all three copies together.
     sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.93701171875f, 0.5869140625f);
     sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.183837890625f);
 

@@ -233,6 +233,9 @@ inline void tanh_init() {
         //    leaves a single upward step of +1.2e-4 at |x| = 1.5. It is free: the bfloat16
         //    sweep is identical either way -- 10.00 max ULP, 0.018352 max absolute error, same
         //    percentiles -- while fp32 max absolute error improves 0.018962 -> 0.018840.
+        //
+        // test_tanh_lut_consistency.py checks all four against the header, and holds the two
+        // arch copies of this table together.
         sfpi::l_reg[sfpi::LRegs::LReg0] = sfpi::vLut16ss(0.96191406f, 0.57617188f);
         sfpi::l_reg[sfpi::LRegs::LReg4] = sfpi::vLut16ii(0.0f, 0.192871094f);
 
