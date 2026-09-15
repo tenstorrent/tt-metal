@@ -142,8 +142,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+    {
+        ZONE_SCOPED("UNINIT")
+        _llk_unpack_fast_tilize_uninit_<is_fp32_dest_acc_en>();
+    }
 }
 
 #endif
@@ -231,8 +233,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
+    {
+        ZONE_SCOPED("UNINIT")
+        _llk_math_fast_tilize_uninit_<is_fp32_dest_acc_en>(formats.math);
+    }
 }
 
 #endif
@@ -326,8 +330,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
-
-    _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    {
+        ZONE_SCOPED("UNINIT")
+        _llk_pack_fast_tilize_uninit_<DstSync::SyncHalf, is_fp32_dest_acc_en>(formats.pack_dst, FACE_R_DIM, num_faces);
+    }
 }
 
 #endif

@@ -112,6 +112,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         PROFILER_SYNC();
     }
+    if constexpr (tilize_en)
+    {
+        ZONE_SCOPED("UNINIT")
+        _llk_unpack_tilize_uninit_wrapper_(formats.unpack_A_dst, num_faces);
+    }
 }
 
 #endif
