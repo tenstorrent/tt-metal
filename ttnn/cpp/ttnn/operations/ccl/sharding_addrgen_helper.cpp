@@ -25,6 +25,7 @@ uint32_t get_sharding_core_count(const ttnn::Tensor& t) {
 
 std::vector<CoreCoord> get_shard_cores(const ttnn::Tensor& t) {
     std::vector<CoreCoord> coordinates;
+    coordinates.reserve(get_sharding_core_count(t));
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
@@ -65,6 +66,7 @@ std::vector<CoreCoord> get_shard_cores(const ttnn::Tensor& t) {
 
 std::vector<uint32_t> generate_run_time_args(const ttnn::Tensor& t) {
     std::vector<uint32_t> args;
+    args.reserve((get_sharding_core_count(t) + 1) / 2);
     const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
@@ -128,6 +130,7 @@ void extend_sharding_run_time_args(const ttnn::Tensor& t, std::vector<uint32_t>&
 
 std::vector<uint32_t> generate_compile_time_args(const ttnn::Tensor& t) {
     std::vector<uint32_t> args;
+    args.reserve(7);
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
         t.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||

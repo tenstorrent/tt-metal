@@ -12,8 +12,7 @@ Analyze branch changes to determine affected build products, trace which tests/s
 
    `sanity-tests.yaml` encapsulates these workflows:
    - `ttnn-post-commit.yaml`
-   - `run-profiler-regression.yaml`
-   - `t3000-fast-tests-impl.yaml`
+   - `t3000-sanity-tests-impl.yaml`
    - `ops-post-commit.yaml`
 
    **Run `sanity-tests.yaml` instead of the above individual workflows when:**
@@ -31,7 +30,6 @@ Analyze branch changes to determine affected build products, trace which tests/s
    **Important:** Still continue analysis for workflows NOT covered by sanity tests, such as:
    - Galaxy tests (`galaxy-*.yaml`)
    - T3000 demo/integration/perf/unit tests (`t3000-demo-tests.yaml`, `t3000-integration-tests.yaml`, etc.)
-   - Single-card demo tests (`single-card-demo-tests.yaml`)
    - Blackhole tests (`blackhole-*.yaml`)
    - Nightly tests (`*-nightly-*.yaml`)
    - Code analysis (`code-analysis.yaml`)

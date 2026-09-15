@@ -23,6 +23,12 @@ class GptOss120BConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 128
     NUM_EXPERTS_PER_TOKEN = 4
+    NUM_SHARED_EXPERTS = 0
+    # GPT-OSS routes with no expert groups; selection is a plain top-k over all experts.
+    NUM_EXPERT_GROUPS = 1
+    NUM_LIMITED_GROUPS = 1
+    # Weights are a softmax over the selected top-k logits; no extra route scaling.
+    ROUTE_SCALE = 1.0
 
     # Model architecture
     NUM_LAYERS = 36

@@ -144,7 +144,6 @@ class TestSampling1DDevice:
         sampler.load_device_buffers()
         assert sampler._device_buffers_loaded
         assert isinstance(sampler._index_offsets, ttnn.Tensor)
-        assert isinstance(sampler._local_indices, ttnn.Tensor)
         assert isinstance(sampler._seeds, ttnn.Tensor)
         assert isinstance(sampler._user_ids, ttnn.Tensor)
 
@@ -203,23 +202,22 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     def test_bind_strategy_ccl_introspection_with_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy correctly detects buffer_key/dtype support on line_all_gather."""
+        """_bind_strategy correctly detects buffer_key support on line_all_gather."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
 
         class MockCCL:
-            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None, dtype=None):
+            def line_all_gather(self, tensor, dim, cluster_axis, memory_config, num_links, buffer_key=None):
                 return tensor
 
         sampler.config = replace(sampler.config, tt_ccl=MockCCL())
         sampler._bind_strategy()
 
         assert sampler._line_all_gather_supports_buffer_key
-        assert sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_no_kwargs(self, ttnn_mesh_device):
-        """_bind_strategy detects when line_all_gather does NOT support buffer_key/dtype."""
+        """_bind_strategy detects when line_all_gather does NOT support buffer_key."""
         from dataclasses import replace
 
         sampler = Sampling1D(vocab_size=1024, mesh_device=ttnn_mesh_device)
@@ -232,7 +230,6 @@ class TestSampling1DDevice:
         sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     def test_bind_strategy_ccl_introspection_exception(self, ttnn_mesh_device):
         """_bind_strategy handles TypeError from inspect.signature gracefully (lines 125-126)."""
@@ -253,7 +250,6 @@ class TestSampling1DDevice:
             sampler._bind_strategy()
 
         assert not sampler._line_all_gather_supports_buffer_key
-        assert not sampler._line_all_gather_supports_dtype
 
     # ------------------------------------------------------------------
     # Error paths (lines 178, 186)
@@ -286,7 +282,7 @@ class TestSampling1DDevice:
 
     @pytest.mark.parametrize("vocab_size", [1024])
     def test_perform_all_gather_with_mock_ccl(self, ttnn_mesh_device, vocab_size):
-        """_perform_all_gather passes buffer_key/dtype kwargs when line_all_gather supports them."""
+        """_perform_all_gather passes the buffer_key kwarg when line_all_gather supports it."""
         B, K = 32, 32
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         sampler.load_device_buffers()
@@ -299,7 +295,6 @@ class TestSampling1DDevice:
 
         sampler._line_all_gather = mock_line_ag
         sampler._line_all_gather_supports_buffer_key = True
-        sampler._line_all_gather_supports_dtype = True
 
         test_tensor = ttnn.from_torch(
             torch.zeros(1, 1, B, K, dtype=torch.bfloat16),
@@ -316,12 +311,10 @@ class TestSampling1DDevice:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             num_links=1,
             buffer_key="TEST_KEY",
-            dtype=ttnn.bfloat16,
         )
 
         assert result is test_tensor
         assert captured_kwargs.get("buffer_key") == "TEST_KEY"
-        assert captured_kwargs.get("dtype") == ttnn.bfloat16
 
     # ------------------------------------------------------------------
     # from_model_args model_config branches (lines 406-408, 416-419)

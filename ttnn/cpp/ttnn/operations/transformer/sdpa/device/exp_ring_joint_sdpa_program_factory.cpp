@@ -63,7 +63,11 @@ uint32_t allocate_per_core_semaphore(
     return sem_id_opt.value();
 }
 
-// Appends 17 runtime args for a fabric MUX client worker.
+// Number of runtime args appended per fabric MUX client worker. Kept in sync with the
+// pushes in fabric_mux_connection_rt_args() and its disconnected-connection counterpart.
+constexpr uint32_t kFabricMuxConnectionRtArgCount = 17;
+
+// Appends kFabricMuxConnectionRtArgCount runtime args for a fabric MUX client worker.
 // Allocates 5 per-core semaphores on worker_logical_core for the connection state.
 void fabric_mux_connection_rt_args(
     const bool mux_connection_valid,
@@ -1114,6 +1118,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             uint32_t ref_q_chunks;
         };
         std::vector<McastCandidate> candidates;
+        candidates.reserve(head_segments.size());
         bool all_eligible = true;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
@@ -1123,6 +1128,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             }
 
             std::vector<uint32_t> chain_core_indices;
+            chain_core_indices.reserve(segments.size());
             for (const auto& seg : segments) {
                 if (seg.core_idx < core_chain_info.size() && core_chain_info[seg.core_idx].participates &&
                     core_chain_info[seg.core_idx].batch == (head_id / NH) &&
@@ -1208,6 +1214,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             mcast_chains = candidates.size();
             // Track injector physical X columns for DRAM channel spreading
             std::vector<uint32_t> injector_phys_x;
+            injector_phys_x.reserve(candidates.size());
             for (const auto& cand : candidates) {
                 const uint32_t chain_size = cand.core_indices.size();
                 const uint32_t num_receivers = chain_size - 1;
@@ -1546,14 +1553,14 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         // Per-link semaphore addresses for chunk-level sync. These occupy per-core reader slots
         // exp_ring_joint_sdpa_dynamic::kReaderSemaphoreArgBase .. +num_links-1. They are hash-excluded, so
         // they are baked here for the cache-miss build and re-applied every dispatch by
-        // get_dynamic_runtime_args(); if you reorder the args above, update kReaderSemaphoreArgBase (and
-        // thus the re-apply target) accordingly.
+        // ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(), which asserts the total
+        // per-core count: adding or removing an arg fails loudly, a count-preserving reorder does not.
         reader_args.push_back(args.num_links);
         for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
             reader_args.push_back(static_cast<uint32_t>(
                 args.semaphore[lnk]
                     .address()));  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every dispatch
-                                   // via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
+                                   // via ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments
         }
 
         // Inject fused-op synchronization RT args: ring_size, ring_index, direction (3 values)
@@ -1590,6 +1597,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
             // fabric_mux_connection_rt_args appends to a std::vector<uint32_t>; collect mux args
             // separately and then merge into the RTArgList so BufferBinding entries above are preserved.
             std::vector<uint32_t> mux_writer_args;
+            mux_writer_args.reserve(kFabricMuxConnectionRtArgCount);
             if (link_in_range) {
                 const CoreCoord& mux_core =
                     is_backward ? mux_backward_logical_cores[link] : mux_forward_logical_cores[link];
@@ -1633,12 +1641,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
                 // out_ready_sem_addr occupies per-core fabric-writer slot
                 // exp_ring_joint_sdpa_dynamic::kWriterFabricOutReadySemArg. It is a hash-excluded
                 // global-semaphore address, so it is baked here for the cache-miss build and re-applied
-                // every dispatch by get_dynamic_runtime_args(); if you reorder the args above, update
-                // kWriterFabricOutReadySemArg (and thus the re-apply target) accordingly.
+                // every dispatch by ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(),
+                // which asserts the per-core count: an added/removed arg fails loudly, a reorder does not.
                 const uint32_t out_ready_sem_addr = args.semaphore[link].address();
                 writer_args.push_back(
                     out_ready_sem_addr);  // smuggled-rta-ok: hash-excluded global-semaphore address, re-applied every
-                                          // dispatch via ExpRingJointSDPADeviceOperation::get_dynamic_runtime_args
+                                          // dispatch via
+                                          // ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments
 
                 // Find the injector core for this MUX writer's (batch, head)
                 const auto& mux_head_work = core_work.at(i).head_work;
@@ -1697,6 +1706,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
     // ---- Fabric MUX cores ----
     std::vector<CoreRange> mux_core_ranges;
+    mux_core_ranges.reserve(2 * args.num_links);
     for (uint32_t link = 0; link < args.num_links; ++link) {
         if (backward_coord.has_value()) {
             mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);
@@ -1764,6 +1774,73 @@ tt::tt_metal::WorkloadDescriptor ExpRingJointSDPAProgramFactory::create_workload
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;
+}
+
+ExpRingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t ExpRingJointSDPAMeshWorkloadFactory::create_mesh_workload(
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value) {
+    return descriptor_adapter_t::create_mesh_workload(
+        operation_attributes, tensor_coords, tensor_args, tensor_return_value);
+}
+
+void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
+    cached_mesh_workload_t& cached_workload,
+    const ExpRingJointSDPAParams& operation_attributes,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& tensor_return_value) {
+    // apply_descriptor re-points the Buffer* runtime args; the hash-excluded per-link GlobalSemaphore
+    // addresses are all that is left to patch.
+    descriptor_adapter_t::apply_descriptor(cached_workload, operation_attributes, tensor_args, tensor_return_value);
+
+    namespace dyn = exp_ring_joint_sdpa_dynamic;
+    const auto& args = operation_attributes;
+
+    // Recompute the SDPA worker grid exactly as build_exp_ring_joint_sdpa_program_descriptor() does.
+    auto* mesh_device = tensor_args.input_q.device();
+    const CoreCoord user_grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
+                                                                : mesh_device->compute_with_storage_grid_size();
+    const CoreCoord sdpa_grid = {user_grid.x - 1, user_grid.y};
+    const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
+    const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
+
+    for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
+        // Hoisted out of the per-core loop, and by reference: a copy would clone the whole arg grid.
+        auto& reader_grid = GetRuntimeArgs(program, dyn::kReaderKernelIdx);
+        auto& writer_fabric_grid = GetRuntimeArgs(program, dyn::kWriterFabricKernelIdx);
+
+        for (uint32_t i = 0; i < num_sdpa_cores; ++i) {
+            const CoreCoord core = {i % sdpa_grid.x, i / sdpa_grid.x};
+
+            auto& reader_args = reader_grid[core.x][core.y];
+            TT_FATAL(
+                reader_args.size() == expected_reader_args,
+                "Exp ring joint SDPA reader expected {} runtime args on core ({},{}), cached program has {}",
+                expected_reader_args,
+                core.x,
+                core.y,
+                reader_args.size());
+            for (uint32_t lnk = 0; lnk < args.num_links; ++lnk) {
+                reader_args[dyn::kReaderSemaphoreArgBase + lnk] = static_cast<uint32_t>(args.semaphore[lnk].address());
+            }
+
+            // out_ready_sem_addr lives only on the two MUX-writer columns. num_links is TT_FATAL-fixed
+            // to 2, so link_in_range always holds in the factory and the slot is always present.
+            if (core.x >= sdpa_grid.x - 2) {
+                const uint32_t link = (core.x == sdpa_grid.x - 1) ? 1u : 0u;
+                auto& writer_args = writer_fabric_grid[core.x][core.y];
+                TT_FATAL(
+                    writer_args.size() == dyn::kWriterFabricArgCount,
+                    "Exp ring joint SDPA fabric writer expected {} runtime args on core ({},{}), cached program has {}",
+                    dyn::kWriterFabricArgCount,
+                    core.x,
+                    core.y,
+                    writer_args.size());
+                writer_args[dyn::kWriterFabricOutReadySemArg] = static_cast<uint32_t>(args.semaphore[link].address());
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::prim

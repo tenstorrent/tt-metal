@@ -22,7 +22,7 @@ void kernel_main() {
     DataflowBuffer cb_post_rhs(HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id);
     DataflowBuffer cb_out(tt::CBIndex::c_2);
 
-    binary_op_init_common(cb_post_lhs.get_id(), cb_post_rhs.get_id(), cb_out.get_id());
+    compute_kernel_hw_startup(cb_post_lhs.get_id(), cb_post_rhs.get_id(), cb_out.get_id());
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

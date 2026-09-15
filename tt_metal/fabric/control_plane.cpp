@@ -285,8 +285,10 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
         TT_FATAL(
             *ctx.size() == 1 && *ctx.rank() == 0,
             "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
+        const auto all_mesh_ids = this->mesh_graph_->get_all_mesh_ids();
         std::vector<MeshId> local_mesh_ids;
-        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+        local_mesh_ids.reserve(all_mesh_ids.size());
+        for (const auto& mesh_id : all_mesh_ids) {
             // TODO: #24528 - Move this to use TopologyMapper once Topology mapper works for multi-mesh systems
             const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
             TT_FATAL(
@@ -365,6 +367,7 @@ void ControlPlane::initialize_distributed_contexts() {
             distributed_contexts_.emplace(local_mesh_id, host_local_context_);
         } else {
             std::vector<int> mpi_neighbors;
+            mpi_neighbors.reserve(mesh_host_ranks->second.size());
             // Sort mesh_host_ranks->second for deterministic iteration across hosts
             std::vector<std::pair<MeshHostRankId, tt::tt_metal::distributed::multihost::Rank>> sorted_host_ranks(
                 mesh_host_ranks->second.begin(), mesh_host_ranks->second.end());
@@ -452,7 +455,7 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
-        std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+        std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
         // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
         if (cluster.is_ubb_galaxy()) {
@@ -462,24 +465,21 @@ void ControlPlane::init_control_plane(
                 const size_t mesh_chip_count = mesh_shape.mesh_size();
 
                 if (!is_1d && mesh_chip_count % 32 == 0) {
-                    auto mesh_pinnings =
+                    auto mesh_pinning_groups =
                         tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                             mesh_id,
                             mesh_shape,
                             /*hard_pin_node_0=*/world_size == 1,
                             /*nw_corner_only=*/false);
-                    fixed_asic_position_pinnings.insert(
-                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                    pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
                 }
             }
         }
 
-        // Add MGD pinnings to the topology mapper (only if mesh graph descriptor is available)
+        // Append MGD many-to-many pinning groups directly (no flattening).
         if (this->mesh_graph_->get_mesh_graph_descriptor_path().has_value()) {
-            const auto& pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
-            for (const auto& [pos, fabric_node] : pinnings) {
-                fixed_asic_position_pinnings.emplace_back(fabric_node, std::vector<AsicPosition>{pos});
-            }
+            const auto& mgd_pinnings = this->mesh_graph_->get_mesh_graph_descriptor().get_pinnings();
+            pinning_groups.insert(pinning_groups.end(), mgd_pinnings.begin(), mgd_pinnings.end());
         }
 
         this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -488,7 +488,7 @@ void ControlPlane::init_control_plane(
             *this->mesh_graph_,
             *this->physical_system_descriptor_,
             this->local_mesh_binding_,
-            fixed_asic_position_pinnings,
+            pinning_groups,
             topology_mapping_timeout);
         this->load_physical_chip_mapping(
             topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
@@ -496,7 +496,7 @@ void ControlPlane::init_control_plane(
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -505,7 +505,7 @@ void ControlPlane::init_control_plane(
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -524,7 +524,7 @@ void ControlPlane::init_control_plane(
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
@@ -580,7 +580,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
     // bisect a device.
-    std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
+    std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint> pinning_groups;
 
     // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
     if (cluster.is_ubb_galaxy()) {
@@ -590,11 +590,10 @@ void ControlPlane::init_control_plane_auto_discovery() {
             const size_t mesh_chip_count = mesh_shape.mesh_size();
 
             if (!is_1d && mesh_chip_count % 32 == 0) {
-                auto mesh_pinnings =
+                auto mesh_pinning_groups =
                     tt::tt_metal::experimental::tt_fabric::get_galaxy_fixed_asic_position_pinnings_for_mesh(
                         mesh_id, mesh_shape, /*hard_pin_node_0=*/world_size == 1, /*nw_corner_only=*/false);
-                fixed_asic_position_pinnings.insert(
-                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                pinning_groups.insert(pinning_groups.end(), mesh_pinning_groups.begin(), mesh_pinning_groups.end());
             }
         }
     }
@@ -605,13 +604,13 @@ void ControlPlane::init_control_plane_auto_discovery() {
         *this->mesh_graph_,
         *this->physical_system_descriptor_,
         this->local_mesh_binding_,
-        fixed_asic_position_pinnings,
+        pinning_groups,
         topology_mapping_timeout);
     this->load_physical_chip_mapping(topology_mapper_->get_local_logical_mesh_chip_id_to_physical_chip_id_mapping());
 
     // Automatically export physical chip mesh coordinate mapping to generated/fabric directory after topology mapper is
     // created This ensures ttnn-visualizer topology remains functional
-    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path output_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                         ("physical_chip_mesh_coordinate_mapping_" + std::to_string(rank + 1) + "_of_" +
                                          std::to_string(world_size) + ".yaml");
     try {
@@ -620,7 +619,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
         log_warning(tt::LogFabric, "Failed to export physical chip mesh coordinate mapping: {}", e.what());
     }
 
-    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" / "fabric" /
+    std::filesystem::path asic_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
                                               ("asic_to_fabric_node_mapping_rank_" + std::to_string(rank + 1) + "_of_" +
                                                std::to_string(world_size) + ".yaml");
     try {
@@ -639,7 +638,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Export the resolved inter-mesh port assignment (the port-determination output) to generated/fabric,
     // the same place as the ASIC mapping golden. Used by the inter-mesh golden test.
     {
-        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_root_dir()) / "generated" /
+        std::filesystem::path intermesh_mapping_file = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" /
                                                        "fabric" /
                                                        ("intermesh_port_assignment_rank_" + std::to_string(rank + 1) +
                                                         "_of_" + std::to_string(world_size) + ".yaml");
@@ -1264,24 +1263,36 @@ FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physi
 }
 
 ChipId ControlPlane::get_physical_chip_id_from_fabric_node_id(const FabricNodeId& fabric_node_id) const {
-    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    auto physical_chip_id = try_get_physical_chip_id_from_fabric_node_id(fabric_node_id);
     TT_FATAL(
-        it != logical_mesh_chip_id_to_physical_chip_id_mapping_.end(),
+        physical_chip_id.has_value(),
         "FabricNodeId {} not found in logical-to-physical chip mapping. Check for a fabric mesh/topology "
         "mismatch or a node outside the configured fabric cluster.",
         fabric_node_id);
+    return *physical_chip_id;
+}
+
+std::optional<ChipId> ControlPlane::try_get_physical_chip_id_from_fabric_node_id(
+    const FabricNodeId& fabric_node_id) const {
+    auto it = logical_mesh_chip_id_to_physical_chip_id_mapping_.find(fabric_node_id);
+    if (it == logical_mesh_chip_id_to_physical_chip_id_mapping_.end()) {
+        return std::nullopt;
+    }
     return it->second;
 }
 
-std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+std::optional<std::pair<FabricNodeId, chan_id_t>> ControlPlane::try_get_connected_mesh_chip_chan_ids(
     FabricNodeId fabric_node_id, chan_id_t chan_id) const {
     // TODO: simplify this and use Global Physical Desc in ControlPlane soon
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
     RoutingDirection port_direction = RoutingDirection::NONE;
     routing_plane_id_t routing_plane_id = 0;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    const auto source_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(fabric_node_id);
+    if (source_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+        return std::nullopt;
+    }
+    for (const auto& [direction, eth_chans] : source_channels_it->second) {
         for (const auto& eth_chan : eth_chans) {
             if (eth_chan == chan_id) {
                 port_direction = direction;
@@ -1306,11 +1317,17 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.chip_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_chip_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(fabric_node_id.mesh_id, dst_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
+                    if (routing_plane_id >= eth_chans.size()) {
+                        // A routing-plane mismatch cannot identify the exact physical peer channel.
+                        return std::nullopt;
+                    }
                     return std::make_pair(dst_fabric_node, eth_chans[routing_plane_id]);
                 }
             }
@@ -1343,11 +1360,13 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
                     .at(fabric_node_id.mesh_id)
                     .port_direction;
             // Find the eth chan on connected dst_fabric_mesh_id based on routing_plane_id
-            const auto& dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
-            const auto& dst_fabric_chip_eth_chans =
-                this->router_port_directions_to_physical_eth_chan_map_.at(dst_fabric_node);
-            for (const auto& [direction, eth_chans] : dst_fabric_chip_eth_chans) {
-                if (direction == reverse_port_direction) {
+            const auto dst_fabric_node = FabricNodeId(dst_fabric_mesh_id, dst_connected_fabric_chip_id);
+            const auto dst_channels_it = this->router_port_directions_to_physical_eth_chan_map_.find(dst_fabric_node);
+            if (dst_channels_it == this->router_port_directions_to_physical_eth_chan_map_.end()) {
+                continue;
+            }
+            for (const auto& [direction, eth_chans] : dst_channels_it->second) {
+                if (direction == reverse_port_direction && !eth_chans.empty()) {
                     if (routing_plane_id >= eth_chans.size()) {
                         // Only TG non-standard intermesh connections hits this
                         return std::make_pair(dst_fabric_node, eth_chans[0]);
@@ -1357,15 +1376,27 @@ std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_id
             }
         }
     }
-    TT_FATAL(false, "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
-    return std::make_pair(FabricNodeId(MeshId{0}, 0), 0);
+    return std::nullopt;
+}
+
+std::pair<FabricNodeId, chan_id_t> ControlPlane::get_connected_mesh_chip_chan_ids(
+    FabricNodeId fabric_node_id, chan_id_t chan_id) const {
+    auto peer = try_get_connected_mesh_chip_chan_ids(fabric_node_id, chan_id);
+    TT_FATAL(
+        peer.has_value(), "Could not find connected mesh chip chan ids for {} on chan {}", fabric_node_id, chan_id);
+    return *peer;
 }
 
 std::vector<chan_id_t> ControlPlane::get_valid_eth_chans_on_routing_plane(
     FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const {
+    const auto& eth_chans_by_direction = this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+    size_t total_eth_chans = 0;
+    for (const auto& [direction, eth_chans] : eth_chans_by_direction) {
+        total_eth_chans += eth_chans.size();
+    }
     std::vector<chan_id_t> valid_eth_chans;
-    for (const auto& [direction, eth_chans] :
-         this->router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id)) {
+    valid_eth_chans.reserve(total_eth_chans);
+    for (const auto& [direction, eth_chans] : eth_chans_by_direction) {
         for (const auto& eth_chan : eth_chans) {
             if (this->get_routing_plane_id(eth_chan, eth_chans) == routing_plane_id) {
                 valid_eth_chans.push_back(eth_chan);
@@ -1547,6 +1578,7 @@ std::vector<chan_id_t> ControlPlane::get_forwarding_eth_chans_to_chip(
     std::vector<chan_id_t> forwarding_channels;
     const auto& active_channels =
         this->get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
+    forwarding_channels.reserve(active_channels.size());
     for (const auto& src_chan_id : active_channels) {
         // check for end-to-end route before accepting this channel
         if (this->get_fabric_route(src_fabric_node_id, dst_fabric_node_id, src_chan_id).empty()) {
@@ -1634,8 +1666,8 @@ void write_to_worker_or_fabric_tensix_cores(
         control_plane.get_fabric_tensix_config() != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     // Get pre-computed translated fabric mux cores from tensix config
-    std::unordered_set<CoreCoord> fabric_mux_cores_translated;
-    std::unordered_set<CoreCoord> dispatch_mux_cores_translated;
+    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated;
+    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated;
     if (tensix_config_enabled) {
         const auto& fabric_context = control_plane.get_fabric_context();
         const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
@@ -1645,7 +1677,7 @@ void write_to_worker_or_fabric_tensix_cores(
 
     enum class CoreType { Worker, FabricTensixExtension, DispatcherMux };
 
-    auto get_core_type = [&](const CoreCoord& core_coord) -> CoreType {
+    auto get_core_type = [&](const tt::tt_metal::CoreCoord& core_coord) -> CoreType {
         if (fabric_mux_cores_translated.contains(core_coord)) {
             return CoreType::FabricTensixExtension;
         }
@@ -1677,7 +1709,7 @@ void write_to_worker_or_fabric_tensix_cores(
     };
 
     for (const auto& tensix_core : all_tensix_cores) {
-        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
         CoreType core_type = get_core_type(core_coord);
         const void* data_to_write = select_data(core_type);
 
@@ -1722,24 +1754,24 @@ static void write_to_all_cores(
                 cluster.write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, CoreCoord(tensix_core.x, tensix_core.y)),
+                    tt_cxy_pair(physical_chip_id, tt::tt_metal::CoreCoord(tensix_core.x, tensix_core.y)),
                     hal.get_dev_addr(core_type, addr_type));
             }
             break;
         }
         case tt::tt_metal::HalProgrammableCoreType::IDLE_ETH:
         case tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH: {
-            std::unordered_set<CoreCoord> logical_eth_cores =
+            std::unordered_set<tt::tt_metal::CoreCoord> logical_eth_cores =
                 (core_type == tt::tt_metal::HalProgrammableCoreType::IDLE_ETH)
                     ? control_plane.get_inactive_ethernet_cores(physical_chip_id)
                     : control_plane.get_active_ethernet_cores(physical_chip_id);
-            for (const CoreCoord& logical_eth_core : logical_eth_cores) {
-                CoreCoord virtual_eth_core = cluster.get_virtual_coordinate_from_logical_coordinates(
+            for (const tt::tt_metal::CoreCoord& logical_eth_core : logical_eth_cores) {
+                tt::tt_metal::CoreCoord virtual_eth_core = cluster.get_virtual_coordinate_from_logical_coordinates(
                     physical_chip_id, logical_eth_core, CoreType::ETH);
                 cluster.write_core(
                     data,
                     size,
-                    tt_cxy_pair(physical_chip_id, CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
+                    tt_cxy_pair(physical_chip_id, tt::tt_metal::CoreCoord(virtual_eth_core.x, virtual_eth_core.y)),
                     hal.get_dev_addr(core_type, addr_type));
             }
             break;
@@ -2084,7 +2116,7 @@ void ControlPlane::write_fabric_telemetry_to_all_chips(const FabricNodeId& fabri
         // auto routing_direction = get_eth_chan_direction(fabric_node_id, chan_id);
         // static_view.direction() = static_cast<std::uint8_t>(routing_direction);
 
-        CoreCoord virtual_eth_core = this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
+        tt::tt_metal::CoreCoord virtual_eth_core = this->cluster_.get().get_virtual_eth_core_from_channel(physical_chip_id, chan_id);
         this->cluster_.get().write_core(
             telemetry.data(),
             telemetry.size(),
@@ -2214,10 +2246,10 @@ bool ControlPlane::is_cross_host_eth_link(ChipId chip_id, chan_id_t chan_id) con
     return this->physical_system_descriptor_->is_cross_host_eth_link(tt::tt_metal::AsicID{asic_id}, chan_id);
 }
 
-std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
+std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chip_id, bool skip_reserved_cores) const {
     const auto& cluster = this->cluster_.get();
 
-    std::unordered_set<CoreCoord> active_ethernet_cores;
+    std::unordered_set<tt::tt_metal::CoreCoord> active_ethernet_cores;
     const auto& cluster_desc = cluster.get_cluster_desc();
     const auto& soc_desc = cluster.get_soc_desc(chip_id);
 
@@ -2234,7 +2266,7 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
         for (auto logical_active_eth_channel : logical_active_eth_channels) {
             tt::umd::CoreCoord logical_active_eth =
                 soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
-            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+            active_ethernet_cores.insert(tt::tt_metal::CoreCoord(logical_active_eth.x, logical_active_eth.y));
         }
     } else {
         std::set<uint32_t> logical_active_eth_channels = cluster_desc->get_active_eth_channels(chip_id);
@@ -2275,10 +2307,10 @@ std::unordered_set<CoreCoord> ControlPlane::get_active_ethernet_cores(ChipId chi
     return active_ethernet_cores;
 }
 
-std::unordered_set<CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
+std::unordered_set<tt::tt_metal::CoreCoord> ControlPlane::get_inactive_ethernet_cores(ChipId chip_id) const {
     const auto& cluster = this->cluster_.get();
-    std::unordered_set<CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
-    std::unordered_set<CoreCoord> inactive_ethernet_cores;
+    std::unordered_set<tt::tt_metal::CoreCoord> active_ethernet_cores = this->get_active_ethernet_cores(chip_id);
+    std::unordered_set<tt::tt_metal::CoreCoord> inactive_ethernet_cores;
 
     for (const auto& [eth_core, chan] : cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
         if (!active_ethernet_cores.contains(eth_core)) {
@@ -2308,7 +2340,7 @@ void ControlPlane::assign_direction_to_fabric_eth_chan(
 }
 
 void ControlPlane::assign_direction_to_fabric_eth_core(
-    const FabricNodeId& fabric_node_id, const CoreCoord& eth_core, RoutingDirection direction) {
+    const FabricNodeId& fabric_node_id, const tt::tt_metal::CoreCoord& eth_core, RoutingDirection direction) {
     auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_.at(fabric_node_id);
     auto chan_id = this->cluster_.get().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
     this->assign_direction_to_fabric_eth_chan(fabric_node_id, chan_id, direction);
@@ -2373,6 +2405,7 @@ std::vector<MeshId> ControlPlane::get_local_mesh_id_bindings() const {
     const auto& mesh_id_bindings = this->local_mesh_binding_.mesh_ids;
     const auto& user_mesh_ids = this->get_user_physical_mesh_ids();
     std::vector<MeshId> local_mesh_ids;
+    local_mesh_ids.reserve(mesh_id_bindings.size());
     for (const auto& mesh_id : mesh_id_bindings) {
         if (std::find(user_mesh_ids.begin(), user_mesh_ids.end(), mesh_id) != user_mesh_ids.end()) {
             local_mesh_ids.push_back(mesh_id);
@@ -2435,7 +2468,7 @@ ControlPlane::get_global_logical_bindings() const {
 // Helper function to fill connection info with common fields for fabric router configs
 void fill_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
-    const CoreCoord& virtual_core,
+    const tt::tt_metal::CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
     uint16_t worker_free_slots_stream_id) {
@@ -2459,7 +2492,7 @@ void fill_connection_info_fields(
 // Helper function to fill tensix connection info with tensix-specific configuration
 void fill_tensix_connection_info_fields(
     tt::tt_fabric::fabric_connection_info_t& connection_info,
-    const CoreCoord& mux_core_virtual,
+    const tt::tt_metal::CoreCoord& mux_core_virtual,
     const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
     uint32_t sender_channel,
     tt::tt_fabric::FabricTensixCoreType core_id) {
@@ -2495,7 +2528,7 @@ void ControlPlane::populate_fabric_connection_info(
     // Always populate fabric router config for normal workers
     const auto& edm_config = builder_context.get_fabric_router_config(
         fabric_tensix_config, static_cast<eth_chan_directions>(sender_channel));
-    CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
+    tt::tt_metal::CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
 
     fill_connection_info_fields(
         worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
@@ -2512,8 +2545,8 @@ void ControlPlane::populate_fabric_connection_info(
             WORKER_FREE_SLOTS_STREAM_ID);
 
         const auto& tensix_config = builder_context.get_tensix_config();
-        CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
-        CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
+        tt::tt_metal::CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
+        tt::tt_metal::CoreCoord mux_core_virtual = cluster.get_virtual_coordinate_from_logical_coordinates(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
         // Get the RISC ID that handles this ethernet channel
         auto core_id = tensix_config.get_core_id_for_channel(physical_chip_id, eth_channel_id);
@@ -2538,8 +2571,8 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     const auto& tensix_config = fabric_context.get_builder_context().get_tensix_config();
 
     // Get mux and dispatcher cores
-    std::unordered_set<CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
-    std::unordered_set<CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> fabric_mux_cores_translated = tensix_config.get_translated_fabric_mux_cores();
+    std::unordered_set<tt::tt_metal::CoreCoord> dispatch_mux_cores_translated = tensix_config.get_translated_dispatch_mux_cores();
 
     const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const std::vector<tt::umd::CoreCoord>& all_tensix_cores =
@@ -2547,7 +2580,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
 
     // Build per-worker connection info and write to each worker core
     for (const auto& tensix_core : all_tensix_cores) {
-        CoreCoord core_coord(tensix_core.x, tensix_core.y);
+        tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
 
         // Determine core type
         const void* data_to_write = nullptr;
@@ -2804,6 +2837,7 @@ std::vector<PortDescriptor> ControlPlane::gather_intermesh_cables_for_exit_nodes
     // and assigns the port_id on each side. This avoids the per-host greedy port exhaustion where a
     // host that processed a shared exit chip first could strand a later ring-closing boundary.
     std::vector<PortDescriptor> gathered_cables;
+    gathered_cables.reserve(exit_nodes.size());
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2850,8 +2884,10 @@ PortDescriptorTable ControlPlane::generate_port_descriptor_table() {
 
     // Iterate neighbors in a stable (neighbor mesh_id, hostname) order rather than get_host_neighbors()'s
     // hostname-keyed unordered_map order, so the gathered record order is host-independent.
+    const auto neighbor_hosts = physical_system_descriptor_->get_host_neighbors(my_host);
     std::vector<std::pair<MeshId, std::string>> sorted_neighbors;
-    for (const auto& neighbor_host : physical_system_descriptor_->get_host_neighbors(my_host)) {
+    sorted_neighbors.reserve(neighbor_hosts.size());
+    for (const auto& neighbor_host : neighbor_hosts) {
         auto neighbor_host_rank = physical_system_descriptor_->get_rank_for_hostname(neighbor_host);
         auto neighbor_rank = tt::tt_metal::distributed::multihost::Rank{static_cast<int>(neighbor_host_rank)};
         // Skip if neighbor host is not in our global logical bindings.
@@ -3928,6 +3964,7 @@ bool ControlPlane::is_local_host_on_switch_mesh() const {
 
     std::optional<MeshId> local_switch_mesh_id = std::nullopt;
     std::vector<MeshId> local_compute_mesh_ids;
+    local_compute_mesh_ids.reserve(local_mesh_ids.size());
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
             if (local_switch_mesh_id.has_value()) {
@@ -3956,6 +3993,7 @@ std::vector<ChipId> ControlPlane::get_switch_mesh_device_ids() const {
     for (const auto& mesh_id : local_mesh_ids) {
         if (mesh_graph.is_switch_mesh(mesh_id)) {
             const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+            switch_device_ids.reserve(switch_device_ids.size() + chip_ids.values().size());
             for (const auto& chip_id : chip_ids.values()) {
                 auto fabric_node_id = FabricNodeId(mesh_id, chip_id);
                 auto physical_chip_id = this->get_physical_chip_id_from_fabric_node_id(fabric_node_id);

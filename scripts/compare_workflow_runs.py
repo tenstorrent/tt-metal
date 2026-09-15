@@ -445,8 +445,6 @@ def main():
         # Core post-commit
         "sanity-tests.yaml",
         # Single-card
-        "single-card-demo-tests.yaml",
-        "perf-models.yaml",
         "perf-device-models.yaml",
         # T3000 (T3K)
         "t3000-demo-tests.yaml",
@@ -472,7 +470,6 @@ def main():
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
-        "blackhole-sanity-tests.yaml",
     ]
 
     # Filter by category if specified

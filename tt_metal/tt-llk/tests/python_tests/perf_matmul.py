@@ -11,7 +11,7 @@ from helpers.matmul_sweep import (
     generate_tile_dims,
 )
 from helpers.param_config import input_output_formats, parametrize
-from helpers.perf import PerfConfig
+from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
@@ -109,7 +109,7 @@ def test_perf_matmul(
         runtimes=[
             UNPACK_TRANS_FACES(Transpose.No),
             NUM_FACES(),
-            LOOP_FACTOR(16),
+            LOOP_FACTOR(64),
             TILE_COUNT(variant_tile_count),
             CRK_TILE_DIMM(dims.ct_dim, dims.rt_dim, dims.kt_dim),
         ],

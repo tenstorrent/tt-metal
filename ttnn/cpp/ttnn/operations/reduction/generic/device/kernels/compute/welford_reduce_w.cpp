@@ -10,7 +10,7 @@
 #include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 
 #ifdef WELFORD_POST_MUL
 // SFPU multiply-by-scalar (mul_unary_tile) applied to the reduced output. See issue #45222.
@@ -46,23 +46,23 @@ void kernel_main() {
     // Circular buffer that the reader kernel fills with input tiles.
     // For FP32 input c_0 is flagged UnpackToDestFp32 by the program factory so the welford SFPU
     // intake (transpose_tile) reads with full FP32 precision. For BF16 input c_0 is Default.
-    constexpr auto cb_in = tt::CBIndex::c_0;
+    constexpr auto dfb_in = tt::CBIndex::c_0;
     // True when input is FP32; gates the transpose re-init / welford PreserveStats recovery
     // in the Wt-inner loop (transpose_tile's UnpackToDestFp32 path clobbers the welford SFPU
     // replay buffer). On BF16 input that path is inactive, so the recovery is gated out.
     constexpr bool welford_fp32_input = get_named_compile_time_arg_val("welford_fp32_input") != 0;
     // Circular buffer where the final variance output tile is written
     // for the writer kernel to consume.
-    constexpr auto cb_out = tt::CBIndex::c_16;
+    constexpr auto dfb_out = tt::CBIndex::c_16;
     // Scratch circular buffer used to hold the variance tile between
     // the two transpose steps (Welford produces row-oriented results;
     // we transpose back to column orientation via this buffer,
     // and transpose operation can't take data from the DST register).
-    constexpr auto cb_var = tt::CBIndex::c_19;
+    constexpr auto dfb_var = tt::CBIndex::c_19;
 
-    CircularBuffer cb_in_obj(cb_in);
-    CircularBuffer cb_out_obj(cb_out);
-    CircularBuffer cb_var_obj(cb_var);
+    DataflowBuffer dfb_in_obj(dfb_in);
+    DataflowBuffer dfb_out_obj(dfb_out);
+    DataflowBuffer dfb_var_obj(dfb_var);
 
     // Destination register indices inside the Tensix DST register file.
     // Welford's LLK uses three adjacent dst registers:
@@ -78,8 +78,8 @@ void kernel_main() {
     // we want to skip some columns from getting processed.
     constexpr uint32_t last_tile_rows = ((W % tile_width) == 0) ? tile_width : (W % tile_width);
 
-    compute_kernel_hw_startup(cb_in, cb_out);
-    pack_reconfig_data_format(cb_out);
+    compute_kernel_hw_startup(dfb_in, dfb_out);
+    pack_reconfig_data_format(dfb_out);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm.
@@ -98,24 +98,24 @@ void kernel_main() {
 
         // transpose and welford (both SFPU-compatible) share a single DST window for the entire
         // loop: one acquire before the loop, one commit after the last tile.
-        reconfig_data_format_srca(cb_in);
+        reconfig_data_format_srca(dfb_in);
         // cb_in's UnpackToDestFp32 mode (FP32 input only) was already programmed by
         // compute_kernel_hw_startup(cb_in, cb_out) at kernel entry, so _init_short is
         // enough here. For BF16 input cb_in is Default mode and the same call works.
-        transpose_init(cb_in);
+        transpose_init(dfb_in);
         tile_regs_acquire();
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
         // persists across DST cycles because LREGs are separate from
         // the DST register file managed by tile_regs_acquire/release.
         for (uint32_t wt = 0; wt < Wt; ++wt) {
-            cb_in_obj.wait_front(onetile);
+            dfb_in_obj.wait_front(onetile);
             if constexpr (welford_fp32_input) {
                 // Re-records the transpose-dest setup at math-thread replay slots [16, 32).
-                transpose_init(cb_in);
+                transpose_init(dfb_in);
             }
-            transpose_tile(cb_in, 0, input_dst);
-            cb_in_obj.pop_front(onetile);
+            transpose_tile(dfb_in, 0, input_dst);
+            dfb_in_obj.pop_front(onetile);
 
             // For fp32 input, transpose_tile takes the UnpackToDest path whose math-side init
             // overwrites the upper half of the SFPU replay buffer (slots [16, 32)), clobbering
@@ -146,18 +146,18 @@ void kernel_main() {
         }
 
         // Pack variance and transpose back to column format
-        cb_var_obj.reserve_back(onetile);
+        dfb_var_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_var);
-        pack_tile(var_dst, cb_var);
+        pack_reconfig_data_format(dfb_var);
+        pack_tile(var_dst, dfb_var);
         tile_regs_release();
-        cb_var_obj.push_back(onetile);
+        dfb_var_obj.push_back(onetile);
 
-        cb_var_obj.wait_front(onetile);
-        reconfig_data_format_srca(cb_var);
-        transpose_init(cb_var);
+        dfb_var_obj.wait_front(onetile);
+        reconfig_data_format_srca(dfb_var);
+        transpose_init(dfb_var);
         tile_regs_acquire();
-        transpose_tile(cb_var, 0, var_dst);
+        transpose_tile(dfb_var, 0, var_dst);
         if constexpr (is_std) {
             sqrt_tile_init();
             sqrt_tile(var_dst);
@@ -169,15 +169,15 @@ void kernel_main() {
         mul_unary_tile(var_dst, post_mul_scaler_bits);
 #endif
         tile_regs_commit();
-        cb_var_obj.pop_front(onetile);
+        dfb_var_obj.pop_front(onetile);
 
         // Pack transposed variance to output
-        cb_out_obj.reserve_back(onetile);
+        dfb_out_obj.reserve_back(onetile);
         tile_regs_wait();
-        pack_reconfig_data_format(cb_out);
-        pack_tile(var_dst, cb_out);
+        pack_reconfig_data_format(dfb_out);
+        pack_tile(var_dst, dfb_out);
         tile_regs_release();
-        cb_out_obj.push_back(onetile);
+        dfb_out_obj.push_back(onetile);
 
     }  // NCHt loop
 }

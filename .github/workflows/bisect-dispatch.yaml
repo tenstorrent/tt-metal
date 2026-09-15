@@ -104,6 +104,7 @@ jobs:
 
   test-dispatch:
     needs: [check-harbor, determine-runner-config]
+    if: ${{ !cancelled() && needs.determine-runner-config.result == 'success' }}
     timeout-minutes: 1440
     runs-on: ${{ fromJSON(needs.determine-runner-config.outputs.runs-on-labels) }}
     container:

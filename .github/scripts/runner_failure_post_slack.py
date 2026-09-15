@@ -17,6 +17,8 @@ from runner_failure_common import (
     RecentJob,
     UNKNOWN_RUNNER,
     format_signature_summary,
+    load_triggering_failures_json,
+    scan_result_from_dict,
 )
 
 
@@ -67,39 +69,6 @@ def slack_config_from_channel(slack_channel: str | None) -> SlackConfig | None:
     return SlackConfig(token=token, channel=slack_channel)
 
 
-def job_from_dict(value: dict[str, Any]) -> RecentJob:
-    return RecentJob(
-        owner_repo=str(value.get("owner_repo") or ""),
-        workflow=str(value.get("workflow") or ""),
-        workflow_id=str(value.get("workflow_id") or ""),
-        run_id=str(value.get("run_id") or ""),
-        run_attempt=str(value.get("run_attempt") or ""),
-        run_url=str(value.get("run_url") or ""),
-        job_id=str(value.get("job_id") or ""),
-        name=str(value.get("name") or ""),
-        runner_name=str(value.get("runner_name") or ""),
-        status=str(value.get("status") or ""),
-        conclusion=str(value.get("conclusion") or ""),
-        html_url=str(value.get("html_url") or ""),
-        started_at=str(value.get("started_at") or ""),
-        completed_at=str(value.get("completed_at") or ""),
-    )
-
-
-def scan_result_from_dict(value: dict[str, Any]) -> JobScanResult:
-    raw_signatures = value.get("signatures")
-    signatures: tuple[str, ...] = ()
-    if isinstance(raw_signatures, list):
-        signatures = tuple(str(item) for item in raw_signatures if item)
-    return JobScanResult(
-        job=job_from_dict(value),
-        log_status=str(value.get("log_status") or ""),
-        log_checked=bool(value.get("log_checked")),
-        signature_labels=signatures,
-        fabric_missing_links=str(value.get("fabric_missing_links") or ""),
-    )
-
-
 def load_report_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -132,23 +101,6 @@ def runner_job_count_from_report(report: dict[str, Any], scan_results: list[JobS
     if isinstance(counts, dict):
         return int_from_report(counts.get("runner_jobs"), default=len(scan_results))
     return len(scan_results)
-
-
-def load_triggering_failures_json(path: Path | None) -> list[JobScanResult]:
-    if path is None:
-        return []
-
-    try:
-        raw_values = json.loads(path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        raise RuntimeError(f"Unable to read triggering failures JSON {path}: {exc}") from exc
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Unable to parse triggering failures JSON {path}: {exc}") from exc
-
-    if not isinstance(raw_values, list):
-        raise RuntimeError(f"Triggering failures JSON {path} must contain a list.")
-
-    return [scan_result_from_dict(value) for value in raw_values if isinstance(value, dict)]
 
 
 def slack_escape(value: str) -> str:
@@ -302,10 +254,10 @@ def workflow_job_label(job: RecentJob) -> str:
 def slack_runner_table_header() -> list[dict[str, str]]:
     return [
         slack_raw_text_cell("Job"),
+        slack_raw_text_cell("Failures"),
         slack_raw_text_cell("Status"),
         slack_raw_text_cell("Started"),
         slack_raw_text_cell("Scanned?"),
-        slack_raw_text_cell("Failures"),
         slack_raw_text_cell("Workflow / job"),
     ]
 
@@ -332,10 +284,10 @@ def slack_runner_table_row(result: JobScanResult) -> list[dict[str, Any]]:
     job = result.job
     return [
         slack_link_cell(job.html_url, job.job_id or "open"),
+        slack_raw_text_cell(failure_summary_for_slack_cell(result)),
         slack_raw_text_cell(job.conclusion or job.status or "unknown"),
         slack_raw_text_cell(compact_started_at(job.started_at)),
         slack_flag_cell("Y" if result.log_checked else "N"),
-        slack_raw_text_cell(failure_summary_for_slack_cell(result)),
         slack_raw_text_cell(workflow_job_label(job)),
     ]
 
@@ -412,10 +364,10 @@ def slack_runner_table_block(rows: list[list[dict[str, Any]]]) -> dict[str, Any]
         "type": "table",
         "column_settings": [
             {"is_wrapped": False},
+            {"is_wrapped": True},
             {"is_wrapped": False},
             {"is_wrapped": False},
             {"align": "center"},
-            {"is_wrapped": True},
             {"is_wrapped": True},
         ],
         "rows": [slack_runner_table_header(), *rows],

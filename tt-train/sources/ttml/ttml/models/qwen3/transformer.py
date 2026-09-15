@@ -14,12 +14,10 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
-from .autograd_ops import ConcatLastDim
 from .attention import Qwen3Attention
 
 # Re-export for callers that import from transformer
 __all__ = [
-    "ConcatLastDim",
     "Qwen3RMSNorm",
     "Qwen3MLP",
     "Qwen3Block",

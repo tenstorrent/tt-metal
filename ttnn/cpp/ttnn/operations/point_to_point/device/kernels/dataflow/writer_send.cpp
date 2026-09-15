@@ -89,7 +89,10 @@ void kernel_main() {
             if (packet_page_idx >= curr_pages_per_packet) {
                 tt::tt_fabric::linear::to_noc_unicast_write(
                     align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
-                perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
+                // blocking+flush: drain the payload out of packet_base_addr before the next tt_memmove
+                // reuses the single-slot packet_cb (the default overload leaves the source read in flight).
+                perform_payload_send<true, true>(
+                    connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
                 // reset counters
                 packet_page_idx = 0;

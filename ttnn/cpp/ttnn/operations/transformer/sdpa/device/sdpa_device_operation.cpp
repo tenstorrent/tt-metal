@@ -232,19 +232,21 @@ void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, cons
         const auto DH = q_shape[3];
         const auto k_page_size_cache = k_shape[2];
         const uint32_t num_pages_per_user = page_table.logical_shape()[1];
-        // Geometry overrides for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
+        // Geometry override for an HMA-shared paged buffer (see PagedCacheGeometryOverride):
         // the cache's declared (num_kv_heads, block_size, head_dim) describe another layer's
-        // view of the shared physical buffer. Q's last dim drives head_dim; these overrides
-        // supply this call's block_size / num_kv_heads so kv_length, the GQA ratio, and the
-        // reader's block addressing use the right geometry. Unset ⇒ use the cache's declared
-        // values. Not supported with MLA (same contract as paged decode).
+        // view of the shared physical buffer. Q's last dim drives head_dim; the override
+        // supplies this call's block_size / num_kv_heads so kv_length, the GQA ratio, and the
+        // reader's block addressing use the right geometry. Inactive (default) ⇒ cache shape.
+        // Not supported with MLA (same contract as paged decode).
         const auto& geo = attrs.paged_cache_geometry;
         const bool has_geometry_override = geo.active();
         if (has_geometry_override) {
             TT_FATAL(!use_mla, "PagedCacheGeometryOverride is not supported with multi-latent attention");
+            TT_FATAL(geo.block_size > 0, "PagedCacheGeometryOverride.block_size must be > 0");
+            TT_FATAL(geo.num_kv_heads > 0, "PagedCacheGeometryOverride.num_kv_heads must be > 0");
         }
-        const uint32_t nkv = geo.num_kv_heads.value_or(nkv_cache);
-        const uint32_t k_page_size = geo.block_size.value_or(k_page_size_cache);
+        const uint32_t nkv = has_geometry_override ? geo.num_kv_heads : nkv_cache;
+        const uint32_t k_page_size = has_geometry_override ? geo.block_size : k_page_size_cache;
         if (!use_mla) {
             // K and V share a per-layer allocation, so their *declared* page sizes must match
             // (independent of any view override).
@@ -600,8 +602,7 @@ Tensor sdpa(
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
-    std::optional<uint32_t> block_size_override,
-    std::optional<uint32_t> num_kv_heads_override) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
     using OperationType = ttnn::prim::SDPAOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -617,10 +618,7 @@ Tensor sdpa(
             .sliding_window_size = sliding_window_size,
             .is_windowed = cu_window_seqlens.has_value(),
             .paged_cache_geometry =
-                ttnn::operations::transformer::PagedCacheGeometryOverride{
-                    .block_size = block_size_override,
-                    .num_kv_heads = num_kv_heads_override,
-                },
+                paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

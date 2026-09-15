@@ -4,6 +4,7 @@
 
 #pragma once
 #include <cstdint>
+#include "llk_assert.h"
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
 #include "llk_unpack_reduce_col_tilizeA_strided.h"
@@ -28,7 +29,25 @@ inline void llk_unpack_tilize_init(
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
-    _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
+
+    if (tensor_shape.total_num_faces() == NUM_FACES) {
+        _llk_unpack_tilize_init_<p_unpacr::UNP_A, DST_ACCUM_MODE>(operand_id, full_ct_dim, block_ct_dim, tensor_shape);
+    } else {
+        const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+            tensor_shape,
+            get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
+            unpack_src_format[operand_id],
+            operand_id,
+            unpack_dst_format[operand_id]);
+        ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
+        _llk_unpack_tilize_strided_init_small_faces_<p_unpacr::UNP_A, DST_ACCUM_MODE>(
+            operand_id, tensor_shape, full_ct_dim, block_ct_dim);
+    }
 }
 
 /**
@@ -43,9 +62,16 @@ inline void llk_unpack_tilize_init(
  */
 inline void llk_unpack_tilize_block(
     const std::uint32_t operand, const std::uint32_t block_c_tiles, const std::uint32_t input_tile_index = 0) {
+    LLK_TDMA_GUARD_NOTE_TDMA(operand);  // TEN-4746: real unpack (UNPACR) disarms this dfb
     const std::uint32_t operand_id = get_operand_id(operand);
 
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
+
+    LLK_ASSERT(
+        tensor_shape.total_num_faces() == NUM_FACES ||
+            (tensor_shape.total_num_faces() == 2 && (tensor_shape.face_r_dim == 1 || tensor_shape.face_r_dim == 2)),
+        "only 1x32 and 2x32 tiny tiles supported for unpack tilize on Quasar");
+
     const std::uint32_t faces_per_entry = tensor_shape.num_faces_r_dim * tensor_shape.face_r_dim;
 
     const LocalDFBInterface& local_dfb = g_dfb_interface[operand_id];
@@ -57,7 +83,11 @@ inline void llk_unpack_tilize_block(
     // structural pattern as BH/WH llk_unpack_tilize_block
     const std::uint32_t l1_base_idx = (rd_entry_idx + input_tile_index) * faces_per_entry;
     for (std::uint32_t t = 0; t < block_c_tiles; t++) {
-        _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+        if (tensor_shape.total_num_faces() == NUM_FACES) {
+            _llk_unpack_tilize_<p_unpacr::UNP_A>(l1_base_idx + t);
+        } else {
+            _llk_unpack_tilize_strided_small_faces_<p_unpacr::UNP_A>(tensor_shape, l1_base_idx + t);
+        }
     }
 }
 
@@ -110,15 +140,17 @@ inline void llk_unpack_tilizeA_B_init(
 
     // UNPACR_STRIDE used in unpack_tilize_operands_reduce requires the following buffer descriptor configuration:
     // Overwrite the buffer descriptor configuration from llk_unpack_hw_configure for operandA.
-    buffer_descriptor_u bd_val = {0};
-    bd_val.f.l1_addr_16B = get_local_dfb_interface(operandA_id).tc_slots[0].base_addr;
-    bd_val.f.format = static_cast<std::uint8_t>(unpack_src_format[operandA_id]);
-    bd_val.f.x_dim = ckernel::trisc::FACE_C_DIM;
-    bd_val.f.y_dim = 1;
-    bd_val.f.z_dim = 1;
-    ckernel::trisc::_configure_buf_desc_table_(operandA_id, bd_val);
+    const tdma_descriptor_t td_val = ckernel::trisc::construct_tdma_desc<ckernel::trisc::L1AccessMode::Strided>(
+        tensor_shape_A,
+        get_local_dfb_interface(operandA_id).tc_slots[0].base_addr,
+        unpack_src_format[operandA_id],
+        operandA_id,
+        unpack_dst_format[operandA_id]);
+    ckernel::trisc::_configure_buf_desc_table_(td_val.buf_desc_id, td_val.buf_desc);
 
-    _llk_unpack_reduce_col_tilizeA_strided_init_(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#if defined(REDUCE_OP)
+    _llk_unpack_reduce_col_tilizeA_strided_init_<REDUCE_OP>(operandA_id, operandB_id, ct_dim, tensor_shape_A);
+#endif
 }
 
 /**
@@ -156,6 +188,8 @@ inline void llk_unpack_tilizeA_B(
         reload_srcB,
         "reload_srcB has to be true for tilizeA_B on Quasar, due to the compatibility with the math reduce kernel.");
 
+    LLK_TDMA_GUARD_NOTE_TDMA(operandA);  // TEN-4746: real unpack (UNPACR) disarms these dfbs
+    LLK_TDMA_GUARD_NOTE_TDMA(operandB);
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
@@ -168,10 +202,10 @@ inline void llk_unpack_tilizeA_B(
     // Compute how many l1_index units fit in one DFB entry.
     // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
     // l1_index by num_faces_c_dim, so one l1_index unit = num_faces_c_dim face-rows in L1.
-    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;                           // DFB entry size in 16B
-    const std::uint32_t face_row_16B =                                                               // Buffer Descriptor granularity in 16B
+    const std::uint32_t entry_size_16B = local_dfb_interface_a.entry_size;  // DFB entry size in 16B
+    const std::uint32_t face_row_16B =                                      // Buffer Descriptor granularity in 16B
         SCALE_DATUM_SIZE(unpack_src_format[operandA_id], ckernel::trisc::FACE_C_DIM) >> 4;
-    const std::uint32_t l1_index_per_entry =                                                         // l1_index steps per entry
+    const std::uint32_t l1_index_per_entry =  // l1_index steps per entry
         entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
     const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 

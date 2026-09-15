@@ -154,6 +154,7 @@ void kernel_main() {
     uint64_t sender_c6_base_noc_addr = get_noc_addr(sender_noc_x, sender_noc_y, sender_c6_l1_addr);
     uint64_t sender_data_avail_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_avail_semaphore_id));
+    Semaphore<> data_avail_sem(data_avail_semaphore_id);
 
     // space_avail lives in our local L1; the sender increments it remotely once per slot it has
     // finished forwarding.  We poll it as a per-entry credit (wait for produced_count+1) before
@@ -351,6 +352,10 @@ void kernel_main() {
                     // Wait only on this entry's cross-device writes — in-flight local
                     // DRAM writes are tagged-out by TRID and keep flying.
                     noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
+                    // The transaction ID is a command-buffer register, not a per-write
+                    // argument. Restore the default ID before this worker hands its NOC
+                    // interface to another kernel (or issues an untagged local write).
+                    noc_async_write_set_trid(0);
 
                     noc_semaphore_inc<true>(sender_data_avail_noc_addr, 1);
 
@@ -397,7 +402,8 @@ void kernel_main() {
     noc_async_write_one_packet_with_trid(
         route_info_scratch_addr, sentinel_c4_slot, route_info_slot_stride, TRID_NON_LOCAL_WRITE);
     noc_async_write_barrier_with_trid(TRID_NON_LOCAL_WRITE);
-    noc_semaphore_inc(sender_data_avail_noc_addr, 1);
+    noc_async_write_set_trid(0);
+    data_avail_sem.up(noc, sender_noc_x, sender_noc_y, 1);
 
     // noc_async_full_barrier flushes everything in-flight (including the inc) before exit.
     noc_async_full_barrier();

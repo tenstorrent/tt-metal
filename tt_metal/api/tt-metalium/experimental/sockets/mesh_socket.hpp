@@ -60,6 +60,9 @@ struct SocketMemoryConfig {
     // TODO: Should data cores be on a different sub device?
     std::optional<SubDeviceId> sender_sub_device = std::nullopt;
     std::optional<SubDeviceId> receiver_sub_device = std::nullopt;
+    // TT_METAL_ALLOCATOR_MODE_HYBRID=1 must be set to enable per-core allocation on socket data buffer.
+    // so data buffers are allocated only on the receiver connection cores instead of every worker core.
+    bool per_core_allocation = false;
 
     // User-provided constructor to make this non-aggregate (prevents ambiguity with Reflectable concept)
     SocketMemoryConfig() = default;
@@ -67,16 +70,19 @@ struct SocketMemoryConfig {
         BufferType socket_storage_type,
         uint32_t fifo_size,
         std::optional<SubDeviceId> sender_sub_device = std::nullopt,
-        std::optional<SubDeviceId> receiver_sub_device = std::nullopt) :
+        std::optional<SubDeviceId> receiver_sub_device = std::nullopt,
+        bool per_core_allocation = false) :
         socket_storage_type(socket_storage_type),
         fifo_size(fifo_size),
         sender_sub_device(sender_sub_device),
-        receiver_sub_device(receiver_sub_device) {}
+        receiver_sub_device(receiver_sub_device),
+        per_core_allocation(per_core_allocation) {}
 
-    static constexpr auto attribute_names =
-        std::forward_as_tuple("socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device");
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "socket_storage_type", "fifo_size", "sender_sub_device", "receiver_sub_device", "per_core_allocation");
     auto attribute_values() const {
-        return std::forward_as_tuple(socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device);
+        return std::forward_as_tuple(
+            socket_storage_type, fifo_size, sender_sub_device, receiver_sub_device, per_core_allocation);
     }
 };
 

@@ -8,19 +8,18 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    constexpr uint32_t N = get_named_compile_time_arg_val("N");
-    constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    constexpr uint32_t num_rows = get_named_compile_time_arg_val("num_rows");
-    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr uint32_t N = get_arg(args::N);
+    constexpr uint32_t page_size = get_arg(args::page_size);
+    constexpr uint32_t num_rows = get_arg(args::num_rows);
 
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);
-    const uint32_t start_row = get_arg_val<uint32_t>(1);
-    const uint32_t end_row = get_arg_val<uint32_t>(2);
+    const uint32_t start_row = get_arg(args::start_row);
+    const uint32_t end_row = get_arg(args::end_row);
 
-    const auto s0 = TensorAccessor(src_args, src_addr);
-    DataflowBuffer dfb(tt::CBIndex::c_0);
+    const auto s0 = TensorAccessor(tensor::input);
+    DataflowBuffer dfb(dfb::cb_src);
     Noc noc;
 
     for (uint32_t row = start_row; row < end_row; ++row) {

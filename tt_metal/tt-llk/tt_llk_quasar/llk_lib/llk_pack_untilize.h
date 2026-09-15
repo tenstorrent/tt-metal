@@ -332,12 +332,11 @@ inline void _llk_pack_untilize_strided_(
     else
     {
         // PACR_STRIDE quirk: need to set BD as 1x1x16 to index rows as tiles
-        // This means that for input tensors with RT_DIM > 1, we need to multiply the l1 tile index calculation buy face_r_dim.
-        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim * tensor_shape.face_r_dim);
+        // This means that for input tensors with RT_DIM > 1, we need to multiply the l1 tile index calculation by face_r_dim.
+        // This scaling is done in external stride calculations, mirroring the 32x32 case.
+        TT_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_pacr::PACK0, l1_tile_idx * tensor_shape.num_faces_c_dim);
         TT_SET_SRC_TILE_FACE_ROW_IDX(
-            p_set_inc_sel::TILE_SEL,
-            p_pacr::PACK0,
-            src_tile_idx * ckernel::pack::PACR_STRIDE_OFFSET_ROWS * tensor_shape.total_num_faces() * tensor_shape.face_r_dim);
+            p_set_inc_sel::TILE_SEL, p_pacr::PACK0, src_tile_idx * ckernel::pack::PACR_STRIDE_OFFSET_ROWS * tensor_shape.num_faces_c_dim);
         ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
     }
 }

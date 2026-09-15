@@ -249,6 +249,7 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
                 batch_size=batch_size,
                 prefill_seq_lens=prefill_seq_lens,
                 can_batch_prefill=can_batch_prefill,
+                empty_slots=kwargs.get("empty_slots"),
             )
         return super().prefill_forward_text(*args, enable_trace=enable_trace, **kwargs)
 

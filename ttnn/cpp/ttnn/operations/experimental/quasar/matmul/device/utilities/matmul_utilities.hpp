@@ -352,11 +352,11 @@ tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const tt
 void get_max_page_size_and_num_pages(
     tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
 
-void move_common_entries(std::vector<CoreCoord>& v1, std::vector<CoreCoord>& v2, std::vector<CoreCoord>& commons);
+void move_common_entries(std::vector<tt::tt_metal::CoreCoord>& v1, std::vector<tt::tt_metal::CoreCoord>& v2, std::vector<tt::tt_metal::CoreCoord>& commons);
 
 void get_optimal_dram_bank_to_reader_assignment(
     tt::tt_metal::IDevice* device,
-    std::vector<CoreCoord>& all_worker_cores_ordered,
+    std::vector<tt::tt_metal::CoreCoord>& all_worker_cores_ordered,
     CoreRangeSet& all_worker_cores,
     tt::tt_metal::NOC noc);
 

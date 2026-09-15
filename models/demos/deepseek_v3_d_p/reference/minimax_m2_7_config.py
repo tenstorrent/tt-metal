@@ -23,6 +23,11 @@ class MiniMaxM27Config:
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
     NUM_SHARED_EXPERTS = 0  # shared_intermediate_size = 0
+    # MiniMax routes with a single expert group -> gate collapses to plain top-k.
+    NUM_EXPERT_GROUPS = 1
+    NUM_LIMITED_GROUPS = 1
+    # Reference route_tokens_to_experts sum-normalizes with no extra scaling.
+    ROUTE_SCALE = 1.0
 
     # Model architecture
     NUM_LAYERS = 62

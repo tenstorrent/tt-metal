@@ -84,6 +84,7 @@ operations:
         src_b: "row_max"
         operation: "SubBcastColCustom"
         unpacker: "SubBcastColCustomUnpacker"
+        broadcast_type: "COL"
         math_fidelity: "LoFi"
     block_size: [32, 64]
     pack:

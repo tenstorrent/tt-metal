@@ -22,10 +22,8 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
-#include "api/debug/dprint.h"  // DEBUG: matmul mcast hang diagnosis (remove after)
 
 void kernel_main() {
-    DPRINT("WRM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args
@@ -115,16 +113,12 @@ void kernel_main() {
 #endif
 
     // WRITER
-    const auto s = TensorAccessor(tensor::out);
+    // Constructed to materialize the tensor::out binding; not read directly -> maybe_unused (matches the
+    // in1_sender_writer sibling) to avoid -Wunused-but-set-variable.
+    [[maybe_unused]] const auto s = TensorAccessor(tensor::out);
 
     // DEBUG: matmul mcast hang — each receiver reports its own NoC coords and which core it
     // increments (in1_mcast_sender_noc_x/y). Compare against the sender's mcast rectangle.
-    DPRINT(
-        "RECV core x={} y={} -> bumps sender x={} y={}\n",
-        (uint32_t)my_x[noc.get_noc_id()],
-        (uint32_t)my_y[noc.get_noc_id()],
-        in1_mcast_sender_noc_x,
-        in1_mcast_sender_noc_y);
 
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
@@ -146,12 +140,6 @@ void kernel_main() {
 
                     // DEBUG: matmul mcast hang — print once on the first block. A receiver that hangs
                     // at the wait above (sender's VALID mcast didn't reach it) will NOT print this.
-                    if (b == 0 && bh == 0 && bw == 0 && block == 0) {
-                        DPRINT(
-                            "RECV in1 VALID x={} y={}\n",
-                            (uint32_t)my_x[noc.get_noc_id()],
-                            (uint32_t)my_y[noc.get_noc_id()]);
-                    }
 
                     cb_in1.push_back(in1_block_num_tiles);
                 }
@@ -270,5 +258,4 @@ void kernel_main() {
     // runtime did, so a kernel that returns with an un-acked atomic/write leaves the core "running"
     // and it never signals program completion -> dispatch process_wait hangs.
     noc.async_full_barrier();
-    DPRINT("WRM end\n");  // DEBUG: matmul layer3 hang
 }

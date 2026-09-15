@@ -339,12 +339,21 @@ def test_model_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = tt_model.rope_setup.get_rot_mats(current_pos, prefetcher)
+        # Models with alternating local/global attention (e.g. Gemma-2) run their
+        # sliding-window layers on a separate local RoPE. Mirror the real decode
+        # path (Transformer.ttnn_decode_forward); no-op for models without it.
+        rot_mats_local = (
+            tt_model.rope_local_setup.get_rot_mats(current_pos, prefetcher)
+            if hasattr(tt_model, "rope_local_setup")
+            else None
+        )
 
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
             rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats_local,
             mode=Mode.DECODE,
             page_table=page_table_tt,
         )

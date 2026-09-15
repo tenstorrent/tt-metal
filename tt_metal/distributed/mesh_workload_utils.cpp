@@ -24,10 +24,10 @@
 
 namespace tt::tt_metal::distributed {
 
-// Use this function to send go signals to a device not running a program.
+// Write the dispatch sequence for a device not running a program.
 // In the MeshWorkload context, a go signal must be sent to each device when
 // a workload is dispatched, in order to maintain consistent global state.
-void write_go_signal(
+void write_go_signal_sequence(
     uint8_t cq_id,
     MeshDevice* mesh_device,
     SubDeviceId sub_device_id,
@@ -36,10 +36,14 @@ void write_go_signal(
     CoreCoord dispatch_core,
     bool send_mcast,
     bool send_unicasts,
-    const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
+    const program_dispatch::ProgramDispatchMetadata& dispatch_md,
+    std::optional<uint32_t> config_ring_sync_count) {
     const auto& hal = MetalContext::instance().hal();
     uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     DeviceCommandCalculator calculator;
+    if (config_ring_sync_count.has_value()) {
+        calculator.add_dispatch_wait();
+    }
     if (tt_metal::MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         calculator.add_notify_dispatch_s_go_signal_cmd();
     }
@@ -58,6 +62,15 @@ void write_go_signal(
         go_signal_cmd_sequence.add_prefetch_set_ringbuffer_offset(
             dispatch_md.prefetcher_cache_info.offset + dispatch_md.prefetcher_cache_info.mesh_max_program_kernels_sizeB,
             true);
+    }
+
+    if (config_ring_sync_count.has_value()) {
+        go_signal_cmd_sequence.add_dispatch_wait(
+            CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
+            0,
+            MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(*sub_device_id),
+            config_ring_sync_count.value(),
+            cq_id);
     }
 
     uint32_t go_msg_u32_val = hal.make_go_msg_u32(

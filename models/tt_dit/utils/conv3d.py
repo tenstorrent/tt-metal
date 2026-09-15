@@ -419,7 +419,13 @@ _BLOCKINGS = {
     (2, 4, 512, 512, (3, 3, 3), 75, 68, 60): (64, 256, 1, 8, 4),  # ltx_s2_res — 60810us
     (2, 4, 256, 256, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_res — 25688us
     (2, 4, 256, 512, (3, 3, 3), 147, 68, 60): (64, 256, 1, 8, 4),  # ltx_s3_chg — 48772us
-    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (64, 128, 6, 4, 8),  # ltx_s4_res — 22798us
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120): (
+        64,
+        128,
+        12,
+        4,
+        8,
+    ),  # ltx_s4_res — fused halo_last 23.1ms (T_out_block 12: fewer larger matmuls; beats force_spatial -4.9%)
     (2, 4, 128, 48, (3, 3, 3), 147, 136, 120): (128, 64, 6, 4, 8),  # ltx_s4_out — 13833us
     # LTX-2.3 spatial latent upsampler (x2), 2x4 BH-LB, 1080p.
     (2, 4, 128, 1024, (3, 3, 3), 21, 9, 8): (64, 256, 1, 2, 8),  # initial_conv
@@ -439,7 +445,8 @@ _BLOCKINGS = {
     (4, 8, 512, 512, (3, 3, 3), 75, 34, 30): (64, 256, 1, 8, 4),  # ltx_s2_res — 13752us
     (4, 8, 256, 256, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_res — 6145us
     (4, 8, 256, 512, (3, 3, 3), 147, 34, 30): (64, 256, 1, 8, 4),  # ltx_s3_chg — 12013us
-    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us
+    # This table feeds standalone conv3d (LTX VAE)
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_res — 5647us standalone
     (4, 8, 128, 48, (3, 3, 3), 147, 68, 60): (128, 64, 6, 2, 16),  # ltx_s4_out — 2914us
     # LTX-2.3 spatial latent upsampler (x2), BH Galaxy 4x8, 1080p.
     # Regenerate via bruteforce_conv3d_sweep.py -k "sweep_all and h4w8"
@@ -470,6 +477,10 @@ _DEFAULT_BLOCKINGS = {
     # full-Cin default OOMs at these widths).
     (1024, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_up
     (512, 4096, (3, 3, 3)): (256, 32, 1, 1, 1),  # s1_up
+    # Same-channel 3x3x3 resnet convs: full-Cin default weight-CB (Cin*32*27*2)
+    # overflows L1 at 1024/512 in; cap Cin_block=256 to fit (442KB weight CB).
+    (1024, 1024, (3, 3, 3)): (256, 32, 1, 1, 1),  # s0_res
+    (512, 512, (3, 3, 3)): (256, 32, 1, 1, 1),  # s2_res
     (256, 512, (3, 3, 3)): (256, 32, 1, 4, 4),  # s3_chg
     (128, 128, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_res
     (128, 48, (3, 3, 3)): (128, 32, 1, 8, 8),  # s4_out
@@ -569,6 +580,28 @@ def register_conv3d_configs(configs: dict) -> None:
         })
     """
     _DEFAULT_BLOCKINGS.update({(c_in, c_out, _ntuple(ks, 3)): tuple(v) for (c_in, c_out, ks), v in configs.items()})
+
+
+# Shapes that run fastest with force_spatial_parallel
+_FORCE_SPATIAL_KEYS = {
+    (2, 4, 128, 48, (3, 3, 3), 147, 136, 120),  # ltx_s4_out (128->48): light C_out matmul
+    # s4_res (4x8): force_spatial beats halo_last at the fused-only finer block 6,4,4 (below)
+    (4, 8, 128, 128, (3, 3, 3), 147, 68, 60),  # ltx_s4_res (4x8)
+}
+
+
+# Fused shapes fastest with halo_last
+_HALO_LAST_KEYS = {
+    # s4_res_2x4 (large per-dev 136x120): halo_last 23100us vs force_spatial 24282us (-4.9%, MIN FW)
+    (2, 4, 128, 128, (3, 3, 3), 147, 136, 120),  # ltx_s4_res (2x4)
+    (2, 4, 256, 256, (3, 3, 3), 147, 68, 60),  # ltx_s3_res (2x4)
+    (2, 4, 256, 512, (3, 3, 3), 147, 68, 60),  # ltx_s3_chg (2x4)
+    (4, 8, 512, 512, (3, 3, 3), 75, 34, 30),  # ltx_s2_res (4x8)
+    (4, 8, 256, 256, (3, 3, 3), 147, 34, 30),  # ltx_s3_res (4x8)
+    (4, 8, 256, 512, (3, 3, 3), 147, 34, 30),  # ltx_s3_chg (4x8)
+    # ltx_s1_up (512->4096): the fused conv pipeline runs ~250us faster than standalone conv on the small 4x8 per-dev
+    (4, 8, 512, 4096, (3, 3, 3), 39, 17, 15),  # ltx_s1_up (4x8)
+}
 
 
 def get_conv3d_config(

@@ -23,7 +23,7 @@ void kernel_main() {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -53,7 +53,7 @@ void kernel_main() {
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             tile_regs_acquire();
-            mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
+            mul_bcast_scalar_init(cb_in0, cb_fused_scale);
             cb_wait_front(cb_in0, ndst);
             cb_reserve_back(cb_scale_mask, ndst);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
@@ -75,7 +75,7 @@ void kernel_main() {
                 cb_wait_front(cb_fused_attn, wt + ndst);  // cumulative wait for up to Wt tiles, only at first ht
             }
             cb_wait_front(cb_scale_mask, ndst);
-            add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
+            add_bcast_rows_init(cb_scale_mask, cb_fused_attn);
             for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
                 add_tiles_bcast_rows(cb_scale_mask, cb_fused_attn, wt8, wt + wt8, wt8);  // tile *= 1/(sum(exp(x)))
             }
@@ -151,7 +151,7 @@ void kernel_main() {
 
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a cumulative wait for Wt tiles in cb_exps
-        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
+        mul_bcast_cols_init(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             tile_regs_acquire();
             cb_reserve_back(tt::CBIndex::c_16, ndst);

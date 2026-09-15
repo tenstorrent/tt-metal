@@ -82,17 +82,6 @@ run_t3000_llama3_perplexity_tests_single_card() {
   fi
 }
 
-run_t3000_mistral_perplexity_tests() {
-  # This one runs all the T3K tests
-
-  echo "LOG_METAL: Running run_t3000_mistral_perplexity_tests"
-
-  tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
-  hf_model="mistralai/Mistral-7B-Instruct-v0.3"
-  TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600
-
-}
-
 run_t3000_llama3_perplexity_tests_t3000() {
 
   echo "LOG_METAL: Checking number of devices"
@@ -208,9 +197,6 @@ run_t3000_tests() {
 
   # Run Llama-70B perplexity tests
   run_t3000_llama70b_perplexity_tests
-
-  # Run mistral perplexity tests
-  run_t3000_mistral_perplexity_tests
 
   # Run llama3 perplexity tests
   run_t3000_llama3_perplexity_tests_single_card

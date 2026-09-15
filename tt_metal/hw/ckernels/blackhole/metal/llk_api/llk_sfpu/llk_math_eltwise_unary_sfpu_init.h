@@ -59,6 +59,7 @@ void sign_init();
 void softplus_init();
 void softshrink_init();
 void square_init();
+void softcap_init();
 void tiled_prod_init();
 void unary_eq_init();
 void unary_ge_init();
@@ -231,6 +232,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
         sfpu::unary_lt_init();
     } else if constexpr (sfpu_op == SfpuType::unary_ne) {
         sfpu::unary_ne_init();
+    } else if constexpr (sfpu_op == SfpuType::softcap) {
+        sfpu::softcap_init();
     } else if constexpr (sfpu_op == SfpuType::unused) {
         sfpu::unused_init();
     } else if constexpr (sfpu_op == SfpuType::typecast) {

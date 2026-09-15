@@ -8,10 +8,12 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 
 void kernel_main() {
     constexpr uint32_t bytes_per_tile_row = get_compile_time_arg_val(0);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t elem_size = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     // Constexpr
     constexpr uint32_t dfb_id_in0 = 0;
@@ -52,12 +54,8 @@ void kernel_main() {
         for (uint32_t i = 0; i < num_blocks; i++) {
             dfb_in0.reserve_back(num_tiles_block_c);
             uint32_t l1_write_addr = dfb_in0.get_write_ptr();
-            // pad the tile by reading values from zero buffer in L1
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
-            // 8 = tile_height / 4
-            for (uint32_t z = 0; z < block_row_size * 8; z++) {
-                dst[z] = pad_value;
-            }
+            const uint32_t pad_bytes = block_row_size * tile_height;
+            dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, pad_bytes, pad_value);
             dfb_in0.push_back(num_tiles_block_c);
         }
     };
@@ -72,10 +70,8 @@ void kernel_main() {
                 s, dst_mem, block_size, {.page_id = curr_stick_id + k, .offset_bytes = offset}, {.offset_bytes = 0});
 
             if (block_row_size > block_size) {
-                volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr + block_size);
-                for (uint32_t z = 0; z < (block_row_size - block_size) / 4; z++) {
-                    dst[z] = pad_value;
-                }
+                const uint32_t tail_bytes = block_row_size - block_size;
+                dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr + block_size, tail_bytes, pad_value);
             }
 
             // Block before copying data from tmp to cb buffer
@@ -83,11 +79,8 @@ void kernel_main() {
             l1_write_addr += block_row_size;
         }
         if (num_rows < tile_height) {
-            volatile tt_l1_ptr std::uint32_t* dst = (volatile tt_l1_ptr uint32_t*)(l1_write_addr);
-
-            for (uint32_t z = 0; z < (block_row_size) / 4 * (tile_height - num_rows); z++) {
-                dst[z] = pad_value;
-            }
+            const uint32_t leftover_bytes = block_row_size * (tile_height - num_rows);
+            dataflow_kernel_lib::fill_l1_range<elem_size>(l1_write_addr, leftover_bytes, pad_value);
         }
         dfb_in0.push_back(num_tiles_block_c);
     };

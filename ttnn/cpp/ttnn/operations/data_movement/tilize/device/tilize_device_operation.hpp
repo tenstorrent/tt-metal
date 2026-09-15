@@ -14,8 +14,6 @@
 #include "tilize_multi_core_retile_program_factory.hpp"
 #include "tilize_device_operation_types.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/distributed/types.hpp"
-#include <tt-metalium/experimental/program_descriptor_patching.hpp>
 
 namespace ttnn::prim {
 
@@ -40,21 +38,17 @@ struct TilizeDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& args, const tensor_args_t& tensor_args);
-
-    // #48928: the sharded factory is pure CB-bound; opt into the descriptor fast-path on a cache hit.
-    static std::vector<tt::tt_metal::DynamicRuntimeArg> get_dynamic_runtime_args(
-        const operation_attributes_t&,
-        const tensor_args_t&,
-        tensor_return_value_t&,
-        const std::optional<ttnn::MeshCoordinate>& = std::nullopt);
 };
+
+// Re-point slot 0 of every core's args for one kernel. Shared by the tilize factories' cache-hit
+// hooks so the slot layout the factories all bake has a single home.
+void patch_tilize_kernel_slot0(tt::tt_metal::Program& program, uint32_t kernel_idx, uint32_t address);
 
 ttnn::Tensor tilize(
     const Tensor& input_tensors,
     const std::optional<tt::tt_metal::MemoryConfig>& output_mem_config,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     bool use_low_perf,
     const tt::tt_metal::Tile& tile,

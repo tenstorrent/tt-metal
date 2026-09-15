@@ -151,6 +151,7 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         spec_B=exp_spec,
         output_format=formats.output_format,
     )
+
     src_exp = prepare_inputs_for_operation(
         src_exp, MathOperation.Exp, formats.input_format, formats.output_format
     )

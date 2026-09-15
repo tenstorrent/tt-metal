@@ -50,9 +50,12 @@ Required Options:
 
 Optional:
     --config <4x32|8x16>                    Mesh configuration (default: 4x32)
-    --use-docker [docker-image]             Run validation via mpi-docker. If an image is given, uses it;
-                                            if the flag is passed with no image, uses the default:
-                                            $DOCKER_IMAGE_DEFAULT
+    --use-docker [docker-image]             Run validation via mpi-docker. Accepts:
+                                              <image>   use the given image
+                                              default   (or no value) use the default image:
+                                                        $DOCKER_IMAGE_DEFAULT
+                                              none      use plain mpirun with local build
+                                                        (same as omitting --use-docker)
                                             (if the flag is omitted entirely, uses plain mpirun with local build)
     --num-iterations <number>               Number of validation iterations (default: 5)
                                             This is the inner per-run validation loop.
@@ -64,6 +67,7 @@ Optional:
     --skip-validation                       Skip validation, only run tt-smi reset
     --skip-version-check                     Skip the tt-smi/KMD/firmware version checks run on all hosts
                                             before recovery (see minimum versions in utils/host_utils.sh)
+    --skip-mpi-stress-test                  Skip the MPI packet stress test run before recovery
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
     --mpi-if <interface>                    Network interface for MPI TCP transport
@@ -122,13 +126,14 @@ EOF
 HOSTS=""
 CONFIG="4x32"
 DOCKER_IMAGE=""
-DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.74.0-dev20260620-6-gd9d52dfe7b6"
+DOCKER_IMAGE_DEFAULT="ghcr.io/tenstorrent/tt-metal/upstream-tests-bh-glx:v0.76.0-dev20260728-7-g04e4029f0e3"
 NUM_ITERATIONS=5
 MAX_ATTEMPTS=1
 SLEEP_DURATION=5
 SKIP_RESET=false
 SKIP_VALIDATION=false
 SKIP_VERSION_CHECK=false
+SKIP_MPI_STRESS_TEST=false
 SEND_TRAFFIC=true
 CHECK=false
 MPI_IF=""
@@ -179,6 +184,14 @@ while [[ $# -gt 0 ]]; do
                 # No value provided: fall back to the default image.
                 DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
                 shift
+            elif [[ "$2" == "default" ]]; then
+                # Explicit "default": use the default image.
+                DOCKER_IMAGE="$DOCKER_IMAGE_DEFAULT"
+                shift 2
+            elif [[ "$2" == "none" ]]; then
+                # "none": use the local build, same as omitting --use-docker.
+                DOCKER_IMAGE=""
+                shift 2
             else
                 DOCKER_IMAGE="$2"
                 shift 2
@@ -230,6 +243,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-version-check)
             SKIP_VERSION_CHECK=true
+            shift
+            ;;
+        --skip-mpi-stress-test)
+            SKIP_MPI_STRESS_TEST=true
             shift
             ;;
         --no-send-traffic)
@@ -448,6 +465,7 @@ echo "Sleep after reset: ${SLEEP_DURATION}s"
 echo "Skip reset: $SKIP_RESET"
 echo "Skip validation: $SKIP_VALIDATION"
 echo "Skip version check: $SKIP_VERSION_CHECK"
+echo "Skip MPI stress test: $SKIP_MPI_STRESS_TEST"
 echo "Output directory: $OUTPUT_DIR"
 echo "Log file: $LOG_FILE"
 echo "Rerun on retrain: $RERUN_ON_RETRAIN"
@@ -458,23 +476,51 @@ echo "Regenerate on failure: $REGENERATE_ON_FAILURE"
 echo "=========================================="
 echo ""
 
-# Step 0: assert minimum tt-smi / KMD / firmware versions on every host (see check_cluster_versions
+# Step 0: assert minimum tt-smi / KMD / firmware versions on every host (see run_version_check_gate
 # in utils/host_utils.sh). These are host-level (independent of --use-docker), so the check always
-# runs via plain mpirun.
+# runs via plain mpirun. A version below the minimum aborts; versions that can't be read only warn
+# and continue. `if !` suspends `set -e` so we handle the abort case here.
 if [[ "$SKIP_VERSION_CHECK" == false ]]; then
-    echo "Checking tt-smi/KMD/firmware versions on all hosts..."
-    # `if !` suspends `set -e`, so a failing rank is handled here instead of aborting abruptly.
-    if ! check_cluster_versions "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
-        echo ""
-        echo "Error: version check failed on one or more hosts (see above)."
-        echo "       Required: tt-smi >= $TT_SMI_MIN_VERSION, KMD >= $KMD_MIN_VERSION, firmware >= $FW_MIN_VERSION."
-        echo "       Re-run with --skip-version-check to bypass."
+    if ! run_version_check_gate "$HOSTS" "$MPI_IF" "${MPI_EXTRA_ARGS[@]}"; then
         exit 1
     fi
-    echo "Version check passed on all hosts."
-    echo ""
 else
     echo "Skipping version check (--skip-version-check)"
+    echo ""
+fi
+
+# Step 0.5: MPI packet stress test — validates MPI transport between all hosts before recovery.
+if [[ "$SKIP_VALIDATION" == true ]]; then
+    echo "Skipping MPI stress test (--skip-validation)"
+    echo ""
+elif [[ "$SKIP_MPI_STRESS_TEST" == false ]]; then
+    echo "Running MPI stress test (1000 iterations, 1048576 bytes/message)..."
+    MPI_STRESS_BIN="./build/tools/scaleout/run_mpi_stress_test"
+    if [[ -n "$DOCKER_IMAGE" ]]; then
+        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+            --empty-entrypoint \
+            --tag-host \
+            --mpi-interface "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            --host "$HOSTS" \
+            --map-by ppr:1:node \
+            --bind-to none \
+            --timeout 3600 \
+            "$MPI_STRESS_BIN" 1000 1048576
+    else
+        timeout --signal=TERM --kill-after=30s 1h mpirun \
+            --host "$HOSTS" \
+            --map-by ppr:1:node \
+            --bind-to none \
+            --mca btl self,vader,tcp \
+            --mca btl_tcp_if_include "$MPI_IF" \
+            "${MPI_EXTRA_ARGS[@]}" \
+            "$MPI_STRESS_BIN" 1000 1048576
+    fi
+    echo "MPI stress test passed."
+    echo ""
+else
+    echo "Skipping MPI stress test (--skip-mpi-stress-test)"
     echo ""
 fi
 

@@ -57,6 +57,7 @@ jobs:
     uses: ./.github/workflows/check-harbor.yaml
   build-artifact:
     needs: check-harbor
+    if: ${{ !cancelled() }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -65,7 +66,7 @@ jobs:
     with:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
-      build-wheel: true
+      build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       tracy: true
@@ -125,6 +126,7 @@ jobs:
   data-movement-unit-tests:
     uses: ./.github/workflows/tm-data-movement-unit-impl.yaml
     needs: [check-harbor, build-artifact, generate-matrix]
+    if: ${{ !cancelled() && needs.build-artifact.result == 'success' && needs.generate-matrix.result == 'success' }}
     secrets: inherit
     strategy:
       fail-fast: false

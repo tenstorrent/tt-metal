@@ -19,7 +19,7 @@ ttnn::Tensor rotary_embedding(
     const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     using namespace tt::constants;
 
-    using tt::tt_metal::PadValue;
+    using ttnn::PadValue;
     TT_FATAL(
         input_tensor.padded_shape()[-1] == TILE_WIDTH || input_tensor.padded_shape()[-1] % (TILE_WIDTH * 2) == 0,
         "Input X dimension ({}) must be either {} (single tile) or divisible by {} (rotate_half midpoint "

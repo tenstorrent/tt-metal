@@ -15,6 +15,7 @@
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
@@ -185,6 +186,12 @@ ttnn::Tensor reduce_scatter(const ttnn::Tensor& tensor, const int dim, const std
         /* cluster_axis */ cluster_axis);
 }
 
+ttnn::Tensor mesh_partition(const ttnn::Tensor& tensor, const int dim, const std::optional<uint32_t> cluster_axis) {
+    // ttnn::mesh_partition already returns the input unchanged when the axis size is 1,
+    // so no single-device guard is needed here.
+    return ttnn::mesh_partition(tensor, dim, cluster_axis, /* memory_config */ std::nullopt);
+}
+
 ttnn::Tensor ring_shift(
     const ttnn::Tensor& tensor, const std::optional<uint32_t> cluster_axis, const RingShiftDirection direction) {
     auto& ctx = ttml::autograd::ctx();
@@ -238,8 +245,7 @@ ttnn::Tensor ring_shift(
     // For intra-mesh, we use same distributed context and rank (same host)
     const core::distributed::InterHostParameters inter_host_params{distributed_ctx, distributed_ctx->rank()};
 
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+    tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
     // Phase 1: Even positions send, odd positions receive
     const core::distributed::IntraMeshParameters even_to_odd_params{even_to_odd_connections};
     socket_manager.send(tensor, inter_host_params, even_to_odd_params);
@@ -250,8 +256,7 @@ ttnn::Tensor ring_shift(
     socket_manager.send(tensor, inter_host_params, odd_to_even_params);
     output_tensor = socket_manager.recv(output_tensor, inter_host_params, odd_to_even_params);
 
-    tt::tt_metal::distributed::Synchronize(
-        mesh_device_ptr.get(), std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+    tt::tt_metal::distributed::Synchronize(*mesh_device_ptr, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
 
     return output_tensor;
 }

@@ -20,7 +20,7 @@
 #include <unordered_set>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include <tt-metalium/experimental/fabric/topology_solver.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 // Forward declaration
@@ -145,11 +145,11 @@ public:
     // Returns a nested map: instance_type -> instance_name -> vector of valid GroupingInfo matches
     // There can be multiple valid groupings for each MGD instance
     // Requires a PhysicalSystemDescriptor reference for validation/filtering
-    // pinnings: optional (AsicPosition, FabricNodeId) constraints applied during PGD<->MGD topology matching
+    // pinnings: optional many-to-many pinning groups applied during PGD<->MGD topology matching
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings =
+        const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings =
             std::nullopt) const;
 
     // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
@@ -157,6 +157,20 @@ public:
     // Intended for use by topology_mapper_utils when no PGD grouping successfully embeds into the PSD.
     static std::vector<GroupingInfo> get_mgd_mesh_groupings_for_placement(
         const MeshGraphDescriptor& mesh_graph_descriptor);
+
+    // Run get_valid_groupings_for_mgd for every MGD and merge into one map. Keys are prefixed "mgd{i}_"
+    // so the same logical instance name in different descriptors does not collide. For each (type,
+    // instance-name) tuple, drains each MGD's vector in round-robin (mgd0 head, mgd1 head, …, repeat)
+    // into the corresponding mgd{i}_ prefixed bucket. Contents per prefixed key match sequential per-MGD merge.
+    // mesh_graph_descriptors: const reference to the caller's vector (no copy of the container).
+    // per_mgd_pinnings: optional pinning constraints in each MGD's LOCAL mesh-id space, parallel to
+    // mesh_graph_descriptors; entry i (if present) is forwarded to that MGD's get_valid_groupings_for_mgd so the
+    // PGD<->MGD match honours the pins. An empty vector (or a std::nullopt entry) means no pins for that MGD.
+    ValidGroupingsMap get_valid_groupings_for_mgds(
+        const std::vector<MeshGraphDescriptor>& mesh_graph_descriptors,
+        const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+        const std::vector<std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>>&
+            per_mgd_pinnings = {}) const;
 
     // Find any valid mapping of a grouping to a physical system descriptor
     // Returns unordered_set of ASIC IDs that mark out the grouping in the PSD
@@ -254,7 +268,7 @@ private:
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-        const std::optional<std::vector<std::pair<tt::tt_metal::ASICPosition, FabricNodeId>>>& pinnings =
+        const std::optional<std::vector<tt::tt_metal::experimental::tt_fabric::PinningConstraint>>& pinnings =
             std::nullopt) const;
 
     // Private helper that takes PSD pointer (used internally by public overloads)

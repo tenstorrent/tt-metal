@@ -17,13 +17,19 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.sampling import SamplingParams, broadcast_sampling_params, format_sampling_params
+from models.common.sampling import (
+    SamplingParams,
+    broadcast_sampling_params,
+    format_sampling_params,
+    scatter_sampling_params_to_slots,
+)
 from models.common.sampling.tt_log_probs import LogProbsResult, reformat_logprobs
 from models.tt_transformers.tt.common import Mode, get_padded_prefill_len
 from models.tt_transformers.tt.generator import (
     MAX_BATCHED_PREFILL_SEQ_LEN,
-    SUPPORTED_PREFILL_BATCH_SIZES,
     Generator,
+    batched_prefill_padded_batch,
+    gather_batched_prefill_samples,
     max_prefill_chunk_size_cutoff,
 )
 
@@ -220,10 +226,7 @@ class GemmaMultimodalGenerator(Generator):
                 use_batched_prefill = False
 
         if use_batched_prefill:
-            padded_batch = next(
-                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
-                self.model_args[0].max_batch_size,
-            )
+            padded_batch = batched_prefill_padded_batch(batch_size, empty_slots, self.model_args[0].max_batch_size)
             if padded_batch > self.model_args[0].max_batch_size:
                 logger.info(
                     f"Batched prefill disabled: padded_batch {padded_batch} exceeds "
@@ -399,7 +402,13 @@ class GemmaMultimodalGenerator(Generator):
                     sampling_module, sampling_dp, sampling_batch, _ = self._get_sampling_contract(model_id)
                     assert sampling_module is not None
                     assert sampling_batch is not None
-                    combined_params = format_sampling_params(sampling_params, sampling_batch)
+                    # ``combined_prompt_tokens`` below and the extracted hidden states
+                    # are both laid out by slot, so the params have to be as well.
+                    combined_params = scatter_sampling_params_to_slots(
+                        format_sampling_params(sampling_params, sampling_batch),
+                        empty_slots,
+                        sampling_batch,
+                    )
                     max_prompt_len = max(int(prompt_lens[i]) for i in range(len(empty_slots)))
                     combined_prompt_tokens = torch.zeros(sampling_batch, max_prompt_len, dtype=torch.long)
                     for local_idx, slot in enumerate(empty_slots):
@@ -458,10 +467,14 @@ class GemmaMultimodalGenerator(Generator):
                         if tt_log_probs is not None
                         else None
                     )
-                    for local_idx, slot in enumerate(empty_slots):
-                        output_tokens[slot] = tokens_host[slot]
-                        if log_probs_host is not None:
-                            output_log_probs[slot] = log_probs_host[slot]
+                    gather_batched_prefill_samples(
+                        empty_slots,
+                        tokens_host,
+                        None,
+                        log_probs_host,
+                        output_tokens,
+                        output_log_probs,
+                    )
                 else:
                     for local_idx, slot in enumerate(empty_slots):
                         user_logits = logits[slot : slot + 1, :, :, :]
@@ -469,7 +482,7 @@ class GemmaMultimodalGenerator(Generator):
                             user_logits, last_token_idx[slot]
                         )
                         _logits = ttnn.to_layout(_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                        output_tensor[slot] = self.model[model_id].process_output_prefill(
+                        output_tensor[local_idx] = self.model[model_id].process_output_prefill(
                             _logits.cpu(), last_token_idx=(last_token_idx[slot] % 32)
                         )
                 break

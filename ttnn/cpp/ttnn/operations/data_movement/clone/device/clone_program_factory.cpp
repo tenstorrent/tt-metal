@@ -7,18 +7,20 @@
 #include "clone_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::operations::data_movement::clone {
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-ProgramDescriptor CloneOperation::create_descriptor(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+ttnn::device_operation::ProgramArtifacts CloneProgramFactory::create_program_artifacts(
+    const CloneOperation::operation_attributes_t& operation_attributes,
+    const CloneOperation::tensor_args_t& tensor_args,
+    CloneOperation::tensor_return_value_t& output) {
     const auto& input = tensor_args.input;
     auto input_data_format = datatype_to_dataformat_converter(input.dtype());
     auto output_data_format = datatype_to_dataformat_converter(output.dtype());
@@ -93,60 +95,58 @@ ProgramDescriptor CloneOperation::create_descriptor(
     }
 
     auto alignment = input.buffer()->alignment();
-
-    uint8_t src_cb_id = static_cast<uint8_t>(tt::CBIndex::c_4);
     uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
+    uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
 
-    ProgramDescriptor desc;
+    // ---------------------------------------------------------------------
+    // Program-scope resource names (typed handles → generated dfb:: / tensor:: tokens)
+    // ---------------------------------------------------------------------
+    const DFBSpecName SRC{"src"};
+    const DFBSpecName DST{"dst"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE_G1{"compute_g1"};
+    const KernelSpecName COMPUTE_G2{"compute_g2"};
+    const TensorParamName INPUT{"input"};
+    const TensorParamName OUTPUT{"output"};
 
-    // Source CB
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = 2 * aligned_input_unit_size,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src_cb_id,
-            .data_format = input_data_format,
-            .page_size = aligned_input_unit_size,
-        }}},
+    // The writer consumes DST when converting dtype (compute produces DST), otherwise it
+    // consumes SRC directly (reader → writer, no compute). The writer kernel names its
+    // endpoint `dfb::dst` in both cases; only which DataflowBufferSpec it binds changes.
+    const DFBSpecName writer_dfb = convert_dtype ? DST : SRC;
+
+    // ---------------------------------------------------------------------
+    // DataflowBufferSpecs (replaces the legacy source / dest CBs; c_4 / c_20)
+    // ---------------------------------------------------------------------
+    ProgramSpec spec;
+    spec.name = "clone";
+
+    spec.dataflow_buffers.push_back(DataflowBufferSpec{
+        .unique_id = SRC,
+        .entry_size = aligned_input_unit_size,
+        .num_entries = 2,
+        .data_format_metadata = input_data_format,
     });
-
-    uint8_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
-        dst_cb_id = static_cast<uint8_t>(tt::CBIndex::c_20);
-        uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 2 * aligned_output_unit_size,
-            .core_ranges = all_cores,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = dst_cb_id,
-                .data_format = output_data_format,
-                .page_size = aligned_output_unit_size,
-            }}},
+        spec.dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = DST,
+            .entry_size = aligned_output_unit_size,
+            .num_entries = 2,
+            .data_format_metadata = output_data_format,
         });
     }
 
-    auto* input_buffer = input.buffer();
-    auto* output_buffer = output.buffer();
+    // ---------------------------------------------------------------------
+    // Tensor parameters (typed bindings replace the buffer-address RTA slot 0)
+    // ---------------------------------------------------------------------
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = INPUT, .spec = input.tensor_spec()});
+    spec.tensor_parameters.push_back(TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()});
 
-    // Compile-time args differ for tilized vs row-major
-    KernelDescriptor::CompileTimeArgs reader_ct_args;
-    KernelDescriptor::CompileTimeArgs writer_ct_args;
-    if (tilized) {
-        reader_ct_args = {src_cb_id};
-        TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
-        writer_ct_args = {dst_cb_id};
-        TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
-    } else {
-        reader_ct_args = {src_cb_id, input_unit_size};
-        TensorAccessorArgs(*input_buffer).append_to(reader_ct_args);
-        writer_ct_args = {dst_cb_id, output_unit_size};
-        TensorAccessorArgs(*output_buffer).append_to(writer_ct_args);
-    }
-
-    // Kernel paths depend on sharded vs interleaved and tilized vs RM
+    // ---------------------------------------------------------------------
+    // Kernel sources (per config branch)
+    // ---------------------------------------------------------------------
     const char* read_kernel_path;
     const char* write_kernel_path;
-
     if (is_sharded) {
         read_kernel_path =
             tilized ? "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/read_kernel_sharded.cpp"
@@ -161,95 +161,152 @@ ProgramDescriptor CloneOperation::create_descriptor(
                                     : "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/write_kernel_rm.cpp";
     }
 
-    // Reader kernel
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = read_kernel_path;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_ct_args);
-    reader_desc.config = ReaderConfigDescriptor{};
+    // Reader / writer runtime-arg schema (buffer addresses now ride the TensorBinding;
+    // the interleaved paths carry a per-node start_id, the sharded paths do not).
+    Group<std::string> rta_names;
+    if (tilized) {
+        rta_names = is_sharded ? Group<std::string>{"num_tiles"} : Group<std::string>{"num_tiles", "start_id"};
+    } else {
+        rta_names = is_sharded ? Group<std::string>{"stick_size", "num_sticks"}
+                               : Group<std::string>{"stick_size", "num_sticks", "start_id"};
+    }
 
-    // Writer kernel
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = write_kernel_path;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_ct_args);
-    writer_desc.config = WriterConfigDescriptor{};
+    // ---------------------------------------------------------------------
+    // Reader / writer KernelSpecs
+    // ---------------------------------------------------------------------
+    KernelSpec reader{
+        .unique_id = READER,
+        .source = read_kernel_path,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::PRODUCER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "input"}},
+        .runtime_arg_schema = {.runtime_arg_names = rta_names},
+        .hw_config = ttnn::create_reader_datamovement_config(input.device()->arch()),
+    };
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source = write_kernel_path,
+        .dfb_bindings = {DFBBinding{
+            .dfb_spec_name = writer_dfb, .accessor_name = "dst", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT, .accessor_name = "output"}},
+        .runtime_arg_schema = {.runtime_arg_names = rta_names},
+        .hw_config = ttnn::create_writer_datamovement_config(input.device()->arch()),
+    };
+    spec.kernels.push_back(reader);
+    spec.kernels.push_back(writer);
 
-    // Compute kernel for dtype conversion (dual core groups)
+    // ---------------------------------------------------------------------
+    // Compute KernelSpecs for dtype conversion (per core group — preserved multiplicity)
+    // ---------------------------------------------------------------------
     if (convert_dtype) {
-        auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-            get_compute_kernel_config_args(input.device()->arch(), operation_attributes.compute_kernel_config);
+        auto compute_hw =
+            ttnn::to_compute_hardware_config(input.device()->arch(), operation_attributes.compute_kernel_config);
+        // Metal 2.0 requires an explicit unpack_modes entry when a compute kernel consumes a
+        // Float32 DFB with a 32-bit dest register. Legacy ComputeConfigDescriptor left
+        // unpack_to_dest_mode default (== UnpackToSrc); mirror that value faithfully.
+        if (auto* gen1 = std::get_if<ComputeGen1Config>(&compute_hw)) {
+            if (input_data_format == tt::DataFormat::Float32 && gen1->enable_32_bit_dest) {
+                gen1->unpack_modes = ComputeUnpackModes{{SRC, UnpackMode::UnpackToSrc}};
+            }
+        }
 
-        ComputeConfigDescriptor compute_config{
-            .math_fidelity = math_fidelity,
-            .fp32_dest_acc_en = fp32_dest_acc_en,
-            .dst_full_sync_en = dst_full_sync_en,
-            .math_approx_mode = math_approx_mode,
+        auto make_compute = [&](const KernelSpecName& unique_id, uint32_t num_tiles) {
+            return KernelSpec{
+                .unique_id = unique_id,
+                .source = "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp",
+                .dfb_bindings =
+                    {DFBBinding{
+                         .dfb_spec_name = SRC, .accessor_name = "src", .endpoint_type = DFBEndpointType::CONSUMER},
+                     DFBBinding{
+                         .dfb_spec_name = DST, .accessor_name = "dst", .endpoint_type = DFBEndpointType::PRODUCER}},
+                .compile_time_args = {{"num_tiles", num_tiles}},
+                .hw_config = compute_hw,
+            };
         };
 
         if (!core_group_1.ranges().empty()) {
-            KernelDescriptor compute_desc_1;
-            compute_desc_1.kernel_source =
-                "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp";
-            compute_desc_1.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            compute_desc_1.core_ranges = core_group_1;
-            compute_desc_1.compile_time_args = {src_cb_id, dst_cb_id, num_units_per_core_group_1};
-            compute_desc_1.config = compute_config;
-            desc.kernels.push_back(std::move(compute_desc_1));
+            spec.kernels.push_back(make_compute(COMPUTE_G1, num_units_per_core_group_1));
         }
         if (!core_group_2.ranges().empty()) {
-            KernelDescriptor compute_desc_2;
-            compute_desc_2.kernel_source =
-                "ttnn/cpp/ttnn/operations/data_movement/clone/device/kernels/compute_kernel.cpp";
-            compute_desc_2.source_type = KernelDescriptor::SourceType::FILE_PATH;
-            compute_desc_2.core_ranges = core_group_2;
-            compute_desc_2.compile_time_args = {src_cb_id, dst_cb_id, num_units_per_core_group_2};
-            compute_desc_2.config = compute_config;
-            desc.kernels.push_back(std::move(compute_desc_2));
+            spec.kernels.push_back(make_compute(COMPUTE_G2, num_units_per_core_group_2));
         }
     }
 
-    // Runtime args per core
+    // ---------------------------------------------------------------------
+    // Work units (placement). Reader/writer share each compute group's work unit so a
+    // group node hosts reader + writer + its compute instance together; the two compute
+    // groups cover disjoint nodes. Without conversion, one work unit over all_cores.
+    // ---------------------------------------------------------------------
+    if (convert_dtype) {
+        if (!core_group_1.ranges().empty()) {
+            spec.work_units.push_back(
+                WorkUnitSpec{.name = "wu_g1", .kernels = {READER, WRITER, COMPUTE_G1}, .target_nodes = core_group_1});
+        }
+        if (!core_group_2.ranges().empty()) {
+            spec.work_units.push_back(
+                WorkUnitSpec{.name = "wu_g2", .kernels = {READER, WRITER, COMPUTE_G2}, .target_nodes = core_group_2});
+        }
+    } else {
+        spec.work_units.push_back(WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores});
+    }
+
+    // ---------------------------------------------------------------------
+    // Runtime args (per node). Legacy node-first loop preserved; AddRuntimeArgsForNode
+    // transposes into the name-first ProgramRunArgs table. Compute kernels carry only a
+    // CTA (num_tiles), so they need no KernelRunArgs entry.
+    // ---------------------------------------------------------------------
+    ProgramRunArgs run_args;
+    KernelRunArgs reader_ra{.kernel = READER};
+    KernelRunArgs writer_ra{.kernel = WRITER};
+
     uint32_t start_id = 0;
     uint32_t num_cores_group_1 = core_group_1.num_cores();
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-    reader_desc.runtime_args.reserve(cores.size());
-    writer_desc.runtime_args.reserve(cores.size());
-
     for (size_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
         uint32_t num_units_per_core = i < num_cores_group_1 ? num_units_per_core_group_1 : num_units_per_core_group_2;
 
-        // Use emplace_runtime_args with the Buffer* directly so the framework
-        // registers a BufferBinding and patches just this arg position on cache
-        // hits. Passing raw input_buffer->address() falls off the fast path and
-        // forces a full descriptor rebuild every dispatch.
         if (is_sharded) {
             if (tilized) {
-                reader_desc.emplace_runtime_args(core, {input_buffer, num_units_per_core});
-                writer_desc.emplace_runtime_args(core, {output_buffer, num_units_per_core});
+                AddRuntimeArgsForNode(reader_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
+                AddRuntimeArgsForNode(writer_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}});
             } else {
-                reader_desc.emplace_runtime_args(core, {input_buffer, input_unit_size, num_units_per_core});
-                writer_desc.emplace_runtime_args(core, {output_buffer, output_unit_size, num_units_per_core});
+                AddRuntimeArgsForNode(
+                    reader_ra.runtime_arg_values,
+                    core,
+                    {{"stick_size", input_unit_size}, {"num_sticks", num_units_per_core}});
+                AddRuntimeArgsForNode(
+                    writer_ra.runtime_arg_values,
+                    core,
+                    {{"stick_size", output_unit_size}, {"num_sticks", num_units_per_core}});
             }
         } else {
             if (tilized) {
-                reader_desc.emplace_runtime_args(core, {input_buffer, num_units_per_core, start_id});
-                writer_desc.emplace_runtime_args(core, {output_buffer, num_units_per_core, start_id});
+                AddRuntimeArgsForNode(
+                    reader_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}, {"start_id", start_id}});
+                AddRuntimeArgsForNode(
+                    writer_ra.runtime_arg_values, core, {{"num_tiles", num_units_per_core}, {"start_id", start_id}});
             } else {
-                reader_desc.emplace_runtime_args(core, {input_buffer, input_unit_size, num_units_per_core, start_id});
-                writer_desc.emplace_runtime_args(core, {output_buffer, output_unit_size, num_units_per_core, start_id});
+                AddRuntimeArgsForNode(
+                    reader_ra.runtime_arg_values,
+                    core,
+                    {{"stick_size", input_unit_size}, {"num_sticks", num_units_per_core}, {"start_id", start_id}});
+                AddRuntimeArgsForNode(
+                    writer_ra.runtime_arg_values,
+                    core,
+                    {{"stick_size", output_unit_size}, {"num_sticks", num_units_per_core}, {"start_id", start_id}});
             }
             start_id += num_units_per_core;
         }
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
+    run_args.kernel_run_args.push_back(std::move(reader_ra));
+    run_args.kernel_run_args.push_back(std::move(writer_ra));
 
-    return desc;
+    run_args.tensor_args.emplace(INPUT, TensorArgument{input.mesh_tensor()});
+    run_args.tensor_args.emplace(OUTPUT, TensorArgument{output.mesh_tensor()});
+
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::operations::data_movement::clone

@@ -29,7 +29,7 @@ MeshSemaphoreHandle CreateMeshSemaphore(MeshBuilder& builder, MeshProgram& /* pr
     auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(mesh_device, local_cores, initial_value);
 
     // Synchronize mesh device after creating global semaphore
-    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+    tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, {});
 
     // Return handle that keeps the GlobalSemaphore alive
     return MeshSemaphoreHandle(std::move(global_semaphore));

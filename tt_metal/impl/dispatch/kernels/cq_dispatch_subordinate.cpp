@@ -307,7 +307,7 @@ FORCE_INLINE void update_worker_completion_count_on_dispatch_d() {
 
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
-    volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<fd_core_type>(sem_id));
+    volatile tt_l1_ptr uint32_t* sem_addr = uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 
     WAYPOINT("DAPW");
     uint32_t heartbeat = 0;
@@ -328,9 +328,9 @@ FORCE_INLINE void cb_acquire_pages_dispatch_s(uint32_t n) {
 template <uint32_t noc_xy, uint32_t sem_id>
 FORCE_INLINE void cb_release_pages_dispatch_s(uint32_t n) {
 #ifdef ARCH_QUASAR
-    Semaphore<fd_core_type>(sem_id).up(n);
+    Semaphore<programmable_core_type>(sem_id).up(n);
 #else
-    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<fd_core_type>(sem_id)), n, my_noc_index);
+    dispatch_s_noc_semaphore_inc(get_noc_addr_helper(noc_xy, get_semaphore<programmable_core_type>(sem_id)), n, my_noc_index);
 #endif
 }
 
@@ -397,7 +397,9 @@ void process_go_signal_mcast_cmd() {
         cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
             static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&aligned_go_signal_storage[storage_offset])),
             dst_noc_addr_multicast,
-            sizeof(uint32_t));
+            sizeof(uint32_t),
+            num_dests,
+            noc_index);
 
         // Multicast write accounting: increment counters for num_dests acks and one issued transaction.
         noc_increment_nonposted_writes_acked(noc_index, num_dests);
@@ -405,7 +407,7 @@ void process_go_signal_mcast_cmd() {
 #if !DEVICE_PRINT_DISPATCH_ENABLED
         wait_for_workers(wait_count, wait_stream);
 #endif
-        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0, num_dests);
         noc_increment_nonposted_writes_issued(noc_index, 1);
     } else {
         wait_for_workers(wait_count, wait_stream);
@@ -531,7 +533,7 @@ void merge_dispatch_d_noc_counter_deltas() {
     constexpr auto dispatch_d_proc_type = static_cast<decltype(proc_type)>(TensixProcessorTypes::DM0);
 
     volatile tt_l1_ptr uint32_t* shutdown_sem_addr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id));
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore<programmable_core_type>(dispatch_d_shutdown_sem_id));
     noc_semaphore_wait(shutdown_sem_addr, 1);
 
     invalidate_l1_cache();

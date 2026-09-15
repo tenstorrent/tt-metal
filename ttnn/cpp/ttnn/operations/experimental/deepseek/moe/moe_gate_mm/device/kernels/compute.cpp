@@ -220,11 +220,11 @@ void kernel_main() {
             /*kt_dim=*/1);
     }
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
 
     // Wait for the partial to come, add it
     cb_w2c_in2.wait_front(1);
-    binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
+    add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_w2c_in2_id, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
     cb_w2c_in2.pop_front(1);
 

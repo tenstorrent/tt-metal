@@ -52,10 +52,15 @@ def _fused_base_addr(t):
     ``experimental_per_core_buffer_address`` on any core in the shard grid; per-core
     addresses are asserted to be uniform across the grid at allocation time
     (``assert_uniform_per_core_addresses``), so any core returns the same base.
+
+    The address is per (device, core), so a device must be named as well. This takes the
+    tensor's first device and uses that base for the whole mesh. Nothing verifies the
+    devices agree: ``assert_uniform_per_core_addresses`` checks cores within a device,
+    not devices against each other. So this is an assumption, not a guarantee.
     """
     if hasattr(t, "is_per_core_allocated") and t.is_per_core_allocated():
         core = t.memory_config().shard_spec.grid.bounding_box().start
-        return t.experimental_per_core_buffer_address(core)
+        return t.experimental_per_core_buffer_address(t.device_coords()[0], core)
     return t.buffer_address()
 
 

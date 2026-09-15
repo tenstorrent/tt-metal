@@ -29,13 +29,10 @@
 #include "noc/noc_parameters.h"
 #define ENABLE_DEBUG 0
 
-#include "api/debug/dprint.h"  // [#47797] act-mcast handshake DPRINT trace (run with DPRINT on)
 #if ENABLE_DEBUG
 #include "api/debug/dprint_pages.h"
 #endif
 
-#include "api/debug/ring_buffer.h"
-// DEBUG: block-sharded conv2d act-mcast deadlock localization via watcher ring buffer (remove after).
 // Marker layout: 0xRP_IIII  R=role/kernel(A=act-reader), P=phase, IIII=(nbh<<8)|act_w_outer_i.
 #define RB_ITER(nbh, awo) ((((uint32_t)(nbh)) << 8) | ((uint32_t)(awo) & 0xff))
 
@@ -205,9 +202,6 @@ void kernel_main() {
     const bool is_sender_core = get_arg(args::is_sender_core) > 0;
     uint32_t dram_config_reader_index = get_arg(args::dram_config_reader_index);
     // DEBUG: act-mcast entry config -> ring buffer. 0xA0_SSFF  SS=sender_id, F=snd, F=rcv.
-    WATCHER_RING_BUFFER_PUSH(
-        0xA0000000u | ((act_mcast_sender_id & 0xff) << 8) | ((is_sender_core ? 1u : 0u) << 4) |
-        (is_receiver_core ? 1u : 0u));
 
     // The act-mcast sender NoC-coord lookup table for the mcast dimension is supplied as positional
     // runtime varargs; get_vararg(act_w_outer_i) is the physical coord of sender act_w_outer_i.
@@ -296,27 +290,19 @@ void kernel_main() {
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
-                    WATCHER_RING_BUFFER_PUSH(0xA1000000u | RB_ITER(nbh, act_w_outer_i));  // sender: pre sem.wait
-                    DPRINT("RDR Ssem nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                     act_mcast_sender_sem.wait(act_mcast_num_dests + (is_receiver_core ? 0 : 1));
                     act_mcast_sender_sem.set(0);
 
                     act_mcast_receiver_sem.set(INVALID);
 
-                    WATCHER_RING_BUFFER_PUSH(
-                        0xA2000000u | RB_ITER(nbh, act_w_outer_i));  // sender: got bumps, pre mcast (waits tilized)
                     // [#47797] Sender got all bumps; about to mcast cb_tilized_in0. If this is the LAST
                     // reader line on a sender core, the compute never produced this nbh's tilized act.
-                    DPRINT("RDR Smc nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);
                     mcast_block_chunked<
                         act_mcast_num_cores,
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
                         act_mcast_tile_size_bytes>(
                         noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
-
-                    WATCHER_RING_BUFFER_PUSH(0xA3000000u | RB_ITER(nbh, act_w_outer_i));  // sender: mcast data done
-                    DPRINT("RDR Sdone nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -358,13 +344,8 @@ void kernel_main() {
                         act_mcast_sender_sem.up(noc, get_vararg(act_w_outer_i), act_mcast_sender_noc_x, 1);
                     }
 
-                    WATCHER_RING_BUFFER_PUSH(
-                        0xA5000000u | RB_ITER(nbh, act_w_outer_i));  // recv: bumped, pre wait VALID
-                    DPRINT("RDR Rval nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     act_mcast_receiver_sem.wait(VALID);
-                    WATCHER_RING_BUFFER_PUSH(0xA6000000u | RB_ITER(nbh, act_w_outer_i));  // recv: got VALID
-                    DPRINT("RDR Rgot nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                 }
                 cb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer

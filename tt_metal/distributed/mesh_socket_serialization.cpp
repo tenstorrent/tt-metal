@@ -61,7 +61,8 @@ flatbuffers::Offset<distributed::flatbuffer::SocketMemoryConfig> to_flatbuffer(
         static_cast<uint32_t>(socket_mem_config.socket_storage_type),
         socket_mem_config.fifo_size,
         sender_sub_device,
-        receiver_sub_device);
+        receiver_sub_device,
+        socket_mem_config.per_core_allocation);
 }
 
 CoreCoord from_flatbuffer(const distributed::flatbuffer::CoreCoord* fb_core_coord) {
@@ -122,6 +123,7 @@ SocketMemoryConfig from_flatbuffer(const distributed::flatbuffer::SocketMemoryCo
         if (fb_socket_mem_config->receiver_sub_device().has_value()) {
             socket_mem_config.receiver_sub_device = SubDeviceId(fb_socket_mem_config->receiver_sub_device().value());
         }
+        socket_mem_config.per_core_allocation = fb_socket_mem_config->per_core_allocation();
     }
     return socket_mem_config;
 }

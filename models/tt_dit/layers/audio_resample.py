@@ -71,6 +71,7 @@ class LowPassFilter1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         if cutoff < 0.0 or cutoff > 0.5:
@@ -91,6 +92,7 @@ class LowPassFilter1d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.prefer_mac = prefer_mac
 
         kernel = _make_kaiser_sinc_kernel_1d(cutoff, half_width, kernel_size)
         self._taps_cpu = kernel.tolist()
@@ -129,7 +131,13 @@ class LowPassFilter1d(Module):
             x = x_BTC
 
         return depthwise_tap_filter(
-            x, self._taps_cpu, self.stride, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+            x,
+            self._taps_cpu,
+            self.stride,
+            mesh_device=self.mesh_device,
+            dtype=self.dtype,
+            cache=self._conv1d_cache,
+            prefer_mac=self.prefer_mac,
         )
 
 
@@ -152,6 +160,7 @@ class UpSample1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         sharded = parallel_config is not None and parallel_config.factor > 1
@@ -164,6 +173,7 @@ class UpSample1d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.prefer_mac = prefer_mac
 
         if window == "hann":
             kernel, self.kernel_size, self.pad, self.pad_left_crop, self.pad_right_crop = _make_hann_sinc_kernel_1d(
@@ -225,10 +235,22 @@ class UpSample1d(Module):
             sub0 = [scaled_taps[2 * j + 0] for j in range(self._poly_K_sub)] + [0.0]
             sub1 = [0.0] + [scaled_taps[2 * j + 1] for j in range(self._poly_K_sub)]
             ph0 = depthwise_tap_filter(
-                base, sub0, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base,
+                sub0,
+                1,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+                cache=self._conv1d_cache,
+                prefer_mac=self.prefer_mac,
             )
             ph1 = depthwise_tap_filter(
-                base, sub1, 1, mesh_device=self.mesh_device, dtype=self.dtype, cache=self._conv1d_cache
+                base,
+                sub1,
+                1,
+                mesh_device=self.mesh_device,
+                dtype=self.dtype,
+                cache=self._conv1d_cache,
+                prefer_mac=self.prefer_mac,
             )
             if base is not x_pad:
                 ttnn.deallocate(base)
@@ -248,6 +270,7 @@ class UpSample1d(Module):
             mesh_device=self.mesh_device,
             dtype=self.dtype,
             cache=self._conv1d_cache,
+            prefer_mac=self.prefer_mac,
         )
 
         T_y = y.shape[1]
@@ -268,6 +291,7 @@ class DownSample1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         self.ratio = ratio
@@ -283,6 +307,7 @@ class DownSample1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            prefer_mac=prefer_mac,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -305,6 +330,7 @@ class Activation1d(Module):
         dtype: ttnn.DataType = ttnn.float32,
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
+        prefer_mac: bool = False,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -317,6 +343,7 @@ class Activation1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            prefer_mac=prefer_mac,
         )
         self.downsample = DownSample1d(
             ratio=down_ratio,
@@ -325,6 +352,7 @@ class Activation1d(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            prefer_mac=prefer_mac,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:

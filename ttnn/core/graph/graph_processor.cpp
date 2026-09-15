@@ -334,6 +334,64 @@ void GraphProcessor::track_allocate_cb(
     }
 }
 
+void GraphProcessor::track_allocate_dataflow_buffer(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    bool borrows_memory,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kBorrowsMemory, std::to_string(borrows_memory)},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeDataflowBufferAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
+void GraphProcessor::track_allocate_scratchpad(
+    const tt::tt_metal::CoreRangeSet& core_range_set,
+    uint64_t addr,
+    uint64_t size,
+    const tt::tt_metal::IDevice* device) {
+    TT_ASSERT(device);
+    const std::lock_guard<std::mutex> lock(mutex);
+
+    track_device(device);
+
+    std::unordered_map<std::string, std::string> params = {
+        {kSize, std::to_string(size)},
+        {kAddress, std::to_string(addr)},
+        {kCoreRangeSet, core_range_set.str()},
+        {kDeviceId, std::to_string(device->id())}};
+    node_id counter = graph.size();
+    int stacking_level = static_cast<int>(current_op_id.size()) - 1;
+    {
+        graph.push_back(Vertex{
+            .counter = counter,
+            .node_type = kNodeScratchpadAllocate,
+            .params = std::move(params),
+            .connections = {},
+            .stacking_level = stacking_level});
+        graph[current_op_id.top()].connections.push_back(counter);
+    }
+}
+
 void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
     TT_ASSERT(device);
     const std::lock_guard<std::mutex> lock(mutex);

@@ -2017,10 +2017,6 @@ def import_report(
                     for buf in bufs:
                         if "device_id" in buf:
                             buf["device_id"] = dev_id_remap.get(buf["device_id"], buf["device_id"])
-                for pages in report.get("buffer_pages_by_address", {}).values():
-                    for page in pages:
-                        if "device_id" in page:
-                            page["device_id"] = dev_id_remap.get(page["device_id"], page["device_id"])
 
             if devices_data:
                 device_ids = import_devices(cursor, devices_data, rank)
@@ -2125,8 +2121,9 @@ def import_report(
             if bp_by_addr and per_op_bufs:
 
                 def _parse_page(p):
+                    raw_device_id = p.get("device_id", 0)
                     return (
-                        p.get("device_id", 0),
+                        dev_id_remap.get(raw_device_id, raw_device_id),
                         p.get("address", 0),
                         p.get("core_y", 0),
                         p.get("core_x", 0),
@@ -2216,7 +2213,7 @@ def import_report(
                 legacy_op_id = base_operation_id + 1 if stats.get("operations", 0) > 0 else base_operation_id
                 pages_for_op = [
                     (
-                        page.get("device_id", 0),
+                        dev_id_remap.get(page.get("device_id", 0), page.get("device_id", 0)),
                         page.get("address", 0),
                         page.get("core_y", 0),
                         page.get("core_x", 0),

@@ -3,10 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import math
+
 import pytest
 import torch
+
 import ttnn
-import math
 from tests.ttnn.utils_for_testing import assert_equal
 
 TTNN_TO_TORCH_DTYPE = {
@@ -307,6 +309,28 @@ def test_untilize_with_unpadding_block_sharded(device, dtype, shape, output_end,
     torch_result = torch_tensor[slices]
 
     assert_equal(result, torch_result)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, output_end",
+    [
+        ([2, 3, 4, 64, 64], [0, 1, 2, 31, 31]),
+        ([2, 3, 4, 64, 64], [1, 2, 3, 63, 63]),
+    ],
+)
+def test_untilize_with_unpadding_rank_gt_4_uses_output_tensor_end(device, dtype, tensor_shape, output_end):
+    torch.manual_seed(0)
+    torch_tensor = torch.arange(1, 1 + math.prod(tensor_shape), dtype=TTNN_TO_TORCH_DTYPE[dtype]).reshape(tensor_shape)
+
+    tile_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    untilized = ttnn.untilize_with_unpadding(tile_tensor, output_tensor_end=output_end)
+    result = ttnn.to_torch(untilized)
+
+    expected_shape = [end + 1 for end in output_end]
+    assert list(untilized.shape) == expected_shape
+    slices = tuple(slice(0, end + 1) for end in output_end)
+    assert_equal(result, torch_tensor[slices])
 
 
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
@@ -700,7 +724,7 @@ def test_untilize_with_unpadding_multicore_nd_shard_to_nd_shard_spec_different_s
         ttnn.Shape([3, 96, 96]),
     ],
 )
-@pytest.mark.parametrize("output_end", [(ttnn.Shape([3, 127, 127]))])
+@pytest.mark.parametrize("output_end", [ttnn.Shape([3, 127, 127])])
 @pytest.mark.parametrize(
     "output_memory_layout",
     [

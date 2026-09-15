@@ -44,19 +44,13 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-06-24 on BH LoudBox 8x1 after unified_routed_expert_moe
-        # switched to in-place direct-write (the FFN writes its results back into the
-        # dispatched buffer; no separate output allocation and no per-layer full-buffer
-        # device fill). The 8x1 proxy (perf-host-64) is fill-dominated — it filled the
-        # full capacity buffer for only 64 active tokens — so it drops the most:
-        # 35.08 ms -> 27.59 ms. Was 35_082_637.
-        expected_ns_8x1=17_151_588,
+        # Recalibrated 2026-07-27 on BH LoudBox 8x1 after routed expert optimization with removing prezeroing
+        # Was 15_506_174.
+        expected_ns_8x1=14_549_108,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Recalibrated 2026-06-24 on BH LoudBox 2x4 for the same in-place direct-write
-        # change (no full-buffer device fill per layer): 35.13 ms -> 32.31 ms. UP_SPLIT
-        # was already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
-        expected_ns_2x4=31_331_606,
+        # Recalibrated 2026-07-27 on BH LoudBox 2x4 for. Was 23_956_009.
+        expected_ns_2x4=15_954_784,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
@@ -75,7 +69,7 @@ def test_deepseek_v3_moe_perf_galaxy():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad0,
-        expected_device_perf_ns_per_iteration=22_492_126,  # Recalibrated 2026-07-20 (perf improvement, was 32_766_805).
+        expected_device_perf_ns_per_iteration=21_028_751,  # Recalibrated 2026-07-26
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
@@ -95,11 +89,44 @@ def test_deepseek_v3_moe_perf_galaxy_pad50():
 
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
-        expected_device_perf_ns_per_iteration=27_159_208,  # Recalibrated 2026-07-18 (perf improvement, was 38_028_230).
+        expected_device_perf_ns_per_iteration=14_107_228,  # Recalibrated 2026-07-27 (perf improvement, was 15_719_590).
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,
         batch_size=1,
         margin=margin,
         comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
+    )
+
+
+# --- Kimi-K3 LatentMoE ---------------------------------------------------------------------------
+_K3_TEST_PATH = "models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe"
+_CMD_K3_8X4 = f"pytest {_K3_TEST_PATH} -k 'fabric2d-mesh-8x4 and kimi_k3-5k-perf'"
+
+
+@pytest.mark.timeout(0)
+def test_kimi_k3_moe_perf_galaxy():
+    """
+    Measures the SiLU path, not the checkpoint's SiTU-GLU (#51335), so this baseline moves when that
+    kernel lands. MoE_START/MoE_END bracket the forward only -- the constructor's one-time weight
+    tilize/typecast is a large share of wall time at 896 experts, but is not per-token cost.
+    """
+    if not _is_galaxy_env():
+        pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = adjust_margin_for_ddr_speed(0.03)
+
+    run_model_device_perf_test_with_merge(
+        command=_CMD_K3_8X4,
+        # Measured 2026-08-07 on bh-glx-120-c04u02 (8x4, DDR 14000 -- sub-nominal, so
+        # adjust_margin_for_ddr_speed doubles the 3% margin to 6%). Dispatch/combine/top-k dominates:
+        # Matmul 2_196 us, CCL 1_042 us, Other 9_687 us.
+        expected_device_perf_ns_per_iteration=12_924_852,
+        subdir="kimi_k3_moe",
+        model_name="kimi_k3_moe_glx_8x4",
+        num_iterations=1,
+        batch_size=1,
+        margin=margin,
+        between_signposts=("MoE_START", "MoE_END"),
+        comments="seq640_5k_isl_glx_8x4_fabric2d_ground_truth_latent_moe_silu",
     )

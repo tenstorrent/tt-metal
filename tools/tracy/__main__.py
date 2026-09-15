@@ -214,7 +214,7 @@ def main():
             sys.exit(1)
 
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
+        generate_report(outputFolder, binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:

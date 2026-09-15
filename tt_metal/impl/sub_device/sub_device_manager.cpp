@@ -10,6 +10,7 @@
 #include <sub_device_types.hpp>
 #include <tt_align.hpp>
 #include <tt_stl/span.hpp>
+#include <algorithm>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -28,7 +29,7 @@
 #include "distributed/mesh_trace.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
-#include "vector_aligned.hpp"
+#include "impl/dispatch/vector_aligned.hpp"
 #include <impl/dispatch/dispatch_query_manager.hpp>
 
 using MeshTraceId = tt::tt_metal::distributed::MeshTraceId;
@@ -148,6 +149,15 @@ std::shared_ptr<MeshTraceBuffer> SubDeviceManager::get_trace(const MeshTraceId& 
         return trace->second;
     }
     return nullptr;
+}
+
+DeviceAddr SubDeviceManager::get_max_trace_high_water_mark() const {
+    DeviceAddr max_high_water_mark = 0;
+    for (const auto& trace_entry : trace_buffer_pool_) {
+        const auto& trace_buffer = trace_entry.second;
+        max_high_water_mark = std::max(max_high_water_mark, trace_buffer->dram_high_water_mark);
+    }
+    return max_high_water_mark;
 }
 
 bool SubDeviceManager::has_allocations() const {

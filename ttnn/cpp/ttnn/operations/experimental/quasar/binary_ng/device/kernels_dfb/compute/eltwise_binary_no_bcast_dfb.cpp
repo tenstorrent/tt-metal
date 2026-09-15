@@ -47,7 +47,7 @@ void kernel_main() {
     constexpr uint32_t dfb_post_rhs_id = dfb_pre_rhs_id;
 #endif
 
-    binary_op_init_common(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
+    compute_kernel_hw_startup(dfb_post_lhs_id, dfb_post_rhs_id, dfb_out_id);
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 #endif

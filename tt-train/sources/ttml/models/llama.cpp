@@ -647,6 +647,7 @@ void load_model_from_safetensors(
 
     // Report unused parameters
     std::vector<std::string> unused_parameters;
+    unused_parameters.reserve(parameters.size());
     for (const auto& [param_name, _] : parameters) {
         if (used_parameters.find(param_name) == used_parameters.end())
             unused_parameters.push_back(param_name);

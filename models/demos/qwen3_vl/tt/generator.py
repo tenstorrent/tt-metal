@@ -113,6 +113,7 @@ class Generator(WarmupForwardMixin):
         enable_trace=True,
         read_from_device=True,
         sampling_params=None,
+        **kwargs,
     ):
         return self._ttt_generator.decode_forward(
             tokens=tokens,
@@ -122,6 +123,7 @@ class Generator(WarmupForwardMixin):
             enable_trace=enable_trace,
             read_from_device=read_from_device,
             sampling_params=sampling_params,
+            **kwargs,
         )
 
     def prefill_forward_single_user_text(

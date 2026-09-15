@@ -13,7 +13,7 @@ namespace ttnn::prim {
 
 struct RingSDPAFusedOpSignaler {
     uint32_t num_fused_op_cores_to_signal = 0;
-    std::vector<CoreCoord> fused_op_receiver_cores_noc;
+    std::vector<tt::tt_metal::CoreCoord> fused_op_receiver_cores_noc;
     std::vector<uint32_t> fused_op_receiver_signal_semaphores;  // [dir0, dir1]
     ttnn::experimental::ccl::FusedOpSignalerMode fused_op_signaler_mode =
         ttnn::experimental::ccl::FusedOpSignalerMode::MULTI;

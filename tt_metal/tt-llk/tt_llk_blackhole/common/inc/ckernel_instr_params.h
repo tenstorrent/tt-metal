@@ -116,6 +116,21 @@ struct p_srcb
     constexpr static std::uint32_t BACKWARD_PASS = 0x1;
 };
 
+constexpr static std::uint32_t SETADC_CH0(std::uint32_t cnt)
+{
+    return cnt;
+}
+
+constexpr static std::uint32_t SETADC_CH1(std::uint32_t cnt)
+{
+    return cnt << 2;
+}
+
+constexpr static std::uint32_t SETADC_CH01(std::uint32_t cnt)
+{
+    return cnt << 2 | cnt;
+}
+
 struct p_setadc
 {
     constexpr static std::uint32_t UNP0   = 0b001;
@@ -130,8 +145,22 @@ struct p_setadc
     constexpr static std::uint32_t SET_Z = 2;
     constexpr static std::uint32_t SET_W = 3;
 
+    constexpr static std::uint32_t X  = 1;
+    constexpr static std::uint32_t Y  = 2;
+    constexpr static std::uint32_t XY = 3;
+    constexpr static std::uint32_t Z  = 1;
+    constexpr static std::uint32_t W  = 2;
+    constexpr static std::uint32_t ZW = 3;
+
     constexpr static std::uint32_t CH_0 = 0;
     constexpr static std::uint32_t CH_1 = 1;
+
+    // Thread-id override for the *_THREAD_OVERRIDE macros in ckernel_common_ops.h: picks whose ADC set
+    // the write lands on. 0 means the issuing thread.
+    constexpr static std::uint32_t THREAD_OVRD_NONE   = 0;
+    constexpr static std::uint32_t THREAD_OVRD_UNPACK = 1;
+    constexpr static std::uint32_t THREAD_OVRD_MATH   = 2;
+    constexpr static std::uint32_t THREAD_OVRD_PACK   = 3;
 };
 
 struct p_pacr
@@ -300,6 +329,9 @@ struct p_zeroacc
     constexpr static std::uint32_t CLR_ALL      = 0b011;
     constexpr static std::uint32_t CLR_HALF_32B = 0b110;
     constexpr static std::uint32_t CLR_ALL_32B  = 0b111;
+    // Value for the row-select operand -- `where` on Blackhole, `dst` on Wormhole -- that clears nothing,
+    // leaving the instruction a no-op apart from applying its AddrMode to the address counters.
+    constexpr static std::uint32_t WHERE_NOP = 0xff;
 };
 
 struct p_zerosrc
@@ -352,9 +384,10 @@ struct p_elwise
     constexpr static std::uint32_t SRCB_BCAST_ROW = 0x2;
     constexpr static std::uint32_t SRCB_BCAST_ALL = 0x3;
 
-    constexpr static std::uint32_t CLR_A  = 0x1;
-    constexpr static std::uint32_t CLR_B  = 0x2;
-    constexpr static std::uint32_t CLR_AB = 0x3;
+    constexpr static std::uint32_t CLR_NONE = 0x0;
+    constexpr static std::uint32_t CLR_A    = 0x1;
+    constexpr static std::uint32_t CLR_B    = 0x2;
+    constexpr static std::uint32_t CLR_AB   = 0x3;
 };
 
 struct p_sfpu
@@ -414,6 +447,43 @@ struct p_exp
     // -0x4300 : 1011 1101 0000 0000
     // ADJ_EXP : 1011 1101 0011 1111 (-0x4300 + 0x003F = 0xBD3F)
     constexpr static std::uint32_t ADJ_EXP = 0xBD3F;
+};
+
+struct p_setdmareg
+{
+    constexpr static std::uint32_t PAYLOAD_IMMEDIATE   = 0;
+    constexpr static std::uint32_t PAYLOAD_16BIT       = 0;
+    constexpr static std::uint32_t PAYLOAD_32BIT       = 1;
+    constexpr static std::uint32_t PAYLOAD_128BIT      = 2;
+    constexpr static std::uint32_t PAYLOAD_TILE_HEADER = 3;
+
+    constexpr static std::uint32_t MODE_IMMEDIATE = 0;
+    constexpr static std::uint32_t MODE_SIGNAL    = 1;
+};
+
+struct p_mop
+{
+    constexpr static std::uint32_t MASK_LOOP   = 0;
+    constexpr static std::uint32_t DOUBLE_LOOP = 1;
+};
+
+struct p_adddmareg
+{
+    constexpr static std::uint32_t REG_PLUS_REG = 0;
+    constexpr static std::uint32_t REG_PLUS_IMM = 1;
+};
+
+constexpr static std::uint32_t REG2FLOP_FLOP_INDEX(std::uint32_t addr)
+{
+    return addr - THCON_CFGREG_BASE_ADDR32;
+}
+
+struct p_reg2flop
+{
+    constexpr static std::uint32_t WRITE_16B = 0;
+    constexpr static std::uint32_t WRITE_4B  = 1;
+    constexpr static std::uint32_t WRITE_2B  = 2;
+    constexpr static std::uint32_t WRITE_1B  = 3;
 };
 
 } // namespace ckernel

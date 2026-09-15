@@ -24,6 +24,8 @@ class RunTimeOptions;
 
 namespace tt_metal {
 
+class MetalEnvImpl;
+
 namespace detail {
 void ReadDeviceProfilerResultsInternal(
     distributed::MeshDevice* mesh_device,
@@ -41,7 +43,7 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
 
 struct ProfilerStateManager {
 public:
-    ProfilerStateManager();
+    explicit ProfilerStateManager(MetalEnvImpl& env);
 
     ~ProfilerStateManager() = default;
 
@@ -63,6 +65,7 @@ public:
 
     static constexpr CoreCoord SYNC_CORE = {0, 0};
 
+    MetalEnvImpl& env_;
     std::unordered_map<ChipId, DeviceProfiler> device_profiler_map;
     mutable std::recursive_mutex device_profiler_map_mutex;
 

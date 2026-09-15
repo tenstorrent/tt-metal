@@ -4,22 +4,21 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "rotary_embedding_llama_device_operation_types.hpp"
 
 namespace ttnn::experimental::prim {
 
 struct RotaryEmbeddingLlamaMultiCoreSharded {
-    // Contract (1): single ProgramDescriptor for the fully-sharded decode case.
-    // All five working CBs (input/cos/sin/trans_mat/output) bind through
-    // CBDescriptor::buffer so the framework patches dynamic addresses on cache hit,
-    // matching the legacy UpdateDynamicCircularBufferAddress chain.
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // Metal 2.0 factory (MetalV2FactoryConcept) for the fully-sharded decode case. All five io
+    // buffers (input/cos/sin/trans_mat/output) bind through borrowed-memory DataflowBuffers
+    // (DataflowBufferSpec::borrowed_from) so their L1 addresses resolve from the tensor args on each
+    // cache hit, matching the legacy dynamic-address update chain.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const RotaryEmbeddingLlamaParams& operation_attributes,
         const RotaryEmbeddingLlamaInputs& tensor_args,
-        ttnn::Tensor& output);
+        ttnn::Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim

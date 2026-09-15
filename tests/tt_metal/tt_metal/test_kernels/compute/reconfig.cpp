@@ -27,7 +27,7 @@ void kernel_main() {
     CircularBuffer cbout0(tt::CBIndex::c_16);
     CircularBuffer cbout1(tt::CBIndex::c_17);
 
-    binary_op_init_common(cb_in0, cb_in1, cb_out0);
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_out0);
     binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
         cbin0.wait_front(ublock_size_tiles);
@@ -52,7 +52,7 @@ void kernel_main() {
             copy_tile(cb_in2, 0, 0);
         }
 #elif (BLOCK_COPY == 0)
-        copy_block_matmul_partials(cb_in2, 0, 0, ublock_size_tiles);
+        copy_block(cb_in2, 0, 0, ublock_size_tiles);
 #endif
         cbin2.pop_front(ublock_size_tiles);
 
@@ -80,7 +80,7 @@ void kernel_main() {
 #endif  // EXPLICIT_RECONFIG
 
         // Init like CB_0 is in A and CB_1 is in B
-        add_tiles_init(cb_in1, cb_in0, true);
+        add_init(cb_in1, cb_in0, true);
 
         for (uint32_t i = 0; i < ublock_size_tiles; ++i) {
             add_tiles(cb_in1, cb_in0, i, i, i);
@@ -96,7 +96,7 @@ void kernel_main() {
         pack_reconfig_l1_acc(true);
 #endif
         // Configured already for CB_16, Bfp16_b
-        pack_tile_block(0, cb_out0, ublock_size_tiles);
+        pack_block(0, cb_out0, ublock_size_tiles);
         // Reconfig for CB_17, Bfp8_b, then pack to CB_17
 #if (EXPLICIT_RECONFIG == 1)
         // Indices for old_output, new_output
@@ -108,7 +108,7 @@ void kernel_main() {
         // Not testing for L1 accumulation
         pack_reconfig_l1_acc(false);
 
-        pack_tile_block(0, cb_out1, ublock_size_tiles);
+        pack_block(0, cb_out1, ublock_size_tiles);
         tile_regs_release();
 
         cbin0.pop_front(ublock_size_tiles);

@@ -69,7 +69,7 @@ on:
       - "Nightly tt-metal L2 tests"
       - "Package and release"
       - "Build test and publish upstream tests"
-      - "vLLM nightly tests"
+      - "vLLM Model Tests"
       - "metal - Run microbenchmarks"
       - "Multi-Host Deployment (Physical)"
       - "(Galaxy) Multi-user Isolation Tests"

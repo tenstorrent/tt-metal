@@ -19,6 +19,9 @@ GDN_CONV1D_L1_SMALL_SIZE = 24576
 class Qwen36ModelArgs(ModelArgs):
     """Qwen3.5-9B ModelArgs for Blackhole P150."""
 
+    # Opt into base ModelArgs TP > n_kv_heads path; attention/tp.py replicates via replicate_kv_weight.
+    SUPPORTS_KV_REPLICATION = True
+
     def __init__(
         self,
         mesh_device=None,
@@ -227,8 +230,9 @@ class Qwen36ModelArgs(ModelArgs):
 
         # Prefill matmul factory (M = seq_len)
         self._prefill_grid = tpc.prefill_grid_default()
+        self.prefill_tuning = tpc.prefill_tuning(tp)
         self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
-            seq_len, k, n, grid_size=self._prefill_grid
+            seq_len, k, n, grid_size=self._prefill_grid, tuning=self.prefill_tuning
         )
 
         # Activation shard configs
@@ -279,7 +283,7 @@ class Qwen36ModelArgs(ModelArgs):
         return Path(root) / suffix
 
     def load_state_dict(self):
-        """Load + remap weights via AutoModelForCausalLM (text-only Qwen3_5ForCausalLM).
+        """Load + remap weights via the text-only HF Qwen3_5ForCausalLM.
         Overrides base meta-key loader."""
         from models.demos.blackhole.qwen36.tt.weight_mapping import (
             is_fp8_checkpoint,
@@ -287,13 +291,32 @@ class Qwen36ModelArgs(ModelArgs):
             remap_qwen36_state_dict,
         )
 
-        # Block FP8 checkpoints: dequant + remap for TP loaders (skip AutoModelForCausalLM).
+        # Block FP8 checkpoints: dequant + remap for TP loaders (skip the HF model).
         if is_fp8_checkpoint(self.CKPT_DIR):
             return load_qwen36_state_dict_fp8(self.CKPT_DIR)
 
-        from transformers import AutoModelForCausalLM
+        # Import the HF classes directly rather than going through AutoModelForCausalLM.
+        # Serving out-of-tree, vllm.transformers_utils.config registers vLLM's OWN
+        # Qwen3_5Config for model_type "qwen3_5" into transformers' AutoConfig
+        # (AutoConfig.register(..., exist_ok=True)), so AutoConfig hands back vLLM's class.
+        # transformers only unwraps a composite config to its text sub-config when
+        # `model_class.config_class == config.sub_configs["text_config"]` — an identity
+        # check that cannot hold across libraries — so the composite config would reach
+        # Qwen3_5ForCausalLM and fail on `config.vocab_size` (which lives one level down,
+        # in text_config). Naming the classes here keeps config and model from the same
+        # library, matching vision/vision_model_config.py::reference_vision_model.
+        #
+        # Qwen3_5TextConfig.from_pretrained picks the `text_config` sub-dict on composite
+        # (3.6 VLM) checkpoints via base_config_key, and reads a text-only (3.5) config.json
+        # as-is, so both checkpoint layouts land on the config Qwen3_5ForCausalLM expects.
+        from transformers.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5TextConfig
 
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, dtype="auto", trust_remote_code=True)
+        text_config = Qwen3_5TextConfig.from_pretrained(self.CKPT_DIR)
+        assert text_config.vocab_size == self.vocab_size and text_config.hidden_size == self.dim, (
+            f"HF text config disagrees with model args: vocab_size {text_config.vocab_size} vs "
+            f"{self.vocab_size}, hidden_size {text_config.hidden_size} vs {self.dim}"
+        )
+        model = Qwen3_5ForCausalLM.from_pretrained(self.CKPT_DIR, config=text_config, dtype="auto")
         state_dict = remap_qwen36_state_dict(model.state_dict())
         del model
         return state_dict

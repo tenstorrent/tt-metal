@@ -232,7 +232,7 @@ void RunMatmulBenchmark(
         in0_sharded ? ttnn::operations::data_movement::create_sharded_memory_config(
                           ttnn::Shape{1, 1, m, k},
                           ttnn::CoreRangeSet(ttnn::CoreRange(
-                              CoreCoord(0, 0), ttnn::CoreCoord(grid_size.height() - 1, grid_size.width() - 1))),
+                              tt::tt_metal::CoreCoord(0, 0), ttnn::CoreCoord(grid_size.height() - 1, grid_size.width() - 1))),
                           ttnn::operations::data_movement::ShardStrategy::BLOCK,
                           tt::tt_metal::ShardOrientation::ROW_MAJOR)
                     : ttnn::DRAM_MEMORY_CONFIG;
@@ -314,7 +314,7 @@ void RunMatmulBenchmark(
                             /*output_tensor*/ std::nullopt,
                             attributes)
                             .at(0);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         output_tensor.deallocate();
     }
 
@@ -339,7 +339,7 @@ void RunMatmulBenchmark(
         {
             ZoneScopedN("Matmul trace iterations");
             ttnn::operations::trace::execute_trace(dev_ptr, tid, std::nullopt, false);
-            tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+            tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -358,7 +358,7 @@ void RunMatmulBenchmark(
                                     /*output_tensor*/ std::nullopt,
                                     attributes)
                                     .at(0);
-                tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+                tt::tt_metal::distributed::Synchronize(*dev_ptr, std::nullopt);
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();

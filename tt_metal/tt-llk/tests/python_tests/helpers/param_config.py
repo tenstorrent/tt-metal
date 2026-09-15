@@ -10,6 +10,7 @@ import pytest
 from helpers.tile_shape import construct_tile_shape
 from typing_extensions import deprecated
 
+from .chip_architecture import ChipArchitecture, get_chip_architecture
 from .data_format_inference import is_format_combination_outlier
 from .format_config import (
     DataFormat,
@@ -311,6 +312,28 @@ def _params_solve_dependencies(**kwargs: any) -> List[Tuple]:
     return list(_solve_recursive(resolved, 0))
 
 
+def build_param_id(parameters, value_tuple):
+    """Readable pytest ID for one parameter tuple, e.g.
+    `formats:Bfp4_b->Float16_b-mathop:Sin`.
+
+    Exposed so tests that call pytest.mark.parametrize directly (because they build
+    their own value tuples) can produce the same IDs as @parametrize, keeping -k
+    filters on format and mathop working across the whole suite.
+    """
+    parts = []
+    for param, value in zip(parameters, value_tuple):
+        if isinstance(value, InputOutputFormat):
+            param_value = f"{value.input_format.name}->{value.output_format.name}"
+        elif hasattr(value, "name"):
+            param_value = value.name
+        elif hasattr(value, "value"):
+            param_value = str(value.value)
+        else:
+            param_value = str(value)
+        parts.append(f"{param}:{param_value}")
+    return "-".join(parts)
+
+
 def parametrize(**kwargs: any):
     compile_key_fn = None
     _rt_names = set()
@@ -358,22 +381,7 @@ def parametrize(**kwargs: any):
     parameters_string = ",".join(parameters)
     parameter_values = _params_solve_dependencies(**unwrapped)
 
-    def generate_id(value_tuple):
-        """Generate readable test IDs from parameter values."""
-        parts = []
-        for param, value in zip(parameters, value_tuple):
-            if isinstance(value, InputOutputFormat):
-                param_value = f"{value.input_format.name}->{value.output_format.name}"
-            elif hasattr(value, "name"):
-                param_value = value.name
-            elif hasattr(value, "value"):
-                param_value = str(value.value)
-            else:
-                param_value = str(value)
-            parts.append(f"{param}:{param_value}")
-        return "-".join(parts)
-
-    ids = [generate_id(values) for values in parameter_values]
+    ids = [build_param_id(parameters, values) for values in parameter_values]
 
     def decorator(test_function):
         if compile_key_fn is not None:
@@ -653,8 +661,11 @@ def get_num_blocks_and_num_tiles_in_block(
     num_rows_tensor, num_cols_tensor = input_dimensions
     num_rows_tile, num_cols_tile = tile_dimensions
 
-    is_outlier = is_format_combination_outlier(
-        formats.input_format, formats.output_format, dest_acc
+    is_outlier = (
+        is_format_combination_outlier(
+            formats.input_format, formats.output_format, dest_acc
+        )
+        and get_chip_architecture() != ChipArchitecture.QUASAR
     )
 
     capacity_divisor = (

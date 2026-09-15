@@ -70,21 +70,17 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 }
 
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
-
 // clang-format off
 /**
- * Initializes the tilize operation with reduction. Should be called once at the beginning of a kernel.
+ * Short initializes the tilize operation with reduction.
  *
- * Return value: None
- *
- * | Param Type | Name           | Description                              | Type     | Valid Range | Required |
- * |------------|----------------|------------------------------------------|----------|-------------|----------|
- * | Template   | neginf_srcA    | NegInf source A flag                     | bool     | true/false  | False    |
- * | Template   | zero_srcA_reduce| Zero source A for reduce flag           | bool     | true/false  | False    |
- * | Function   | icb0           | Input circular buffer A identifier       | uint32_t | 0 to 31     | True     |
- * | Function   | icb1_scaler    | Input circular buffer for scaler         | uint32_t | 0 to 31     | True     |
- * | Function   | block          | Size of tile block to work on            | uint32_t | > 0         | True     |
- * | Function   | ocb            | Output circular buffer identifier        | uint32_t | 0 to 31     | True     |
+ * | Param Type | Name             | Description                          | Type     | Valid Range | Required |
+ * |------------|------------------|--------------------------------------|----------|-------------|----------|
+ * | Template   | neginf_srcA      | NegInf source A flag                 | bool     | true/false  | False    |
+ * | Template   | zero_srcA_reduce | Zero source A for reduce flag        | bool     | true/false  | False    |
+ * | Function   | icb0             | Input circular buffer A identifier   | uint32_t | 0 to 31     | True     |
+ * | Function   | icb1_scaler      | Input circular buffer for scaler     | uint32_t | 0 to 31     | True     |
+ * | Function   | block            | Size of tile block to work on        | uint32_t | > 0         | True     |
  *
  * Unpack face geometry for operand A comes from circular-buffer metadata (JIT unpack_tile_* arrays), e.g.
  * set_unpack_face_geometry / set_tile_dims on the host.
@@ -92,33 +88,11 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb, uint32_t call_
 // clang-format on
 template <bool neginf_srcA = true, bool zero_srcA_reduce = false>
 ALWI void tilizeA_B_reduce_init(
-    uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb0, icb1_scaler, ocb, call_line);
-#ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
+    uint32_t icb0, uint32_t icb1_scaler, uint32_t block, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1_scaler, call_line);
     UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
         icb0, icb1_scaler, block)));
-
     MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>(ocb)));
-#else
-    UNPACK((llk_unpack_hw_configure(icb0, icb1_scaler)));
-    UNPACK((llk_unpack_tilizeA_B_init<neginf_srcA, true /*reload_srcB*/, false /*zero_srcA*/, zero_srcA_reduce>(
-        icb0, icb1_scaler, block)));
-
-    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>(icb0, icb1_scaler)));
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb0, icb1_scaler)));
-
-    PACK((llk_pack_hw_configure(ocb)));
-    PACK((llk_pack_init(ocb)));
-    PACK((llk_pack_dest_init()));
-#endif
 }
 #endif  // (REDUCE_OP && REDUCE_DIM) || __DOXYGEN__
 
@@ -324,7 +298,7 @@ ALWI void fast_tilize_init_with_dt_impl(uint32_t icb, uint32_t full_dim, uint32_
     // leave SrcB in a prior matmul-weights config that's incompatible with the
     // fast-tilize path, producing garbage output.
     UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(icb, icb)));
-    MATH((llk_math_reconfig_data_format<true, true>(icb, icb)));
+    MATH((llk_math_reconfig_data_format<true /*is_fp32_dest_acc_en*/, false /*skip_int8: derive int8 state*/>(icb, icb)));
 
     fast_tilize_init_impl<configure_remap>(icb, full_dim, ocb);
 }
@@ -470,7 +444,37 @@ ALWI void fast_tilize_block(
 #endif
 }
 
-#endif  // !ARCH_QUASAR
+#else   // ARCH_QUASAR
+// Quasar has no separate fast-tilize LLK path -- its regular unpack_tilize is already fast, so these
+// wrappers just forward to the plain tilize_* implementation defined above.
+ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    tilize_init(icb, full_dim, ocb, call_line);
+}
+
+ALWI void fast_tilize_init_skip_remap(
+    uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    tilize_init(icb, full_dim, ocb, call_line);
+}
+
+ALWI void fast_tilize_init_with_dt(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    reconfig_data_format(icb, icb);
+    tilize_init(icb, full_dim, ocb);
+}
+
+ALWI void fast_tilize_init_with_dt_skip_remap(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
+    reconfig_data_format(icb, icb);
+    tilize_init(icb, full_dim, ocb);
+}
+
+ALWI void fast_tilize_uninit(uint32_t icb, uint32_t ocb, [[maybe_unused]] uint32_t full_dim) {
+    tilize_uninit(icb, ocb);
+}
+
+ALWI void fast_tilize_block(
+    uint32_t icb, uint32_t block, uint32_t ocb, uint32_t input_tile_index = 0, uint32_t output_tile_index = 0) {
+    tilize_block(icb, block, ocb, input_tile_index, output_tile_index);
+}
+#endif  // ARCH_QUASAR
 
 // clang-format off
 /**

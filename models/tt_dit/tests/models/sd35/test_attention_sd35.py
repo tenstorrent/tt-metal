@@ -14,6 +14,7 @@ from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor
+from ....utils.test import line_params_req_exact_devices
 
 
 @pytest.mark.parametrize(
@@ -52,7 +53,7 @@ from ....utils.tensor import bf16_tensor
 )
 # @pytest.mark.parametrize("context_pre_only", [True, False])
 # TODO: add more parametrizations of Attention module options
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("device_params", [line_params_req_exact_devices], ids=["line"], indirect=True)
 def test_sd35_joint_attention(
     mesh_device: ttnn.MeshDevice,
     mesh_shape: tuple[int, int],

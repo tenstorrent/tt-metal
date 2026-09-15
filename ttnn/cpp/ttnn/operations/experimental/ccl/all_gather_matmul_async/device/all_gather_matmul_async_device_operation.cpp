@@ -149,7 +149,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const CoreCoord all_gather_core_grid_offset,
+    const tt::tt_metal::CoreCoord all_gather_core_grid_offset,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config_ag,
@@ -199,9 +199,9 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
-    std::optional<CoreCoord> user_core_coord;
+    std::optional<tt::tt_metal::CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
-        user_core_coord = CoreCoord(core_grid->x, core_grid->y);
+        user_core_coord = tt::tt_metal::CoreCoord(core_grid->x, core_grid->y);
     }
 
     auto matmul_struct = ttnn::prim::create_matmul_attributes(

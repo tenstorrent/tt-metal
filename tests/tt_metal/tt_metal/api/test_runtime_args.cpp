@@ -31,6 +31,7 @@
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 
 #include "device_fixture.hpp"
+#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include <umd/device/types/xy_pair.hpp>
 
 // Access to internal API: ProgramImpl::num_kernel, get_kernel
@@ -339,8 +340,7 @@ void verify_core_rt_args(
     const std::vector<uint32_t>& written_args,
     const uint32_t incr_val) {
     std::vector<uint32_t> observed_args;
-    auto* device = mesh_device->get_devices()[0];
-    tt_metal::detail::ReadFromDeviceL1(device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
+    slow_dispatch::ReadFromL1(*mesh_device, core, base_addr, written_args.size() * sizeof(uint32_t), observed_args);
 
     for (size_t i = 0; i < written_args.size(); i++) {
         uint32_t expected_result = written_args.at(i) + incr_val;
@@ -370,12 +370,11 @@ void verify_results(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     const auto& program = workload.get_programs().at(device_range);
-    auto* device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         const auto kernel = program.impl().get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
             kernel->get_kernel_processor_type(0),
             false);
@@ -393,7 +392,7 @@ void verify_results(
         // Verify common RT Args (same for all cores) if they exist.
         if (!common_rt_args.empty()) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
                 kernel->get_kernel_processor_class(),
                 kernel->get_kernel_processor_type(0),
                 true);
@@ -426,7 +425,6 @@ void verify_quasar_crtas(
     const CoreCoord& core,
     const std::vector<std::vector<uint32_t>>& per_user_dm_crtas,
     bool expect_shared_address) {
-    auto* device = mesh_device->get_devices()[0];
     uint32_t l1_base = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     uint32_t results_base = get_runtime_arg_addr(l1_base, tt::tt_metal::HalProcessorClassType::DM, 0, true);
     uint32_t max_dms = MetalContext::instance().hal().get_processor_types_count(
@@ -450,7 +448,7 @@ void verify_quasar_crtas(
         uint32_t crta_addr = results_base + ((kCommonRTASeparation + physical_dm_id * num_crtas) * sizeof(uint32_t));
 
         std::vector<uint32_t> observed;
-        tt_metal::detail::ReadFromDeviceL1(device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
+        slow_dispatch::ReadFromL1(*mesh_device, core, crta_addr, num_crtas * sizeof(uint32_t), observed);
 
         for (size_t j = 0; j < num_crtas; j++) {
             EXPECT_EQ(observed[j], expected_crtas[j]) << "DM" << physical_dm_id << " CRTA[" << j << "]";
@@ -462,7 +460,7 @@ void verify_quasar_crtas(
         uint32_t physical_dm_id = kQuasarFirstUserDm + user_dm_idx;
         uint32_t addr_offset = addr_base + (physical_dm_id * sizeof(uint32_t));
         std::vector<uint32_t> addr;
-        tt_metal::detail::ReadFromDeviceL1(device, core, addr_offset, sizeof(uint32_t), addr);
+        slow_dispatch::ReadFromL1(*mesh_device, core, addr_offset, sizeof(uint32_t), addr);
         crta_addrs.push_back(addr[0]);
     }
 
@@ -490,16 +488,14 @@ namespace tt::tt_metal {
 
 // Write unique and common runtime args to device and readback to verify written correctly.
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
+    for (auto& mesh_device : this->devices_) {
         // First run the program with the initial runtime args
         CoreRange first_core_range(CoreCoord(0, 0), CoreCoord(1, 1));
         CoreRange second_core_range(CoreCoord(3, 3), CoreCoord(5, 5));
         CoreRangeSet core_range_set(std::vector{first_core_range, second_core_range});
-        auto mesh_device = this->devices_.at(id);
         auto& cq = mesh_device->mesh_command_queue();
-        auto* device = this->devices_.at(id)->get_devices()[0];
-        auto workload =
-            unit_tests::runtime_args::initialize_program_data_movement_rta(this->devices_.at(id), core_range_set, 2);
+        auto* device = mesh_device->get_devices()[0];
+        auto workload = unit_tests::runtime_args::initialize_program_data_movement_rta(mesh_device, core_range_set, 2);
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         auto& program = workload.get_programs().at(device_range);
@@ -552,8 +548,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsDataMovement) {
 }
 
 TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -590,8 +585,7 @@ TEST_F(MeshDeviceFixture, TensixLegallyModifyRTArgsCompute) {
 
 // Don't cover all cores of kernel with SetRuntimeArgs. Verify that correct offset used to access common runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -625,8 +619,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsSubsetOfCoresCompute) {
 
 // Different unique runtime args per core. Not overly special, but verify that it works.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -665,8 +658,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsUniqueValuesCompute) {
 // Some cores have more unique runtime args than others. Unused in kernel, but API supports it, so verify it works and
 // that common runtime args are appropriately offset by amount from core(s) with most unique runtime args.
 TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -724,8 +716,7 @@ TEST_F(MeshDeviceFixture, TensixSetRuntimeArgsVaryingLengthPerCore) {
 // Too many unique and common runtime args, overflows allowed space and throws expected exception from both
 // unique/common APIs.
 TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         CoreRange first_core_range(CoreCoord(1, 1), CoreCoord(2, 2));
@@ -755,8 +746,7 @@ TEST_F(MeshDeviceFixture, TensixIllegalTooManyRuntimeArgs) {
 }
 
 TEST_F(MeshDeviceFixture, TensixIllegallyModifyRTArgs) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -836,12 +826,11 @@ TEST_F(MeshDeviceFixture, Metal2RejectsLegacyRuntimeArgsAPIs) {
 }
 
 TEST_F(MeshDeviceFixture, TensixSetCommonRuntimeArgsMultipleCreateKernel) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto& cq = mesh_device->mesh_command_queue();
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-        auto grid_size = this->devices_.at(id)->logical_grid_size();
+        auto grid_size = mesh_device->logical_grid_size();
         auto max_x = grid_size.x - 1;
         auto max_y = grid_size.y - 1;
 
@@ -879,8 +868,7 @@ TEST_F(MeshDeviceFixture, ActiveEthIllegalTooManyRuntimeArgs) {
     uint32_t active_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         auto active_eth_cores = device->get_active_ethernet_cores(true);
 
@@ -965,8 +953,7 @@ TEST_F(MeshDeviceFixture, IdleEthIllegalTooManyRuntimeArgs) {
     uint32_t idle_eth_max_runtime_args =
         hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::KERNEL_CONFIG) / sizeof(uint32_t) -
         watcher_reserved_count_words;
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        auto mesh_device = this->devices_.at(id);
+    for (auto& mesh_device : this->devices_) {
         auto* device = mesh_device->get_devices()[0];
         auto idle_eth_cores = device->get_inactive_ethernet_cores();
 

@@ -90,7 +90,7 @@ inline bool is_emule_device(const IDevice* device) {
 void validate_buffer_parameters(
     DeviceAddr size,
     DeviceAddr page_size,
-    const BufferType& /*buffer_type*/,
+    const BufferType& buffer_type,
     const TensorMemoryLayout& buffer_layout,
     const std::optional<ShardSpecBuffer>& shard_spec,
     const std::optional<BufferDistributionSpec>& buffer_distribution_spec) {
@@ -98,6 +98,26 @@ void validate_buffer_parameters(
         TT_FATAL(
             shard_spec.has_value() || buffer_distribution_spec.has_value(),
             "Buffer was specified as sharded but does not have shard_spec or buffer_distribution_spec specified");
+
+        // DRAM banks are 1D: bank_id is a core's logical x-coordinate and the grid is a single row.
+        // A shard core off row 0 aliases onto an existing bank and corrupts data. Applies to both the
+        // ND (BufferDistributionSpec) and legacy (ShardSpecBuffer) paths.
+        if (buffer_type == BufferType::DRAM) {
+            std::vector<CoreCoord> shard_cores;
+            if (buffer_distribution_spec.has_value()) {
+                shard_cores = buffer_distribution_spec->cores();
+            } else if (shard_spec.has_value()) {
+                shard_cores = corerange_to_cores(shard_spec->grid());
+            }
+            for (const auto& core : shard_cores) {
+                TT_FATAL(
+                    core.y == 0,
+                    "Invalid DRAM shard grid: shard core ({}, {}) is not on row 0. DRAM banks are 1D "
+                    "(bank_id == logical x-coordinate), so every shard core must have y == 0.",
+                    core.x,
+                    core.y);
+            }
+        }
     } else {
         TT_FATAL(
             shard_spec == std::nullopt && buffer_distribution_spec == std::nullopt,

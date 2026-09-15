@@ -5,6 +5,8 @@
 #include "move_device_operation_types.hpp"
 #include "move_overlap_program_factory.hpp"
 
+#include <tt-metalium/experimental/program_descriptor_patching.hpp>
+
 #include <cmath>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -27,6 +29,7 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
     TT_ASSERT(logical_controller == logical_zero);
 
     std::vector<CoreRange> logical_core_ranges;
+    logical_core_ranges.reserve(3);
     auto split_core_range_containing_controller = [&](const CoreRange& controller_core_range) {
         TT_ASSERT(controller_core_range.start_coord == logical_controller);
         CoreRange right_block(
@@ -201,6 +204,26 @@ ProgramDescriptor MoveOverlapProgramFactory::create_descriptor(
     desc.kernels.push_back(std::move(reader_desc));
 
     return desc;
+}
+
+void MoveOverlapProgramFactory::override_runtime_arguments(
+    tt::tt_metal::Program& program,
+    const MoveOperationAttributes& /*operation_attributes*/,
+    const MoveTensorArgs& tensor_args,
+    Tensor& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Single reader kernel, src/dst declared at slots 0/1.
+    const uint32_t src_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t dst_addr = tensor_return_value.buffer()->address();
+    for (auto& col : tt::tt_metal::GetRuntimeArgs(program, 0)) {
+        for (auto& a : col) {
+            if (a.size() < 2) {
+                continue;
+            }
+            a[0] = src_addr;
+            a[1] = dst_addr;
+        }
+    }
 }
 
 }  // namespace ttnn::prim

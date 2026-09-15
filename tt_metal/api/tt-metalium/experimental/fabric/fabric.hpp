@@ -122,6 +122,8 @@ std::vector<chan_id_t> get_active_fabric_eth_routing_planes_in_direction(
 
 std::unordered_map<MeshId, tt::tt_metal::distributed::MeshShape> get_physical_mesh_shapes();
 
+std::vector<FabricType> get_all_mgd_fabric_types();
+
 tt::tt_fabric::Topology get_fabric_topology();
 
 struct FabricEriscDatamoverKernelConfig {
@@ -326,7 +328,7 @@ public:
         size_t base_l1_address);
 
     void append_client_connection_rt_args(
-        const CoreCoord& mux_virtual_core,
+        const tt::tt_metal::CoreCoord& mux_virtual_core,
         uint8_t logical_channel_id,
         const ClientSemaphores& client_semaphores,
         std::vector<uint32_t>& worker_args) const;
@@ -338,13 +340,13 @@ private:
     friend void add_fabric_mux_v2_to_program(
         tt::tt_metal::Program& program,
         const FabricMuxV2Config& config,
-        const CoreCoord& mux_logical_core,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
         const std::vector<uint32_t>& downstream_sender_rt_args,
         tt::tt_metal::NOC forwarder_noc);
     friend void add_fabric_mux_v2_to_program(
         tt::tt_metal::Program& program,
         const FabricMuxV2Config& config,
-        const CoreCoord& mux_logical_core,
+        const tt::tt_metal::CoreCoord& mux_logical_core,
         const FabricNodeId& src_fabric_node_id,
         const FabricNodeId& dst_fabric_node_id,
         uint32_t link_idx,
@@ -387,14 +389,14 @@ private:
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     const std::vector<uint32_t>& downstream_sender_rt_args,
     tt::tt_metal::NOC forwarder_noc = tt::tt_metal::NOC::RISCV_0_default);
 
 void add_fabric_mux_v2_to_program(
     tt::tt_metal::Program& program,
     const FabricMuxV2Config& config,
-    const CoreCoord& mux_logical_core,
+    const tt::tt_metal::CoreCoord& mux_logical_core,
     const FabricNodeId& src_fabric_node_id,
     const FabricNodeId& dst_fabric_node_id,
     uint32_t link_idx,

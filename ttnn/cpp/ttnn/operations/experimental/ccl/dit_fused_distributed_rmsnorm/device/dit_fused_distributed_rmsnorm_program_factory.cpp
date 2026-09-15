@@ -394,7 +394,7 @@ DitFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // Per-token weight/bias: shape [N, H] (or [B,1,N,H]) instead of broadcast
     // [1, H]. Detected by checking the second-to-last logical dim — broadcast
     // weight has 1 there. When set, the reader reads per-row tiles using
-    // noc_async_read_tile (full 4 KB/tile) and compute uses mul_tiles instead
+    // a full-page noc.async_read (4 KB/tile) and compute uses mul_tiles instead
     // of mul_tiles_bcast_rows.
     const bool per_token_weight = has_weight && (weight->logical_shape()[-2] > 1);
     const bool per_token_bias = has_bias && (bias->logical_shape()[-2] > 1);
@@ -550,7 +550,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Grid-wide set: the packet CB + sync semaphores are created here so their
     // L1 address is identical on every worker and forwarder core — a worker
     // learns its forwarder's packet base / sem addr from its OWN
-    // get_write_ptr(packet_cb) / get_semaphore(id), no cross-core address args.
+    // CircularBuffer(packet_cb).get_write_ptr() / Semaphore(id), no cross-core address args.
     const CoreRangeSet all_core_set({core_grid});
 
     // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
@@ -740,7 +740,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // The resident LayerNorm POST now clamps its sub-phases to the per-block tail count,
     // so non-divisible num_tile_cols is supported there (e.g. SD3.5: dim 2432 -> 38/19
     // tile-cols at TP2/TP4). The block-major LayerNorm POST, however, streams input and
-    // its PRE waits cb_wait_front(input_cb, block_size) per block — the shared reader
+    // its PRE waits input_cb.wait_front(block_size) per block — the shared reader
     // pushes only the tail count on the last block, so a non-divisible width would hang
     // that path. block-major LN needs num_tile_cols wide enough to stream (>=56) and is
     // only reached by divisible shapes today; keep a fail-fast guard for it until it gets
@@ -824,9 +824,9 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     constexpr uint32_t welford_zero_cb_id = tt::CBIndex::c_21;
 
     // Double-buffer input_cb: reader can fill chunk N+1 while compute is in
-    // chunk N's post phase. The cumulative cb_wait_front in compute pairs
+    // chunk N's post phase. The cumulative wait_front in compute pairs
     // naturally with this — compute uses absolute indices within the
-    // current chunk, and cb_pop_front at end of chunk frees that chunk's slots
+    // current chunk, and pop_front at end of chunk frees that chunk's slots
     // back to the reader.
     //
     // Streaming low-L1: input_cb holds only a handful of block_size-tile blocks
@@ -941,7 +941,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // Size the cos/sin CBs to match the actual cos/sin tensor dtype rather
         // than assuming fp32. LTX feeds bf16 cos/sin (its standalone RoPE op is
         // all-bf16); accepting bf16 here halves the rope-table DRAM reads and L1
-        // footprint. The reader derives tile bytes from get_tile_size(rope_cos_cb)
+        // footprint. The reader derives tile bytes from rope_cos_cb.get_tile_size()
         // and the compute reconfigs the unpacker via reconfig_data_format(), so
         // both follow this format automatically.
         const tt::DataFormat rope_format = datatype_to_dataformat_converter(rope_cos->dtype());
@@ -1012,7 +1012,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     create_cb(
         rotated_input_cb_id, program, worker_core_set, intermediate_tile_size, rotated_cb_tiles, intermediate_format);
     // output_cb sized to 2 full padded rows so the writer can deep-drain a
-    // whole row under ONE noc_async_writes_flushed() (instead of flushing every
+    // whole row under ONE noc.async_writes_flushed() (instead of flushing every
     // block_size=2 tiles) while compute produces the next row. The shallow
     // 4-tile CB capped write concurrency at block_size, leaving the output
     // drain at ~22% of POST as back-pressure (P_ADD's 5.9× core-to-core spread
@@ -1043,8 +1043,8 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
     // Sync semaphores for the worker<->forwarder handshake. arrival (workers inc,
     // forwarder waits) + go (forwarder incs, workers wait) are on-chip; created on
     // the WHOLE grid so their L1 address is identical across workers + forwarders
-    // (kernels resolve via get_semaphore(id)). out_ready is the caller's
-    // GlobalSemaphore, fabric-inc'd by peer forwarders (resolved later).
+    // (kernels resolve via Semaphore(id)). out_ready is the caller's GlobalSemaphore,
+    // fabric-inc'd by peer forwarders (resolved later).
     const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
     const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
 
@@ -1289,7 +1289,7 @@ for (uint32_t f = 0; f < num_forwarders; f++) {
         // tiles straight into stats_gathered_cb (sized for num_heads) and consume
         // them locally in POST. With the old (ring_size==1)-only form, per_head
         // ring>1 routed PRE to stats_local_cb (sized 1 tile, no consumer) and
-        // wedged on the 2nd head's cb_reserve_back.
+        // wedged on the 2nd head's reserve_back.
         /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
         // Packed AG CBs (all-gather path). For is_tp_1 the compute kernel
         // sidesteps the packed path entirely (pushes col-0 stats straight into

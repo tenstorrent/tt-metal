@@ -21,6 +21,13 @@ const std::unordered_map<CoreCoord, DeviceAddr>& get_per_core_addresses(const Bu
     return buffer.per_core_addresses_;
 }
 
+DeviceAddr get_shard_base_address(const Buffer& buffer, CoreCoord core) {
+    if (is_per_core_allocation(buffer)) {
+        return get_per_core_address(buffer, core);
+    }
+    return buffer.address();
+}
+
 void copy_per_core_addresses(Buffer& dst, const Buffer& src) {
     TT_FATAL(
         dst.per_core_allocation_ && src.per_core_allocation_,

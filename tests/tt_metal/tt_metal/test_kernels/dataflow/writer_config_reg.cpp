@@ -21,12 +21,12 @@
 
 #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_alu_config(ckernel::unpacker::alu_config_t& config) {
-    config.ALU_ROUNDING_MODE_Fpu_srnd_en = 1;
+    config.ALU_ROUNDING_MODE_Fpu_srnd_en = 0;
     config.ALU_ROUNDING_MODE_Gasket_srnd_en = 0;
-    config.ALU_ROUNDING_MODE_Packer_srnd_en = 1;
-    config.ALU_ROUNDING_MODE_Padding = 15;
+    config.ALU_ROUNDING_MODE_Packer_srnd_en = 0;
+    config.ALU_ROUNDING_MODE_Padding = 0;
     config.ALU_ROUNDING_MODE_GS_LF = 0;
-    config.ALU_ROUNDING_MODE_Bfp8_HF = 1;
+    config.ALU_ROUNDING_MODE_Bfp8_HF = 0;
     config.ALU_FORMAT_SPEC_REG0_SrcAUnsigned = 1;
     config.ALU_FORMAT_SPEC_REG0_SrcBUnsigned = 0;
     config.ALU_FORMAT_SPEC_REG0_SrcA = 0;
@@ -255,22 +255,18 @@ void kernel_main() {
             std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS>
                 tile_descriptor_vec;
             UNPACK(tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();)
-            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
-            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
 
             dprint_tensix_unpack_tile_descriptor();
 
             tile_descriptor.f = tile_descriptor_vec[0];
-            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
             tile_descriptor.f = tile_descriptor_vec[1];
-            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 2, tile_descriptor);
             break;
         case UNPACK_CONFIG: uint num_of_words_unpack_config;
-#ifdef ARCH_GRAYSKULL
-            num_of_words_unpack_config = 3;
-#else
-            num_of_words_unpack_config = 4;
-#endif
+            num_of_words_unpack_config = 2;
             ckernel::unpacker::unpack_config_u unpack_config;
             generate_unpack_config(unpack_config.f);
             std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> unpack_config_vec;

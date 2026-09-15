@@ -32,8 +32,13 @@ class KimiK26Adapter(MLAPrefillAdapter):
     prefill_trace_default = "/mnt/models/deepseek-prefill-cache/golden/kimi-26/kimi_longbook_56320"
 
     # Single expert group + device gate: route routing-all-gather semaphores to L1_SMALL.
-    l1_small_size = 512
+    # Routing consumes 512 B; leave 256 B for MLA high-bandwidth-gather semaphores.
+    l1_small_size = 768
     routing_use_l1_small_for_semaphores = True
+
+    # Kimi ships a DFlash speculative drafter; the prefill runner can build its context-KV cache during
+    # prefill when a drafter checkpoint (DFLASH_HF_MODEL) is provided. K2.7 inherits this.
+    supports_dflash = True
 
     # --- test metadata (HF download coordinates + PCC thresholds) ---
     hf_repo_id = "moonshotai/Kimi-K2.6"

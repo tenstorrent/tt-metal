@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/endpoints.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -24,7 +25,10 @@ void kernel_main() {
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::in0);
-    DataflowBuffer cb_in1(dfb::in1);
+    // Staging area for the unaligned path is a private node-local L1 scratchpad (scratch::pad),
+    // constructed inside the unaligned branch below. It is NOT a DFB: the reader both fills it
+    // (src->scratch) and drains it (scratch->dest local copy), which would be an unsupported DM
+    // producer+consumer self-loop DFB on Gen2/Quasar.
 
     // The source-buffer base address is bound via the tensor parameter (tensor::src). The
     // legacy reader pre-shifted the base by `aligned_input_width_offset_bytes`; in the typed
@@ -50,10 +54,11 @@ void kernel_main() {
 
         constexpr uint32_t trid_base = 1;
 
-        cb_in1.reserve_back(num_trids);
-        // QSR: read page size from the DFB object (get_local_cb_interface().fifo_page_size is stale for Metal-2.0
-        // DFBs); cb_in1 constructed above
-        uint32_t scratch_cb_page_size = cb_in1.get_entry_size();
+        // Private node-local L1 scratchpad (raw memory, no producer/consumer credit semantics).
+        // Total size == num_trids * scratch_cb_page_size (set by the host ScratchpadSpec), so the
+        // per-slot page size is recovered by dividing the total by num_trids.
+        Scratchpad<uint32_t> scratch(scratch::pad);
+        uint32_t scratch_cb_page_size = scratch.size_in_bytes() / num_trids;
         SlotState slot_states[num_trids];
         uint32_t dest_offsets[num_trids];
         uint32_t scratch_offsets[num_trids];
@@ -68,8 +73,8 @@ void kernel_main() {
         UnicastEndpoint self_ep;
         const uint32_t my_noc_x = my_x[noc.get_noc_id()];
         const uint32_t my_noc_y = my_y[noc.get_noc_id()];
-        // Base L1 address of the scratch CB
-        const uint32_t scratch_l1_base = cb_in1.get_write_ptr();
+        // Base L1 address of the scratch region.
+        const uint32_t scratch_l1_base = scratch.get_base_address();
 
         uint32_t dest_off = 0;        // running offset into cb_in0
         uint32_t rows_issued = 0;     // Number of src->scratch transfers started
@@ -80,13 +85,15 @@ void kernel_main() {
                 uint32_t active_trid = trid_base + slot;
 
                 if (slot_states[slot] == SlotState::IDLE && rows_issued < block_height) {
-                    // Start new src->scratch transfer (TRID-tagged).
+                    // Start new src->scratch transfer (TRID-tagged). Destination is the raw L1
+                    // scratchpad slot, addressed directly (no DFB offset semantics).
+                    CoreLocalMem<uint32_t> scratch_dst(scratch_l1_base + scratch_offsets[slot]);
                     noc.async_read<NocOptions::TXN_ID>(
                         s0,
-                        cb_in1,
+                        scratch_dst,
                         aligned_block_width_bytes,
                         {.page_id = stick_id, .offset_bytes = aligned_input_width_offset_bytes},
-                        {.offset_bytes = scratch_offsets[slot]},
+                        {.offset_bytes = 0},
                         NocOptVals{.trid = static_cast<uint8_t>(active_trid)});
                     dest_offsets[slot] = dest_off;
                     slot_states[slot] = SlotState::SRC_PENDING;
@@ -124,10 +131,7 @@ void kernel_main() {
                 }
             }
         }
-
-        // cb_in1 is reserved once as an alignment scratchpad (no downstream consumer);
-        // commit the reservation so the CB is left balanced.
-        cb_in1.push_back(num_trids);
+        // No DFB bookkeeping: the scratchpad is raw L1 with no producer/consumer credits.
     }
     // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
     UnicastEndpoint self_ep;

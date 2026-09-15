@@ -84,7 +84,7 @@ from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_mesh import (
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup, interleaved_to_halfsplit_perm
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 
 # Bespoke suite: validated against recorded vLLM trace bundles (indexer logits/topk, sparse output,
@@ -405,15 +405,14 @@ def _run_device_forward(model, config, layer, mesh_device):
     sp_axis, tp_axis = 0, 1
     # Sparse: uncompressed bf16/ROW_MAJOR KVPE cache + indexed rope + a caller-owned indexer key cache.
     # Single-shot is folded onto the block-cyclic path (one full-seq chunk at offset 0).
-    kvpe_cache = init_kvpe_cache(
-        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+    kvpe_cache = init_mla_kv_cache(
+        cache_format=MlaKvCacheFormat.BF16_RM,
+        hf_config=config,
         mesh_device=mesh_device,
         seq_len=SEQ_LEN,
         mesh_shape=list(mesh_device.shape),
         sp_axis=sp_axis,
         num_kvpe_cache_layers=1,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     index_kv_cache = init_kvpe_cache(
         kvpe_cache_head_dim=config.index_head_dim,
@@ -447,7 +446,8 @@ def _run_device_forward(model, config, layer, mesh_device):
     ]  # [1, S, hidden]
     # KVPE: replicated across TP — concat TP replicas on the unused dim 1, keep first.
     kvpe_t = ttnn.to_torch(
-        kvpe_cache, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        kvpe_cache.storage,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
     ).to(torch.bfloat16)[
         0, 0, :SEQ_LEN
     ]  # [S, 576]

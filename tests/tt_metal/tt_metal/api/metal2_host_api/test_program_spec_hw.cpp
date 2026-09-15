@@ -23,8 +23,8 @@
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
+#include <tt-metalium/tensor/mesh_tensor.hpp>
+#include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
 
 #include "device_fixture.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
@@ -65,7 +65,7 @@ protected:
 //
 // Proves that DFB local accessor names work end-to-end on real WH/BH hardware:
 //   1. kernel_bindings_generated.h is emitted correctly (dfb::buf resolves at compile time)
-//   2. The DFBAccessor mechanism works (DFB ID maps to the correct underlying CB)
+//   2. The DFBBindingToken mechanism works (DFB ID maps to the correct underlying CB)
 //   3. Data flows correctly through the DFB from producer to consumer
 //
 // Pipeline:
@@ -667,8 +667,8 @@ TEST_F(ProgramSpecHWTest, TensorAccessorBindingLoopback) {
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, page_config, memory_config);
     auto tensor_spec = TensorSpec(Shape{num_pages, 512}, tensor_layout);
 
-    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
-    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor input_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
+    MeshTensor output_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     // -------------------------------------------------------
     // Build ProgramSpec: 2 DM kernels + 1 DFB + 2 TensorParameters
@@ -792,7 +792,7 @@ TEST_F(ProgramSpecHWTest, LocalTensorAccessorBindingCompileComputeKernel) {
 
     // Single-shard L1 tensor on core (0,0): one 32x32 BFLOAT16 tile.
     auto tensor_param = MakeShardedTensorParameter("local_t", Shape{32, 32}, {32, 32}, /*num_cores=*/1);
-    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec, TensorTopology{});
+    MeshTensor local_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_param.spec);
 
     ProgramSpec spec;
     spec.name = "local_tensor_accessor_compute";
@@ -1027,7 +1027,7 @@ TEST_F(ProgramSpecHWTest, CrtaAllFourSectionsSetAndPartialUpdate) {
         PageConfig(Layout::ROW_MAJOR),
         MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
     auto tensor_spec = TensorSpec(Shape{1, 512}, tensor_layout);
-    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
+    MeshTensor io_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec);
 
     ProgramSpec spec;
     spec.name = "crta_all_four_sections";
@@ -1095,18 +1095,18 @@ void kernel_main() {
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
-    // enqueue_invariant so the UPDATE phase may omit it (retaining its bound tensor) — exercises the
-    // "invariant tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
+    // The UPDATE phase omits this tensor (retaining its bound tensor) — exercises the
+    // "omitted tensor retained across partial update" path. dynamic_tensor_shape widens the binding to
     // two CRTA words (base + aligned_page_size) — the multi-word binding this test exists to stress.
     spec.tensor_parameters = {TensorParameter{
         .unique_id = TensorParamName{"io"},
         .spec = tensor_spec,
-        .advanced_options = TensorParameterAdvancedOptions{.enqueue_invariant = true, .dynamic_tensor_shape = true}}};
+        .relaxations = TensorSpecRelaxations{.dynamic_tensor_shape = true}}};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit_0", node, {"producer", "consumer"})};
 
     Program program = MakeProgramFromSpec(*mesh_device, spec);
 
-    // Consumer's per-node RTAs (re-supplied on every set/update — they are not enqueue-invariant).
+    // Consumer's per-node RTAs (re-supplied on every set/update in this test).
     auto consumer_args = [&]() {
         return ProgramRunArgs::KernelRunArgs{
             .kernel = KernelSpecName{"consumer"},
@@ -1177,7 +1177,7 @@ void kernel_main() {
         << "partial update: vararg 0 landed at the wrong offset — the vararg base must be "
            "named + tensor-binding(2 words) + scratchpad section words (the A1 sum with a multi-word binding).";
     EXPECT_EQ(u[5], kVararg1Upd) << "partial update: vararg 1 landed at the wrong offset";
-    // Not touched by this update — the invariant tensor's binding (both words) and the scratchpad must survive.
+    // Not touched by this update — the omitted tensor's binding (both words) and the scratchpad must survive.
     EXPECT_EQ(u[2], tensor_base) << "tensor-binding base slot was clobbered by the named/vararg partial update";
     EXPECT_EQ(u[6], kExpectedPageSize) << "tensor-binding page-size slot was clobbered by the partial update";
     EXPECT_EQ(u[3], scratch_base) << "scratchpad slot was clobbered by the named/vararg partial update";

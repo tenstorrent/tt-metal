@@ -218,24 +218,27 @@ def staging_dir(keep: bool, prefix: str) -> Iterator[Path]:
 def run_cabling_generator(
     cabling_gen: Path,
     repo_root: Path,
-    cabling_dir: Path,
+    cabling_args: List[str],
     deployment_path: Path,
     suffix: str,
     target_aggregated_dir: Path,
     verbose: bool,
 ) -> ClusterFiles:
-    """Invoke run_cabling_generator and copy its outputs into target_aggregated_dir."""
-    # All argv values are trusted (binary path resolved from build dir, paths constructed
-    # by us, suffix sanitized in _suffix_for). subprocess.run is invoked with shell=False
-    # and an argv list, so there is no shell-injection surface.
+    """Invoke run_cabling_generator and copy its outputs into target_aggregated_dir.
+
+    cabling_args are the mode-specific arguments describing the topology inputs, e.g.
+    ["--cabling", <dir>] for a flat merge or ["--aggregate", "--name", <name>, "--child", ...]
+    for a nested aggregation. All values are constructed by us (directory names / file paths
+    discovered on disk), and subprocess.run is invoked with shell=False, so there is no
+    shell-injection surface.
+    """
     if not cabling_gen.is_file() or cabling_gen.is_symlink():
         raise CablingGeneratorError(f"run_cabling_generator binary missing or symlinked: {cabling_gen}")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", suffix):
         raise CablingGeneratorError(f"refusing unsafe suffix: {suffix!r}")
     cmd = [
         str(cabling_gen),
-        "--cabling",
-        str(cabling_dir),
+        *cabling_args,
         "--deployment",
         str(deployment_path),
         "--output",
@@ -382,37 +385,36 @@ def aggregate_tree(
 
     try:
         with staging_dir(keep=args.keep_temp, prefix=f"merge_{source_dir.name}_") as staging:
-            staging_cabling = staging / "cabling"
-            staging_cabling.mkdir(parents=True, exist_ok=True)
-
+            # Nest each child under a composite root. The child's directory name uniquifies the top
+            # segment of the child's own intra-cluster hierarchy (taken from its FSD), so the
+            # aggregated FSD combines the directory forest (e.g. "out") with the descriptor's own
+            # hierarchy (e.g. "sp4-120-a29/sp2_0/..."). Glue files wire children together at this
+            # composite's level.
+            cabling_args: List[str] = ["--aggregate", "--name", source_dir.name]
             used_names: set = set()
             for name, cf in children:
-                # Disambiguate by child directory name to keep merged cabling filenames unique.
-                base = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
-                dest_name = f"{base}__cabling.textproto"
+                # Child directory names are unique within a composite; sanitize defensively and
+                # disambiguate in the unlikely event two sanitize to the same instance name.
+                inst = re.sub(r"[^A-Za-z0-9_.-]", "_", name)
+                candidate = inst
                 n = 1
-                while dest_name in used_names:
-                    dest_name = f"{base}__cabling_{n}.textproto"
+                while candidate in used_names:
+                    candidate = f"{inst}_{n}"
                     n += 1
-                used_names.add(dest_name)
-                _safe_copy(cf.cabling, staging_cabling / dest_name, staging_cabling)
+                used_names.add(candidate)
+                cabling_args += ["--child", f"{candidate}={cf.cabling}"]
+                # Supply the child's FSD (when present) so the generator can recover the child's
+                # intra-cluster hierarchy, which a flattened cabling descriptor no longer carries.
+                if cf.fsd is not None:
+                    cabling_args += ["--child-fsd", f"{candidate}={cf.fsd}"]
+                # Supply the child's own deployment so it loads against its host_id-indexed hosts. This
+                # is required for hierarchical (instance-named) children produced by nested composites,
+                # whose leaf nodes are not named by hostname and so cannot be sliced from the composite
+                # deployment.
+                cabling_args += ["--child-deployment", f"{candidate}={cf.deployment}"]
 
             for g in glue:
-                # g.name is the basename (Path.name strips any directory component).
-                # Re-sanitize for defense in depth and to satisfy SAST.
-                base = re.sub(r"[^A-Za-z0-9_.-]", "_", g.name)
-                # Force glue files to sort lexicographically AFTER all child cabling
-                # descriptors. run_cabling_generator constructs the base topology from
-                # the first .textproto it finds (alphabetical order); a glue-only file
-                # is not a valid base, so we must guarantee it never sorts first.
-                stem, ext = Path(base).stem, Path(base).suffix
-                dest_name = f"zz_glue__{stem}{ext}"
-                n = 1
-                while dest_name in used_names:
-                    dest_name = f"zz_glue__{stem}_{n}{ext}"
-                    n += 1
-                used_names.add(dest_name)
-                _safe_copy(g, staging_cabling / dest_name, staging_cabling)
+                cabling_args += ["--glue", str(g)]
 
             staged_deployment = staging / "deployment.textproto"
             concat_deployments([cf.deployment for _, cf in children], staged_deployment, staging)
@@ -420,7 +422,7 @@ def aggregate_tree(
             return run_cabling_generator(
                 cabling_gen=cabling_gen,
                 repo_root=repo_root,
-                cabling_dir=staging_cabling,
+                cabling_args=cabling_args,
                 deployment_path=staged_deployment,
                 suffix=_suffix_for(rel, source_dir.name),
                 target_aggregated_dir=target_aggregated_dir,

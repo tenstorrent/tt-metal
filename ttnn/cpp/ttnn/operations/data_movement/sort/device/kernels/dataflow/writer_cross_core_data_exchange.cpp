@@ -5,31 +5,20 @@
 #include "cross_core_data_exchange_common.hpp"
 #include "sort_dataflow_common.hpp"
 
+#include "experimental/kernel_args.h"
+
 #include <cstdint>
 
 void kernel_main() {
-    // Runtime args
-    const uint32_t output_tensor_buffer_addr = get_arg_val<uint32_t>(0);
-
     // Compile time args
-    constexpr uint32_t compute_with_storage_grid_size_x = get_compile_time_arg_val(0);
-    constexpr uint32_t compute_with_storage_grid_size_y = get_compile_time_arg_val(1);
-    constexpr uint32_t index_tensor_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t value_tensor_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t value_tensor_peer_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t physical_core_lookup_table_dfb_index =
-        get_compile_time_arg_val(5);  // unused - for future improvements
-    constexpr uint32_t Wt = get_compile_time_arg_val(6);
-    constexpr uint32_t Ht = get_compile_time_arg_val(7);
-    constexpr uint32_t number_of_tiles_per_core = get_compile_time_arg_val(8);
-    constexpr uint32_t number_of_cores_used = get_compile_time_arg_val(9);           // unused - for future improvements
-    const uint32_t sem_exchange_addr = get_semaphore(get_compile_time_arg_val(10));  // unused - for future improvements
-    constexpr bool is_32_bit_data = get_compile_time_arg_val(11) == 1;
-    constexpr bool is_row_major = get_compile_time_arg_val(12) == 1;
-    constexpr uint32_t rm_value_output_dfb_index = get_compile_time_arg_val(13);
-    constexpr uint32_t W_value_slice_bytes = get_compile_time_arg_val(14);
-
-    constexpr auto value_tensor_args = TensorAccessorArgs<15>();
+    constexpr uint32_t compute_with_storage_grid_size_x = get_arg(args::compute_with_storage_grid_size_x);
+    constexpr uint32_t compute_with_storage_grid_size_y = get_arg(args::compute_with_storage_grid_size_y);
+    constexpr uint32_t Wt = get_arg(args::Wt);
+    constexpr uint32_t Ht = get_arg(args::Ht);
+    constexpr uint32_t number_of_tiles_per_core = get_arg(args::number_of_tiles_per_core);
+    constexpr uint32_t number_of_cores_used = get_arg(args::number_of_cores_used);  // unused - for future improvements
+    constexpr bool is_32_bit_data = get_arg(args::is_32_bit_data) == 1;
+    constexpr uint32_t W_value_slice_bytes = get_arg(args::W_value_slice_bytes);
 
     // Constants
     constexpr uint32_t one_tile = 1;
@@ -42,32 +31,36 @@ void kernel_main() {
     const uint16_t processing_pair_end = processing_pair_start + number_of_pairs_processed_by_each_core;
 
     // Output tensor config
-    const auto output_tensor_accessor = TensorAccessor(value_tensor_args, output_tensor_buffer_addr);
+    const auto output_tensor_accessor = TensorAccessor(tensor::value_tensor);
 
     Noc noc;
-    DataflowBuffer value_tensor_dfb(value_tensor_cb_index);
-    DataflowBuffer rm_value_output_dfb(rm_value_output_dfb_index);
-    DataflowBuffer physical_core_lookup_table_dfb(physical_core_lookup_table_dfb_index);
-    constexpr uint32_t value_tensor_tile_size = get_tile_size(value_tensor_cb_index);
+#ifdef IS_ROW_MAJOR
+    DataflowBuffer rm_value_output_dfb(dfb::rm_value_output);
+#else
+    DataflowBuffer value_tensor_dfb(dfb::value_tensor);
+    const uint32_t value_tensor_tile_size = value_tensor_dfb.get_tile_size();
+#endif
+    DataflowBuffer physical_core_lookup_table_dfb(dfb::physical_core_lookup_table);
 
     constexpr uint32_t TILE_H = 32;  // TILE_HEIGHT
     const uint32_t value_slice_offset_bytes = core_id * W_value_slice_bytes;
 
     for (uint32_t h = 0; h < Ht; h++) {
         // Generate input index tiles (TILE format).
-        // The RM path also relies on these — the compute kernel sorts indices
+        // The RM path also relies on these; the compute kernel sorts indices
         // alongside values in TILE format, then pack_untilize's the result into
-        // RM rows for the reader to drain.  No need for an RM-specific index
+        // RM rows for the reader to drain. No need for an RM-specific index
         // generator here.
         for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
             if (is_32_bit_data) {
-                generate_index_tile<uint32_t>(index_tensor_cb_index, core_id * number_of_tiles_per_core + w);
+                generate_index_tile<uint32_t>(dfb::index_tensor, core_id * number_of_tiles_per_core + w);
             } else {
-                generate_index_tile<uint16_t>(index_tensor_cb_index, core_id * number_of_tiles_per_core + w);
+                generate_index_tile<uint16_t>(dfb::index_tensor, core_id * number_of_tiles_per_core + w);
             }
         }  // w loop
 
-        if constexpr (is_row_major) {
+#ifdef IS_ROW_MAJOR
+        {
             // ROW_MAJOR output values: drain TILE_H untilized value rows from
             // rm_value_output_dfb (compute pack_untilize'd them) and write each
             // row's per-core W-slice back to DRAM.
@@ -83,7 +76,9 @@ void kernel_main() {
                 noc.async_write_barrier();
                 rm_value_output_dfb.pop_front(one_tile);
             }
-        } else {
+        }
+#else
+        {
             // Write value tensor to DRAM (TILE path)
             for (uint32_t w = 0; w < number_of_tiles_per_core; w++) {
                 value_tensor_dfb.wait_front(one_tile);
@@ -98,6 +93,7 @@ void kernel_main() {
                 value_tensor_dfb.pop_front(one_tile);
             }  // Wt loop
         }
+#endif
     }  // h loop
     physical_core_lookup_table_dfb.push_back(one_tile);
 }

@@ -4,40 +4,37 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 #include <tt-metalium/constants.hpp>
 #include "ckernel.h"
 #include "ckernel_defs.h"
 
 void kernel_main() {
     // Runtime args
-    const uint32_t user_ids_tensor_buffer_addr = get_arg_val<uint32_t>(0);
-    const uint32_t core_id = get_arg_val<uint32_t>(1);
+    const auto core_id = get_arg(args::core_id);
 
     // Compile time args
-    constexpr uint32_t user_ids_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t kernel_communication_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t number_of_ids = get_compile_time_arg_val(2);
-    constexpr auto user_ids_tensor_accessor_args = TensorAccessorArgs<3>();
+    constexpr auto number_of_ids = get_arg(args::number_of_ids);
 
     // Constants
     constexpr uint32_t one_tile = 1;
 
-    // Index tensor config
-    constexpr DataFormat user_ids_tensor_data_format = get_dataformat(user_ids_cb_index);
-    const auto user_ids_tensor_dram = TensorAccessor(user_ids_tensor_accessor_args, user_ids_tensor_buffer_addr);
-
     Noc noc;
-    CircularBuffer user_ids_cb(user_ids_cb_index);
-    CircularBuffer kernel_communication_cb(kernel_communication_cb_index);
+    DataflowBuffer user_ids_dfb(dfb::user_ids);
+    DataflowBuffer kernel_communication_dfb(dfb::kernel_communication);
 
-    // Read user_id from circular buffer
-    user_ids_cb.reserve_back(one_tile);
-    const uint32_t l1_write_addr_index = user_ids_cb.get_write_ptr();
+    // Index tensor config
+    const DataFormat user_ids_tensor_data_format = user_ids_dfb.get_dataformat();
+    const auto user_ids_tensor_dram = TensorAccessor(tensor::user_ids);
+
+    // Read user_id from dataflow buffer
+    user_ids_dfb.reserve_back(one_tile);
+    const uint32_t l1_write_addr_index = user_ids_dfb.get_write_ptr();
     noc.async_read(
-        user_ids_tensor_dram, user_ids_cb, get_tile_size(user_ids_cb_index), {.page_id = 0}, {.offset_bytes = 0});
+        user_ids_tensor_dram, user_ids_dfb, user_ids_dfb.get_tile_size(), {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
     // Process user_ids
@@ -51,10 +48,10 @@ void kernel_main() {
     }
 
     // Prepare message for compute kernel
-    kernel_communication_cb.reserve_back(one_tile);
-    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_cb.get_write_ptr());
+    kernel_communication_dfb.reserve_back(one_tile);
+    CoreLocalMem<volatile uint32_t> communication_ptr(kernel_communication_dfb.get_write_ptr());
     communication_ptr[0] = is_user_id ? 1 : 0;
 
     // Send to compute kernel
-    kernel_communication_cb.push_back(one_tile);
+    kernel_communication_dfb.push_back(one_tile);
 }

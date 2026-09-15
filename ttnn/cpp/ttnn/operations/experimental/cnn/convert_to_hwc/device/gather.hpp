@@ -24,8 +24,8 @@ namespace ttnn::experimental::prim {
 struct GatherTransfer {
     uint32_t src_core_idx;
     uint32_t dst_core_idx;
-    CoreCoord src_core_coord;
-    CoreCoord dst_core_coord;
+    tt::tt_metal::CoreCoord src_core_coord;
+    tt::tt_metal::CoreCoord dst_core_coord;
     uint32_t src_offset;  // Offset within source shard (in elements)
     uint32_t dst_offset;  // Offset within destination shard (in elements)
     uint32_t length;      // Number of elements to transfer
@@ -35,8 +35,8 @@ struct GatherTransfer {
     GatherTransfer(
         uint32_t sc_idx,
         uint32_t dc_idx,
-        const CoreCoord& sc_coord,
-        const CoreCoord& dc_coord,
+        const tt::tt_metal::CoreCoord& sc_coord,
+        const tt::tt_metal::CoreCoord& dc_coord,
         uint32_t s_off,
         uint32_t d_off,
         uint32_t len,
@@ -148,16 +148,16 @@ std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores);
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores);
 
 // Variant that allows overriding the per-output-core width (useful for uneven output sharding)
 std::vector<GatherTransfer> precompute_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
-    const std::vector<CoreCoord>& output_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& output_cores,
     uint32_t output_shard_width_override);
 
 /**
@@ -180,7 +180,7 @@ std::vector<LowLevelGatherTransfer> lower_gather_transfers(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
     uint32_t output_shard_width);
@@ -209,7 +209,7 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
     uint32_t B,
     uint32_t C,
     uint32_t HW,
-    const std::vector<CoreCoord>& input_cores,
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
     uint32_t num_output_cores,
     uint32_t element_size_bytes,
     uint32_t block_size,
@@ -226,7 +226,7 @@ BlockedTransfersWithCount group_transfers_by_output_column_blocks(
  * @return Vector of GatherTransfer objects sorted by source for optimal cache access
  */
 std::vector<GatherTransfer> precompute_gather_transfers(
-    const Tensor& input, const std::vector<CoreCoord>& output_cores);
+    const Tensor& input, const std::vector<tt::tt_metal::CoreCoord>& output_cores);
 
 /**
  * @brief Tensor-based interface for blocked transfer grouping
@@ -300,10 +300,10 @@ inline uint32_t elements_to_bytes(uint32_t element_count, uint32_t element_size)
 inline void serialize_low_level_transfer(
     const LowLevelGatherTransfer& transfer,
     std::vector<uint32_t>& output,
-    const std::vector<CoreCoord>& input_cores,
-    const std::function<CoreCoord(const CoreCoord&)>& logical_to_worker_core) {
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::function<tt::tt_metal::CoreCoord(const tt::tt_metal::CoreCoord&)>& logical_to_worker_core) {
     // Convert logical core coordinates to worker core coordinates
-    CoreCoord logical_core = input_cores[transfer.src_shard_idx];
+    tt::tt_metal::CoreCoord logical_core = input_cores[transfer.src_shard_idx];
     auto worker_core = logical_to_worker_core(logical_core);
 
     // Kernel pulls data from input so only source core x/y is required
@@ -319,8 +319,8 @@ inline void serialize_low_level_transfer(
 
 inline std::vector<uint32_t> serialize_blocked_transfer_groups(
     const std::vector<BlockedTransferGroup>& groups,
-    const std::vector<CoreCoord>& input_cores,
-    const std::function<CoreCoord(const CoreCoord&)>& logical_to_worker_core) {
+    const std::vector<tt::tt_metal::CoreCoord>& input_cores,
+    const std::function<tt::tt_metal::CoreCoord(const tt::tt_metal::CoreCoord&)>& logical_to_worker_core) {
     std::vector<uint32_t> output;
     const uint32_t number_of_blocks = groups.size();
     output.push_back(number_of_blocks);

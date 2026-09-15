@@ -71,7 +71,7 @@ void kernel_main() {
     constexpr uint32_t HtWt = Ht * Wt;
 
     constexpr auto cb_out_init = gamma_grad_has_value ? cb_dgamma : cb_dbeta;
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_0, cb_out_init);
 
     dfb_scaler_obj.wait_front(onetile);  // comes from the reader
 
@@ -171,10 +171,10 @@ void kernel_main() {
                 dfb_xmm_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    sub_bcast_cols_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_bcast_cols_init_with_dt(dfb_x_obj, dfb_mean_obj);
                     sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
                 } else {
-                    sub_tiles_bcast_scalar_init_short_with_dt(dfb_x_obj, dfb_mean_obj);
+                    sub_bcast_scalar_init_with_dt(dfb_x_obj, dfb_mean_obj);
                     sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
                 }
 
@@ -211,10 +211,10 @@ void kernel_main() {
                 dfb_y_obj.reserve_back(onetile);
 
                 if (is_lastdim_layernorm) {
-                    mul_bcast_cols_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_bcast_cols_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                     mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
                 } else {
-                    mul_tiles_bcast_scalar_init_short_with_dt(dfb_xmm_obj, dfb_rstd_obj);
+                    mul_bcast_scalar_init_with_dt(dfb_xmm_obj, dfb_rstd_obj);
                     mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
                 }
                 tile_regs_commit();

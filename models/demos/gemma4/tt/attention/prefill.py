@@ -296,11 +296,20 @@ def _prefill_forward_single(
                 compute_kernel_config=sdpa_ckc,
             )
         # Save this chunk's last ``hist`` K/V tokens as the next chunk's tail.
+        # The slices must outlive tt_k / tt_v (deallocated below); force an
+        # independent DRAM copy so deallocation of the parent doesn't
+        # invalidate the tail.
         kseq = tt_k.shape[-2]
         nkv = tt_k.shape[1]
         tail_start = max(0, kseq - hist)
-        k_tail_out = ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim])
-        v_tail_out = ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim])
+        k_tail_out = ttnn.clone(
+            ttnn.slice(tt_k, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        v_tail_out = ttnn.clone(
+            ttnn.slice(tt_v, [0, 0, tail_start, 0], [1, nkv, kseq, config.head_dim]),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
         sliding_tail_out = (k_tail_out, v_tail_out)
     elif need_cross_chunk:
         # Full-attention chunk N>0: attend the full prefix already filled in the

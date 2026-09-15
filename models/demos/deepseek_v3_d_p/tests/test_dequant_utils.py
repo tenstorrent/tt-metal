@@ -21,6 +21,7 @@ import torch
 from models.demos.deepseek_v3_d_p.utils.test_utils import (
     _dequantize_packed_int4_weight,
     _pack_quant_params,
+    convert_state_dict,
     dequantize_state_dict,
     is_pack_quantized_int4,
 )
@@ -123,3 +124,69 @@ def test_dequantize_state_dict_int4_pack_quant_round_trip():
     # fp32 passthrough must NOT be downcast to bf16 (router-bias precision).
     assert out[bias].dtype == torch.float32
     torch.testing.assert_close(out[bias], bias_val, rtol=0, atol=0)
+
+
+def test_convert_state_dict_passes_through_dequantized_checkpoint():
+    """A dequantized checkpoint has no `quantization_config`, so nothing may reach the dequantizer --
+    it reads quantization metadata up front and would raise (the Kimi prefill-block CI failure)."""
+    weight = torch.tensor([[1.25, -0.75]], dtype=torch.bfloat16)
+    bias = torch.tensor([1.5, -2.5], dtype=torch.float32)  # router bias -- must stay fp32
+    hf_config = SimpleNamespace()  # no quantization_config at all
+
+    out = convert_state_dict({"mlp.gate.weight": weight, "mlp.gate.e_score_correction_bias": bias}, hf_config)
+
+    assert set(out) == {"mlp.gate.weight", "mlp.gate.e_score_correction_bias"}
+    assert out["mlp.gate.weight"].dtype == torch.bfloat16
+    torch.testing.assert_close(out["mlp.gate.weight"], weight, rtol=0, atol=0)
+    # Source dtype preserved, matching the INT4 path's passthrough (no bf16 downcast of the router bias).
+    assert out["mlp.gate.e_score_correction_bias"].dtype == torch.float32
+    torch.testing.assert_close(out["mlp.gate.e_score_correction_bias"], bias, rtol=0, atol=0)
+
+
+def test_convert_state_dict_dequantizes_int4_pack_quantized_checkpoint():
+    """With a `quantization_config` present, convert_state_dict must take the INT4 dequant path."""
+    levels = torch.tensor([[-8, -1, 0, 7, 3, -4, 5, -2]], dtype=torch.int64)
+    group_size = 8
+    scale = torch.tensor([[0.25]], dtype=torch.float32)
+
+    weight = "model.layers.0.mlp.experts.0.gate_proj.weight"
+    state_dict = {
+        f"{weight}_packed": _pack_int4_offset_binary(levels),
+        f"{weight}_scale": scale,
+        f"{weight}_shape": torch.tensor([levels.shape[0], levels.shape[1]]),
+    }
+    hf_config = SimpleNamespace(quantization_config=_int4_quant_config(group_size))
+
+    out = convert_state_dict(state_dict, hf_config, dtype=torch.bfloat16)
+
+    assert set(out) == {weight}
+    expected = (levels.to(torch.float32) * scale.repeat_interleave(group_size, dim=1)).to(torch.bfloat16)
+    torch.testing.assert_close(out[weight], expected, rtol=0, atol=0)
+
+
+def test_convert_state_dict_reads_quantization_config_nested_under_text_config():
+    """Kimi's multimodal checkpoint nests the LM config; missing it would pass INT4 payload through raw."""
+    levels = torch.tensor([[-8, -1, 0, 7, 3, -4, 5, -2]], dtype=torch.int64)
+    group_size = 8
+    weight = "model.layers.0.mlp.experts.0.gate_proj.weight"
+    state_dict = {
+        f"{weight}_packed": _pack_int4_offset_binary(levels),
+        f"{weight}_scale": torch.tensor([[0.25]], dtype=torch.float32),
+        f"{weight}_shape": torch.tensor([levels.shape[0], levels.shape[1]]),
+    }
+    hf_config = SimpleNamespace(text_config=SimpleNamespace(quantization_config=_int4_quant_config(group_size)))
+
+    out = convert_state_dict(state_dict, hf_config, dtype=torch.bfloat16)
+
+    assert set(out) == {weight}  # dequantized, not passed through as raw _packed/_scale/_shape
+
+
+def test_convert_state_dict_rejects_quantized_payload_without_quantization_config(expect_error):
+    """Quantized weights whose config lost its metadata must fail loudly, not pass through as garbage."""
+    hf_config = SimpleNamespace()
+
+    with expect_error(ValueError, "no `quantization_config`"):
+        convert_state_dict({"w.weight_packed": torch.zeros(1, 1, dtype=torch.int32)}, hf_config)
+
+    with expect_error(ValueError, "no `quantization_config`"):
+        convert_state_dict({"w.weight": torch.zeros(1, 1).to(torch.float8_e4m3fn)}, hf_config)

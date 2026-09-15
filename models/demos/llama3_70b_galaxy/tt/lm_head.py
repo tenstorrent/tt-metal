@@ -53,6 +53,10 @@ class LMHead(LightweightModule):
             if args.dummy_weights
             else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_prefill"
         )
+        # On Blackhole (no prefetcher) decode uses a per-device matmul on the unpadded
+        # column-fractured K (matching the attention QKV no-prefetch path), so it does not
+        # require the ring-padded weight.
+        self.no_prefetcher = not args.use_prefetcher
         padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
         padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
 
@@ -141,7 +145,27 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         outputs = []
         num_links = 3
-        if mode == "decode":
+        if mode == "decode" and self.no_prefetcher:
+            num_links = self.args.model_config["GALAXY_NUM_LINKS"]
+            # Blackhole no-prefetch: per-device matmul on the unpadded column-fractured K
+            # (the ring matmul is prefetcher-only). Each column produces a partial logits tensor;
+            # the cross-column reduction is done by line_all_reduce below.
+            x_in = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+            for weight in self.output_weights_prefill:
+                output = ttnn.linear(
+                    x_in,
+                    weight,
+                    compute_kernel_config=self.compute_kernel_config,
+                    program_config=None,
+                    core_grid=None,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    dtype=ttnn.bfloat8_b,
+                )
+                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+                outputs.append(output)
+            if x_in is not x:
+                ttnn.deallocate(x_in)
+        elif mode == "decode":
             num_links = self.args.model_config["GALAXY_NUM_LINKS"]
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])

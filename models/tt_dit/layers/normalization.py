@@ -203,6 +203,7 @@ class DistributedRMSNorm(Module):
         trans_mat=None,
         dtype=None,
         dynamic_weight=None,
+        dynamic_bias=None,
         per_head_norm=False,
     ) -> ttnn.Tensor:
         # per_head_norm selects the normalization semantics when the activation is
@@ -229,6 +230,15 @@ class DistributedRMSNorm(Module):
         if dynamic_weight is not None:
             weight = dynamic_weight if weight is None else ttnn.multiply(weight, dynamic_weight)
         weight_key = tuple(weight.shape) if weight is not None else None
+
+        # dynamic_bias is the additive half of an adaLN modulation (the `shift`), folded into the same
+        # fused op as the scale so the caller needs no separate elementwise add. The device op accepts
+        # a per-token bias of shape [.., N, H] alongside a per-token weight; it requires a weight
+        # whenever a bias is given. Unlike the weight it does not reach create_stats_buffer, because
+        # only the weight can change the stats scratch geometry -- hence it is absent from the cache key.
+        if dynamic_bias is not None and weight is None:
+            msg = "dynamic_bias requires a weight: pass dynamic_weight or build the norm with affine=True"
+            raise ValueError(msg)
 
         # Fused distributed RMSNorm device op (PRE sum-of-squares + fabric ring AG + POST
         # normalize, with optional fused RoPE / per-head norm).
@@ -265,6 +275,7 @@ class DistributedRMSNorm(Module):
             num_heads_per_device=num_heads_per_device,
             per_head_norm=per_head_norm,
             weight=weight,
+            bias=dynamic_bias,
             compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
             num_preferred_links=self.ccl_manager.num_links,  # must match create_stats_buffer above
             transformation_mat=trans_mat,
@@ -351,8 +362,7 @@ class DistributedLayerNorm(Module):
         """Lazy-allocate the row-major fp32 reciprocal LUT the fused op consumes.
 
         The fused op's reader NoC-reads a ROW_MAJOR [1,1,1,width_per_device] DRAM tensor
-        holding [1/1..1/width] (replicated per device) — unlike the composite Welford op,
-        which used a HEIGHT_SHARDED L1 layout. Cached per (device, width).
+        holding [1/1..1/width] (replicated per device). Cached per (device, width).
         """
         width = self.embedding_dim // self.mesh_width
         key = (self.mesh_device.id(), width)
@@ -423,7 +433,7 @@ Set mesh_axis to None to disable data parallelism.
 class GroupNorm(Module):
     default_num_out_blocks = {
         # (Batch, Height, Width, Channels): num_out_blocks
-    }  # used to override the num_out_blocks computed based on the input shape.
+    }  # overrides the num_out_blocks computed from the input shape.
 
     def __init__(
         self,
@@ -469,11 +479,6 @@ class GroupNorm(Module):
             math.ceil(self.num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols,
             32,
         ]
-        block_wt = ttnn.operations.normalization.find_max_tile_span(
-            self.num_channels, self.num_channels // self.num_groups, 32
-        )
-        mask_shape = [1, self.num_groups, 32, 32 * block_wt]
-
         self.weight = Parameter(
             total_shape=weight_shape,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -486,7 +491,6 @@ class GroupNorm(Module):
             mesh_axes=[mesh_axis, None, None, None],
             device=self.mesh_device,
         )
-        self.mask = Parameter(total_shape=mask_shape, device=self.mesh_device)
 
     @classmethod
     def from_torch(
@@ -515,9 +519,6 @@ class GroupNorm(Module):
         if "bias" in state:
             state["bias"] = self._prepare_param(state["bias"])
 
-        input_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
-        state["mask"] = ttnn.to_torch(input_mask)
-
     def _prepare_param(self, param: torch.Tensor) -> torch.Tensor:
         expected_shape = (self.num_channels * self.num_devices,)
         assert param.shape == expected_shape, f"expected shape {expected_shape}, got {param.shape}"
@@ -534,7 +535,6 @@ class GroupNorm(Module):
         kwargs = dict(
             weight=self.weight.data,
             bias=self.bias.data,
-            input_mask=self.mask.data,
             num_groups=self.num_groups,
             epsilon=self.eps,
             core_grid=self.core_grid,
@@ -557,7 +557,7 @@ class GroupNorm3D(Module):
     Routes through the DRAM-interleaved ``ttnn.group_norm``. The grid is pinned at
     construction from ``input_nhw``/``num_batches`` via
     ``determine_expected_group_norm_dram_grid_size`` (uniform multicast groups; avoids
-    the mcast deadlock at small spatial sizes), so gamma/beta/mask are static
+    the mcast deadlock at small spatial sizes), so gamma/beta are static
     ``Parameter``s and round-trip through ``Module.save``/``load``.
     """
 
@@ -599,12 +599,9 @@ class GroupNorm3D(Module):
         )
 
         weight_shape = [1, 1, math.ceil(num_channels // self.num_virtual_cols / 32) * self.num_virtual_cols, 32]
-        block_wt = ttnn.operations.normalization.find_max_tile_span(num_channels, num_channels // num_groups, 32)
-        mask_shape = [1, num_groups, 32, 32 * block_wt]
 
         self.weight = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
         self.bias = Parameter(total_shape=weight_shape, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, device=mesh_device)
-        self.mask = Parameter(total_shape=mask_shape, dtype=dtype, device=mesh_device)
 
     @classmethod
     def from_torch(
@@ -637,8 +634,6 @@ class GroupNorm3D(Module):
             state["bias"] = ttnn.create_group_norm_weight_bias_rm(
                 state["bias"], self.num_channels, self.num_virtual_cols
             )
-        mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.num_virtual_cols)
-        state["mask"] = ttnn.to_torch(mask)
 
     def forward(self, x_BTHWC: ttnn.Tensor) -> ttnn.Tensor:
         B, T, H, W, C = x_BTHWC.shape
@@ -659,7 +654,6 @@ class GroupNorm3D(Module):
             # -1 = built-in chunk heuristic. Default 1 (with pinned core_grid) overflows L1
             # at large gathered spatial.
             num_out_blocks=-1,
-            input_mask=self.mask.data,
             weight=self.weight.data,
             bias=self.bias.data,
             epsilon=self.eps,

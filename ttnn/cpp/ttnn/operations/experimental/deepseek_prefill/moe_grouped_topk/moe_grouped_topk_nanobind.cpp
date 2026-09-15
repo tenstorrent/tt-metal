@@ -16,11 +16,28 @@ void bind_moe_grouped_topk(nb::module_& mod) {
     ttnn::bind_function<"moe_grouped_topk", "ttnn.experimental.deepseek_prefill.">(
         mod,
         R"doc(
-            Gating mechanism for routing inputs in a mixture-of-experts (MoE) model, specifically optimized for DeepSeek. This operation post-processes the scores and bias from the linear gate projection. To each score, it applies a sigmoid, adds the bias, and reshapes the scores into groups. It then sorts the scores within each group, sums the scores of the top p experts in each group, and selects the top k groups. It then selects the top n experts from the selected groups and gathers the unbiased scores (original sigmoid output) based on the top k experts indices. It then normalizes the chosen scores and scales the normalized scores by the scales.
+            Gating mechanism for routing inputs in a mixture-of-experts (MoE) model, specifically
+            optimized for DeepSeek. It post-processes the scores and bias from the linear gate
+            projection through the following stages:
+
+              1. Activation: apply the router affinity activation (score_func) to each score.
+              2. Bias: add the bias and reshape the biased scores into ``n_groups`` groups.
+              3. Group ranking: sort scores within each group, sum the top ``summed_experts_per_group``
+                 experts per group, and select the top ``topk_groups`` groups by that sum.
+              4. Expert selection: select the top ``n_activated_experts`` experts from the selected
+                 groups, then gather the unbiased scores (the activation output, without the bias)
+                 for those experts.
+              5. Normalize and scale: normalize the gathered scores and scale them by ``route_scale``.
 
             Args:
-                scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
-                bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32, layout must be TILE). The shape should be [N, B, S, 256]. N, B and S can be any value. 256 is the number of experts in DeepSeek at each layer.
+                scores (ttnn.Tensor): Input scores tensor (dtype must be FLOAT32 or BFLOAT16, layout must be
+                    TILE). BFLOAT16 inputs are upcast to FLOAT32 inside the kernel, so the op computes in fp32
+                    either way (this avoids a separate host-side typecast). The shape should be [N, B, S, E],
+                    where N, B and S can be any value and E is the number of experts. For the grouped path
+                    (n_groups == 8) E must be 256 (DeepSeek). For the single-group path (n_groups == 1) E may be
+                    any tile-aligned width (a multiple of 32), e.g. 384 for Kimi.
+                bias (ttnn.Tensor): Bias tensor (dtype must be FLOAT32 or BFLOAT16, layout must be TILE).
+                    BFLOAT16 inputs are upcast to FLOAT32 inside the kernel. Same shape [N, B, S, E] as ``scores``.
                 n_groups (int): Number of groups to partition the experts into. Right now this number must be 8.
                 summed_experts_per_group (int): Number of experts per group to sum prior to ranking groups. Right now this number must be 2.
                 topk_groups (int): Number of top groups to select from. Right now this number must be 4.
@@ -32,6 +49,11 @@ void bind_moe_grouped_topk(nb::module_& mod) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the output tensor. Defaults to None, which results in auto-selection.
                 padding_config (ttnn.Tensor, optional): ROW_MAJOR UINT32 tensor with per-device [num_real_tokens, pad_side].
                     pad_side is 0 for right padding and 1 for left padding. Defaults to None, which treats all tokens as real.
+                biased_scores (ttnn.Tensor, optional): Test-only debug output. A pre-allocated FLOAT32 TILE tensor with
+                    the same shape as ``scores``; when provided, the op writes the full-width biased scores
+                    (score_activation(logits) + bias, before top-k selection) into it. This is the exact tensor top-k
+                    operates on, so it can be compared against a reference implementation without top-k tie-break
+                    ambiguity. Defaults to None (no debug output, zero overhead).
 
             Returns:
                 Tuple[ttnn.Tensor, ttnn.Tensor]: A tuple containing the scaled expert scores (dtype BFLOAT16) and selected expert indices (dtype UINT16). The shape of the scores tensor should be [N, B, S, 8]. The shape of the indices tensor should be [N, B, S, 8]. N, B and S can be any value. 8 is the number of experts in the final selected groups.
@@ -49,7 +71,8 @@ void bind_moe_grouped_topk(nb::module_& mod) {
         nb::arg("stable_sort") = false,
         nb::arg("score_func") = "sigmoid",
         nb::arg("memory_config") = nb::none(),
-        nb::arg("padding_config") = nb::none());
+        nb::arg("padding_config") = nb::none(),
+        nb::arg("biased_scores") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk::detail

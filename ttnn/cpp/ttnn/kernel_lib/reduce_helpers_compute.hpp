@@ -299,8 +299,8 @@ struct NoOp {
  *                       SFPU; MIN dispatched via reduce_{h,w}_neg.cpp (SFPU vs FPU branch).
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
- * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 SUM through
- *                   the SFPU for full-fp32 accumulation; see ReduceFp32Mode.
+ * @tparam fp32_mode Float32 precision mode (default: Fast). Accurate routes Float32 SUM and MAX
+ *                   through the SFPU at full fp32; see ReduceFp32Mode.
  *
  * @param input_block_shape Tile grid dimensions (rows x cols x batches)
  *              Use ReduceInputBlockShape::of(r, c, b), ::row(c), ::col(r), or ::single()

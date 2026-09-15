@@ -146,7 +146,7 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     const auto q_in = make_q_input(batch, shape.n_heads, seq_len, qk_head, 1001U);
     const auto params = ttml::ops::build_rope_params(seq_len, shape.qk_rope_dim, /*theta=*/10000.0F);
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto run_step = [&]() {
         if (use_fused) {
@@ -162,13 +162,13 @@ double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batc
     for (uint32_t step = 0; step < cfg.num_warmup; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     for (uint32_t step = 0; step < cfg.num_measure; ++step) {
         run_step();
     }
-    tt::tt_metal::distributed::Synchronize(device, std::nullopt);
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
     const auto t1 = std::chrono::high_resolution_clock::now();
 
     ttml::autograd::ctx().reset_graph();

@@ -58,7 +58,8 @@ struct noc_traits_t<UnicastEndpoint> {
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             return args.addr;
         } else {
-            uint64_t noc_addr = src.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            uint64_t noc_addr =
+                src.get_noc_unicast_addr(args.noc_x, args.noc_y, Noc::l1_cached_view(args.addr), noc.get_noc_id());
             return noc_addr;
         }
     }
@@ -67,7 +68,8 @@ struct noc_traits_t<UnicastEndpoint> {
         if constexpr (address_type == Noc::AddressType::LOCAL_L1) {
             return args.addr;
         } else {
-            uint64_t noc_addr = dst.get_noc_unicast_addr(args.noc_x, args.noc_y, args.addr, noc.get_noc_id());
+            uint64_t noc_addr =
+                dst.get_noc_unicast_addr(args.noc_x, args.noc_y, Noc::l1_cached_view(args.addr), noc.get_noc_id());
             return noc_addr;
         }
     }
@@ -86,7 +88,12 @@ struct noc_traits_t<MulticastEndpoint> {
     static auto dst_addr_mcast(const MulticastEndpoint& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(address_type == Noc::AddressType::NOC);
         uint64_t noc_addr = dst.get_noc_multicast_addr(
-            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, args.addr, noc.get_noc_id());
+            args.noc_x_start,
+            args.noc_y_start,
+            args.noc_x_end,
+            args.noc_y_end,
+            Noc::l1_cached_view(args.addr),
+            noc.get_noc_id());
         return noc_addr;
     }
 };

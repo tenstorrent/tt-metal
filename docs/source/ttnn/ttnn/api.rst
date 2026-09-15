@@ -252,6 +252,7 @@ Pointwise Unary
    ttnn.silu
    ttnn.sin
    ttnn.sinh
+   ttnn.softcap
    ttnn.softplus
    ttnn.softshrink
    ttnn.softsign
@@ -334,6 +335,7 @@ Pointwise Binary
    ttnn.rpow
    ttnn.rsub
    ttnn.rsub_
+   ttnn.situ_glu
    ttnn.squared_difference
    ttnn.squared_difference_
    ttnn.subalpha

@@ -526,8 +526,17 @@ def get_data_loader(input_loc, batch_size, iterations, download_entire_dataset=F
                 examples = []
 
     if len(files) == 0:
+        # Must be the namespaced dataset id. huggingface_hub rejects the bare name with
+        # "Invalid HF URI 'hf://datasets/imagenet-1k@...'. Repository id must be
+        # 'namespace/name', got 'imagenet-1k'", which fails every imagenet-based demo the
+        # moment the dataset is not already in the local cache.
         files_raw = iter(
-            load_dataset("imagenet-1k", split="validation", use_auth_token=True, streaming=not download_entire_dataset)
+            load_dataset(
+                "ILSVRC/imagenet-1k",
+                split="validation",
+                use_auth_token=True,
+                streaming=not download_entire_dataset,
+            )
         )
         files = []
         sample_count = batch_size * iterations

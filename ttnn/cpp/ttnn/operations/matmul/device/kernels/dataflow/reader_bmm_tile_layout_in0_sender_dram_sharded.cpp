@@ -8,7 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/kernel_helper_functions/pad_tile.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
@@ -49,15 +49,15 @@ void kernel_main() {
 
     const uint32_t sender_block_id = sender_id * num_blocks_per_shard;
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
+    constexpr uint32_t dfb_id_in0 = get_named_compile_time_arg_val("cb_in0");
+    constexpr uint32_t dfb_id_in2 = get_named_compile_time_arg_val("cb_in0_sharded");  // Sharded cb
 
-    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(cb_id_in0);
-    constexpr DataFormat in0_data_format = get_dataformat(cb_id_in0);
+    constexpr uint32_t in0_single_tile_size_bytes = get_tile_size(dfb_id_in0);
+    constexpr DataFormat in0_data_format = get_dataformat(dfb_id_in0);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in2(cb_id_in2);
+    DataflowBuffer dfb_in0(dfb_id_in0);
+    DataflowBuffer dfb_in2(dfb_id_in2);
     Semaphore<> sender_sem(get_compile_time_arg_val(4));
     Semaphore<> receiver_sem(get_compile_time_arg_val(5));
 
@@ -68,7 +68,7 @@ void kernel_main() {
     // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
     // to receive the mcast
 
-    uint32_t local_read_addr = cb_in2.get_read_ptr();
+    uint32_t local_read_addr = dfb_in2.get_read_ptr();
 
     if (worker_core_type == 1) {  // mcast sender + no compute
 
@@ -76,7 +76,7 @@ void kernel_main() {
             const uint32_t block_id = sender_block_id + i;
 
             // Operand 0
-            l1_write_addr_in0 = cb_in0.get_write_ptr();
+            l1_write_addr_in0 = dfb_in0.get_write_ptr();
             if (block_id % 2 != 0) {  // double buffer
                 l1_write_addr_in0 += in0_block_size_bytes;
             }
@@ -142,12 +142,12 @@ void kernel_main() {
         for (uint32_t block = 0; block < num_blocks; ++block) {
             const uint32_t block_id = block / num_blocks_per_shard;
 
-            cb_in0.reserve_back(in0_block_num_tiles);
+            dfb_in0.reserve_back(in0_block_num_tiles);
             // Set in0 semaphore value to INVALID
             receiver_sem.set(INVALID);
 
             if (block_id == sender_id) {
-                uint32_t l1_write_addr_in0 = cb_in0.get_write_ptr();
+                uint32_t l1_write_addr_in0 = dfb_in0.get_write_ptr();
                 // copy start address of block, to be used for mcasting
 
                 // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr
@@ -211,7 +211,7 @@ void kernel_main() {
             }
 
             receiver_sem.wait(VALID);
-            cb_in0.push_back(in0_block_num_tiles);
+            dfb_in0.push_back(in0_block_num_tiles);
         }
     } else {  // mcast receiver + compute
 
@@ -221,7 +221,7 @@ void kernel_main() {
             // get the mcast sender noc
 
             // Operand 0
-            cb_in0.reserve_back(in0_block_num_tiles);
+            dfb_in0.reserve_back(in0_block_num_tiles);
 
             // Set in0 semaphore value to INVALID
             receiver_sem.set(INVALID);
@@ -230,7 +230,7 @@ void kernel_main() {
             // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
             receiver_sem.wait(VALID);
 
-            cb_in0.push_back(in0_block_num_tiles);
+            dfb_in0.push_back(in0_block_num_tiles);
         }
     }
     noc.async_write_barrier();

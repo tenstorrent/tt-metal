@@ -10,48 +10,44 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     int i{0};
-    const uint32_t input_addr = get_arg_val<uint32_t>(0);
-    const uint32_t N = get_arg_val<uint32_t>(1);
-    const uint32_t C = get_arg_val<uint32_t>(2);
-    const uint32_t H = get_arg_val<uint32_t>(3);
-    const uint32_t W = get_arg_val<uint32_t>(4);
-    const uint32_t kernel_size_h = get_arg_val<uint32_t>(5);
-    const uint32_t kernel_size_w = get_arg_val<uint32_t>(6);
-    const uint32_t stride_h = get_arg_val<uint32_t>(7);
-    const uint32_t stride_w = get_arg_val<uint32_t>(8);
-    const uint32_t padding_h = get_arg_val<uint32_t>(9);
-    const uint32_t padding_w = get_arg_val<uint32_t>(10);
-    const uint32_t dilation_h = get_arg_val<uint32_t>(11);
-    const uint32_t dilation_w = get_arg_val<uint32_t>(12);
-    const uint32_t LH = get_arg_val<uint32_t>(13);
-    const uint32_t LW = get_arg_val<uint32_t>(14);
-    const uint32_t input_cb_page_size = get_arg_val<uint32_t>(15);
-    const uint32_t dram_aligned_input_cb_page_size = get_arg_val<uint32_t>(16);
-    const uint32_t output_cb_page_size = get_arg_val<uint32_t>(17);
-    const uint32_t start_id = get_arg_val<uint32_t>(18);
-    const uint32_t num_units_per_core = get_arg_val<uint32_t>(19);
-    const uint32_t aligned = get_arg_val<uint32_t>(20);
+    const uint32_t N = get_arg(args::N);
+    const uint32_t C = get_arg(args::C);
+    const uint32_t H = get_arg(args::H);
+    const uint32_t W = get_arg(args::W);
+    const uint32_t kernel_size_h = get_arg(args::kernel_size_h);
+    const uint32_t kernel_size_w = get_arg(args::kernel_size_w);
+    const uint32_t stride_h = get_arg(args::stride_h);
+    const uint32_t stride_w = get_arg(args::stride_w);
+    const uint32_t padding_h = get_arg(args::padding_h);
+    const uint32_t padding_w = get_arg(args::padding_w);
+    const uint32_t dilation_h = get_arg(args::dilation_h);
+    const uint32_t dilation_w = get_arg(args::dilation_w);
+    const uint32_t LH = get_arg(args::LH);
+    const uint32_t LW = get_arg(args::LW);
+    const uint32_t input_cb_page_size = get_arg(args::input_cb_page_size);
+    const uint32_t dram_aligned_input_cb_page_size = get_arg(args::dram_aligned_input_cb_page_size);
+    const uint32_t output_cb_page_size = get_arg(args::output_cb_page_size);
+    const uint32_t start_id = get_arg(args::start_id);
+    const uint32_t num_units_per_core = get_arg(args::num_units_per_core);
+    const uint32_t aligned = get_arg(args::aligned);
 
-    constexpr uint32_t input_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t scratch_cb_id = get_compile_time_arg_val(2);
-    constexpr auto input_args = TensorAccessorArgs<3>();  // Start after 3 manual compile-time args
     constexpr uint32_t onetile = 1;
 
     uint32_t P = kernel_size_h * kernel_size_w;
     uint32_t l = LH * LW;
 
-    // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
-    // program cache hits.
-    const auto s0 = TensorAccessor(input_args, input_addr, input_cb_page_size);
+    const auto s0 = TensorAccessor(tensor::input);
 
     Noc noc;
-    DataflowBuffer input_dfb(input_cb_id);
-    DataflowBuffer output_dfb(output_cb_id);
-    DataflowBuffer scratch_dfb(scratch_cb_id);
+    DataflowBuffer input_dfb(dfb::input);
+    DataflowBuffer output_dfb(dfb::output);
+#ifdef HAS_SCRATCH_CB
+    DataflowBuffer scratch_dfb(dfb::scratch);
+#endif
 
     for (uint32_t row_id = start_id; row_id < start_id + num_units_per_core; row_id++) {
         output_dfb.reserve_back(onetile);
@@ -96,6 +92,7 @@ void kernel_main() {
                             s0, input_dfb, input_cb_page_size, {.page_id = input_row_id}, {.offset_bytes = 0});
                         noc.async_read_barrier();
                     } else {
+#ifdef HAS_SCRATCH_CB
                         // Two-step read via scratch buffer for DRAM alignment
                         // Read DRAM-aligned size to scratch buffer first
                         noc.async_read(
@@ -116,6 +113,7 @@ void kernel_main() {
                              .addr = scratch_dfb.get_write_ptr()},
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
+#endif
                     }
 
                     input_dfb.push_back(onetile);

@@ -9,10 +9,32 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "api/dataflow/noc.h"
 #include "ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 namespace ttnn::operations::ccl::common {
+
+// Multicast a Semaphore<>'s local value to a rectangle with proper coordinate ordering for
+// NOC 0 vs NOC 1 (same policy as get_safe_multicast_noc_addr applies to raw addresses).
+// NOC 0: start = (min_x, min_y), end = (max_x, max_y)
+// NOC 1: start = (max_x, max_y), end = (min_x, min_y) - coordinates need to be swapped
+template <NocOptions opts = NocOptions::DEFAULT, typename SemaphoreT>
+FORCE_INLINE void set_multicast_safe(
+    SemaphoreT& sem,
+    const Noc& noc,
+    uint32_t noc_x_start,
+    uint32_t noc_y_start,
+    uint32_t noc_x_end,
+    uint32_t noc_y_end,
+    uint32_t num_dests,
+    bool linked = false) {
+    if (noc.get_noc_id() == 0) {
+        sem.template set_multicast<opts>(noc, noc_x_start, noc_y_start, noc_x_end, noc_y_end, num_dests, linked);
+    } else {
+        sem.template set_multicast<opts>(noc, noc_x_end, noc_y_end, noc_x_start, noc_y_start, num_dests, linked);
+    }
+}
 
 enum class Polarity : uint8_t {
     NEGATIVE,

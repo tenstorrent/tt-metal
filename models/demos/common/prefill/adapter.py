@@ -5,7 +5,7 @@
 
 The prefill runner (``prefill_runner.py``) is a model-agnostic orchestration
 engine: it owns rank topology, the layer split, the H2D/D2D sockets, the
-request/standalone loops, lease/reclaim, LayerAck, and shutdown. Everything that
+the request serving loop, lease/reclaim, LayerAck, and shutdown. Everything that
 differs per model lives behind a ``PrefillModelAdapter``.
 
 To add a model you implement (or subclass) one adapter and register it; the
@@ -69,6 +69,19 @@ class PrefillRunParams:
     weight_cache_path: Optional[Path]
     sp_axis: int = 0
     tp_axis: int = 1
+    # Explicit semantic cache format selected by model/module configuration. Scaled FP8 is a packed
+    # mixed-format row, so it must not be represented or inferred as a bare tensor dtype.
+    sparse_kv_cache_format: Optional[object] = None
+    # Capture the per-chunk forward as a (segmented) ttnn trace and replay it every chunk, instead of
+    # re-dispatching op-by-op. Requires the mesh opened with a trace_region_size > 0. See prefill_runner.
+    use_trace: bool = False
+    # MoE shared-expert ∥ dispatch overlap (default on). Off => single-segment trace (no per-chunk
+    # sub-device swaps), faster replay at the cost of the overlap. See TtPrefillRuntimeConfig.
+    overlap_shared_expert_with_dispatch: bool = True
+    # Build the DFlash drafter context-KV cache during prefill. Opt-in / default False so adding this
+    # feature never breaks existing PrefillRunParams constructors (which need not pass it); the runner
+    # derives it from the model capability (supports_dflash) + PREFILL_DFLASH + a drafter checkpoint.
+    dflash_enabled: bool = False
 
     @property
     def sp_factor(self) -> int:
@@ -82,7 +95,7 @@ class PrefillRunParams:
 class KvCaches(ABC):
     """Opaque handle for a model's on-device KV cache(s), returned by ``allocate_kv_cache``. The engine
     never introspects it: it allocates it once, OWNS its lifetime, passes it back into every runtime call
-    that touches it (compile / prefill_chunk / build_kv_chunk_table / kv_cache_pcc_check / read_slot_kv),
+    that touches it (compile / prefill_chunk / build_kv_chunk_table),
     and frees it with the mesh at shutdown. Each model returns its own concrete subclass shaped however
     fits its cache (a named struct of one or more device tensors), so the engine imposes no structure and
     growing/renaming a model's caches never touches it."""
@@ -112,6 +125,12 @@ class PrefillModelAdapter(ABC):
     # Route the MoE routing all-gather's global semaphores to L1_SMALL instead of
     # pinning the main-L1 floor. Requires l1_small_size > 0.
     routing_use_l1_small_for_semaphores: bool = False
+    # Emb-axis sharding of the cross-rank D2D hidden state (seq is always SP-sharded). True (default):
+    # emb TP-sharded, [Shard(2), Shard(3)]. False: emb replicated across TP, [Shard(2), Replicate()].
+    # Must match the layout the model's decoder layer consumes/produces.
+    pipeline_activation_emb_tp_sharded: bool = True
+    # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
+    supports_dflash: bool = False
 
     # =====================================================================
     # Glue the engine calls. The adapter is a factory + descriptor only: it says
@@ -124,6 +143,19 @@ class PrefillModelAdapter(ABC):
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back
         to ``hf_model_default``). The runner sets ``max_seq_len`` on the result."""
+
+    @property
+    def default_sparse_kv_cache_format(self) -> Optional[object]:
+        """Semantic primary-cache format used when the runner builds ``PrefillRunParams``.
+
+        Models with a format choice override this property. Direct module users can instead put
+        an explicit format in ``PrefillRunParams.sparse_kv_cache_format``.
+        """
+        return None
+
+    def resolve_sparse_kv_cache_format(self, requested: Optional[object]) -> Optional[object]:
+        """Return an explicit request, otherwise this adapter's model default."""
+        return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
     def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
@@ -153,7 +185,7 @@ class PrefillModelAdapter(ABC):
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
         it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        kv_cache_pcc_check / set_layer_ack_channel). ``params`` carries the per-rank knobs."""
+        set_layer_ack_channel). ``params`` carries the per-rank knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).
@@ -226,7 +258,7 @@ class PrefillModelAdapter(ABC):
 # model is one line here (plus the adapter class in that model's package). Keeping
 # these as strings means importing this common module never imports a model's
 # device/runtime stack — only the selected model is imported, at get_adapter time.
-DEFAULT_MODEL = "deepseek_v3_d_p"
+DEFAULT_MODEL = "kimi_k2_7"
 
 ADAPTER_PATHS = {
     "deepseek_v3_d_p": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v3:DeepSeekV3Adapter",
@@ -239,6 +271,8 @@ ADAPTER_PATHS = {
     # Kimi-K2.7: same architecture as K2.6, new checkpoint (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
+    "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

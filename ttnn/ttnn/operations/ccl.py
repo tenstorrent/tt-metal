@@ -15,6 +15,16 @@ WorkerMode = ttnn._ttnn.operations.experimental.ccl_experimental.WorkerMode
 # Experimental CCL enum for moe_compute operation
 MoEActivationFunction = ttnn._ttnn.operations.experimental.ccl_experimental.MoEActivationFunction
 
+# Experimental CCL enum for strided_all_gather_minimal_matmul_async operation
+MMSignalAggregatorMode = ttnn._ttnn.operations.experimental.ccl_experimental.MMSignalAggregatorMode
+
 # TODO: Add golden functions (#12747)
 
-__all__ = ["Topology", "get_usable_topology", "DispatchAlgorithm", "WorkerMode", "MoEActivationFunction"]
+__all__ = [
+    "Topology",
+    "get_usable_topology",
+    "DispatchAlgorithm",
+    "WorkerMode",
+    "MoEActivationFunction",
+    "MMSignalAggregatorMode",
+]

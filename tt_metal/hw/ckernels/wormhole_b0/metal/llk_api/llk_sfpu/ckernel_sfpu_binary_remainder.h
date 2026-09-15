@@ -16,10 +16,11 @@ namespace ckernel::sfpu {
 // 2^31 as float (used for INT32 sign-magnitude conversion edge cases)
 constexpr float TWO_POW_31 = 2147483648.0f;
 
-// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
-// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
-// Returns: unsigned remainder r
-sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
+// Computes the scaled reciprocal 1/|b| for the unsigned remainder (two Newton–Raphson iterations
+// plus an exponent-based scale). Split recip and remainder computation so that the tensor-scalar
+// path can hoist this loop-invariant work above its element loop, since a scalar divisor is identical
+// for every lane and iteration.
+sfpi_inline sfpi::vFloat unsigned_remainder_recip(const sfpi::vInt& b_signed) {
     // Get absolute value of b for reciprocal computation
     sfpi::vMag b = sfpi::abs(b_signed);
 
@@ -41,24 +42,31 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     scale = sfpi::as<sfpi::vFloat>((254 << 23) - sfpi::as<sfpi::vInt>(scale));
     inv_b_f = t * inv_b_f + inv_b_f;
 
-    // Second Newton-Raphson iteration (interleaved with abs(a) computation)
+    // Second Newton-Raphson iteration
     sfpi::vFloat e = inv_b_f * neg_b_f + 1.0f;
-    sfpi::vMag a = sfpi::abs(a_signed);
     inv_b_f = e * inv_b_f + inv_b_f;
 
+    // Apply scaling factor to finalize reciprocal
+    return inv_b_f * scale;
+}
+
+// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|, given the scaled reciprocal 1/|b|.
+// Use 32-bit integer division from ckernel_sfpu_div_int32_floor.h
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(
+    const sfpi::vInt& a_signed, const sfpi::vInt& b_signed, const sfpi::vFloat& inv_b_f) {
+    // Absolute value of a; handle edge case where sign-magnitude conversion yields negative
+    sfpi::vMag a = sfpi::abs(a_signed);
     sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
     v_if(a_f < 0.0f) { a_f = TWO_POW_31; }
     v_endif;
-
-    // Apply scaling factor to finalize reciprocal
-    inv_b_f = inv_b_f * scale;
 
     // Initial quotient approximation : q = a * 1/b
     sfpi::vFloat q_f = a_f * inv_b_f + sfpi::vConstFloatPrgm0;
     sfpi::vMag q = sfpi::exman(q_f);
 
-    // Recompute b for chunk extraction to reduce register pressure
-    b = sfpi::abs(b_signed);
+    // b for chunk extraction
+    sfpi::vMag b = sfpi::abs(b_signed);
 
     // 8388608.0f = 2^23 is used as a Bias for mantissa alignment
     sfpi::vFloat MANTISSA_ALIGNMENT_OFFSET = 8388608.0f;
@@ -114,6 +122,12 @@ sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_sign
     v_endif;
 
     return r;
+}
+
+// Computes the unsigned remainder: |a| - floor(|a| / |b|) * |b|
+// Returns: unsigned remainder r
+sfpi_inline sfpi::vInt compute_unsigned_remainder_int32(const sfpi::vInt& a_signed, const sfpi::vInt& b_signed) {
+    return compute_unsigned_remainder_int32(a_signed, b_signed, unsigned_remainder_recip(b_signed));
 }
 
 // Signed (int32) remainder = a - floor(a / b) * b

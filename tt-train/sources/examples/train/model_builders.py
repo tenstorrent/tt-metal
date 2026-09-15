@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, NamedTuple
 
 import ttml
@@ -35,14 +35,14 @@ FLOPS_REGISTRY: dict[str, Callable] = {
 
 
 @dataclass
-class _GPT2Spec:
+class GPT2Spec:
     bias: bool = True
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
     use_composite_layernorm: bool = False
 
 
 @dataclass
-class _LlamaSpec:
+class LlamaSpec:
     num_groups: int = 3
     theta: float = 500000.0
     intermediate_dim: int | None = None
@@ -50,14 +50,14 @@ class _LlamaSpec:
     high_freq_factor: float = 4.0
     low_freq_factor: float = 1.0
     original_context_length: int = 0
+    embedding_placement: ttml.models.EmbeddingPlacement = ttml.models.EmbeddingPlacement.Replicated
 
 
 @dataclass
-class _DeepSeekSpec:
-    theta: float = 10000.0
-    inter_dim: int | None = None
+class MoEParams:
+    """DeepSeek MoE expert/routing hyperparameters — the YAML ``moe_hyperparam`` block."""
+
     moe_inter_dim: int = 256
-    n_dense_layers: int = 2
     n_routed_experts: int = 8
     n_shared_experts: int = 1
     n_activated_experts: int = 2
@@ -65,15 +65,33 @@ class _DeepSeekSpec:
     n_limited_groups: int = 1
     score_func: str = "sigmoid"
     route_scale: float = 2.5
+
+
+@dataclass
+class DeepSeekSpec:
+    theta: float = 10000.0
+    inter_dim: int | None = None
+    n_dense_layers: int = 2
     q_lora_rank: int = 256
     kv_lora_rank: int = 128
     qk_nope_head_dim: int = 64
     qk_rope_head_dim: int = 32
     v_head_dim: int = 64
+    # MoE FFN variant (applies to layers >= n_dense_layers):
+    #   dense     — on-device masked experts, reference/debug path (no grouping)
+    #   sparse_ep — moe_group/ungroup sparse dispatch with expert-parallel experts
+    # sparse_ep partitions the expert list across the "tp" axis (full-model TP) or
+    # the mesh axis named by device_config.moe_axis; with no such axis (single chip)
+    # it degenerates to single-device sparse (EP size 1).
+    moe_type: Literal["dense", "sparse_ep"] = "sparse_ep"
+    moe_hyperparam: MoEParams = field(default_factory=MoEParams)
+    # Resolved MoE-parallel mesh axis name, filled from device_config.moe_axis in
+    # train.py:main() (not parsed from YAML). None => no MoE-only TP axis.
+    moe_axis_name: str | None = None
 
 
 @dataclass
-class _Qwen3Spec:
+class Qwen3Spec:
     num_groups: int = 3
     theta: float = 1000000.0
     intermediate_dim: int | None = None
@@ -85,7 +103,7 @@ class _Qwen3Spec:
     original_context_length: int = 0
 
 
-ModelSpec = _GPT2Spec | _LlamaSpec | _DeepSeekSpec | _Qwen3Spec
+ModelSpec = GPT2Spec | LlamaSpec | DeepSeekSpec | Qwen3Spec
 
 
 @dataclass
@@ -114,8 +132,8 @@ def _default_mlp_inter_dim(embedding_dim: int) -> int:
     return ((4 * embedding_dim * 2) // 3 + 255) // 256 * 256
 
 
-def _parse_gpt2(tc: dict) -> _GPT2Spec:
-    spec = _GPT2Spec()
+def _parse_gpt2(tc: dict) -> GPT2Spec:
+    spec = GPT2Spec()
     spec.bias = tc.get("bias", spec.bias)
     spec.positional_embedding_type = tc.get("positional_embedding_type", spec.positional_embedding_type)
     if "experimental" in tc:
@@ -127,7 +145,7 @@ def _parse_gpt2(tc: dict) -> _GPT2Spec:
 def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
     if use_tp:
         raise ValueError("model_type=gpt2 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _GPT2Spec)
+    assert isinstance(cfg.spec, GPT2Spec)
     spec = cfg.spec
     exp = NanoGPTExperimentalConfig(use_composite_layernorm=spec.use_composite_layernorm)
     return create_nanogpt(
@@ -147,8 +165,8 @@ def _build_gpt2(cfg: ModelConfig, use_tp: bool) -> Model:
     )
 
 
-def _parse_llama(tc: dict) -> _LlamaSpec:
-    spec = _LlamaSpec()
+def _parse_llama(tc: dict) -> LlamaSpec:
+    spec = LlamaSpec()
     spec.num_groups = tc.get("num_groups", spec.num_groups)
     spec.theta = tc.get("theta", spec.theta)
     spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
@@ -158,11 +176,13 @@ def _parse_llama(tc: dict) -> _LlamaSpec:
         spec.high_freq_factor = rope.get("high_freq_factor", spec.high_freq_factor)
         spec.low_freq_factor = rope.get("low_freq_factor", spec.low_freq_factor)
         spec.original_context_length = rope.get("original_context_length", spec.original_context_length)
+    if "embedding_placement" in tc:
+        spec.embedding_placement = ttml.models.EmbeddingPlacement.from_string(tc["embedding_placement"])
     return spec
 
 
 def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
-    assert isinstance(cfg.spec, _LlamaSpec)
+    assert isinstance(cfg.spec, LlamaSpec)
     spec = cfg.spec
     if spec.num_groups <= 0:
         raise ValueError("num_groups must be a positive integer")
@@ -189,53 +209,76 @@ def _build_llama(cfg: ModelConfig, use_tp: bool) -> Model:
                 original_context_length=spec.original_context_length,
             ),
             use_tp=use_tp,
+            embedding_placement=spec.embedding_placement,
         )
     )
 
 
-def _parse_deepseek(tc: dict) -> _DeepSeekSpec:
-    spec = _DeepSeekSpec()
+def _parse_deepseek(tc: dict) -> DeepSeekSpec:
+    spec = DeepSeekSpec()
     spec.theta = tc.get("theta", spec.theta)
     spec.inter_dim = tc.get("inter_dim", spec.inter_dim)
-    spec.moe_inter_dim = tc.get("moe_inter_dim", spec.moe_inter_dim)
     spec.n_dense_layers = tc.get("n_dense_layers", spec.n_dense_layers)
-    spec.n_routed_experts = tc.get("n_routed_experts", spec.n_routed_experts)
-    spec.n_shared_experts = tc.get("n_shared_experts", spec.n_shared_experts)
-    spec.n_activated_experts = tc.get("n_activated_experts", spec.n_activated_experts)
-    spec.n_expert_groups = tc.get("n_expert_groups", spec.n_expert_groups)
-    spec.n_limited_groups = tc.get("n_limited_groups", spec.n_limited_groups)
-    spec.score_func = tc.get("score_func", spec.score_func)
-    spec.route_scale = tc.get("route_scale", spec.route_scale)
     spec.q_lora_rank = tc.get("q_lora_rank", spec.q_lora_rank)
     spec.kv_lora_rank = tc.get("kv_lora_rank", spec.kv_lora_rank)
     spec.qk_nope_head_dim = tc.get("qk_nope_head_dim", spec.qk_nope_head_dim)
     spec.qk_rope_head_dim = tc.get("qk_rope_head_dim", spec.qk_rope_head_dim)
     spec.v_head_dim = tc.get("v_head_dim", spec.v_head_dim)
+
+    spec.moe_type = tc.get("moe_type", spec.moe_type)
+    # Expert/routing knobs live under `moe_hyperparam`; fall back to flat top-level
+    # keys so legacy configs keep parsing.
+    moe = tc.get("moe_hyperparam", tc)
+    h = spec.moe_hyperparam
+    h.moe_inter_dim = moe.get("moe_inter_dim", h.moe_inter_dim)
+    h.n_routed_experts = moe.get("n_routed_experts", h.n_routed_experts)
+    h.n_shared_experts = moe.get("n_shared_experts", h.n_shared_experts)
+    h.n_activated_experts = moe.get("n_activated_experts", h.n_activated_experts)
+    h.n_expert_groups = moe.get("n_expert_groups", h.n_expert_groups)
+    h.n_limited_groups = moe.get("n_limited_groups", h.n_limited_groups)
+    h.score_func = moe.get("score_func", h.score_func)
+    h.route_scale = moe.get("route_scale", h.route_scale)
     return spec
 
 
+_MOE_TYPES = ("dense", "sparse_ep")
+
+
 def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
-    if use_tp:
-        raise ValueError("model_type=deepseek has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _DeepSeekSpec)
+    # DeepSeek integrates with the named-mesh TP path (MLA, dense MLP, LM head, and — under
+    # full-model TP — sparse MoE all shard across the "tp" axis). moe_type selects the MoE FFN
+    # variant; sparse_ep additionally partitions experts across a mesh axis.
+    assert isinstance(cfg.spec, DeepSeekSpec)
     spec = cfg.spec
+    if spec.moe_type not in _MOE_TYPES:
+        raise ValueError(f"Unknown moe_type={spec.moe_type!r}; expected one of {list(_MOE_TYPES)}")
+
+    # Resolve the expert-sharding axis for sparse_ep: "tp" under full-model TP, else
+    # the axis resolved from device_config.moe_axis (set on the spec in main()). With no usable
+    # axis SparseMoEEP runs at EP size 1, so a missing axis is not an error.
+    moe_axis_name = None
+    if spec.moe_type == "sparse_ep":
+        moe_axis_name = "tp" if use_tp else spec.moe_axis_name
+
+    h = spec.moe_hyperparam
     inter_dim = spec.inter_dim or _default_mlp_inter_dim(cfg.embedding_dim)
     return DeepSeek(
         DeepSeekConfig(
             vocab_size=round_up_to_tile(cfg.vocab_size, 32),
             dim=cfg.embedding_dim,
             inter_dim=inter_dim,
-            moe_inter_dim=spec.moe_inter_dim,
+            moe_inter_dim=h.moe_inter_dim,
             n_layers=cfg.num_blocks,
             n_dense_layers=spec.n_dense_layers,
             n_heads=cfg.num_heads,
-            n_routed_experts=spec.n_routed_experts,
-            n_shared_experts=spec.n_shared_experts,
-            n_activated_experts=spec.n_activated_experts,
-            n_expert_groups=spec.n_expert_groups,
-            n_limited_groups=spec.n_limited_groups,
-            score_func=spec.score_func,
-            route_scale=spec.route_scale,
+            n_routed_experts=h.n_routed_experts,
+            n_shared_experts=h.n_shared_experts,
+            n_activated_experts=h.n_activated_experts,
+            n_expert_groups=h.n_expert_groups,
+            n_limited_groups=h.n_limited_groups,
+            score_func=h.score_func,
+            route_scale=h.route_scale,
+            moe_type=spec.moe_type,
             q_lora_rank=spec.q_lora_rank,
             kv_lora_rank=spec.kv_lora_rank,
             qk_nope_head_dim=spec.qk_nope_head_dim,
@@ -244,12 +287,14 @@ def _build_deepseek(cfg: ModelConfig, use_tp: bool) -> Model:
             max_seq_len=cfg.max_sequence_length,
             rope_theta=spec.theta,
             runner_type=cfg.runner_type,
+            moe_axis_name=moe_axis_name,
+            use_tp=use_tp,
         )
     )
 
 
-def _parse_qwen3(tc: dict) -> _Qwen3Spec:
-    spec = _Qwen3Spec()
+def _parse_qwen3(tc: dict) -> Qwen3Spec:
+    spec = Qwen3Spec()
     spec.num_groups = tc.get("num_groups", spec.num_groups)
     spec.theta = tc.get("theta", spec.theta)
     spec.intermediate_dim = tc.get("intermediate_dim", spec.intermediate_dim)
@@ -267,7 +312,7 @@ def _parse_qwen3(tc: dict) -> _Qwen3Spec:
 def _build_qwen3(cfg: ModelConfig, use_tp: bool) -> Model:
     if use_tp:
         raise ValueError("model_type=qwen3 has no TP path; use model_type=llama for DP+TP")
-    assert isinstance(cfg.spec, _Qwen3Spec)
+    assert isinstance(cfg.spec, Qwen3Spec)
     spec = cfg.spec
     head_dim = spec.head_dim or cfg.embedding_dim // cfg.num_heads
     intermediate = spec.intermediate_dim or _default_mlp_inter_dim(cfg.embedding_dim)

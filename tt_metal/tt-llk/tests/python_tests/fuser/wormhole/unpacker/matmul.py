@@ -5,18 +5,16 @@
 from typing import List, Tuple
 
 import torch
+from fuser.base_unpacker import Unpacker
 from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
-from fuser.fused_loop import FusedLoop, LoopBlock
-from fuser.fused_operation import FusedOperation
-from fuser.fused_unpacker import Unpacker
 from fuser.fuser_config import GlobalConfig
-from helpers.golden_generators import TransposeGolden, get_golden_generator
-from helpers.llk_params import Transpose
+from fuser.l1_operation import L1Operation
+from fuser.tile_loop import LoopBlock, TileLoop
 
 
 class MatmulUnpacker(Unpacker):
-    loop: FusedLoop = LoopBlock()
+    loop: TileLoop = LoopBlock()
     per_block_init = True
 
     def get_headers(self) -> List[str]:
@@ -27,7 +25,7 @@ class MatmulUnpacker(Unpacker):
 
     def perf_set_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -40,7 +38,7 @@ class MatmulUnpacker(Unpacker):
 
     def perf_clear_valid(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -55,35 +53,19 @@ class MatmulUnpacker(Unpacker):
         self,
         tensor_a: torch.Tensor,
         tensor_b: torch.Tensor,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        t_matrix = get_golden_generator(TransposeGolden)
-
-        if compute_unit.unpack_transpose_faces == Transpose.Yes:
-            tensor_b = t_matrix.transpose_faces_multi_tile(
-                tensor_b,
-                compute_unit.src_b.data_format,
-                compute_unit.src_b.tile_count,
-                tilize=True,
-                input_dimensions=compute_unit.src_b.dimensions,
-            )
-
-        if compute_unit.unpack_transpose_within_face == Transpose.Yes:
-            tensor_b = t_matrix.transpose_within_faces_multi_tile(
-                tensor_b,
-                compute_unit.src_b.data_format,
-                compute_unit.src_b.tile_count,
-                untilize=True,
-                input_dimensions=compute_unit.src_b.dimensions,
-            )
+        tensor_b = self.transpose_golden(
+            tensor_b, config, operation, compute_unit, use_srcb=True
+        )
 
         return tensor_a, tensor_b
 
     def init(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -93,13 +75,13 @@ class MatmulUnpacker(Unpacker):
         ct_dim = block.block_tiles_x
         num_cols = compute_unit.src_a.tile_shape.total_col_dim()
         kt_dim = compute_unit.src_a.dimensions[1] // num_cols
-        transpose_faces = compute_unit.unpack_transpose_faces.cpp_enum_value
+        transpose = compute_unit.transpose_within_face.cpp_enum_value
 
-        return f"_llk_unpack_AB_matmul_init_<>({transpose_faces}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
+        return f"_llk_unpack_AB_matmul_init_<>({transpose}, {ct_dim}, {rt_dim}, {kt_dim}, {face_r_dim}, {face_r_dim});\n"
 
     def unpack(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,
@@ -140,7 +122,7 @@ class MatmulUnpacker(Unpacker):
 
     def uninit(
         self,
-        operation: FusedOperation,
+        operation: L1Operation,
         config: GlobalConfig,
         compute_unit: FpuNode,
         block: BlockData,

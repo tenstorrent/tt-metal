@@ -610,6 +610,14 @@ inline void configure_pack(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(is_fp8_e4m3 ? to_underlying(DataFormat::Float16) : pack_output_src_format);
 
+    // Establish the no-override baseline for the Dstacc ALU format-select fields (ADDR32=0), consumed
+    // by the packer: clear Dstacc_val/override so the base REG2_Dstacc format programmed above is
+    // used. The SrcA/SrcB override fields in the same word are owned by the math thread
+    // (_llk_math_hw_configure_); the two writers touch disjoint bits and rely on per-byte RMWCIB
+    // atomicity, so this write does not depend on the surrounding REG_RMW mutex for cross-thread safety.
+    constexpr std::uint32_t dstacc_fmt_override_mask = ALU_FORMAT_SPEC_REG_Dstacc_val_MASK | ALU_FORMAT_SPEC_REG_Dstacc_override_MASK;
+    cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_Dstacc_val_ADDR32, 0, dstacc_fmt_override_mask>(0);
+
     // Config RELU
     relu_config_u hw_relu_config;
     hw_relu_config.r.STACC_RELU_ApplyRelu     = relu_config & 0xffff;

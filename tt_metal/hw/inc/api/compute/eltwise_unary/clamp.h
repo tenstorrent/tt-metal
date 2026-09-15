@@ -39,6 +39,7 @@ ALWI void clamp_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
         param1));
 }
 
+#ifndef ARCH_QUASAR
 // clang-format off
 /**
  * Performs element-wise clamp operation for int32. The DST
@@ -65,6 +66,7 @@ ALWI void clamp_tile_int32(uint32_t idst, uint32_t param0, uint32_t param1) {
         param0,
         param1));
 }
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
