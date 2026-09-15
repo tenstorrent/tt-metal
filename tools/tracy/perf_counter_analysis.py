@@ -27,7 +27,7 @@ DeviceOpsDict = Dict[int, List[OpDict]]
 
 
 class _TracyCounterView:
-    """CounterView over one (op, core)'s Tracy rows; cycles(bank) is the ref cnt of any counter in that bank."""
+    """CounterView over one (op, core)'s Tracy rows; cycles() answers per counter, else per bank."""
 
     _BANK_REF = {
         "FPU": ("FPU_COUNTER", "SFPU_COUNTER", "MATH_COUNTER"),
@@ -44,7 +44,10 @@ class _TracyCounterView:
     def count(self, bank: str, counter_name: str) -> float:
         return float(self._v.get(counter_name, 0.0))
 
-    def cycles(self, bank: str) -> float:
+    def cycles(self, bank: str, counter_name: "str | None" = None) -> float:
+        # Multipass replays the workload per group, so each row carries the reference count of its own pass.
+        if counter_name is not None and counter_name in self._r:
+            return float(self._r[counter_name])
         for cand in self._BANK_REF.get(bank, ()):
             if cand in self._r:
                 return float(self._r[cand])

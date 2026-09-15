@@ -16,8 +16,11 @@ class CounterView(Protocol):
         """Average count for a counter (0.0 if absent)."""
         ...
 
-    def cycles(self, bank: str) -> float:
-        """Average reference-cycle count for a bank (0.0 if absent)."""
+    def cycles(self, bank: str, counter_name: "str | None" = None) -> float:
+        """Reference-cycle count for a bank, or for one counter when the data keeps a reference per counter
+        (0.0 if absent). Tracy merges the L1 rows of independently replayed multipass passes, so two L1 ports
+        can carry counts measured over different windows.
+        """
         ...
 
     def has(self, counter_name: str) -> bool:
@@ -39,9 +42,11 @@ def pct(value: "float | None") -> "float | None":
 
 
 def bounded(value: "float | None") -> "float | None":
-    """Clamp a fraction to [0, 1]. The L1 grant counter is the arbiter accept for its port, so grant never exceeds
-    request on Blackhole (0 of 924 port/op pairs in the selector sweep); the clamp stays as a guard for Wormhole,
-    which was not measured, and for the scoreboard stall whose two counters start in separate groups.
+    """Clamp a fraction to [0, 1]. The L1 grant counter is the interface ready line, not an accept gated by the
+    request (RTL: request is `o_l1_rden | o_l1_wren`, grant is `i_l1_reqif_ready`), so a port that is ready while
+    idle reports more grants than requests and the clamp is what keeps backpressure at 0 instead of negative. The
+    selector sweep never saw it under load (0 of 924 Blackhole port/op pairs), so loaded ports are unaffected. The
+    scoreboard stall needs the same clamp for a different reason: its two counters start in separate groups.
     """
     return None if value is None else min(1.0, max(0.0, value))
 
@@ -66,12 +71,20 @@ def first_present(v: "CounterView", names) -> "str | None":
     return next((n for n in names if v.has(n)), None)
 
 
-def mean_port_util(v: "CounterView", bank: str, names, cycles: float) -> "float | None":
-    """Mean busy fraction over the ports of one client group that are present in the data."""
-    present = [n for n in names if v.has(n)]
-    if not present:
+def mean_port_util(v: "CounterView", bank: str, names) -> "float | None":
+    """Mean busy fraction over the ports of one client group that are present in the data.
+
+    Every port divides by its own reference count, so a group that spans L1 mux positions stays correct when the
+    positions were captured in separate multipass passes. Ports whose pass reported no reference are left out.
+    """
+    fractions = [
+        f
+        for f in (safe_div(v.count(bank, n), v.cycles(bank, n)) for n in names if v.has(n))
+        if f is not None
+    ]
+    if not fractions:
         return None
-    return safe_div(sum(v.count(bank, n) for n in present), len(present) * cycles)
+    return sum(fractions) / len(fractions)
 
 
 # L1 client-port groupings, arch UNIONs; callers filter to the ports present in their data.
@@ -150,7 +163,6 @@ def compute_metrics(v: CounterView) -> dict:
         )
 
     pack_cycles = v.cycles("TDMA_PACK")
-    l1_cycles = v.cycles("L1")
 
     fpu_instruction = v.count("FPU", "FPU_COUNTER")
     fpu_or_sfpu = v.count("FPU", "MATH_COUNTER")
@@ -206,14 +218,14 @@ def compute_metrics(v: CounterView) -> dict:
     # No src-data stall metric: MATH_SRC_DATA_READY is gated on dec_instr_alu while
     # MATH_INSTRN_AVAILABLE counts the whole math pipe, so their ratio is not a stall fraction.
 
-    noc_ring0_util = mean_port_util(v, "L1", L1_RING0, l1_cycles)
-    noc_ring1_util = mean_port_util(v, "L1", L1_RING1, l1_cycles)
-    unpacker_l1_util = mean_port_util(v, "L1", L1_UNPACKER, l1_cycles)
-    unpacker1_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER1_EXT, l1_cycles)
-    unpacker0_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER0_EXT, l1_cycles)
-    ext_pack_l1_util = mean_port_util(v, "L1", L1_EXT_PACK, l1_cycles)
-    tdma_bundle_l1_util = mean_port_util(v, "L1", L1_TDMA_BUNDLE, l1_cycles)
-    l1_mean_client_util = mean_port_util(v, "L1", L1_ALL, l1_cycles)
+    noc_ring0_util = mean_port_util(v, "L1", L1_RING0)
+    noc_ring1_util = mean_port_util(v, "L1", L1_RING1)
+    unpacker_l1_util = mean_port_util(v, "L1", L1_UNPACKER)
+    unpacker1_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER1_EXT)
+    unpacker0_ext_l1_util = mean_port_util(v, "L1", L1_UNPACKER0_EXT)
+    ext_pack_l1_util = mean_port_util(v, "L1", L1_EXT_PACK)
+    tdma_bundle_l1_util = mean_port_util(v, "L1", L1_TDMA_BUNDLE)
+    l1_mean_client_util = mean_port_util(v, "L1", L1_ALL)
     # NoC ring0 grant efficiency: accepted per requested cycle, summed over the ports that carry both counters.
     _ring0_pairs = [c for c in L1_RING0 if strict(v, c, c + "_GRANT")]
     _ring0_req = sum(v.count("L1", c) for c in _ring0_pairs)
@@ -359,13 +371,22 @@ def compute_metrics(v: CounterView) -> dict:
 
     # Port 2 carries TDMA bundle 0 (mover, packer read, THCON) together with BRISC, TRISC0 and NCRISC.
     l1_port2_util = (
-        safe_div(v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC"), l1_cycles)
+        safe_div(
+            v.count("L1", "L1_0_TDMA_BUNDLE_0_RISC"),
+            v.cycles("L1", "L1_0_TDMA_BUNDLE_0_RISC"),
+        )
         if v.has("L1_0_TDMA_BUNDLE_0_RISC")
         else None
     )
-    l1_port1_util = safe_div(v.count("L1", l1_port1), l1_cycles) if l1_port1 else None
+    l1_port1_util = (
+        safe_div(v.count("L1", l1_port1), v.cycles("L1", l1_port1))
+        if l1_port1
+        else None
+    )
     l1_packer_port8_util = (
-        safe_div(v.count("L1", l1_port8), l1_cycles) if l1_port8 else None
+        safe_div(v.count("L1", l1_port8), v.cycles("L1", l1_port8))
+        if l1_port8
+        else None
     )
     # UNBOUNDED ratios: L1 grant cycles per compute-engine busy cycle, cross-domain so >1 possible
     # (ample L1 bandwidth). packer_l1_eff is only meaningful on WH, where port 1 carries pack1 traffic.
@@ -379,7 +400,7 @@ def compute_metrics(v: CounterView) -> dict:
         if v.has("L1_0_PORT1_GRANT") and v.has("PACKER_BUSY") and not v.is_blackhole()
         else None
     )  # Wormhole only: Blackhole port 1 carries no packer
-    # Back-pressure = 1 - accepted/requested; the grant is the arbiter accept, clamped only as a guard (bounded()).
+    # Back-pressure = 1 - ready/requested; ready can outlast the requests on an idle port, hence bounded().
     l1_unpacker_backpressure = (
         bounded(
             one_minus(
@@ -425,10 +446,10 @@ def compute_metrics(v: CounterView) -> dict:
 
     # Split NoC utilisation (per direction, primary L1_0/L1_1 channels only). Tracy reports these
     # separately; the merged noc_ring{0,1}_util above additionally include the BH secondary channels.
-    noc_ring0_out_util = mean_port_util(v, "L1", _R0_OUT, l1_cycles)
-    noc_ring0_in_util = mean_port_util(v, "L1", _R0_IN, l1_cycles)
-    noc_ring1_out_util = mean_port_util(v, "L1", _R1_OUT, l1_cycles)
-    noc_ring1_in_util = mean_port_util(v, "L1", _R1_IN, l1_cycles)
+    noc_ring0_out_util = mean_port_util(v, "L1", _R0_OUT)
+    noc_ring0_in_util = mean_port_util(v, "L1", _R0_IN)
+    noc_ring1_out_util = mean_port_util(v, "L1", _R1_OUT)
+    noc_ring1_in_util = mean_port_util(v, "L1", _R1_IN)
 
     _unp0 = v.count("L1", "L1_0_UNPACKER_0")
     _pk = v.count("L1", l1_port1) if l1_port1 else 0.0
@@ -441,7 +462,10 @@ def compute_metrics(v: CounterView) -> dict:
         "L1_0_UNPACKER_0"
     )  # the L1_0 bank was captured; otherwise these all read 0
     _l1_total = _unp0 + _pk + _bundle + _noc_out + _noc_in
-    l1_total_bw = safe_div(_l1_total, 8 * l1_cycles) if _l1_0 else None
+    # Every term is an L1_0 port, so the window is the one the L1_0 pass measured.
+    l1_total_bw = (
+        safe_div(_l1_total, 8 * v.cycles("L1", "L1_0_UNPACKER_0")) if _l1_0 else None
+    )
     # Port 1 is unpacker 1 on Blackhole (a read) and pack1 on Wormhole (a write).
     _bh = v.is_blackhole()
     _reads = _unp0 + _noc_out + (_pk if _bh else 0.0)

@@ -24,7 +24,7 @@ class _View:
     def count(self, bank, name):
         return float(self._values.get(name, 0.0))
 
-    def cycles(self, bank):
+    def cycles(self, bank, counter_name=None):
         return self._cycles if self._values else 0.0
 
     def has(self, name):
@@ -73,8 +73,31 @@ def test_per_engine_packers_gate_on_wormhole_only_counters():
 
 def test_mean_port_util_averages_only_present_ports():
     view = _View({"L1_0_NOC_RING0_OUTGOING_0": 500.0, "L1_0_NOC_RING0_OUTGOING_1": 1500.0})
-    assert mc.mean_port_util(view, "L1", mc.L1_RING0, 2000.0) == 0.5
-    assert mc.mean_port_util(view, "L1", mc.L1_EXT_PACK, 2000.0) is None
+    assert mc.mean_port_util(view, "L1", mc.L1_RING0) == 0.5
+    assert mc.mean_port_util(view, "L1", mc.L1_EXT_PACK) is None
+
+
+class _PerPassView(_View):
+    """A view whose L1 ports were captured in passes of different length, as multipass produces."""
+
+    def __init__(self, values, refs):
+        super().__init__(values)
+        self._refs = refs
+
+    def cycles(self, bank, counter_name=None):
+        if counter_name is not None and counter_name in self._refs:
+            return self._refs[counter_name]
+        return super().cycles(bank)
+
+
+def test_l1_port_groups_use_the_reference_of_the_pass_that_captured_each_port():
+    # Ring 0 spans L1_0 and L1_2, which multipass captures in separate passes: 100/100 and 100/200 is 75%.
+    view = _PerPassView(
+        {"L1_0_NOC_RING0_OUTGOING_0": 100.0, "L1_2_NOC_RING0_OUTGOING_2": 100.0},
+        {"L1_0_NOC_RING0_OUTGOING_0": 100.0, "L1_2_NOC_RING0_OUTGOING_2": 200.0},
+    )
+    assert mc.mean_port_util(view, "L1", mc.L1_RING0) == 0.75
+    assert mc.compute_metrics(view)["noc_ring0_util_pct"] == 75.0
 
 
 def test_enum_parser_matches_the_compiled_ordinals():

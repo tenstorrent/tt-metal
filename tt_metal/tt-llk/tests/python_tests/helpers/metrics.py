@@ -35,8 +35,13 @@ class _DfCounterView:
         result = self._df.loc[mask, "count"]
         return float(result.mean()) if len(result) > 0 else 0.0
 
-    def cycles(self, bank: str) -> float:
-        result = self._df.loc[self._df["bank"] == bank, "cycles"]
+    def cycles(self, bank: str, counter_name: "str | None" = None) -> float:
+        mask = self._df["bank"] == bank
+        if counter_name is not None:
+            named = mask & (self._df["counter_name"] == counter_name)
+            if named.any():
+                mask = named
+        result = self._df.loc[mask, "cycles"]
         return float(result.mean()) if len(result) > 0 else 0.0
 
     def has(self, counter_name: str) -> bool:
