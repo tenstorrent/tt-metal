@@ -26,7 +26,6 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
@@ -1343,32 +1342,6 @@ ALWI void matmul_blocks(
     dfb_in1.pop_front(K * N);
 }
 
-/**
- * out_dfb[i] = transpose(in_dfb[i]) for i in [0, num_tiles): physical per-tile 32x32 transpose of a block.
- *
- * Builds K^T for architectures whose matmul unpacker cannot transpose SrcA (Quasar): transpose the whole
- * K-chunk in place (each tile transposed, same grid position), so a plain matmul_blocks(transpose=false)
- * reading the result computes Q @ K^T. in_dfb is consumed; out_dfb receives num_tiles.
- */
-ALWI void transpose_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
-    DataflowBuffer dfb_in(in_dfb);
-    DataflowBuffer dfb_out(out_dfb);
-    dfb_in.wait_front(num_tiles);
-    dfb_out.reserve_back(num_tiles);
-    transpose_init(in_dfb);
-    pack_reconfig_out(out_dfb);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
-        tile_regs_acquire();
-        transpose_tile(in_dfb, i, 0);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile<true>(0, out_dfb, i);
-        tile_regs_release();
-    }
-    dfb_out.push_back(num_tiles);
-    dfb_in.pop_front(num_tiles);
-}
-
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_dfb, const uint32_t& out_dfb) {
     DataflowBuffer dfb_in1(in1_dfb);
@@ -2034,16 +2007,16 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
-            // QK = Q @ K^T. Quasar's matmul unpacker cannot transpose SrcA (K), so physically transpose the
-            // K-chunk into dfb::kt then run the standard matmul with transpose=false. Reuse matmul_blocks
-            // (ct=N); do NOT hand-roll a per-column matmul (ct=1 silently gives wrong PCC ~0.2). Ungated so
-            // WH validates the same path; the extra kt DFB is offset by the max_A/max_B merge to stay <= 8.
-            transpose_block(dfb_k_in, dfb::kt, Sk_chunk_t * DHt);
-            reconfig_data_format(dfb::kt, dfb_q_in);
+            // QK = Q @ K^T via the matmul's native SrcA transpose (transpose=true), reading dfb_k_in
+            // directly. The srca-transpose LLK on the rebased base provides the SrcA transpose the Quasar
+            // matmul unpacker was missing, so the transpose-free kt-staging workaround is gone (WH always
+            // had SrcA transpose). matmul_blocks packs via pack_tile naming dfb_qk_im but does not itself
+            // reconfig the packer, so re-point it here first.
+            reconfig_data_format(dfb_k_in, dfb_q_in);
             pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
-                dfb::kt,
+                dfb_k_in,
                 dfb_qk_im,
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -2054,7 +2027,7 @@ void sdpa_inner_loop(
                 qk_in0_block_w,
                 qk_subblock_h,
                 qk_subblock_w,
-                false /*transpose*/);
+                true /*transpose*/);
 
             /**
              * Note
