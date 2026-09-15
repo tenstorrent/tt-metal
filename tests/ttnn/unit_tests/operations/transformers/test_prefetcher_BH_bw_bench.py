@@ -273,65 +273,96 @@ def test_mpfe_priority_contention(device):
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
-    # validator + consumer warmup + timed consumers + final validator
-    num_prefetch_layers = trace_repeats + 3
+    logger.info(
+        f"[mpfe_contention] setup active_weight={active_weight} banks={num_dram_banks} "
+        f"K={K} N={N} ring={ring_size} repeats={trace_repeats}"
+    )
+
     ttnn.experimental.start_tensor_prefetcher(device)
-    try:
-        ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
-        ttnn.experimental.queue_tensor_prefetcher_request(
-            device,
-            [(tt_weight, ring_size)] * num_prefetch_layers,
-            global_cb=gcb,
-        )
+    ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, 0)
 
-        ttnn.experimental.test_dram_prefetcher_validator(
-            device,
-            tt_weight,
-            num_layers=1,
-            print_stride=0,
-            global_cb=gcb,
-        )
-        ttnn.experimental.test_dram_prefetcher_contention_consumer(
-            device,
-            tt_weight,
-            timing_tensor,
-            num_iters=ring_size,
-            page_size_bytes=page_size,
-            ordinary_read_bytes=ordinary_read_bytes,
-            global_cb=gcb,
-        )
-        ttnn.synchronize_device(device)
+    logger.info("[mpfe_contention] validating initial prefetched layer")
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [(tt_weight, ring_size)],
+        global_cb=gcb,
+    )
+    ttnn.experimental.test_dram_prefetcher_validator(
+        device,
+        tt_weight,
+        num_layers=1,
+        print_stride=0,
+        global_cb=gcb,
+    )
+    ttnn.synchronize_device(device)
 
-        bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
-        for _ in range(trace_repeats):
-            ttnn.experimental.test_dram_prefetcher_contention_consumer(
-                device,
-                tt_weight,
-                timing_tensor,
-                num_iters=ring_size,
-                page_size_bytes=page_size,
-                ordinary_read_bytes=ordinary_read_bytes,
-                global_cb=gcb,
-            )
-        ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+    logger.info("[mpfe_contention] warming contention consumer")
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [(tt_weight, ring_size)],
+        global_cb=gcb,
+    )
+    ttnn.experimental.test_dram_prefetcher_contention_consumer(
+        device,
+        tt_weight,
+        timing_tensor,
+        num_iters=ring_size,
+        page_size_bytes=page_size,
+        ordinary_read_bytes=ordinary_read_bytes,
+        global_cb=gcb,
+    )
+    ttnn.synchronize_device(device)
 
-        t0 = time.perf_counter()
+    # Capture one balanced producer/consumer pair. The request is retained by the
+    # Tensor Prefetcher manager instead of being sent during capture, then reissued
+    # once immediately before each device-trace replay.
+    logger.info("[mpfe_contention] capturing balanced prefetch/consumer trace")
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [(tt_weight, ring_size)],
+        global_cb=gcb,
+        capture_into_trace=True,
+    )
+    ttnn.experimental.test_dram_prefetcher_contention_consumer(
+        device,
+        tt_weight,
+        timing_tensor,
+        num_iters=ring_size,
+        page_size_bytes=page_size,
+        ordinary_read_bytes=ordinary_read_bytes,
+        global_cb=gcb,
+    )
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+
+    logger.info("[mpfe_contention] running timed trace replays")
+    t0 = time.perf_counter()
+    for _ in range(trace_repeats):
         ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
-        ttnn.synchronize_device(device)
-        elapsed = time.perf_counter() - t0
-        ttnn.release_trace(device, bench_trace)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    ttnn.release_trace(device, bench_trace)
 
-        timing_words = ttnn.to_torch(timing_tensor).reshape(-1, 8).tolist()
-        ttnn.experimental.test_dram_prefetcher_validator(
-            device,
-            tt_weight,
-            num_layers=1,
-            print_stride=0,
-            global_cb=gcb,
-        )
-        ttnn.synchronize_device(device)
-    finally:
-        ttnn.experimental.stop_tensor_prefetcher(device)
+    timing_words = ttnn.to_torch(timing_tensor).reshape(-1, 8).tolist()
+
+    logger.info("[mpfe_contention] validating final prefetched layer")
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [(tt_weight, ring_size)],
+        global_cb=gcb,
+    )
+    ttnn.experimental.test_dram_prefetcher_validator(
+        device,
+        tt_weight,
+        num_layers=1,
+        print_stride=0,
+        global_cb=gcb,
+    )
+    ttnn.synchronize_device(device)
+
+    logger.info("[mpfe_contention] stopping Tensor Prefetcher")
+    ttnn.experimental.stop_tensor_prefetcher(device)
+    logger.info("[mpfe_contention] Tensor Prefetcher stopped")
 
     prefetch_bytes = trace_repeats * K * N * (1088 / 1024.0)
     ordinary_bytes = trace_repeats * ring_size * ring_size * ordinary_read_bytes
