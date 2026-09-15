@@ -175,43 +175,41 @@ def _prefill_hifi4_ckc():
 _SINGLE_TILE_FID_LOGGED = False
 
 
-def single_tile_matmul_ckc(m, weight):
-    """Fidelity for the one-tile matmuls every tuned config declines, bf16 only.
+def single_tile_matmul_ckc(m):
+    """Fidelity/accumulation for the one-tile matmuls every tuned config declines.
 
     ``in_prefill_l1_matmul_band`` opens *above* one tile (``TILE_SIZE < m``), so
     at ``m <= 32`` — a short prompt's whole prefill, a last-token slice, or a
     decode step — ``interleaved_{gate_up,down_proj,o_proj}_prefill_config`` and
     ``interleaved_prefill_config`` all return ``(None, None, None)``. The call
     sites then pass ``compute_kernel_config=None`` and ttnn.linear falls back to
-    its own default, which here is HiFi2 (``increase_fidelity`` in
-    matmul_device_operation.cpp: a bf16 activation keeps it off the LoFi path).
+    its own default, which here is HiFi2 with ``fp32_dest_acc_en`` off
+    (``increase_fidelity`` in matmul_device_operation.cpp: a bf16 activation
+    keeps it off the LoFi path).
 
-    HiFi2 feeds the FPU only 5 of one operand's mantissa bits. Against a **bf16**
-    weight that throws away real precision on every QKV, O, gate/up and down
-    projection, and 48 layers of it dominated the 12B full-model logit error:
-    on a WH T3K at 1x8 (all-bf16 weights) this took test_full_model from 0.9628
-    to 0.9890 and full_model_decode from 0.9647 to 0.9744.
+    That default loses precision twice, and the two losses are independent:
 
-    Against a **BFP8_B** weight it is worse than useless. BFP8_B carries a 7-bit
-    mantissa under a block-shared exponent, which HiFi2 already covers, so the
-    extra passes add no information and only change rounding. Measured on the
-    same T3K, raising every bfp8 matmul to HiFi4 *cost* accuracy: 1x2 0.9780 ->
-    0.9690, and 1x4 0.9591 -> 0.8789 (below its 0.945 gate). Hence the dtype
-    gate — which also makes this a no-op for every gemma4 variant still on
-    all-bfp8 weights.
+    * HiFi2 feeds the FPU only 5 of one operand's mantissa bits.
+    * The destination register accumulates in bf16, so every partial sum along
+      K is rounded to 8 mantissa bits before the next one is added. Across 48
+      layers of QKV / O / gate-up / down projections this dominates the 12B
+      full-model logit error, and it is the larger of the two terms.
 
-    ``fp32_dest_acc_en`` stays False deliberately: HiFi4 *together with* fp32
+    Because the accumulator term is about the *sum*, not the operands, it pays
+    off regardless of how the weight is stored — BFP8_B weights gain as much as
+    bf16 ones (on a WH T3K at 1x4, all-bfp8: test_full_model 0.9591 -> 0.9803).
+
+    HiFi3 rather than HiFi4 is deliberate: HiFi4 *together with* fp32
     dest-accumulation trips Wormhole hardware bug #38306, which is what produced
     the garbage decode output behind the "do not re-enable" note on Linear
-    fidelity in compute_config.py. Fidelity on its own does not trip it.
+    fidelity in compute_config.py. The pairing is also what the data picks — at
+    1x2, hifi3_fp32 scored 0.9920, hifi4_fp32 0.9813 and hifi2_fp32 0.9776.
 
     Override with ``GEMMA4_SINGLE_TILE_FIDELITY``: ``hifi2`` / ``hifi3`` /
     ``hifi4``, each optionally suffixed ``_fp32`` to add fp32 dest-accumulation,
     or ``auto`` (return None and let ttnn decide).
     """
     if int(m) > TILE_SIZE:
-        return None
-    if weight is None or weight.dtype != ttnn.bfloat16:
         return None
     mode = os.environ.get("GEMMA4_SINGLE_TILE_FIDELITY", "hifi3_fp32").strip().lower()
     global _SINGLE_TILE_FID_LOGGED

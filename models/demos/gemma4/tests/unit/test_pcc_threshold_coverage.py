@@ -19,17 +19,18 @@ from models.demos.gemma4.tests.test_factory import _mesh_key_from_node_name, get
 _TABLE = os.path.join(os.path.dirname(__file__), "..", "pcc_thresholds.json")
 _MESHES = ["1x2", "1x4", "1x8"]
 
-# Measured on a real T3K, bit-reproducible (paired runs agreed to every decimal
-# and survived a board reset). (clean base 9d83ad5c8c7, this branch).
-# The branch column was re-measured after the bf16-weight + dtype-gated
-# HiFi3 + fp32-dest-acc change (see precision_overrides.json "_comment_wh_bf16").
-# 1x8 went all-bf16; 1x2 took shared_mlp + lm_head (DRAM-bound, attention cannot
-# fit). 1x4 was deliberately left on all-bfp8 and is bit-unchanged to every
-# decimal, which is what pins the guarantee that the change is a no-op wherever
-# the weights stay bfp8. Both prefill and decode improved on both bf16 meshes.
+# Measured on a real T3K (clean base 9d83ad5c8c7, this branch). Repeated runs
+# agree to every decimal on five of the six, and survived a board reset; 1x4
+# prefill produced 0.9805 once against 0.9803 on three other runs, so treat
+# ~2e-4 as its run-to-run spread when comparing against these.
+# The branch column covers HiFi3 + fp32 dest-accumulation on the m<=32
+# projections, plus the bf16 weight promotions in precision_overrides.json
+# ("_comment_wh_bf16"). 1x8 went all-bf16 and 1x2 took shared_mlp + lm_head;
+# 1x4 stays all-bfp8 and still gains 0.021, because the dest-accumulator width
+# is a property of the sum rather than of how the weight is stored.
 _WH_MEASURED = {
-    "test_full_model": {"1x2": (0.9550, 0.9894), "1x4": (0.9613, 0.9591), "1x8": (0.9514, 0.9896)},
-    "test_full_model_decode": {"1x2": (0.9610, 0.9824), "1x4": (0.9737, 0.9643), "1x8": (0.9735, 0.9835)},
+    "test_full_model": {"1x2": (0.9550, 0.9920), "1x4": (0.9613, 0.9803), "1x8": (0.9514, 0.9896)},
+    "test_full_model_decode": {"1x2": (0.9610, 0.9907), "1x4": (0.9737, 0.9848), "1x8": (0.9735, 0.9835)},
 }
 # The regression this coverage exists to catch: prefill island ON.
 _REGRESSED = {
