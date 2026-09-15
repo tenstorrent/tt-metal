@@ -124,6 +124,7 @@ jobs:
           # other containers still running their workloads (per-tray and per-ASIC granularity).
           - arch: wormhole_b0
             scenario: tray_reset
+            repeat_count: 2
             num_containers: 4
             chips_per_container: 8
             container_prefix: tray_reset
@@ -132,6 +133,7 @@ jobs:
             test_args: "-k 'not fabric_ring'"
           - arch: blackhole
             scenario: tray_reset
+            repeat_count: 80
             num_containers: 4
             chips_per_container: 8
             container_prefix: bh_tray_reset
@@ -140,6 +142,7 @@ jobs:
             test_args: "-k 'non-trace and not ring and not broken and linear_2D and bfloat_8 and not DRAM'"
           - arch: wormhole_b0
             scenario: asic_reset
+            repeat_count: 250
             num_containers: 32
             chips_per_container: 1
             container_prefix: chip_reset
@@ -148,6 +151,7 @@ jobs:
             test_args: "-k test_fill"
           - arch: blackhole
             scenario: asic_reset
+            repeat_count: 250
             num_containers: 32
             chips_per_container: 1
             container_prefix: bh_chip_reset
@@ -403,7 +407,8 @@ jobs:
             "${{ matrix.container_prefix }}" \
             "${{ matrix.test_path }}" \
             "${{ matrix.test_args }}" \
-            "$RESET_DEVICE_IDS"
+            "$RESET_DEVICE_IDS" \
+            ${{ matrix.repeat_count }}
 
       - name: Check test results
         run: |
