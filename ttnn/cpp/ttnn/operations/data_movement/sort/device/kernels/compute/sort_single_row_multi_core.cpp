@@ -100,9 +100,9 @@ void kernel_main() {
                             input_tensor_dfb.push_back(2);
                             rm_input_value_dfb.pop_front(TILE_H);
                             tilize_uninit(dfb::rm_input_value, dfb::input_tensor);
-                            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init
-                            // (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                            compute_kernel_hw_startup(dfb::rm_input_index, dfb::rm_input_index, dfb::index_tensor);
+                            reconfig_data_format_srca(dfb::rm_input_index);
+                            pack_reconfig_data_format(dfb::index_tensor);
+                            rearm_dest_sync(dfb::index_tensor);
 
                             tilize_init(dfb::rm_input_index, 2, dfb::index_tensor);
                             rm_input_index_dfb.wait_front(TILE_H);
@@ -111,10 +111,8 @@ void kernel_main() {
                             index_tensor_dfb.push_back(2);
                             rm_input_index_dfb.pop_front(TILE_H);
                             tilize_uninit(dfb::rm_input_index, dfb::index_tensor);
-                            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init
-                            // (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                            compute_kernel_hw_startup(
-                                dfb::input_tensor, dfb::index_tensor, dfb::input_tensor_transposed);
+                            reconfig_data_format_srca(dfb::input_tensor);
+                            rearm_dest_sync(dfb::input_tensor_transposed);
 
                             ckernel::topk_tile_init();
                             transpose_init(dfb::input_tensor);
@@ -295,15 +293,8 @@ void kernel_main() {
                             input_tensor_output_dfb.pop_front(2);
                             rm_output_value_dfb.push_back(TILE_H);
                             pack_untilize_uninit(dfb::rm_output_value);
-                            // Reconfig the packer to the index-output format before the index
-                            // untilize. The output operand must be the untilize destination
-                            // (rm_output_index), not its source (index_tensor_output): those two
-                            // happen to share a data format today, so passing the source only works
-                            // by coincidence.
-                            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init
-                            // (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                            compute_kernel_hw_startup(
-                                dfb::rm_input_index, dfb::rm_input_index, dfb::rm_output_index);
+                            reconfig_data_format_srca(dfb::index_tensor_output);
+                            rearm_dest_sync(dfb::rm_output_index);
 
                             pack_untilize_init<2>(dfb::index_tensor_output, dfb::rm_output_index);
                             index_tensor_output_dfb.wait_front(2);
@@ -312,10 +303,9 @@ void kernel_main() {
                             index_tensor_output_dfb.pop_front(2);
                             rm_output_index_dfb.push_back(TILE_H);
                             pack_untilize_uninit(dfb::rm_output_index);
-                            // Reset compute state for the next pair's tilize.
-                            // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init
-                            // (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                            compute_kernel_hw_startup(dfb::rm_input_value, dfb::rm_input_index, dfb::input_tensor);
+                            reconfig_data_format_srca(dfb::rm_input_value);
+                            pack_reconfig_data_format(dfb::input_tensor);
+                            rearm_dest_sync(dfb::input_tensor);
 #endif
 
                             processing_pair_id += number_of_available_cores;
