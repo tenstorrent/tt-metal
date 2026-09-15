@@ -247,7 +247,7 @@ the cause).
 
 As the note indicates, sfpi provides a type that can be used to tell
 the compiler register pressure is high, and therefore avoid
-optimizations that can increse it. It is not however a guaranteed
+optimizations that can increase it. It is not however a guaranteed
 solution.  To use this, place:
 
 .. code-block:: c++
