@@ -42,8 +42,10 @@ guard; the tested revision includes PACK, where the streaming call occurs.
 
 Both fixed outputs are finite and bit-identical after trace replay.
 Evidence:`fullchip-fix-fast-v2.json`,`fullchip-fix-lofi_fast_b8-v2.json`.
-These initial accuracy checks sample Q rows; larger regression sweeps are
-in progress. Do not cite the failed finite-output benchmark as performance
+These initial accuracy checks sample Q rows. Later private-harness results
+and current-source smoke coverage are summarized in [the final qualification](FINAL_QUALIFICATION.md);
+the dedicated integration regression matrix remains a [next step](ENGINEERING_NEXT_STEPS.md).
+Do not cite the failed finite-output benchmark as performance
 evidence. Prior Q128 qualification and resident throughput measurements
 remain measurements of their stated cases, not qualification of distinct
 Q256 recurrence. Any future FAST promotion must include this regression.
