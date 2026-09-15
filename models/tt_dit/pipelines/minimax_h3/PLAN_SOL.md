@@ -428,6 +428,62 @@ accumulation chain, so it cannot support a 99.999 % target.
 reconstruct what a one-pass kernel never loses. Step 3 makes them dead code; strip them then, not
 before. The rail-cap fix (`grid_x`/`grid_y`) is independent and stays.
 
+## S2c - `sol_attn`: the hybrid measured, single chip
+
+`sol_ring` targeted the wrong op (production dispatches `RingJointSDPADeviceOperation`; the exp
+variant it forked is a simulated-4x32 path) and the ring rotates all K/V regardless of selection, so
+its skip bought 9%. The replacement fork is `sol_attn`, off the plain non-ring SDPA -- the slot a
+block-sparse fine stage actually occupies is after the K/V all-gather, which VSA already does.
+
+Held to eight gates before any timing: bit-identity with its parent on three shapes, torch PCC
+0.99970 (the bf16 floor), bit-identity on the provided-mask path a block mask will ride, bitwise
+determinism, `keep_every=1` == dense with the skip branches instantiated, and a fresh-compile-first
+stride gate that distinguishes knob-not-plumbed from hash-miss. Those gates caught, in order: a
+signature divergence (`is_causal` defaulted false against the parent's true), a CB-id shift from
+growing the compile-time arg vector positionally (the CB ids own its tail; the stride now travels as
+a define), a stale `_ttnn.so` (factory changes need `build_metal.sh`; kernels are JIT), and the skip
+landing on the dead legacy path (`use_streaming_compute` routes these shapes to `sdpa_standard_v2`).
+
+**The measurement, one chip, seq 16384, k_chunk 512, 50 amortized dispatches (job 410):**
+
+| kept chunks | K/V read | median | speedup | ideal |
+|---|---|---|---|---|
+| 32/32 | 100% | 10.945 ms | 1.00x | 1.00x |
+| 16/32 | 50% | 5.470 ms | 2.00x | 2.00x |
+| 8/32 | 25% | 2.780 ms | 3.94x | 4.00x |
+| 4/32 | 12.5% | 1.412 ms | 7.75x | 8.00x |
+
+Two earlier instruments were wrong before this one was right: per-op host timing put every density at
+the ~2 ms dispatch+sync floor (11% apparent effect), and a compute-only skip bought 10% because the
+op is READ-bound -- the reader streamed every K/V chunk from DRAM regardless, which is exactly why
+skipped chunks had to be drained. The skip that works is **matched**: the reader never reads a
+skipped chunk (globally strided, so the K-forwarding chain stays in lockstep) and the compute never
+drains one.
+
+Fitting `t = a + b * kept`: **fixed cost a ~ 0.05-0.2 ms against `vsa_sdpa`'s 9.6 ms floor** -- two
+orders of magnitude -- on a base that is also 2x more compute-efficient at full density. That is the
+hybrid premise demonstrated: dense chunk math plus selective reads converts density to time at ~99%
+efficiency.
+
+Bounds on the claim: single chip, global contiguous chunk-granular stride, no SP gather in front.
+Production adds the all-gather (6.0 ms/block with the landed bfp8 narrowing) and Sol's per-row
+selection.
+
+### Remaining steps
+
+1. **Block mask** (per q-chunk x k-chunk bitmap) replacing the stride. The reader re-reads K/V per q
+   chunk, so per-q-chunk skipping is natural -- but it breaks the K-forwarding chain's lockstep, so
+   masked mode disables forwarding (each core reads its own K; more DRAM traffic, still far ahead) or
+   the chain is redesigned. Sol's 64-token q-block selection lands on 128-token q chunks as the union
+   of two rows -- small overhead, measured not assumed.
+2. **Pooled residual** as one extra chunk in the same softmax: `vc` as block sum, `p * block_len` in
+   the denominator, one shared row max. `tau -> -inf` == dense is the pin.
+3. **Threshold routing on device** feeding the mask; the oracle fixed the sizing (289 +- 12% at the
+   15 s shard, `diag` suffices).
+4. **PCC >= 0.9996 against `sol_attn_oracle.sol_attention`**, plus determinism and the dense
+   reduction.
+5. Mesh integration: `sol_attn` over the SP-gathered K/V where `vsa_sdpa` sits today.
+
 ## S3 - Fuse the coarse-stage setup
 
 Sol fuses K/V summaries, block statistics and the threshold into one preprocessing kernel:
