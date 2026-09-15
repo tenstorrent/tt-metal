@@ -66,6 +66,11 @@ constexpr uint32_t kFullInvalMaxPoll = 10000;
 // here; it gets its own smaller count.
 constexpr uint32_t kFullInvalIterations = 500;
 
+// Line counts swept by the fence-cost passes. Duplicated in test_compute_ipc.cpp, which sizes the
+// load_src buffer from the largest entry and indexes the result words from this list's length.
+constexpr uint32_t kFenceSweepIterations = 1000;
+constexpr uint32_t kFenceSweepLines[] = {1, 2, 4, 8};
+
 struct AluPassResult {
     uint32_t cycles;
     uint32_t instret;
@@ -258,6 +263,63 @@ FORCE_INLINE AluPassResult run_invalidate_only_pass(uint32_t iterations, uintptr
     return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
 }
 
+// Invalidating N lines: N calls to invalidate_l2_cache_line, or one invalidate_l2_cache_range?
+// Both emit the same N MMIO stores -- risc_common.h's range helper loops one store per 64 B line and
+// puts its two fences OUTSIDE that loop. So the only difference is fence count, 2N versus 2. The two
+// passes below keep an identical loop structure and move only the fences, making the delta between
+// them the cost of 2(N-1) fences and nothing else. No loads follow, so no refill is included.
+template <bool fence_per_line>
+FORCE_INLINE AluPassResult
+run_invalidate_nlines_pass(uint32_t iterations, uintptr_t addr, uintptr_t inv_reg, uint32_t n_lines) {
+    uint32_t cycle_start, cycle_end, instret_start, instret_end;
+    if constexpr (fence_per_line) {
+        asm volatile(
+            "rdcycle   %[c0]\n"
+            "rdinstret %[i0]\n"
+            "mv        a2, %[iters]\n"
+            "1:\n"
+            "mv   t0, %[addr]\n"
+            "mv   t1, %[lines]\n"
+            "2:\n"
+            "fence\n"
+            "sd   t0, 0(%[invreg])\n"
+            "fence\n"
+            "addi t0, t0, 64\n"
+            "addi t1, t1, -1\n"
+            "bnez t1, 2b\n"
+            "addi a2, a2, -1\n"
+            "bnez a2, 1b\n"
+            "rdcycle   %[c1]\n"
+            "rdinstret %[i1]\n"
+            : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+            : [iters] "r"(iterations), [addr] "r"(addr), [invreg] "r"(inv_reg), [lines] "r"(n_lines)
+            : "t0", "t1", "a2", "memory");
+    } else {
+        asm volatile(
+            "rdcycle   %[c0]\n"
+            "rdinstret %[i0]\n"
+            "mv        a2, %[iters]\n"
+            "1:\n"
+            "mv   t0, %[addr]\n"
+            "mv   t1, %[lines]\n"
+            "fence\n"
+            "2:\n"
+            "sd   t0, 0(%[invreg])\n"
+            "addi t0, t0, 64\n"
+            "addi t1, t1, -1\n"
+            "bnez t1, 2b\n"
+            "fence\n"
+            "addi a2, a2, -1\n"
+            "bnez a2, 1b\n"
+            "rdcycle   %[c1]\n"
+            "rdinstret %[i1]\n"
+            : [c0] "=&r"(cycle_start), [i0] "=&r"(instret_start), [c1] "=r"(cycle_end), [i1] "=r"(instret_end)
+            : [iters] "r"(iterations), [addr] "r"(addr), [invreg] "r"(inv_reg), [lines] "r"(n_lines)
+            : "t0", "t1", "a2", "memory");
+    }
+    return {.cycles = cycle_end - cycle_start, .instret = instret_end - instret_start};
+}
+
 // FULL-cache invalidate (L2 wipe + whole L1 D$ discard), then the same four cached load-use pairs, for
 // a like-for-like comparison against the per-line variant above. Replicates invalidate_cache_all()
 // minus the I$ discard (we are not reloading code), i.e. invalidate_l2_cache() + invalidate_l1_dcache(0).
@@ -436,6 +498,29 @@ void kernel_main() {
     write_result(result_addr, 21, kMultiLoadIterations);
     write_result(result_addr, 22, inval_only.cycles);
     write_result(result_addr, 23, inval_only.instret);
+
+    // Fence-cost sweep: per-line calls vs one range call, at 1/2/4/8 lines. Result words 43..58,
+    // four per line count: {per_line.cycles, per_line.instret, range.cycles, range.instret}.
+    for (uint32_t i = 0; i < sizeof(kFenceSweepLines) / sizeof(kFenceSweepLines[0]); ++i) {
+        const uint32_t lines = kFenceSweepLines[i];
+        const AluPassResult per_line =
+            run_invalidate_nlines_pass<true>(kFenceSweepIterations, load_src_addr, L2_INVALIDATE_ADDR, lines);
+        const AluPassResult one_range =
+            run_invalidate_nlines_pass<false>(kFenceSweepIterations, load_src_addr, L2_INVALIDATE_ADDR, lines);
+        write_result(result_addr, 43 + i * 4 + 0, per_line.cycles);
+        write_result(result_addr, 43 + i * 4 + 1, per_line.instret);
+        write_result(result_addr, 43 + i * 4 + 2, one_range.cycles);
+        write_result(result_addr, 43 + i * 4 + 3, one_range.instret);
+        DEVICE_PRINT(
+            "ALU_IPC fence_sweep lines={} iters={} per_line_cycles={} per_line_instret={} range_cycles={} "
+            "range_instret={}\n",
+            lines,
+            kFenceSweepIterations,
+            per_line.cycles,
+            per_line.instret,
+            one_range.cycles,
+            one_range.instret);
+    }
 
     // Full-cache invalidate instead of per-line, same 4 cached reads, for a like-for-like comparison.
     const AluPassResult full_inval = run_full_invalidate_load_use_pass(
