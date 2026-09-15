@@ -366,9 +366,6 @@ def test_zero_offset_is_deterministic_and_matches_reference(
     )
 
 
-SPLIT_KINDS = {"smallest": 1, "midpoint": None, "largest": -1}
-
-
 def _tail_rows(kind: str, local_rows: int) -> int:
     """Tail length for a named split, in rows."""
     if kind == "smallest":
