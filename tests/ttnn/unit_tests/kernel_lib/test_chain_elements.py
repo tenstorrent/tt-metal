@@ -143,7 +143,7 @@ def test_copy_dest_int32(device):
         kernels=[
             lib.build_reader_kernel([tt_in], n, core_grid),
             lib.build_writer_1out_kernel(tt_out, n, core_grid),
-            lib.build_compute_kernel(MISC_ELEMENTS, [n, 2], core_grid),
+            lib.build_compute_kernel(MISC_ELEMENTS, [n, 2], core_grid, fp32_dest_acc_en=True),
         ],
         semaphores=[],
         cbs=[lib.cb_descriptor(0, dt, 2, core_grid), lib.cb_descriptor(16, dt, 2, core_grid)],
