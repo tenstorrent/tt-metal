@@ -12,7 +12,7 @@ data route (Dest / SFPU / packer formats, unpack-to-Dest vs FPU datacopy)
 resolved by resolve_quasar_sfpu_variant exactly as in
 quasar/test_eltwise_unary_sfpu_quasar.py.
 
-Each entry in CASES (near the bottom of this file) sweeps one SFPU op over an
+Each entry in CASES (right after the Case dataclass) sweeps one SFPU op over an
 input domain and emits a multi-panel accuracy plot + stats summary (golden vs
 hardware: signed ULP error, relative error, ULP CDF, per-bin percentiles,
 monotonicity) to tests/python_tests/_plot_output/qsr/sfpu_<id>.png.
@@ -138,8 +138,8 @@ QUASAR_APPROX_CAPABLE_OPS = (
 #   resolve_quasar_sfpu_variant, and a Case the hardware cannot run fails
 #   loudly at run time.
 #
-#   Run one op:   pytest quasar/test_sfpu_plot_quasar.py -k Exp -s
-#   Run all:      pytest quasar/test_sfpu_plot_quasar.py -s
+#   Run one op:   CHIP_ARCH=quasar pytest --run-simulator quasar/test_sfpu_plot_quasar.py -k Exp -s
+#   Run all:      CHIP_ARCH=quasar pytest --run-simulator quasar/test_sfpu_plot_quasar.py -s
 #
 #   Each case writes _plot_output/qsr/sfpu_<id>.png and prints a stats
 #   summary, then asserts the hardware result matches golden.
@@ -154,7 +154,9 @@ QUASAR_APPROX_CAPABLE_OPS = (
 #   dest_sync / implied_math_format  Quasar-only kernel knobs (default Half / Yes,
 #                           the perf-mode pins of the functional suite)
 #   extra_undefined_ranges  override the red "undefined domain" plot shading
-#   name                    custom test id (name of file) (defaults to "<Op>-<fmt>")
+#   name                    custom test id — the plot filename and the -k selector
+#                           (defaults to "<Op>-<fmt>", or "<Op>-<fmt>-approx" when
+#                           approx_mode=Yes)
 #   input_dimensions        sample-point count (defaults to [32, 32] = 1024, one
 #                           tile). The Quasar kernel runs every tile in one Dest
 #                           section, so this is capped by Dest capacity: 8 tiles
@@ -247,7 +249,7 @@ CASES = [
     for approx in _approx_modes(op)
 ] + [
     # exhaustive demo: every bf16 value in [0.01, 10] through the approx kernel
-    # (auto-batched at Dest capacity).
+    # (~1.3k values, auto-sized to whole tiles: a single 2-tile run, no batching).
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.ulp_sweep(low=0.01, high=10.0),
@@ -256,8 +258,10 @@ CASES = [
     ),
     # batched fp32 demo: every fp32 value in [1.0, 1.002] (~16.8k values, 17
     # tiles) swept in 4-tile batches — the fp32 Dest capacity — and joined.
-    # Exercises the batching loop on the simulator in a few runs; the WH/BH
-    # file's full-octave [1.0, 2.0] sweep (2^23 values) would take hours here.
+    # Exercises the batching loop on the simulator in a few runs. The WH/BH
+    # file's full-octave [1.0, 2.0] sweep (2^23 values) would be 2048 runs of
+    # 4 tiles here — about 25 minutes on the simulator and over
+    # _MAX_SWEEP_BATCHES, so run_case rejects it.
     Case(
         op=MathOperation.Reciprocal,
         spec=StimuliSpec.ulp_sweep(low=1.0, high=1.002),
@@ -273,9 +277,7 @@ CASES = [
 # One 32x32 tile = 1024 elements.
 _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 
-# Max values a ulp_sweep may have — beyond this it takes too long, so run_case
-# errors and asks for a narrower range. Only fp32 can reach it (bf16/fp16 ~65k).
-_MAX_ULP_SWEEP_VALUES = 2**25
+_MAX_SWEEP_BATCHES = 512
 
 
 def _dest_capacity_tiles(dest_sync: DestSync, dest_acc: DestAccumulation) -> int:
@@ -430,12 +432,25 @@ def run_case(case: Case) -> bool:
     is_ulp = spec.distribution == DistributionKind.ULP_SWEEP
     batch_tiles = case.batch_tiles
     if is_ulp:
-        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
-        if case.input_dimensions is None and total > _MAX_ULP_SWEEP_VALUES:
+        if batch_tiles is not None and not 1 <= batch_tiles <= capacity_tiles:
             raise ValueError(
-                f"ulp_sweep [{spec.low}, {spec.high}] has {total:,} values, over "
-                f"the {_MAX_ULP_SWEEP_VALUES:,}-value limit — narrow the range."
+                f"{case.test_id}: batch_tiles={batch_tiles} must be between 1 and "
+                f"the Quasar Dest capacity of {capacity_tiles} tiles"
             )
+        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
+        # Reject a range that would take too many device runs. Skipped when
+        # input_dimensions is set — that is a single, quick run.
+        if case.input_dimensions is None:
+            run_tiles = batch_tiles if batch_tiles is not None else capacity_tiles
+            run_values = run_tiles * _TILE_ELEMENTS
+            num_runs = math.ceil(total / run_values)
+            if num_runs > _MAX_SWEEP_BATCHES:
+                raise ValueError(
+                    f"{case.test_id}: ulp_sweep [{spec.low}, {spec.high}] has "
+                    f"{total:,} values = {num_runs:,} runs of {run_tiles} tiles, "
+                    f"over the {_MAX_SWEEP_BATCHES}-run limit — narrow the range "
+                    f"(at most {run_values * _MAX_SWEEP_BATCHES:,} values)."
+                )
         if (
             batch_tiles is None
             and case.input_dimensions is None
@@ -449,11 +464,6 @@ def run_case(case: Case) -> bool:
                 spec.high,
                 total,
                 batch_tiles,
-            )
-        if batch_tiles is not None and batch_tiles > capacity_tiles:
-            raise ValueError(
-                f"{case.test_id}: batch_tiles={batch_tiles} exceeds the Quasar Dest "
-                f"capacity of {capacity_tiles} tiles"
             )
 
     if is_ulp and batch_tiles is not None:
