@@ -179,6 +179,7 @@ def run_exp_ring_joint_sdpa_nightly(
     num_buffers_per_channel=32,
     max_payload_size=8192,
     mesh_device=None,
+    op=None,
 ):
     """
     Run exp_ring_joint_scaled_dot_product_attention and verify accuracy or determinism.
@@ -423,7 +424,8 @@ def run_exp_ring_joint_sdpa_nightly(
                 seen_sem_addrs.extend(iter_sem_addrs)
                 logger.info(f"[cache-hit iter {i}] semaphore addresses: {iter_sem_addrs}")
 
-            tt_out, _tt_joint_out, _tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
+            attention_op = op if op is not None else ttnn.transformer.exp_ring_joint_scaled_dot_product_attention
+            tt_out, _tt_joint_out, _tt_lse = attention_op(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -652,6 +654,55 @@ def test_exp_ring_joint_attention_sdpa_accuracy(
         pcc_threshold=DEFAULT_PCC_THRESHOLD,
         max_mse=DEFAULT_MAX_MSE,
         max_payload_size=max_payload_size,
+    )
+
+
+# === sol_ring: the fork must clear the gates its parent clears ===
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS, ids=TEST_CONFIG_IDS)
+def test_sol_ring_matches_dense_accuracy(
+    b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, test_global_mask, max_payload_size, reset_seeds
+):
+    """`sol_ring` against the same reference and the same thresholds as its parent.
+
+    The fork starts as an exact clone, so anything this catches is a forking mistake -- a renamed
+    symbol bound to the wrong body, a kernel path still pointing at the parent's file, a compile-time
+    arg that shifted. Once the block-sparse routing lands, this pins what the dense path cost.
+    """
+    if test_global_mask:
+        total_seq = total_seq - 31
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        pcc_threshold=DEFAULT_PCC_THRESHOLD,
+        max_mse=DEFAULT_MAX_MSE,
+        max_payload_size=max_payload_size,
+        op=ttnn.transformer.sol_ring,
+    )
+
+
+@pytest.mark.skipif(len(TEST_CONFIGS) == 0, reason="No valid device configuration detected")
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
+@pytest.mark.parametrize("b, nh, total_seq, d, q_chunk_size, k_chunk_size", TEST_CONFIGS[:1], ids=TEST_CONFIG_IDS[:1])
+def test_sol_ring_determinism(b, nh, total_seq, d, q_chunk_size, k_chunk_size, dtype, reset_seeds):
+    """Repeated launches must be bitwise equal, as they are for the parent."""
+    run_exp_ring_joint_sdpa_nightly(
+        b,
+        nh,
+        total_seq,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        do_check=False,
+        num_iterations=3,
+        op=ttnn.transformer.sol_ring,
     )
 
 
