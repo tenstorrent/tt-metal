@@ -57,6 +57,7 @@ Tensor high_bw_all_gather(
     // Trace-safe active extent: 1-element uint32 tensor holding this chunk's start position in the
     // gathered dim; the reader derives the extent from it. Mutually exclusive with gathered_dim_size.
     const std::optional<Tensor>& gathered_prefix_tensor = std::nullopt,
-    uint32_t gathered_slab_global = 0);
+    uint32_t gathered_slab_global = 0,
+    bool gathered_prefix_spans_full_mesh = false);
 
 }  // namespace ttnn::prim

@@ -536,7 +536,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     uint32_t kv_cache_layer_idx,
     bool split_forwarding_enabled,
     bool partial_readiness_enabled,
-    RingAttentionRankMapping rank_mapping) {
+    RingAttentionRankMapping rank_mapping,
+    // TP fan-in of a rank-major gathered slab: its populated rows are `ranks` runs, not one prefix.
+    // 1 is the identity.
+    uint32_t kv_block_cyclic_ranks) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
@@ -669,7 +672,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const uint32_t max_payload_size_bytes = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     const uint32_t num_dram_banks = mesh_device->allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
+    // The bank-owned schedule maps input page to output page as the identity, which a multi-run
+    // transfer cannot preserve, so a rank-major slab uses the general schedule.
     const bool output_bank_owned_schedule =
+        kv_block_cyclic_ranks <= 1 &&
         ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(input_tensor, output_tensor, dim);
     if (partial_readiness_enabled) {
         TT_FATAL(fuse_op, "Partial all-gather readiness requires a fused consumer");
@@ -863,6 +869,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             // Appended last so main's arg order is untouched; the reader reads it as kHasSlotMetadata
             // and kReaderFixedCompileTimeArgCount (asserted just below) counts it.
             static_cast<uint32_t>(has_slot_metadata),  // kHasSlotMetadata
+            kv_block_cyclic_ranks,                     // kKvBlockCyclicRanks
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kReaderFixedCompileTimeArgCount,
@@ -917,6 +924,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             static_cast<uint32_t>(partial_readiness_enabled),   // kPartialReadinessEnabled
             static_cast<uint32_t>(output_bank_owned_schedule),  // kOutputBankOwnedSchedule
             num_dram_banks,                                     // kNumDramBanks
+            kv_block_cyclic_ranks,                              // kKvBlockCyclicRanks
         };
         TT_FATAL(
             args.size() == ttnn::ring_attention_all_gather::kWriterFixedCompileTimeArgCount,

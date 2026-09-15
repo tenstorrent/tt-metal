@@ -52,6 +52,9 @@ enum CompileTimeArg : uint32_t {
     kPartialReadinessEnabled,
     kOutputBankOwnedSchedule,
     kNumDramBanks,
+    // TP fan-in of a BLOCK-CYCLIC (rank-major) gathered slab; 1 = natural order, the identity.
+    // See BlockCyclicRowMap: the populated rows of such a slab are `ranks` runs, not one prefix.
+    kKvBlockCyclicRanks,
     kNumFixedCompileTimeArgs,
 };
 
@@ -84,6 +87,7 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
+constexpr uint32_t kv_block_cyclic_ranks = get_compile_time_arg_val(kKvBlockCyclicRanks);
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -229,6 +233,16 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+    // Mirrors the reader: the owned pages index the LOGICAL row space, physical_row() places each row.
+    // Both kernels must agree or the destination offsets diverge. ranks == 1 is the identity.
+    std::array<ring_attention_all_gather::BlockCyclicRowMap, num_inputs> bc_row_map;
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        bc_row_map[input_idx] = ring_attention_all_gather::BlockCyclicRowMap::make(
+            kv_block_cyclic_ranks,
+            input_valid_pages[input_idx] / input_tensor_Wt[input_idx],
+            input_tensor_Ht[input_idx]);
+    }
+
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
     /* Args for overlapped all gather */
@@ -342,9 +356,10 @@ void kernel_main() {
             }
         } else {
             uint32_t tile_id_start = my_tensor_rank * input_tensor_Wt[input_idx];
+            const auto& bc_map = bc_row_map[input_idx];
+            uint32_t logical_row = input_tile_id_start[input_idx] / input_tensor_Wt[input_idx];
             uint32_t pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-            uint32_t row_offset =
-                (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+            uint32_t row_offset = bc_map.physical_row(logical_row) * output_tensor_Wt[input_idx];
             uint32_t tiles_read = input_tile_id_start[input_idx];
             uint32_t tiles_to_read = input_tile_id_end[input_idx];
             if (gather_dim == 3) {
@@ -363,7 +378,7 @@ void kernel_main() {
 
                     pages_read_in_row++;
                     if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
-                        row_offset += output_tensor_Wt[input_idx];
+                        row_offset = bc_map.physical_row(++logical_row) * output_tensor_Wt[input_idx];
                         pages_read_in_row = 0;
                     }
 
@@ -383,7 +398,7 @@ void kernel_main() {
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= input_tensor_Wt[input_idx]) {
-                            row_offset += output_tensor_Wt[input_idx];
+                            row_offset = bc_map.physical_row(++logical_row) * output_tensor_Wt[input_idx];
                             pages_read_in_row = 0;
                         }
                     } else {
@@ -406,9 +421,9 @@ void kernel_main() {
                 tile_id_start += output_pages_per_batch_head;
                 tiles_read = input_tile_id_start[input_idx];
                 tiles_to_read = input_tile_id_end[input_idx];
+                logical_row = input_tile_id_start[input_idx] / input_tensor_Wt[input_idx];
                 pages_read_in_row = input_tile_id_start[input_idx] % input_tensor_Wt[input_idx];
-                row_offset =
-                    (input_tile_id_start[input_idx] / input_tensor_Wt[input_idx]) * output_tensor_Wt[input_idx];
+                row_offset = bc_map.physical_row(logical_row) * output_tensor_Wt[input_idx];
             }
         }
     }
@@ -542,7 +557,9 @@ void kernel_main() {
                 uint32_t tile_id_start = slice_tensor_rank * input_tensor_Wt[input_idx];
                 const uint32_t slice_Wt = input_tensor_Wt[input_idx];
                 const uint32_t stride_Wt = output_tensor_Wt[input_idx];
-                uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
+                const auto& bc_map = bc_row_map[input_idx];
+                uint32_t logical_row = relay_start / slice_Wt;
+                uint32_t row_offset = bc_map.physical_row(logical_row) * stride_Wt;
                 uint32_t pages_read_in_row = relay_start % slice_Wt;
 
                 if (gather_dim == 3) {
@@ -558,14 +575,14 @@ void kernel_main() {
                         uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
-                            row_offset += stride_Wt;
+                            row_offset = bc_map.physical_row(++logical_row) * stride_Wt;
                             pages_read_in_row = 0;
                         }
                         if (num_pages_to_read == 2) {
                             uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
                             pages_read_in_row++;
                             if (pages_read_in_row >= slice_Wt) {
-                                row_offset += stride_Wt;
+                                row_offset = bc_map.physical_row(++logical_row) * stride_Wt;
                                 pages_read_in_row = 0;
                             }
 

@@ -70,6 +70,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
-    bool circular_kv_cache = false);
+    bool circular_kv_cache = false,
+    // KV dedup (ag-before): the KV slab is block-cyclic over TP, so the reader decodes it back to
+    // natural order. Geometry is derived from the mesh and the tensors; false = natural order.
+    bool kv_block_cyclic_cache_tp_sharded = false);
 
 }  // namespace ttnn::prim

@@ -838,6 +838,12 @@ HighBwAllGatherUnicastFactory::cached_program_t HighBwAllGatherUnicastFactory::c
         reader_compile_args.push_back(output_chunk_size);
         reader_compile_args.push_back(static_cast<uint32_t>(packet_size));
         reader_compile_args.push_back(cb_meta_writer_id);
+        // The prefix scalar counts the whole mesh; this gather rides one axis of it.
+        const uint32_t gathered_prefix_divisor =
+            operation_attributes.gathered_prefix_spans_full_mesh
+                ? static_cast<uint32_t>(mesh_device->shape().mesh_size()) / operation_attributes.num_devices
+                : 1u;
+        reader_compile_args.push_back(gathered_prefix_divisor);
         if (extent_from_metadata) {
             tt::tt_metal::TensorAccessorArgs(tensor_args.gathered_prefix_tensor->buffer())
                 .append_to(reader_compile_args);

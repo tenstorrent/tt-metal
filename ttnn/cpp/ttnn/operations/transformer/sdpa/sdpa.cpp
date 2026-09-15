@@ -321,7 +321,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx) {
+    std::optional<uint32_t> kv_cache_layer_idx,
+    bool kv_block_cyclic_cache_tp_sharded) {
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_kv,
@@ -359,7 +360,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         kv_actual_isl_tensor,
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
-        std::nullopt);  // sliding_window_size
+        // circular_kv_cache sits between sliding_window_size and the block-cyclic flag; ring_mla never
+        // uses a circular cache.
+        std::nullopt,  // sliding_window_size
+        /*circular_kv_cache=*/false,
+        kv_block_cyclic_cache_tp_sharded);
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

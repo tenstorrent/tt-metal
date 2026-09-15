@@ -155,7 +155,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     // on-device as slot_id[0] * kv_cache_num_layers + kv_cache_layer_idx (mirrors
     // update_padded_kv_cache). Resolve to 1/0 when nullopt -> slot = slot_id[0] (existing behavior).
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
+    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
+    // The KV slab is block-cyclic over TP; the reader decodes it to natural order. Geometry comes from
+    // the mesh and the tensors.
+    bool kv_block_cyclic_cache_tp_sharded = false);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

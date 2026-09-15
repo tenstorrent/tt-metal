@@ -311,9 +311,15 @@ void kernel_main() {
     // Sharded joint requires the gathered joint K/V buffers (only meaningful when joint K is present).
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
 
-    // Slots 40-43 are the rank-mapping descriptor and slot 44 the bounded sliding KV slab count, so
-    // the tensor accessors start at compile-arg slot 45.
-    constexpr auto q_args = TensorAccessorArgs<45>();
+    // Slots 40-43 are the rank-mapping descriptor, slot 44 the bounded sliding KV slab count, and
+    // 45-48 the block-cyclic KV slab geometry, so the tensor accessors start at compile-arg slot 49.
+    // Block-cyclic KV slab geometry; the permutation breaks only every kv_bc_stripe_rows_t tiles, so
+    // reads stay contiguous runs.
+    constexpr bool kv_block_cyclic = get_compile_time_arg_val(45) != 0;
+    constexpr uint32_t kv_bc_stripe_rows_t = get_compile_time_arg_val(46);
+    constexpr uint32_t kv_bc_stripes = get_compile_time_arg_val(47);
+    constexpr uint32_t kv_bc_ranks = get_compile_time_arg_val(48);
+    constexpr auto q_args = TensorAccessorArgs<49>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -328,14 +334,13 @@ void kernel_main() {
     // (unused) accessor offset (q_args' slot 45) so TensorAccessorArgs<> -- instantiated unconditionally
     // here -- never names a non-accessor compile arg (which would fail its internal static_assert).
     // The chain/CB compile args then start after the metadata accessor when present.
-    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 45;
+    constexpr uint32_t meta_args_offset = slot_from_metadata ? post_tensor_args_offset : 49;
     constexpr auto meta_args = TensorAccessorArgs<meta_args_offset>();  // slot_id accessor
-    // kv_actual_isl gets its OWN accessor (a separately-allocated single-page DRAM tensor can land in a
-    // different DRAM bank than slot_id, so the slot accessor's dspec reads the wrong bank for it -- the kv
-    // read silently returned 0). Appended right after slot's when kv_pad_from_metadata; otherwise fall back
-    // to a VALID accessor offset so the unconditional TensorAccessorArgs<> never names a non-accessor arg.
-    constexpr uint32_t kv_meta_args_offset =
-        kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
+    // kv_actual_isl has its own accessor: it follows the slot's when present, else the tensor accessors.
+    // Falls back to a valid offset when absent; must mirror the factory's append order.
+    constexpr uint32_t kv_meta_base_offset =
+        slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
+    constexpr uint32_t kv_meta_args_offset = kv_pad_from_metadata ? kv_meta_base_offset : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
     constexpr uint32_t chains_base_no_kv_pad =
         slot_from_metadata ? meta_args.next_compile_time_args_offset() : post_tensor_args_offset;
@@ -651,15 +656,20 @@ void kernel_main() {
     // (Lt_local == Lt when joint is not sharded), so this is bit-identical there.
     const auto joint_q_input_tile_logical = TensorTileShape(B, NH, Lt_local, DHt);
 
+    // One construction point for the four KV generators, whose reader/shape types differ.
+    const auto make_kv_gen = [](const auto& rdr, auto shape) {
+        return make_block_cyclic_addr_generator<kv_block_cyclic, kv_bc_stripe_rows_t, kv_bc_stripes, kv_bc_ranks>(
+            rdr, shape);
+    };
     const auto q_generator = PaddedAddrGenerator(q_reader, input_q_tile_logical);
-    const auto local_k_generator = PaddedAddrGenerator(local_k_reader, input_k_tile_logical);
-    const auto gathered_k_generator = PaddedAddrGenerator(gathered_k_reader, gathered_k_input_tile_logical);
+    const auto local_k_generator = make_kv_gen(local_k_reader, input_k_tile_logical);
+    const auto gathered_k_generator = make_kv_gen(gathered_k_reader, gathered_k_input_tile_logical);
     const auto local_v_reader = TensorAccessor(v_args, v_addr);
     const auto input_v_tile_logical = TensorTileShape(kv_batch_dim, NHV, kv_local_padded_Nt, vDHt);
     const auto gathered_v_reader = TensorAccessor(gathered_v_args, gathered_v_addr);
     const auto gathered_v_input_tile_logical = TensorTileShape(gathered_kv_batch_dim, NHV, gathered_padded_Nt, vDHt);
-    const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
-    const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
+    const auto local_v_generator = make_kv_gen(local_v_reader, input_v_tile_logical);
+    const auto gathered_v_generator = make_kv_gen(gathered_v_reader, gathered_v_input_tile_logical);
     [[maybe_unused]] const auto v_generators =
         VSourceGenerators<decltype(local_v_generator), decltype(gathered_v_generator)>{
             local_v_generator, gathered_v_generator};

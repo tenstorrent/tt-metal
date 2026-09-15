@@ -96,7 +96,13 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
                 gathered_slab_global: Block-cyclic slab width in gathered-dim elements
                     (``chunk_local * num_devices``). Required with ``gathered_prefix_tensor`` and hashed,
                     being structural rather than per-chunk.
-        )doc",
+                gathered_prefix_spans_full_mesh: Set when ``gathered_prefix_tensor`` counts positions
+                    across the WHOLE mesh while this gather rides one axis of it, as a TP-axis gather of
+                    a sequence sharded over SP*TP does. The start is then scaled by
+                    ``mesh_size / num_devices`` before the extent is derived, and
+                    ``gathered_slab_global`` is given in this gather's own units. Structural, so it is
+                    hashed.
+)doc",
         &high_bw_all_gather,
         nb::arg("input_tensor").noconvert(),
         nb::arg("dim"),
@@ -112,7 +118,8 @@ void bind_experimental_high_bw_all_gather_operation(nb::module_& mod) {
         nb::arg("batch_slot_num_layers") = 1,
         nb::arg("batch_slot_layer_idx") = 0,
         nb::arg("gathered_prefix_tensor") = nb::none(),
-        nb::arg("gathered_slab_global") = 0);
+        nb::arg("gathered_slab_global") = 0,
+        nb::arg("gathered_prefix_spans_full_mesh") = false);
 }
 
 }  // namespace ttnn::operations::experimental::high_bw_all_gather::detail

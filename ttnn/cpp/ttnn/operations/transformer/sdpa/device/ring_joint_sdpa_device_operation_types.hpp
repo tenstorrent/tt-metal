@@ -45,6 +45,9 @@ struct RingJointSDPAParams {
     // callers only opt in. false = unbounded cache (byte-identical to the pre-existing behavior).
     // Requires chunked sliding + kv_actual_isl.
     bool circular_kv_cache = false;
+    // The KV slab is block-cyclic over TP and the reader decodes it to natural order. Geometry comes
+    // from the mesh and the tensors; structural, so it is hashed.
+    bool kv_block_cyclic_cache_tp_sharded = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -68,7 +71,8 @@ struct RingJointSDPAParams {
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
         std::optional<uint32_t> sliding_window_size = std::nullopt,
-        bool circular_kv_cache = false) :
+        bool circular_kv_cache = false,
+        bool kv_block_cyclic_cache_tp_sharded = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -89,7 +93,8 @@ struct RingJointSDPAParams {
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
         sliding_window_size(sliding_window_size),
-        circular_kv_cache(circular_kv_cache) {}
+        circular_kv_cache(circular_kv_cache),
+        kv_block_cyclic_cache_tp_sharded(kv_block_cyclic_cache_tp_sharded) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -118,6 +123,7 @@ struct RingJointSDPAParams {
         "latent_v_head_dim",
         "sliding_window_size",
         "circular_kv_cache",
+        "kv_block_cyclic_cache_tp_sharded",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -138,6 +144,7 @@ struct RingJointSDPAParams {
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
             std::cref(circular_kv_cache),
+            std::cref(kv_block_cyclic_cache_tp_sharded),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -169,7 +176,10 @@ struct RingJointSDPAInputs {
     std::optional<Tensor> slot_id;
     std::optional<Tensor> kv_actual_isl;
 
-    bool has_metadata() const { return slot_id.has_value() && kv_actual_isl.has_value(); }
+    // kv_actual_isl drives logical_nt, the q-mapping and the ring masks; every captured chunk needs it.
+    // slot_id is optional: a caller whose slab is already slot-selected has no slot left to choose.
+    bool has_metadata() const { return kv_actual_isl.has_value(); }
+    bool has_slot_metadata() const { return slot_id.has_value(); }
 
     // Chunked-prefill is signalled implicitly by Q being shorter than the per-device K shard:
     // Q is the latest slab, K is the populated prefix from chunk 0 through the current chunk.

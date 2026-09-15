@@ -48,6 +48,9 @@ enum CompileTimeArg : uint32_t {
     kPrefetchPackets,
     // Trace-safe cache-slot select, appended last so main's arg order is untouched.
     kHasSlotMetadata,
+    // TP fan-in of a BLOCK-CYCLIC (rank-major) gathered slab; 1 = natural order, the identity.
+    // See BlockCyclicRowMap: the populated rows of such a slab are `ranks` runs, not one prefix.
+    kKvBlockCyclicRanks,
     kNumFixedCompileTimeArgs,
 };
 
@@ -76,6 +79,7 @@ constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialRead
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
 constexpr bool has_slot_metadata = get_compile_time_arg_val(kHasSlotMetadata);
+constexpr uint32_t kv_block_cyclic_ranks = get_compile_time_arg_val(kKvBlockCyclicRanks);
 
 static_assert(!partial_readiness_enabled || num_inputs == 1, "partial readiness requires one gathered input");
 static_assert(
@@ -237,6 +241,16 @@ void kernel_main() {
             input_tile_id_end);
     }
 
+    // The pages this worker owns index the logical row space; physical_row() places each one. Built
+    // after the metadata clamp so both paths see the final extent.
+    std::array<ring_attention_all_gather::BlockCyclicRowMap, num_inputs> bc_row_map;
+    for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        bc_row_map[input_idx] = ring_attention_all_gather::BlockCyclicRowMap::make(
+            kv_block_cyclic_ranks,
+            input_valid_pages[input_idx] / input_tensor_Wt[input_idx],
+            input_tensor_Ht[input_idx]);
+    }
+
     OpSignaler op_signaler;
     if constexpr (fuse_op) {
         op_signaler = OpSignaler(arg_idx);
@@ -317,7 +331,9 @@ void kernel_main() {
                     cb_fifo_limit,
                     cb_fifo_size,
                     input_tensor_addrgens[input_idx],
-                    [&](uint32_t tr) { return input_page_base + tr; });
+                    [&, in_Wt = input_tensor_Wt[input_idx], map = bc_row_map[input_idx]](uint32_t tr) {
+                        return input_page_base + map.physical_row(tr / in_Wt) * in_Wt + tr % in_Wt;
+                    });
                 tiles_read = input_tile_id_start[input_idx];
                 tiles_to_read = input_tile_id_end[input_idx];
                 input_page_base += input_pages_per_batch_head;
@@ -482,8 +498,12 @@ void kernel_main() {
                     uint32_t output_tile_id_start = 0;
                     const uint32_t slice_Wt = input_tensor_Wt[input_idx];
                     const uint32_t stride_Wt = output_tensor_Wt[input_idx];
+                    const auto& bc_map = bc_row_map[input_idx];
+                    // Walk the LOGICAL row space and place each row at its physical offset, so the relayed
+                    // slice lands where the consumer's block-cyclic decode expects it (identity at ranks==1).
+                    uint32_t logical_row = relay_start / slice_Wt;
                     uint32_t pages_read_in_row = relay_start % slice_Wt;
-                    uint32_t row_offset = (relay_start / slice_Wt) * stride_Wt;
+                    uint32_t row_offset = bc_map.physical_row(logical_row) * stride_Wt;
                     if (gather_dim == 3) {
                         output_tile_id_start = sender_tensor_rank * slice_Wt;
                     } else {
@@ -506,13 +526,14 @@ void kernel_main() {
                                 const uint32_t pid = output_tile_id_start + row_offset + pages_read_in_row;
                                 pages_read_in_row++;
                                 if (pages_read_in_row >= slice_Wt) {
-                                    row_offset += stride_Wt;
+                                    row_offset = bc_map.physical_row(++logical_row) * stride_Wt;
                                     pages_read_in_row = 0;
                                 }
                                 return pid;
                             });
+                        logical_row = relay_start / slice_Wt;
                         pages_read_in_row = relay_start % slice_Wt;
-                        row_offset = (relay_start / slice_Wt) * stride_Wt;
+                        row_offset = bc_map.physical_row(logical_row) * stride_Wt;
                         tiles_read = relay_start;
                         tiles_to_read = relay_end;
                         output_tile_id_start += output_pages_per_batch_head;

@@ -72,6 +72,15 @@ def gather_cache_natural(tt_cache, mesh_device, tp_shard_kv: bool = False):
     return flat, sp * tp
 
 
+def tp_stripe_major_cache(block_cyclic: torch.Tensor, sp: int, tp: int) -> torch.Tensor:
+    """Re-lay one slot's linear-chip-order rows [seq, D] as [tp, seq/tp, D] to preload a TP-deduped cache.
+    TP must lead: a mapper cannot split one dim across both axes, and dim 2 already carries SP's sequence.
+    """
+    seq, head_dim = block_cyclic.shape
+    local = seq // (sp * tp)
+    return block_cyclic.reshape(sp, tp, local, head_dim).permute(1, 0, 2, 3).reshape(tp, seq // tp, head_dim)
+
+
 def unrotate_cache_layer(cache_slot: torch.Tensor, positions: torch.Tensor, total_len: int) -> torch.Tensor:
     """Un-rotate one slot's block-cyclic cache rows [seq_len_cache, head_dim] to natural order and slice the
     valid region. `positions` = blockcyclic_positions(sp, chunk, seq_len_cache)."""

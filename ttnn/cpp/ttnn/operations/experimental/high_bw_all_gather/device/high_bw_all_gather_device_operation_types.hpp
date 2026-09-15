@@ -89,6 +89,9 @@ struct HighBwAllGatherParams {
     // `gathered_slab_global` is the block-cyclic slab width in gathered-dim elements (chunk_local * sp).
     // It is structural -- identical for every chunk and every layer -- so it is hashed.
     uint32_t gathered_slab_global = 0;
+    // Set when gathered_prefix_tensor counts the whole mesh while this gather rides one axis of it; the
+    // start is scaled by mesh_size / num_devices before the extent is derived. Hashed.
+    bool gathered_prefix_spans_full_mesh = false;
 };
 
 struct HighBwAllGatherInputs {

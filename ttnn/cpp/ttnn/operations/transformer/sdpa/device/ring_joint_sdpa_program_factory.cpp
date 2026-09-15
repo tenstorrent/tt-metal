@@ -1022,7 +1022,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
     // Metadata uses an on-device cache-slot value, but needs the same single-slot program structure.
-    const bool slot_from_metadata = tensor_args.has_metadata();
+    // Slot block only when a slot tensor is supplied; the extent metadata stands on its own.
+    const bool slot_from_metadata = tensor_args.has_slot_metadata();
     const bool indexed_kv_cache = args.has_indexed_kv_cache() || slot_from_metadata;
     // Latent-V mode: V tensors are omitted; the reader reuses K's buffer and
     // reads only the first vDHt head-dim tiles.
@@ -1481,6 +1482,37 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t num_active_cores = enable_zigzag_balancing ? std::min(num_cores, all_heads_num_q_chunks / 2)
                                                               : std::min(num_cores, all_heads_num_q_chunks);
 
+    // Block-cyclic KV slab geometry: ranks is the non-SP mesh axis, stripes the chunks the slab holds.
+    // A single chunk needs no permutation, so it folds to the natural-order generator.
+    const bool kv_block_cyclic_requested = args.kv_block_cyclic_cache_tp_sharded;
+    const uint32_t kv_bc_ranks =
+        kv_block_cyclic_requested
+            ? static_cast<uint32_t>(tensor_args.input_q.device()->get_view().shape().mesh_size()) /
+                  static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size)
+            : 1;
+    const uint32_t kv_bc_stripes = kv_block_cyclic_requested ? tensor_args.kv_slab_count() : 1;
+    const bool kv_block_cyclic = kv_block_cyclic_requested && kv_bc_stripes > 1;
+    TT_FATAL(
+        !kv_block_cyclic_requested || (kv_bc_ranks > 1 && kv_bc_stripes > 0),
+        "ring_joint_sdpa kv_block_cyclic_cache_tp_sharded needs a TP axis to dedup over and a whole number "
+        "of chunks in the slab; got ranks {} stripes {}",
+        kv_bc_ranks,
+        kv_bc_stripes);
+    // The stripe is the contiguous run the reader crosses without a jump.
+    TT_FATAL(
+        !kv_block_cyclic || kv_local_padded_Nt % (kv_bc_stripes * kv_bc_ranks) == 0,
+        "ring_joint_sdpa block-cyclic KV needs the padded slab ({} tiles) to divide into stripes * ranks "
+        "({} * {}); a partial stripe has no contiguous run to read",
+        kv_local_padded_Nt,
+        kv_bc_stripes,
+        kv_bc_ranks);
+    const uint32_t kv_bc_stripe_rows_t = kv_block_cyclic ? kv_local_padded_Nt / (kv_bc_stripes * kv_bc_ranks) : 1;
+    // Divisibility alone accepts a zero-height slab, which divides by zero in physical_seq_tile.
+    TT_FATAL(
+        kv_bc_stripe_rows_t > 0,
+        "ring_joint_sdpa block-cyclic KV derived a zero-tile stripe from a {}-tile slab",
+        kv_local_padded_Nt);
+
     std::vector<uint32_t> reader_compile_time_args = {
         B,
         NH,
@@ -1533,8 +1565,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         rank_mapping.mesh_cols,
         // Slot 44: circular sliding KV slab count (0 = unbounded). Feeds the reader's
         // build_sliding_q_work_plan so local slab addressing wraps identically to the host halo
-        // layout and the compute kernel. Tensor accessors start at slot 45.
+        // layout and the compute kernel.
         circular_kv_slab_count,
+        // Slots 45-48: block-cyclic KV slab geometry. Tensor accessors start at slot 49.
+        static_cast<uint32_t>(kv_block_cyclic),
+        kv_bc_stripe_rows_t,
+        kv_bc_stripes,
+        kv_bc_ranks,
     };
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -1564,11 +1601,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // DRAM banks, so each needs its OWN accessor -- a shared accessor's dspec (bank for page 0) is baked
     // from one buffer and reads the wrong bank for the other (kv read silently returned 0, breaking the
     // rotation derivation). The writer already appends kv_actual_isl's own accessor for the same reason.
+    // Independent appends in this order; mirrors the reader's kv_meta_base_offset.
     if (slot_from_metadata) {
         TensorAccessorArgs(tensor_args.slot_id->buffer()).append_to(reader_compile_time_args);
-        if (kv_pad_from_metadata) {
-            TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
-        }
+    }
+    if (kv_pad_from_metadata) {
+        TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(reader_compile_time_args);
     }
 
     /**
@@ -2667,16 +2705,22 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    if (slot_from_metadata) {
+    // Either metadata piece pushes this block; kv_actual_isl's address is index 4. Slot fields stay at
+    // 0..3 and are read only under the kernel's slot_from_metadata guard, so the zeros are never seen.
+    if (slot_from_metadata || kv_pad_from_metadata) {
+        const uint32_t slot_addr =
+            slot_from_metadata ? tensor_args.slot_id->buffer()->address() : 0u;  // smuggled-rta-ok: meta addr
+        const uint32_t kv_isl_addr =
+            kv_pad_from_metadata ? tensor_args.kv_actual_isl->buffer()->address() : 0u;  // smuggled-rta-ok: meta addr
         reader_kernel.emplace_common_runtime_args(
-            {tensor_args.slot_id->buffer()->address(),  // smuggled-rta-ok: metadata tensor addr (on-device)
+            {slot_addr,
              args.kv_cache_num_layers,
              args.kv_cache_layer_idx,
              std::min(
                  tensor_args.input_k.logical_shape()[0],
                  tensor_args.input_v.has_value() ? tensor_args.input_v->logical_shape()[0]
                                                  : tensor_args.input_k.logical_shape()[0]),
-             tensor_args.kv_actual_isl->buffer()->address()});  // smuggled-rta-ok: metadata tensor addr (on-device)
+             kv_isl_addr});
     }
 
     KernelDescriptor writer_kernel{};
@@ -2907,7 +2951,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .send_to_next_count_Ht = chunked_sliding_halo_layout.halo_tile_rows,
             .send_backward = linear_wrap_halo,
             .unicast_hops = linear_wrap_halo ? ring_size - 1 : 1,
-            .slot_id = tensor_args.has_metadata() ? &tensor_args.slot_id.value() : nullptr,
+            .slot_id = tensor_args.has_slot_metadata() ? &tensor_args.slot_id.value() : nullptr,
             .kv_actual_isl = tensor_args.has_metadata() ? &tensor_args.kv_actual_isl.value() : nullptr,
             .kv_cache_num_layers = args.kv_cache_num_layers,
             .kv_cache_layer_idx = args.kv_cache_layer_idx,
@@ -2986,7 +3030,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             // consumer implements the second-half wait.
             sdpa_fused_op_signaler->split_forwarding_enabled,
             /*partial_readiness_enabled=*/false,
-            rank_mapping);
+            rank_mapping,
+            // A rank-major slab's populated rows are `ranks` runs, not one prefix. Same fold as the
+            // reader, so both sides agree on the layout.
+            kv_block_cyclic ? kv_bc_ranks : 1u);
     }
 
     return desc;

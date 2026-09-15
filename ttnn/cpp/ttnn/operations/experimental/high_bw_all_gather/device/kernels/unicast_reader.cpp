@@ -77,8 +77,8 @@ void kernel_main() {
     constexpr uint32_t ext_ct_base =
         batch_index_from_metadata ? batch_index_meta_args.next_compile_time_args_offset() : meta_ct_base + 1;
     constexpr bool extent_from_metadata = get_compile_time_arg_val(ext_ct_base) != 0;
-    // The 14 scalars below are always pushed (zeros when unused), so no index guarding is needed here --
-    // unlike the slot block, this one is too wide to collapse its base to 0 safely.
+    // Every scalar below is pushed unconditionally, zero when unused, so none of them needs the guarded
+    // index the slot block uses.
     constexpr uint32_t ext_base = ext_ct_base + 1;
     constexpr uint32_t ext_pages_per_slab = get_compile_time_arg_val(ext_base + 0);
     constexpr uint32_t ext_full_gathered_dim = get_compile_time_arg_val(ext_base + 1);
@@ -95,7 +95,10 @@ void kernel_main() {
     constexpr uint32_t ext_output_chunk_size = get_compile_time_arg_val(ext_base + 12);
     constexpr uint32_t ext_packet_size = get_compile_time_arg_val(ext_base + 13);
     constexpr uint32_t cb_meta_writer_id = get_compile_time_arg_val(ext_base + 14);
-    constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 16 : 0>();
+    // Scales the prefix start into this gather's dim when the scalar counts a wider one, as for a TP-axis
+    // gather reading a whole-mesh token count. 1 is the identity.
+    constexpr uint32_t ext_prefix_divisor = get_compile_time_arg_val(ext_base + 15);
+    constexpr auto gathered_prefix_meta_args = TensorAccessorArgs<extent_from_metadata ? ext_ct_base + 17 : 0>();
 
     constexpr uint32_t inputs_per_cb_page = cb_page_size / input_page_size;
     constexpr uint32_t outputs_per_cb_page = cb_page_size / output_chunk_size;
@@ -178,8 +181,11 @@ void kernel_main() {
         // so one CB serves as both the NoC landing slot and the reader->writer mailbox.
         const uint32_t prefix_start = trace_metadata::read_metadata_scalar_u32(
             noc, gathered_prefix_meta_args, gathered_prefix_meta_addr, writer_meta_l1);
-        const uint32_t gathered =
-            part::gathered_dim_size_for_prefix(prefix_start + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
+        // Truncation shifts the start by under one element, which the round-up to whole slabs below
+        // absorbs: both the exact and the truncated start land on the same slab.
+        const uint32_t prefix_start_local = ext_prefix_divisor > 1 ? prefix_start / ext_prefix_divisor : prefix_start;
+        const uint32_t gathered = part::gathered_dim_size_for_prefix(
+            prefix_start_local + ext_slab_global, ext_slab_global, ext_full_gathered_dim);
         const uint32_t active_pages = part::active_num_input_pages(gathered, ext_slab_global, ext_pages_per_slab);
         const auto sched = part::worker_schedule(
             active_pages,

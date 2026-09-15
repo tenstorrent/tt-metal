@@ -433,6 +433,9 @@ class ttMLA:
         self.tt_ccl = get_tt_ccl(mesh_device)
         self.tp_factor = mesh_device.shape[self.tp_axis]
         self.sp_factor = mesh_device.shape[self.sp_axis]
+        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
+        self._kvpe_tp_gather_buffer = None
+        self._kv_dedup_chunks = 0
         assert (
             self.active_seq_len % self.sp_factor == 0
         ), f"active_seq_len ({self.active_seq_len}) must divide SP factor ({self.sp_factor})"
@@ -506,6 +509,23 @@ class ttMLA:
                 seq_len=seq_len,
                 kvpe_dim=self.kv_lora_rank + self.qk_rope_head_dim,
             )
+            if self._kv_dedup:
+                # Output of the TP gather that rebuilds one SP rank's slab (see _gather_kvpe_tp_to_sp),
+                # shaped exactly as the undeduped cache ring_mla reads.
+                assert seq_len % self.active_seq_len == 0, (
+                    f"tp_shard_kv needs the cache to hold a whole number of chunks: seq_len {seq_len} "
+                    f"is not a multiple of chunk {self.active_seq_len}"
+                )
+                assert (
+                    self.active_seq_len_local % (self.tp_factor * ttnn.TILE_SIZE) == 0
+                ), f"tp_shard_kv needs a tile-aligned per-chip chunk stripe: {self.active_seq_len_local} / tp {self.tp_factor}"
+                self._kv_dedup_chunks = seq_len // self.active_seq_len
+                self._kvpe_tp_gather_buffer = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
+                    name="kvpe_tp_ag_before",
+                    shape=[1, 1, seq_len // self.sp_factor, self.kv_lora_rank + self.qk_rope_head_dim],
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                )
         else:
             # All-gather K/V outputs + dummy joint_q/kv/v placeholders are uniform across layers
             # (config + seq_len + mesh), so they're owned once per model by TT_CCL and shared by every
@@ -563,7 +583,6 @@ class ttMLA:
         self._is_dsa_family = TtIndexer.matches_config(config)
         self._sparse_kv_gather_buffer = None
         # KV dedup shards the cache over BOTH axes, so its gather needs the scratch even at sp == 1.
-        self._kv_dedup = self.tp_shard_kv and self.tp_factor > 1
         if self._has_indexer and not self.kv_only and (self.sp_factor > 1 or self._kv_dedup):
             kvpe_row_width = self.sparse_kv_cache_format.storage_width(self.kv_cache_geometry)
             self._sparse_kv_gather_buffer = self.tt_ccl.get_mla_sparse_kv_gather_buffer(
@@ -641,6 +660,13 @@ class ttMLA:
     @staticmethod
     def kv_cache_to_host(kvpe_cache: MlaKvCache, mesh_device: ttnn.MeshDevice, sp_axis: int = 0):
         """Read and decode the logical KVPE cache in natural SP order."""
+        # A TP-deduped cache has no TP replica to collapse -- every tp coord holds a distinct stripe, so
+        # this composer would silently drop 1 - 1/tp of the sequence. gather_cache_natural reads that one.
+        stripes = mesh_device.shape[0] * mesh_device.shape[1]
+        assert ttMLA._declared_seq_shard_factor(kvpe_cache.storage) != stripes, (
+            "kv_cache_to_host reads an SP-sharded, TP-replicated cache; this one is TP-deduped "
+            "(dim 2 sharded across both axes). Use utils.test_utils.gather_cache_natural(tp_shard_kv=True)."
+        )
         host = ttnn.to_torch(
             kvpe_cache.storage,
             mesh_composer=ttnn.create_mesh_composer(
@@ -902,6 +928,75 @@ class ttMLA:
             is_decode_mode=False,
         )
 
+    def _kv_block_cyclic_kwargs(self) -> dict:
+        """ring_mla's view of the KV slab: block-cyclic over TP whenever the cache is TP-deduped.
+
+        The TP gather concatenates this SP rank's shards rank-major -- its fast path, which keeps the
+        bank-owned schedule -- so ring_mla's reader decodes back to natural order. Flag only: the op
+        derives the geometry from the mesh and the tensors, so it cannot disagree with either. Empty
+        without dedup, leaving every other caller byte-identical."""
+        return {"kv_block_cyclic_cache_tp_sharded": True} if self._kv_dedup else {}
+
+    def _gather_kvpe_tp_to_sp(
+        self,
+        kvpe_cache: MlaKvCache,
+        cache_batch_idx: int,
+        seq_len_local: int,
+        populated_global: int,
+        metadata=None,
+        cache_layer_idx: int = 0,
+    ) -> ttnn.Tensor:
+        """Rebuild one SP rank's KVPE slab from its tp stripes, for a TP-deduped dense cache.
+
+        The cache is block-cyclic over sp*tp: chip (s,t) owns rows [c*C + s*C/sp + t*R, +R) of EVERY
+        chunk c, R = C/(sp*tp). Concatenating the chips' shards would land t-major -- all of t=0's
+        chunks, then all of t=1's -- which is not the order ring_mla reads. Declaring the shard as
+        n_chunks stripes of R rows makes the gather interleave them, so rank t's chunk c lands at
+        c*(tp*R) + t*R: the SP-only block-cyclic slab, byte for byte.
+
+        Everything else is the sparse path's gather: input_batch_index selects this (user, layer) slot
+        in-op and gathered_dim_size bounds the transfer to the populated prefix, so nothing is copied,
+        nothing is sliced, and nothing past the prefix moves.
+        """
+        storage = kvpe_cache.storage
+        rows_dev = seq_len_local // self.tp_factor  # this chip's rows for one chunk
+        chunk_global = seq_len_local * self.sp_factor
+        assert self._kvpe_tp_gather_buffer is not None
+        assert storage.shape[2] == self._kv_dedup_chunks * rows_dev, (
+            f"tp_shard_kv expects {self._kv_dedup_chunks} stripes of {rows_dev} rows, but the per-chip "
+            f"cache is {storage.shape[2]} rows; chunk {seq_len_local} differs from the allocated "
+            f"{self.active_seq_len_local}"
+        )
+        # Whole slabs: the gather moves whole stripes, and ring_mla reads the cache in whole chunks.
+        active_chunks = min(self._kv_dedup_chunks, -(-populated_global // chunk_global))
+        if metadata is not None:
+            # Both per-chunk scalars come from metadata: metadata[0] is the user id, recomposed per
+            # (user, layer) on-device; metadata[1] is actual_start in global tokens, divided by sp here.
+            slot_kwargs = {
+                "input_batch_index_tensor": metadata[0],
+                "batch_slot_num_layers": self.layer_num,
+                "batch_slot_layer_idx": cache_layer_idx,
+                "gathered_prefix_tensor": metadata[1],
+                # One chunk of this SP rank's slab; metadata[1] counts the whole mesh, so the op scales it.
+                "gathered_slab_global": self.tp_factor * rows_dev,
+                "gathered_prefix_spans_full_mesh": True,
+            }
+        else:
+            slot_kwargs = {
+                "input_batch_index": cache_batch_idx if storage.shape[0] > 1 else 0,
+                "gathered_dim_size": active_chunks * self.tp_factor * rows_dev,
+            }
+        return ttnn.experimental.high_bw_all_gather(
+            storage,
+            dim=2,
+            output_tensor=self._kvpe_tp_gather_buffer,
+            num_links=self.ccl_num_links,
+            cluster_axis=self.tp_axis,
+            # Plain concat: the shards land rank-major and ring_mla's reader decodes them
+            # (see _kv_block_cyclic_kwargs).
+            **slot_kwargs,
+        )
+
     def _chunked_attn(
         self,
         *,
@@ -940,8 +1035,6 @@ class ttMLA:
 
         # Write this chunk into the cache. update_padded_kv_cache derives each chip's local write
         # offset on-device from kv_actual_global (chunk-aligned kv_actual -> uniform per-chip write).
-        # The dense ring_mla cache is still TP-replicated; only _sparse_chunked_attn is TP-dedup wired.
-        assert not self.tp_shard_kv, "tp_shard_kv is only supported on the sparse (DSA) path, not dense ring_mla"
         # Metadata (trace-safe) path reads slot_idx/kv_actual_global on-device from the metadata tensor.
         self._update_kv_cache(
             kvpe_cache,
@@ -951,7 +1044,35 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
+            tp_axis=self.tp_shard_kv_axis,  # KV dedup: write only this chip's 1/tp window
         )
+
+        # Global rows the cache holds: dedup splits the per-chip depth over both axes, so recovering it
+        # takes SP and TP.
+        cache_rows_global = kvpe_cache.storage.shape[2] * self.sp_factor * (self.tp_factor if self._kv_dedup else 1)
+        # Capped at the capacity ring_mla accepts; the metadata path derives logical_n on-device, so the
+        # host value is a placeholder.
+        ring_logical_n = (
+            cache_rows_global if metadata is not None else min(kv_actual_isl + chunk_size_global, cache_rows_global)
+        )
+
+        # ring_mla rings the SP axis alone, so a TP gather rebuilds this SP rank's slab first. The result
+        # is batch-1: the slot select is spent here.
+        if self._kv_dedup:
+            # The gather takes its slot and extent from metadata, so a capture replays neither.
+            # See _gather_kvpe_tp_to_sp.
+            ring_kv = self._gather_kvpe_tp_to_sp(
+                kvpe_cache,
+                cache_batch_idx,
+                seq_len_local,
+                ring_logical_n,
+                metadata=metadata,
+                cache_layer_idx=cache_layer_idx,
+            )
+            ring_cache_batch_idx = 0
+        else:
+            ring_kv = kvpe_cache.storage
+            ring_cache_batch_idx = cache_batch_idx
 
         # K and V are the single latent kvpe cache (V = first kv_lora_rank columns, materialized
         # in-op). logical_n = prior valid length + this chunk; cache_batch_idx selects this
@@ -964,21 +1085,20 @@ class ttMLA:
         # the per-layer factor (kv_cache_num_layers/kv_cache_layer_idx) so the readers recompute the full
         # (user, layer) slot on-device -- otherwise every layer would read layer 0's KV cache.
         if metadata is not None:
-            meta_slot_kwargs = {
-                "slot_id": metadata[0],
-                "kv_actual_isl_tensor": metadata[1],
-                "kv_cache_num_layers": self.layer_num,
-                "kv_cache_layer_idx": cache_layer_idx,
-            }
-            ring_logical_n = kvpe_cache.storage.shape[2] * self.sp_factor  # global cache capacity
+            # The TP gather already selected the slot, so the slab is batch-1 and there is no slot to
+            # recompose here; the extent metadata stands alone.
+            meta_slot_kwargs = {"kv_actual_isl_tensor": metadata[1]}
+            if not self._kv_dedup:
+                meta_slot_kwargs |= {
+                    "slot_id": metadata[0],
+                    "kv_cache_num_layers": self.layer_num,
+                    "kv_cache_layer_idx": cache_layer_idx,
+                }
         else:
-            meta_slot_kwargs = {"kv_cache_batch_idx": cache_batch_idx, "kv_actual_isl": kv_actual_isl}
-            # Capped at the capacity ring_mla accepts: the last chunk's pad rows can sit past the cache
-            # end, and only pad rows read them.
-            ring_logical_n = min(kv_actual_isl + chunk_size_global, kvpe_cache.storage.shape[2] * self.sp_factor)
+            meta_slot_kwargs = {"kv_cache_batch_idx": ring_cache_batch_idx, "kv_actual_isl": kv_actual_isl}
         attn_out, _ = ttnn.transformer.ring_mla(
             tt_q,
-            kvpe_cache.storage,
+            ring_kv,
             persistent_output_buffer_kv=self._chunked_kv_buf,
             head_dim_v=self.kv_lora_rank,
             logical_n=ring_logical_n,
@@ -994,6 +1114,7 @@ class ttMLA:
             ccl_core_grid_offset=self.tt_ccl.ring_attention_ccl_core_grid_offset,
             use_column_major_ccl=True,
             is_balanced=self.is_balanced,
+            **self._kv_block_cyclic_kwargs(),
             **meta_slot_kwargs,
         )
 
@@ -1552,6 +1673,10 @@ class ttMLA:
 
     def _dense_single_attn(self, *, tt_q, tt_kvpe, tt_kv_nope, kvpe_cache, cache_layer_idx, seq_len_local, **_):
         # Single-shot prefill: materialize V before causal ring SDPA.
+        assert not self._kv_dedup, (
+            "tp_shard_kv needs the chunked (block-cyclic) cache write; single-shot _write_kvpe fills a "
+            "TP-replicated cache and would write tp copies into a deduped allocation"
+        )
         self._write_kvpe(kvpe_cache, tt_kvpe, cache_layer_idx)
         tt_v_embedding = self._apply_wkv_b2(tt_kv_nope, seq_len_local)
         attn_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(

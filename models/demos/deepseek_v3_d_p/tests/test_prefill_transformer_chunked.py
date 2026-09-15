@@ -2281,6 +2281,9 @@ def glm_chunked_perf_gate(variant, use_trace, num_layers, n_chunks, num_iters, p
 # The nopcc x {trace, notrace} pair is what CI runs: it times the real path and passes on
 # completion, with no golden dependency. Renamed from *_no_pcc now that PCC is optional, so the
 # name no longer contradicts the flag.
+# tp_sharded shards the KVPE cache over SP*TP and gathers TP before ring_mla. The recorded baselines
+# are sp_only, so that arm is record-only until it has its own.
+@pytest.mark.parametrize("tp_shard_kv", [False, True], ids=["sp_only", "tp_sharded"])
 # ids: "traced" not "trace" — "notrace" CONTAINS "trace", so a -k "trace" term would match BOTH
 # modes and silently double a CI job. Matches the padded test's convention.
 @pytest.mark.parametrize("use_trace", [False, True], ids=["notrace", "traced"])
@@ -2343,6 +2346,7 @@ def test_kimi_prefill_transformer_chunked_perf(
     perf_margin,
     use_trace,
     preload_isl,
+    tp_shard_kv,
 ):
     topology = per_axis_topology(device_params["fabric_config"])
     if preload_isl + n_chunks * CHUNK > SEQ_CACHE_NOPCC:
@@ -2370,6 +2374,7 @@ def test_kimi_prefill_transformer_chunked_perf(
         preload_isl=preload_isl,
         check_pcc=False,  # timing only — accuracy lives in test_kimi_prefill_transformer_chunked
         use_trace=use_trace,
+        tp_shard_kv=tp_shard_kv,
     )
 
 

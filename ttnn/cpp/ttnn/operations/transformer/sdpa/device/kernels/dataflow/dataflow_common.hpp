@@ -14,6 +14,7 @@
 #include "api/tensor/noc_traits.h"
 #include <tt-metalium/constants.hpp>
 #include "api/debug/assert.h"
+#include "block_cyclic_remap.hpp"  // tt::block_cyclic invP, for the block-cyclic KV slab generator
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/q_chunk_remapping.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/sliding_window_geometry.hpp"
 
@@ -1468,6 +1469,106 @@ struct PaddedAddrGenerator {
 
 template <typename ReaderType, typename TensorShapeType>
 PaddedAddrGenerator(const ReaderType&, TensorShapeType) -> PaddedAddrGenerator<ReaderType, TensorShapeType>;
+
+// Reads a rank-major KV slab in natural token order: logical tile c*Ranks*StripeRowsT + t*StripeRowsT + o
+// sits at t*Stripes*StripeRowsT + c*StripeRowsT + o. BlockCyclic == false reads the slab unremapped.
+template <
+    bool BlockCyclic,
+    uint32_t StripeRowsT,  // contiguous seq tiles per (chunk, TP rank) -- the jump granularity
+    uint32_t Stripes,      // chunks held by the slab
+    uint32_t Ranks,        // TP ranks the chunk was split over
+    typename ReaderType,
+    typename TensorShapeType = TensorTileShape>
+struct BlockCyclicPaddedAddrGenerator {
+    ReaderType reader;
+    TensorShapeType tensor_shape;
+
+    BlockCyclicPaddedAddrGenerator(const ReaderType& reader, TensorShapeType tensor_shape) :
+        reader(reader), tensor_shape(tensor_shape) {}
+
+    static constexpr uint32_t slab_rows_t = StripeRowsT * Stripes * Ranks;
+    // Gaps for the shared invP, whose `Sp` takes Ranks: its "slab" is our chunk, its "shard" our rank.
+    static constexpr uint32_t shard_stride_gap = StripeRowsT * (Stripes - 1);
+    static constexpr uint32_t slab_stride_gap = StripeRowsT * (Ranks - 1);
+
+    // Physical seq tile of a logical one, within its slab.
+    static FORCE_INLINE uint32_t physical_seq_tile(uint32_t logical) {
+        const uint32_t slab = logical / slab_rows_t;
+        const uint32_t within = logical - slab * slab_rows_t;
+        return slab * slab_rows_t +
+               tt::block_cyclic::logical_to_chunked_physical<StripeRowsT, Ranks, shard_stride_gap, slab_stride_gap>(
+                   within);
+    }
+
+    void issue_reads(
+        const Slice& slice,
+        uint32_t end_seq_tile,
+        uint32_t dst_cb_id,
+        uint32_t dst_addr,
+        uint32_t outer_stride,
+        uint32_t inner_stride,
+        uint32_t barrier_threshold) const {
+        const uint32_t d2_start = slice.d2_start;
+        const uint32_t rows = slice.get_d2_size();
+        const uint32_t cols = slice.get_d3_size();
+        const uint32_t shape_d2 = tensor_shape.d2();
+        const uint32_t bound = shape_d2 < end_seq_tile ? shape_d2 : end_seq_tile;
+        // Validity is a logical prefix: the permutation does not move the sequence end.
+        const uint32_t valid_rows = (d2_start >= bound) ? 0 : std::min(rows, bound - d2_start);
+        uint32_t barrier_count = 0;
+
+        uint32_t row = 0;
+        while (row < valid_rows) {
+            // Longest run that stays inside one stripe. BlockCyclic == false takes the whole range.
+            uint32_t run = valid_rows - row;
+            uint32_t base_seq_tile = d2_start + row;
+            if constexpr (BlockCyclic) {
+                const uint32_t offset_in_stripe = base_seq_tile % StripeRowsT;
+                const uint32_t to_stripe_end = StripeRowsT - offset_in_stripe;
+                if (to_stripe_end < run) {
+                    run = to_stripe_end;
+                }
+                base_seq_tile = physical_seq_tile(base_seq_tile);
+            }
+            issue_block_reads(
+                reader,
+                tensor_shape.id_of(slice.d0, slice.d1, base_seq_tile, slice.d3_start),
+                tensor_shape.stride2(),
+                run,
+                cols,
+                /*dst_row_origin=*/row,
+                dst_addr,
+                outer_stride,
+                inner_stride,
+                barrier_threshold,
+                barrier_count);
+            row += run;
+        }
+        // Padded tail, zero-filled in destination order.
+        zero_fill_block(
+            reader,
+            rows - valid_rows,
+            cols,
+            /*dst_row_origin=*/valid_rows,
+            dst_cb_id,
+            dst_addr,
+            outer_stride,
+            inner_stride);
+    }
+};
+
+// Builds a BlockCyclicPaddedAddrGenerator with the geometry explicit and reader/shape types deduced.
+template <
+    bool BlockCyclic,
+    uint32_t StripeRowsT,
+    uint32_t Stripes,
+    uint32_t Ranks,
+    typename ReaderType,
+    typename TensorShapeType>
+FORCE_INLINE auto make_block_cyclic_addr_generator(const ReaderType& reader, TensorShapeType tensor_shape) {
+    return BlockCyclicPaddedAddrGenerator<BlockCyclic, StripeRowsT, Stripes, Ranks, ReaderType, TensorShapeType>(
+        reader, tensor_shape);
+}
 
 // Fetch tiles via NOC reads into a given L1 address. No CB lifecycle — caller manages
 // the reserve/push sequence on the destination CB. Used by forwarding paths that mcast before pushing.

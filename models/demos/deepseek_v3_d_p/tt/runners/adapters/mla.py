@@ -57,6 +57,8 @@ def unwrap_multimodal_config(cfg):
 class MLAPrefillAdapter(PrefillModelAdapter):
     """DeepSeek-V3-family prefill adapter (MLA + MoE over TtPrefillRuntime)."""
 
+    supports_tp_shard_kv = True  # allocate_kv_cache below honors params.tp_shard_kv
+
     # ------------------------------------------------------------------
     # HF config
     # ------------------------------------------------------------------
@@ -104,6 +106,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 sp_axis=params.sp_axis,
                 num_layers=params.num_layers,
                 num_users=params.num_users,
+                tp_axis=params.tp_axis if params.tp_shard_kv else None,
             )
         )
 

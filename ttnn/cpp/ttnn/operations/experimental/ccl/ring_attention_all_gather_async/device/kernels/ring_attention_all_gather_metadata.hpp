@@ -111,6 +111,29 @@ inline LinkPageRange compute_link_page_range(uint32_t valid_pages, uint32_t num_
         next_link_idx * pages_per_link + (next_link_idx < remainder ? next_link_idx : remainder)};
 }
 
+// Row remap for a rank-major slab: the populated rows are `ranks` runs of `seg` at pitch `stride`, and
+// the count `ranks * seg` matches the prefix extent, so the link split is unchanged. Ranks <= 1 is the identity.
+struct BlockCyclicRowMap {
+    uint32_t seg = 0;     // rows transferred per rank    (gather_valid_Ht / ranks)
+    uint32_t stride = 0;  // rank block pitch, in rows    (cache_local_tile_rows / ranks)
+
+    // `ranks` is the TP fan-in the slab was gathered over; gather_valid_Ht the prefix-shaped extent
+    // compute_gather_valid_Ht produced; cache_local_tile_rows the full per-device slab height.
+    static BlockCyclicRowMap make(uint32_t ranks, uint32_t gather_valid_Ht, uint32_t cache_local_tile_rows) {
+        if (ranks <= 1) {
+            return {};
+        }
+        return {gather_valid_Ht / ranks, cache_local_tile_rows / ranks};
+    }
+
+    uint32_t physical_row(uint32_t logical_row) const {
+        if (seg == 0) {
+            return logical_row;
+        }
+        return (logical_row / seg) * stride + (logical_row % seg);
+    }
+};
+
 // gather_valid_Ht = ceil(logical_n / chunk_global) * chunk_local_tiles, where logical_nt is the padded
 // chunk extent clamped to the cache capacity and chunk_global_tiles = chunk_local_tiles * ring_size.
 // TILE_HEIGHT is 32.
