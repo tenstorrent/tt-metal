@@ -365,7 +365,7 @@ class UnarySfpuMathSchema(BaseModel):
     type: Literal["UnarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Literal[8, 16, 32] = 8
+    iterations: Literal[8, 32] = 8
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     fill_const_value: float = 1.0
     loop: Optional[Union[str, LoopSchema]] = None
@@ -420,7 +420,7 @@ class BinarySfpuMathSchema(BaseModel):
     type: Literal["BinarySfpu"]
     operation: MathOperation
     approximation_mode: ApproximationMode = ApproximationMode.No
-    iterations: Literal[8, 16, 32] = 8
+    iterations: Literal[8, 32] = 8
     src1_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     src2_dest_tile_index: Annotated[int, Field(ge=0)] = 0
     dst_dest_tile_index: Annotated[int, Field(ge=0)] = 0

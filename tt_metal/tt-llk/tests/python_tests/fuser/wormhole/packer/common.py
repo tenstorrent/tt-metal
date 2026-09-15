@@ -106,7 +106,7 @@ def pack_reduce_mask_config(operation: "L1Operation") -> str:
     if operation.reduce_dim is None:
         return ""
     reduce_dim = operation.reduce_dim.cpp_enum_value
-    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>();\n"
+    return f"_llk_pack_reduce_mask_config_<{reduce_dim}>({operation.tile_shape.face_r_dim});\n"
 
 
 def pack_reduce_mask_clear(operation) -> str:

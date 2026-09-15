@@ -10,6 +10,22 @@ operands:
   - name: "datacopy_out"
     dims: [32, 128]
     format: "Float32"
+  - name: "compact_r_input"
+    dims: [16, 128]
+    format: "Float32"
+    tile_dims: [16, 32]
+  - name: "compact_r_out"
+    dims: [16, 128]
+    format: "Float32"
+    tile_dims: [16, 32]
+  - name: "compact_c_input"
+    dims: [32, 64]
+    format: "Float32"
+    tile_dims: [32, 16]
+  - name: "compact_c_out"
+    dims: [32, 64]
+    format: "Float32"
+    tile_dims: [32, 16]
 
 operations:
   - math:
@@ -31,4 +47,44 @@ operations:
     pack:
       - output: "datacopy_out"
         block_size: [32, 128]
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        block_size: [16, 128]
+        in0: "compact_r_input"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        unpack_to_dest: true
+      - type: "BinarySfpu"
+        block_size: [16, 32]
+        operation: "SfpuElwadd"
+        approximation_mode: false
+        iterations: 8
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+        dst_dest_tile_index: 2
+    pack:
+      - output: "compact_r_out"
+        block_size: [16, 128]
+        packer: "Packer"
+  - math:
+      - type: "Fpu"
+        block_size: [32, 64]
+        in0: "compact_c_input"
+        operation: "Datacopy"
+        unpacker: "UnpackerA"
+        math_fidelity: "LoFi"
+        unpack_to_dest: true
+      - type: "BinarySfpu"
+        block_size: [32, 16]
+        operation: "SfpuElwadd"
+        approximation_mode: false
+        iterations: 8
+        src1_dest_tile_index: 0
+        src2_dest_tile_index: 1
+        dst_dest_tile_index: 2
+    pack:
+      - output: "compact_c_out"
+        block_size: [32, 64]
         packer: "Packer"

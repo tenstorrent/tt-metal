@@ -100,9 +100,12 @@ operations:
         packer: "Packer"
         pack_relu: "ZERO_RELU"
       - output: "sub_exp_sum"
-        block_size: [32, 64]
+        block_size: [32, 32]
         packer: "Packer"
         pack_l1_accumulation: 1
+        loop:
+          dest: [0, 1]
+          out: [0, 0]
 
   # Step 4: attn_v = sub_exp_out[32,64] × V[64,64] → [32,64]
   - math:
@@ -122,31 +125,46 @@ operations:
   # Datacopy loads sum into DEST, then SFPU reciprocal
   - math:
       - type: "Fpu"
-        block_size: [32, 64]
+        block_size: [32, 32]
         operation: "Datacopy"
         unpacker: "UnpackerA"
         math_fidelity: "LoFi"
         in0: "sub_exp_sum"
+        loop:
+          in0: [0]
+          dest: [0]
       - type: "UnarySfpu"
-        block_size: [32, 64]
+        block_size: [32, 32]
         operation: "Reciprocal"
         iterations: 8
+        loop:
+          dest: [0]
     pack:
       - output: "sum_recip"
-        block_size: [32, 64]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0]
+          out: [0]
 
   # Step 6: output = attn_v * bcast_col(sum_recip) — normalize
   - math:
       - type: "Fpu"
-        block_size: [32, 64]
+        block_size: [32, 32]
         in0: "attn_v"
         in1: "sum_recip"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
         broadcast_type: "COL"
         math_fidelity: "LoFi"
+        loop:
+          in0: [0, 1]
+          in1: [0, 0]
+          dest: [0, 1]
     pack:
       - output: "output"
-        block_size: [32, 64]
+        block_size: [32, 32]
         packer: "Packer"
+        loop:
+          dest: [0, 1]
+          out: [0, 1]

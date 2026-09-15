@@ -4,6 +4,8 @@
 
 from typing import TYPE_CHECKING, List
 
+from helpers.llk_params import EltwiseBinaryReuseDestType
+
 if TYPE_CHECKING:
     from .l1_operation import L1Operation
     from .fuser_config import GlobalConfig
@@ -42,8 +44,20 @@ class Unpacker:
     # Controls the tile iteration pattern for unpack and math loops.
     granularity = InvocationGranularity.NONE
     per_block_init: bool = False
+    reverse_operands: bool = False
 
     output_layout = OutputLayout.ROW_MAJOR
+
+    def physical_order(self, src_a, src_b):
+        return (src_b, src_a) if self.reverse_operands else (src_a, src_b)
+
+    def physical_operands(self, compute_unit: "FpuNode"):
+        operand_b = (
+            compute_unit.src_a
+            if compute_unit.reuse_dest == EltwiseBinaryReuseDestType.DEST_TO_SRCA
+            else compute_unit.src_b or compute_unit.src_a
+        )
+        return self.physical_order(compute_unit.src_a, operand_b)
 
     def init(
         self,

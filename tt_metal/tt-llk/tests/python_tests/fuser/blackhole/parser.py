@@ -95,7 +95,19 @@ UNPACKER_MAP = {
     ),
     "UnpackerTilizeA": (
         lambda s: UnpackerTilizeA(),
-        [IN0_REQUIRED, NO_BROADCAST, NO_TRANSPOSE],
+        [
+            IN0_REQUIRED,
+            NO_BROADCAST,
+            NO_TRANSPOSE,
+            require_src_a_tiles(
+                (1, 32),
+                (2, 32),
+                (4, 32),
+                (8, 32),
+                (16, 32),
+                (32, 32),
+            ),
+        ],
     ),
     "MatmulUnpacker": (
         lambda s: MatmulUnpacker(),
