@@ -126,6 +126,24 @@ void kernel_main() {
         }
         const bool should_forward = slices_received < writes_expected;
 
+        // Signal the fused op as soon as the WHOLE slice has landed (every packet group's count), before the
+        // re-read for forwarding: the consumer's per-shard gate must not wait behind the relay, and the relay
+        // cannot start earlier anyway (the writer is still busy with the previous slice on the link).
+        {
+            const uint32_t n_packets = (total + num_tiles_to_write_per_packet - 1) / num_tiles_to_write_per_packet;
+            const uint32_t n_syncs = (n_packets + chunks_per_sync - 1) / chunks_per_sync;
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + n_syncs);
+        }
+        if constexpr (fuse_op) {
+            if (direction == 1 && slices_received == 0) {
+                // the direction-1 writer pre-signals the local slice; do not overtake it
+                Semaphore<> self_write_done_sem(self_write_done_sem_id);
+                self_write_done_sem.wait_min(1);
+                self_write_done_sem.set(0);
+            }
+            op_signaler.synchronize_workers_and_signal_op(chip);
+        }
+
         SeqCursor cur;
         cur.r = row_start;
         uint32_t chunk_count = 0;
@@ -154,16 +172,6 @@ void kernel_main() {
                 }
             }
             done += n;
-        }
-
-        if constexpr (fuse_op) {
-            if (direction == 1 && slices_received == 0) {
-                // the direction-1 writer pre-signals the local slice; do not overtake it
-                Semaphore<> self_write_done_sem(self_write_done_sem_id);
-                self_write_done_sem.wait_min(1);
-                self_write_done_sem.set(0);
-            }
-            op_signaler.synchronize_workers_and_signal_op(chip);
         }
     }
 

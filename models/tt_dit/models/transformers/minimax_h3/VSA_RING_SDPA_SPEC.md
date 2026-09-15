@@ -503,3 +503,11 @@ Bottom line for the merge: with the stock gather the op is correct at every shap
 step, least at 5 s where the gather is a larger share of the block; the fused gather is worth 5-8 %. The stock path has no remaining lever on the gather side without touching
 the helper (its bandwidth and hop latency are what they are); on the compute side the only lever is L1 for a longer
 pass 0, which does not help once the gather is contention-bound.
+
+Would a multi-worker (MUX) stock gather recover the gap? Measured directly: the fused gather (2 workers per link,
+signalling each slice the moment its last packet group has landed, before its own relay re-read) driven through the
+SAME per-shard gate runs 26.4 ms in the block -- identical to the stock gather's 26.4 -- against 23.5 with its per-block
+gate. Under per-shard signalling the gather's worker count is irrelevant; the gain comes from consuming a shard while
+it lands, which needs per-chunk landed counters the stock protocol does not expose. Adding a MUX to the stock helper
+would therefore not close the gap by itself; it would also need per-chunk signalling (its out_ready increments are
+per slice), i.e. the fused gather's protocol.
