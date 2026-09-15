@@ -1680,6 +1680,12 @@ class DeepSeekV4Attention(DeepSeekV4Module):
             if mask.shape[-2] != self.local_num_heads:
                 attn_mask = ttnn.repeat(mask, ttnn.Shape([1, 1, self.local_num_heads, 1]))
             bounds = {"is_causal": False, "attn_mask": attn_mask}
+            # Masked traces bake a short Skv (``sliding_window``); slice the dense
+            # combined cache to match so the kernel does not walk the full axis.
+            if kv is not None:
+                skv = int(attn_mask.shape[-1])
+                if kv.shape[-2] > skv:
+                    kv = ttnn.slice(kv, [0, 0, 0, 0], [kv.shape[0], kv.shape[1], skv, kv.shape[-1]])
         common = dict(
             attention_sink=self.sdpa_sinks_tt,
             scale=self.scaling,
