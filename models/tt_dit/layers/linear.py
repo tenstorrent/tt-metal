@@ -88,8 +88,6 @@ class Linear(Module):
         mesh_device=None,
         weight_mesh_axes=None,
         bias_mesh_axes=None,
-        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
-        # the sites that need more precision than the shared default.
         compute_kernel_config=None,
     ):
         super().__init__()
@@ -199,8 +197,6 @@ class ColParallelLinear(Module):
         chunks=None,
         chunk_sizes=None,
         activation_dtype=None,
-        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
-        # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         pin_output_bf16=False,
     ):
@@ -553,8 +549,6 @@ class RowParallelLinear(Module):
         mesh_axis=0,
         fsdp_mesh_axis=None,
         ccl_manager=None,
-        # Branch addition kept over main: the H3 / Qwen3-VL layers pass an explicit config for
-        # the sites that need more precision than the shared default.
         compute_kernel_config=None,
         mm_memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
     ):
