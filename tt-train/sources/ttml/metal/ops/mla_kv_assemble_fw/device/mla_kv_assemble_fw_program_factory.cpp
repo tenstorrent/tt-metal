@@ -146,7 +146,8 @@ MLAKVAssembleFwProgramFactory::cached_program_t MLAKVAssembleFwProgramFactory::c
         core_group_2,
         num_blocks_per_core_group_1,
         num_blocks_per_core_group_2,
-        [&](const tt::tt_metal::CoreCoord& core, uint32_t num_blocks, uint32_t start_block) {
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block] = work;
             // Block index = b * Ts + sb. Inputs kv_up, k_pe are flat across blocks.
             const uint32_t kv_up_tile_id_start = start_block * kv_up_tiles_per_block;
             const uint32_t k_pe_tile_id_start = start_block * kpe_tiles_per_block;

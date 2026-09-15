@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <type_traits>
 
 #include "metal/ttnn_all_includes.hpp"
 
@@ -109,11 +110,21 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
             .defines = defines});
 }
 
+namespace ttml::metal {
+
+// One core's share of the work, as handed out by for_each_core_with_work.
+struct CoreWork {
+    tt::tt_metal::CoreCoord core;
+    uint32_t index;      // position in the walk: core == {index / num_cores_y, index % num_cores_y}
+    uint32_t num_units;  // rows, blocks or tiles this core processes
+    uint32_t start;      // units handed to the cores before it
+};
+
 /**
  * Walk the cores that `tt::tt_metal::split_work_to_cores` handed work to, in the order tt-train
- * readers/writers assume (core i -> {i / num_cores_y, i % num_cores_y}). Calls
- * `fn(core, num_units_for_core, num_units_before_core)` once per core; the last argument is the running
- * offset, i.e. how many work units (rows, blocks, tiles) earlier cores received.
+ * readers/writers assume (core i -> {i / num_cores_y, i % num_cores_y}), and call `fn(const CoreWork&)`
+ * once per core. Ops that need the walk position (per-core seeds, reduction protocols) take it from
+ * `CoreWork::index` rather than recomputing the walk.
  */
 template <typename Fn>
 inline void for_each_core_with_work(
@@ -135,18 +146,25 @@ inline void for_each_core_with_work(
         } else {
             TT_FATAL(false, "Core {} is in neither work group", core.str());
         }
-        fn(core, num_units, num_units_written);
+        fn(CoreWork{core, i, num_units, num_units_written});
         num_units_written += num_units;
     }
 }
 
 /**
  * The same core walk without the work lookup, for override_runtime_arguments where only buffer addresses
- * change and every core keeps the work it was given in create().
+ * change and every core keeps the work it was given in create(). `fn` takes `(core)` or `(core, index)`.
  */
 template <typename Fn>
 inline void for_each_core(uint32_t num_cores, uint32_t num_cores_y, Fn&& fn) {
     for (uint32_t i = 0; i < num_cores; ++i) {
-        fn(tt::tt_metal::CoreCoord{i / num_cores_y, i % num_cores_y});
+        const tt::tt_metal::CoreCoord core{i / num_cores_y, i % num_cores_y};
+        if constexpr (std::is_invocable_v<Fn&, const tt::tt_metal::CoreCoord&, uint32_t>) {
+            fn(core, i);
+        } else {
+            fn(core);
+        }
     }
 }
+
+}  // namespace ttml::metal

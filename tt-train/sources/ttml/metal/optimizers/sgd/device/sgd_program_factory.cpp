@@ -277,7 +277,8 @@ SGDProgramFactory::cached_program_t SGDProgramFactory::create(
         core_group_2,
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
-        [&](const tt::tt_metal::CoreCoord& core, uint32_t num_tiles, uint32_t start_tile) {
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_tiles, start_tile] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
