@@ -103,36 +103,38 @@ def _demo(out_path: str) -> str:
     return plot_bev(traj, scores, anchors, out_path, title="DiffusionDrive (synthetic demo — no device)")
 
 
-def _run_model(checkpoint: Optional[str], anchors_path: Optional[str], out_path: str) -> str:
+def _require(path: Optional[str], flag: str, env: str) -> None:
+    """Exit with a usable message unless ``path`` names an existing file."""
+    if not path:
+        raise SystemExit(
+            f"[viz] {flag} is required (or set {env}). Run scripts/prepare_assets.py "
+            f"to download the pinned assets, or pass --demo for synthetic output."
+        )
+    if not Path(path).exists():
+        raise SystemExit(f"[viz] {flag} not found: {path}")
+
+
+def _run_model(checkpoint: str, anchors_path: str, out_path: str) -> str:
+    """Render real pretrained-model output.
+
+    Both assets are mandatory — ``main`` validates them before calling. Rendering
+    random weights here would emit a plausible-looking trajectory indistinguishable
+    from a real one; ``--demo`` is the supported path for synthetic output.
+    """
     import torch
 
     import ttnn
-    from models.experimental.diffusion_drive.reference.model import (
-        DiffusionDriveConfig,
-        DiffusionDriveModel,
-        load_model,
-    )
+    from models.experimental.diffusion_drive.reference.model import DiffusionDriveConfig, load_model
     from models.experimental.diffusion_drive.tt.config import ModelConfig
     from models.experimental.diffusion_drive.tt.ttnn_diffusion_drive import TtnnDiffusionDriveModel
 
-    latent = checkpoint is None
-    ref_cfg = DiffusionDriveConfig(plan_anchor_path=anchors_path, latent=latent)
-    ref_model = (
-        DiffusionDriveModel(ref_cfg) if latent else load_model(checkpoint, ref_cfg, torch.device("cpu"))
-    ).eval()
+    ref_cfg = DiffusionDriveConfig(plan_anchor_path=anchors_path, latent=False)
+    ref_model = load_model(checkpoint, ref_cfg, torch.device("cpu")).eval()
 
     device = ttnn.open_device(device_id=0, l1_small_size=32768)
     try:
         ttnn_model = TtnnDiffusionDriveModel(ref_model, ModelConfig(plan_anchor_path=anchors_path), device)
-        (
-            ttnn_model.build_stage2(device)
-            .build_stage3(device)
-            .build_stage3_4(device)
-            .build_stage3_5(device)
-            .build_stage3_6(device)
-            .build_stage3_7(device)
-            .build_stage4(device)
-        )
+        ttnn_model.build_all(device)
         features = {
             "camera_feature": torch.randn(1, 3, 256, 1024),
             "lidar_feature": torch.randn(1, 1, 256, 256),
@@ -145,7 +147,7 @@ def _run_model(checkpoint: Optional[str], anchors_path: Optional[str], out_path:
 
     traj = out["trajectory"][0].detach().cpu().numpy()  # (8, 3)
     scores = out["scores"][0].detach().cpu().numpy()  # (20,)
-    anc = ref_model._trajectory_head.plan_anchor.detach().cpu().numpy() if anchors_path else None
+    anc = ref_model._trajectory_head.plan_anchor.detach().cpu().numpy()
     return plot_bev(traj, scores, anc, out_path)
 
 
@@ -160,8 +162,14 @@ def main() -> None:
     if args.demo:
         print(f"[viz] wrote {_demo(args.out)} (synthetic demo)")
         return
-    ckpt = args.checkpoint if args.checkpoint and Path(args.checkpoint).exists() else None
-    print(f"[viz] wrote {_run_model(ckpt, args.anchors, args.out)}")
+
+    # Fail closed. Without these assets the model would run on random weights and
+    # still plot a perfectly plausible trajectory, with nothing in the output
+    # marking it as meaningless. --demo is the supported way to get synthetic
+    # output, so normal mode refuses rather than silently degrading.
+    _require(args.checkpoint, "--checkpoint", "DD_CHECKPOINT_PATH")
+    _require(args.anchors, "--anchors", "DD_ANCHOR_PATH")
+    print(f"[viz] wrote {_run_model(args.checkpoint, args.anchors, args.out)}")
 
 
 if __name__ == "__main__":
