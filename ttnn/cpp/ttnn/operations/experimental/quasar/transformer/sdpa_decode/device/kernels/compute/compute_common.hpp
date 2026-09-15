@@ -935,13 +935,26 @@ void correction_block(
 
     for (uint32_t i = 0; i < num_head_tiles; i++) {
         tile_regs_acquire();
-        copy_init(dfb_worker_max);
 #ifndef ARCH_QUASAR
+        copy_init(dfb_worker_max);
         exp_tile_init<EXP_APPROX_MODE>();
 #endif
+        // Each input switch must bind its own Quasar unpack buffer descriptor.
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_max);
+#endif
         copy_tile(dfb_prev_max, i, dst_reg_0);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_max);
+#endif
         copy_tile(dfb_worker_max, i, dst_reg_1);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_prev_sum);
+#endif
         copy_tile(dfb_prev_sum, i, dst_reg_3);
+#ifdef ARCH_QUASAR
+        copy_init(dfb_worker_sum);
+#endif
         copy_tile(dfb_worker_sum, i, worker_sum_dst);
 #ifdef ARCH_QUASAR
         // No fused max/sub/exp/add primitive on Quasar. Decompose into generic dst-to-dst SFPU
@@ -967,15 +980,28 @@ void correction_block(
         mul_binary_tile(dst_reg_1, worker_sum_dst, worker_sum_dst);  // exp_worker * worker_sum
         mul_binary_tile(dst_reg_0, dst_reg_3, dst_reg_3);            // exp_prev * prev_sum
         add_binary_tile_init();
-        add_binary_tile(dst_reg_3, worker_sum_dst, dst_reg_3);       // cur_sum
+        add_binary_tile(dst_reg_3, worker_sum_dst, dst_reg_3);  // cur_sum
 #else
         MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));  // WH/BH fused fast path
 #endif
         tile_regs_commit();
         tile_regs_wait();
+        // pack_tile selects the tile index; pack_reconfig_out selects the output buffer.
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff);
+#endif
         pack_tile(dst_reg_0, dfb_exp_max_diff);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_exp_max_diff_2);
+#endif
         pack_tile(dst_reg_1, dfb_exp_max_diff_2);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_max);
+#endif
         pack_tile(dst_reg_2, dfb_cur_max);
+#ifdef ARCH_QUASAR
+        pack_reconfig_out(dfb_cur_sum);
+#endif
         pack_tile(dst_reg_3, dfb_cur_sum);
         tile_regs_release();
         dfb_cur_max_obj.push_back(1);
@@ -1000,6 +1026,9 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
     // Postcondition: out_dfb has num_tiles produced
 
     copy_init(in_dfb);
+#ifdef ARCH_QUASAR
+    pack_reconfig_out(out_dfb);
+#endif
 
     dfb_in.wait_front(num_tiles);
     dfb_out.reserve_back(num_tiles);
