@@ -470,7 +470,7 @@ class TtPrefillTransformer(LightweightModule):
             ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
         indexer_indices = None
         for i, layer in enumerate(self.layers):
-            signpost(f"forward_layer_{i}_start")
+            signpost(f"forward_layer_{self.first_layer_idx + i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
             inject = indexer_indices if (reuse and mode == "shared") else None
             ret = layer(
@@ -502,7 +502,7 @@ class TtPrefillTransformer(LightweightModule):
                     indexer_indices = new_idx
             else:
                 h, _ = ret
-            signpost(f"forward_layer_{i}_end")
+            signpost(f"forward_layer_{self.first_layer_idx + i}_end")
             if self.kv_only_last_layer and i == len(self.layers) - 1:
                 # Last layer was kv-only — KV cache filled, migration callback
                 # fired, no hidden state flowing forward. Skip norm + lm_head +
