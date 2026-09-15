@@ -1445,6 +1445,13 @@
 - name: TT-DiT Wan2.2-T2V-A14B unit tests
   cmd: |
     export TT_METAL_WATCHER=30
+    # setup-job sets TT_METAL_WATCHER_NOINLINE=1 (any presence enables it) and
+    # TT_METAL_OPERATION_TIMEOUT_SECONDS=5. Under NOINLINE, Wan RoPE host->device
+    # Typecast of [1,1,37800,128] fp32 on a 2x4 Galaxy subset stalls the fetch
+    # queue >5s (false hang; cores still in TypecastDeviceOperation). Real
+    # backstops remain: the job budget and pytest --timeout.
+    unset TT_METAL_WATCHER_NOINLINE
+    export TT_METAL_OPERATION_TIMEOUT_SECONDS=60
     unset HF_HUB_OFFLINE
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     pytest --timeout 1000 models/tt_dit/tests/models/wan2_2/test_rope.py
