@@ -76,6 +76,9 @@ void max_block_inplace(uint32_t in0, uint32_t in1) {
     }
     dfb_in0.pop_front(num_tiles);
     dfb_in0.reserve_back(num_tiles);
+    // pack-side drain: reserve_back->push_back needs a PACR between them (dummy_unpack/UNPACR
+    // can't order the pack side).
+    dummy_pack(in0);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -291,6 +294,8 @@ void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
     dfb_in.pop_front(num_tiles);
     dfb_in.reserve_back(num_tiles);
+    // Requires Quasar pack-side drain
+    dummy_pack(in_dfb);
     dfb_in.push_back(num_tiles);
 }
 
@@ -474,6 +479,8 @@ void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb) 
             PACK((llk_pack_reconfig_l1_acc(false)));
             dfb_out.pop_front(num_tiles);
             dfb_out.reserve_back(num_tiles);
+            // Requires Quasar pack-side drain
+            dummy_pack(out_dfb);
             dfb_out.push_back(num_tiles);
         } else {
             dfb_out.push_back(num_tiles);
@@ -566,6 +573,8 @@ void mul_block_bcast_scalar_inplace(uint32_t in0_dfb) {
     }
     dfb_in0.pop_front(num_tiles);
     dfb_in0.reserve_back(num_tiles);
+    // Requires Quasar pack-side drain
+    dummy_pack(in0_dfb);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -599,6 +608,8 @@ void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
         dfb_in1.pop_front(num_tiles);
     }
     dfb_in0.reserve_back(num_tiles);
+    // Requires Quasar pack-side drain
+    dummy_pack(in0_dfb);
     dfb_in0.push_back(num_tiles);
 }
 
@@ -709,11 +720,12 @@ void sub_exp_block(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_
 #ifdef TRISC_MATH
 template <VectorMode vector_mode = VectorMode::C, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 void fused_max_sub_exp_add_tile(uint32_t idst, int scale_bf16) {
+    constexpr bool reuse_cur_max_tile = is_fp32_dest_acc_en && DST_SYNC_MODE == DstSync::SyncHalf;
     SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         is_fp32_dest_acc_en,
         calculate_fused_max_sub_exp_add_tile,
-        (is_fp32_dest_acc_en),
+        (is_fp32_dest_acc_en, reuse_cur_max_tile),
         idst,
         vector_mode,
         scale_bf16);
@@ -751,9 +763,15 @@ void correction_block(
 
     constexpr uint32_t dst_reg_0 = 0;  // dst_reg_0 is used for prev_max
     constexpr uint32_t dst_reg_1 = 1;  // dst_reg_1 is used for worker_max
-    constexpr uint32_t dst_reg_2 = 2;  // dst_reg_2 is used for cur_max
+    constexpr uint32_t dst_reg_2 = 2;  // cur_max output; also worker_sum input in FP32 half-sync
     constexpr uint32_t dst_reg_3 = 3;  // dst_reg_3 is used for prev_sum, returns cur_sum
-    constexpr uint32_t dst_reg_4 = 4;  // dst_reg_4 is used for worker_sum
+    constexpr uint32_t dst_reg_4 = 4;  // worker_sum in the five-tile layout
+    // #56171: FP32 half-sync only has slots 0..3. Reuse the cur_max output
+    // slot for worker_sum, which the SFPU loads before writing cur_max.
+    constexpr uint32_t worker_sum_dst = (DST_ACCUM_MODE && DST_SYNC_MODE == DstSync::SyncHalf) ? dst_reg_2 : dst_reg_4;
+    static_assert(
+        worker_sum_dst < compute_kernel_lib::DEST_AUTO_LIMIT,
+        "correction_block DST layout exceeds DEST capacity for this sync/accum mode");
 
     // convert scale from fp32 to bf16
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
@@ -765,7 +783,7 @@ void correction_block(
         copy_tile(dfb_prev_max, i, dst_reg_0);
         copy_tile(dfb_worker_max, i, dst_reg_1);
         copy_tile(dfb_prev_sum, i, dst_reg_3);
-        copy_tile(dfb_worker_sum, i, dst_reg_4);
+        copy_tile(dfb_worker_sum, i, worker_sum_dst);
         MATH((fused_max_sub_exp_add_tile<vector_mode>(0, scale_bf16)));
         tile_regs_commit();
         tile_regs_wait();
@@ -1694,6 +1712,9 @@ void sdpa_inner_loop(
             dfb_k_range_obj.wait_front(1);
             k_chunk_start = ckernel::read_tile_value(dfb_windowed_k_range, 0, 0);
             k_chunk_end = ckernel::read_tile_value(dfb_windowed_k_range, 0, 1);
+            // read_tile_value is a plain L1 load (no UNPACR), so this wait_front->pop_front
+            // is bare; dummy_unpack issues an UNPACR_NOP that orders POP after WAIT.
+            dummy_unpack(dfb_windowed_k_range);
             dfb_k_range_obj.pop_front(1);
         }
 
@@ -1724,6 +1745,11 @@ void sdpa_inner_loop(
             if (sdpa_type == RING && !chunked_enabled && k_chunk >= causal_k_limit && is_causal) {
                 dfb_k_in_obj.wait_front(k_chunk_tiles);
                 dfb_v_in_obj.wait_front(v_chunk_tiles);
+                // these bare wait_front->pop_front drains (this K/V chunk is skipped, no
+                // matmul consumes it) would trap the Quasar unpacker (POP_TILES races past WAIT_TILES).
+                // dummy_unpack() orders each POP after its WAIT via an UNPACR_NOP; reads nothing, no-op on WH/BH.
+                dummy_unpack(dfb_k_in);
+                dummy_unpack(dfb_v_in);
                 dfb_k_in_obj.pop_front(k_chunk_tiles);
                 dfb_v_in_obj.pop_front(v_chunk_tiles);
 
@@ -1816,6 +1842,10 @@ void sdpa_inner_loop(
                     // Warning: this won't work if dfb_qk_im is double-buffered -- the stamps would land
                     // in the other buffer, leaving the QK scores unmasked.
                     dfb_qk_im_obj.wait_front(Sk_chunk_t * Sq_chunk_t);
+                    // bare wait_front->pop_front (the pop/re-reserve cycle only moves the
+                    // rd/wr ptr, no op consumes the QK tiles) would trap the Quasar unpacker. dummy_unpack()
+                    // orders POP after WAIT via an UNPACR_NOP; reads nothing, no-op on WH/BH.
+                    dummy_unpack(dfb_qk_im);
                     dfb_qk_im_obj.pop_front(Sk_chunk_t * Sq_chunk_t);
                     dfb_qk_im_obj.reserve_back(Sk_chunk_t * Sq_chunk_t);
                     // Chunked-prefill: feed abs K (matches abs q_start_tile so diag stamp lines up).
@@ -1860,6 +1890,9 @@ void sdpa_inner_loop(
                         k_start_tile_for_mask,
                         lw_straddle_col,
                         lw_straddle_jump);
+                    // pack-side drain (guarded path: the mask apply above can be a no-op, leaving
+                    // reserve_back->push_back bare).
+                    dummy_pack(dfb_qk_im);
                     dfb_qk_im_obj.push_back(Sk_chunk_t * Sq_chunk_t);
                 } else {
                     add_block_inplace(dfb_qk_im, dfb_mask_in, qk_chunk_tiles);
@@ -2097,6 +2130,10 @@ void sdpa_inner_loop(
         if (KV_chunks_processed_in_iter % 2 == 0) {
             dfb_k_in_obj.wait_front(k_chunk_tiles);
             dfb_v_in_obj.wait_front(v_chunk_tiles);
+            // bare wait_front->pop_front drains (nothing consumes these K/V tiles) would
+            // trap the Quasar unpacker. dummy_unpack() orders each POP after its WAIT via an UNPACR_NOP.
+            dummy_unpack(dfb_k_in);
+            dummy_unpack(dfb_v_in);
             dfb_k_in_obj.pop_front(k_chunk_tiles);
             dfb_v_in_obj.pop_front(v_chunk_tiles);
         }

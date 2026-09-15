@@ -81,7 +81,7 @@ ALWI void process_tile(
 #if HAS_ACTIVATIONS(POST)
             BINARY_SFPU_INIT
 #endif
-#if ISCLOSE_OP
+#ifdef ISCLOSE_OP
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2, rtol_bits, atol_bits);
 #else
             BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);

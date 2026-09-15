@@ -48,6 +48,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Gemma3-27B DP=4"
   model: google/gemma-3-27b-it
@@ -67,6 +68,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 # ── Gemma 4 ────────────────────────────────────────────────────────
 
@@ -85,11 +87,9 @@
       tier: 3
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
-# Product path on QB2: 256k + chunked prefill + B=32. LoudBox legs are omitted
-# — models.vllm bh_loudbox budget (75) is fully consumed by Llama-3.1-8B.
-# SKU timeouts kept at main's allocation so verify_time_budget stays green
-# without touching .github/time_budget.yaml.
+# Product path on QB2: 256k + chunked prefill + B=32.
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
@@ -106,6 +106,58 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
+
+# tp=8 coverage on the 8-chip BH LoudBox (P150x8) — the flagship 12B config.
+# Serving knobs mirror the QB2 leg; the impl workflow additionally exports the
+# P150x8 target config (bounded sliding KV + batched prefill + eager chunks):
+# the gated traced-sequential-prefill default deterministically WEDGES 12B on
+# a 1x8 BH mesh under concurrent prefill+decode (chip-local NOC1 write/ack
+# stall at the fabric-heaviest chip), which is also why the tt-inference-server
+# P150X8 spec defaults to bounded. First run on a fresh runner cold-builds the
+# P150x8-mesh weight cache (~15 min, fits the gate; warm after).
+- name: "Gemma4-12B tp=8"
+  model: google/gemma-4-12B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 40
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
+
+# 31B tp=8 on the BH LoudBox. Unlike 12B, 31B keeps the gated (traced
+# sequential prefill) default — it is immune to the 12B 1x8 wedge and this is
+# the config validated by the full benchmark sweep on the link-exact emulated
+# LoudBox (rc=0, b32 identity byte-equal, 17.4 tok/s/u b32@4k). Serving knobs
+# mirror the 31B QB2 leg. First run on a fresh cache needs mlperf-write-access
+# and may take two dispatches (the 31B bfp8 conversion is resumable but can
+# exceed the 20 min server gate in one shot; warm thereafter).
+- name: "Gemma4-31B tp=8"
+  model: google/gemma-4-31B-it
+  coherence-test: true
+  server-timeout: 20
+  benchmark-timeout: 5
+  mesh-device: P150x8
+  arch: arch-blackhole
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 2048 --long_prefill_token_threshold 2048 --async-scheduling"
+  multimodal: false
+  skus:
+    bh_loudbox:
+      timeout: 40
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+  budget_type: vllm
 
 - name: "Gemma4-26B-A4B"
   model: google/gemma-4-26B-A4B-it
@@ -123,6 +175,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # Serve 16k with chunked prefill=2048 (12 GB/ASIC); do not mirror BH 256k.
 #
@@ -177,6 +230,7 @@
       tier: 2
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 - name: "Gemma4-31B"
   model: google/gemma-4-31B-it
@@ -194,6 +248,7 @@
       tier: 1
   owner_id: U08TJ70UFRT # Harry Andrews
   team: models
+  budget_type: vllm
 
 # ── Qwen 3.6 ───────────────────────────────────────────────────────
 
@@ -214,6 +269,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 - name: "Qwen3.6-27B (batch=8)"
   model: Qwen/Qwen3.6-27B
@@ -232,6 +288,7 @@
       tier: 1
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: vllm
 
 # ── GPT-OSS ────────────────────────────────────────────────────────
 
@@ -258,6 +315,7 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 - name: "GPT-OSS-120B (high-throughput)"
   model: openai/gpt-oss-120b
@@ -281,12 +339,13 @@
   owner_id: U08TJ70UFRT # Harry Andrews
   co-owner-2-id: U06F3ER8X9A # Stuti Raizada
   team: models
+  budget_type: vllm
 
 # ── Llama ──────────────────────────────────────────────────────────
 
 - name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 15
+  server-timeout: 20
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -304,10 +363,11 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct (prefix caching)"
   model: meta-llama/Llama-3.1-8B-Instruct
-  server-timeout: 10
+  server-timeout: 15
   benchmark-timeout: 5
   mesh-device: T3K
   arch: arch-wormhole_b0
@@ -327,6 +387,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -345,6 +406,7 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct with sampling-tests"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -369,6 +431,7 @@
       tier: 2
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct (chunked prefill)"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -398,6 +461,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.1-8B-Instruct DP=4"
   model: meta-llama/Llama-3.1-8B-Instruct
@@ -422,6 +486,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U08BH66EXAL # Radoica Draskic
   team: models
+  budget_type: vllm
 
 - name: "Llama-3.3-70B-Instruct device with sampling-tests (prefix caching)"
   model: meta-llama/Llama-3.3-70B-Instruct
@@ -442,6 +507,7 @@
   owner_id: U08E1JCDVNX # Pavle Petrovic
   co-owner-2-id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Qwen 3 ─────────────────────────────────────────────────────────
 
@@ -462,6 +528,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: vllm
 
 - name: "Qwen3-32B device (BH Galaxy)"
   model: Qwen/Qwen3-32B
@@ -485,6 +552,7 @@
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
   team: models
+  budget_type: vllm
 
 # ── Qwen VL ────────────────────────────────────────────────────────
 
@@ -505,6 +573,7 @@
       tier: 2
   owner_id: U08JFM3CFA4 # Gongyu Wang
   team: models
+  budget_type: vllm
 
 - name: "Qwen3-VL-32B-Instruct"
   model: Qwen/Qwen3-VL-32B-Instruct
@@ -524,6 +593,7 @@
       tier: 2
   owner_id: U08H31YMN4Q # Sarva Sanjay
   team: models
+  budget_type: vllm
 
 # ── Infra / overhead ───────────────────────────────────────────────
 
@@ -543,6 +613,7 @@
       tier: 1
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
+  budget_type: vllm
 
 # ── Disabled entries (preserved for re-enable) ─────────────────────
 #

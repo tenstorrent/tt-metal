@@ -106,5 +106,13 @@ void kernel_main() {
     }
 
     // Pop the single reused scalar tile from the RHS DFB.
+    // Only the zero-work path (num_tiles == 0) needs this: both chunk loops zero-trip, so nothing unpacks
+    // dfb_post_rhs between its wait_front(1) above and this pop_front(1) -> a bare pair that traps the Quasar
+    // unpacker. dummy_unpack() interposes an UNPACR_NOP so POP follows a real unpack. For num_tiles > 0 the op
+    // already unpacked the RHS, so skip it. (On WH/BH dummy_unpack is a debug-only SrcA flush with no ordering
+    // role; the guard also keeps it off the hot path there.)
+    if (num_tiles == 0) {
+        dummy_unpack(dfb_post_rhs_id);
+    }
     dfb_post_rhs.pop_front(1);
 }

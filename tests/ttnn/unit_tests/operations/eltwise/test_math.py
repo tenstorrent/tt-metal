@@ -48,7 +48,12 @@ def run_math_unary_test(
     if pcc_check:
         assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     else:
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp, allow_nonfinite=allow_nonfinite)
+        assert_with_ulp(
+            expected_result=torch_output_tensor,
+            actual_result=output_tensor,
+            ulp_threshold=ulp,
+            allow_nonfinite=allow_nonfinite,
+        )
 
 
 @pytest.mark.parametrize("h", [32])
@@ -151,7 +156,7 @@ def test_digamma_large_x(device):
     golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
-    assert_with_ulp(golden, output_tensor, 2, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2, allow_nonfinite=True)
 
 
 def test_digamma_small_x(device):
@@ -166,7 +171,7 @@ def test_digamma_small_x(device):
     golden = torch.digamma(xs.to(torch.float64)).to(torch.float32)
     input_tensor = ttnn.from_torch(xs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.to_torch(ttnn.digamma(input_tensor))
-    assert_with_ulp(golden, output_tensor, 2)
+    assert_with_ulp(expected_result=golden, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -202,7 +207,7 @@ def run_math_unary_test_recip(device, h, w, ttnn_function, ulp=1):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -235,7 +240,7 @@ def run_math_unary_test_range(device, h, w, ttnn_function, ulp=1):
     output_tensor = ttnn_function(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):
@@ -252,7 +257,7 @@ def run_math_test_polygamma(device, h, w, scalar, ttnn_function, ulp=1):
     output_tensor = ttnn_function(input_tensor, scalar)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=ulp)
 
 
 @pytest.mark.parametrize("scalar", [1, 2, 5, 10])
@@ -281,5 +286,5 @@ def test_recip_fixed(device, h, w, fill_value):
     else:
         golden_function = ttnn.get_golden_function(ttnn.reciprocal)
         torch_output_tensor = golden_function(torch_input_tensor, device=device)
-        assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=1)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1)
         assert_allclose(torch_output_tensor, output_tensor, atol=1e-2, rtol=1e-2)

@@ -6,6 +6,7 @@
 #include <cstdint>
 #include "experimental/llk_unpack_A_sdpa.h"
 #include "llk_unpack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A
@@ -21,6 +22,7 @@ inline void llk_unpack_A_sdpa_init(
     const std::uint32_t transpose_of_faces = 0,
     const std::uint32_t within_face_16x16_transpose = 0,
     const std::uint32_t operand = 0) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operand_id = get_operand_id(operand);
     const std::uint32_t face_r_dim = get_operand_face_r_dim(operand_id);
     const std::uint32_t num_faces = get_operand_num_faces(operand_id);
@@ -37,6 +39,12 @@ inline void llk_unpack_A_sdpa_init(
         operand_unpack_dst_format);
 }
 
-inline void llk_unpack_A_sdpa_set_srcb_dummy_valid() { _llk_unpack_A_sdpa_set_srcb_dummy_valid_(); }
+inline void llk_unpack_A_sdpa_set_srcb_dummy_valid() {
+    SAN_HOOK(unsupported());
+    _llk_unpack_A_sdpa_set_srcb_dummy_valid_();
+}
 
-inline void llk_unpack_A_sdpa_set_srca_srcb_dummy_valid() { _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_(); }
+inline void llk_unpack_A_sdpa_set_srca_srcb_dummy_valid() {
+    SAN_HOOK(unsupported());
+    _llk_unpack_A_sdpa_set_srca_srcb_dummy_valid_();
+}
