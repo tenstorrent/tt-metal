@@ -59,30 +59,31 @@ still get correct results but you fragment the dedup and the cache.
 
 ## 2. When to expect a performance gain
 
-**Avoided compiles.** In-flight dedup and the server's on-disk cache compile a kernel once
-instead of once per process. That requires **kernel overlap**: the same kernel hash needed
-by more than one process, or more than once over time. On co-located setups this is most
-of the speedup.
+Two cases actually pay off.
 
-**Relocated compiles.** Work runs on the server's CPU even with zero overlap. Shifting the
-same work to an idle box of similar size is modest and can lose to RPC and ELF transfer —
-useful in the co-located multi-host setup (§4b), not a reason to deploy on its own.
-**Scale-out** is the stronger form: a farm with more compile CPU than the application
-hosts, given a large unique kernel list. Kernels hash-shard across endpoints
-(`kernel_hash % num_endpoints`), so the farm compiles them in parallel in a way a single
-local thread pool cannot. That is the CPU-farm / cache-warming pattern (§4c).
+**Kernel overlap.** In-flight dedup and the server's on-disk cache compile a kernel once
+instead of once per process. That needs the same kernel hash on more than one process, or
+more than once over time. This is the usual win for §4a and §4b: the compile still runs on
+the workload hosts' CPUs, but overlapping kernels are not compiled N times. A per-host
+local-disk `TT_METAL_CACHE` cannot share across processes or hosts.
 
-| Situation | Expect | Mechanism |
-| --- | --- | --- |
-| N processes compile largely the same kernel set, concurrently | Best case — ideally 1 compile instead of N | avoided compiles |
-| Same kernels requested later by a different process or host | Server cache hit; near-free | avoided compiles |
-| Large unique kernel list on a scaled-out server pool | Wins if the farm has more CPU than the application hosts | relocated compiles (scale-out) |
-| No overlap, similar CPU both sides, app host contended / server idle | Modest; RPC and transfer can eat it | relocated compiles |
-| One process, unique kernels, uncontended host, no extra compile machines | **Net loss** — RPC and transfer for work local compile would have done | neither |
-| Warm local `TT_METAL_CACHE` | No requests — same as not using the server | n/a |
+**Scale-out.** A farm with *more* compile CPU than the application hosts, given a large
+unique kernel list. Kernels hash-shard across endpoints
+(`kernel_hash % num_endpoints`), so the farm compiles them in parallel in a way a local
+thread pool cannot. That is the usual reason to put compile on a separate set of machines
+(§4c, typically cache warming). Relocating onto a similar-size box without adding capacity
+is possible but rarely the win: workload hosts already have CPU, and you still pay RPC
+and ELF transfer.
+
+| Situation | Expect |
+| --- | --- |
+| N processes compile largely the same kernel set, concurrently | Best case — ideally 1 compile instead of N |
+| Same kernels requested later by a different process or host | Server cache hit; near-free |
+| Large unique kernel list on a scaled-out server pool | Wins if the farm has more CPU than the application hosts |
+| Unique kernels, same amount of compile CPU as compiling locally | **Net loss** — RPC and transfer for work local compile would have done |
+| Warm local `TT_METAL_CACHE` | No requests — same as not using the server |
 
 Rule of thumb: deploy for overlap, or for a large unique kernel list on a bigger CPU pool.
-A single process with unique kernels on a same-size box is not a win.
 
 ---
 
@@ -170,13 +171,10 @@ is free.
 
 *Multi-host run; one server per host; no extra machines.*
 
-This does **not** require dedicated hardware. During compile the application is mostly
-waiting, so the CPU it isn't using is what the server spends.
-
-Unlike a per-host local-disk `TT_METAL_CACHE`, the server fleet can reuse a kernel across
-hosts: it is compiled once on whichever server the hash routes to, and the others take the
-cache or in-flight result. **Whenever kernel sets overlap across hosts, that gain is
-guaranteed**; local disk cannot do it.
+The compile still uses these hosts' CPUs — you are not adding capacity. The reason to do
+it is **cross-host overlap**: unlike a per-host local-disk `TT_METAL_CACHE`, a kernel
+needed on several hosts is compiled once (whichever server the hash routes to) and the
+others take the cache or in-flight result. Local disk cannot do that.
 
 ```bash
 # On every host: start a server (widened bind so peers can reach it)
@@ -352,5 +350,5 @@ your sources.
 | Compile fails with "No such file or directory" on a header or kernel source | §5a/§5b: the server does not see the same tree, or the generated source isn't on a shared filesystem. Fix the mount, or use `TT_METAL_JIT_PREPROCESS=1`. |
 | `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). |
 | `Absolute <field> is not allowed` / `must not contain '..'` | The server rejected a client-supplied path component. Expected for a malformed or mismatched client; report it if it happens in a normal run. |
-| No speedup at all | No kernel overlap, or unique kernels without extra compile CPU — see §2. |
-| Slower than local | Single process with unique kernels, or `TT_METAL_JIT_PREPROCESS` left on unnecessarily. |
+| No speedup at all | No kernel overlap, and no extra compile CPU — see §2. |
+| Slower than local | Unique kernels on similar CPU, or `TT_METAL_JIT_PREPROCESS` left on unnecessarily. |
