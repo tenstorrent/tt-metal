@@ -94,7 +94,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_init_(
     const std::uint32_t in1_tile_c_dim = TILE_C_DIM,
     const bool partial_face            = false,
     const std::uint32_t transpose      = 0,
-    const std::uint32_t kt_dim         = 1)
+    const std::uint32_t kt_dim         = 2)
 {
     sdpa_custom_mm_reuse_dest_srcb_configure_addrmod<math_fidelity>(
         transpose, kt_dim, in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face);
@@ -114,7 +114,7 @@ inline void _llk_math_sdpa_custom_mm_reuse_dest_srcb_(
     std::uint32_t src_index,
     std::uint32_t dst_index,
     [[maybe_unused]] const bool transpose = false,
-    const std::uint32_t kt_dim            = 1,
+    const std::uint32_t kt_dim            = 2,
     const std::uint32_t nt_dim            = 1,
     bool signal_output                    = false)
 {

@@ -1915,11 +1915,16 @@ class SDPA_CUSTOM_MM_REUSE_DEST(TemplateParameter):
 
     kt_dim: int = 2
     nt_dim: int = 1
+    # When true the kernel omits the trailing dim arguments and takes the LLK/API
+    # defaults instead. Only meaningful when kt_dim/nt_dim match those defaults.
+    defaulted_dims: bool = False
 
     def convert_to_cpp(self) -> str:
         lines = [
             f"constexpr std::uint32_t KT_DIM = {self.kt_dim};",
             f"constexpr std::uint32_t NT_DIM = {self.nt_dim};",
+            "constexpr bool DEFAULTED_DIMS = "
+            f"{'true' if self.defaulted_dims else 'false'};",
         ]
         return "\n".join(lines)
 
