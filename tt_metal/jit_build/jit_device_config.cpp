@@ -48,8 +48,6 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
     auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
-    const tt::CoreType resolved_dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
-
     return {
         .hal = &hal,
         .arch = cluster.arch(),
@@ -58,7 +56,7 @@ JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, C
         .pcie_core = pcie_core,
         .harvesting_mask = cluster.get_harvesting_mask(device_id),
         .dispatch_core_type = dispatch_core_config.get_dispatch_core_type(),
-        .resolved_dispatch_core_type = resolved_dispatch_core_type,
+        .resolved_dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config),
         .fds_signalling = ctx.get_dispatch_query_manager().fds_signalling_enabled(),
         .dispatch_core_axis = dispatch_core_config.get_dispatch_core_axis(),
         .coordinate_virtualization_enabled = hal.is_coordinate_virtualization_enabled(),
