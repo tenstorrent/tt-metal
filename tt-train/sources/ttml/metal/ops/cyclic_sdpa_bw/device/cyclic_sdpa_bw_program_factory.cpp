@@ -196,7 +196,7 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_15, 2U * rowT, tt::DataFormat::Float32);    // dQ_i, travels along
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);        // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);        // V_j
-    make_cb(tt::CBIndex::c_6, 1U, tt::DataFormat::Float16_b);          // causal mask
+    make_cb(tt::CBIndex::c_6, 2U, tt::DataFormat::Float16_b);          // causal mask: triangle, all -inf
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);       // P^T
     make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);        // dQ seed, transposed, at streak starts
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);           // transpose fence
