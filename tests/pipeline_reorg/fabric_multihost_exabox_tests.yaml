@@ -22,6 +22,7 @@
       timeout: 10
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "System Health Check (SC4)"
@@ -33,6 +34,7 @@
       timeout: 10
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric stability short (SC4)"
@@ -62,6 +64,7 @@
       timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 # ============================================================================
@@ -94,6 +97,7 @@
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric express links 32x4 multicast source-inject APIs (SC4)"
@@ -120,6 +124,7 @@
       timeout: 10
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric express links quad 8x4 torus sanity (SC4)"
@@ -158,6 +163,7 @@
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric express links dual 16x4 Torus-X sanity (SC4)"
@@ -196,6 +202,7 @@
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "Fabric express links 8x4 plus 24x4 Torus-X sanity (SC4)"
@@ -234,6 +241,7 @@
       timeout: 15
   owner_id: U08UBDUKH6Z # Neel Nyamagoudar
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
 
 - name: "DC validation (quad) neighbor exchange"
@@ -294,4 +302,5 @@
       timeout: 20
   owner_id: U0845EV7A5U # Umair Cheema
   team: scaleout
+  budget_type: e2e
   sp_config: sc4
