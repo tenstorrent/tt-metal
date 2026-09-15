@@ -820,3 +820,55 @@ def test_affine_exclusive_scan_rejects_invalid_configuration(
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED"):
         _run(a_tt, b_tt, state_tt, 4, memory_config=sharded)
+
+
+def test_segmented_bf16_height_sharded_k128_rebinds_indicator(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    batch_heads, groups, dim = 2, 4, 128
+    memory = _height_sharded_memory_config(device, batch_heads * groups, dim, dim)
+    retained = []
+    entries = None
+    for seed, boundary in ((991, True), (992, False), (993, True)):
+        head = _host_inputs(batch_heads, groups, dim, dim, seed=seed)
+        tail = _host_inputs(batch_heads, groups, dim, dim, seed=seed + 100)
+        host = tuple(t.to(torch.bfloat16).float() for t in (*head, *tail))
+        tensors = tuple(
+            _to_device(
+                t,
+                device,
+                ttnn.bfloat16 if i in (0, 1, 3, 4) else ttnn.float32,
+                memory_config=memory if i in (0, 1, 3, 4) else ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for i, t in enumerate(host)
+        )
+        indicator = _to_device(torch.tensor([[[float(boundary)]]]), device)
+        before = tuple(ttnn.to_torch(t).clone() for t in (*tensors, indicator))
+        output = _run(
+            *tensors[:3],
+            groups,
+            tail_a=tensors[3],
+            tail_b=tensors[4],
+            tail_state=tensors[5],
+            wrap_indicator=indicator,
+            wrap_group=1,
+            split_in_group=True,
+        )
+        actual = ttnn.to_torch(output)
+        expected = _segmented_oracle(*host, batch_heads, groups, 1, True, boundary)
+        assert_accurate(expected, actual, name=f"BF16 sharded segmented boundary={boundary}", pcc_threshold=0.999)
+        assert tuple(output.shape) == (batch_heads * groups, dim, dim)
+        assert output.dtype == ttnn.float32 and output.layout == ttnn.TILE_LAYOUT
+        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        assert output.buffer_address() not in {t.buffer_address() for t in (*tensors, indicator)}
+        for old, tensor in zip(before, (*tensors, indicator), strict=True):
+            assert_bit_identical(old, ttnn.to_torch(tensor), name="segmented input immutability")
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+            assert indicator.buffer_address() != retained[-1][-2].buffer_address()
+        retained.append((*tensors, indicator, output))
+    for invocation in retained:
+        for tensor in invocation:
+            ttnn.deallocate(tensor)
