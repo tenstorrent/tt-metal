@@ -231,6 +231,35 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # in ``__init__``; that does not reach the platform, so PLI still needs
     # the kill-switch to disable async_scheduling.
     @staticmethod
+    def _spec_real_batch(tokens, start_pos):
+        """Rows that belong to REAL requests, ignoring the runner's padding.
+
+        The runner pads a decode batch up to a wire bucket
+        (``decode_pad_to``) and pads the padded rows' positions with -1, by its
+        own convention: "Pad positions with -1 to indicate no position". So
+        ``tokens.shape[0]`` is the WIRE width, not the number of requests.
+
+        The adaptive gate must use the real count. Reading the wire width made a
+        SOLO request whose bucket padded above 1 look batched, so the model
+        served it as plain baseline at width 1 while the scheduler -- which
+        counts scheduled requests, and was right -- had reserved a full block.
+        The commit then died on the width check:
+
+            ValueError: Model output width violates output_tokens_per_step:
+            1 != 64
+
+        Seen on a BH Galaxy DP=4 server at 121k ISL, where the smallest decode
+        bucket is above 1; a P150x8 server pads solo decodes to 1 and never hit
+        it.
+        """
+        if start_pos is None:
+            return int(tokens.shape[0])
+        try:
+            return max(1, int((start_pos.reshape(-1) >= 0).sum()))
+        except Exception:
+            return int(tokens.shape[0])
+
+    @staticmethod
     def _spec_pt_identity(page_table):
         """Stable identity for the request a spec session belongs to: the first
         block id of its page-table row.
@@ -2866,7 +2895,8 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
             start_pos = args[1]
         if tokens is None:
             raise ValueError("Gemma4DFlash decode expects token input")
-        batch = int(tokens.shape[0])
+        # REAL request count, not the padded wire width (see _spec_real_batch).
+        batch = self._spec_real_batch(tokens, start_pos)
         # Throughput mode (GEMMA4_DFLASH_SERVE_BLOCK=1 -> block-output OFF): plain
         # batched baseline at width 1, no spec, no padding.
         if self._SPEC_BLOCK <= 1:
@@ -3249,7 +3279,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         # to the real batch and samples exactly as for a baseline model. A solo
         # request that just joined a batch drops its MTP session first, so
         # baseline owns its KV from vLLM's committed position.
-        if int(tokens.shape[0]) != 1:
+        if self._spec_real_batch(tokens, start_pos) != 1:
             self._spec_release_session()
             return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         anchor_from_runner = int(tokens.reshape(-1)[0])
