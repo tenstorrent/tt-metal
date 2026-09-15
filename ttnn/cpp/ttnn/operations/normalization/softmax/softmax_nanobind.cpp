@@ -313,7 +313,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
                 program_config (SoftmaxProgramConfig, optional): Program configuration for the operation. Defaults to SoftmaxDefaultProgramConfig().
                 is_causal_mask (bool, optional): Whether the mask is a causal mask. Defaults to False.
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: The same tensor as input with the fused scale-mask-softmax operation applied in-place.
@@ -366,9 +366,7 @@ void bind_normalization_softmax_scale_mask_inplace_operation(nb::module_& mod) {
         nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
         nb::arg("is_causal_mask") = false,
         nb::arg("compute_kernel_config") = nb::none(),
-        // TODO: switch the default value to 'true' once model accuracy is fixed
-        // See issue #28531
-        nb::arg("numeric_stable") = false);
+        nb::arg("numeric_stable") = true);
 }
 
 // Softmax with scale and causal mask in-place operation
@@ -394,7 +392,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
             Keyword Args:
                 program_config (SoftmaxProgramConfig, optional): Program configuration for the operation. Defaults to SoftmaxDefaultProgramConfig().
                 compute_kernel_config (DeviceComputeKernelConfig, optional): Compute kernel configuration for the operation.
-                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to False.
+                numeric_stable (bool, optional): Whether to use numerically stable softmax computation. Defaults to True.
 
             Returns:
                 ttnn.Tensor: The same tensor as input with the specialized causal scale-mask-softmax operation applied in-place.
@@ -445,9 +443,7 @@ void bind_normalization_softmax_scale_casual_mask_HW_inplace_operation(nb::modul
         nb::kw_only(),
         nb::arg("program_config") = nb::cast(SoftmaxDefaultProgramConfig{}),
         nb::arg("compute_kernel_config") = nb::none(),
-        // TODO: switch the default value to 'true' once model accuracy is fixed
-        // See issue #28531
-        nb::arg("numeric_stable") = false);
+        nb::arg("numeric_stable") = true);
 }
 
 void bind_normalization_softmax(nb::module_& mod) {
