@@ -8,7 +8,7 @@ import functools
 import math
 import re
 import warnings
-from collections.abc import Hashable, Mapping, Sequence
+from collections.abc import Container, Hashable, Mapping, Sequence
 from dataclasses import dataclass
 
 import torch
@@ -191,7 +191,7 @@ class TransformerEncoder(Module):
         deepstack_embeds: Sequence[ttnn.Tensor] = (),
         cache: Cache | None = None,
         skip_final_linear: bool = False,
-        output_hidden_states: bool = False,
+        output_hidden_states: bool | Container[int] = False,
     ) -> ttnn.Tensor | list[ttnn.Tensor]:
         """Run the stack over `tokens`, filling `cache` for decoding when given.
 
@@ -210,12 +210,16 @@ class TransformerEncoder(Module):
                 vision rows after that layer.
             skip_final_linear: Leaves out the language-model head, returning the final states.
             output_hidden_states: Returns the input of every layer followed by the outputs of the
-                final norm and, unless skipped, the head.
+                final norm and, unless skipped, the head; or only the entries of that list at the
+                given indices, so that the others are not kept alive.
         """
         if cache is not None:
             cache.reset()
 
         batch_size, seq_len = tokens.shape
+
+        def keep_hidden_state(i: int) -> bool:
+            return output_hidden_states is True or i in (output_hidden_states or ())
 
         if (vision_embeds is None) != (vision_mask is None):
             msg = "vision_embeds and vision_mask must be passed together"
@@ -291,12 +295,12 @@ class TransformerEncoder(Module):
 
         if vision_mask is not None:
             vision_index, vision_row_mask = self._vision_rows(vision_mask, padded_seq_len=padded_seq_len)
-            x = x + (ttnn.embedding(vision_index, vision_embeds, layout=ttnn.TILE_LAYOUT) - x) * vision_row_mask
+            x = ttnn.where(vision_row_mask, ttnn.embedding(vision_index, vision_embeds, layout=ttnn.TILE_LAYOUT), x)
 
         hidden_states = []
 
         for i, decoder_layer in enumerate(self.layers):
-            if output_hidden_states:
+            if keep_hidden_state(i):
                 hidden_states.append(x)
 
             x = decoder_layer.forward(
@@ -322,16 +326,16 @@ class TransformerEncoder(Module):
         if self.final_norm is not None:
             x = self.final_norm.forward(x)
 
-        if output_hidden_states:
+        if keep_hidden_state(len(self.layers)):
             hidden_states.append(x)
 
         if not skip_final_linear and self.final_linear is not None:
             x = self.final_linear.forward(x)
 
-            if output_hidden_states:
+            if keep_hidden_state(len(self.layers) + 1):
                 hidden_states.append(x)
 
-        return hidden_states if output_hidden_states else x
+        return hidden_states if output_hidden_states is not False else x
 
     def _decode_step(
         self,

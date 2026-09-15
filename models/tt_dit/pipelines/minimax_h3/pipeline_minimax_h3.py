@@ -63,6 +63,7 @@ from ...encoders.qwen3vl.loader_minimax_h3 import (
 )
 from ...encoders.qwen3vl.model_qwen3vl import mrope_position_ids
 from ...encoders.qwen3vl.vision_qwen3vl import vision_cu_seqlens
+from ...encoders.transformer import WEIGHT_CACHE_DTYPE
 from ...layers.audio_ops import weights_variant
 from ...models.audio_vae.minimax_h3.convert_minimax_h3_audio import convert_minimax_h3_audio_state_dict
 from ...models.audio_vae.minimax_h3.decoder_minimax_h3_audio import MiniMaxH3AudioDecoder
@@ -792,6 +793,7 @@ class MiniMaxH3Pipeline:
                 parallel_config=self.encoder_parallel_config,
                 mesh_shape=tuple(self.mesh_device.shape),
                 mesh_device=self.mesh_device,
+                dtype=WEIGHT_CACHE_DTYPE,
                 get_torch_state_dict=lambda: load_minimax_h3_text_state_dict(
                     self.weights_dir / "text_encoder", num_layers=MINIMAX_H3_TEXT_ENCODER_LAYER
                 ),

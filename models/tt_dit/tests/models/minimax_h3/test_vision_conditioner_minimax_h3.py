@@ -214,7 +214,7 @@ def test_fused_conditioner_real_weights(conditioner, mesh_device, submesh_shape,
     truncated = {
         f"model.language_model.{key}": value
         for key, value in reference.language_model.state_dict().items()
-        if not (m := layer_re.match(key)) or int(m.group(1)) < TAP
+        if key != "norm.weight" and (not (m := layer_re.match(key)) or int(m.group(1)) < TAP)
     }
     encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(truncated))
 

@@ -474,9 +474,9 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             ids = torch.nn.functional.pad(ids, (0, MAX_TEXT_TOKENS - n_text), value=int(pad_id))
         tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
         # Every layer's input followed by the raw output of the last layer, so entry i + 1 is the
-        # output of layer i.
-        hidden_states = self.encoder.forward(tt_ids, output_hidden_states=True)
-        taps = [hidden_states[i + 1] for i in QWEN3_VL_ACTIVATION_LAYERS]
+        # output of layer i. Only the taps are kept, so the other layers' states are freed as the
+        # stack runs.
+        taps = self.encoder.forward(tt_ids, output_hidden_states=[i + 1 for i in QWEN3_VL_ACTIVATION_LAYERS])
         # taps: 13 x [1, MAX_TEXT_TOKENS, 4096], REPLICATED across the whole mesh.
         # Read back cheaply: slice to the real text rows [0:n_text] ON DEVICE (causal => pad rows
         # never influence the real rows, and the model masks them anyway), then read a SINGLE

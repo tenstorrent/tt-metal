@@ -12,7 +12,12 @@ import transformers
 
 import ttnn
 from models.tt_dit.blocks.rope import RopeConfig
-from models.tt_dit.encoders.transformer import StateConversion, TransformerEncoder, TransformerEncoderConfig
+from models.tt_dit.encoders.transformer import (
+    WEIGHT_CACHE_DTYPE,
+    StateConversion,
+    TransformerEncoder,
+    TransformerEncoderConfig,
+)
 from models.tt_dit.parallel.config import EncoderParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils import cache
@@ -117,6 +122,7 @@ class Qwen3VlCheckpoint:
             parallel_config=parallel_config,
             mesh_shape=tuple(device.shape),
             mesh_device=device,
+            dtype=WEIGHT_CACHE_DTYPE,
         )
 
     def _load_state_dict(self) -> dict[str, torch.Tensor]:
