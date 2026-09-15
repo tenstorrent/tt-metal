@@ -94,6 +94,41 @@ auto get_default_value() {
     }
 }
 
+/*
+ * argmax's ordering policy, matching torch.argmax:
+ *   - a NaN outranks every number,
+ *   - a NaN already held is never displaced, so the FIRST NaN's index wins,
+ *   - +0.0 compares equal to -0.0, so the lower index wins.
+ */
+inline constexpr uint16_t ARGMAX_BF16_EXPONENT_MASK = 0x7F80;   // Exponent bits (14-7) of a bfloat16
+inline constexpr uint16_t ARGMAX_BF16_MANTISSA_MASK = 0x007F;   // Mantissa bits (6-0) of a bfloat16
+inline constexpr uint16_t ARGMAX_BF16_MAGNITUDE_MASK = 0x7FFF;  // All bits except the sign
+
+inline bool argmax_bfloat16_greater(uint16_t a, uint16_t b) {
+    const bool a_is_nan =
+        (a & ARGMAX_BF16_EXPONENT_MASK) == ARGMAX_BF16_EXPONENT_MASK && (a & ARGMAX_BF16_MANTISSA_MASK) != 0;
+    const bool b_is_nan =
+        (b & ARGMAX_BF16_EXPONENT_MASK) == ARGMAX_BF16_EXPONENT_MASK && (b & ARGMAX_BF16_MANTISSA_MASK) != 0;
+    if (a_is_nan || b_is_nan) {
+        return a_is_nan && !b_is_nan;
+    }
+    // bfloat16_greater orders +0.0 above -0.0; argmax needs them equal.
+    if ((a & ARGMAX_BF16_MAGNITUDE_MASK) == 0 && (b & ARGMAX_BF16_MAGNITUDE_MASK) == 0) {
+        return false;
+    }
+    return bfloat16_greater(a, b);
+}
+
+inline bool argmax_float32_greater(uint32_t a, uint32_t b) {
+    const bool a_is_nan = (a & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (a & FLOAT32_MANTISSA_MASK) != 0;
+    const bool b_is_nan = (b & FLOAT32_EXPONENT_MASK) == FLOAT32_EXPONENT_MASK && (b & FLOAT32_MANTISSA_MASK) != 0;
+    if (a_is_nan || b_is_nan) {
+        return a_is_nan && !b_is_nan;
+    }
+    // float32_greater already treats +0.0 and -0.0 as equal; its NaN branch is unreachable from here.
+    return float32_greater(a, b);
+}
+
 /**
  * @brief Helper function to calculate the index for argmax operations.
  *
@@ -178,9 +213,9 @@ void compare_values(
     const uint32_t index = calculate_argmax_index(reduce_all, k, j, i, inner_dim_units, red_dim_units);
 
     if constexpr (data_format == DataFormat::Float16_b) {
-        update_max_if_greater(max_val, max_idx, val, index, bfloat16_greater);
+        update_max_if_greater(max_val, max_idx, val, index, argmax_bfloat16_greater);
     } else if constexpr (data_format == DataFormat::Float32) {
-        update_max_if_greater(max_val, max_idx, val, index, float32_greater);
+        update_max_if_greater(max_val, max_idx, val, index, argmax_float32_greater);
     } else if constexpr (data_format == DataFormat::UInt16) {
         update_max_if_greater(max_val, max_idx, val, index, [](auto a, auto b) { return a > b; });
     } else if constexpr (data_format == DataFormat::Int32) {
@@ -224,7 +259,11 @@ inline void process_core_data(
     if (compare_func(val, max_val)) {
         max_idx = i_red_idxs[inner_idx];
         max_val = val;
-    } else if ((val == max_val) && (i_red_idxs[inner_idx] < max_idx)) {
+    } else if (!compare_func(max_val, val) && (i_red_idxs[inner_idx] < max_idx)) {
+        // Neither is greater, so this is a tie. Cores are merged in core-id order, which is not
+        // index order when reducing all dims, so the lower index must win explicitly. Bitwise
+        // equality is not enough: two different NaN payloads, and +0.0 vs -0.0, tie without
+        // matching bit patterns.
         max_idx = i_red_idxs[inner_idx];
     }
 }

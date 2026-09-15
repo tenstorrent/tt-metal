@@ -204,7 +204,7 @@ def run_llama3_decode_performance(
 
     # Prepare the encoded prompts for the decode input
     tt_out_tok = ttnn.from_torch(
-        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
+        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, batch_size, 1),
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -298,7 +298,7 @@ def run_llama3_decode_performance(
     )
 
     tt_out_tok_reset = ttnn.from_torch(
-        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
+        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, batch_size, 1),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
