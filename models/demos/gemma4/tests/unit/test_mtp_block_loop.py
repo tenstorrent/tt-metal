@@ -68,6 +68,9 @@ class _Harness:
 
     # real implementations, so the tests exercise shipped logic
     _spec_pt_identity = staticmethod(MTP._spec_pt_identity)
+    # The adaptive gate counts REAL requests, not the padded decode wire width
+    # (the runner pads positions with -1); the stub drives it with one row.
+    _spec_real_batch = staticmethod(MTP._spec_real_batch)
     _spec_pending_is_mine = MTP._spec_pending_is_mine
     _spec_active_is_mine = MTP._spec_active_is_mine
     run = MTP.decode_forward
