@@ -865,7 +865,7 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/gemma4_d_p/tests/test_sanity_glx.py \
-        -vv --tb=short --timeout=3600
+        -vv --tb=short --timeout=1800
     '
   test_type: gemma4_d_p
   test_tags: [gemma4_d_p, transformer]
@@ -873,7 +873,7 @@
   budget_type: demo
   skus:
     bh_sc1:
-      timeout: 120
+      timeout: 30
       tier: 1
       release_ready: false
   owner_id: U078RU2KP9Q # Muhammad Asif Manzoor
