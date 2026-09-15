@@ -202,7 +202,8 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);           // transpose fence
     // The statistics' remainders (see cyclic_dataflow_utils.hpp) and the
     // ones column that carries -D's into the matmul.
-    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);      // L remainder, row layout
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);      // -L remainder, row layout
+    make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);     // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);    // -D remainder, column 0
     make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);          // ones column
     // The reader's "statistics are in L1" signal to the writer: two pages of
@@ -268,6 +269,8 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
         const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
         if (exact) {
             compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
+            // The writer makes L's remainder in the form this path takes.
+            sync_defines["FOLD_SCALE_INTO_KEY"] = "1";
         }
     }
 

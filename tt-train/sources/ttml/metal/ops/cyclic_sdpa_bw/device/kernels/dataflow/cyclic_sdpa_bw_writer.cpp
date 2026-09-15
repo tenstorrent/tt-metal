@@ -31,6 +31,10 @@
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/cyclic_dataflow_utils.hpp"
 
+#ifndef FOLD_SCALE_INTO_KEY
+#define FOLD_SCALE_INTO_KEY 0
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
@@ -67,10 +71,11 @@ void kernel_main() {
     // The statistics the reader loads, one slot, and the tiles made of them.
     constexpr uint32_t cb_lse = tt::CBIndex::c_4;
     constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
-    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
-    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
-    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_30;
-    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
+    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;      // -L, row layout
+    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;        // -D, row layout
+    constexpr uint32_t cb_lse_rem_row = tt::CBIndex::c_30;  // -L's remainder, Float32 row
+    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_9;       // -L's remainder, bfloat16 column
+    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;        // -D's remainder, bfloat16 column
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores);
@@ -95,7 +100,8 @@ void kernel_main() {
     const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * get_tile_size(cb_lse_rem));
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
     const uint64_t arrive_noc_addr = get_noc_addr(coord_noc_x, coord_noc_y, get_semaphore(arrive_sem_id));
     const uint64_t release_mcast_addr = get_noc_multicast_addr(
@@ -107,8 +113,8 @@ void kernel_main() {
         // The statistic tiles for this timestep, once the reader has L and D.
         cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
         invalidate_l1_cache();
-        cyclic_dataflow::produce_statistic_tiles(
-            base_lse, base_u_scalar, Bt, interm_bytes, cb_lse_row, cb_u_row, cb_lse_rem, cb_u_rem);
+        cyclic_dataflow::produce_statistic_tiles<FOLD_SCALE_INTO_KEY != 0>(
+            base_lse, base_u_scalar, Bt, interm_bytes, cb_lse_row, cb_u_row, cb_lse_rem_row, cb_lse_rem, cb_u_rem);
         cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
 
         write_tiles_by_row(cb_grad_query, grad_query, (pair.i - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);

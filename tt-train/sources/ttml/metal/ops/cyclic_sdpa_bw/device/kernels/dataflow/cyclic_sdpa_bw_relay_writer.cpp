@@ -51,6 +51,10 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 #endif
 
+#ifndef FOLD_SCALE_INTO_KEY
+#define FOLD_SCALE_INTO_KEY 0
+#endif
+
 void kernel_main() {
     uint32_t arg = 0;
     const uint32_t my_core = get_arg_val<uint32_t>(arg++);
@@ -100,10 +104,11 @@ void kernel_main() {
     // compute kernel (see cyclic_dataflow_utils.hpp).
     constexpr uint32_t cb_lse = tt::CBIndex::c_4;
     constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
-    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
-    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
-    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_30;
-    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
+    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;      // -L, row layout
+    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;        // -D, row layout
+    constexpr uint32_t cb_lse_rem_row = tt::CBIndex::c_30;  // -L's remainder, Float32 row
+    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_9;       // -L's remainder, bfloat16 column
+    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;        // -D's remainder, bfloat16 column
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores, kMaskMode);
@@ -128,7 +133,8 @@ void kernel_main() {
     // in column 0 only; zero them once so the rest holds zeros.
     cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * get_tile_size(cb_lse_rem));
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
@@ -184,9 +190,9 @@ void kernel_main() {
                 cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
                 invalidate_l1_cache();
             }
-            cyclic_dataflow::produce_statistic_tiles(
+            cyclic_dataflow::produce_statistic_tiles<FOLD_SCALE_INTO_KEY != 0>(
                 base_lse + slot * stride_interm, base_u_scalar + slot * stride_interm, Bt, interm_bytes,
-                cb_lse_row, cb_u_row, cb_lse_rem, cb_u_rem);
+                cb_lse_row, cb_u_row, cb_lse_rem_row, cb_lse_rem, cb_u_rem);
             if (!forwarded) {
                 cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
             }
