@@ -80,6 +80,12 @@ jobs:
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
 
+      - name: Print public source file (fork workflow experiment)
+        run: |
+          echo '::group::Public source - prepare_test_matrix.py'
+          cat .github/scripts/utils/prepare_test_matrix.py
+          echo '::endgroup::'
+
       - name: Install dependencies
         run: pip3 install PyYAML
 
