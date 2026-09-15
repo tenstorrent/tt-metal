@@ -63,10 +63,10 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
-          # Only real releases reach the RELEASE board. Package and release also
-          # runs on main (cron dev release) and on feature branches via dispatch;
-          # those failures are CI noise. Release refs are `stable` and the
-          # version tags, matching release-build-test-publish.yaml.
+          # Only release refs reach the RELEASE board: `main` (the nightly cron
+          # dev release), `stable`, and the version tags. Package and release
+          # also runs on feature branches via dispatch; those failures are CI
+          # noise and stay off the board.
           #
           # Resolved from the run itself rather than the trigger, because
           # `on.workflow_run.branches` cannot express tags and does not apply to
@@ -75,7 +75,7 @@ jobs:
           read -r BRANCH HEAD_SHA < <(gh api "repos/$REPO/actions/runs/$RUN_ID" \
             --jq '"\(.head_branch) \(.head_sha)"')
           case "$BRANCH" in
-            stable|v[0-9]*) ;;
+            main|stable|v[0-9]*) ;;
             *)
               echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to file."
               echo "file=false" >> "$GITHUB_OUTPUT"
@@ -260,7 +260,7 @@ jobs:
           # ever filed a ticket, so only they have anything to close.
           BRANCH=$(gh api "repos/$REPO/actions/runs/$RUN_ID" --jq .head_branch)
           case "$BRANCH" in
-            stable|v[0-9]*) ;;
+            main|stable|v[0-9]*) ;;
             *)
               echo "::notice::run $RUN_ID is on '$BRANCH', not a release ref; nothing to close."
               exit 0 ;;
