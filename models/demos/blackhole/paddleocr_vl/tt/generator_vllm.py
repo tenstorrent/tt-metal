@@ -237,6 +237,18 @@ class PaddleOCRVLForConditionalGeneration(VLGenerator, SupportsMultiModal):
         rope_deltas = torch.stack([rd.reshape(-1)[:1] for rd in all_rope_deltas], dim=0)
         return output_logits, rope_deltas
 
+    def warmup_model_prefill(self, *args, enable_trace: bool = False, **kwargs):
+        """Compile the vision buckets in the plugin's phase-one warmup.
+
+        Prefill tracing stays off for this model, so the phase-two call (this
+        method with ``enable_trace=True``) has nothing to do; see
+        ``DropInVisionTransformer.warmup_buckets`` for why phase one matters.
+        """
+        if enable_trace:
+            return
+        warmed = self.visual_model.warmup_buckets()
+        logger.info(f"vision tower: {warmed} bucket(s) compiled before trace capture")
+
     def decode_forward(self, *args, **kwargs):
         rope_deltas_list = kwargs.pop("rope_deltas_all_users", None)
         if rope_deltas_list is not None:

@@ -36,6 +36,12 @@ from .functional import preprocess
 # largest image the processor can emit is 5120 patches, which 6144 covers.
 VISION_BUCKETS = (1024, 2048, 4096, 6144)
 
+# One representative grid per bucket, used to compile each program set during
+# warmup. Both dimensions are even (spatial merge is 2) and the patch count sits
+# exactly at the bucket's capacity, so warming these compiles the same programs a
+# real request of that size replays.
+WARMUP_GRIDS = {1024: (32, 32), 2048: (32, 64), 4096: (64, 64), 6144: (64, 80)}
+
 
 def bucket_for(n_patches: int) -> int:
     for b in VISION_BUCKETS:
@@ -200,6 +206,27 @@ class DropInVisionTransformer(torch.nn.Module):
     @property
     def spatial_merge_size(self) -> int:
         return self.model_args.spatial_merge_size
+
+    @torch.no_grad()
+    def warmup_buckets(self) -> int:
+        """Compile every bucket's program set before any trace is captured.
+
+        Left to itself the tower compiles a bucket on first use, which in a
+        served process can land after the decode trace is captured, corrupting
+        it (tt-metal #48536). Returns the number of buckets warmed.
+        """
+        patch = self.model_args.patch_size
+        for bucket, (h, w) in WARMUP_GRIDS.items():
+            n = h * w
+            assert bucket_for(n) == bucket, f"warmup grid {h}x{w} maps to {bucket_for(n)}, not {bucket}"
+            if bucket in self._warmed:
+                continue
+            logger.info(f"vision tower: warming bucket {bucket} with a {h}x{w} grid ({n} patches)")
+            self.forward(
+                torch.zeros(n, 3, patch, patch, dtype=torch.bfloat16),
+                torch.tensor([[1, h, w]], dtype=torch.int32),
+            )
+        return len(self._warmed)
 
     def _rot_mats(self, cos: torch.Tensor, sin: torch.Tensor):
         mesh = self.model_args.mesh_device
