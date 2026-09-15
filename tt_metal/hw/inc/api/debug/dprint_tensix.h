@@ -47,6 +47,7 @@ inline void dprint_array_with_data_type(uint32_t data_format, uint32_t* data) {
     DPRINT("{}\n", dp_typed_array_t<count>(data_format, data));
 }
 
+#ifndef ARCH_QUASAR  // references Bfp*/Lf8/UInt32 formats absent from the Quasar DataFormat enum
 // Dprints data format as string given an uint
 inline void dprint_data_format(uint8_t data_format) {
     switch (data_format) {
@@ -69,6 +70,7 @@ inline void dprint_data_format(uint8_t data_format) {
         default: DPRINT("INVALID DATA FORMAT"); break;
     }
 }
+#endif  // !ARCH_QUASAR
 
 // if flag DEST_ACCESS_CFG_remap_addrs is enabled
 // destination register row identifiers are remmaped
@@ -139,6 +141,8 @@ inline uint32_t reconstruct_float32(uint32_t float16, uint32_t mantissa16) {
     return sign | exponent | mantissa;
 }
 
+#ifndef ARCH_QUASAR  // these DEST readers use the RISCV_DEBUG_REG_* debug-bus wrapper macros, which are not wired up on
+                     // Quasar
 // Helper function that prints one row from dest when dest is configured for storing float32 values.
 // This function should be used only from dprint_tensix_dest_reg.
 // Float32 in dest = [Float16, Mantissa16]
@@ -221,8 +225,72 @@ inline void dprint_tensix_dest_reg_row_int8(uint32_t data_format, uint16_t row) 
     dbg_read_dest_acc_row(row, rd_data);
     dprint_array_with_data_type<ARRAY_LEN>(data_format, rd_data);
 }
+#endif  // !ARCH_QUASAR
 
 #if !defined(ENV_LLK_INFRA)
+#ifdef ARCH_QUASAR
+// Prints up to num_rows rows (default: the whole 64-row tile) of DEST tile tile_id as raw packed hex
+// words -- Quasar device_print has no typed-array support. The data format is passed explicitly (it is
+// not read back from config); PR1 supports Float32 and Float16_b. The unpack<->math mailbox rendezvous
+// (dbg_thread_halt; pack deferred) brackets the read so it is safe to call mid-pipeline -- a live
+// unbracketed read desyncs the unpack tile counter (TILE_COUNTERS fault).
+inline void dprint_tensix_dest_reg(DataFormat data_format, int tile_id = 0, uint32_t num_rows = NUM_ROWS_PER_TILE) {
+    UNPACK(ckernel::dbg_thread_halt<ckernel::UnpackThreadId>());
+    MATH(ckernel::dbg_thread_halt<ckernel::MathThreadId>());
+    MATH({
+        // Program Math's section for MMIO DEST reads (ends with tensix_sync, committing the copied tile).
+        ckernel::configure_dest_access<ckernel::MathThreadId>(data_format, /*enable_swizzle=*/true);
+        ckernel::tensix_sync();
+
+        DPRINT("Tile ID = {}\n", tile_id);
+        const uint32_t row0 = tile_id * NUM_ROWS_PER_TILE;
+        const uint32_t nrows = num_rows < NUM_ROWS_PER_TILE ? num_rows : NUM_ROWS_PER_TILE;
+        for (uint32_t r = 0; r < nrows; ++r) {
+            const uint32_t row = row0 + r;
+            if (data_format == DataFormat::Float32) {
+                uint32_t rd[16];
+                ckernel::dbg_read_dest_row_32b(row, rd);
+                DPRINT(
+                    "DEST row {}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
+                    row,
+                    rd[0],
+                    rd[1],
+                    rd[2],
+                    rd[3],
+                    rd[4],
+                    rd[5],
+                    rd[6],
+                    rd[7]);
+                DPRINT(
+                    "           {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
+                    rd[8],
+                    rd[9],
+                    rd[10],
+                    rd[11],
+                    rd[12],
+                    rd[13],
+                    rd[14],
+                    rd[15]);
+            } else {
+                uint32_t rd[8];
+                ckernel::dbg_read_dest_row_16b(row, rd);
+                DPRINT(
+                    "DEST row {}: {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}\n",
+                    row,
+                    rd[0],
+                    rd[1],
+                    rd[2],
+                    rd[3],
+                    rd[4],
+                    rd[5],
+                    rd[6],
+                    rd[7]);
+            }
+        }
+    })
+    MATH(ckernel::dbg_thread_unhalt<ckernel::MathThreadId>());
+}
+#else
 // Print the contents of tile with index tile_id within the destination register
 template <bool print_by_face = false>
 void dprint_tensix_dest_reg(int tile_id = 0) {
@@ -271,6 +339,7 @@ void dprint_tensix_dest_reg(int tile_id = 0) {
     })
     dbg_unhalt();
 }
+#endif  // ARCH_QUASAR
 #endif  // !defined(ENV_LLK_INFRA)
 
 // Print the contents of the specified configuration register field.
