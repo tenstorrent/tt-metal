@@ -130,7 +130,7 @@
     wh_llmbox:
       timeout: 24
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 
@@ -142,7 +142,7 @@
     wh_llmbox:
       timeout: 4
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 
@@ -154,7 +154,7 @@
     wh_llmbox:
       timeout: 10
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 
@@ -166,7 +166,7 @@
     wh_llmbox:
       timeout: 65
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 
@@ -178,7 +178,7 @@
     wh_llmbox:
       timeout: 18
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 
@@ -190,7 +190,7 @@
     wh_llmbox:
       timeout: 10
       tier: 1
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: sweep
 

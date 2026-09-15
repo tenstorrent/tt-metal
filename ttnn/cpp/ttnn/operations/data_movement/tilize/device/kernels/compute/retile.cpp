@@ -10,12 +10,13 @@
 #include "internal/circular_buffer_interface.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "experimental/kernel_args.h"
 
 // Retile: untilize input tiles into an intermediate row-major buffer, then tilize into the output
 // tile shape. The intermediate is a single L1 allocation shared by untilize (producer) and tilize
-// (consumer) to avoid a copy, exposed as two aliased CB views because the producer and consumer
-// need different fixed tile/face geometry: mid_cb has the input tile shape, mid_view_cb the output
-// tile shape (its bytes stay in the input data format; conversion happens on the final pack).
+// (consumer) to avoid a copy, exposed as two aliased DFB views because the producer and consumer
+// need different fixed tile/face geometry: dfb::mid has the input tile shape, dfb::mid_view the
+// output tile shape (its bytes stay in the input data format; conversion happens on the final pack).
 
 namespace {
 
@@ -36,23 +37,19 @@ ALWI void fill_zeros_pages(DataflowBuffer& dfb, uint32_t num_pages, uint32_t pag
 }  // namespace
 
 void kernel_main() {
-    const uint32_t num_input_blocks = get_arg_val<uint32_t>(0);
-    const uint32_t num_real_input_rows = get_arg_val<uint32_t>(1);
+    const uint32_t num_input_blocks = get_arg(args::num_input_blocks);
+    const uint32_t num_real_input_rows = get_arg(args::num_real_input_rows);
     // Shrink-case output cap: emit real rows only. Padded rows would OOB the output DRAM buffer.
-    const uint32_t num_real_output_rows = get_arg_val<uint32_t>(2);
+    const uint32_t num_real_output_rows = get_arg(args::num_real_output_rows);
     if (num_input_blocks == 0 || num_real_output_rows == 0) {
         return;
     }
 
-    constexpr uint32_t tiles_per_block = get_compile_time_arg_val(0);
-    constexpr uint32_t src_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t mid_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t mid_view_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t out_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t in_tile_height = get_compile_time_arg_val(5);
-    constexpr uint32_t out_tile_height = get_compile_time_arg_val(6);
-    constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    constexpr uint32_t mid_page_size = get_compile_time_arg_val(8);
+    constexpr uint32_t tiles_per_block = get_arg(args::tiles_per_block);
+    constexpr uint32_t in_tile_height = get_arg(args::in_tile_height);
+    constexpr uint32_t out_tile_height = get_arg(args::out_tile_height);
+    constexpr uint32_t out_tile_size = get_arg(args::out_tile_size);
+    constexpr uint32_t mid_page_size = get_arg(args::mid_page_size);
 
     static_assert(in_tile_height > 0 && out_tile_height > 0, "retile kernel requires positive tile heights");
     static_assert(
@@ -72,10 +69,11 @@ void kernel_main() {
 
     const uint32_t num_iters = num_input_blocks / in_rows_per_iter;
 
-    compute_kernel_hw_startup(src_cb, mid_cb);
+    compute_kernel_hw_startup(dfb::src, dfb::mid);
 
-    DataflowBuffer mid(mid_cb);
-    DataflowBuffer out_dfb(out_cb);
+    DataflowBuffer mid(dfb::mid);
+    DataflowBuffer mid_view(dfb::mid_view);
+    DataflowBuffer out_dfb(dfb::out);
 
     uint32_t emitted_output_rows = 0;
 
@@ -93,8 +91,8 @@ void kernel_main() {
         if (real_rows > 0) {
             compute_kernel_lib::untilize<
                 tiles_per_block,
-                src_cb,
-                mid_cb,
+                dfb::src,
+                dfb::mid,
                 compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                 compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                 compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(real_rows);
@@ -105,29 +103,29 @@ void kernel_main() {
 
         mid.wait_front(block_pages);
         uint32_t block_rd_ptr = 0;
-        UNPACK({ block_rd_ptr = get_local_cb_interface(mid_cb).fifo_rd_ptr; })
+        UNPACK({ block_rd_ptr = mid.get_read_ptr(); })
 
-        // mid_view_cb aliases the mid_cb L1 region but has no producer of its own, and its output
+        // dfb::mid_view aliases the dfb::mid L1 region but has no producer of its own, and its output
         // tile-rows sit at non-page-aligned byte offsets within the block that pops can't express.
-        // So set its fifo_rd_ptr directly to the block base plus each output tile-row's offset.
-        pack_reconfig_data_format(mid_cb, out_cb);
-        tilize_init(mid_view_cb, tiles_per_block, out_cb);
+        // So set its read cursor directly to the block base plus each output tile-row's offset.
+        pack_reconfig_data_format(dfb::mid, dfb::out);
+        tilize_init(dfb::mid_view, tiles_per_block, dfb::out);
         for (uint32_t r = 0; r < out_rows_per_iter; ++r) {
             if (emitted_output_rows >= num_real_output_rows) {
                 break;
             }
-            UNPACK({ get_local_cb_interface(mid_view_cb).fifo_rd_ptr = block_rd_ptr + r * words_per_out_tile_row; })
+            UNPACK({ mid_view.evil_set_read_ptr(block_rd_ptr + r * words_per_out_tile_row); })
             out_dfb.reserve_back(tiles_per_block);
-            tilize_block(mid_view_cb, tiles_per_block, out_cb);
+            tilize_block(dfb::mid_view, tiles_per_block, dfb::out);
             out_dfb.push_back(tiles_per_block);
             ++emitted_output_rows;
         }
-        tilize_uninit(mid_view_cb, out_cb);
+        tilize_uninit(dfb::mid_view, dfb::out);
 
         mid.pop_front(block_pages);
 
-        reconfig_data_format_srca(mid_view_cb, src_cb);
-        pack_reconfig_data_format(out_cb, mid_cb);
+        reconfig_data_format_srca(dfb::mid_view, dfb::src);
+        pack_reconfig_data_format(dfb::out, dfb::mid);
 
         if (emitted_output_rows >= num_real_output_rows) {
             break;
