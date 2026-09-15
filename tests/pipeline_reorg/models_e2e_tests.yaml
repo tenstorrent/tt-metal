@@ -175,7 +175,7 @@
       timeout: 25
       tier: 2
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -433,7 +433,7 @@
       timeout: 20
       tier: 2
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -453,7 +453,7 @@
       timeout: 15
       tier: 3
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
@@ -808,7 +808,7 @@
       timeout: 6
       tier: 3
       release_ready: false
-  owner_id: U08JFM3CFA4 # Gongyu Wang
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
   budget_type: e2e
 
