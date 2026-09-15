@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-void SolAttnOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
+void SolAttnOperation::validate_on_program_cache_miss(const SolAttnParams& attrs, const SolAttnInputs& tensors) {
     const bool use_mla = attrs.use_mla;
 
     // Common validations for both modes
@@ -527,7 +527,7 @@ void SolAttnOperation::validate_on_program_cache_miss(const SDPAParams& attrs, c
 }
 
 SolAttnOperation::spec_return_value_t SolAttnOperation::compute_output_specs(
-    const SDPAParams& attrs, const SDPAInputs& tensors) {
+    const SolAttnParams& attrs, const SolAttnInputs& tensors) {
     auto shape = tensors.q.logical_shape();
     if (attrs.use_mla) {
         shape[3] = attrs.head_dim_v.value_or(shape[3]);
@@ -537,13 +537,13 @@ SolAttnOperation::spec_return_value_t SolAttnOperation::compute_output_specs(
 }
 
 SolAttnOperation::tensor_return_value_t SolAttnOperation::create_output_tensors(
-    const SDPAParams& attrs, const SDPAInputs& tensors) {
+    const SolAttnParams& attrs, const SolAttnInputs& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<SolAttnOperation::tensor_return_value_t>
 SolAttnOperation::create_op_performance_model(
-    const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
+    const SolAttnParams& args, const SolAttnInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
     const bool has_v = tensor_args.v.has_value();

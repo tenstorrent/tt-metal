@@ -11,7 +11,7 @@
 
 namespace ttnn::prim {
 
-struct SDPAParams {
+struct SolAttnParams {
     std::optional<float> scale;
     tt::tt_metal::MemoryConfig output_mem_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
@@ -34,13 +34,13 @@ struct SDPAParams {
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
 };
 
-struct SDPAInputs {
+struct SolAttnInputs {
     Tensor q;
     Tensor k;
     std::optional<Tensor> v;
     std::optional<Tensor> attn_mask;
     std::optional<Tensor> page_table;
-    // Mirrors SDPAParams::chunk_start_idx_tensor so ProgramDescriptor buffer bindings can patch cache hits.
+    // Mirrors SolAttnParams::chunk_start_idx_tensor so ProgramDescriptor buffer bindings can patch cache hits.
     std::optional<Tensor> chunk_start_idx_tensor;
     std::optional<Tensor> attention_sink;
     // Cumulative window sequence lengths [num_windows + 1], int32/uint32, ROW_MAJOR. Present only in

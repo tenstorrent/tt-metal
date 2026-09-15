@@ -26,27 +26,27 @@ using namespace tt::tt_metal;
 namespace ttnn::prim {
 
 // Chain management structures for KV store-and-forward optimization
-struct CoreHeadWork {
+struct SolAttnCoreHeadWork {
     uint32_t batch = 0;
     uint32_t head = 0;
     uint32_t q_chunk_start = 0;
     uint32_t q_chunk_count = 0;
 };
 
-struct CoreWork {
+struct SolAttnCoreWork {
     CoreCoord logical_core;
     CoreCoord physical_core;
     uint32_t global_q_start = 0;
     uint32_t global_q_count = 0;
-    std::vector<CoreHeadWork> head_work;
+    std::vector<SolAttnCoreHeadWork> head_work;
 };
 
-struct HeadSegmentRef {
+struct SolAttnHeadSegmentRef {
     uint32_t core_idx = 0;
     uint32_t head_work_index = 0;
 };
 
-struct CoreChainInfo {
+struct SolAttnCoreChainInfo {
     bool participates = false;
     bool is_injector = false;
     bool is_sink = false;
@@ -111,13 +111,13 @@ bool sol_attn_get_exp_approx_mode(
 // Effective (num_kv_heads_k, num_kv_heads_v, block_size) for an HMA-shared paged buffer.
 // Apply PagedCacheGeometryOverride only when !use_mla: MLA never passes overrides (validated
 // upstream), and applying num_kv_heads to V under MLA would skip the elems/block check.
-struct EffectiveKvGeometry {
+struct SolAttnEffectiveKvGeometry {
     uint32_t nkh = 0;
     uint32_t nvh = 0;
     uint32_t block_size = 0;
 };
 
-EffectiveKvGeometry sol_attn_resolve_effective_kv_geometry(
+SolAttnEffectiveKvGeometry sol_attn_resolve_effective_kv_geometry(
     const ttnn::operations::transformer::PagedCacheGeometryOverride& geo,
     bool use_mla,
     uint32_t k_num_heads,
@@ -130,7 +130,7 @@ EffectiveKvGeometry sol_attn_resolve_effective_kv_geometry(
 }
 
 // Chunked prefill parameters collected from page table layout.
-struct ChunkedParams {
+struct SolAttnChunkedParams {
     uint32_t chunked_q_chunk_offset = 0;
     uint32_t block_size = 0;
     uint32_t block_size_t = 0;
@@ -139,7 +139,7 @@ struct ChunkedParams {
 };
 
 // Compute chunked prefill parameters from the page table tensor.
-ChunkedParams sol_attn_compute_chunked_params(
+SolAttnChunkedParams sol_attn_compute_chunked_params(
     bool is_chunked,
     bool is_chunked_legacy,
     bool flexible_chunked,
@@ -147,7 +147,7 @@ ChunkedParams sol_attn_compute_chunked_params(
     const std::optional<Tensor>& page_table,
     uint32_t k_seq_dim,
     std::size_t q_chunk_size) {
-    ChunkedParams p;
+    SolAttnChunkedParams p;
     if (!is_chunked) {
         return p;
     }
@@ -191,7 +191,7 @@ tt::tt_metal::Buffer* buffer_or_null(const std::optional<Tensor>& t) {
 
 // Windowed (block-diagonal) CB allocation and runtime values, split out of create_descriptor (which
 // sits at clang-tidy's cognitive-complexity limit). The allocators are create_descriptor's CB lambdas.
-struct WindowedSetup {
+struct SolAttnWindowedSetup {
     tt::tt_metal::Buffer* cu_window_buffer = nullptr;
     tt::tt_metal::Buffer* q_offset_buffer = nullptr;
     uint32_t cu_window_seqlens_eles = 0;
@@ -202,13 +202,13 @@ struct WindowedSetup {
 };
 
 template <typename AllocateTileCb, typename AllocateCb>
-WindowedSetup sol_attn_setup_windowed_cbs(
-    const SDPAParams& attrs,
-    const SDPAInputs& tensors,
+SolAttnWindowedSetup sol_attn_setup_windowed_cbs(
+    const SolAttnParams& attrs,
+    const SolAttnInputs& tensors,
     sdpa_cb::CBIds& cb_ids,
     const AllocateTileCb& allocate_tile_cb,
     const AllocateCb& allocate_cb) {
-    WindowedSetup w;
+    SolAttnWindowedSetup w;
     // When NOT windowed, fall back to a valid CB id (q_in): the writer's windowed block is gated by
     // `if constexpr`, but in a non-template function the discarded branch is still compiled, so
     // get_tile_size/get_dataformat on this id must be well-formed (an inactive id would
@@ -845,7 +845,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     }
 
     // Windowed (block-diagonal) CBs and runtime values; see sol_attn_setup_windowed_cbs above.
-    const WindowedSetup windowed =
+    const SolAttnWindowedSetup windowed =
         sol_attn_setup_windowed_cbs(operation_attributes, tensor_args, cb_ids, allocate_tile_cb, allocate_cb);
     tt::tt_metal::Buffer* const cu_window_buffer = windowed.cu_window_buffer;
     tt::tt_metal::Buffer* const windowed_q_offset_buffer = windowed.q_offset_buffer;
@@ -934,10 +934,10 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     TT_FATAL(num_phases == 1, "Single-chip SDPA assumes num_phases == 1 under global Q scheduling");
 
     // Build chain topology for KV forwarding (non-causal only)
-    std::vector<CoreWork> core_work(num_cores);
-    std::vector<CoreChainInfo> core_chain_info(num_cores);
+    std::vector<SolAttnCoreWork> core_work(num_cores);
+    std::vector<SolAttnCoreChainInfo> core_chain_info(num_cores);
     const uint32_t total_heads = B * NQH;
-    std::vector<std::vector<HeadSegmentRef>> head_segments;
+    std::vector<std::vector<SolAttnHeadSegmentRef>> head_segments;
     uint32_t mcast_chains = 0;
 
     // Windowed is excluded like sliding-window: both narrow the per-Q-chunk K range, and chains
@@ -964,7 +964,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
                 if (q_count == 0) {
                     return;
                 }
-                work.head_work.push_back(CoreHeadWork{
+                work.head_work.push_back(SolAttnCoreHeadWork{
                     .batch = nb,
                     .head = nh,
                     .q_chunk_start = q_start,
@@ -972,7 +972,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
                 });
                 const uint32_t head_id = (nb * NQH) + nh;
                 if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
+                    head_segments[head_id].push_back(SolAttnHeadSegmentRef{
                         .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
                 }
             };

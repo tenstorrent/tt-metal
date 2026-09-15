@@ -16,8 +16,8 @@
 namespace ttnn::prim {
 
 struct SolAttnOperation {
-    using operation_attributes_t = SDPAParams;
-    using tensor_args_t = SDPAInputs;
+    using operation_attributes_t = SolAttnParams;
+    using tensor_args_t = SolAttnInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
 
