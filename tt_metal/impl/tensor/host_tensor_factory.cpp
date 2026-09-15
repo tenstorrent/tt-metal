@@ -89,7 +89,7 @@ HostTensor host_tensor_from_vector_with_pad_value(const std::vector<T>& buffer, 
 }
 
 template <typename T>
-HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, TensorSpec spec, T pad_value) {
+HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, const TensorSpec& spec, T pad_value) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
@@ -226,13 +226,16 @@ template HostTensor host_tensor_from_vector_with_pad_value<uint16_t>(
 template HostTensor host_tensor_from_vector_with_pad_value<uint8_t>(const std::vector<uint8_t>&, TensorSpec, uint8_t);
 template HostTensor host_tensor_from_vector_with_pad_value<int8_t>(const std::vector<int8_t>&, TensorSpec, int8_t);
 
-template HostTensor host_tensor_from_vector_with_pad_value<bfloat16>(std::vector<bfloat16>&&, TensorSpec, bfloat16);
-template HostTensor host_tensor_from_vector_with_pad_value<float>(std::vector<float>&&, TensorSpec, float);
-template HostTensor host_tensor_from_vector_with_pad_value<int32_t>(std::vector<int32_t>&&, TensorSpec, int32_t);
-template HostTensor host_tensor_from_vector_with_pad_value<uint32_t>(std::vector<uint32_t>&&, TensorSpec, uint32_t);
-template HostTensor host_tensor_from_vector_with_pad_value<uint16_t>(std::vector<uint16_t>&&, TensorSpec, uint16_t);
-template HostTensor host_tensor_from_vector_with_pad_value<uint8_t>(std::vector<uint8_t>&&, TensorSpec, uint8_t);
-template HostTensor host_tensor_from_vector_with_pad_value<int8_t>(std::vector<int8_t>&&, TensorSpec, int8_t);
+template HostTensor host_tensor_from_vector_with_pad_value<bfloat16>(
+    std::vector<bfloat16>&&, const TensorSpec&, bfloat16);
+template HostTensor host_tensor_from_vector_with_pad_value<float>(std::vector<float>&&, const TensorSpec&, float);
+template HostTensor host_tensor_from_vector_with_pad_value<int32_t>(std::vector<int32_t>&&, const TensorSpec&, int32_t);
+template HostTensor host_tensor_from_vector_with_pad_value<uint32_t>(
+    std::vector<uint32_t>&&, const TensorSpec&, uint32_t);
+template HostTensor host_tensor_from_vector_with_pad_value<uint16_t>(
+    std::vector<uint16_t>&&, const TensorSpec&, uint16_t);
+template HostTensor host_tensor_from_vector_with_pad_value<uint8_t>(std::vector<uint8_t>&&, const TensorSpec&, uint8_t);
+template HostTensor host_tensor_from_vector_with_pad_value<int8_t>(std::vector<int8_t>&&, const TensorSpec&, int8_t);
 
 template HostTensor HostTensor::from_vector<bfloat16>(const std::vector<bfloat16>&, TensorSpec);
 template HostTensor HostTensor::from_vector<float>(const std::vector<float>&, TensorSpec);
