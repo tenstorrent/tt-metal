@@ -1013,8 +1013,27 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
              {1, 4, 2048, 64, 2},
              {1, 4, 2048, 64, 4},
              {1, 4, 4096, 64, 4},
+             // Larger still. 8192 rows is C = 32 at Bt = 4 (three groups of
+             // 32 cores, slices looped) or C = 64 at Bt = 2 (one group of 64);
+             // Bt = 1 would be C = 128, which has no rectangle and is
+             // refused, so the sequence cap (review item 1) is what bounds
+             // this table, not memory. 16384 rows is C = 64 at Bt = 4 only.
+             {1, 4, 8192, 64, 4},
+             {1, 4, 8192, 64, 2},
+             {1, 8, 8192, 64, 4},
+             {1, 8, 8192, 64, 2},
+             {1, 1, 8192, 64, 2},
+             {1, 1, 16384, 64, 4},
+             {1, 2, 16384, 64, 4},
          }) {
         const size_t rows_per_chip = cfg[2];
+        // TTML_LOUDBOX_MIN_ROWS skips the smaller cases, for adding rows to
+        // the table without rerunning the ones already in it.
+        if (const char* env = std::getenv("TTML_LOUDBOX_MIN_ROWS"); env != nullptr && *env != '\0') {
+            if (rows_per_chip < std::strtoul(env, nullptr, 10)) {
+                continue;
+            }
+        }
         const auto Bt = static_cast<uint32_t>(cfg[4]);
         const size_t seq_len = rows_per_chip * cp_size;
         if (rows_per_chip % (2U * Bt * 32U) != 0U) {
