@@ -202,12 +202,7 @@ jobs:
       # submodule out here so its JIT-compiled kernels match the libraries it
       # links against.
       metal-ref: ${{ github.sha }}
-      # The dev container `build-artifact` built (or found) for this commit.
-      # tt-blaze compiles kernels with the SFPI inside the container it runs in,
-      # so this is what makes the gate test this commit's toolchain instead of
-      # whatever tt-blaze's repo-variable DEV_IMAGE was last set to. The image is
-      # already in ghcr when `build-artifact` completes; push-image-to-ghcr only
-      # adds the release tag.
+      # tt-blaze compiles kernels with this container's SFPI; must be this commit's image.
       dev-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       # Run tt-blaze's full merge gate from its main branch.
       blaze-ref: main
