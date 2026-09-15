@@ -21,7 +21,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_CLAMPED_SILU_GLU, ACTIVATION_SILU
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvCacheFormat
@@ -498,7 +498,17 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_activation=getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", ACTIVATION_SILU),
             shared_expert_situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
             shared_expert_situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
+            # Only where the shared expert actually clamps: gpt-oss and MiniMax carry a SWIGLU_LIMIT
+            # of their own that their activation never reads, and passing it would just travel.
+            # The routed expert needs no counterpart -- its kernel bakes the same value compile-time.
+            shared_expert_clamped_limit=(
+                getattr(model_cfg, "SWIGLU_LIMIT", None)
+                if getattr(model_cfg, "SHARED_EXPERT_ACTIVATION", None) == ACTIVATION_CLAMPED_SILU_GLU
+                else None
+            ),
             gate_weights=state_dict.get("gate_weights"),  # None if cache exists
+            # DeepSeek-V4 hash layers route via a frozen tid2eid[input_ids] table; None elsewhere.
+            hash_table=state_dict.get("hash_table"),
             gate_fallback_mode=gate_fallback_mode,
             n_expert_groups=model_cfg.NUM_EXPERT_GROUPS,
             n_limited_groups=model_cfg.NUM_LIMITED_GROUPS,
