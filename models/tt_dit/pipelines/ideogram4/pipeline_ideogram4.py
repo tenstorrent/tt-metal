@@ -6,7 +6,7 @@
 
 Faithful port of the reference ``pipeline_ideogram4.py`` orchestration, composing
 the already-verified tt_dit components:
-  * text encoder  — encoders.qwen3vl.Qwen3VlEncoder (13-layer tap)
+  * text encoder  — encoders.qwen3vl.Qwen3VlTextEncoder (13-layer tap)
   * denoiser      — models.transformers.transformer_ideogram4.Ideogram4Transformer
                     (a conditional and an unconditional instance — asymmetric CFG)
   * VAE decoder   — models.vae.vae_ideogram4.Ideogram4VAEDecoder
@@ -110,7 +110,6 @@ __all__ = ["Ideogram4DecodeStage", "Ideogram4Sampler", "cfg_blend", "interleave_
 # is device-resident (encoder + cond + uncond transformers + VAE); no dynamic offload.
 # =============================================================================
 
-import dataclasses
 import gc as _gc
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -123,7 +122,7 @@ from PIL import Image
 from safetensors.torch import load_file as _load_file
 from safetensors.torch import save_file as _save_file
 
-from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlEncoder
+from ...encoders.qwen3vl.model_qwen3vl import Qwen3VlTextEncoder, create_rope_tensors
 from ...models.transformers.transformer_ideogram4 import Ideogram4Transformer, rope_halfsplit_to_interleaved
 from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
 from ...parallel.manager import CCLManager
@@ -246,11 +245,7 @@ class Ideogram4PipelineConfig:
             num_links=num_links if num_links is not None else preset["num_links"],
             # cfg-parallel factor 1: never split cond/uncond across submeshes (asymmetric nets).
             dit_parallel_config=DiTParallelConfig.from_tuples(cfg=(1, 0), sp=sp, tp=tp),
-            # The encoder runs on the whole mesh, tensor-parallel like the denoiser, with its weights
-            # sharded across the denoiser's SP axis rather than replicated: it runs once per prompt,
-            # so the per-layer weight gather is cheap, while the resident DRAM it frees is needed to
-            # fit 2048px at SP4xTP2.
-            encoder_parallel_config=EncoderParallelConfig.from_tuples(tp=tp, sp=None, fsdp=sp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(tp),
             vae_parallel_config=VAEParallelConfig.from_tuple(tp),
             height=height,
             width=width,
@@ -316,21 +311,36 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         # language_model weights and spams a "newly initialized" warning).
         qcfg = _tf.AutoConfig.from_pretrained(qwen_repo).text_config
         enc_sd = _dq(f"{weights_dir}/text_encoder/model.safetensors")
-        # The final norm is left out: the encoder is built without it, see below.
-        enc_sd = {
-            k: v for k, v in enc_sd.items() if k.startswith("language_model.") and k != "language_model.norm.weight"
-        }
+        enc_sd = {k[len("language_model.") :]: v for k, v in enc_sd.items() if k.startswith("language_model.")}
         self.tokenizer = _tf.AutoTokenizer.from_pretrained(weights_dir, subfolder="tokenizer")
-        # The Ideogram checkpoint ships the language model without its head, and the taps are raw
-        # layer outputs, so the final norm is left out as well.
-        enc_config = dataclasses.replace(Qwen3VlEncoder.config_from_hf(qcfg), final_norm=False, final_linear=False)
-        self.encoder = Qwen3VlEncoder(
-            enc_config,
+        self._enc_head_dim = qcfg.hidden_size // qcfg.num_attention_heads
+        self._enc_mrope = qcfg.rope_scaling["mrope_section"]
+        # transformers >=4.57 moved rope_theta to the top-level config; older versions
+        # kept it inside rope_scaling. Accept both.
+        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta", qcfg.rope_theta)
+        self.encoder = Qwen3VlTextEncoder(
+            vocab_size=qcfg.vocab_size,
+            hidden_size=qcfg.hidden_size,
+            intermediate_size=qcfg.intermediate_size,
+            hidden_act="silu",
+            num_hidden_layers=qcfg.num_hidden_layers,
+            num_attention_heads=qcfg.num_attention_heads,
+            num_key_value_heads=qcfg.num_key_value_heads,
+            rms_norm_eps=qcfg.rms_norm_eps,
+            rope_theta=self._enc_rope_theta,
+            mrope_section=self._enc_mrope,
+            activation_layers=QWEN3_VL_ACTIVATION_LAYERS,
             device=mesh_device,
             parallel_config=self._config.encoder_parallel_config,
             ccl_manager=ccl,
+            # FSDP-shard encoder weights across the SP (non-TP) axis instead of replicating
+            # them. The encoder runs once (outside the denoise loop), so the per-layer weight
+            # all-gather overhead is negligible, while it frees ~(sp_factor-1)/sp_factor of the
+            # encoder's resident DRAM during denoise (needed to fit 2048px at SP4xTP2).
+            # Auto-disables when the non-TP axis is size 1 (e.g. the TP=4 (1,4) submesh).
+            is_fsdp=True,
         )
-        self.encoder.load_torch_state_dict(Qwen3VlEncoder.convert_state(enc_sd))
+        self.encoder.load_torch_state_dict(enc_sd)
         del enc_sd
         _gc.collect()
 
@@ -453,11 +463,12 @@ class Ideogram4Pipeline(PipelineAPIMixin):
     def _encode(self, prompt: str):
         """Tokenize + run the device encoder -> real interleaved llm_features (host) + n_text.
 
-        CONSTANT-SHAPE: the token ids are padded to exactly ``MAX_TEXT_TOKENS``, so the encoder
-        always sees the same shape regardless of prompt length (no per-length recompile /
-        shape-keyed POBs). The Qwen3-VL encoder is CAUSAL (no mask is passed), so the real rows
-        [0:n_text] are unaffected by the trailing pad. We slice the taps back to [:, :n_text] and
-        return the real-length feats.
+        CONSTANT-SHAPE: the token ids are padded to exactly ``MAX_TEXT_TOKENS`` and the
+        encoder rope is built for that fixed length, so the encoder always sees the same
+        shape regardless of prompt length (no per-length recompile / shape-keyed POBs).
+        The Qwen3-VL encoder is CAUSAL (model_qwen3vl: is_causal=(attention_bias is None),
+        and we pass attention_mask=None), so the real rows [0:n_text] are unaffected by the
+        trailing pad. We slice the taps back to [:, :n_text] and return the real-length feats.
         """
         ids = self._tokenize(prompt)
         n_text = ids.shape[1]
@@ -472,11 +483,15 @@ class Ideogram4Pipeline(PipelineAPIMixin):
             pad_id = 0
         if n_text < MAX_TEXT_TOKENS:
             ids = torch.nn.functional.pad(ids, (0, MAX_TEXT_TOKENS - n_text), value=int(pad_id))
+        cos, sin = create_rope_tensors(
+            1, MAX_TEXT_TOKENS, None, self._enc_head_dim, self._enc_rope_theta, self._enc_mrope
+        )
         tt_ids = ttnn.from_torch(ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.mesh_device)
-        # Every layer's input followed by the raw output of the last layer, so entry i + 1 is the
-        # output of layer i. Only the taps are kept, so the other layers' states are freed as the
-        # stack runs.
-        taps = self.encoder.forward(tt_ids, output_hidden_states=[i + 1 for i in QWEN3_VL_ACTIVATION_LAYERS])
+        taps = self.encoder.forward(
+            tt_ids,
+            attention_mask=None,
+            pos_embeds=(bf16_tensor(cos, device=self.mesh_device), bf16_tensor(sin, device=self.mesh_device)),
+        )
         # taps: 13 x [1, MAX_TEXT_TOKENS, 4096], REPLICATED across the whole mesh.
         # Read back cheaply: slice to the real text rows [0:n_text] ON DEVICE (causal => pad rows
         # never influence the real rows, and the model masks them anyway), then read a SINGLE

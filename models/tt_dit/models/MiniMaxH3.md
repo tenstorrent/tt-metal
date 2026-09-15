@@ -72,12 +72,12 @@ the final norm is never applied.
 
 **Mind the off-by-one.** `hidden_states` holds the embedding output plus one entry per layer, so
 `hidden_states[50]` is the output of layer 49 and a **50-layer stack suffices** — the remaining 14 of
-the checkpoint's 64 layers are never read, and neither is `lm_head`. `loader_minimax_h3.py` builds a
-`num_layers = 50` stack with `final_norm=False` and `final_linear=False`, and
+the checkpoint's 64 layers are never read, and neither is `lm_head`. `loader_minimax_h3.py` builds
+this as `activation_layers=(num_layers - 1,)` with `num_layers = 50`, and
 `load_minimax_h3_text_state_dict` reads 552 tensors from 12 of 14 shards, 50.3 GB bf16. Note that
-with the final norm the encoder would return the *normalized* final state, which diffusers is
-explicit is **not** the conditioning H3 expects; `test_minimax_h3_text_conditioner` asserts the tap
-is distinguishable from that post-norm state.
+`activation_layers=None` returns the *normalized* final state, which diffusers is explicit is **not**
+the conditioning H3 expects; `test_minimax_h3_text_conditioner` asserts the tap is distinguishable
+from that post-norm state.
 
 Verified against the released weights on a 4x8 Blackhole Galaxy, TP=8 on axis 1 (no FSDP):
 **PCC 99.9993%, RMSE/sigma 0.4%, at 128 tokens** —
@@ -94,14 +94,13 @@ Two conditioner facts that break naive assumptions:
   the derivation, so the hazard shows no signal there.)
 - **`rope_scaling.mrope_interleaved` is true.** The chunked and interleaved rotary layouts coincide
   exactly while all three M-RoPE axes share a position — i.e. for `t2va`, where the flag is a no-op.
-  A vision run makes them diverge. The encoder's `RopeConfig` carries `mrope_interleaved` and
-  `mrope_position_ids()` builds the per-axis positions; see `tests/unit/test_rope.py`.
+  A vision run makes them diverge. `create_rope_tensors(..., interleaved=True)` and
+  `mrope_position_ids()` cover that; see `tests/encoders/qwen3vl/test_qwen3vl_mrope.py`.
 
-FSDP is a placement choice, and the two consumers make it differently. The pipeline's
-`EncoderParallelConfig` sets `fsdp` on the SP axis (`pipeline_minimax_h3.py`), sharding the weights
-across the non-TP axis as well — ~1.6 GB/device for the 50.3 GB stack on 32 chips.
-`test_text_encoder_minimax_h3.py` leaves `fsdp` unset: a 31.9 GiB Blackhole chip holds a TP=8 shard
-without it, so the
+FSDP is a placement choice, and the two consumers make it differently. The pipeline builds the
+encoder with `is_fsdp=True` (`pipeline_minimax_h3.py`), sharding the weights across the non-TP axis
+as well — ~1.6 GB/device for the 50.3 GB stack on 32 chips. `test_text_encoder_minimax_h3.py` leaves
+`is_fsdp` at its False default: a 31.9 GiB Blackhole chip holds a TP=8 shard without it, so the
 weights are simply replicated across the non-TP axis — load bandwidth, not capacity. (On a Wormhole
 2x4, where TP=4 puts 14.9 GiB on a 12 GiB chip, FSDP is a capacity requirement.)
 
@@ -114,20 +113,18 @@ additive deepstack injection at decoder layers 0/1/2 from vision layers `[8, 16,
 
 The tower is ported: `encoders/qwen3vl/vision_qwen3vl.py` (`Qwen3VlVisionModel`; the pipeline runs it
 replicated, no TP),
-wired into the decoder by `TransformerEncoder.forward`'s `vision_embeds` / `vision_mask` /
-`deepstack_embeds` arguments — merged tokens **replace** the `<|image_pad|>` row embeddings,
-deepstack features are **added** to those same rows. Gated by
-`tests/encoders/qwen3vl/test_qwen3vl_vision_*.py` and, on released weights,
-`tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
+wired into the decoder by `model_qwen3vl.py`'s `vision_embeds` / `vision_runs` / `deepstack_embeds`
+forward arguments — merged tokens **replace** the `<|image_pad|>` row embeddings, deepstack features
+are **added** to those same rows. Gated by `tests/encoders/qwen3vl/test_qwen3vl_vision_*.py` and, on
+released weights, `tests/models/minimax_h3/test_vision_conditioner_minimax_h3.py`.
 
 **The tower is green on released weights; the fused conditioner is not.** Merged tokens read 99.5953%
 at the production 1344x768 canvas (~9.4% RMSE/sigma; 99.6532% measured at 448x448, which is not a
 canvas `resolve_canvas_size` yields, so the gate runs the production canvas only).
-`test_fused_conditioner_real_weights` is a strict `xfail` on its massive-activation row check:
-measured with the HiFi4 decoder linears the loader used before it moved to the shared encoder (see
-Precision), whole-tensor PCC is 85.82% at the production canvas, and the port reproduces 6 of the
-reference's 7 massive-activation rows — row 63 missing, one spurious row at 156. Do not read a green
-run of that file as `fl2va` being verified end to end.
+`test_fused_conditioner_real_weights` is a strict `xfail` on its massive-activation row check: with
+the HiFi4 decoder linears (see Precision) whole-tensor PCC is 85.82% at the production canvas, and
+the port reproduces 6 of the reference's 7 massive-activation rows — row 63 missing, one spurious row
+at 156. Do not read a green run of that file as `fl2va` being verified end to end.
 
 Note the demos port at `models/demos/qwen3_vl/` is built on `LightweightModule` /
 `tt_transformers`, not `tt_dit`. It is an algorithm reference, not reusable code.
@@ -394,15 +391,15 @@ masked only by luck, since 1 and 39 tokens both round up to 37888.
 
 ## Precision
 
-The conditioner's decoder linears run at whatever the shared `TransformerEncoder` uses. It used to
-opt into **HiFi4** through a `high_fidelity_linears` flag of its own encoder class; moving onto the
-shared encoder dropped that, and the table below is the measurement from when it was in force, not a
-description of what runs today. Measured on the `fl2va` conditioner:
+The conditioner's decoder linears run at **HiFi4** instead of the tt_dit-wide HiFi2 default.
+`build_minimax_h3_text_encoder` opts in unconditionally (via `Qwen3VlTextEncoder`'s
+`high_fidelity_linears`, which threads an explicit compute-kernel config to every qkv/o/gate/up/down
+projection); there is no knob. Measured on the `fl2va` conditioner:
 
 | decoder linears | fused conditioner PCC | massive-activation rows (reference has 7) | per forward |
 |---|---|---|---|
 | HiFi2 (tt_dit default) | 70.89 % | 5 | 1183.2 ms |
-| HiFi4 | **85.82 %** | **7** | 1184.2 ms |
+| HiFi4 (what runs) | **85.82 %** | **7** | 1184.2 ms |
 | HiFi4 + no packer L1 acc | identical to HiFi4 | identical | — |
 
 So it is free at this shape, `packer_l1_acc` has no effect, and the vision tower is unchanged — the gain
