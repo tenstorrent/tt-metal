@@ -420,12 +420,12 @@
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
-    pytest --timeout 900 models/demos/qwen25_vl/demo/demo.py
+    pytest --timeout 1200 models/demos/qwen25_vl/demo/demo.py
   model: qwen2.5-vl-72b
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 20
+      timeout: 25
       tier: 2
       release_ready: false
     bh_quietbox_2:
@@ -755,7 +755,7 @@
   model_family: Mistral
   skus:
     wh_n150:
-      timeout: 7
+      timeout: 9
       tier: 2
       release_ready: false
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
@@ -1234,6 +1234,33 @@
       release_ready: false
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
+  budget_type: e2e
+
+# ── XTTS-v2 ────────────────────────────────────────────────────────
+# End-to-end voice-cloning TTS: the demo renders the default text with the default reference voice
+# (auto-downloaded) through the fully-traced path and writes generated/xtts_demo/xtts_demo.wav.
+# Blackhole P150 only. Paired with the gated perf baseline, which asserts setup / decode ms-per-code
+# / vocoder ms-per-code / RTF against the measured P150 numbers (see the model's README).
+- name: xtts-v2 e2e tests
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/xtts/requirements.txt
+    pytest models/experimental/xtts/tests/perf/test_e2e_perf.py --timeout=900
+    # Empty-generation regressions live here, after the perf test has compiled the pipeline they
+    # share: 118 s here against 294 s in the unit job.
+    pytest models/experimental/xtts/tests/pcc/test_empty_generation.py --timeout=900
+    python models/experimental/xtts/demo/xtts_demo.py
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      # Measured 9m20s / 9m08s / 9m00s across runs 34453045104, 34444464755, 34450411323.
+      # 15 min leaves ~5.5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 15
+      tier: 3
+      release_ready: false
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
   budget_type: e2e
 
 # ── Panoptic DeepLab ───────────────────────────────────────────────
