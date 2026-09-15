@@ -38,6 +38,12 @@ struct SolAttnParams {
     uint32_t chunk_keep_every = 0;
 };
 
+// Per-(q_chunk, k_chunk) keep/skip decision, one byte each, ROW_MAJOR uint8, DRAM. Value 0 skips the
+// k_chunk (no K/V DRAM read, no forwarding, no mask read); anything else keeps it. Row 0 (q_chunk 0)
+// and column 0 (k_chunk 0) of every row are read but the reader always treats k_chunk 0 as kept
+// regardless of the byte's value, mirroring chunk_keep_every's "chunk 0 always kept" floor so a row
+// can never select nothing. Broadcasts over batch/heads the same way attn_mask does: dim 0 size 1
+// broadcasts over batch, dim 1 size 1 broadcasts over heads.
 struct SolAttnInputs {
     Tensor q;
     Tensor k;
@@ -54,6 +60,8 @@ struct SolAttnInputs {
     // read by the writer at runtime. Present only when the caller wants a per-device offset under one
     // shared program; otherwise the scalar windowed_q_token_offset is used.
     std::optional<Tensor> windowed_q_token_offset_tensor;
+    // Per-(q_chunk, k_chunk) keep/skip byte map. See the comment above SolAttnInputs.
+    std::optional<Tensor> block_mask;
 };
 
 }  // namespace ttnn::prim

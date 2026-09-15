@@ -363,6 +363,23 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     const bool use_provided_mask = attn_mask.has_value();
     const bool broadcast_provided_mask_batch = use_provided_mask ? (attn_mask.value().logical_shape()[0] == 1) : false;
     const bool broadcast_provided_mask_heads = use_provided_mask ? (attn_mask.value().logical_shape()[1] == 1) : false;
+    const auto& block_mask = tensor_args.block_mask;
+    const bool use_block_mask = block_mask.has_value();
+    const bool broadcast_block_mask_batch = use_block_mask ? (block_mask.value().logical_shape()[0] == 1) : false;
+    const bool broadcast_block_mask_heads = use_block_mask ? (block_mask.value().logical_shape()[1] == 1) : false;
+    if (use_block_mask) {
+        const auto& bm_shape = block_mask.value().logical_shape();
+        TT_FATAL(
+            bm_shape[2] == q_num_chunks,
+            "block_mask q_chunks dim ({}) must match the resolved q_num_chunks ({})",
+            bm_shape[2],
+            q_num_chunks);
+        TT_FATAL(
+            bm_shape[3] == k_num_chunks,
+            "block_mask k_chunks dim ({}) must match the resolved k_num_chunks ({})",
+            bm_shape[3],
+            k_num_chunks);
+    }
     // Windowed mode synthesizes the mask in the writer; the compute consumes it through the provided-mask
     // path even though there is no attn_mask tensor (and the reader does not read one).
     const bool compute_use_provided_mask = use_provided_mask || is_windowed;
@@ -427,6 +444,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     auto* k_buffer = input_tensor_k.buffer();
     auto* v_buffer = input_tensor_v.buffer();
     auto* mask_buffer = attn_mask.has_value() ? attn_mask.value().buffer() : nullptr;
+    auto* block_mask_buffer = sol_attn_buffer_or_null(tensor_args.block_mask);
     auto* attention_sink_buffer = attention_sink.has_value() ? attention_sink.value().buffer() : nullptr;
     // page_table and chunk_start_idx must be BufferBindings (not raw address writes);
     // otherwise their addresses go stale on descriptor cache hits.
@@ -656,7 +674,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     uint32_t receiver_semaphore_id = 0;
     uint32_t valid_semaphore_id = 0;
 
-    if (!is_causal && !use_provided_mask) {
+    if (!is_causal && !use_provided_mask && !use_block_mask) {
         sender_semaphore_id = 0;
         receiver_semaphore_id = 1;
         valid_semaphore_id = 2;
@@ -759,6 +777,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     // shifts every one of them -- a CB field then reads the `inactive` sentinel and kernel compile
     // dies at unpack_src_format[-1]. Positional growth of this vector is not safe.
     defines_map["SOL_ATTN_CHUNK_KEEP_EVERY"] = std::to_string(operation_attributes.chunk_keep_every);
+    defines_map["SOL_ATTN_USE_BLOCK_MASK"] = std::to_string(use_block_mask ? 1 : 0);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
@@ -859,6 +878,16 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     const uint32_t cu_window_seqlens_eles = windowed.cu_window_seqlens_eles;
     const uint32_t windowed_q_token_offset = windowed.q_token_offset;
 
+    // Block mask row (reader -> compute): one uint32_t per k_chunk, expanded from the DRAM tensor's
+    // packed uint8 row. Not part of CBIds -- that struct is shared with the parent sdpa/ring factories,
+    // and extending it would shift compile-time-arg positions for ops this feature has no business
+    // touching. 2 pages, matching cb_windowed_k_range's double buffering across q iterations.
+    uint32_t cb_block_mask_row = 0;
+    if (use_block_mask) {
+        const uint32_t block_mask_row_page_size = ((k_num_chunks * sizeof(uint32_t) + 15) / 16) * 16;
+        cb_block_mask_row = allocate_cb(block_mask_row_page_size, 2, tt::DataFormat::UInt32);
+    }
+
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     cb_ids.col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
@@ -907,11 +936,22 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
+    // Block mask: appended after the CBIds splice (the last mutation to these vectors before this
+    // point), so it cannot shift any CB id's position. cb_block_mask_row is 0 (a valid but unused CB
+    // index) when !use_block_mask; harmless since the reader/compute only touch it behind
+    // SOL_ATTN_USE_BLOCK_MASK. broadcast flags let the reader compute the DRAM row address; compute
+    // only ever reads the row the reader already resolved, so it needs the CB id alone.
+    reader_compile_time_args.push_back(cb_block_mask_row);
+    reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_batch));
+    reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_heads));
+    TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.block_mask)).append_to(reader_compile_time_args);
+    compute_compile_time_args.push_back(cb_block_mask_row);
+
     // Semaphores for KV chain forwarding (non-causal only, and only when no mask disabled it above --
     // otherwise sender/receiver/valid semaphore_id all default to 0 and this would push three
     // descriptors at the same id).
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
-    if (!is_causal && !use_provided_mask) {
+    if (!is_causal && !use_provided_mask && !use_block_mask) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
             .core_type = tt::CoreType::WORKER,
@@ -959,7 +999,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     // chunks -- no longer holds. Each core reads its own K/V from DRAM under a mask; the S2c density
     // sweep found the fixed cost of this fork's forwarding-free skip two orders of magnitude below
     // vsa_sdpa's floor, so losing the forwarding saving here is expected to stay far ahead of it.
-    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed && !use_provided_mask) {
+    if (!is_causal && !is_chunked && !has_sliding_window && !is_windowed && !use_provided_mask && !use_block_mask) {
         head_segments.resize(total_heads);
 
         log_debug(tt::LogOp, "=== Building KV chain forwarding topology ===");
@@ -1529,6 +1569,10 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         reader_args.push_back(cu_window_seqlens_eles);
         reader_args.push_back(windowed_q_token_offset);
         reader_args.push_back(windowed_q_offset_buffer);
+
+        // Block mask tail: appended after every other reader runtime arg, so a hand-parsed index in
+        // the reader kernel that predates this feature never shifts.
+        reader_args.push_back(block_mask_buffer);
 
         reader_desc.emplace_runtime_args(core, reader_args);
 

@@ -61,6 +61,7 @@ Tensor sol_attn(
     uint32_t windowed_q_token_offset = 0,
     const std::optional<Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
-    uint32_t chunk_keep_every = 0);
+    uint32_t chunk_keep_every = 0,
+    const std::optional<Tensor>& block_mask = std::nullopt);
 
 }  // namespace ttnn::prim

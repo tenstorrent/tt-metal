@@ -37,6 +37,10 @@ ttnn::Tensor sol_attn(
     uint32_t windowed_q_token_offset = 0,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
     // experiment knob: keep every Nth KV chunk, skip the rest. 0 or 1 = dense.
-    uint32_t chunk_keep_every = 0);
+    uint32_t chunk_keep_every = 0,
+    // Per-(q_chunk, k_chunk) keep/skip byte map: [B|1, NQH|1, q_chunks, k_chunks], UINT8, ROW_MAJOR,
+    // DRAM. 0 skips the k_chunk's K/V DRAM read entirely. Non-causal only; mutually exclusive with
+    // chunk_keep_every.
+    const std::optional<ttnn::Tensor>& block_mask = std::nullopt);
 
 }  // namespace ttnn::transformer

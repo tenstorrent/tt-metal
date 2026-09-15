@@ -25,7 +25,8 @@ ttnn::Tensor sol_attn(
     const std::optional<ttnn::Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor,
-    uint32_t chunk_keep_every) {
+    uint32_t chunk_keep_every,
+    const std::optional<ttnn::Tensor>& block_mask) {
     [[maybe_unused]] auto arch = input_tensor_q.storage_type() == StorageType::DEVICE
                                      ? input_tensor_q.device()->arch()
                                      : ttnn::GetDefaultDevice()->arch();
@@ -77,7 +78,8 @@ ttnn::Tensor sol_attn(
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
         std::nullopt,  // paged_cache_geometry
-        chunk_keep_every);
+        chunk_keep_every,
+        block_mask);
 }
 
 }  // namespace ttnn::transformer

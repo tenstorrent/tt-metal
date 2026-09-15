@@ -473,9 +473,42 @@ selection.
 
 1. **Block mask** (per q-chunk x k-chunk bitmap) replacing the stride. The reader re-reads K/V per q
    chunk, so per-q-chunk skipping is natural -- but it breaks the K-forwarding chain's lockstep, so
-   masked mode disables forwarding (each core reads its own K; more DRAM traffic, still far ahead) or
-   the chain is redesigned. Sol's 64-token q-block selection lands on 128-token q chunks as the union
-   of two rows -- small overhead, measured not assumed.
+   masked mode disables forwarding (each core reads its own K; more DRAM traffic, still far ahead) --
+   decided over redesigning the chain, since the dense hybrid's fixed cost already has two orders of
+   magnitude of headroom against `vsa_sdpa`. Sol's 64-token q-block selection lands on 128-token q
+   chunks as the union of two rows -- small overhead, measured not assumed.
+
+   Design settled, landed so far (op layer, not yet the kernel loop): a new `block_mask` tensor --
+   `[B|1, NQH|1, q_chunks, k_chunks]`, UINT8, ROW_MAJOR, DRAM, 0 = skip -- added to `SolAttnInputs`
+   (`sol_attn_device_operation_types.hpp`), threaded through `sol_attn()`'s signature at every layer
+   (`sol_attn.hpp/cpp`, `device/sol_attn_device_operation.hpp/cpp`), and validated: mutually exclusive
+   with `chunk_keep_every` (same skip mechanism, don't measure it twice), non-causal only (mirrors
+   `attn_mask`), rejected in chunked/windowed mode. Dtype/layout/broadcast checks mirror `attn_mask`'s.
+   `sdpa_nanobind.cpp`, the reader/compute kernels, and the Python test additions are still pending.
+
+   Kernel-loop design (not yet implemented): `k_num_chunks` is `constexpr` in both the reader and
+   `sol_attn_driver.hpp`, so each side can size a local per-row buffer at compile time -- no need for a
+   runtime-sized allocation or a second pass over the tensor's shape. Per q-chunk, the reader does one
+   `TensorAccessorArgs`-based page read of the row (one ROW_MAJOR row *is* one page here, so this is a
+   single `async_read`, not a byte loop) into a local L1 array, uses it directly for its own skip
+   `continue` (mirroring the `SOL_ATTN_CHUNK_KEEP_EVERY` block, chunk 0 always kept, same reasoning),
+   and separately expands it into a small new CB (`k_num_chunks` x `uint32_t`, 2 pages for double
+   buffering across q iterations -- exactly `cb_windowed_k_range`'s shape, just sized by `k_num_chunks`
+   instead of 2) that `sol_attn_driver.hpp` reads via `ckernel::read_tile_value` and scans with the same
+   `stride_keeps()`/`first_kept`/`last_kept` scaffolding already written for `chunk_keep_every`, with
+   the predicate swapped from a modulo to a table lookup. This CB is **not** added to the shared
+   `CBIds` struct in `sdpa_interleaved_cb_ids.hpp` -- that struct is shared with the parent `sdpa` and
+   `ring_distributed` factories, and extending it (even by appending) risks shifting compile-time-arg
+   positions for ops this change has no business touching; it was tried and reverted. The new CB id
+   and its `TensorAccessorArgs` are tracked as sol_attn-local locals, appended after
+   `cb_ids.reader_compile_time_args()`/`compute_compile_time_args()` are spliced in (already the last
+   mutation to those vectors before kernel creation, confirmed by reading the splice site), with a
+   `use_block_mask` compile-time `#define` (not a positional arg) gating the branch -- same reasoning
+   as `chunk_keep_every`'s define. Must extend the `!is_causal && !use_provided_mask` forwarding-disable
+   guards (three sites: semaphore-id assignment, semaphore-descriptor push, chain-topology build) to
+   also read `!use_block_mask`, and add a `q_chunks`/`k_chunks` shape cross-check against the resolved
+   chunk sizes in the factory (deferred there in validation since program_config may still be
+   defaulted at op-validate time).
 2. **Pooled residual** as one extra chunk in the same softmax: `vc` as block sum, `p * block_len` in
    the denominator, one shared row max. `tau -> -inf` == dense is the pin.
 3. **Threshold routing on device** feeding the mask; the oracle fixed the sizing (289 +- 12% at the

@@ -170,6 +170,32 @@ void SolAttnOperation::validate_on_program_cache_miss(const SolAttnParams& attrs
             TT_FATAL(mask_shape[3] == k_shape[2], "Mask sequence length must match K sequence length");
         }
 
+        TT_FATAL(
+            !(tensors.block_mask.has_value() && attrs.chunk_keep_every > 1),
+            "block_mask and chunk_keep_every are two skip mechanisms measuring the same thing; use only one");
+
+        if (tensors.block_mask.has_value()) {
+            const auto& bm = tensors.block_mask.value();
+            TT_FATAL(!attrs.is_causal, "block_mask is not supported with is_causal (non-causal only, like attn_mask)");
+            TT_FATAL(bm.storage_type() == StorageType::DEVICE, "block_mask must be on device");
+            TT_FATAL(q.device() == bm.device(), "block_mask must be on the same device as the input tensors");
+            TT_FATAL(bm.layout() == Layout::ROW_MAJOR, "block_mask must be ROW_MAJOR (one byte per chunk, untilized)");
+            TT_FATAL(bm.dtype() == DataType::UINT8, "block_mask must be UINT8. Got {}", bm.dtype());
+            TT_FATAL(bm.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "block_mask must be in DRAM");
+
+            const auto& bm_shape = bm.logical_shape();
+            const auto q_shape = q.logical_shape();
+            TT_FATAL(bm_shape.size() == 4, "block_mask must be rank 4: [batch, heads, q_chunks, k_chunks]");
+            TT_FATAL(
+                bm_shape[0] == 1 || bm_shape[0] == q_shape[0],
+                "block_mask batch dim must be 1 (broadcast) or match Q's batch dim");
+            TT_FATAL(
+                bm_shape[1] == 1 || bm_shape[1] == q_shape[1],
+                "block_mask heads dim must be 1 (broadcast) or match Q's heads dim");
+            // q_chunks/k_chunks dims are checked against the resolved chunk sizes in the program factory,
+            // which is where chunking is actually resolved (program_config may be defaulted).
+        }
+
         validate_shapes_and_chunks();
     };
 
@@ -220,6 +246,7 @@ void SolAttnOperation::validate_on_program_cache_miss(const SolAttnParams& attrs
         TT_FATAL(
             !tensors.attn_mask.has_value(),
             "Attention mask should not be provided in chunked mode - masking is handled internally");
+        TT_FATAL(!tensors.block_mask.has_value(), "block_mask is not supported in chunked mode");
 
         // Additional chunked-specific validations
         const auto q_shape = q.logical_shape();
@@ -430,6 +457,7 @@ void SolAttnOperation::validate_on_program_cache_miss(const SolAttnParams& attrs
         TT_FATAL(
             !tensors.attn_mask.has_value(),
             "Windowed SDPA builds its mask from cu_window_seqlens; attn_mask must not be provided.");
+        TT_FATAL(!tensors.block_mask.has_value(), "block_mask is not supported with windowed SDPA.");
         TT_FATAL(!attrs.use_mla, "Windowed SDPA does not support MLA.");
         TT_FATAL(
             !(attrs.chunk_start_idx.has_value() || attrs.chunk_start_idx_tensor.has_value()),
@@ -644,7 +672,8 @@ Tensor sol_attn(
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
-    uint32_t chunk_keep_every) {
+    uint32_t chunk_keep_every,
+    const std::optional<Tensor>& block_mask) {
     using OperationType = ttnn::prim::SolAttnOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -674,6 +703,7 @@ Tensor sol_attn(
             .attention_sink = attention_sink,
             .cu_window_seqlens = cu_window_seqlens,
             .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+            .block_mask = block_mask,
         });
 }
 }  // namespace ttnn::prim
