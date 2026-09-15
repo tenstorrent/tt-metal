@@ -66,7 +66,7 @@ _ISL_FUNCTIONAL_SWEEP = [251, 768, 3001]
 #   289 -> m_t 10: a FULL block then a 2-tile tail, a different path from a lone short block
 #          because the tail reuses CB slots the full block already cycled.
 _ISL_SHORT_BLOCK_SWEEP = [67, 289]
-_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 1024, 2048, 4096, 5120]
+_ISL_EXHAUSTIVE_SWEEP = [0, 128, 256, 512, 768, 1024, 2048, 4096, 5120]
 # "kimi_k26" used to sit here and matched nothing: SINGLE_EXPERT_MODELS calls that shape
 # kimi_k2_7, so the sweep silently ran ONE model for however long the name was stale.
 _ISL_EXHAUSTIVE_MODELS = ("kimi_k2_7", "glm_51")
