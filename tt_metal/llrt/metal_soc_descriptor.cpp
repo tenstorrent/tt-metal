@@ -8,28 +8,25 @@
 #include <yaml-cpp/yaml.h>
 
 #include <umd/device/types/arch.hpp>
+#include <umd/device/tt_device/tt_device.hpp>
 
 namespace {
-// SYS-4948: first CMFW bundle whose DRAM telemetry lives on the relocated endpoints. Metal's noc0
-// assignment has to match wherever CMFW polls, so this threshold decides which endpoint pair the
-// descriptor loads.
+// SYS-4948: CMFW publishes which noc2axi port MRISC is loaded on for each GDDR instance, and that
+// port is implicitly the noc0 port. Metal's noc0 assignment has to land on the same port.
 //
-// This is the bundle from tt-system-firmware PR #1452, which self-reports as 19.13.2.0. It is not
-// public: a board only reports it after being deliberately flashed with that bundle. The public
-// release line is far below it (latest tag v19.6.0), so any board that has not been flashed stays on
-// the pre-relocation endpoints, which is the safe direction -- it only costs bandwidth, whereas
-// selecting relocated endpoints on a CMFW that has not moved puts a noc on an endpoint CMFW polls
-// (the SYS-1419 hang).
-//
-// Revisit only if the relocation ends up shipping publicly under a different version than 19.13.2.
-constexpr tt::umd::FirmwareBundleVersion kBlackholeRelocatedDramEndpointFirmware(19, 13, 2);
+// Nibble i is GDDR instance i (instance 0 in the least significant nibble), holding the port index
+// 0..2, or kMriscPortHarvested when that instance is disabled. A port is not a dram_view endpoint
+// index -- the two do not share a numbering, so each view declares its port (blackhole_140_arch.yaml).
+constexpr uint8_t kMriscPortsPerWord = 8;
+constexpr uint32_t kMriscPortNibbleMask = 0xF;
+constexpr uint32_t kMriscPortHarvested = 0xF;
 
-// FirmwareBundleVersion::compare_firmware_bundle normalizes major >= 80 to 0 as a legacy marker, so
-// such a threshold would compare below every real version and enable the relocation everywhere --
-// the opposite of raising the bar. Reject that outright rather than shipping it silently.
-static_assert(
-    kBlackholeRelocatedDramEndpointFirmware.major < 80,
-    "Threshold major >= 80 is treated as a legacy version and would match every firmware.");
+uint32_t mrisc_port_for_channel(uint32_t mrisc_noc2axi_ports, size_t channel) {
+    if (channel >= kMriscPortsPerWord) {
+        return kMriscPortHarvested;
+    }
+    return (mrisc_noc2axi_ports >> (4 * channel)) & kMriscPortNibbleMask;
+}
 
 // True if physical DRAM `channel` is harvested per `dram_harvesting_mask`. Single home for the
 // bit-masking convention used across the DRAM-view helpers below.
@@ -274,23 +271,94 @@ tt::tt_metal::CoreCoord metal_SocDescriptor::get_dram_compute_grid_size() const 
     return tt::tt_metal::CoreCoord(this->get_num_dram_views(), get_grid_size(tt::CoreType::DRAM).y);
 }
 
-bool metal_SocDescriptor::uses_relocated_dram_endpoints(
-    const std::optional<tt::umd::FirmwareBundleVersion>& firmware_version) const {
-    // Only Blackhole reserves a CMFW-owned noc0 DRAM endpoint, so no other arch has a second
-    // assignment to choose between.
-    if (this->arch != tt::ARCH::BLACKHOLE) {
-        return false;
+std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device) {
+    // Not in UMD's TelemetryTag enum, so it goes in by number.
+    constexpr uint8_t kGddrMriscNoc2AxiPortTag = 72;
+
+    if (tt_device == nullptr) {
+        return std::nullopt;
     }
-    // An unreadable version means we cannot prove CMFW has moved. Staying on the pre-relocation
-    // endpoints only costs bandwidth, whereas guessing wrong collides a noc with CMFW (SYS-1419).
-    if (!firmware_version.has_value()) {
-        return false;
+    auto* telemetry = tt_device->get_firmware_telemetry_reader();
+    // Absent on CMFW older than 19.12, which predates the relocation.
+    if (telemetry == nullptr || !telemetry->is_entry_available(kGddrMriscNoc2AxiPortTag)) {
+        return std::nullopt;
     }
-    return firmware_version.value() >= kBlackholeRelocatedDramEndpointFirmware;
+    return telemetry->read_entry(kGddrMriscNoc2AxiPortTag);
 }
 
-void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(bool use_relocated_dram_endpoints) {
+namespace {
+// Picks whichever of the two assignments in `device_descriptor_yaml` matches the port CMFW reports.
+bool uses_relocated_dram_endpoints(
+    const YAML::Node& device_descriptor_yaml,
+    const std::optional<uint32_t>& mrisc_noc2axi_ports,
+    tt::ARCH arch,
+    uint32_t dram_harvesting_mask,
+    const std::string& descriptor_path) {
+    // Only Blackhole reserves a CMFW-owned noc0 DRAM endpoint, so no other arch has a second
+    // assignment to choose between.
+    if (arch != tt::ARCH::BLACKHOLE) {
+        return false;
+    }
+    // Absent telemetry means the pre-relocation layout, per the telemetry contract. That is also the
+    // safe direction: keeping the old endpoints only costs bandwidth, whereas guessing wrong
+    // collides a noc with MRISC (SYS-1419).
+    if (!mrisc_noc2axi_ports.has_value()) {
+        return false;
+    }
+
+    // Only channels whose two assignments declare different ports are informative; the rest keep
+    // MRISC where it was and move only noc1, so telemetry cannot tell them apart.
+    bool saw_relocated = false;
+    bool saw_legacy = false;
+    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
+        const size_t channel = dram_view["channel"].as<size_t>();
+        if (is_dram_channel_harvested(dram_harvesting_mask, channel)) {
+            continue;
+        }
+        const uint32_t mrisc_port = mrisc_port_for_channel(mrisc_noc2axi_ports.value(), channel);
+        // A disabled GDDR instance is reported as harvested even when the descriptor still lists the
+        // channel, so it says nothing about which assignment is loaded.
+        if (mrisc_port == kMriscPortHarvested) {
+            continue;
+        }
+        const auto legacy_port = dram_view["mrisc_noc2axi_port"].as<uint32_t>();
+        const auto relocated_port = dram_view["relocated_mrisc_noc2axi_port"].as<uint32_t>();
+        if (legacy_port == relocated_port) {
+            continue;
+        }
+        TT_FATAL(
+            mrisc_port == legacy_port || mrisc_port == relocated_port,
+            "CMFW reports MRISC on noc2axi port {} for DRAM channel {}, which matches neither the "
+            "pre-relocation ({}) nor the relocated ({}) port declared in {}. Refusing to guess: putting a noc "
+            "on a port MRISC owns hangs the chip (SYS-1419).",
+            mrisc_port,
+            channel,
+            legacy_port,
+            relocated_port,
+            descriptor_path);
+        (mrisc_port == relocated_port ? saw_relocated : saw_legacy) = true;
+    }
+
+    // CMFW configures every instance the same way, so the informative channels must agree.
+    TT_FATAL(
+        !(saw_relocated && saw_legacy),
+        "CMFW reports a mix of pre-relocation and relocated MRISC ports across DRAM channels "
+        "(GDDR_MRISC_NOC2AXI_PORT = {:#010x}). The descriptor has no assignment matching that.",
+        mrisc_noc2axi_ports.value());
+
+    return saw_relocated;
+}
+}  // namespace
+
+void metal_SocDescriptor::load_dram_metadata_from_device_descriptor(
+    const std::optional<uint32_t>& mrisc_noc2axi_ports) {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
+    const bool use_relocated_dram_endpoints = uses_relocated_dram_endpoints(
+        device_descriptor_yaml,
+        mrisc_noc2axi_ports,
+        this->arch,
+        this->harvesting_masks.dram_harvesting_mask,
+        this->device_descriptor_file_path);
     const char* eth_endpoint_key = use_relocated_dram_endpoints ? "relocated_eth_endpoint" : "eth_endpoint";
     const char* worker_endpoint_key = use_relocated_dram_endpoints ? "relocated_worker_endpoint" : "worker_endpoint";
     this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
@@ -446,11 +514,9 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
 metal_SocDescriptor::metal_SocDescriptor(
-    const SocDescriptor& other,
-    const tt::BoardType& /*board_type*/,
-    std::optional<tt::umd::FirmwareBundleVersion> firmware_version) :
+    const SocDescriptor& other, const tt::BoardType& /*board_type*/, std::optional<uint32_t> mrisc_noc2axi_ports) :
     SocDescriptor(other) {
-    this->load_dram_metadata_from_device_descriptor(this->uses_relocated_dram_endpoints(firmware_version));
+    this->load_dram_metadata_from_device_descriptor(mrisc_noc2axi_ports);
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
 }

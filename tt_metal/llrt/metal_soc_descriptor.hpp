@@ -17,7 +17,14 @@
 #include <umd/device/soc_descriptor.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/utils/semver.hpp>
+
+namespace tt::umd {
+class TTDevice;
+}
+
+// CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry word for `tt_device`, or nullopt when the entry is absent
+// (CMFW older than 19.12) or there is no device to ask.
+std::optional<uint32_t> read_mrisc_noc2axi_ports(tt::umd::TTDevice* tt_device);
 
 //! SocDescriptor contains information regarding the SOC configuration targeted.
 /*!
@@ -42,13 +49,12 @@ public:
 
     std::map<tt::tt_metal::CoreCoord, int> logical_eth_core_to_chan_map;
 
-    // `firmware_version` is the cluster-wide CMFW bundle version, or nullopt when it cannot be read.
-    // On Blackhole it selects which DRAM endpoint assignment the descriptor loads (see SYS-4948 in
-    // blackhole_140_arch.yaml); nullopt keeps the pre-relocation assignment.
+    // `mrisc_noc2axi_ports` is CMFW's GDDR_MRISC_NOC2AXI_PORT telemetry word, or nullopt when the
+    // entry is absent (CMFW older than 19.12). On Blackhole it selects which DRAM endpoint
+    // assignment the descriptor loads (see SYS-4948 in blackhole_140_arch.yaml); nullopt keeps the
+    // pre-relocation assignment.
     metal_SocDescriptor(
-        const SocDescriptor& other,
-        const tt::BoardType& board_type,
-        std::optional<tt::umd::FirmwareBundleVersion> firmware_version = std::nullopt);
+        const SocDescriptor& other, const tt::BoardType& board_type, std::optional<uint32_t> mrisc_noc2axi_ports);
 
     tt::tt_metal::CoreCoord get_preferred_worker_core_for_dram_view(int dram_view, uint8_t noc) const;
     tt::tt_metal::CoreCoord get_preferred_eth_core_for_dram_view(int dram_view, uint8_t noc) const;
@@ -108,11 +114,7 @@ private:
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
     bool is_noc0_dram_endpoint(const tt::tt_metal::CoreCoord& translated_coord) const;
 
-    // True when this chip's CMFW has relocated its DRAM telemetry endpoints, so the descriptor must
-    // load the relocated_* endpoint pairs to keep noc0 aligned with CMFW (SYS-4948).
-    bool uses_relocated_dram_endpoints(const std::optional<tt::umd::FirmwareBundleVersion>& firmware_version) const;
-
-    void load_dram_metadata_from_device_descriptor(bool use_relocated_dram_endpoints);
+    void load_dram_metadata_from_device_descriptor(const std::optional<uint32_t>& mrisc_noc2axi_ports);
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
 };
