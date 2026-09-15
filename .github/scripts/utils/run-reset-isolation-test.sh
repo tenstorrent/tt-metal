@@ -6,15 +6,16 @@
 # run-reset-isolation-test.sh
 #
 # Orchestrate an ETH isolation test:
-#   1. Start one long workload per container (pytest --count, so the device is
-#      opened once and the run spans the reset).
-#   2. After RESET_WAIT_SECS, stop container-0's workload and reset its devices.
-#   3. Restart container-0's workload.
+#   1. Start one long workload per container except container-0 (pytest --count,
+#      so the device is opened once and the run spans the reset).
+#   2. Run a short workload in container-0 and let it finish, releasing its
+#      devices cleanly -- resetting a device that was never closed fails.
+#   3. Reset container-0's devices, then run in it again to confirm they came back.
 #   4. Every other container must have run through the reset undisturbed.
 #
 # Usage:
 #   bash run-reset-isolation-test.sh <NUM_CONTAINERS> <CONTAINER_PREFIX> \
-#       <TEST_PATH> <TEST_ARGS> <RESET_DEVICE_IDS> <REPEAT_COUNT> [RESET_WAIT_SECS]
+#       <TEST_PATH> <TEST_ARGS> <RESET_DEVICE_IDS> <REPEAT_COUNT>
 #
 # Exit code: always 0 — pass/fail determined by per-container .status files
 # written to RESULTS_DIR, consumed by the caller's "Check test results" step.
@@ -26,16 +27,14 @@ CONTAINER_PREFIX="${2:?CONTAINER_PREFIX required}"
 TEST_PATH="${3:?TEST_PATH required}"
 TEST_ARGS="${4}"
 RESET_DEVICE_IDS="${5:?RESET_DEVICE_IDS required}"
-# Repetitions inside one pytest process, sized so the run outlasts the reset.
+# Repetitions inside one pytest process, sized so the survivor runs outlast the reset.
 REPEAT_COUNT="${6:?REPEAT_COUNT required}"
-RESET_WAIT_SECS="${7:-60}"
 
 # Matches ResetUtil.post_reset_settle_seconds in tests/sweep_framework/framework/tt_smi_util.py.
 POST_RESET_SETTLE_SECS=10
-# Bound on pytest's SIGINT teardown, and on the post-reset run so a device that
-# never comes back cannot burn the whole step budget and lose the other results.
-STOP_TIMEOUT_SECS=300
-POST_RESET_RUN_TIMEOUT_SECS=900
+# Bound on container-0's runs so a device that never comes back cannot burn the
+# whole step budget and lose the survivors' results.
+C0_RUN_TIMEOUT_SECS=900
 # The host's tt-smi is a venv console script, not on PATH. Its shebang points at
 # the venv python, so the absolute path needs no activation.
 HOST_TT_SMI=/opt/tt_metal_infra/provisioning/provisioning_env/bin/tt-smi
@@ -66,7 +65,6 @@ echo "=== ETH Isolation Reset Test ==="
 echo "  Containers  : ${NUM_CONTAINERS} (prefix: ${CONTAINER_PREFIX})"
 echo "  Test        : ${TEST_PATH} ${TEST_ARGS} --count=${REPEAT_COUNT}"
 echo "  Reset IDs   : ${RESET_DEVICE_IDS}"
-echo "  Reset delay : ${RESET_WAIT_SECS}s"
 echo ""
 
 # --- Step 1: One long run per container, all started together ---
@@ -82,42 +80,21 @@ for i in $(seq 1 $(( NUM_CONTAINERS - 1 ))); do
     bg_pids+=($!)
 done
 
-echo ">>> Starting workload in ${container0} (to be interrupted)"
-(
-    run_in_container "$container0" "$REPEAT_COUNT" || true
-) &
-container0_initial_pid=$!
-
-# --- Step 2: Wait, then reset container-0's device(s) ---
-echo ">>> Waiting ${RESET_WAIT_SECS}s before reset..."
-sleep "$RESET_WAIT_SECS"
-
+# --- Step 2: Let container-0 finish a run, so its devices are closed cleanly ---
+# Signals are deliberately not used here. Interrupting pytest needs SIGINT (no
+# SIGTERM handler in CPython means no fixture teardown, so no device close), and
+# SIGINT does not reliably reach it: in run 34928391619's WH tray_reset the CCL
+# suite kept running tests for the full 300s wait and had to be SIGKILLed, which
+# then reset an unclosed device and failed for that reason. Letting a short run
+# finish gives the same precondition -- devices released -- without the signal.
+echo ">>> Running a short workload in ${container0} to completion..."
 reset_ok=1
-if ! pytest_running "$container0"; then
-    echo ">>> ERROR: ${container0}'s workload is not running ${RESET_WAIT_SECS}s in;"
-    echo ">>>        there is nothing for the reset to interrupt. Raise REPEAT_COUNT."
+if ! run_in_container "$container0" 1 "$C0_RUN_TIMEOUT_SECS"; then
+    echo ">>> ERROR: ${container0}'s pre-reset workload failed; not resetting."
     reset_ok=0
 fi
 
 if [ "$reset_ok" = "1" ]; then
-    # SIGINT, not the default SIGTERM: CPython installs no SIGTERM handler, so
-    # pytest would die instantly without fixture teardown, leaving the eth/fabric
-    # firmware live on a board we are about to reset.
-    echo ">>> Stopping workload in ${container0} (SIGINT)..."
-    docker exec "$container0" pkill -INT -f pytest || true
-
-    for _ in $(seq "$STOP_TIMEOUT_SECS"); do
-        pytest_running "$container0" || break
-        sleep 1
-    done
-    if pytest_running "$container0"; then
-        echo ">>> WARNING: pytest still running after ${STOP_TIMEOUT_SECS}s; sending SIGKILL."
-        echo ">>>          The device will NOT have been closed cleanly."
-        docker exec "$container0" pkill -KILL -f pytest || true
-        sleep 2
-    fi
-    wait "$container0_initial_pid" || true
-
     # Reset from the host, not via docker exec: the host tt-smi is newer than the
     # dev image's, and it sees all 32 boards, so device-node targets are
     # unambiguous (in-container, ids are relative to that container's view).
@@ -136,9 +113,7 @@ if [ "$reset_ok" = "1" ]; then
         sleep "$POST_RESET_SETTLE_SECS"
 
         # A survivor that finished before the reset completed never had a
-        # workload running across it, so its exit code proves nothing. Checking
-        # here rather than before the reset catches an undersized REPEAT_COUNT
-        # whatever the suite's runtime turns out to be.
+        # workload running across it, so its exit code proves nothing.
         for i in $(seq 1 $(( NUM_CONTAINERS - 1 ))); do
             container="${CONTAINER_PREFIX}-${i}"
             if ! pytest_running "$container"; then
@@ -150,12 +125,12 @@ if [ "$reset_ok" = "1" ]; then
     fi
 fi
 
-# --- Step 3: Restart container-0 to confirm the reset devices came back ---
+# --- Step 3: Run in container-0 again to confirm the reset devices came back ---
 if [ "$reset_ok" = "1" ]; then
-    echo ">>> Restarting workload in ${container0}..."
+    echo ">>> Re-running workload in ${container0}..."
     (
         rc=0
-        run_in_container "$container0" 1 "$POST_RESET_RUN_TIMEOUT_SECS" || rc=$?
+        run_in_container "$container0" 1 "$C0_RUN_TIMEOUT_SECS" || rc=$?
         echo "$rc" > "${RESULTS_DIR}/${container0}.status"
     ) &
     bg_pids+=($!)
