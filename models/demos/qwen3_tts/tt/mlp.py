@@ -27,7 +27,7 @@ from models.demos.qwen3_tts.tt.dram_sharded_matmul import (
     width_sharded_l1_memcfg,
 )
 from models.demos.qwen3_tts.tt.linear_1d_program_config import find_1d_mcast_grid, make_linear_1d_program_config
-from models.demos.qwen3_tts.tt.mesh_utils import is_n150
+from models.demos.qwen3_tts.tt.mesh_utils import is_n150, is_n300
 from models.demos.qwen3_tts.tt.model_config import PREFILL_SEQS, SHORT_SEQ_LIMIT
 
 # Decode gate/up core grids, keyed by (K, per-chip N) so only the exact shapes that
@@ -86,6 +86,25 @@ def _swept_decode_gate_up_grid(hidden, local_inter, k_tiles, n_tiles, cg, rows, 
         if want % r == 0 and want // r <= cg.x:
             return r, want // r, want
     return rows, cols, None
+
+
+def _swept_in0_shard(m_tiles, k_tiles, cores, grid):
+    """Width-shard ``k_tiles`` over exactly ``cores``, or None if this grid cannot.
+
+    The swept prefill entries below are core COUNTS, and a count only becomes a
+    rectangle if ``grid.x`` divides it: on Wormhole's 8-wide grid 32 lays out as 8x4,
+    but on Blackhole's 11-wide grid ``min(32, 11) x max(1, 32 // 11)`` is 22 cores,
+    which is neither the count the program config was swept for nor a divisor of
+    K_tiles — ``width_sharded_l1_memcfg`` then asserted (K_tiles=64 not divisible by
+    num_cores=22) and took the whole layer down at construction time. Returning None
+    keeps the interleaved in0 on any grid that cannot hold the swept shape.
+    """
+    if cores % grid.x or k_tiles % cores:
+        return None
+    rows = cores // grid.x
+    if rows > grid.y:
+        return None
+    return width_sharded_l1_memcfg(m_tiles, k_tiles, grid.x, rows)
 
 
 def _wide_intermediate_memcfg(n_tiles, swept_cores, cg):
@@ -287,7 +306,12 @@ class MLP(LightweightModule):
         }
         self._prefill_gate_up_n300 = {}
         self._prefill_gate_up_in0_memcfg = {}
-        _mm_override = os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
+        # Wormhole only. Every entry above was swept on the 8x8 compute grid / 12 DRAM
+        # banks of an N150 or N300 and is labelled with the SKU it came from; the counts
+        # are not portable, and on Blackhole's 11-wide grid the gate/up entry used to
+        # abort layer construction outright. Other SKUs keep find_1d_mcast_grid.
+        _wh_swept = is_n150(device) or is_n300(device)
+        _mm_override = _wh_swept and os.environ.get("QWEN3_TTS_N300_MM_OVERRIDE", "1") != "0"
         for (_m, _k, _n), (_cores, _sb, _in0_sharded) in _PREFILL_GATE_UP.items() if _mm_override else ():
             if _k != hidden_size or _n != self.local_intermediate or _m not in self._prefill_gate_up_progcfg:
                 continue
@@ -295,9 +319,9 @@ class MLP(LightweightModule):
                 _m, _k, _n, grid.x, grid.y, _fp32, num_cores=_cores, out_subblock=_sb
             )
             if _in0_sharded:
-                self._prefill_gate_up_in0_memcfg[_m] = width_sharded_l1_memcfg(
-                    _m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x)
-                )
+                _shard = _swept_in0_shard(_m // 32, _k // 32, _cores, grid)
+                if _shard is not None:
+                    self._prefill_gate_up_in0_memcfg[_m] = _shard
         self._prefill_down_progcfg = {
             m: make_linear_1d_program_config(m, self.local_intermediate, hidden_size, _down_gx, _down_gy, _fp32)
             for m in PREFILL_SEQS
@@ -318,15 +342,15 @@ class MLP(LightweightModule):
             (128, 6144, 2048): 32,  # N150 / TP=1
         }
         self._prefill_down_in0_memcfg = {}
-        if os.environ.get("QWEN3_TTS_PREFILL_DOWN_SHARD_IN0", "1") != "0":
+        if _wh_swept and os.environ.get("QWEN3_TTS_PREFILL_DOWN_SHARD_IN0", "1") != "0":
             for (_m, _k, _n), _cores in _PREFILL_DOWN_SHARD_IN0.items():
                 if _k != self.local_intermediate or _n != hidden_size or _m not in self._prefill_down_progcfg:
                     continue
                 if _cores != _down_gx * _down_gy:
                     continue  # the shard grid must match the config the matmul actually runs
-                self._prefill_down_in0_memcfg[_m] = width_sharded_l1_memcfg(
-                    _m // 32, _k // 32, min(_cores, grid.x), max(1, _cores // grid.x)
-                )
+                _shard = _swept_in0_shard(_m // 32, _k // 32, _cores, grid)
+                if _shard is not None:
+                    self._prefill_down_in0_memcfg[_m] = _shard
 
         # DRAM-sharded decode path — now supported for TP>1 too.
         # TP=2 benefit: each chip has smaller dimensions (local_intermediate = intermediate // tp)
