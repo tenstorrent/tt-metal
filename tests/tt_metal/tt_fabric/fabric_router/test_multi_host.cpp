@@ -24,6 +24,9 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "tt_metal/fabric/fabric_context.hpp"
+#include <fmt/format.h>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/distributed_context.hpp>
@@ -1750,6 +1753,55 @@ TEST(MultiHost, T3K2x2AssignZDirectionFabric2DSanity) {
     // Verify that we found Z channels for intermesh connections
     // For 2x2 T3K with 4 channels per connection, bidirectional, we expect Z channels
     EXPECT_GT(z_channel_count, 0) << "Expected Z channels for intermesh connections with assign_z_direction";
+
+    // A FABRIC_2D mesh compiles its Z routers without deadlock avoidance; this is the polarity the torus
+    // side of a Z cable has to match (see T3K2x2AssignZDirectionDeadlockAvoidancePolarity).
+    const auto& fabric_context = control_plane.get_fabric_context();
+    EXPECT_EQ(fabric_context.get_fabric_topology(), tt::tt_fabric::Topology::Mesh);
+    EXPECT_FALSE(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::Z));
+}
+
+// Two 2x2 meshes joined only by Z routers (assign_z_direction). Bring the same MGD up as FABRIC_2D and as
+// each FABRIC_2D_TORUS_* flavour: the Z routers must report the same deadlock-avoidance / first-level-ACK
+// setting (off) in every case, because the rank at the other end of a Z cable may have picked a different
+// fabric config and the two ends of one cable must agree. N/S/E/W keep their per-torus-axis behaviour.
+TEST(MultiHost, T3K2x2AssignZDirectionDeadlockAvoidancePolarity) {
+    const std::filesystem::path t3k_2x2_assign_z_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_assign_z_direction_mesh_graph_descriptor.textproto";
+
+    using tt::tt_fabric::FabricConfig;
+    using tt::tt_fabric::Topology;
+    struct Expected {
+        FabricConfig config;
+        Topology topology;
+        bool east_west;
+        bool north_south;
+    };
+    const std::vector<Expected> table = {
+        {FabricConfig::FABRIC_2D, Topology::Mesh, /*east_west=*/false, /*north_south=*/false},
+        {FabricConfig::FABRIC_2D_TORUS_X, Topology::Torus, /*east_west=*/true, /*north_south=*/false},
+        {FabricConfig::FABRIC_2D_TORUS_Y, Topology::Torus, /*east_west=*/false, /*north_south=*/true},
+        {FabricConfig::FABRIC_2D_TORUS_XY, Topology::Torus, /*east_west=*/true, /*north_south=*/true},
+    };
+
+    for (const auto& row : table) {
+        SCOPED_TRACE(fmt::format("fabric_config={}", enchantum::to_string(row.config)));
+        auto control_plane = make_control_plane(
+            t3k_2x2_assign_z_mesh_graph_desc_path.string(),
+            row.config,
+            tt::tt_fabric::FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+
+        const auto& fabric_context = control_plane->get_fabric_context();
+        EXPECT_EQ(fabric_context.get_fabric_topology(), row.topology);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::EAST), row.east_west);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::WEST), row.east_west);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::NORTH), row.north_south);
+        EXPECT_EQ(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::SOUTH), row.north_south);
+        EXPECT_FALSE(fabric_context.need_deadlock_avoidance_support(eth_chan_directions::Z))
+            << "Z routers must never enable deadlock avoidance (Z is not a torus axis)";
+    }
 }
 
 TEST(MultiHost, TestDual4x8ZDirectionFallbackControlPlaneInit) {

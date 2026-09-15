@@ -1,0 +1,57 @@
+# SPDX-FileCopyrightText: 2025 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Inter-mesh Z routers under a 2D Torus -- hardware coverage for the #56298
+# fix (tt_metal/fabric/fabric_context.cpp: Z routers must NOT enable deadlock
+# avoidance under Topology::Torus). Run on a Z-connected, torus-capable
+# multi-mesh graph so the inter-mesh hop lands on a Z router while the fabric is
+# opened as a Torus -- e.g. the quad 8x4 RING/RING galaxies:
+#
+#   ./tools/scaleout/exabox/run_fabric_tests.sh --config 4x32z --image none \
+#     --test-config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_z_torus_intermesh.yaml \
+#     --filter name.ZTorus
+#
+# The InterMesh group is the load-bearing one: its neighbor exchange crosses the
+# Z cables while every mesh is a Torus, exercising the Z-router-under-torus path.
+# The Intra group is a fast sanity that torus traffic still flows within a mesh.
+
+Tests:
+
+  - name: "ZTorusInterMeshNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "ZTorusIntraMeshNeighborExchange"
+    sync: true
+    fabric_setup:
+      topology: Torus
+      torus_config: XY
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1, 2]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh
