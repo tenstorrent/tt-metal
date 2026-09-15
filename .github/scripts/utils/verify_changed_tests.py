@@ -22,9 +22,10 @@ and the queue only needs the scope to resolve.
 
 Design notes
 ------------
-Entries are keyed on (name, arch, gtest_shard_index). `name` alone is not
-unique: llk_merge_gate_tests.yaml has four "LLK FD wormhole" entries differing
-only by shard, and vllm_model_tests.yaml has entries differing only by arch.
+Entries with an `id` are keyed by it. Legacy entries without one are keyed on
+(name, arch, gtest_shard_index). `name` alone is not unique:
+llk_merge_gate_tests.yaml has four "LLK FD wormhole" entries differing only by
+shard, and vllm_model_tests.yaml has entries differing only by arch.
 
 Edits that cannot change how a test executes do not need hardware:
 
@@ -337,7 +338,11 @@ def parse_entries(text):
 
 
 def entry_key(entry):
+    entry_id = str(entry.get("id", ""))
+    if entry_id:
+        return ("id", entry_id)
     return (
+        "legacy",
         str(entry.get("name", "")),
         str(entry.get("arch", "")),
         str(entry.get("gtest_shard_index", "")),
@@ -345,7 +350,9 @@ def entry_key(entry):
 
 
 def key_str(key):
-    name, arch, shard = key
+    if key[0] == "id":
+        return f"id={key[1]}"
+    _, name, arch, shard = key
     parts = [name]
     if arch:
         parts.append(f"arch={arch}")
@@ -363,7 +370,7 @@ def index_entries(entries, path):
             raise GateError(
                 f"{path}: two entries share the key '{key_str(key)}'. "
                 "The gate cannot tell which one an edit touched -- give them "
-                "distinguishing name/arch/gtest_shard_index values."
+                "distinguishing id/name/arch/gtest_shard_index values."
             )
         index[key] = entry
     return index

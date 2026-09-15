@@ -225,14 +225,22 @@ void HighBwAllGatherDeviceOperation::validate_on_program_cache_miss(
     // participate when it has been linearized into one Hamiltonian ring.
     const auto mesh_shape = input_tensor.device()->shape();
     if (args.linearized_mesh_ring) {
-        const uint32_t snake_lane_count =
-            args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
-        TT_FATAL(
-            mesh_shape[0] > 1 && mesh_shape[1] > 1 && snake_lane_count % 2 == 0,
-            "high_bw_all_gather full-mesh ring requires a 2D mesh whose selected snake orientation has an even "
-            "lane count; mesh={}, orientation={}",
-            mesh_shape,
-            static_cast<uint32_t>(args.snake_ring_orientation));
+        // Parity is a cycle requirement only; the resolver already chose the shape, so check against that.
+        if (args.linearized_mesh_open_path) {
+            TT_FATAL(
+                mesh_shape.mesh_size() > 1,
+                "high_bw_all_gather full-mesh path requires at least two devices; mesh={}",
+                mesh_shape);
+        } else {
+            const uint32_t snake_lane_count =
+                args.snake_ring_orientation == ttnn::ccl::snake_ring::Orientation::Row ? mesh_shape[0] : mesh_shape[1];
+            TT_FATAL(
+                mesh_shape.mesh_size() > 2 && snake_lane_count % 2 == 0,
+                "high_bw_all_gather full-mesh ring requires more than two devices and a selected snake "
+                "orientation with an even lane count; mesh={}, orientation={}",
+                mesh_shape,
+                static_cast<uint32_t>(args.snake_ring_orientation));
+        }
         TT_FATAL(
             ttnn::operations::ccl::common::has_row_major_mesh_coordinates(input_tensor),
             "high_bw_all_gather full-mesh ring currently requires row-major tensor mesh coordinates");
@@ -478,9 +486,10 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             *cluster_axis,
             mesh_shape);
     } else {
+        // The route is not resolved yet, so more than one device is all that can be asserted here.
         TT_FATAL(
-            mesh_shape[0] > 1 && mesh_shape[1] > 1 && (mesh_shape[0] % 2 == 0 || mesh_shape[1] % 2 == 0),
-            "high_bw_all_gather cluster_axis=None requires a 2D mesh with at least one even dimension, got {}",
+            mesh_shape.mesh_size() > 1,
+            "high_bw_all_gather cluster_axis=None requires a mesh with more than one device, got {}",
             mesh_shape);
     }
     TT_FATAL(
@@ -488,6 +497,13 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         "high_bw_all_gather input and output tensors must be on the same mesh device");
 
     const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
+    // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
+    TT_FATAL(
+        !linearized_mesh_ring || fabric_is_2d,
+        "high_bw_all_gather cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
+        "FABRIC_2D_TORUS_X/Y/XY), got {}",
+        fabric_config);
     // Axis 0 is N/S, and axis 1 is E/W.
     // An inactive axis has num_devices = 1, num_links = 0, Linear topology.
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
@@ -526,17 +542,26 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
                                                       : axis_num_devices[0] * axis_num_devices[1];
     const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
     const bool one_active_axis = (axis_num_devices[0] > 1) != (axis_num_devices[1] > 1);
-    const bool fabric_is_2d = ::tt::tt_fabric::is_2d_fabric_config(fabric_config);
     ttnn::ccl::snake_ring::Orientation snake_orientation = linearized_mesh_ring && mesh_shape[0] % 2 != 0
                                                                ? ttnn::ccl::snake_ring::Orientation::Column
                                                                : ttnn::ccl::snake_ring::Orientation::Row;
     std::optional<uint64_t> direct_neighbor_route_hash;
+    bool linearized_mesh_open_path = false;
     if (fabric_is_2d && (linearized_mesh_ring || one_active_axis)) {
-        const auto mesh_ring_plan = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            input_tensor, cluster_axis, collective_num_links, axis_topology, true, "high_bw_all_gather");
-        if (mesh_ring_plan.has_value()) {
-            snake_orientation = mesh_ring_plan->orientation;
-            direct_neighbor_route_hash = mesh_ring_plan->route_plan_hash;
+        // Safe to opt in: this op's line schedule already handles dead endpoints for axis gathers.
+        const auto mesh_route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+            input_tensor,
+            cluster_axis,
+            collective_num_links,
+            axis_topology,
+            true,
+            "high_bw_all_gather",
+            /*allow_open_path=*/linearized_mesh_ring);
+        if (mesh_route.has_value()) {
+            snake_orientation = mesh_route->plan.orientation;
+            direct_neighbor_route_hash = mesh_route->plan.route_plan_hash;
+            linearized_mesh_open_path =
+                linearized_mesh_ring && mesh_route->topology == tt::tt_fabric::Topology::Linear;
         }
     }
     const uint32_t active_axis = cluster_axis.value_or(0);
@@ -573,6 +598,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
             .output_mem_config = output_tensor.memory_config(),
             .cluster_axis = cluster_axis.value_or(0),
             .linearized_mesh_ring = linearized_mesh_ring,
+            .linearized_mesh_open_path = linearized_mesh_open_path,
             .snake_ring_orientation = snake_orientation,
             .fabric_config = fabric_config,
             .axis_topology = axis_topology,

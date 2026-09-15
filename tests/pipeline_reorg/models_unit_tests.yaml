@@ -1761,7 +1761,15 @@
 
 - name: On-device sampling unit tests
   cmd: |
-    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision"
+    exit_code=0
+    pytest --timeout 300 models/common/tests/test_sampling.py -k "ttsampling or num_single_device_vocab_splits or untilize_chunk_count or seed or slot_remap or topk_authoritative_route_decision" || exit_code=$?
+    # Shared-generator behaviour rather than a model's, so it rides along here instead
+    # of reserving its own leg: the async-ahead keep runs before any transformer layer
+    # and reads only torch tensors plus the two device trace-input buffers, so one
+    # device is enough, no weights are loaded, and both files finish in seconds.
+    pytest --timeout 300 models/tt_transformers/tests/test_async_ahead_token_keep_unit.py \
+      models/tt_transformers/tests/test_async_ahead_token_keep_decode.py || exit_code=$?
+    exit $exit_code
   model: tt-model-sampling
   skus:
     wh_n150:
@@ -2080,4 +2088,33 @@
       tier: 2
   owner_id: U03HY7MK4BT # Mark O'Connor
   team: models
+  budget_type: unit
+
+# XTTS-v2 (zero-shot voice-cloning TTS). Blackhole P150 only — no Wormhole / multi-chip numbers
+# exist for this model. The PCC suite is 24 tests in ~6 min warm; the timeout allows for the
+# first-run download of the ~1.9 GB coqui/XTTS-v2 checkpoint into the HF cache.
+# NOTE: the test_tt_eval* tests (eager, traced, traced-long) additionally pull whisper-large-v3
+# (~3 GB), UTMOS and ECAPA2 for objective metrics. They are best-effort and ungated, so the
+# "not eval" filter deselects them here, keeping the job to the deterministic PCC gates and off the
+# extra downloads.
+- name: xtts-v2 unit tests
+  cmd: |
+    set -e
+    unset TT_METAL_WATCHER
+    uv pip install -r models/experimental/xtts/requirements.txt
+    # test_empty_generation runs in the e2e job instead: it needs a full traced pipeline, which
+    # costs 294 s of cold-cache compile here but 118 s there (the e2e perf test has already
+    # compiled it). Keeping it here overran this job's 25 min. Every other pcc test stays.
+    pytest models/experimental/xtts/tests/pcc/ -k "not eval" --timeout=900 \
+      --ignore=models/experimental/xtts/tests/pcc/test_empty_generation.py
+  model: xtts-v2
+  model_family: XTTS
+  skus:
+    bh_p150b_civ2:
+      # Measured 21m03s on a cold JIT cache (0/3829 kernel-cache hits), run 34484668114.
+      # 26 min leaves ~5 min for a first-run 1.9 GB weight download on a fresh runner.
+      timeout: 26
+      tier: 3
+  owner_id: U087HGJ455E # Sudhanshu Singhal
+  team: shield
   budget_type: unit

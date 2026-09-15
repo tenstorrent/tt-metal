@@ -1172,7 +1172,10 @@ targets:
             seq_len: 128
             status: active
             perf:
-              prefill_time_to_first_token: 275
+              # b1 TTFT measured 192-294 ms over 24 scheduled runs 2026-08-21..09-14 (mean 251, sd 34) on every
+              # f10cs* host; centre on the mean with a 0.25 tolerance ([187.5, 312.5]).
+              prefill_time_to_first_token: 250
+              prefill_time_to_first_token_tolerance: 0.25
               # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
               # recent scheduled runs + 3 targeted reruns. The old 13.77 center
               # sat at the top of the range, so its tol-0.15 floor (11.70) tripped

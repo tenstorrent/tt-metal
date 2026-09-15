@@ -403,6 +403,41 @@ def test_duplicate_composite_key_fails_closed(repo: Repo):
     assert "share the key" in stderr
 
 
+def test_id_disambiguates_same_name(repo: Repo):
+    """Unique ids distinguish same-name entries that run on different SKUs."""
+    same_name = textwrap.dedent(
+        """\
+        - id: unit-shared-wh
+          name: shared name
+          cmd: ./build/test/shared-wh
+          skus:
+            wh_n150_civ2:
+              timeout: 5
+          team: llk
+          owner_id: U006
+
+        - id: unit-shared-bh
+          name: shared name
+          cmd: ./build/test/shared-bh
+          skus:
+            bh_p150:
+              timeout: 5
+          team: llk
+          owner_id: U006
+        """
+    )
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", same_name)
+    repo.commit_base()
+    repo.write(
+        "tests/pipeline_reorg/sample_unit_tests.yaml",
+        same_name.replace("./build/test/shared-bh", "./build/test/shared-bh --extra"),
+    )
+    code, payload, _ = repo.scope()
+    assert code == 0
+    assert payload["expected_leg_count"] == 1
+    assert payload["run_legs"][0]["sku"] == "bh_p150"
+
+
 def test_entry_without_skus_fails_closed(repo: Repo):
     no_skus = BASE_TESTS_YAML + textwrap.dedent(
         """

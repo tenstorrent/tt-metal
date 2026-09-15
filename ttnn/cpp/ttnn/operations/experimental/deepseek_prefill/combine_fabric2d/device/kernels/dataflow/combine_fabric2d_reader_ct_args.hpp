@@ -10,8 +10,9 @@
 //
 // Variable-length blocks follow the scalars, in this order:
 //   [SCALAR_CT_ARGS ..)          schedule, `schedule_len` words
-//   [schedule end ..)            assignments, ASSIGNMENT_WORDS each
-//   [assignments end ..)         TensorAccessorArgs, chained on by the program factory
+//   [schedule end ..)            own assignments, ASSIGNMENT_WORDS each
+//   [assignments end ..)         forwarding chunk descriptors, CHUNK_WORDS each
+//   [descriptors end ..)         TensorAccessorArgs, chained on by the program factory
 
 #include "combine_fabric2d_kernel_interface.hpp"
 
@@ -21,8 +22,9 @@
 
 namespace cmbf2d {
 
-// Scalars packed before the variable-length blocks, i.e. the index the schedule starts at.
-constexpr uint32_t READER_SCALAR_CT_ARGS = 24;
+// Scalars packed before the variable-length blocks, i.e. the index the schedule starts at. Asserted against
+// the field list below, so it cannot drift out of step with it.
+constexpr uint32_t READER_SCALAR_CT_ARGS = 23;
 
 struct ReaderCtArgs {
     uint32_t num_l1_slots;
@@ -32,10 +34,9 @@ struct ReaderCtArgs {
     uint32_t ring_addr;
     uint32_t filled_addr;
     uint32_t freed_addr;
-    uint32_t fwd_chunks_per_quarter;
-    uint32_t fwd_pages_per_chunk;
-    uint32_t my_quarter;
-    uint32_t num_incoming_chunks;
+    uint32_t fwd_pages_per_stream;
+    uint32_t my_stream;
+    uint32_t num_forwarding_chunks;
     uint32_t fwd_sem_addr;
     uint32_t nbr_chip_id;
     uint32_t num_assignments;
@@ -46,7 +47,7 @@ struct ReaderCtArgs {
     uint32_t num_experts_per_tok;
     uint32_t dispatch_group_size;
     uint32_t local_split_count;
-    uint32_t my_row;
+    uint32_t my_dg_index;
     uint32_t control_addr;
     uint32_t meta_prefetch_cap;
 
@@ -66,14 +67,13 @@ struct ReaderCtArgs {
         ring_addr(l1.ring),
         filled_addr(plan.ring_filled_addr),
         freed_addr(plan.ring_freed_addr),
-        fwd_chunks_per_quarter(op::relay_chunks_per_stream(op::ring_extent(args))),
-        fwd_pages_per_chunk(plan.pages_per_chunk),
-        // Our quarter of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
-        // from the downstream chip's point of view, so the reader WRITES quarter q of the neighbour's buffer
-        // and READS quarter q of its own — the same q, because every chip runs the same code. Doubles as
+        fwd_pages_per_stream(plan.pages_per_stream),
+        // Our region of the forwarding buffer. (plane, direction) identifies the upstream sender uniquely
+        // from the downstream chip's point of view, so the reader WRITES region q of the neighbour's buffer
+        // and READS region q of its own — the same q, because every chip runs the same code. Doubles as
         // this stream's share of the same-chip run, which it copies after the fabric work.
-        my_quarter(plan.stream),
-        num_incoming_chunks(op::relay_chunks_per_stream(op::ring_extent(args))),
+        my_stream(plan.stream),
+        num_forwarding_chunks(0),  // set from the descriptor block below, so the two cannot disagree
         fwd_sem_addr(plan.fwd_arrived_addr),
         nbr_chip_id(static_cast<uint32_t>(self.downstream_node.chip_id)),
         num_assignments(count_own_assignments(work)),
@@ -84,7 +84,7 @@ struct ReaderCtArgs {
         num_experts_per_tok(args.num_experts_per_tok),
         dispatch_group_size(op::ring_extent(args)),
         local_split_count(op::stream_count(args.num_links)),
-        my_row(op::my_row(args, coord)),
+        my_dg_index(op::my_dg_index(args, coord)),
         control_addr(l1.control),
         meta_prefetch_cap(META_PREFETCH) {
         // Schedule: the work order, relays tagged. An own entry carries its index into the table that
@@ -98,9 +98,19 @@ struct ReaderCtArgs {
                 continue;
             }
             blocks_.push_back(w.dst_chip_id);
-            blocks_.push_back(w.dst_row);
+            blocks_.push_back(w.dst_dg_index);
             blocks_.push_back(w.split_idx);
             blocks_.push_back(w.split_count);
+        }
+        // Chunk descriptors for our own region of the forwarding buffer, in arrival order — which is the
+        // order the upstream sender emits them, because both sides derive it from the same generator. They
+        // are what lets the reader compute every chunk's length, and so its page range, with nothing
+        // exchanged between the two chips.
+        const auto forwarding =
+            op::forwarding_chunks(plan.stream, op::my_dg_index(args, coord), op::ring_extent(args), args.num_links);
+        num_forwarding_chunks = static_cast<uint32_t>(forwarding.size());
+        for (const auto& c : forwarding) {
+            c.append_to(blocks_);
         }
     }
 
@@ -113,10 +123,9 @@ struct ReaderCtArgs {
             ring_addr,
             filled_addr,
             freed_addr,
-            fwd_chunks_per_quarter,
-            fwd_pages_per_chunk,
-            my_quarter,
-            num_incoming_chunks,
+            fwd_pages_per_stream,
+            my_stream,
+            num_forwarding_chunks,
             fwd_sem_addr,
             nbr_chip_id,
             num_assignments,
@@ -127,7 +136,7 @@ struct ReaderCtArgs {
             num_experts_per_tok,
             dispatch_group_size,
             local_split_count,
-            my_row,
+            my_dg_index,
             control_addr,
             meta_prefetch_cap};
         word_arr.insert(word_arr.end(), blocks_.begin(), blocks_.end());
@@ -142,28 +151,29 @@ struct ReaderCtArgs {
         ring_addr(get_compile_time_arg_val(4)),
         filled_addr(get_compile_time_arg_val(5)),
         freed_addr(get_compile_time_arg_val(6)),
-        fwd_chunks_per_quarter(get_compile_time_arg_val(7)),
-        fwd_pages_per_chunk(get_compile_time_arg_val(8)),
-        my_quarter(get_compile_time_arg_val(9)),
-        num_incoming_chunks(get_compile_time_arg_val(10)),
-        fwd_sem_addr(get_compile_time_arg_val(11)),
-        nbr_chip_id(get_compile_time_arg_val(12)),
-        num_assignments(get_compile_time_arg_val(13)),
-        schedule_len(get_compile_time_arg_val(14)),
-        num_routed_experts(get_compile_time_arg_val(15)),
-        experts_per_chip(get_compile_time_arg_val(16)),
-        my_expert_base(get_compile_time_arg_val(17)),
-        num_experts_per_tok(get_compile_time_arg_val(18)),
-        dispatch_group_size(get_compile_time_arg_val(19)),
-        local_split_count(get_compile_time_arg_val(20)),
-        my_row(get_compile_time_arg_val(21)),
-        control_addr(get_compile_time_arg_val(22)),
-        meta_prefetch_cap(get_compile_time_arg_val(23)) {}
+        fwd_pages_per_stream(get_compile_time_arg_val(7)),
+        my_stream(get_compile_time_arg_val(8)),
+        num_forwarding_chunks(get_compile_time_arg_val(9)),
+        fwd_sem_addr(get_compile_time_arg_val(10)),
+        nbr_chip_id(get_compile_time_arg_val(11)),
+        num_assignments(get_compile_time_arg_val(12)),
+        schedule_len(get_compile_time_arg_val(13)),
+        num_routed_experts(get_compile_time_arg_val(14)),
+        experts_per_chip(get_compile_time_arg_val(15)),
+        my_expert_base(get_compile_time_arg_val(16)),
+        num_experts_per_tok(get_compile_time_arg_val(17)),
+        dispatch_group_size(get_compile_time_arg_val(18)),
+        local_split_count(get_compile_time_arg_val(19)),
+        my_dg_index(get_compile_time_arg_val(20)),
+        control_addr(get_compile_time_arg_val(21)),
+        meta_prefetch_cap(get_compile_time_arg_val(22)) {}
 
     static constexpr uint32_t schedule_base = READER_SCALAR_CT_ARGS;
-    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(14);  // schedule_len
+    static constexpr uint32_t assignment_base = schedule_base + get_compile_time_arg_val(13);  // schedule_len
+    static constexpr uint32_t forwarding_chunk_base =
+        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(12);  // num_assignments
     static constexpr uint32_t accessor_base =
-        assignment_base + ASSIGNMENT_WORDS * get_compile_time_arg_val(13);  // num_assignments
+        forwarding_chunk_base + CHUNK_WORDS * get_compile_time_arg_val(9);  // num_forwarding_chunks
 
     // One accessor per DRAM buffer the program factory chained on, in that order.
     static constexpr auto dram_in_args = TensorAccessorArgs<accessor_base>();
@@ -191,5 +201,12 @@ private:
     std::vector<uint32_t> blocks_;  // schedule then assignments, appended after the scalars
 #endif
 };
+
+#ifdef KERNEL_BUILD
+// The scalars are read back by index, so the base the variable-length blocks start at IS the field count.
+static_assert(
+    sizeof(ReaderCtArgs) == READER_SCALAR_CT_ARGS * sizeof(uint32_t),
+    "READER_SCALAR_CT_ARGS no longer matches the field list; the blocks after the scalars would be misread");
+#endif
 
 }  // namespace cmbf2d
