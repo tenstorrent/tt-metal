@@ -21,8 +21,8 @@ on:
           - changed
           - full
   schedule:
-    # Fridays at 03:17 UTC
-    - cron: "17 3 * * 5"
+    # Sundays at 03:17 UTC (Saturday night in Eastern time)
+    - cron: "17 3 * * 0"
 
 permissions:
   actions: read
