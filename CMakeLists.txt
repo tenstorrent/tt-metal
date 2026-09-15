@@ -284,13 +284,22 @@ target_precompile_headers(
         <fmt/format.h>
         <nlohmann/json.hpp>
         <algorithm>
+        <array>
+        <chrono>
         <cstddef>
         <cstdint>
+        <fstream>
         <functional>
         <map>
         <memory>
+        <mutex>
+        <optional>
+        <set>
+        <sstream>
+        <thread>
         <tuple>
         <unordered_map>
+        <unordered_set>
         <variant>
         <vector>
 )

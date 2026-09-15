@@ -538,31 +538,3 @@ def run_moe_perf_with_approximation(
     if perf_failures:
         summary = "; ".join(f"{which}: {msg}" for which, msg in perf_failures)
         raise AssertionError(f"Perf check(s) outside expected range — {summary}")
-
-
-def run_mla_perf_loudbox(
-    command_2x4: str,
-    expected_ns_2x4: float,
-    model_name_2x4: str,
-    subdir: str,
-    num_iterations: int = 1,
-    batch_size: int = 1,
-    margin: float = 0.03,
-    comments_2x4: str = "",
-):
-    """Run and validate the local 2x4 unwrapped-Fabric2D MLA proxy.
-
-    This result is not extrapolated to the production 8x4 TorusXY topology: scaling SDPA alone
-    cannot account for the different CCL topology.
-    """
-    logger.info("=== 2x4 MLA perf test on LB ===")
-    run_model_device_perf_test_with_merge(
-        command=command_2x4,
-        expected_device_perf_ns_per_iteration=expected_ns_2x4,
-        subdir=subdir,
-        model_name=model_name_2x4,
-        num_iterations=num_iterations,
-        batch_size=batch_size,
-        margin=margin,
-        comments=comments_2x4,
-    )

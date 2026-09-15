@@ -1,0 +1,365 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+CPU reference for the XTTS-v2 GPT transformer core, plus a golden-tensor
+generator for the TTNN PCC test.
+
+Block boundary under test:
+
+    inputs_embeds [1, S, 1024]
+        -> GPT2 stack (30 blocks, causal)      (gpt.gpt.h.*)
+        -> ln_f                                (gpt.gpt.ln_f)      [GPT2's final LN]
+        -> final_norm                          (gpt.final_norm)   [XTTS's extra LN]
+        = latents [1, S, 1024]
+
+The transformer core is HuggingFace GPT2Model with the built-in positional embedding
+(wpe) nulled to zeros, so hidden = inputs_embeds (no positional addition inside the
+transformer). For a single unpadded sequence (batch=1) the attention mask is all-ones,
+so the effective attention is standard GPT2 causal.
+
+Reference weights: the real coqui/XTTS-v2 checkpoint (model.pth). We only touch the
+transformer-core tensors (gpt.gpt.h.*, gpt.gpt.ln_f.*, gpt.final_norm.*).
+
+Run to (re)generate goldens:
+    python models/experimental/xtts_v2/reference/xtts_gpt_ref.py --ckpt {path-to-model.pth}
+"""
+
+import argparse
+import functools
+import os
+import pickle
+
+import torch
+
+# ---- XTTS-v2 GPT core config (from coqui config.json + build_hf_gpt_transformer) ----
+GPT_CONFIG = dict(
+    n_embd=1024,
+    n_layer=30,
+    n_head=16,
+    n_inner=4096,  # HF GPT2 default = 4*n_embd; matches mlp.c_fc [1024,4096]
+    activation_function="gelu_new",  # HF GPT2 default (tanh-approx GELU)
+    layer_norm_epsilon=1e-5,  # HF GPT2 default
+    n_positions=2048,  # only bounds the (nulled) wpe; irrelevant to the forward
+    vocab_size=256,  # unused (wte bypassed via inputs_embeds)
+)
+
+# Checkpoint resolution (mirrors tt-metal's HF_MODEL convention): an explicit path wins,
+# then $XTTS_CKPT (a local model.pth), then $XTTS_CKPT_DIR/model.pth (the pipeline scripts'
+# checkpoint-dir convention), otherwise coqui/XTTS-v2 is pulled from the HF hub (and cached
+# by huggingface_hub). Resolved lazily at load time -- importing this module never
+# downloads. Override the repo id with $XTTS_HF_MODEL.
+XTTS_HF_REPO = os.getenv("XTTS_HF_MODEL", "coqui/XTTS-v2")
+DEFAULT_CKPT = None  # sentinel: resolve_ckpt() selects the source at load time
+
+
+def resolve_ckpt(ckpt_path=None):
+    """Resolve the XTTS-v2 checkpoint path:
+    explicit arg > $XTTS_CKPT (model.pth file) > $XTTS_CKPT_DIR/model.pth > HF hub download.
+
+    Whatever the source, the returned path's directory also holds vocab.json (+ config.json):
+    consumers assume the coqui checkpoint-dir layout (XttsV2.__init__ loads the tokenizer's
+    vocab.json from next to model.pth), so the hub fallback fetches those sidecars into the
+    same snapshot dir — otherwise the 1.9 GB download succeeds and the tokenizer load crashes."""
+    if ckpt_path:
+        return ckpt_path
+    env = os.getenv("XTTS_CKPT")
+    if env:
+        return env
+    env_dir = os.getenv("XTTS_CKPT_DIR")
+    if env_dir:
+        return os.path.join(env_dir, "model.pth")
+    from huggingface_hub import hf_hub_download
+
+    for sidecar in ("vocab.json", "config.json"):
+        hf_hub_download(repo_id=XTTS_HF_REPO, filename=sidecar)
+    return hf_hub_download(repo_id=XTTS_HF_REPO, filename="model.pth")
+
+
+GOLDEN_DIR = os.path.join(os.path.dirname(__file__), "..", "golden", "gpt")
+
+
+# --------------------------------------------------------------------------------------
+# Checkpoint loading (stub the TTS package so pickle can resolve config globals)
+# --------------------------------------------------------------------------------------
+# The checkpoint carries coqui's config objects next to the tensors, so weights_only=True cannot
+# read it. These are every class it asks to build; anything else is a substituted file, not ours.
+_CKPT_GLOBALS = {
+    ("collections", "OrderedDict"),
+    ("torch", "FloatStorage"),
+    ("torch", "LongStorage"),
+    ("torch._utils", "_rebuild_tensor_v2"),
+}
+_CKPT_STUBBED = {
+    ("TTS.config.shared_configs", "BaseDatasetConfig"),
+    ("TTS.tts.configs.xtts_config", "XttsConfig"),
+    ("TTS.tts.models.xtts", "XttsArgs"),
+    ("TTS.tts.models.xtts", "XttsAudioConfig"),
+}
+
+
+def _load_restricted(path):
+    """torch.load the checkpoint, refusing every class it does not need to rebuild its tensors."""
+
+    class _Discarded:
+        def __init__(self, *a, **k):
+            pass
+
+        def __setstate__(self, s):
+            pass
+
+    class _Unpickler(pickle.Unpickler):
+        def find_class(self, module, name):
+            if (module, name) in _CKPT_STUBBED:
+                return _Discarded  # coqui's config objects; load_full_state keeps only tensors
+            if (module, name) in _CKPT_GLOBALS:
+                return super().find_class(module, name)
+            raise pickle.UnpicklingError(f"checkpoint asked for an unexpected class: {module}.{name}")
+
+    return torch.load(path, map_location="cpu", weights_only=False, pickle_module=_Shim(_Unpickler))
+
+
+class _Shim:
+    """torch.load wants a module-like object exposing Unpickler, load and a name."""
+
+    __name__ = "pickle"
+
+    def __init__(self, unpickler):
+        self.Unpickler = unpickler
+        self.load = pickle.load
+
+
+@functools.lru_cache(maxsize=2)
+def load_full_state(ckpt_path=None):
+    """Load (and cache) the XTTS checkpoint's tensors.
+
+    Cached because data-parallel serving builds one model instance per chip: on a 1x32 mesh the
+    preprocess_* functions are called 32 times, and re-reading the 1.86 GB model.pth each time
+    dominates startup. The returned dict is read-only as far as callers are concerned — the
+    preprocess_* functions only copy out of it."""
+    sd = _load_restricted(resolve_ckpt(ckpt_path))
+    state = sd["model"] if isinstance(sd, dict) and "model" in sd else sd
+    return {k: v for k, v in state.items() if hasattr(v, "shape")}
+
+
+def load_gpt_core_state(ckpt_path=DEFAULT_CKPT):
+    """Return the transformer-core weights with 'gpt.gpt.'/'gpt.' prefixes stripped.
+
+    Keys returned:
+      - HF GPT2Model names: h.{i}.*, ln_f.*
+      - final_norm.weight / final_norm.bias   (XTTS's extra LayerNorm)
+    """
+    full = load_full_state(ckpt_path)
+    core = {}
+    for k, v in full.items():
+        if k.startswith("gpt.gpt."):  # the HF GPT2Model submodule
+            core[k[len("gpt.gpt.") :]] = v
+        elif k in ("gpt.final_norm.weight", "gpt.final_norm.bias"):
+            core[k[len("gpt.") :]] = v
+    return core
+
+
+# --------------------------------------------------------------------------------------
+# Reference model
+# --------------------------------------------------------------------------------------
+class _NullPositionEmbedding(torch.nn.Module):
+    """Replaces GPT2's wpe: returns zeros, matching coqui null_position_embeddings."""
+
+    def __init__(self, dim):
+        super().__init__()
+        self.dim = dim
+
+    def forward(self, position_ids):
+        return torch.zeros(*position_ids.shape, self.dim)
+
+
+def build_reference(ckpt_path=DEFAULT_CKPT):
+    """Build the ground-truth HF GPT2 core + XTTS final_norm with real weights."""
+    from transformers import GPT2Config, GPT2Model
+
+    cfg = GPT2Config(
+        n_embd=GPT_CONFIG["n_embd"],
+        n_layer=GPT_CONFIG["n_layer"],
+        n_head=GPT_CONFIG["n_head"],
+        n_inner=GPT_CONFIG["n_inner"],
+        activation_function=GPT_CONFIG["activation_function"],
+        layer_norm_epsilon=GPT_CONFIG["layer_norm_epsilon"],
+        n_positions=GPT_CONFIG["n_positions"],
+        n_ctx=GPT_CONFIG["n_positions"],
+        vocab_size=GPT_CONFIG["vocab_size"],
+        resid_pdrop=0.0,
+        embd_pdrop=0.0,
+        attn_pdrop=0.0,
+        use_cache=False,
+    )
+    gpt = GPT2Model(cfg)
+    gpt.wpe = _NullPositionEmbedding(GPT_CONFIG["n_embd"])  # null positional embedding
+
+    core = load_gpt_core_state(ckpt_path)
+    final_norm = torch.nn.LayerNorm(GPT_CONFIG["n_embd"], eps=GPT_CONFIG["layer_norm_epsilon"])
+    final_norm.weight.data = core["final_norm.weight"].float()
+    final_norm.bias.data = core["final_norm.bias"].float()
+
+    gpt_sd = {k: v for k, v in core.items() if not k.startswith("final_norm.")}
+    missing, unexpected = gpt.load_state_dict(gpt_sd, strict=False)
+    # wte/wpe are expected-missing (bypassed / nulled); nothing else should be missing.
+    real_missing = [m for m in missing if not (m.startswith("wte") or m.startswith("wpe"))]
+    assert not real_missing, f"unexpected missing keys: {real_missing[:8]}"
+    assert not unexpected, f"unexpected keys: {unexpected[:8]}"
+
+    gpt.eval()
+    final_norm.eval()
+    return gpt, final_norm
+
+
+def reference_forward(gpt, final_norm, inputs_embeds):
+    """inputs_embeds [1,S,1024] -> (last_hidden_state, latents)."""
+    with torch.no_grad():
+        out = gpt(inputs_embeds=inputs_embeds, use_cache=False)
+        last_hidden = out.last_hidden_state  # after ln_f
+        latents = final_norm(last_hidden)
+    return last_hidden, latents
+
+
+def make_golden_input(ckpt_path=DEFAULT_CKPT, n_text=16, n_mel=48, seed=0):
+    """Construct a realistic seeded inputs_embeds from the real embedding tables:
+    [text_emb + text_pos] ++ [mel_emb + mel_pos]  ->  [1, n_text+n_mel, 1024]."""
+    full = load_full_state(ckpt_path)
+    text_emb_w = full["gpt.text_embedding.weight"].float()  # (6681,1024)
+    mel_emb_w = full["gpt.mel_embedding.weight"].float()  # (1026,1024)
+    text_pos = full["gpt.text_pos_embedding.emb.weight"].float()  # (404,1024)
+    mel_pos = full["gpt.mel_pos_embedding.emb.weight"].float()  # (608,1024)
+
+    g = torch.Generator().manual_seed(seed)
+    text_ids = torch.randint(0, text_emb_w.shape[0], (n_text,), generator=g)
+    mel_ids = torch.randint(0, mel_emb_w.shape[0], (n_mel,), generator=g)
+
+    text_e = text_emb_w[text_ids] + text_pos[:n_text]
+    mel_e = mel_emb_w[mel_ids] + mel_pos[:n_mel]
+    inputs_embeds = torch.cat([text_e, mel_e], dim=0).unsqueeze(0)  # [1,S,1024]
+    return inputs_embeds.contiguous()
+
+
+# --------------------------------------------------------------------------------------
+# End-to-end generation reference (prefill prompt -> greedy decode until stop / max_new)
+# --------------------------------------------------------------------------------------
+START_AUDIO_TOKEN = 1024  # gpt_start_audio_token
+STOP_AUDIO_TOKEN = 1025  # gpt_stop_audio_token
+
+
+def load_gen_head(ckpt_path=DEFAULT_CKPT):
+    """Load the generation-head tensors (kept on CPU / outside the TT transformer block):
+    mel_head (latent->logits), mel_embedding + mel_pos (embed the sampled code), and the
+    text embeddings used to build a prompt."""
+    full = load_full_state(ckpt_path)
+    return {
+        "mel_head_w": full["gpt.mel_head.weight"].float(),  # (1026,1024)
+        "mel_head_b": full["gpt.mel_head.bias"].float(),  # (1026,)
+        "mel_emb": full["gpt.mel_embedding.weight"].float(),  # (1026,1024)
+        "mel_pos": full["gpt.mel_pos_embedding.emb.weight"].float(),  # (608,1024)
+        "text_emb": full["gpt.text_embedding.weight"].float(),  # (6681,1024)
+        "text_pos": full["gpt.text_pos_embedding.emb.weight"].float(),  # (404,1024)
+    }
+
+
+def build_prompt_embeds(heads, n_text=16, seed=0):
+    """A seeded text-only prompt [1, n_text, 1024] (stands in for cond+text until the
+    Perceiver exists). Reference and TTNN use the identical prompt."""
+    g = torch.Generator().manual_seed(seed)
+    text_ids = torch.randint(0, heads["text_emb"].shape[0], (n_text,), generator=g)
+    return (heads["text_emb"][text_ids] + heads["text_pos"][:n_text]).unsqueeze(0).contiguous()
+
+
+def reference_generate(ckpt_path=DEFAULT_CKPT, n_text=16, max_new=24, seed=0, model=None):
+    """Greedy generate: prefill [prompt, START] then decode until STOP or max_new.
+    Returns the prompt, per-step input embeddings (teacher-forcing), codes, logits, latents.
+    Pass model=(gpt, final_norm) to reuse an already-built reference."""
+    heads = load_gen_head(ckpt_path)
+    gpt, final_norm = model if model is not None else build_reference(ckpt_path)
+    prompt = build_prompt_embeds(heads, n_text, seed)
+    mel_emb, mel_pos = heads["mel_emb"], heads["mel_pos"]
+    mh_w, mh_b = heads["mel_head_w"], heads["mel_head_b"]
+
+    def head(latent):  # [1,1,1024] -> [1,1,1026]
+        return latent @ mh_w.t() + mh_b
+
+    with torch.no_grad():
+        start_emb = (mel_emb[START_AUDIO_TOKEN] + mel_pos[0]).view(1, 1, -1)
+        out = gpt(inputs_embeds=torch.cat([prompt, start_emb], dim=1), use_cache=True)
+        past = out.past_key_values
+        last = final_norm(out.last_hidden_state[:, -1:])
+        logits = head(last)
+        code = int(logits.argmax(-1))
+        codes, latents, step_inputs, step_logits = [code], [last], [start_emb], [logits]
+        cur = code
+        for m in range(1, max_new):
+            emb = (mel_emb[cur] + mel_pos[m]).view(1, 1, -1)
+            out = gpt(inputs_embeds=emb, past_key_values=past, use_cache=True)
+            past = out.past_key_values
+            last = final_norm(out.last_hidden_state[:, -1:])
+            logits = head(last)
+            step_inputs.append(emb)
+            step_logits.append(logits)
+            latents.append(last)
+            code = int(logits.argmax(-1))
+            codes.append(code)
+            if code == STOP_AUDIO_TOKEN:
+                break
+            cur = code
+
+    return {
+        "prompt_embeds": prompt,
+        "step_inputs": torch.cat(step_inputs, dim=1),  # [1,T,1024]
+        "ref_codes": torch.tensor(codes),  # [T]
+        "ref_logits": torch.cat(step_logits, dim=1),  # [1,T,1026]
+        "ref_latents": torch.cat(latents, dim=1),  # [1,T,1024]
+        "start_token": START_AUDIO_TOKEN,
+        "stop_token": STOP_AUDIO_TOKEN,
+    }
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ckpt", default=DEFAULT_CKPT)
+    ap.add_argument("--out", default=GOLDEN_DIR)
+    ap.add_argument("--n-text", type=int, default=16)
+    ap.add_argument("--n-mel", type=int, default=48)
+    ap.add_argument("--max-new", type=int, default=24, help="generation golden steps")
+    args = ap.parse_args()
+
+    os.makedirs(args.out, exist_ok=True)
+    print(f"[ref] loading reference from {args.ckpt}")
+    gpt, final_norm = build_reference(args.ckpt)
+    print("[ref] building golden input")
+    inputs_embeds = make_golden_input(args.ckpt, args.n_text, args.n_mel)
+    print(f"[ref] inputs_embeds shape={tuple(inputs_embeds.shape)} " f"std={inputs_embeds.std().item():.4f}")
+    last_hidden, latents = reference_forward(gpt, final_norm, inputs_embeds)
+
+    torch.save(inputs_embeds, os.path.join(args.out, "inputs_embeds.pt"))
+    torch.save(last_hidden, os.path.join(args.out, "last_hidden_state.pt"))
+    torch.save(latents, os.path.join(args.out, "latents.pt"))
+    torch.save({"n_text": args.n_text, "n_mel": args.n_mel, "config": GPT_CONFIG}, os.path.join(args.out, "meta.pt"))
+    print(
+        f"[ref] latents shape={tuple(latents.shape)} "
+        f"mean={latents.mean().item():.5f} std={latents.std().item():.5f}"
+    )
+    print(f"[ref] wrote prefill goldens to {args.out}")
+
+    # Generation golden (prefill + greedy decode)
+    gen_dir = os.path.join(args.out, "generate")
+    os.makedirs(gen_dir, exist_ok=True)
+    print(f"[ref] generating (max_new={args.max_new})")
+    gen = reference_generate(args.ckpt, n_text=args.n_text, max_new=args.max_new)
+    for k in ("prompt_embeds", "step_inputs", "ref_codes", "ref_logits", "ref_latents"):
+        torch.save(gen[k], os.path.join(gen_dir, f"{k}.pt"))
+    torch.save(
+        {"start_token": gen["start_token"], "stop_token": gen["stop_token"], "n_text": args.n_text},
+        os.path.join(gen_dir, "meta.pt"),
+    )
+    print(f"[ref] generated {gen['ref_codes'].numel()} codes: {gen['ref_codes'].tolist()}")
+    print(f"[ref] wrote generation goldens to {gen_dir}")
+
+
+if __name__ == "__main__":
+    main()

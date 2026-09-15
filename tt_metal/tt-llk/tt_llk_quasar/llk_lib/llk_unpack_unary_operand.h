@@ -150,7 +150,7 @@ inline void _llk_unpack_unary_operand_mop_config_(const std::uint32_t buf_desc_i
  * @note Does NOT support tiny-tiles
  */
 template <std::uint32_t UNP_SEL, bool IS_32b_DEST_EN>
-inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape& tensor_shape)
+inline void _llk_unpack_unary_operand_transpose_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles, const TensorShape tensor_shape)
 {
     static_assert((UNP_SEL == p_unpacr::UNP_A) || (UNP_SEL == p_unpacr::UNP_B), "UNP_SEL can only be p_unpacr::UNP_A or p_unpacr::UNP_B for unpack transpose");
 

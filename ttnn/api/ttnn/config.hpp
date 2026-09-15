@@ -87,6 +87,21 @@ public:
     // Defined in config.cpp (uses tt-logger).
     void validate(std::string_view name) const;
 
+    // Applies a JSON object of attribute overrides (the TTNN_CONFIG_OVERRIDES format). Unknown keys and
+    // bad values throw when strict (applying nothing) and are skipped with a warning otherwise.
+    // `source` names the origin (env var, file path) in those messages. Defined in config.cpp.
+    void apply_json_overrides(const std::string& json_text, bool strict = true, const std::string& source = {});
+
+    // Names of the overridable attributes, so callers need not filter dir(CONFIG). Defined in config.cpp.
+    static std::vector<std::string> keys();
+
+    // Applies a config file written by save_to_file (the TTNN_CONFIG_PATH format). A stale or corrupt file
+    // warns and leaves the parsed keys applied rather than failing the process. Defined in config.cpp.
+    void load_from_file(const std::filesystem::path& path);
+
+    // Writes the overridable attributes as JSON, in the format load_from_file reads. Defined in config.cpp.
+    void save_to_file(const std::filesystem::path& path) const;
+
     // Returns all config attributes as key-value pairs for Inspector.
     // Defined in config.cpp (uses reflection for_each).
     std::vector<std::pair<std::string, std::string>> get_config_entries() const;

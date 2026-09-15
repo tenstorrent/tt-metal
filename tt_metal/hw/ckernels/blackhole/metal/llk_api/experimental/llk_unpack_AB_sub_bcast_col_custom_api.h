@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB SUB BCAST COL CUSTOM - SDPA specialized blocked sub path
@@ -16,6 +17,7 @@
 // on Blackhole the SrcB descriptor is not programmed here, so it is unused.
 inline void llk_unpack_AB_sub_bcast_col_init_custom(
     const std::uint32_t operandA, [[maybe_unused]] const std::uint32_t operandB) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
@@ -27,6 +29,7 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t tile_index_a,
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1) {
+    SAN_HOOK(unsupported());
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 

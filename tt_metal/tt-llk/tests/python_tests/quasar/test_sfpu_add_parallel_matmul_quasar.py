@@ -313,7 +313,10 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     outcome = configuration.run()
 
     res_add = torch.tensor(outcome.result, dtype=torch_format)
-    res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
+    res_matmul = torch.tensor(
+        stimuli.collect_buffer_c_results(TestConfig.TENSIX_LOCATION),
+        dtype=torch_format,
+    )
 
     assert len(res_add) == len(golden_add), "add"
     assert len(res_matmul) == len(golden_matmul), "matmul"
