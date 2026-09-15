@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "sol_ring.hpp"
 #include "vsa_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
@@ -176,6 +177,54 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+        joint_strategy,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        scale,
+        compute_kernel_config,
+        num_workers_per_link,
+        num_buffers_per_channel);
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    const std::string& joint_strategy,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    uint32_t num_workers_per_link,
+    uint32_t num_buffers_per_channel) {
+    return ttnn::transformer::sol_ring(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
@@ -889,6 +938,41 @@ void bind_sdpa(nb::module_& mod) {
         mod,
         exp_ring_joint_doc,
         &exp_ring_joint_scaled_dot_product_attention_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("joint_tensor_q") = nb::none(),
+        nb::arg("joint_tensor_k") = nb::none(),
+        nb::arg("joint_tensor_v") = nb::none(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("joint_strategy"),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("num_workers_per_link") = 1,
+        nb::arg("num_buffers_per_channel") = 8);
+
+    const auto* const sol_ring_doc =
+        R"doc(
+        Sol-Attn ring attention. Currently an exact clone of
+        exp_ring_joint_scaled_dot_product_attention, forked so block-sparse routing and the
+        pooled-summary residual can be added against a known-good baseline.
+        )doc";
+
+    ttnn::bind_function<"sol_ring", "ttnn.transformer.">(
+        mod,
+        sol_ring_doc,
+        &sol_ring_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
