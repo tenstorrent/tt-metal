@@ -85,7 +85,7 @@ MESH_SHAPE = _mesh_shape()
 )
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 def test_traced_verify_throughput(mesh_device, device_params, reset_seeds, ensure_gc):
-    """Eager vs traced verify: same tokens, and how many per second."""
+    """Eager vs traced verify: same tokens, how many per second, and what it actually said."""
     del device_params
     if os.environ.get("DFLASH_RUN_TARGET") != "1":
         pytest.skip("set DFLASH_RUN_TARGET=1 to run the full 27B")
@@ -114,19 +114,32 @@ def test_traced_verify_throughput(mesh_device, device_params, reset_seeds, ensur
             f"acceptance {stats.mean_acceptance_length:.3f} tok/step over "
             f"{len(stats.acceptance_lengths)} steps"
         )
-        return stats, dt, n
+        # Decode what it actually said. A throughput number with no output is easy to trust too far:
+        # the equality assert below proves the two arms AGREE, not that either is coherent, and a
+        # target left in a bad state (a missed _set_vision_merge, a stale GDN carry) still emits
+        # fluent-looking tokens at full speed. Reading the text is the cheapest check that the
+        # thing is generating language rather than plausible-shaped noise.
+        cont = tokenizer.decode(stats.output_ids[0, stats.num_input_tokens :], skip_special_tokens=True)
+        logger.info(f"[{label}] -> {cont!r}")
+        return stats, dt, n, cont
 
-    eager_stats, eager_dt, eager_n = run("eager verify")
+    eager_stats, eager_dt, eager_n, eager_text = run("eager verify")
 
     target.enable_traced_verify()
-    traced_stats, traced_dt, traced_n = run("TRACED verify")
+    traced_stats, traced_dt, traced_n, traced_text = run("TRACED verify")
 
     speedup = (eager_dt / eager_n) / (traced_dt / traced_n)
     logger.info(
         f"=== verify trace: {eager_n / eager_dt:.2f} -> {traced_n / traced_dt:.2f} tok/s "
         f"({speedup:.2f}x). Production traced decode is 17.87 tok/s. ==="
     )
-    print(f"\n>>> eager {eager_n / eager_dt:.2f} tok/s -> traced {traced_n / traced_dt:.2f} tok/s ({speedup:.2f}x)\n")
+    print(f"\n>>> eager {eager_n / eager_dt:.2f} tok/s -> traced {traced_n / traced_dt:.2f} tok/s ({speedup:.2f}x)")
+    print(f">>> prompt: {PROMPT!r}")
+    print(f">>> output: {traced_text!r}")
+    if eager_text != traced_text:
+        # The id-level assert below is the real gate; this only makes the difference readable.
+        print(f">>> EAGER DIFFERS: {eager_text!r}")
+    print()
 
     # Greedy + a verifying target: the tokens cannot change. If they did, the trace is wrong.
     assert torch.equal(eager_stats.output_ids, traced_stats.output_ids), (
