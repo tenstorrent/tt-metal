@@ -7,11 +7,13 @@
 
 #include "barrier.h"
 #include "perf.h" // the PERF_COUNTERS_* L1 region constants
+// START_PERF_MEASURE below expands to ZONE_SCOPED, so the zone layer has to be in scope even when a
+// translation unit reaches this header before trisc.cpp includes it. Self-guarded on LLK_PROFILER.
+#include "profiler.h"
 
 #ifdef PERF_COUNTERS_COMPILED
 
 #include "ckernel.h"
-#include "profiler.h" // the zone/timestamp layer (TRISC only)
 
 // BRISC builds the config only; the per-zone measurement layer below also needs LLK_PROFILER.
 // Quasar has no BRISC in this harness: the unpack TRISC does the one-time setup before it releases the others.
@@ -399,7 +401,7 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         // Slot 3 has no reference counter; every bank is armed within a few cycles of INSTRN, so its count is
         // reported over the INSTRN reference.
         const llk::perf::BankRegs regs = llk::perf::bank_regs(static_cast<Bank>(b));
-        bank_cycles[b]                  = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
+        bank_cycles[b]                 = regs.out_l ? llk::perf::read_ref(regs) : bank_cycles[0];
 #else
         bank_cycles[b] = llk::perf::read_ref(llk::perf::bank_regs(static_cast<Bank>(b)));
 #endif
@@ -543,7 +545,11 @@ inline void configure_and_arm_from_brisc()
 
 #endif // PERF_COUNTERS_COMPILED
 
-// One measured scope: NC activates timing only, WC both.
+// One measured scope: NC activates timing only, WC both. Without the profiler there is no zone to open.
+#if defined(LLK_PROFILER)
 #define START_PERF_MEASURE(zone_name) \
     MEASURE_PERF_COUNTERS(zone_name)  \
     ZONE_SCOPED(zone_name)
+#else
+#define START_PERF_MEASURE(zone_name) MEASURE_PERF_COUNTERS(zone_name)
+#endif
