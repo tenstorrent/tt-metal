@@ -39,6 +39,7 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* reach;         // fanout: extent x 2 x (m + 2), tokens reaching >= h hops
     volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
     volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
     uint32_t end;
@@ -64,6 +65,7 @@ Control carve_control() {
     c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(3 * ct.seq_len * ct.topk));
+    c.reach = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * 2u * (ct.extent / 2u + 2u)));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
     c.end = a;
@@ -90,6 +92,17 @@ void read_control_tables(const Control& c) {
     noc_async_read(region_acc.get_noc_addr(0), (uint32_t)c.region, row_bytes);
     // The table carries a trailing sentinel column so a padded token's unguarded lookup maps to -1.
     noc_async_read(table_acc.get_noc_addr(0), (uint32_t)c.table, (ct.num_routed_experts + 1) * 4u);
+    if (ct.fanout) {
+        const auto reach_acc = TensorAccessor(
+            dspf2d::ReaderCtArgs::reach_args, get_arg_val<uint32_t>(dspf2d::ReaderRtArg::kFanoutReachAddr));
+        const uint32_t hops = ct.extent / 2u + 2u;
+        for (uint32_t o = 0; o < ct.extent; o++) {
+            for (uint32_t d = 0; d < 2u; d++) {
+                noc_async_read(
+                    reach_acc.get_noc_addr(o * 2u + d), (uint32_t)(c.reach + (o * 2u + d) * hops), hops * 4u);
+            }
+        }
+    }
     noc_async_read_barrier();
 }
 
@@ -280,6 +293,18 @@ struct Ring {
         published = claimed;
     }
 };
+
+// Under fan-out a chunk is (origin, hop) and its length is how many of that origin's tokens are still
+// in flight at that hop -- not a per-expert count, which is a marginal and cannot express it.
+uint32_t mc_reach(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t hop) {
+    const uint32_t hops = ct.extent / 2u + 2u;
+    return c.reach[(origin_row * 2u + dir_idx) * hops + hop];
+}
+
+uint32_t mc_chunk_len(const Control& c, uint32_t origin_row, uint32_t dir_idx, uint32_t hop, uint32_t link) {
+    const uint32_t n = mc_reach(c, origin_row, dir_idx, hop);
+    return slice_begin(n, link + 1, ct.num_links) - slice_begin(n, link, ct.num_links);
+}
 
 uint32_t chunk_len(const Control& c, uint32_t origin_row, uint32_t e, uint32_t idx, uint32_t count) {
     const uint32_t n = run_len(c, origin_row, e);
