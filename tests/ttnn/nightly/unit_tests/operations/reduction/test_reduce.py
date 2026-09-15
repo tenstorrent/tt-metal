@@ -205,6 +205,34 @@ def test_rm_reduce_h_axis_split(device, reduce_op, dtype, keepdim, shape):
     )
 
 
+@pytest.mark.parametrize("reduce_op", ["mean", "sum"])
+@pytest.mark.parametrize(
+    "dtype,fast_and_approximate_mode", [(ttnn.bfloat16, False), (ttnn.float32, False), (ttnn.float32, True)]
+)
+@pytest.mark.parametrize("height", [31, 193, 256, 257, 449, 513, 1025])
+def test_rm_reduce_h_chunk_reuse(device, reduce_op, dtype, fast_and_approximate_mode, height):
+    # One core owns all five output columns: each short H tail is followed by
+    # another column. Cover native/additive selection and one/multiple H chunks.
+    sub_core_grids = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    torch.manual_seed(0)
+    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    torch_op = torch.mean if reduce_op == "mean" else torch.sum
+    ttnn_op = ttnn.mean if reduce_op == "mean" else ttnn.sum
+    for _ in range(2):
+        torch_input = torch.rand((1, 1, height, 144), dtype=torch_dtype)
+        torch_ref = torch_op(torch_input.float(), dim=-2, keepdim=True).to(torch_dtype)
+        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        tt_output = ttnn_op(
+            tt_input,
+            dim=-2,
+            keepdim=True,
+            sub_core_grids=sub_core_grids,
+            fast_and_approximate_mode=fast_and_approximate_mode,
+        )
+        assert tt_output.layout == ttnn.ROW_MAJOR_LAYOUT
+        torch.testing.assert_close(ttnn.to_torch(tt_output), torch_ref, rtol=0.01, atol=0.02)
+
+
 # Partials are always ROW_MAJOR, so output_layout only selects what the final combine stage emits —
 # orthogonal to dtype, so bfloat16 alone covers it.
 @pytest.mark.parametrize("reduce_op", ["mean", "sum"])

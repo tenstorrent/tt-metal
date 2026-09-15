@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "indexer_score_program_factory.hpp"
 
 #include <algorithm>
@@ -354,9 +355,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     reader_ct.insert(reader_ct.end(), 6, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
     // Cache-slot metadata, same reasoning and the same fixed-width discipline: flag, rt base,
-    // pages-per-slot, mailbox CB, then a placeholder accessor.
+    // pages-per-slot, mailbox CB, cache extent, then a placeholder accessor.
     reader_ct.push_back(0u);
-    reader_ct.insert(reader_ct.end(), 3, 0u);
+    reader_ct.insert(reader_ct.end(), 4, 0u);
     tt::tt_metal::TensorAccessorArgs(*q.buffer()).append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
@@ -391,6 +392,26 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_
     compute_ct.push_back(0u);                        // metadata CB unused
 
     const std::string kdir = "ttnn/cpp/ttnn/operations/experimental/indexer_score/device/kernels/";
+    namespace rh = ttnn::kernel_lib::host;
+    const tt::tt_metal::TensorLayout pool_layout(
+        DataType::BFLOAT16, tt::tt_metal::PageConfig(Layout::TILE), MemoryConfig{});
+    auto pool_plan = rh::make_reduce_plan(
+        rh::ReduceBlockSpec::tiled(
+            (block_pool ? blocks_per_unit : 1) * 32,
+            (block_pool ? block_tiles : 1) * 32,
+            DataType::BFLOAT16,
+            DataType::BFLOAT16,
+            (QC)),
+        tt::tt_metal::ReduceOpMath::MAX,
+        tt::tt_metal::ReduceOpDim::W,
+        1.0F,
+        ReduceFp32Mode::Fast,
+        {q.device()->arch(), false, false, q.device()->l1_size_per_core()});
+    pool_plan.input_policy = compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop;
+    rh::ReduceCallArgs(pool_plan, {cb_id[cb_acc_strip_arg], cb_id[cb_scaler_arg], cb_id[cb_out_strip_arg]})
+        .append_to(compute_ct);
+    rh::ReduceAuxiliaryArgs({cb_id[cb_scaler_arg], pool_plan.auxiliary_tiles}).append_to(reader_ct);
+
     auto reader_id = tt::tt_metal::CreateKernel(
         program, kdir + "reader_indexer_score.cpp", core_ranges, tt::tt_metal::ReaderDataMovementConfig(reader_ct));
     auto writer_id = tt::tt_metal::CreateKernel(

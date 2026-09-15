@@ -10,6 +10,7 @@
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_common.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 
 void kernel_main() {
@@ -21,25 +22,12 @@ void kernel_main() {
     uint32_t batch_size_bytes = get_arg(args::batch_size_bytes);
 
 #ifdef REDUCE_SCALER
-    constexpr auto scaler_bits = get_arg(args::scaler_bits);
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<ttnn::kernel_lib::ReduceAuxiliaryArgs<0>, dfb::scaler>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 #endif
 
-    // Emit tiles in N, W_skip, H, W_chunk order to match the chunked iteration of the
-    // unified reduce compute kernel (row_chunk = DEST_AUTO_LIMIT). For shard_Wt=1 this
-    // degenerates to one column per chunk; for shard_Wt>1 it interleaves columns.
-    // Int32 SFPU max reserves one DST for the binary-fold work tile (DEST_AUTO_LIMIT - 1).
-    // Accurate fp32: the host sets enable_fp32_sfpu so SFPU chunk sizing here matches the
-    // compute kernel.
-    constexpr auto fp32_mode = get_arg(args::enable_fp32_sfpu) != 0 ? ReduceFp32Mode::Accurate : ReduceFp32Mode::Fast;
-    // The data format has to be a constant expression here (it is a template argument below), so it
-    // is read with the free function rather than off a DataflowBuffer object: DataflowBuffer's
-    // constructor is not constexpr, so no such object is usable in a constant expression.
-    constexpr DataFormat reduce_format = get_dataformat(dfb::in0);
-    constexpr bool use_sfpu_reduce_path = is_sfpu_reduce_path<REDUCE_OP, REDUCE_DIM, reduce_format, fp32_mode>();
-    constexpr uint32_t row_chunk =
-        use_sfpu_reduce_path ? (compute_kernel_lib::DEST_AUTO_LIMIT - 1) : compute_kernel_lib::DEST_AUTO_LIMIT;
+    // The host fixes the stream order to match the planned compute call.
+    constexpr uint32_t row_chunk = get_arg(args::reduce_output_tiles);
 
     constexpr uint32_t onetile = 1;
 

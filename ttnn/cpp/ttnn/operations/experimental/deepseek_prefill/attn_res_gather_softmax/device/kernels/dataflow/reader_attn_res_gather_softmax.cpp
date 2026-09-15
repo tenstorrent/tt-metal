@@ -66,8 +66,8 @@ void kernel_main() {
     if (num_stat_rows > 0) {
         // Both reductions are plain sums; the mean this feeds is taken against the
         // full unsharded `d` downstream, not against this rank's share.
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_id_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<pending_args.next_compile_time_args_offset()>;
+        dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
         // q spans the same d as a row of the stream and is the same for every row
         // this core owns, so it is read once and left resident.

@@ -106,11 +106,8 @@ void kernel_main() {
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, num_cores>();
 
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-        cb_identity_scale_in,
-        ckernel::PoolType::MAX,
-        ckernel::ReduceDim::REDUCE_ROW,
-        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+    using Auxiliary = ttnn::kernel_lib::ReduceAuxiliaryArgs<cb_arg_offset + 7>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.

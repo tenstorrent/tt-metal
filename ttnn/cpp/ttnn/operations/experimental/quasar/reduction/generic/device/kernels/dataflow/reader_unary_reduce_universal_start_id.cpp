@@ -9,17 +9,19 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_tiles = get_arg_val<uint32_t>(1);
     uint32_t start_id = get_arg_val<uint32_t>(2);
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(0);
     constexpr auto tensor_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t cb_id_in2 = 2;
-    float scaler_f = __builtin_bit_cast(float, scaler_bits);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in2, REDUCE_OP, REDUCE_DIM>(scaler_f);
+    using Auxiliary = ttnn::kernel_lib::BoundReduceAuxiliaryArgs<
+        ttnn::kernel_lib::ReduceAuxiliaryArgs<tensor_args.next_compile_time_args_offset()>,
+        cb_id_in2>;
+    dataflow_kernel_lib::prepare_reduce_auxiliary_tiles<Auxiliary>();
 
     constexpr uint32_t cb_id_in0 = 0;
 

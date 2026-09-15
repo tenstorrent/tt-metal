@@ -91,6 +91,25 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     }
     TT_FATAL(num_cores > 0, "Reduce W requires at least one worker core");
 
+    namespace rh = ttnn::kernel_lib::host;
+    const rh::ReduceHardwareConfig hardware{device->arch(), fp32_dest_acc_en, false, device->l1_size_per_core()};
+    auto plan_reduction = [&](uint32_t local_Ht) {
+        return make_generic_reduce_sequence(
+            a.tensor_spec(),
+            output.tensor_spec(),
+            operation_attributes.math_op,
+            ReduceOpDim::W,
+            operation_attributes.scaler,
+            ReduceFp32Mode::Fast,
+            hardware,
+            local_Ht,
+            Wt,
+            1,
+            rm_path,
+            rm_path ? &plan : nullptr);
+    };
+    const auto auxiliary_sequence = plan_reduction(1);
+
     ProgramDescriptor desc;
 
     if (rm_path) {
@@ -149,7 +168,7 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
     });
 
     desc.cbs.push_back(CBDescriptor{
-        .total_size = scaler_single_tile_size,
+        .total_size = auxiliary_sequence.auxiliary.tiles.size() * scaler_single_tile_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(CBIndex::c_2),
@@ -184,6 +203,8 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         reader_compile_time_args = {std::bit_cast<uint32_t>(operation_attributes.scaler)};
         TensorAccessorArgs(a).append_to(reader_compile_time_args);
     }
+
+    auxiliary_sequence.append_auxiliary_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args;
     if (rm_path) {
@@ -246,6 +267,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
         };
     }
 
+    const auto reduction_group_1 = plan_reduction(ht_per_core_group_1);
+    reduction_group_1.append_to(compute_kernel_args_group_1);
+    if (!rm_path) {
+        compute_kernel_args_group_1.push_back(reduction_group_1.auxiliary.tiles.size());
+    }
+
     // MIN (negate) and INT32 reduce are rejected in validate() on Quasar (negative_tile / sfpu_reduce
     // are unported), so only the plain MAX/SUM reduce.cpp compute kernel is selected here.
     const std::string compute_kernel =
@@ -279,6 +306,12 @@ tt::tt_metal::ProgramDescriptor ReduceDeviceOperation::ReduceMultiCoreWProgramFa
                 1,                     // NC
                 post_mul_scaler_bits,  // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
             };
+        }
+
+        const auto reduction_group_2 = plan_reduction(ht_per_core_group_2);
+        reduction_group_2.append_to(compute_kernel_args_group_2);
+        if (!rm_path) {
+            compute_kernel_args_group_2.push_back(reduction_group_2.auxiliary.tiles.size());
         }
 
         KernelDescriptor d;

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
+
 #include <string>
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
@@ -266,8 +268,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
     // the physical 128).
     float winv = (grid.num_blocks == 1) ? (1.0f / logical_K) : (static_cast<float>(grid.num_blocks) / logical_K);
     float cinv = is_post_all_gather ? (1.0f / num_distributed_devices) : (1.0f / grid.num_blocks);
-    auto bfloat_cinv = bfloat16(cinv);
-    auto bfloat_cinv_one = bfloat16(1.0f);
     auto bfloat_winv = bfloat16(winv);
 
     // Build mcast NOC coordinates
@@ -355,6 +355,52 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .writer_noc = writer_noc,
         .compute_hw = to_compute_hardware_config(device->arch(), compute_kernel_config),
     };
+    if (!use_welford) {
+        namespace rh = ttnn::kernel_lib::host;
+        rh::ReduceAuxiliaryPlan local_auxiliary{1, {}};
+        if (!is_post_all_gather) {
+            const auto reduce_dtype = fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16;
+            const rh::ReduceHardwareConfig hardware{
+                device->arch(), fp32_dest_acc_en, dst_full_sync_en, device->l1_size_per_core()};
+            const uint32_t logical_tiles = tt::div_up(logical_K, tile_width);
+            TT_FATAL(Kt == logical_tiles, "Sharded layernorm reduction requires tile-rounded logical width");
+            TT_FATAL(
+                logical_tiles > (grid.num_blocks - 1) * block_wt && logical_tiles <= grid.num_blocks * block_wt,
+                "Sharded layernorm reduction requires a nonempty final width block");
+            const uint32_t last_tiles = logical_tiles - (grid.num_blocks - 1) * block_wt;
+            // The existing elementwise column mask also zeros output padding.
+            // Describe full tiles here; the final shard can own fewer tiles.
+            for (uint32_t tiles : {block_wt, last_tiles}) {
+                auto block = rh::ReduceBlockSpec::tiled(block_ht * 32, tiles * 32, reduce_dtype, reduce_dtype);
+                block.resident_input_tiles = block_ht * block_wt;
+                block.input_row_stride_tiles = block_wt;
+                auto plan = rh::make_reduce_plan(
+                    block, ReduceOpMath::SUM, ReduceOpDim::W, winv, ReduceFp32Mode::Fast, hardware);
+                plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+                rh::ReduceCallPlan call{
+                    .input_cb_id = 0,
+                    .auxiliary_cb_id = 1,
+                    .auxiliary_tile_offset = static_cast<uint32_t>(local_auxiliary.tiles.size()),
+                    .output_cb_id = 2,
+                    .accumulator_cb_id = std::nullopt,
+                    .plan = plan};
+                rh::ReduceCallArgs(call).append_to(config.reduce_compute_args);
+                local_auxiliary.tiles.insert(
+                    local_auxiliary.tiles.end(), plan.auxiliary_tiles.begin(), plan.auxiliary_tiles.end());
+                config.reduce_auxiliary_format = plan.find_cb(rh::ReduceCbRole::Auxiliary)->data_format;
+            }
+        } else {
+            local_auxiliary.tiles.push_back({winv, rh::ReduceAuxiliaryTileType::FirstRow, 32});
+        }
+        config.reduce_auxiliary_tiles = local_auxiliary.tiles.size();
+        rh::ReduceAuxiliaryArgs(local_auxiliary).append_to(config.reduce_auxiliary_args);
+        // The cross-core raw reduction either applies the global scale or
+        // carries a first-stage scaled result through with an identity scaler.
+        rh::ReduceAuxiliaryArgs({1, {{cinv, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+            .append_to(config.reduce_auxiliary_args);
+        rh::ReduceAuxiliaryArgs({1, {{1.0F, rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+            .append_to(config.reduce_auxiliary_args);
+    }
     if (operation_attributes.fused_activation.has_value()) {
         const auto& act = operation_attributes.fused_activation.value();
         // The inner tile loop variable in the sharded compute kernels is "w" (dst register index).
@@ -380,8 +426,6 @@ ttnn::device_operation::ProgramArtifacts LayerNormShardedProgramFactory::create_
         .core_ranges = core_ranges,
         .mcast_noc_x = std::move(mcast_noc_x),
         .mcast_noc_y = std::move(mcast_noc_y),
-        .packed_cinv_value = pack_two_bfloat16_into_uint32({bfloat_cinv, bfloat_cinv}),
-        .packed_cinv_value_one = pack_two_bfloat16_into_uint32({bfloat_cinv_one, bfloat_cinv_one}),
         .packed_winv_value = pack_two_bfloat16_into_uint32({bfloat_winv, bfloat_winv}),
         .eps_u = eps_u,
         .single_tile_size = single_tile_size,

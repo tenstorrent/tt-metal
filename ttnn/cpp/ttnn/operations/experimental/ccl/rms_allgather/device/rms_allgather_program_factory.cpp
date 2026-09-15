@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/kernel_lib/host/reduce_host.hpp"
 #include "rms_allgather_program_factory.hpp"
 
 #include <algorithm>
@@ -657,6 +658,37 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         (std::uint32_t)post_reduce_sender_semaphore_id,
         (std::uint32_t)ex_global_cb_index};
 
+    namespace rh = ttnn::kernel_lib::host;
+    const rh::ReduceHardwareConfig reduce_hardware{
+        mesh_device->arch(), fp32_dest_acc_en, false, mesh_device->l1_size_per_core()};
+    const auto make_stats_call = [&](uint32_t tiles, float scalar, compute_kernel_lib::ReduceInputPolicy policy) {
+        auto plan = rh::make_reduce_plan(
+            rh::ReduceBlockSpec::tiled(
+                32,
+                tiles * 32,
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16,
+                fp32_dest_acc_en ? DataType::FLOAT32 : DataType::BFLOAT16),
+            ReduceOpMath::SUM,
+            ReduceOpDim::W,
+            scalar,
+            ReduceFp32Mode::Fast,
+            reduce_hardware);
+        plan.input_policy = policy;
+        plan.reconfig_mode = compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT;
+        return rh::ReduceCallPlan{
+            .input_cb_id = 0, .auxiliary_cb_id = 1, .output_cb_id = 2, .accumulator_cb_id = std::nullopt, .plan = plan};
+    };
+    const auto first_stage_call = make_stats_call(
+        num_blocks_first_stage,
+        use_two_stage_reduce ? 1.0F : 1.0F / num_blocks,
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+    const auto second_stage_call = make_stats_call(
+        use_two_stage_reduce ? num_blocks_first_stage + num_blocks_second_stage - 1 : num_blocks_first_stage,
+        1.0F / num_blocks,
+        compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile);
+    const auto post_call = make_stats_call(
+        num_distributed_devices, 1.0F / num_distributed_devices, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop);
+
     std::vector<uint32_t> writer_compile_time_args = {
         1,  // Gets overwritten in not all to all workers
         in2_cb_index,
@@ -695,6 +727,15 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
     writer_compile_time_args.push_back(num_blocks);
     writer_compile_time_args.push_back(num_mcast_dests);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(writer_compile_time_args);
+    // The first local reduction is still the raw reduce_tile loop; describe
+    // its scaler explicitly. Cross-core calls use the planner's recipes.
+    rh::ReduceAuxiliaryArgs({in2_cb_index, {{1.0F / (block_wt * 32), rh::ReduceAuxiliaryTileType::FirstRow, 32}}})
+        .append_to(writer_compile_time_args);
+    rh::ReduceAuxiliaryArgs({pre_in4_cb_index, first_stage_call.plan.auxiliary_tiles})
+        .append_to(writer_compile_time_args);
+    rh::ReduceAuxiliaryArgs({pre_in4_cb_index, second_stage_call.plan.auxiliary_tiles})
+        .append_to(writer_compile_time_args);
+    rh::ReduceAuxiliaryArgs({in4_cb_index, post_call.plan.auxiliary_tiles}).append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;
@@ -739,6 +780,9 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
         cb_stats_reduced_index,
         ex_global_cb_index,
         signaling_cb};
+    rh::ReduceCallArgs(first_stage_call).append_to(compute_compile_time_args);
+    rh::ReduceCallArgs(second_stage_call).append_to(compute_compile_time_args);
+    rh::ReduceCallArgs(post_call).append_to(compute_compile_time_args);
 
     // reader kernel
 
@@ -934,6 +978,10 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             compute_args.push_back((uint32_t)is_second_stage_reader);
             compute_args.push_back((uint32_t)(!(use_two_stage_reduce && (!is_second_stage_reader))));
             compute_args.push_back((uint32_t)num_distributed_devices);
+            TT_FATAL(compute_args[1] == 1, "RMS all-gather stats calls require one output tile per worker");
+            TT_FATAL(
+                compute_args[5] == post_call.plan.Wt,
+                "RMS all-gather distributed block count must match the post-reduction descriptor");
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id_all_to_all, core, compute_args);
         } else {
             tt::tt_metal::SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
@@ -1122,11 +1170,8 @@ RMSAllGatherMeshWorkloadFactory::cached_program_t RMSAllGatherMeshWorkloadFactor
             writer_mcast_sender_args.push_back(mcast_start.y);
             writer_mcast_sender_args.push_back(mcast_end.x);
             writer_mcast_sender_args.push_back(mcast_end.y);
-            if (use_two_stage_reduce && (!(width_index < 1))) {
-                writer_mcast_sender_args.push_back(cinv_one_bits);
-            } else {
-                writer_mcast_sender_args.push_back(cinv_pre_bits);
-            }
+            // Select the recipe by the worker's role, independently of its scalar encoding.
+            writer_mcast_sender_args.push_back(static_cast<uint32_t>(use_two_stage_reduce && width_index < 1));
             writer_mcast_sender_args.push_back(i);  // Core ID to limit number of cores to do all gather on
             writer_mcast_sender_args.insert(
                 writer_mcast_sender_args.end(), all_gather_rts.begin(), all_gather_rts.end());

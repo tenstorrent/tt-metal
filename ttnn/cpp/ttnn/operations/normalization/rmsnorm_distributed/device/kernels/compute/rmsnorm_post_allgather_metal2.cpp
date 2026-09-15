@@ -8,8 +8,7 @@
  *   E(x**2) is contained in a one tile wide tensor containing E(x**2) in the left most column.
  *
  * Metal 2.0 fork of rmsnorm_post_allgather.cpp: same computation, with named kernel arguments and
- * named dataflow-buffer bindings instead of positional compile-time args and CB indices. The legacy
- * file beside this one still serves consumers that have not migrated.
+ * named dataflow-buffer bindings instead of positional compile-time args and CB indices.
  */
 
 #include <cstdint>
@@ -23,6 +22,7 @@
 #include "api/compute/layernorm.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_plan_args.hpp"
 #include "experimental/kernel_args.h"
 
 ALWI void ACQ() {
@@ -98,8 +98,9 @@ void kernel_main() {
          * RMSNorm reduces sum(x**2) directly into dfb::var for the rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles buffer lifecycle.
          */
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, dfb::stats, dfb::reduce, dfb::var>(
-            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+        using Call = ttnn::kernel_lib::
+            BoundReduceCallArgs<ttnn::kernel_lib::ReduceCallArgs<0>, dfb::stats, dfb::reduce, dfb::var>;
+        compute_kernel_lib::reduce<Call>();
 
         /*
          * 1/sqrt(var + eps)

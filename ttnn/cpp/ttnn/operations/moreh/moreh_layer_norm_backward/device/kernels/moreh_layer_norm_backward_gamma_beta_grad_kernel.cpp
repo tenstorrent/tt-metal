@@ -6,7 +6,7 @@
 // gamma_beta_grad factories. Both bind the same resource names, so a change to this kernel's
 // binding vocabulary or argument schema has to land on both factories together.
 
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "moreh_norm_backward_reduce.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
@@ -16,6 +16,19 @@ void kernel_main() {
     constexpr auto origin_H = get_arg(args::origin_H);
     constexpr auto origin_W = get_arg(args::origin_W);
     constexpr auto NCHt = get_arg(args::NCHt);
+    constexpr auto block_tiles = get_arg(args::reduce_block_tiles);
+    constexpr auto buffer_tiles = get_arg(args::reduce_buffer_tiles);
+#ifdef REDUCE_GRAD_TILES
+    constexpr auto num_blocks = NCHt < block_tiles ? 1 : NCHt / block_tiles;
+#ifdef BETA_GRAD_HAS_VALUE
+    DataflowBuffer reduce_dy(dfb::reduce_dy);
+#endif
+#ifdef GAMMA_GRAD_HAS_VALUE
+    DataflowBuffer reduce_ydy(dfb::reduce_ydy);
+#endif
+#else
+    constexpr uint32_t num_blocks = 1;
+#endif
     constexpr auto Wt = get_arg(args::Wt);
     constexpr bool is_lastdim_layernorm = get_arg(args::is_lastdim_layernorm) == 1;
     constexpr bool is_groupnorm = get_arg(args::is_groupnorm) == 1;
@@ -79,7 +92,7 @@ void kernel_main() {
 #endif
     compute_kernel_hw_startup(dfb::dy, dfb::dy, dfb_out_init);
 
-    dfb_scaler_obj.wait_front(onetile);  // comes from the reader
+    dfb_scaler_obj.wait_front(get_arg(args::reduce_aux_tiles));  // comes from the reader
 
 #ifdef DO_MASK_H
     dfb_mask_h_obj.wait_front(onetile);
@@ -91,23 +104,36 @@ void kernel_main() {
     uint32_t h_idx;
     uint32_t w_idx;
     for (uint32_t outer_idx = 0; outer_idx < num_cols_per_core; outer_idx++) {
-        for (uint32_t inner_idx = 0; inner_idx < NCHt; inner_idx++) {
-            if (is_groupnorm) {
-                h_idx = (inner_idx % HtWt) / Wt;
-                w_idx = (inner_idx % HtWt) % Wt;
-            } else {
-                h_idx = inner_idx;
-                w_idx = outer_idx;
-            }
+        for (uint32_t block = 0; block < num_blocks; ++block) {
+#ifdef REDUCE_GRAD_TILES
+            const uint32_t current_tiles = block + 1 == num_blocks ? NCHt - block * block_tiles : block_tiles;
+#ifdef BETA_GRAD_HAS_VALUE
+            reduce_dy.reserve_back(buffer_tiles);
+#endif
+#ifdef GAMMA_GRAD_HAS_VALUE
+            reduce_ydy.reserve_back(buffer_tiles);
+#endif
+#else
+            const uint32_t current_tiles = NCHt;
+#endif
+            for (uint32_t tile = 0; tile < current_tiles; ++tile) {
+                const uint32_t inner_idx = block * block_tiles + tile;
+                if (is_groupnorm) {
+                    h_idx = (inner_idx % HtWt) / Wt;
+                    w_idx = (inner_idx % HtWt) % Wt;
+                } else {
+                    h_idx = inner_idx;
+                    w_idx = outer_idx;
+                }
 
-            // Compute dycopy
-            // deepcopy and mask(optional)
-            tile_regs_acquire();
-            dfb_dy_obj.wait_front(onetile);  // comes from the reader
-            dfb_dycopy_obj.reserve_back(onetile);
+                // Compute dycopy
+                // deepcopy and mask(optional)
+                tile_regs_acquire();
+                dfb_dy_obj.wait_front(onetile);  // comes from the reader
+                dfb_dycopy_obj.reserve_back(onetile);
 
-            copy_tile_init_with_dt(dfb_dy_obj);
-            copy_tile(dfb::dy, 0, dst0);
+                copy_tile_init_with_dt(dfb_dy_obj);
+                copy_tile(dfb::dy, 0, dst0);
 
 #ifdef DO_MASK_H
             if ((h_idx + 1) % origin_Ht == 0) {
@@ -140,6 +166,16 @@ void kernel_main() {
             // Compute dyadd
             dfb_dycopy_obj.wait_front(onetile);
 #ifdef BETA_GRAD_HAS_VALUE
+#ifdef REDUCE_GRAD_TILES
+            tile_regs_acquire();
+            copy_tile_init_with_dt(dfb_dycopy_obj);
+            copy_tile(dfb::dycopy, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb::reduce_dy);
+            pack_tile<true>(dst0, dfb::reduce_dy, tile);
+            tile_regs_release();
+#else
             if (inner_idx == 0) {
                 tile_regs_acquire();
                 dfb_dyadd_obj.reserve_back(onetile);
@@ -169,6 +205,7 @@ void kernel_main() {
                 dfb_dyadd_obj.push_back(onetile);
                 tile_regs_release();
             }
+#endif  // REDUCE_GRAD_TILES
 #endif  // BETA_GRAD_HAS_VALUE
         // We don't pop dycopy here.
 
@@ -257,6 +294,18 @@ void kernel_main() {
             dfb_ydy_obj.push_back(onetile);
             tile_regs_release();
 
+#ifdef REDUCE_GRAD_TILES
+            dfb_ydy_obj.wait_front(onetile);
+            tile_regs_acquire();
+            copy_tile_init_with_dt(dfb_ydy_obj);
+            copy_tile(dfb::ydy, 0, dst0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(dfb::reduce_ydy);
+            pack_tile<true>(dst0, dfb::reduce_ydy, tile);
+            tile_regs_release();
+            dfb_ydy_obj.pop_front(onetile);
+#else
             // Compute ydyadd
             if (inner_idx == 0) {
                 tile_regs_acquire();
@@ -291,63 +340,59 @@ void kernel_main() {
                 dfb_ydyadd_obj.push_back(onetile);
                 tile_regs_release();
             }
+#endif  // REDUCE_GRAD_TILES
 #endif  // GAMMA_GRAD_HAS_VALUE
 
             dfb_dycopy_obj.pop_front(onetile);
-        }  // inner_idx loop
+            }  // inner_idx loop
 
+#ifdef REDUCE_GRAD_TILES
 #ifdef GAMMA_GRAD_HAS_VALUE
-        // Compute dgamma
-        if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[y * dy]
-            compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::ydyadd, dfb::scaler, dfb::dgamma>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Just copy
-            tile_regs_acquire();
-            dfb_ydyadd_obj.wait_front(onetile);
-            dfb_dgamma_obj.reserve_back(onetile);
-
-            copy_tile_init_with_dt(dfb_ydyadd_obj);
-            copy_tile(dfb::ydyadd, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_dgamma_obj);
-
-            dfb_ydyadd_obj.pop_front(onetile);
-            dfb_dgamma_obj.push_back(onetile);
-            tile_regs_release();
-        }
-#endif  // GAMMA_GRAD_HAS_VALUE
-
+            reduce_ydy.push_back(buffer_tiles);
+            reduce_moreh_grad_block<dfb::reduce_ydy, dfb::dgamma, dfb::ydyadd>(block, num_blocks);
+            reduce_ydy.pop_front(buffer_tiles);
+#endif
 #ifdef BETA_GRAD_HAS_VALUE
-        // Compute dbeta
-        if (is_lastdim_layernorm || is_groupnorm) {
-            // Sum[dy]
-            compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, dfb::dyadd, dfb::scaler, dfb::dbeta>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
-        } else {
-            // Just copy
-            tile_regs_acquire();
-            dfb_dyadd_obj.wait_front(onetile);
-            dfb_dbeta_obj.reserve_back(onetile);
+            reduce_dy.push_back(buffer_tiles);
+            reduce_moreh_grad_block<dfb::reduce_dy, dfb::dbeta, dfb::dyadd>(block, num_blocks);
+            reduce_dy.pop_front(buffer_tiles);
+#endif
+#endif
+        }  // block loop
 
-            copy_tile_init_with_dt(dfb_dyadd_obj);
-            copy_tile(dfb::dyadd, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, dfb_dbeta_obj);
-
-            dfb_dyadd_obj.pop_front(onetile);
-            dfb_dbeta_obj.push_back(onetile);
-            tile_regs_release();
-        }
-#endif  // BETA_GRAD_HAS_VALUE
+#ifndef REDUCE_GRAD_TILES
+        // These layer-norm parameters retain every element within a tile;
+        // only the outer batch dimension is summed.
+#ifdef GAMMA_GRAD_HAS_VALUE
+        tile_regs_acquire();
+        dfb_ydyadd_obj.wait_front(onetile);
+        dfb_dgamma_obj.reserve_back(onetile);
+        copy_tile_init_with_dt(dfb_ydyadd_obj);
+        copy_tile(dfb::ydyadd, 0, dst0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, dfb_dgamma_obj);
+        dfb_ydyadd_obj.pop_front(onetile);
+        dfb_dgamma_obj.push_back(onetile);
+        tile_regs_release();
+#endif
+#ifdef BETA_GRAD_HAS_VALUE
+        tile_regs_acquire();
+        dfb_dyadd_obj.wait_front(onetile);
+        dfb_dbeta_obj.reserve_back(onetile);
+        copy_tile_init_with_dt(dfb_dyadd_obj);
+        copy_tile(dfb::dyadd, 0, dst0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile_with_dt(dst0, dfb_dbeta_obj);
+        dfb_dyadd_obj.pop_front(onetile);
+        dfb_dbeta_obj.push_back(onetile);
+        tile_regs_release();
+#endif
+#endif
 
     }  // outer_idx loop
-    dfb_scaler_obj.pop_front(onetile);
+    dfb_scaler_obj.pop_front(get_arg(args::reduce_aux_tiles));
 
 #ifdef DO_MASK_H
     dfb_mask_h_obj.pop_front(onetile);
