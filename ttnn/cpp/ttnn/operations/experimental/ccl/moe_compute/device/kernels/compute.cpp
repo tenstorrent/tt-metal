@@ -18,7 +18,7 @@
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#include "../../../moe_gpt/device/kernels/swiglu_sfpu.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"

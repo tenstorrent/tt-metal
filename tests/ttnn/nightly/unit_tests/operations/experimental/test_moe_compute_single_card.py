@@ -63,6 +63,7 @@ from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
     validate_e_t,
     validate_matmul,
     validate_combine,
+    validate_combine_torch,
     validate_per_expert_tokens,
     _get_base_pcc_threshold,
 )
@@ -160,10 +161,18 @@ def _run_moe_compute_single_card_test(
     compute_only=True,
     skip_on_ci=False,
     matmul_xfail_on_bh=False,
+    local_combine=False,
+    expect_error=None,
 ):
     """
-    Single-card MoE compute test body. cluster_axis is fixed to None
-    (no dispatch axis on 1x1 mesh).
+    Single-card MoE compute test body. cluster_axis is None (no dispatch axis on a 1x1
+    mesh) unless local_combine=True, which selects axis 0 explicitly; on a 1x1 mesh that
+    axis has size one, so the op takes the same FullLocal path as cluster_axis=None.
+
+    On a 1xN mesh with local_combine=True every device runs one local combine over the same
+    replicated token set and its own expert shard (global expert e lives on device
+    e // experts_per_device), and the outputs are the per-device partials the caller sums.
+    That path needs the conftest ``expect_error`` fixture for its sharded-input rejection check.
 
     The matmul ring size is auto-detected from the live DRAM-bank count (12 on WH, 7/8 on
     BH) — the same ``effective_matmul_ring_size(mesh_device)`` the public op uses — and is used
@@ -191,7 +200,10 @@ def _run_moe_compute_single_card_test(
 
     # Derived dims (mirrors run_moe_compute_test in test_moe_compute_6U.py).
     num_devices = mesh_shape[0] * mesh_shape[1]
-    assert num_devices == 1, "single-card test must be run on a 1x1 mesh"
+    multi_device_local = num_devices > 1
+    if multi_device_local:
+        assert local_combine and mesh_shape[0] == 1, "a multi-device run needs local_combine=True on a 1xN mesh"
+        assert expect_error is not None, "a multi-device run needs the expect_error fixture"
     num_dispatch_devices = num_devices  # cluster_axis is None
     num_replicated_devices = num_devices // num_dispatch_devices
     total_tokens = tokens_per_device * num_dispatch_devices
@@ -203,6 +215,7 @@ def _run_moe_compute_single_card_test(
     logger.info(f"  mesh_shape: {mesh_shape}")
     logger.info(f"  cluster_axis: {cluster_axis}")
     logger.info(f"  compute_only: {compute_only}")
+    logger.info(f"  local_combine: {local_combine}")
     logger.info(f"  num_devices: {num_devices}")
     logger.info(f"  tokens_per_device: {tokens_per_device}, total_tokens: {total_tokens}")
     logger.info(f"  experts: {experts}, experts_per_device: {experts_per_device}")
@@ -253,7 +266,7 @@ def _run_moe_compute_single_card_test(
     expert_scores_mem_config = create_sharded_memory_config(tilize_drain_core, expert_scores_shard_shape, dtype)
 
     # Generate test data.
-    sparse_buffer, expert_indices, expert_scores, _ = gen_sparse_buffer_and_indices(
+    sparse_buffer, expert_indices, expert_scores, original_tokens = gen_sparse_buffer_and_indices(
         tokens_per_device,
         hidden_size,
         experts,
@@ -278,36 +291,51 @@ def _run_moe_compute_single_card_test(
     # Stack the (one) layer along the L dim so compute_matmul_golden gets shape (L, D, E/D, T, H).
     tilize_golden_outputs = tilize_golden_output.unsqueeze(0)
 
-    # Sparse buffer / indices / scores tensors.
-    tt_sparse_buffer = ttnn.from_torch(
-        sparse_buffer,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=dtype,
-        memory_config=sparse_mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
-    )
+    # Sparse buffer / indices / scores tensors. The 1x1 tests shard the per-device stack on
+    # dim 0 (one slice per device). The multi-device local combine replicates one copy of the
+    # dense token set instead: the op requires a replicated input topology, and each device
+    # reads only the rows routed to its own experts (the golden reads the same rows).
+    if multi_device_local:
+        token_mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        tilize_input = original_tokens.reshape(1, total_tokens, hidden_size)
+        token_copies = 1
+    else:
+        token_mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=0)
+        tilize_input = sparse_buffer
+        token_copies = num_devices
+
+    def upload_tilize_input(torch_input, mesh_mapper):
+        return ttnn.from_torch(
+            torch_input,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=dtype,
+            memory_config=sparse_mem_config,
+            mesh_mapper=mesh_mapper,
+        )
+
+    tt_sparse_buffer = upload_tilize_input(tilize_input, token_mesh_mapper)
 
     expert_indices_flat = expert_indices.reshape(total_tokens, selected_experts_k)
-    expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+    expert_indices_replicated = expert_indices_flat.unsqueeze(0).repeat(token_copies, 1, 1)
     tt_expert_indices = ttnn.from_torch(
         expert_indices_replicated,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=ttnn.uint16,
         memory_config=expert_indices_mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=token_mesh_mapper,
     )
 
     expert_scores_flat = expert_scores.reshape(total_tokens, selected_experts_k)
-    expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(num_devices, 1, 1)
+    expert_scores_replicated = expert_scores_flat.unsqueeze(0).repeat(token_copies, 1, 1)
     tt_expert_scores = ttnn.from_torch(
         expert_scores_replicated,
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         dtype=dtype,
         memory_config=expert_scores_mem_config,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=token_mesh_mapper,
     )
 
     #########################################
@@ -391,12 +419,12 @@ def _run_moe_compute_single_card_test(
             device=mesh_device,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            mesh_mapper=token_mesh_mapper if multi_device_local else ttnn.ShardTensorToMesh(mesh_device, dim=1),
         )
 
-    def run_moe_compute_once(optional_combine_output_tensor):
+    def run_moe_compute_once(optional_combine_output_tensor, tilize_input_tensor=None):
         return ttnn.experimental.moe_compute(
-            tt_sparse_buffer,
+            tt_sparse_buffer if tilize_input_tensor is None else tilize_input_tensor,
             tt_expert_indices,
             tt_expert_scores,
             tt_expert_mapping,
@@ -406,9 +434,10 @@ def _run_moe_compute_single_card_test(
             output_height_shard_dim=output_height_shard_dim,
             intermediate_size=N,
             has_bias=has_bias,
-            # cluster_axis=None: required for both compute_only and single-device fused (FullLocal).
-            # topology/num_links/mux/semaphore must be None for both paths.
-            cluster_axis=None,
+            # cluster_axis=None: required for compute_only and for the implicit 1x1 FullLocal
+            # call. local_combine=True instead names the size-one axis 0 explicitly.
+            # topology/num_links/mux/semaphore must be None for all of these paths.
+            cluster_axis=0 if local_combine else None,
             topology=None,
             num_links=None,
             mux_core_range_set=None,
@@ -416,6 +445,7 @@ def _run_moe_compute_single_card_test(
             optional_cross_device_semaphore=None,
             activation_type=activation_type,
             compute_only=compute_only,
+            local_combine=local_combine,
         )
 
     def deallocate_l1_moe_compute_outputs(output_tensors):
@@ -441,6 +471,44 @@ def _run_moe_compute_single_card_test(
         tt_combine_output_tensor = create_combine_output_tensor()
 
     layer_id = 0
+
+    def assert_replicated_outputs(output_tensors):
+        # FullLocal on a multi-device mesh leaves one full-width partial per device and shards no
+        # tensor dimension, so every output keeps the replicated input topology (the op's
+        # compute_output_topologies) instead of an expert-sharded placement from the weights.
+        input_topology = tt_sparse_buffer.tensor_topology()
+        for slot, tensor in enumerate(output_tensors):
+            placements = tensor.tensor_topology().placements()
+            assert all(
+                isinstance(placement, ttnn.PlacementReplicate) for placement in placements
+            ), f"output slot {slot} placements {placements} are not all replicated"
+            assert tensor.tensor_topology() == input_topology, f"output slot {slot} topology differs from the input"
+
+    def validate_combine_output(tt_combine_output, pcc_threshold):
+        if not multi_device_local:
+            # validate_combine uses cluster_axis for the mesh composer; on 1x1, dim=1 is correct.
+            return validate_combine(
+                layer_id,
+                mesh_device,
+                cluster_axis=1,  # single device: either axis works
+                tt_combine_output=tt_combine_output,
+                combine_goldens=combine_goldens,
+                pcc_threshold=pcc_threshold,
+            )
+        # Every device holds one full-width partial over its own experts: compare each device's
+        # output against the golden rows its experts own (the caller sums the partials).
+        output_ref, output_data_map = combine_goldens
+        slot_owner = expert_mapping[0].long()[expert_indices_flat.long()].transpose(0, 1)  # [K, total_tokens]
+        all_passed = True
+        for device_idx, device_tensor in enumerate(ttnn.get_device_tensors(tt_combine_output)):
+            device_data_map = output_data_map * (slot_owner == device_idx).unsqueeze(0)
+            passed = validate_combine_torch(
+                layer_id, ttnn.to_torch(device_tensor, mesh_composer=None), (output_ref, device_data_map), pcc_threshold
+            )
+            logger.info(f"Combine Output Tensor device {device_idx}: {'PASSED' if passed else 'FAILED'}")
+            all_passed = all_passed and passed
+        return all_passed
+
     outputs = run_moe_compute_once(tt_combine_output_tensor)
 
     # ===================================================================
@@ -452,6 +520,8 @@ def _run_moe_compute_single_card_test(
     assert (
         len(outputs) == expected_n
     ), f"compute_only={compute_only} must return {expected_n} tensors. Got {len(outputs)}."
+    if multi_device_local:
+        assert_replicated_outputs(outputs)
 
     if compute_only:
         (
@@ -557,19 +627,12 @@ def _run_moe_compute_single_card_test(
         mesh_device,
         base_pcc_threshold,
         has_bias=has_bias,
+        skip_idle_experts=not compute_only,  # the combine writer path skips zero-token experts
     )
 
     combine_all_passed = True
     if not compute_only:
-        # validate_combine uses cluster_axis for the mesh composer; on 1x1, dim=1 is correct.
-        combine_all_passed = validate_combine(
-            layer_id,
-            mesh_device,
-            cluster_axis=1,  # single device: either axis works
-            tt_combine_output=combine_output_tensor,
-            combine_goldens=combine_goldens,
-            pcc_threshold=base_pcc_threshold,
-        )
+        combine_all_passed = validate_combine_output(combine_output_tensor, base_pcc_threshold)
 
     logger.info(f"\n========== Asserts ==========")
     logger.info(f"Per Expert Total Tokens: {'PASSED' if per_expert_tokens_all_passed else 'FAILED'}")
@@ -605,23 +668,27 @@ def _run_moe_compute_single_card_test(
         assert (
             len(cache_hit_outputs) == expected_n
         ), f"compute_only={compute_only} cache hit must return {expected_n} tensors. Got {len(cache_hit_outputs)}."
+        if multi_device_local:
+            assert_replicated_outputs(cache_hit_outputs)
 
         cache_hit_combine_output_tensor = ttnn.to_memory_config(
             cache_hit_outputs[5], memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        cache_hit_combine_all_passed = validate_combine(
-            layer_id,
-            mesh_device,
-            cluster_axis=1,  # single device: either axis works
-            tt_combine_output=cache_hit_combine_output_tensor,
-            combine_goldens=combine_goldens,
-            pcc_threshold=base_pcc_threshold,
-        )
+        cache_hit_combine_all_passed = validate_combine_output(cache_hit_combine_output_tensor, base_pcc_threshold)
         logger.info(f"Combine Output Tensor Cache Hit: {'PASSED' if cache_hit_combine_all_passed else 'FAILED'}")
         assert cache_hit_combine_all_passed, "Combine output tensor cache-hit verification failed!"
 
         deallocate_l1_moe_compute_outputs(cache_hit_outputs)
         ttnn.deallocate(cache_hit_outputs[5])
+
+        if multi_device_local:
+            # A per-device (sharded) token set is rejected: every device must see the whole
+            # replicated set. The check runs on cache hits too, so the cached program above
+            # does not bypass it.
+            tt_sharded_input = upload_tilize_input(sparse_buffer, ttnn.ShardTensorToMesh(mesh_device, dim=0))
+            with expect_error(RuntimeError, r"fully replicated input topology"):
+                run_moe_compute_once(create_combine_output_tensor(), tilize_input_tensor=tt_sharded_input)
+            ttnn.deallocate(tt_sharded_input)
 
 
 # DeepSeek-shaped workload mirrored on a single WH card so kernels see the same dims.
@@ -807,12 +874,72 @@ def test_moe_compute_single_card_full_local_b1(mesh_device, mesh_shape):
     )
 
 
-# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
-    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
-    # Build minimal valid input shapes; we do NOT need the op to actually run --
-    # validation must reject the bad arg combination before kernel launch.
+def test_moe_compute_single_card_explicit_local_combine(mesh_device, mesh_shape):
+    """local_combine=True with cluster_axis naming a size-one axis matches the implicit 1x1 FullLocal call."""
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=1,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+        local_combine=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "trace_region_size": 500000}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])
+def test_moe_compute_multi_device_local_combine(mesh_device, mesh_shape, expect_error):
+    """local_combine=True on a 1x4 mesh (cluster_axis=0 is the size-one axis): the replicated
+    token set and identical routing metadata go to every device, each device combines its own
+    expert shard, every device's partial matches the golden rows its experts own, all outputs
+    keep the replicated input topology, and a dim-0-sharded input is rejected. The mesh_device
+    fixture skips this on machines with fewer than four devices."""
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("multi-device local combine needs at least two devices")
+    hidden_size = 2048
+    ring_n = effective_matmul_ring_size(mesh_device)
+    _run_moe_compute_single_card_test(
+        mesh_device=mesh_device,
+        mesh_shape=mesh_shape,
+        experts_per_device=16,
+        tokens_per_device=8,
+        selected_experts_k=8,
+        N=512,
+        hidden_size=hidden_size,
+        output_height_shard_dim=4,
+        output_width_shard_dim=auto_output_width_shard_dim(hidden_size, matmul_ring_size=ring_n),
+        dtype=ttnn.bfloat16,
+        activation_type=MoEActivationFunction.SILU,
+        has_bias=False,
+        compute_only=False,
+        local_combine=True,
+        expect_error=expect_error,
+    )
+
+
+def _minimal_rejection_inputs(mesh_device):
+    """Replicated inputs with valid shapes for argument-validation tests. The op must reject
+    the bad argument combination before any kernel launch, so the weights are placeholders."""
     hidden_size = 7168
     tokens_per_device = 32
     experts = 8
@@ -868,25 +995,54 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, 
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
+    return (tt_sparse, tt_indices, tt_scores, tt_mapping, tt_w0_w1, tt_w2)
 
+
+def _call_moe_compute_for_rejection(mesh_device, **overrides):
+    kwargs = dict(
+        layer_id=0,
+        output_height_shard_dim=4,
+        intermediate_size=2048,
+        has_bias=False,
+        cluster_axis=None,
+        topology=None,
+        num_links=None,
+        mux_core_range_set=None,
+        optional_output_tensor=None,
+        optional_cross_device_semaphore=None,
+        activation_type=MoEActivationFunction.SILU,
+        compute_only=False,
+    )
+    kwargs.update(overrides)
+    return ttnn.experimental.moe_compute(*_minimal_rejection_inputs(mesh_device), **kwargs)
+
+
+# Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
+    """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
     with expect_error(RuntimeError, r"compute_only.*cluster_axis"):
-        ttnn.experimental.moe_compute(
-            tt_sparse,
-            tt_indices,
-            tt_scores,
-            tt_mapping,
-            tt_w0_w1,
-            tt_w2,
-            layer_id=0,
-            output_height_shard_dim=4,
-            intermediate_size=2048,
-            has_bias=False,
-            cluster_axis=1,  # <-- conflicting with compute_only=True
-            topology=None,
-            num_links=None,
-            mux_core_range_set=None,
-            optional_output_tensor=None,
-            optional_cross_device_semaphore=None,
-            activation_type=MoEActivationFunction.SILU,
-            compute_only=True,
-        )
+        _call_moe_compute_for_rejection(mesh_device, compute_only=True, cluster_axis=1)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_local_combine_rejects_compute_only(mesh_device, mesh_shape, expect_error):
+    """local_combine=True and compute_only=True are mutually exclusive."""
+    with expect_error(RuntimeError, r"compute_only.*local_combine"):
+        _call_moe_compute_for_rejection(mesh_device, compute_only=True, local_combine=True)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
+def test_moe_compute_local_combine_rejects_shared_experts(mesh_device, mesh_shape, expect_error):
+    """local_combine=True has no shared-expert path; the caller runs shared experts separately."""
+    with expect_error(RuntimeError, r"local_combine.*shared experts"):
+        _call_moe_compute_for_rejection(mesh_device, local_combine=True, num_shared_experts_per_device=1)
+
+
+@pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 4), (1, 4))], indirect=["mesh_device"])
+def test_moe_compute_local_combine_rejects_non_degenerate_axis(mesh_device, mesh_shape, expect_error):
+    """local_combine=True needs a size-one cluster_axis; axis 1 of a 1x4 mesh has four devices."""
+    if mesh_device.get_num_devices() < 2:
+        pytest.skip("needs a mesh with a non-degenerate axis")
+    with expect_error(RuntimeError, r"local-combine cluster_axis 1 must be degenerate"):
+        _call_moe_compute_for_rejection(mesh_device, local_combine=True, cluster_axis=1)

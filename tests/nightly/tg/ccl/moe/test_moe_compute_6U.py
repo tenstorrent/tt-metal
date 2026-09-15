@@ -806,7 +806,14 @@ def validate_matmul(
     base_pcc_threshold,
     *,
     has_bias: bool = False,
+    skip_idle_experts: bool = False,
 ):
+    """Check the two experts left in the matmul double buffer on every device.
+
+    dm1 toggles the output half once per expert it hands to the combine writer. With a combine
+    writer present (compute_only=False) it skips experts with zero tokens, so the halves the last
+    experts land in depend on that device's token counts; pass skip_idle_experts=True there.
+    compute_only keeps the toggle for every expert, so the halves follow the expert index."""
     logger.info(f"\n========== Matmul Output Tensor Validation ==========")
 
     devices = math.prod(mesh_device.shape)
@@ -828,26 +835,23 @@ def validate_matmul(
     )
 
     matmul_all_passed = True
-    # Calculate which experts are still in the double buffer
-    # Buffer toggles for each expert: 0->1->0->1...
-    # So for N experts, the last 2 experts in the buffer are:
-    # - If N is even: buffer 0 has expert N-2, buffer 1 has expert N-1
-    # - If N is odd: buffer 0 has expert N-1, buffer 1 has expert N-2
-    experts_to_check = []
-    if experts_per_device == 1:
-        experts_to_check = [(0, 0)]  # Only one expert in buffer 0
-    elif experts_per_device == 2:
-        experts_to_check = [(0, 0), (1, 1)]  # Expert 0 in buffer 0, expert 1 in buffer 1
-    else:
-        # For >2 experts, determine which 2 experts remain in the buffer
-        if experts_per_device % 2 == 0:
-            # Even number of experts
-            experts_to_check = [(experts_per_device - 2, 0), (experts_per_device - 1, 1)]
-        else:
-            # Odd number of experts
-            experts_to_check = [(experts_per_device - 1, 0), (experts_per_device - 2, 1)]
 
-    logger.info(f"Checking experts in double buffer: {experts_to_check}")
+    # Which experts are still in the double buffer on device d: walk the experts in order and
+    # toggle the half per expert dm1 hands over (0->1->0->1...); the last expert written to each
+    # half is what host readback sees. Without idle skipping this is the fixed rule (N even:
+    # half 0 holds N-2 and half 1 holds N-1; N odd: half 0 holds N-1 and half 1 holds N-2).
+    def experts_in_double_buffer(d):
+        last_expert_in_half = {}
+        half = 0
+        for expert_id in range(experts_per_device):
+            if skip_idle_experts and expert_token_counts[d, expert_id].item() == 0:
+                continue
+            last_expert_in_half[half] = expert_id
+            half ^= 1
+        return sorted((expert_id, half) for half, expert_id in last_expert_in_half.items())
+
+    experts_to_check_per_device = [experts_in_double_buffer(d) for d in range(devices)]
+    logger.info(f"Checking experts in double buffer (per device): {experts_to_check_per_device}")
 
     # smaller batch -> smaller dataset so PCC is less stable. A lower threshold is acceptable.
     MATMUL_PCC_THRESHOLD = 0.987 if total_tokens == 512 else 0.986
@@ -856,13 +860,13 @@ def validate_matmul(
     reshaped_device_outputs = []
     for d in range(devices):
         buffer_token_counts = torch.zeros(2, dtype=expert_token_counts[d].dtype)
-        for expert_id, buffer_idx in experts_to_check:
+        for expert_id, buffer_idx in experts_to_check_per_device[d]:
             buffer_token_counts[buffer_idx] = expert_token_counts[d][expert_id]
         reshaped_device_outputs.append(reshape_func(raw_output[d], buffer_token_counts, d))
     reshaped_device_outputs = torch.stack(reshaped_device_outputs)
 
     for d in range(devices):
-        for expert_id, buffer_idx in experts_to_check:
+        for expert_id, buffer_idx in experts_to_check_per_device[d]:
             active_tokens = expert_token_counts[d, expert_id].item()
             if active_tokens == 0:
                 continue
@@ -920,6 +924,13 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
     else:
         torch_combine_out = ttnn.to_torch(tt_combine_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
 
+    return validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold)
+
+
+def validate_combine_torch(layer_id, torch_combine_out, combine_goldens, pcc_threshold):
+    """Compare an already-composed combine output [K, tokens, hidden] against the golden rows
+    flagged in output_data_map. Slots with no flagged row (a device that owns none of the
+    experts a token selected at that k) are skipped."""
     output_ref, output_data_map = combine_goldens
 
     assert torch_combine_out.shape == output_ref[0].shape
@@ -932,6 +943,8 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
                 vals.append(torch_combine_out[k, t, :])
                 refs.append(output_ref[layer_id, k, t, :])
 
+        if not vals:
+            continue
         vals = torch.stack(vals)
         refs = torch.stack(refs)
         _, pcc_val = comp_pcc(refs, vals)
@@ -2306,6 +2319,7 @@ def _run_moe_compute_impl(
                 mesh_device,
                 base_pcc_threshold,
                 has_bias=has_bias,
+                skip_idle_experts=True,  # fused path: dm1 skips zero-token experts
             ):
                 matmul_all_passed = False
 
