@@ -64,8 +64,10 @@ Two cases actually pay off.
 **Kernel overlap.** In-flight dedup and the server's on-disk cache compile a kernel once
 instead of once per process. That needs the same kernel hash on more than one process, or
 more than once over time. This is the usual win for §4a and §4b: the compile still runs on
-the workload hosts' CPUs, but overlapping kernels are not compiled N times. A per-host
-local-disk `TT_METAL_CACHE` cannot share across processes or hosts.
+the workload hosts' CPUs, but overlapping kernels are not compiled N times. A shared
+on-disk `TT_METAL_CACHE` can reuse *finished* ELFs across processes on one host, but it is
+lock-free: there is no in-flight dedup, so near-simultaneous misses can all compile. It
+also cannot share across hosts.
 
 **Scale-out.** A farm with *more* compile CPU than the application hosts, given a large
 unique kernel list. Kernels hash-shard across endpoints
@@ -124,10 +126,14 @@ a later request for the same kernel skip recompilation.
 
 The default is `/tmp/tt-metal-cache/`. Relocate it when `/tmp` is too small or ephemeral —
 objects and ELFs accumulate for every unique kernel, with no garbage collection, and a few
-large workloads can fill a tmpfs. Use a node-local disk with headroom, and keep it distinct
-from any client `TT_METAL_CACHE` (the layouts differ). Clients with neither `TT_METAL_CACHE`
-nor `$HOME` (common in containers) also fall back to `/tmp/tt-metal-cache/` — set both
-explicitly so they do not collide.
+large workloads can fill a tmpfs. Use a node-local disk with headroom.
+
+Keep it distinct from any client `TT_METAL_CACHE`; the two layouts differ. There is a real
+collision to avoid when the server shares a host with its clients (§4a, §4b): a client
+whose `TT_METAL_CACHE` is unset falls back to `$HOME/.cache/tt-metal-cache/`, but if
+`$HOME` is also unset or missing — common in containers — it falls back to
+`/tmp/tt-metal-cache/`, which is exactly the server's default. Set both variables
+explicitly in that case.
 
 ### Point a client at it
 
@@ -148,19 +154,21 @@ client fails fast instead of falling back to local compilation.
 
 *Several ranks, pytest workers, or model instances on one machine.*
 
-Each process needs its **own** `TT_METAL_CACHE` (sharing one across concurrent processes
-causes compilation conflicts). That isolation is why a local cache gives no cross-process
-reuse. The server's in-flight deduper collapses simultaneous compiles of the same kernel.
+Concurrent processes on one host **can** share a `TT_METAL_CACHE` directory — some tests
+already do. The local cache is lock-free, though, so it has no in-flight dedup across
+processes: if several ranks miss at about the same time, they can all compile the same
+kernel. The compile server eliminates that duplication.
 
 ```bash
 # Terminal 1 — server
 ./build/tools/jit_compile_server
 
-# Terminals 2..N — workloads, one private cache each
+# Terminals 2..N — workloads; a shared cache dir is fine
 export TT_METAL_JIT_SERVER_ENABLE=1
 export TT_METAL_JIT_SERVER_ENDPOINTS=localhost:9876
-TT_METAL_CACHE=/tmp/cache_rank0 python my_workload.py --rank 0 &
-TT_METAL_CACHE=/tmp/cache_rank1 python my_workload.py --rank 1 &
+export TT_METAL_CACHE=/tmp/tt-metal-cache-shared
+python my_workload.py --rank 0 &
+python my_workload.py --rank 1 &
 wait
 ```
 
@@ -199,9 +207,9 @@ Two things to get right:
 
 - **Identical endpoint list, identical order, on every rank.** Otherwise routing diverges
   and dedup fragments.
-- **Per-rank `TT_METAL_CACHE`.** Ranks on the same host must not share one. If `$HOME` is on
-  NFS, prefer a node-local path — a shared-filesystem cache adds latency and contention to
-  the local-hit fast path that is supposed to be cheap.
+- **Prefer a node-local `TT_METAL_CACHE` if `$HOME` is on NFS.** The local-hit fast path is
+  supposed to be cheap; a shared-filesystem cache adds latency. Ranks on the same host may
+  share that directory.
 
 With `tt_run`/`ttrun.py`, `TT_METAL_HOME` and `TT_METAL_CACHE` are forwarded to ranks, and
 the JIT server variables can be passed the same way:
@@ -329,7 +337,7 @@ your sources.
 | `TT_METAL_JIT_SERVER_ENDPOINTS` | unset | Comma-separated `host:port` list. Must be identical and identically ordered across all clients that should share dedup. |
 | `TT_METAL_JIT_SERVER_ENDPOINT` | unset | Single-endpoint fallback, used only when `..._ENDPOINTS` is unset or empty. |
 | `TT_METAL_JIT_PREPROCESS` | unset (off) | Set (any value) to preprocess on the client and ship self-contained `.ii`. See §5b — use only when the server cannot see your sources. |
-| `TT_METAL_CACHE` | `$HOME/.cache/tt-metal-cache/`, else `/tmp/tt-metal-cache/` | Local kernel cache. Must be unique per concurrent process. Checked before any remote request. |
+| `TT_METAL_CACHE` | `$HOME/.cache/tt-metal-cache/`; falls back to `/tmp/tt-metal-cache/` when `$HOME` is unset or does not exist | Local kernel cache. Concurrent processes on one host may share it. Checked before any remote request. The fallback path collides with the server's default cache root — see §3. |
 | `TT_METAL_FORCE_JIT_COMPILE` | unset | Set to bypass all ELF reuse, local and remote. |
 
 ### Server (`jit_compile_server`)
