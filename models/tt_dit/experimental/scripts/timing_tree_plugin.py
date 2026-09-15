@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""pytest plugin: render every DiffVAE decode tree recorded during a test, for tests OUTSIDE
-models/tt_dit/tests/models/vae (whose conftest owns the `timing_tree` fixture).
+"""pytest plugin: render every DiffVAE decode tree recorded during a test that does not request
+the `timing_tree` fixture (models/tt_dit/tests/conftest.py).
 
 The pipeline test in tests/models/ltx sets TT_DIT_STAGE_TIMING=1 but never asks for that fixture,
 so the spans are recorded and then dropped. Load this with

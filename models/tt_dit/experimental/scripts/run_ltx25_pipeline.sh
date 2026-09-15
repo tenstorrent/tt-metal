@@ -70,7 +70,7 @@ PYTEST=(python_env/bin/python -u -m pytest
 # The PERFORMANCE table's VAE decode row expands into stage/block sub-rows (LTX_PERF_BREAKDOWN).
 # Untraced because the tree spans time trace capture, not execution, and BLOCK_PROF's syncs
 # cannot live inside a trace -- so totals here are slower than traced production numbers.
-# The tree is printed by timing_tree_plugin.py (the vae conftest fixture does not reach this test).
+# The tree is printed by timing_tree_plugin.py (this test does not request the timing_tree fixture).
 if [ "${PROFILE:-0}" = 1 ]; then
   OUT_DIR="$PWD/generated/profile/$(date -u +%Y%m%d_%H%M%S)"
   mkdir -p "$OUT_DIR"
