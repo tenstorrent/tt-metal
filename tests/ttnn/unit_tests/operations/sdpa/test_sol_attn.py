@@ -82,6 +82,111 @@ def test_sol_attn_matches_parent_with_provided_mask(device, b, nh, seq, d):
     assert torch.equal(parent, fork), "sol_attn diverged from its parent on the provided-mask path"
 
 
+def _block_mask_program_config(device, chunk_size=128):
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=chunk_size,
+        k_chunk_size=chunk_size,
+        exp_approx_mode=False,
+    )
+
+
+def _dense_equivalent_mask(keep, seq, chunk_size):
+    """Expand a [q_chunks, k_chunks] keep/skip decision into the dense per-(row, col) mask it means."""
+    dense = torch.where(keep, 0.0, float("-inf"))
+    dense = dense.repeat_interleave(chunk_size, dim=0).repeat_interleave(chunk_size, dim=1)
+    return dense.view(1, 1, seq, seq)
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+def test_sol_attn_block_mask_all_ones_is_dense(device):
+    """A block_mask of all 1s must not change anything -- every chunk is kept, same as no mask at all."""
+    b, nh, seq, d, chunk_size = 1, 2, 1024, 128, 128
+    num_chunks = seq // chunk_size
+    q, k, v = _qkv(b, nh, seq, d, seed=21)
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    cfg = _block_mask_program_config(device, chunk_size)
+    block_mask = torch.ones(1, 1, num_chunks, num_chunks, dtype=torch.uint8)
+    tt_block_mask = ttnn.from_torch(block_mask, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8)
+
+    parent = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False, program_config=cfg)
+    )
+    fork = ttnn.to_torch(
+        ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, block_mask=tt_block_mask)
+    )
+    assert torch.equal(parent, fork), "all-1s block_mask diverged from dense"
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+def test_sol_attn_block_mask_matches_dense_equivalent(device):
+    """A random per-q_chunk sparsity pattern (the shape routing actually produces) against two
+    independent references: the parent op fed the equivalent dense mask (PCC, not bit-exact --
+    genuinely skipping a chunk's compute is not required to sum identically to computing it and
+    then zeroing it), and raw torch fp32 (the same bf16 floor as test_sol_attn_matches_torch).
+    """
+    b, nh, seq, d, chunk_size = 1, 2, 1024, 128, 128
+    num_chunks = seq // chunk_size
+    torch.manual_seed(13)
+    q, k, v = _qkv(b, nh, seq, d, seed=13)
+    keep = torch.rand(num_chunks, num_chunks) > 0.5
+    keep[:, 0] = True  # chunk 0 always kept -- matches the kernel's own floor, so oracle and kernel agree
+    block_mask = keep.to(torch.uint8).view(1, 1, num_chunks, num_chunks)
+
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    cfg = _block_mask_program_config(device, chunk_size)
+    tt_block_mask = ttnn.from_torch(block_mask, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8)
+    fork = ttnn.to_torch(
+        ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, block_mask=tt_block_mask)
+    )
+
+    dense_mask = _dense_equivalent_mask(keep, seq, chunk_size).to(torch.bfloat16)
+    tt_dense_mask = dev(dense_mask)
+    parent = ttnn.to_torch(
+        ttnn.transformer.scaled_dot_product_attention(
+            tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, attn_mask=tt_dense_mask
+        )
+    )
+    ok, pcc = comp_pcc(parent.float(), fork.float(), 0.999)
+    logger.info(f"sol_attn block_mask vs parent+dense-mask PCC {pcc}")
+    assert ok, f"PCC {pcc}"
+
+    gt = torch.nn.functional.scaled_dot_product_attention(
+        q.float(), k.float(), v.float(), attn_mask=_dense_equivalent_mask(keep, seq, chunk_size).float()
+    )
+    ok, pcc = comp_pcc(gt, fork.float(), 0.99)
+    logger.info(f"sol_attn block_mask vs torch PCC {pcc}")
+    assert ok, f"PCC {pcc}"
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+def test_sol_attn_block_mask_is_deterministic(device):
+    """Repeated launches with a fixed block_mask must be bitwise equal."""
+    b, nh, seq, d, chunk_size = 1, 2, 1024, 128, 128
+    num_chunks = seq // chunk_size
+    q, k, v = _qkv(b, nh, seq, d, seed=17)
+    torch.manual_seed(17)
+    keep = torch.rand(num_chunks, num_chunks) > 0.5
+    keep[:, 0] = True
+    block_mask = keep.to(torch.uint8).view(1, 1, num_chunks, num_chunks)
+
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    cfg = _block_mask_program_config(device, chunk_size)
+    tt_block_mask = ttnn.from_torch(block_mask, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint8)
+
+    outs = [
+        ttnn.to_torch(
+            ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, program_config=cfg, block_mask=tt_block_mask)
+        )
+        for _ in range(3)
+    ]
+    for i, o in enumerate(outs[1:], start=1):
+        assert torch.equal(outs[0], o), f"launch {i} differs from launch 0"
+
+
 @skip_for_wormhole_b0("sol_attn targets Blackhole")
 def test_sol_attn_is_deterministic(device):
     """Repeated launches must be bitwise equal, or no later PCC gate has a fixed target."""
