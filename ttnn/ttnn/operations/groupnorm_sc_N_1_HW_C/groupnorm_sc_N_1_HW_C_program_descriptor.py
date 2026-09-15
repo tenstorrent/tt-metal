@@ -33,7 +33,8 @@ CHUNK_TILES_TARGET = 32  # tiles per (chunk_rows x cols_per_group) block; chunk_
 X_DEPTH = 2  # streaming x ring depth, in chunks
 X_RM_DEPTH = 2  # RM stick ring depth, in tile-rows
 MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
-OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * cols_per_group tiles
+OUT_BLOCK_TILES_TARGET = 8  # output tiles per writer barrier (examples/double_buffer: 4-8 in flight saturates)
+OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * out_block tiles (writer double-buffering)
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
 L1_BUDGET_BYTES_DEFAULT = 1_000_000  # min(1 MB, worker L1 - 200 KiB) on WH/BH is the 1 MB term
 MATH_FIDELITY = ttnn.MathFidelity.HiFi4
@@ -42,6 +43,10 @@ DST_FULL_SYNC_EN = True
 MATH_APPROX_MODE = False
 
 TILE = 32
+
+# Bytes per element for the RM-stick arithmetic (host `element_size()` raises for block formats).
+# bfloat8_b never takes the RM path (feature_spec INVALID), so its entry only keeps the expressions finite.
+_ELEM_SIZE = {ttnn.bfloat16: 2, ttnn.float32: 4, ttnn.bfloat8_b: 1}
 
 # Regime-pin contract (acceptance test): module-level overrides of the two host knobs.
 _l1_budget_bytes_override = None
@@ -274,6 +279,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     num_col_groups = Ct_core // cols
     num_row_chunks = Ht_core // chunk_rows
     chunk = chunk_rows * cols
+    # writer store block: tiles per NoC barrier, independent of cols (cols can be 1 on wide grids)
+    out_block = _largest_divisor_leq(chunk, OUT_BLOCK_TILES_TARGET)
     blk = Ht_core * Ct_core  # == num_col_groups * num_row_chunks * chunk (no ragged blocks)
     in1_num_subblocks = math.ceil(Kg / dest_limit)
     out_subblock_w = min(Kg, dest_limit)
@@ -283,12 +290,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     y_tile_bytes = output_tensor.buffer_page_size()
     f32_tile_bytes = ttnn.tile_size(ttnn.float32)
     scaler_tile_bytes = ttnn.tile_size(ttnn.bfloat16)
-    x_elem_size = input_tensor.element_size()
+    x_elem_size = _ELEM_SIZE[input_tensor.dtype]
     x_page_bytes = input_tensor.buffer_page_size()  # tile (TILE input) or stick (RM input)
     g_dtype = affine.dtype if affine is not None else ttnn.bfloat16
     g_tile_bytes = ttnn.tile_size(g_dtype)
-    g_elem_size = affine.element_size() if affine is not None else 2
+    g_elem_size = _ELEM_SIZE[g_dtype]
     g_is_tile = int(affine is not None and affine.layout == ttnn.TILE_LAYOUT)
+    g_is_bfp = int(g_dtype == ttnn.bfloat8_b)  # block format: the reader fetches the whole tile page
     g_page_bytes = affine.buffer_page_size() if affine is not None else g_tile_bytes
 
     # ---- core ranges -------------------------------------------------------------------------
@@ -326,7 +334,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     add(CB_STATS_T, 2, f32_tile_bytes, ttnn.float32)
     add(CB_A_FULL, cols, f32_tile_bytes, ttnn.float32)
     add(CB_B_FULL, cols, f32_tile_bytes, ttnn.float32)
-    add(CB_OUT, OUT_DEPTH_FACTOR * cols, y_tile_bytes, output_tensor.dtype)
+    add(CB_OUT, OUT_DEPTH_FACTOR * out_block, y_tile_bytes, output_tensor.dtype)
 
     # ---- regime: resident_2d vs streaming_2d (host-side, exact) -----------------------------
     l1_budget = _l1_budget_bytes_override if _l1_budget_bytes_override is not None else L1_BUDGET_BYTES_DEFAULT
@@ -389,14 +397,15 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         x_page_bytes,
         g_elem_size,
         g_is_tile,
+        g_is_bfp,
         g_page_bytes,
         C,
         G,
         HW,
         Ht,
         Ct,
-    ]  # 27 scalars, then the accessors (TA_BASE = 27 in the reader)
-    assert len(reader_ct) == 27
+    ]  # 28 scalars, then the accessors (TA_BASE = 28 in the reader)
+    assert len(reader_ct) == 28
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -424,12 +433,13 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         Ct,
         gather_tiles_per_stat,
         SEM_GATHER,
-    ]  # 14 scalars → McastArgs CT base = 14
+        out_block,
+    ]  # 15 scalars → McastArgs CT base = 15
     writer_mc_ct_base = len(writer_ct)
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_scalars = 12  # McastArgs RT base (MC_RT in the writer)
-    assert writer_mc_ct_base == 14
+    assert writer_mc_ct_base == 15
 
     compute_ct = [
         CB_X_PASS1,

@@ -286,6 +286,13 @@ void kernel_main() {
                 // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
                 // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
                 // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
+                //
+                // Ordering: the chain below reads a_T (tile tl of cb_a_full) with WaitPolicy::None, but that tile
+                // was packed by the chain just above. Unpack, math and pack are separate threads; the ONLY thing
+                // that orders "pack wrote a_T to L1" against "unpack reads a_T" is CB credit, so wait for it here.
+                // Without this the unpacker can read stale L1 (non-deterministic per-element errors, seen on
+                // RM input + gamma_only where no beta bcast sat between the two chains).
+                cb_wait_front(cb_a_full, tl + 1);
                 if constexpr (has_beta) {
                     ckl::unary_bcast<BroadcastDim::Row, input(cb_beta_row), output(cb_beta_full)>(
                         IterationShape::one_tile());

@@ -58,7 +58,8 @@ void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(11);
     constexpr uint32_t gather_tiles_per_stat = get_compile_time_arg_val(12);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(13);
-    constexpr uint32_t MC_CT = 14;
+    constexpr uint32_t out_block = get_compile_time_arg_val(14);  // tiles per store barrier (divides chunk)
+    constexpr uint32_t MC_CT = 15;
     constexpr uint32_t MC_RT = 12;
     constexpr auto mc = McastArgs<MC_CT, MC_RT>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
@@ -78,6 +79,9 @@ void kernel_main() {
     const uint32_t num_participants = get_arg_val<uint32_t>(11);  // every core of the rectangle (incl. idle)
 
     constexpr uint32_t num_stats = 2 * Kg;
+    constexpr uint32_t chunk = chunk_rows * cols;
+    constexpr uint32_t out_blocks_per_chunk = chunk / out_block;
+    static_assert(chunk % out_block == 0, "out_block must divide the chunk (host derives it so)");
     constexpr uint32_t f32_tile_bytes = get_tile_size(cb_partial);
     constexpr uint32_t gather_tiles = num_stats * gather_tiles_per_stat;
     constexpr uint32_t y_tile_bytes = get_tile_size(cb_out);
@@ -115,21 +119,25 @@ void kernel_main() {
         sem_gather.up(noc, root_x, root_y, 1);
     };
 
-    // cb_out -> DRAM tiles of this core's block, one barrier per tile-row of `cols` tiles.
+    // cb_out -> DRAM tiles of this core's block. Compute packs the chunk row-major (chunk_rows x cols, one push
+    // per tile); the writer drains it in `out_block`-tile groups with ONE barrier per group, so the number of
+    // tiles in flight per barrier is a host knob (OUT_BLOCK_TILES_TARGET) and not an accident of `cols`
+    // (which is 1 whenever the ct split gives a core a single tile-column).
     auto store_image = [&](uint32_t n) {
         for (uint32_t cg = 0; cg < num_col_groups; ++cg) {
             for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
-                for (uint32_t i = 0; i < chunk_rows; ++i) {
-                    cb_wait_front(cb_out, cols);
+                for (uint32_t b = 0; b < out_blocks_per_chunk; ++b) {
+                    cb_wait_front(cb_out, out_block);
                     const uint32_t l1 = get_read_ptr(cb_out);
-                    const uint32_t r = row_begin + rc * chunk_rows + i;
-                    for (uint32_t j = 0; j < cols; ++j) {
-                        const uint32_t t = col_begin + cg * cols + j;
+                    for (uint32_t k = 0; k < out_block; ++k) {
+                        const uint32_t idx = b * out_block + k;  // linear tile index inside the chunk
+                        const uint32_t r = row_begin + rc * chunk_rows + idx / cols;
+                        const uint32_t t = col_begin + cg * cols + idx % cols;
                         const uint32_t page = n * Ht * Ct + r * Ct + t;
-                        noc_async_write(l1 + j * y_tile_bytes, out_acc.get_noc_addr(page), y_tile_bytes);
+                        noc_async_write(l1 + k * y_tile_bytes, out_acc.get_noc_addr(page), y_tile_bytes);
                     }
                     noc_async_write_barrier();
-                    cb_pop_front(cb_out, cols);
+                    cb_pop_front(cb_out, out_block);
                 }
             }
         }

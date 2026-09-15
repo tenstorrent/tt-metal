@@ -55,13 +55,14 @@ void kernel_main() {
     constexpr uint32_t x_page_bytes = get_compile_time_arg_val(18);
     constexpr uint32_t g_elem_size = get_compile_time_arg_val(19);
     constexpr bool g_is_tile = get_compile_time_arg_val(20) != 0;
-    [[maybe_unused]] constexpr uint32_t g_page_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t C = get_compile_time_arg_val(22);
-    constexpr uint32_t G = get_compile_time_arg_val(23);
-    constexpr uint32_t HW = get_compile_time_arg_val(24);
-    constexpr uint32_t Ht = get_compile_time_arg_val(25);
-    constexpr uint32_t Ct = get_compile_time_arg_val(26);
-    constexpr uint32_t TA_BASE = 27;
+    constexpr bool g_is_bfp = get_compile_time_arg_val(21) != 0;  // bfloat8_b affine: whole-page reads
+    [[maybe_unused]] constexpr uint32_t g_page_bytes = get_compile_time_arg_val(22);
+    constexpr uint32_t C = get_compile_time_arg_val(23);
+    constexpr uint32_t G = get_compile_time_arg_val(24);
+    constexpr uint32_t HW = get_compile_time_arg_val(25);
+    constexpr uint32_t Ht = get_compile_time_arg_val(26);
+    constexpr uint32_t Ct = get_compile_time_arg_val(27);
+    constexpr uint32_t TA_BASE = 28;
 
     constexpr auto x_args = TensorAccessorArgs<TA_BASE>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<x_args.next_compile_time_args_offset()>();
@@ -184,7 +185,11 @@ void kernel_main() {
         uint32_t l1 = l1_base;
         for (uint32_t tl = 0; tl < cols; ++tl) {
             const uint32_t T = col_begin + cg * cols + tl;
-            if constexpr (g_is_tile) {
+            if constexpr (g_is_tile && g_is_bfp) {
+                // bfloat8_b TILE affine: a block format has no addressable row 0 (shared-exponent header +
+                // packed mantissas), so fetch the whole tile page; rows 1..31 are the tensor's own zero padding.
+                noc_async_read(acc.get_noc_addr(T, 0), l1, g_tile_bytes);
+            } else if constexpr (g_is_tile) {
                 // TILE affine: row 0 of faces 0 and 1 of page T are already at the right offsets.
                 noc_async_read(acc.get_noc_addr(T, 0), l1, half_row_bytes);
                 noc_async_read(acc.get_noc_addr(T, face_bytes), l1 + face_bytes, half_row_bytes);
@@ -205,6 +210,28 @@ void kernel_main() {
                     row1[w] = 0u;
                 }
                 l1 += g_tile_bytes;
+            }
+        }
+        // c_non_aligned: the last channel tile's lanes >= C carry whatever followed the stick in DRAM (RM
+        // affine reads a full 32-lane run). They must be ZERO, not merely masked: pass 2 writes
+        // y = 0 * a_T + b_T = beta into those output lanes, and a bfloat8_b output tile shares one exponent per
+        // 16-lane block, so garbage there destroys the valid neighbouring channels (seen as PCC 0.96 on
+        // (1,1,64,50) bf8b). TILE affine pages are zero-padded by the tensor itself; bf8b pages are read whole.
+        if constexpr (!g_is_bfp) {
+            constexpr uint32_t c_tail = C % 32;
+            if (c_tail != 0) {
+                const uint32_t T_last = Ct - 1;
+                const uint32_t T_first = col_begin + cg * cols;
+                if (T_last >= T_first && T_last < T_first + cols) {
+                    const uint32_t tile_l1 = l1_base + (T_last - T_first) * g_tile_bytes;
+                    for (uint32_t lane = c_tail; lane < 32; ++lane) {
+                        const uint32_t off = (lane < 16) ? lane * g_elem_size : face_bytes + (lane - 16) * g_elem_size;
+                        volatile tt_l1_ptr uint8_t* p = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile_l1 + off);
+                        for (uint32_t b = 0; b < g_elem_size; ++b) {
+                            p[b] = 0u;
+                        }
+                    }
+                }
             }
         }
         cb_push_back(cb_row, cols);

@@ -79,18 +79,27 @@ INPUT_TAGGERS = {
 # 2. SUPPORTED
 # ---------------------------------------------------------------------------
 #
-# Phase 0: bf16 activations, both input layouts, tile-aligned HW and C, BOTH group
-# alignments (the membership-matrix path is alignment-agnostic), all three affine call
-# patterns with bf16 weights in either layout. "none" is the canonical no-weight sentinel
-# and is always legal.
+# Phase 0: every TARGET dtype for activations and weights (the pipeline is dtype-agnostic: page
+# formats come from the tensors, all statistics are Float32 pages accumulated in fp32 DEST), both
+# input layouts, tile-aligned HW and C, BOTH group alignments (the membership-matrix path is
+# alignment-agnostic), all three affine call patterns with weights in either layout. "none" is
+# the canonical no-weight sentinel and is always legal. bfloat8_b + ROW_MAJOR (activation or
+# weight) is structurally impossible and lives in feature_spec.INVALID, never here.
+#
+# Alignment: a TILE-layout input carries zero-padded rows/lanes, so the column sums over padded
+# rows contribute 0 and the membership matrix's zero columns (`ch >= C`) drop padded lanes —
+# `hw_non_aligned` and `c_non_aligned` need no extra kernel path for TILE input. RM input is
+# tilized in-kernel from sticks: `c_non_aligned` works (the stick's alignment padding is finite and
+# masked by E_T), but `hw_non_aligned` does not yet — the stick reader walks past the image's last
+# row (see EXCLUSIONS).
 
 SUPPORTED = {
-    "dtype": [ttnn.bfloat16],
+    "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-    "alignment": ["tile_aligned"],
+    "alignment": ["tile_aligned", "hw_non_aligned", "c_non_aligned"],
     "groups_alignment": ["group_aligned", "group_straddling"],
     "affine": ["gamma_beta", "gamma_only", "no_affine"],
-    "affine_dtype": [ttnn.bfloat16, "none"],
+    "affine_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, "none"],
     "affine_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, "none"],
 }
 
@@ -99,7 +108,13 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+EXCLUSIONS = [
+    # RM input whose HW is not a multiple of 32: `read_sticks_for_tilize` reads 32 * chunk_rows sticks per
+    # tile-row block, so the last block of an image reads rows past HW (the next image / past the buffer)
+    # into the statistics. Lifting this = zero-filling the sticks beyond HW in cb_x_rm before the tilize
+    # (refinement candidate; see op_requirements.md).
+    {"layout": ttnn.ROW_MAJOR_LAYOUT, "alignment": "hw_non_aligned"},
+]
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +146,20 @@ def _affine_axes(gamma, beta):
     return affine, affine_dtype, affine_layout
 
 
-def validate(input_tensor, num_groups, *, gamma=None, beta=None):
+def validate(input_tensor, num_groups, *, gamma=None, beta=None, compute_kernel_config=None):
+    # Precision convention (.claude/references/precision_convention.md): `fp32_dest_acc_en` is read
+    # from the caller's config, never silently overridden. `fp32_dest_acc_en` is not a feature_spec
+    # axis for this op, so the refusal below is the runtime form of the convention's EXCLUSIONS
+    # entry: the statistics path is a Float32-page matmul (`[S;Q] x E^T`, `[mean;rstd] x E_T`) whose
+    # correctness contract is HiFi4 + fp32 DEST (matmul_block_helpers.hpp -> Precision), so a 16-bit
+    # DEST is refused for EVERY input dtype (fp32 + False is the convention's mandatory refusal;
+    # bf16/bf8b + False is a refinement candidate: intermediate CB formats must follow DEST width).
+    cfg = compute_kernel_config if compute_kernel_config is not None else default_compute_kernel_config()
+    if not bool(getattr(cfg, "fp32_dest_acc_en", True)):
+        raise ExcludedCell(
+            "groupnorm_sc_N_1_HW_C: compute_kernel_config.fp32_dest_acc_en=False is not supported "
+            "(statistics are Float32-page matmuls that require fp32 DEST accumulation; refinement candidate)"
+        )
     affine, affine_dtype, affine_layout = _affine_axes(gamma, beta)
     axes = {
         "dtype": input_tensor.dtype,
@@ -201,7 +229,7 @@ def groupnorm_sc_N_1_HW_C(
     compute_kernel_config=None,
 ) -> ttnn.Tensor:
     """GroupNorm on a channel-last (N, 1, H*W, C) tensor. Output: same shape, same dtype, TILE layout."""
-    validate(input_tensor, num_groups, gamma=gamma, beta=beta)
+    validate(input_tensor, num_groups, gamma=gamma, beta=beta, compute_kernel_config=compute_kernel_config)
     _validate_arguments(input_tensor, num_groups, gamma, beta, eps)
 
     device = input_tensor.device()
