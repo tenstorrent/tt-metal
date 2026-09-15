@@ -249,7 +249,8 @@ def _assert_matches_reference(
     tp_axis,
     config,
     label: str,
-    state_linf_threshold: float = STATE_LINF_THRESHOLD,
+    state_linf_threshold: float | None = STATE_LINF_THRESHOLD,
+    pcc_threshold: float = PCC_THRESHOLD,
 ) -> None:
     """Undo MLA's row permutation, then compare output and both carries."""
     rotated_output = reconstruct_sp_tp_tensor(output_tt, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
@@ -260,7 +261,8 @@ def _assert_matches_reference(
         expected_output,
         natural_output,
         name=f"{label} output",
-        pcc_threshold=PCC_THRESHOLD,
+        pcc_threshold=pcc_threshold,
+        rmse_threshold=0.05,
         linf_threshold=OUTPUT_LINF_THRESHOLD,
     )
 
@@ -275,14 +277,16 @@ def _assert_matches_reference(
             expected_state.recurrent,
             reconstruct_state_at_sp_rank(state.recurrent, mesh_device, sp_axis, tp_axis, sp_rank),
             name=f"{label} sp_rank={sp_rank} recurrent",
-            pcc_threshold=PCC_THRESHOLD,
+            pcc_threshold=pcc_threshold,
+            rmse_threshold=0.05,
             linf_threshold=state_linf_threshold,
         )
         assert_accurate(
             expected_convolution,
             reconstruct_convolution_at_sp_rank(state.convolution, mesh_device, sp_axis, tp_axis, sp_rank, local_width),
             name=f"{label} sp_rank={sp_rank} convolution",
-            pcc_threshold=PCC_THRESHOLD,
+            pcc_threshold=pcc_threshold,
+            rmse_threshold=0.05,
             linf_threshold=CONVOLUTION_LINF_THRESHOLD,
         )
 
