@@ -87,7 +87,6 @@ from test_sfpu_plot import (
     FMT_SHORT,
     allowed_intervals_for,
     arch_title_suffix,
-    downsample_for_plot,
     plot_and_print,
     plot_output_dir,
 )
@@ -538,16 +537,6 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
-    # Downsample the arrays for the plot only (too many points to draw);
-    # passed_test and the max ULP below still use the full result.
-    x_plot, golden_plot, hw_plot, downsampled = downsample_for_plot(x, y_golden, y_hw)
-    if downsampled:
-        logger.info(
-            "plot downsampled {} -> {} points (even sample + worst cases)",
-            x.size,
-            x_plot.size,
-        )
-
     # ULP/eps spacing in plot_and_print is taken from the format the compared
     # values live in: golden and hw are produced in output_format.
     title_suffix = arch_title_suffix(ChipArchitecture.QUASAR)
@@ -566,9 +555,9 @@ def run_case(case: Case) -> bool:
     plot_and_print(
         mathop,
         formats.output_format,
-        x_plot,
-        golden_plot,
-        hw_plot,
+        x,
+        y_golden,
+        y_hw,
         plot_path,
         title_suffix=title_suffix,
         allowed_intervals=allowed_intervals,
