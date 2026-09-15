@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import pytest
 import torch
 from loguru import logger
@@ -127,3 +129,89 @@ def test_ltx_rope_interleaved(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axi
     # Compare
     assert_quality(output_ref, tt_output_torch, pcc=0.99)
     logger.info("PASSED: LTX interleaved RoPE matches PyTorch reference")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, sp_axis, tp_axis",
+    [[(4, 8), 1, 0]],
+    ids=["4x8sp1tp0"],
+    indirect=["mesh_device"],
+)
+def test_ltx_compact_rope_device_materializer(mesh_device: ttnn.MeshDevice, sp_axis: int, tp_axis: int):
+    from models.tt_dit.models.transformers.ltx.rope_ltx import (
+        expand_compact_video_rope,
+        prepare_compact_video_rope,
+    )
+
+    F, H, W = 4, 8, 8
+    video_n_real, video_n = F * H * W, 512
+    compact = prepare_compact_video_rope(
+        F,
+        H,
+        W,
+        inner_dim=4096,
+        theta=10000.0,
+        max_pos=[20, 2048, 2048],
+        fps=25,
+        axis_capacity=64,
+    )
+    expected = expand_compact_video_rope(compact, inner_dim=4096, num_attention_heads=32, video_N=video_n)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    compact_tt = [
+        ttnn.from_torch(
+            value,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=mapper,
+        )
+        for value in (
+            compact.self_cos.unsqueeze(0),
+            compact.self_sin.unsqueeze(0),
+            compact.cross_cos.unsqueeze(0).unsqueeze(0),
+            compact.cross_sin.unsqueeze(0).unsqueeze(0),
+        )
+    ]
+    metadata = ttnn.from_torch(
+        torch.tensor([video_n_real, F, H, W], dtype=torch.int64).reshape(1, 1, 1, 4),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=mapper,
+    )
+    shard_mapping = {sp_axis: 2, tp_axis: 1}
+    outputs = [
+        bf16_tensor_2dshard(torch.zeros_like(value), device=mesh_device, shard_mapping=shard_mapping)
+        for value in expected
+    ]
+
+    actual_tt = ttnn.experimental.ltx_rope_materialize(
+        *compact_tt,
+        metadata,
+        *outputs,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+    fixed_addresses = tuple(value.buffer_address() for value in outputs)
+    replay_start = time.perf_counter()
+    replay_tt = ttnn.experimental.ltx_rope_materialize(
+        *compact_tt,
+        metadata,
+        *outputs,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+    replay_seconds = time.perf_counter() - replay_start
+    assert tuple(value.buffer_address() for value in replay_tt) == fixed_addresses
+    logger.info(f"warm LTX RoPE materializer: {replay_seconds * 1000:.1f} ms")
+
+    concat_dims = [None, None]
+    concat_dims[sp_axis] = 2
+    concat_dims[tp_axis] = 1
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dims, mesh_shape=tuple(mesh_device.shape))
+    actual = [ttnn.to_torch(value, mesh_composer=composer) for value in actual_tt]
+
+    for got, reference in zip(actual, expected):
+        assert torch.equal(got, reference.to(torch.bfloat16))

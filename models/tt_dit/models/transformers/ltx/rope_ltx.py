@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import functools
 import math
+from dataclasses import dataclass
 from enum import Enum
 
 import numpy as np
@@ -37,6 +38,29 @@ from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 class LTXRopeType(Enum):
     INTERLEAVED = "interleaved"
     SPLIT = "split"
+
+
+@dataclass(frozen=True)
+class LTXCompactVideoRope:
+    """Compact fp32 recipes for the two large video positional-embedding pairs.
+
+    ``self_*`` is laid out as ``(axis=3, coordinate, rate)`` and ``cross_*`` as
+    ``(coordinate, rate)``.  Rows after the logical axis lengths contain the
+    identity rotation, which lets one fixed-capacity device arena serve every
+    console configuration without changing a captured input address.
+    """
+
+    self_cos: torch.Tensor
+    self_sin: torch.Tensor
+    cross_cos: torch.Tensor
+    cross_sin: torch.Tensor
+    latent_frames: int
+    latent_height: int
+    latent_width: int
+
+    @property
+    def axis_capacity(self) -> int:
+        return int(self.self_cos.shape[1])
 
 
 @functools.lru_cache(maxsize=5)
@@ -199,6 +223,150 @@ def precompute_freqs_cis(
     return cos_freq.to(out_dtype), sin_freq.to(out_dtype)
 
 
+def _video_axis_middle_positions(
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    *,
+    fps: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return the separable axis coordinates used by the full patch-grid path.
+
+    This is algebraically identical to ``video_get_patch_grid_bounds`` followed
+    by ``get_pixel_coords(..., causal_fix=True)`` and midpoint selection, but it
+    allocates O(F+H+W) values instead of O(F*H*W).
+    """
+
+    if latent_frames <= 0 or latent_height <= 0 or latent_width <= 0:
+        raise ValueError("latent video dimensions must be positive")
+    if fps <= 0:
+        raise ValueError("fps must be positive")
+
+    starts_t = torch.arange(latent_frames, dtype=torch.float32) * 8
+    ends_t = starts_t + 8
+    starts_t = (starts_t + 1 - 8).clamp(min=0)
+    ends_t = (ends_t + 1 - 8).clamp(min=0)
+    temporal = ((starts_t + ends_t) / 2.0) / fps
+
+    height = torch.arange(latent_height, dtype=torch.float32) * 32 + 16
+    width = torch.arange(latent_width, dtype=torch.float32) * 32 + 16
+    return temporal, height, width
+
+
+def prepare_compact_video_rope(
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    *,
+    inner_dim: int,
+    theta: float,
+    max_pos: list[int],
+    fps: float = 24.0,
+    cross_pe_dim: int = 2048,
+    cross_pe_max_pos: int = 20,
+    axis_capacity: int | None = None,
+) -> LTXCompactVideoRope:
+    """Build compact fp32 axis×rate tables for video self-RoPE and cross-PE.
+
+    The expensive full ``(heads, tokens, head_dim)`` tensors are deliberately
+    not formed here.  A device materializer expands these tables directly into
+    the trace-stable bf16 destination buffers.
+    """
+
+    if len(max_pos) != 3:
+        raise ValueError(f"video self-RoPE requires three max_pos values, got {len(max_pos)}")
+    temporal, height, width = _video_axis_middle_positions(latent_frames, latent_height, latent_width, fps=fps)
+    axes = (temporal, height, width)
+    needed_capacity = max(len(axis) for axis in axes)
+    capacity = needed_capacity if axis_capacity is None else int(axis_capacity)
+    if capacity < needed_capacity:
+        raise ValueError(f"axis_capacity={capacity} is smaller than required {needed_capacity}")
+
+    self_rates = generate_freq_grid(theta, 3, inner_dim)
+    self_cos = torch.ones(3, capacity, self_rates.numel(), dtype=torch.float32)
+    self_sin = torch.zeros_like(self_cos)
+    for axis_index, (positions, maximum) in enumerate(zip(axes, max_pos)):
+        phase = self_rates * (positions.unsqueeze(-1) / maximum * 2 - 1)
+        self_cos[axis_index, : positions.numel()] = phase.cos()
+        self_sin[axis_index, : positions.numel()] = phase.sin()
+
+    cross_rates = generate_freq_grid(theta, 1, cross_pe_dim)
+    cross_phase = cross_rates * (temporal.unsqueeze(-1) / cross_pe_max_pos * 2 - 1)
+    cross_cos = torch.ones(capacity, cross_rates.numel(), dtype=torch.float32)
+    cross_sin = torch.zeros_like(cross_cos)
+    cross_cos[:latent_frames] = cross_phase.cos()
+    cross_sin[:latent_frames] = cross_phase.sin()
+
+    return LTXCompactVideoRope(
+        self_cos=self_cos,
+        self_sin=self_sin,
+        cross_cos=cross_cos,
+        cross_sin=cross_sin,
+        latent_frames=latent_frames,
+        latent_height=latent_height,
+        latent_width=latent_width,
+    )
+
+
+def expand_compact_video_rope(
+    compact: LTXCompactVideoRope,
+    *,
+    inner_dim: int,
+    num_attention_heads: int,
+    video_N: int | None = None,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Host oracle for the device materializer.
+
+    This helper is intentionally test-oriented; the serving path must never use
+    it because it recreates the full tensors that the compact representation is
+    designed to avoid.
+    """
+
+    F, H, W = compact.latent_frames, compact.latent_height, compact.latent_width
+    token = torch.arange(F * H * W)
+    t_index = token // (H * W)
+    spatial = token % (H * W)
+    h_index = spatial // W
+    w_index = spatial % W
+
+    self_axes_cos = torch.stack(
+        (
+            compact.self_cos[0, t_index],
+            compact.self_cos[1, h_index],
+            compact.self_cos[2, w_index],
+        ),
+        dim=-1,
+    )
+    self_axes_sin = torch.stack(
+        (
+            compact.self_sin[0, t_index],
+            compact.self_sin[1, h_index],
+            compact.self_sin[2, w_index],
+        ),
+        dim=-1,
+    )
+    self_cos = self_axes_cos.flatten(1).repeat_interleave(2, dim=-1)
+    self_sin = self_axes_sin.flatten(1).repeat_interleave(2, dim=-1)
+    pad_size = inner_dim % 6
+    if pad_size:
+        self_cos = torch.cat((torch.ones(self_cos.shape[0], pad_size), self_cos), dim=-1)
+        self_sin = torch.cat((torch.zeros(self_sin.shape[0], pad_size), self_sin), dim=-1)
+    self_cos = reshape_interleaved_to_bhnd(self_cos.unsqueeze(0), num_attention_heads)
+    self_sin = reshape_interleaved_to_bhnd(self_sin.unsqueeze(0), num_attention_heads)
+
+    cross_cos = compact.cross_cos[t_index].repeat_interleave(2, dim=-1)
+    cross_sin = compact.cross_sin[t_index].repeat_interleave(2, dim=-1)
+    cross_cos = reshape_interleaved_to_bhnd(cross_cos.unsqueeze(0), num_attention_heads)
+    cross_sin = reshape_interleaved_to_bhnd(cross_sin.unsqueeze(0), num_attention_heads)
+
+    if video_N is not None:
+        # The divisibility check belongs to pad_video_rope_sp; use SP=1 for the
+        # oracle because production rungs are always tile-aligned.
+        self_cos, self_sin = pad_video_rope_sp(self_cos, self_sin, 1, video_N=video_N)
+        cross_cos, cross_sin = pad_video_rope_sp(cross_cos, cross_sin, 1, video_N=video_N)
+    return self_cos, self_sin, cross_cos, cross_sin
+
+
 # =============================================================================
 # Device-side RoPE builders (INTERLEAVED cos/sin, sharded onto the DiT mesh) for
 # ttnn.experimental.rotary_embedding_llama. All positions stay fp32 — bf16 introduced
@@ -352,17 +520,49 @@ def prepare_av_cross_pe(
         (a_q_cos, a_q_sin)  — audio Q in V→A cross-attn (SP×TP sharded).
         (a_k_cos, a_k_sin)  — audio K in A→V cross-attn (TP-only; K side after AllGather).
     """
+    v_q_cos, v_q_sin = prepare_video_cross_pe(
+        latent_frames,
+        latent_height,
+        latent_width,
+        theta=theta,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        fps=fps,
+        cross_pe_max_pos=cross_pe_max_pos,
+        video_N=video_N,
+    )
+    a_q_cos, a_q_sin, a_k_cos, a_k_sin = prepare_audio_cross_pe(
+        audio_N,
+        audio_N_real,
+        theta=theta,
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        cross_pe_max_pos=cross_pe_max_pos,
+    )
+    return v_q_cos, v_q_sin, a_q_cos, a_q_sin, a_k_cos, a_k_sin
+
+
+def prepare_video_cross_pe(
+    latent_frames: int,
+    latent_height: int,
+    latent_width: int,
+    *,
+    theta: float,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config: DiTParallelConfig,
+    fps: float = 24.0,
+    cross_pe_max_pos: int = 20,
+    video_N: int | None = None,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Build only the large, temporal video side of AV cross-PE."""
+
     v_shape = VideoLatentShape(batch=1, channels=128, frames=latent_frames, height=latent_height, width=latent_width)
     v_coords = video_get_patch_grid_bounds(v_shape)
     v_positions = get_pixel_coords(v_coords, scale_factors=(8, 32, 32), causal_fix=True).float()
-    v_positions[:, 0, ...] = v_positions[:, 0, ...] / fps  # temporal axis → seconds
-    v_temporal = v_positions[:, 0:1, :]  # (1, 1, video_N, 2)
-
-    a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
-    a_positions = audio_get_patch_grid_bounds(a_shape).float()  # (1, 1, audio_N_real, 2)
-
-    rope_kwargs = dict(
-        dim=2048,  # audio_cross_attention_dim — both sides share this
+    v_positions[:, 0, ...] /= fps
+    v_cos, v_sin = precompute_freqs_cis(
+        v_positions[:, 0:1, :],
+        dim=2048,
         out_dtype=torch.float32,
         theta=theta,
         max_pos=[cross_pe_max_pos],
@@ -370,36 +570,55 @@ def prepare_av_cross_pe(
         num_attention_heads=32,
         rope_type=LTXRopeType.INTERLEAVED,
     )
-
-    v_cos, v_sin = precompute_freqs_cis(v_temporal, **rope_kwargs)  # (1, video_N, 2048)
-    a_cos, a_sin = precompute_freqs_cis(a_positions, **rope_kwargs)  # (1, audio_N_real, 2048)
-    v_cos = reshape_interleaved_to_bhnd(v_cos, num_heads=32)  # (1, 32, video_N, 64)
+    v_cos = reshape_interleaved_to_bhnd(v_cos, num_heads=32)
     v_sin = reshape_interleaved_to_bhnd(v_sin, num_heads=32)
+    v_cos, v_sin = pad_video_rope_sp(v_cos, v_sin, parallel_config.sequence_parallel.factor, video_N=video_N)
+    sp_axis = parallel_config.sequence_parallel.mesh_axis
+    tp_axis = parallel_config.tensor_parallel.mesh_axis
+    return (
+        bf16_tensor_2dshard(v_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+        bf16_tensor_2dshard(v_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+    )
+
+
+def prepare_audio_cross_pe(
+    audio_N: int,
+    audio_N_real: int,
+    *,
+    theta: float,
+    mesh_device: ttnn.MeshDevice,
+    parallel_config: DiTParallelConfig,
+    cross_pe_max_pos: int = 20,
+) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+    """Build the small audio Q and gathered-K sides of AV cross-PE."""
+
+    a_shape = AudioLatentShape(batch=1, channels=8, frames=audio_N_real, mel_bins=16)
+    a_positions = audio_get_patch_grid_bounds(a_shape).float()
+    a_cos, a_sin = precompute_freqs_cis(
+        a_positions,
+        dim=2048,
+        out_dtype=torch.float32,
+        theta=theta,
+        max_pos=[cross_pe_max_pos],
+        use_middle_indices_grid=True,
+        num_attention_heads=32,
+        rope_type=LTXRopeType.INTERLEAVED,
+    )
     a_cos = reshape_interleaved_to_bhnd(a_cos, num_heads=32)
     a_sin = reshape_interleaved_to_bhnd(a_sin, num_heads=32)
-
-    v_cos, v_sin = pad_video_rope_sp(v_cos, v_sin, parallel_config.sequence_parallel.factor, video_N=video_N)
-
     if audio_N > audio_N_real:
         head_dim = a_cos.shape[-1]
         a_cos_padded = torch.ones(1, 32, audio_N, head_dim)
-        a_cos_padded[:, :, :audio_N_real, :] = a_cos
+        a_cos_padded[:, :, :audio_N_real] = a_cos
         a_sin_padded = torch.zeros(1, 32, audio_N, head_dim)
-        a_sin_padded[:, :, :audio_N_real, :] = a_sin
+        a_sin_padded[:, :, :audio_N_real] = a_sin
         a_cos, a_sin = a_cos_padded, a_sin_padded
 
     sp_axis = parallel_config.sequence_parallel.mesh_axis
     tp_axis = parallel_config.tensor_parallel.mesh_axis
-
-    # Q-side: SP×TP sharded (matches the Q tensor layout post-attention QKV split).
-    v_q_cos = bf16_tensor_2dshard(v_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    v_q_sin = bf16_tensor_2dshard(v_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    a_q_cos = bf16_tensor_2dshard(a_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-    a_q_sin = bf16_tensor_2dshard(a_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1})
-
-    # K-side: TP-only on heads (sequence is replicated after AllGather on K). Only the audio K
-    # rope is needed (A→V gathers audio K); video K in V→A reuses the SP-sharded v_q rope.
-    a_k_cos = bf16_tensor(a_cos, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
-    a_k_sin = bf16_tensor(a_sin, device=mesh_device, mesh_axis=tp_axis, shard_dim=1)
-
-    return (v_q_cos, v_q_sin, a_q_cos, a_q_sin, a_k_cos, a_k_sin)
+    return (
+        bf16_tensor_2dshard(a_cos, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+        bf16_tensor_2dshard(a_sin, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 1}),
+        bf16_tensor(a_cos, device=mesh_device, mesh_axis=tp_axis, shard_dim=1),
+        bf16_tensor(a_sin, device=mesh_device, mesh_axis=tp_axis, shard_dim=1),
+    )
