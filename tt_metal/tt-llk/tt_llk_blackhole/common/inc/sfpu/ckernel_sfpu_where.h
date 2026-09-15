@@ -28,17 +28,20 @@ inline void _calculate_where_(
 
     constexpr InstrModLoadStore mod0 = data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
+    constexpr bool is_fp = (data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b);
+    constexpr int shift  = (data_format == DataFormat::Float16_b) ? 17 : 1;
+
 #ifdef DISABLE_SFPLOADMACRO
     int offset3 = (dst_index_out * 32) << 1;
 
-    constexpr int replay_len = (data_format == DataFormat::Float32) ? 7 : 6;
+    constexpr int replay_len = is_fp ? 7 : 6;
     lltt::record(0, replay_len);
     TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
-    if constexpr (data_format == DataFormat::Float32)
+    if constexpr (is_fp)
     {
-        // Drop the IEEE-754 sign bit so that -0.0 (0x80000000) evaluates to 0 (false)
-        TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+        // Drop the IEEE-754 sign bit so that -0.0 evaluates to 0 (false)
+        TTI_SFPSHFT(shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
     }
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
     TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
@@ -51,48 +54,31 @@ inline void _calculate_where_(
         lltt::replay(0, replay_len);
     }
 #else
-    if constexpr (data_format == DataFormat::Float32)
+    if (dst_index_out == dst_index_in0)
     {
-        // For Float32, shift left by 1 to discard the sign bit before testing for zero (IEEE 754: -0.0 == 0).
-        // Macro path evaluates LREG0 directly on load cycle; using explicit replay buffer allows inserting TTI_SFPSHFT.
-        int offset3 = (dst_index_out * 32) << 1;
+        // We use macros 0 and 2 to schedule the following, which achieves 4 cycles per input row of 32 values:
+
+        // Load Unit               | Simple Unit                       | Store Unit
+        // SFPLOAD L0=Dst[offset0] |                                   |
+        // -                       | SFPSHFT (clears sign bit: ±0->0)  |
+        // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0)    |
+        // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)        |
+        // (next SFPLOAD L0)       |                                   | SFPSTORE Dst[offset0]=L0
 
         load_replay_buf(
             0,
-            7,
-            [offset0, offset1, offset2, offset3, mod0]
-            {
-                TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
-                TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
-                TTI_SFPSHFT(1, p_sfpu::LREG0, p_sfpu::LREG0, 1);
-                TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-                TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
-                TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
-                TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
-            });
-
-#pragma GCC unroll 8
-        for (int d = 0; d < ITERATIONS; d++)
-        {
-            lltt::replay(0, 7);
-        }
-    }
-    else if (dst_index_out == dst_index_in0)
-    {
-        // We use macros 0 and 2 to schedule the following, which achieves 3 cycles per input row of 32 values:
-
-        // Load Unit               | Simple Unit                    | Store Unit
-        // SFPLOAD L0=Dst[offset0] |                                |
-        // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0) |
-        // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)     |
-        // (next SFPLOAD L0)       |                                | SFPSTORE Dst[offset0]=L0
-
-        load_replay_buf(
-            0,
-            3,
+            4,
             [offset0, offset1, offset2]
             {
                 TT_SFPLOADMACRO((0 << 2), mod0, ADDR_MOD_7, offset0);
+                if constexpr (is_fp)
+                {
+                    TTI_SFPSHFT(shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                }
+                else
+                {
+                    TTI_SFPNOP;
+                }
                 TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_7, offset1);
                 TT_SFPLOAD(0, mod0, ADDR_MOD_6, offset2);
             });
@@ -100,28 +86,37 @@ inline void _calculate_where_(
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            lltt::replay(0, 3);
+            lltt::replay(0, 4);
         }
     }
     else
     {
-        // We use macros 1 and 2 to schedule the following, which achieves 4 cycles per input row of 32 values:
+        // We use macros 1 and 2 to schedule the following, which achieves 5 cycles per input row of 32 values:
 
-        // Load Unit               | Simple Unit                    | Store Unit
-        // SFPLOAD L0=Dst[offset0] |                                |
-        // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0) |
-        // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)     |
-        // -                       |                                | SFPSTORE Dst[offset3]=L0
-        // (next SFPLOAD L0)       |                                |
+        // Load Unit               | Simple Unit                       | Store Unit
+        // SFPLOAD L0=Dst[offset0] |                                   |
+        // -                       | SFPSHFT (clears sign bit: ±0->0)  |
+        // SFPLOAD L0=Dst[offset1] | SFPSETCC LaneEnabled=(L0 EQ 0)    |
+        // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)        |
+        // -                       |                                   | SFPSTORE Dst[offset3]=L0
+        // (next SFPLOAD L0)       |                                   |
 
         int offset3 = (dst_index_out * 32) << 1;
 
         load_replay_buf(
             0,
-            4,
+            5,
             [offset0, offset1, offset2, offset3]
             {
                 TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_7, offset0);
+                if constexpr (is_fp)
+                {
+                    TTI_SFPSHFT(shift, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+                }
+                else
+                {
+                    TTI_SFPNOP;
+                }
                 TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_7, offset1);
                 TT_SFPLOAD(0, mod0, ADDR_MOD_7, offset2);
                 TT_SFPSTORE(0, mod0, ADDR_MOD_6, offset3);
@@ -130,7 +125,7 @@ inline void _calculate_where_(
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
         {
-            lltt::replay(0, 4);
+            lltt::replay(0, 5);
         }
     }
 #endif
@@ -147,11 +142,13 @@ inline void _init_where_()
     TTI_SFPENCC(0, 0, 13, 0);
 
     // Macro 0: special case handling for where(a, b, c, a), i.e. write the output to the first input.
+    // Delay 1 on simple_bits executes SFPSETCC 2 instructions later (after the sign bit clearing step).
+    // Delay 3 on store_bits executes SFPSTORE 4 instructions later (start of next iteration).
     {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
         constexpr std::uint32_t mad_bits    = 0;
         constexpr std::uint32_t round_bits  = 0;
-        constexpr std::uint32_t store_bits  = 0x00 | 0x00 | (2 << 3) | 3;
+        constexpr std::uint32_t store_bits  = 0x00 | 0x00 | (3 << 3) | 3;
 
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
         TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
@@ -159,8 +156,9 @@ inline void _init_where_()
     }
 
     // Macro 1: otherwise, handle where(a, b, c, d).
+    // Delay 1 on simple_bits executes SFPSETCC 2 instructions later (after the sign bit clearing step).
     {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
+        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
         constexpr std::uint32_t mad_bits    = 0;
 
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 1, 1);

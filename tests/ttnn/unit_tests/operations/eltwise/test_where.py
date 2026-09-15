@@ -87,18 +87,25 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
     assert torch_equal_nan(result, golden)
 
 
-def test_ttnn_where_signed_zero_predicate(device):
+@pytest.mark.parametrize(
+    "dtype, ttnn_dtype",
+    [
+        (torch.float32, ttnn.float32),
+        (torch.bfloat16, ttnn.bfloat16),
+    ],
+)
+def test_ttnn_where_signed_zero_predicate(dtype, ttnn_dtype, device):
     # Tests that both +0.0 and -0.0 predicates correctly evaluate to false branch (closes #56522)
     torch.manual_seed(0)
     shape = (1, 1, 32, 32)
-    c_data = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=torch.float32).repeat(32 * 32 // 4).reshape(shape)
-    T = torch.full(shape, 100.0, dtype=torch.float32)
-    F = torch.full(shape, -100.0, dtype=torch.float32)
+    c_data = torch.tensor([0.0, -0.0, 1.0, -1.0], dtype=dtype).repeat(32 * 32 // 4).reshape(shape)
+    T = torch.full(shape, 100.0, dtype=dtype)
+    F = torch.full(shape, -100.0, dtype=dtype)
     golden = torch.where(c_data.bool(), T, F)
 
-    ttnn_C = ttnn.from_torch(c_data, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_T = ttnn.from_torch(T, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_C = ttnn.from_torch(c_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
