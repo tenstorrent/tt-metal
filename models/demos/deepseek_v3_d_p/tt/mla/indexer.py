@@ -565,6 +565,18 @@ class TtIndexer:
         so keys land at the same positions update_padded_kv_cache writes them to. For DS (half-split
         weights) self._rope_perm first reorders the rope half into the interleaved arrangement so this
         interleaved op matches the DS reference (the permutation cancels in q·k, applied to both q and k)."""
+        if self._rope_perm is None:
+            return ttnn.experimental.deepseek_prefill.rotary_embedding_indexed(
+                x,
+                rope_tensors["cos_matrix"],
+                rope_tensors["sin_matrix"],
+                rope_tensors["trans_matrix"],
+                metadata[1] if metadata is not None else kv_actual_global,
+                cluster_axis=self.sp_axis,
+                seq_subshard_axis=seq_subshard_axis,
+                rotary_dim=64,
+            )
+        # DeepSeek's half-split permutation retains the established path.
         h, n = x.shape[1], x.shape[2]
         pe = ttnn.slice(x, [0, 0, 0, 0], [1, h, n, 64])
         nope = ttnn.slice(x, [0, 0, 0, 64], [1, h, n, self.index_args.index_head_dim])

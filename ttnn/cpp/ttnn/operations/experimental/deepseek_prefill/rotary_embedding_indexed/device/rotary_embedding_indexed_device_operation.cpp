@@ -32,12 +32,9 @@ using namespace ttnn::experimental::prim::rope_metal2;
 
 namespace {
 
-// Writer + compute kernels are reused verbatim from the rotary_embedding_llama prefill path (they
-// consume cos/sin from the CB and write output indexed by local seq tile -- neither touches the
-// cos/sin source index). Only the reader is forked to derive the per-device cos/sin shard offset.
-// The shared CB/tensor names and the writer/compute sources come from rope_metal2 (kWriterSource,
-// kComputeSource, INPUT_DFB, OUT_DFB, OUTPUT_PARAM, ...) so the reused-kernel binding contract has one
-// source of truth; only the reader source and the metadata-path names are local.
+// Reuse llama's rotary compute and binding vocabulary. The indexed reader selects
+// the SP/TP position and rotary channel region; our writer places the rotated tiles
+// into the full-width output and copies the remaining channels directly.
 constexpr auto kReaderKernelPath =
     "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
     "reader_rotary_embedding_indexed_interleaved_start_id.cpp";
@@ -232,7 +229,13 @@ void RotaryEmbeddingIndexedDeviceOperation::validate_on_program_cache_miss(
         trans_mat_shape);
     TT_FATAL(cos.dtype() == sin.dtype(), "cos and sin dtype must match");
     TT_FATAL(cos_shape == sin_shape, "cos and sin must have the same shape");
-    TT_FATAL(input_shape[-1] == cos_shape[-1], "input and cos head dim must match");
+    TT_FATAL(args.rotary_dim > 0 && args.rotary_dim % TILE_WIDTH == 0, "rotary_dim must be positive and tile-aligned");
+    TT_FATAL(args.rotary_offset % TILE_WIDTH == 0, "rotary_offset must be tile-aligned");
+    TT_FATAL(
+        args.rotary_dim <= input.logical_shape()[-1] &&
+            args.rotary_offset <= input.logical_shape()[-1] - args.rotary_dim,
+        "rotary region must fit within input head dim");
+    TT_FATAL(args.rotary_dim == cos_shape[-1], "rotary_dim and cos head dim must match");
 
     const uint32_t input_seq = input_shape[-2];
     TT_FATAL(input_seq % TILE_HEIGHT == 0, "input seq dim ({}) must be tile-aligned", input_seq);
@@ -284,6 +287,8 @@ ttsl::hash::hash_t RotaryEmbeddingIndexedDeviceOperation::compute_program_hash(
         tensor_args.metadata.has_value(),
         args.cluster_axis,
         args.seq_subshard_axis,
+        args.rotary_dim,
+        args.rotary_offset,
         args.compute_kernel_config,
         args.output_mem_config,
         tensor_args.input.tensor_spec(),
@@ -326,7 +331,9 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const uint32_t batch = input.padded_shape()[0];
     const uint32_t n_heads = input.padded_shape()[1];
     const uint32_t seq_len_t = input.padded_shape()[2] / TILE_HEIGHT;
-    const uint32_t head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t input_head_dim_t = input.padded_shape()[3] / TILE_WIDTH;
+    const uint32_t head_dim_t = args.rotary_dim / TILE_WIDTH;
+    const uint32_t rotary_offset_t = args.rotary_offset / TILE_WIDTH;
     const uint32_t cos_seq_len_t = cos.padded_shape()[2] / TILE_HEIGHT;
     const uint32_t sin_seq_len_t = sin.padded_shape()[2] / TILE_HEIGHT;
     // cos/sin are the (much taller) per-device shards, so rotary coverage is bounded by the input.
@@ -422,7 +429,7 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         DataflowBufferSpec{
             .unique_id = ZERO_DFB,
             .entry_size = output_single_tile_size,
-            .num_entries = head_dim_t,
+            .num_entries = std::max(1u, input_head_dim_t - head_dim_t),
             .data_format_metadata = output_cb_data_format},
     };
     if (has_metadata) {
@@ -494,6 +501,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
             {{"n_heads", n_heads},
              {"Ht", seq_len_t},
              {"Wt", head_dim_t},
+             {"input_Wt", input_head_dim_t},
+             {"rotary_offset_t", rotary_offset_t},
              {"freq_per_head", static_cast<uint32_t>(freq_per_head)},
              {"cos_Ht", cos_seq_len_t},
              {"sin_Ht", sin_seq_len_t},
@@ -506,20 +515,28 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
         .runtime_arg_schema = reader_schema,
         .hw_config = create_reader_datamovement_config(mesh_device->arch())};
 
-    // ------------------------------------------------------------------ writer + compute (reused llama)
+    // ------------------------------------------------------------------ indexed writer + reused llama compute
     KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = kWriterSource,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/rotary_embedding_indexed/device/kernels/dataflow/"
+            "writer_rotary_embedding_indexed.cpp",
         .compiler_options = {.defines = reload_define},
         .dfb_bindings =
             {DFBBinding{.dfb_spec_name = OUT_DFB, .accessor_name = "out", .endpoint_type = DFBEndpointType::CONSUMER},
-             // zero is a single-toucher (writer fills + reads it) -> self-loop (PRODUCER + CONSUMER).
-             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::PRODUCER},
+             // Borrow the shared zero-buffer slot for writer-only passthrough scratch.
+             DFBBinding{.dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::PRODUCER},
              DFBBinding{
-                 .dfb_spec_name = ZERO_DFB, .accessor_name = "zero", .endpoint_type = DFBEndpointType::CONSUMER}},
-        .tensor_bindings = {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"}},
+                 .dfb_spec_name = ZERO_DFB, .accessor_name = "copy", .endpoint_type = DFBEndpointType::CONSUMER}},
+        .tensor_bindings =
+            {TensorBinding{.tensor_parameter_name = OUTPUT_PARAM, .accessor_name = "output"},
+             TensorBinding{.tensor_parameter_name = INPUT_PARAM, .accessor_name = "input"}},
         .compile_time_args =
-            {{"n_heads", n_heads}, {"Wt", head_dim_t}, {"Ht", seq_len_t}, {"rotary_Ht", rotary_seq_len_t}},
+            {{"n_heads", n_heads},
+             {"Wt", head_dim_t},
+             {"Ht", seq_len_t},
+             {"input_Wt", input_head_dim_t},
+             {"rotary_offset_t", rotary_offset_t}},
         .runtime_arg_schema = {.runtime_arg_names = {"batch_start", "batch_end", "seq_t_start", "seq_t_end"}},
         .hw_config = create_writer_datamovement_config(mesh_device->arch())};
 
@@ -708,7 +725,9 @@ ttnn::Tensor rotary_embedding_indexed(
     uint32_t cluster_axis,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<uint32_t>& seq_subshard_axis) {
+    const std::optional<uint32_t>& seq_subshard_axis,
+    const std::optional<uint32_t>& rotary_dim,
+    uint32_t rotary_offset) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::rotary_embedding_indexed::
         RotaryEmbeddingIndexedDeviceOperation;
 
@@ -728,6 +747,8 @@ ttnn::Tensor rotary_embedding_indexed(
         .cluster_axis = cluster_axis,
         .seq_subshard_axis = seq_subshard_axis,
         .kv_actual_global = kv_actual_global,
+        .rotary_dim = rotary_dim.value_or(input.logical_shape()[-1]),
+        .rotary_offset = rotary_offset,
         .output_mem_config = out_mem_config,
         .compute_kernel_config = kernel_config_val,
     };
