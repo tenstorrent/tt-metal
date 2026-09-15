@@ -1,5 +1,4 @@
 set(HW_JIT_API_HEADERS
-    firmware/src/pch.h
     inc/experimental/blaze_rt_arg.h
     inc/api/alignment.h
     inc/api/compile_time_args.h
@@ -232,6 +231,7 @@ set(HW_JIT_API_HEADERS
     inc/internal/cross_node_dfb_interface.h
     inc/internal/firmware_common.h
     inc/internal/mod_div_lib.h
+    inc/internal/pch.h
     inc/internal/risc_attribs.h
     inc/internal/template_string.h
     inc/internal/tensix_functions.h

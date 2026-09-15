@@ -11,7 +11,7 @@
 namespace tt::jit_build {
 
 // Relative to the tt-metal root; installed alongside the other JIT inputs.
-inline constexpr std::string_view PCH_UMBRELLA = "tt_metal/hw/firmware/src/pch.h";
+inline constexpr std::string_view PCH_UMBRELLA = "tt_metal/hw/inc/internal/pch.h";
 
 // Return the cached header path for -include, or empty on failure.
 // Match the consuming compile's flags and optimization level for GCC PCH compatibility.
