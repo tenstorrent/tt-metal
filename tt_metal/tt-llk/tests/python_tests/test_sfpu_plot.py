@@ -702,12 +702,13 @@ def plot_and_print(
         fontweight="bold",
         y=0.995,
     )
-    # Second title line: the run's parameters, in a smaller monospace font so
-    # the op name stays the headline. tight_layout below reserves the strip.
+    # Parameter block under the suptitle, in a smaller monospace font so the op
+    # name stays the headline.
+    param_lines = param_line.count("\n") + 1 if param_line else 0
     if param_line:
         fig.text(
             0.5,
-            0.981,
+            0.977,
             param_line,
             ha="center",
             va="top",
@@ -1238,8 +1239,8 @@ def plot_and_print(
             bbox=summary_bbox_kwargs,
         )
 
-    # Leave a strip at the top for the suptitle and the parameter line.
-    plt.tight_layout(rect=(0, 0, 1, 0.965 if param_line else 0.98))
+    top = 0.98 - (0.012 + 0.009 * param_lines if param_lines else 0.0)
+    plt.tight_layout(rect=(0, 0, 1, top))
 
     # Draw a thin vertical separator between the plot column and the summary
     # column. Done after tight_layout so the position lines up with the actual
@@ -1419,9 +1420,7 @@ _MAX_PLOT_POINTS = 100_000
 # When downsampling, always keep this many worst-error points so the plot still shows the extremes.
 _PLOT_KEEP_WORST = 2000
 
-# Max values a ulp_sweep may have — beyond this it takes too long, so run_case
-# errors and asks for a narrower range. Only fp32 can reach it (bf16/fp16 ~65k).
-_MAX_ULP_SWEEP_VALUES = 2**25
+_MAX_SWEEP_BATCHES = 512
 
 
 def downsample_for_plot(
@@ -1574,14 +1573,25 @@ def run_case(case: Case) -> bool:
     is_ulp = spec.distribution == DistributionKind.ULP_SWEEP
     batch_tiles = case.batch_tiles
     if is_ulp:
-        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
-        # Reject a range with too many values to sweep in a reasonable time.
-        # (Skipped when input_dimensions is set — that's a single, quick run.)
-        if case.input_dimensions is None and total > _MAX_ULP_SWEEP_VALUES:
+        if batch_tiles is not None and not 1 <= batch_tiles <= _MAX_SWEEP_TILES:
             raise ValueError(
-                f"ulp_sweep [{spec.low}, {spec.high}] has {total:,} values, over "
-                f"the {_MAX_ULP_SWEEP_VALUES:,}-value limit — narrow the range."
+                f"{case.test_id}: batch_tiles={batch_tiles} must be between 1 and "
+                f"{_MAX_SWEEP_TILES} tiles"
             )
+        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
+        # Reject a range that would take too many device runs. Skipped when
+        # input_dimensions is set — that is a single, quick run.
+        if case.input_dimensions is None:
+            run_tiles = batch_tiles if batch_tiles is not None else _MAX_SWEEP_TILES
+            run_values = run_tiles * _TILE_ELEMENTS
+            num_runs = math.ceil(total / run_values)
+            if num_runs > _MAX_SWEEP_BATCHES:
+                raise ValueError(
+                    f"{case.test_id}: ulp_sweep [{spec.low}, {spec.high}] has "
+                    f"{total:,} values = {num_runs:,} runs of {run_tiles} tiles, "
+                    f"over the {_MAX_SWEEP_BATCHES}-run limit — narrow the range "
+                    f"(at most {run_values * _MAX_SWEEP_BATCHES:,} values)."
+                )
         if (
             batch_tiles is None
             and case.input_dimensions is None
