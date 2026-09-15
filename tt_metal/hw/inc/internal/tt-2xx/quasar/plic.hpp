@@ -14,6 +14,15 @@ namespace overlay::quasar {
 // PLIC source 0 means "no interrupt", so the FDS threshold sources sit one above their interrupt ids.
 constexpr uint32_t plic_source_base = DM_CORE_INT_ID_FDS_THRESHOLD_INTERRUPTS_0 + 1;
 
+// A source is delivered only while its priority strictly exceeds the context threshold, so this
+// pairing delivers every FDS source: the minimum priority that beats the allow-all threshold.
+constexpr uint32_t plic_threshold_allow_all = 0;
+constexpr uint32_t plic_fds_priority = 1;
+
+// FDS group g arrives at the PLIC as source plic_source_base + g.
+constexpr uint32_t plic_source_for_go_group(uint32_t group_id) { return plic_source_base + group_id; }
+constexpr uint32_t go_group_from_plic_source(uint32_t source) { return source - plic_source_base; }
+
 // Only DM0 takes FDS interrupts, so every access below targets PLIC context 0.
 constexpr uint32_t plic_priority_register_address(uint32_t source) {
     return TT_CLUSTER_PLIC_REG_MAP_BASE_ADDR + source * static_cast<uint32_t>(sizeof(uint32_t));
