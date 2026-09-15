@@ -638,8 +638,10 @@ void call_unary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy LUT tanh': tanh_derivative_init loads the tanh piecewise-linear
-        // LUT into LReg0/1/2, which _calculate_tanh_derivative_ then consumes.
+        // Legacy LUT tanh': tanh_derivative_init loads a 6-entry piecewise-linear
+        // LUT fitted for sech^2 -- slopes into LReg0/1/2, intercepts into LReg4/5/6 --
+        // which _calculate_tanh_derivative_ then consumes as 1 - lut(x)^2. It is no
+        // longer tanh's own table; the two are fitted separately and free to diverge.
         llk_math_eltwise_unary_sfpu_init<OPERATION>(tanh_derivative_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::typecast)

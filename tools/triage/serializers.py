@@ -17,10 +17,13 @@ from __future__ import annotations
 import csv
 import io
 import os
+import sys
 import textwrap
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields, is_dataclass
 from typing import Any, Callable, Iterable
+
+ALL_VERBOSE_LEVELS = sys.maxsize
 
 
 @dataclass
@@ -33,6 +36,9 @@ class TableData:
 def extract_table_data(result: Any, verbose_level: int = 0) -> TableData | None:
     """
     Convert a dataclass or list-of-dataclasses to a `TableData`.
+
+    Fields declared with a `verbose=` level above `verbose_level` are left out;
+    pass `ALL_VERBOSE_LEVELS` to keep all of them.
 
     Returns `None` for results that aren't a dataclass or non-empty list of
     dataclasses - those are emitted as plain strings by serializers.

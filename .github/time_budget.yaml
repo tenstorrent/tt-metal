@@ -78,7 +78,7 @@ ttnn:
     sim_wh_n150: 40
     sim_bh_p150: 40
   sanity:
-    wh_n300_civ2: 565
+    wh_n300_civ2: 580  # +5 each for core and both fused groups (45-minute per-group budget).
     bh_p100: 545
     bh_p150b_civ2: 565
     bh_quietbox_2: 65
@@ -152,7 +152,7 @@ ttnn:
 
 train:
   merge_gate:
-    bh_p150b_civ2: 30
+    bh_p150b_civ2: 45
   unit:
     bh_p100: 105
     bh_p150b_civ2: 90
