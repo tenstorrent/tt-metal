@@ -2,7 +2,9 @@
 
 **Goal:** prefill `ttnn.experimental.quasar.transformer.scaled_dot_product_attention` (a) stays green on WH for ALL its tests, (b) runs on Quasar via craq-sim as far as possible. Shared tree/build/WH card with the forked `sdpa_decode` session (`tt-metal-fb`); commits tagged `Quasar sdpa (prefill):`.
 
-## Status: DONE on WH (13/13 green, multi-chunk validated). craq-sim walls at dispatch (emulator territory).
+## Status: DONE on WH (13/13 green, multi-chunk validated). **PASSES on the Quasar emulator** (seq128, after the pack_init fix). craq-sim walls at dispatch (#378).
+
+**Quasar emulator (ZEBU): sdpa PASSES (2026-09-15).** First correct output on Quasar HW. The final blocker was the packer "sticky destination" bug: `pack_reconfig_data_format` changes only the format, not the output ring; Quasar needs `pack_init` to re-point the pack destination. Without it the packer kept writing to the previous ring → all-zero output (seq128), no assert. Fix `cf2f5ff6f14` = a Quasar-gated `pack_reconfig_out()` wrapper (`pack_reconfig_data_format` + `#ifdef ARCH_QUASAR pack_init`) across all 25 output switches; WH byte-identical. Root cause cross-confirmed by LLK inspection (Quasar `_llk_pack_reconfig_data_format_` writes only `IN_DATA_FORMAT`; `_llk_pack_init_`→`_llk_pack_mop_config_(buf_desc)` re-points dest) + the libttsim packer-dest model (`craq-sim-91`) + the decode fork hitting the identical gap. NOTE: **craq-sim cannot validate this** (separate PACR_STRIDE gap, craq-sim#378, returns all-zero regardless) — the emulator is the sole confirmation path.
 
 **Tests (all PASS on WH n150):** ops regular 3/3 (seq128/512/1024), ops chunked 3/3, prototype_ops sdpa 3/3 + chunked 3/3, graph 1/1. (`models/experimental/llama32_1b_quasar/tests/{ops,prototype_ops,graph_ops}/`.) Module `test_attention_1d` 9/10 — the 1 failure is a HF gated-repo `OSError` (env/auth), not the op.
 
