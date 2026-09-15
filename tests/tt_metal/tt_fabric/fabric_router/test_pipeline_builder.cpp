@@ -32,6 +32,7 @@
 #include <tt-metalium/experimental/fabric/pipeline_builder.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 namespace {
@@ -225,42 +226,8 @@ std::string describe_layouts(const std::vector<SubmeshLayout>& layouts) {
     return desc;
 }
 
-}  // namespace
-
-// tt-run supplies the mock descriptor and MGD. Each case must find a valid layout.
-TEST(PipelineBuilderMockTest, GraphCapacity) {
-    const char* mock = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
-    const char* requested_capacity = std::getenv("TT_PIPELINE_TEST_CORE_CAPACITY");
-    if (mock == nullptr || *mock == '\0' || requested_capacity == nullptr) {
-        GTEST_SKIP() << "requires mock cluster and TT_PIPELINE_TEST_CORE_CAPACITY";
-    }
-    const std::string capacity_text(requested_capacity);
-    ASSERT_TRUE(capacity_text == "1" || capacity_text == "2");
-    const uint32_t capacity = std::stoul(capacity_text);
-    const char* requested_fabric = std::getenv("TT_PIPELINE_TEST_FABRIC");
-    const std::string fabric_mode = requested_fabric == nullptr ? "2D" : requested_fabric;
-    ASSERT_TRUE(fabric_mode == "2D" || fabric_mode == "TORUS_XY" || fabric_mode == "TORUS_Y");
-    auto fabric_config = FabricConfig::FABRIC_2D;
-    if (fabric_mode == "TORUS_XY") {
-        fabric_config = FabricConfig::FABRIC_2D_TORUS_XY;
-    } else if (fabric_mode == "TORUS_Y") {
-        fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
-    }
-
-    const auto setup_start = std::chrono::steady_clock::now();
-    log_info(tt::LogFabric, "Pipeline test control-plane setup starting");
-    auto& context = tt::tt_metal::MetalContext::instance();
-    context.get_cluster().configure_ethernet_cores_for_fabric_routers(
-        fabric_config, std::numeric_limits<uint8_t>::max());
-    context.set_default_fabric_topology();
-    context.set_fabric_config(fabric_config, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
-    context.initialize_fabric_config();
-    const auto& control_plane = context.get_control_plane();
+void check_graph_capacity(const ControlPlane& control_plane, uint32_t capacity, const std::string& fabric_mode) {
     const auto layouts = build_submesh_layouts_from_mgd(control_plane.get_mesh_graph());
-    log_info(
-        tt::LogFabric,
-        "Pipeline test control-plane setup finished: {:.3f}s",
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count());
     ASSERT_GE(layouts.size(), 2u);
     // Model-equivalent placement graphs only: no weights, programs, or MeshDevice.
     // A smaller graph searches all supplied submeshes, leaving the rest unused.
@@ -310,7 +277,7 @@ TEST(PipelineBuilderMockTest, GraphCapacity) {
         graph,
         stage_count,
         layouts.size(),
-        capacity_text,
+        capacity,
         fabric_mode,
         seconds);
     EXPECT_EQ(result.resolved_edges.size(), edges.size());
@@ -335,6 +302,50 @@ TEST(PipelineBuilderMockTest, GraphCapacity) {
     }
     check_slot(result.stage_order.front(), result.h2d_entry_row, result.h2d_entry_col, result.h2d_core_slot);
     check_slot(result.stage_order.front(), result.d2h_exit_row, result.d2h_exit_col, result.d2h_core_slot);
+}
+
+}  // namespace
+
+// tt-run supplies the mock descriptor and MGD. Each case must find a valid layout.
+TEST(PipelineBuilderMockTest, GraphCapacity) {
+    const char* mock = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    const char* requested_capacity = std::getenv("TT_PIPELINE_TEST_CORE_CAPACITY");
+    if (mock == nullptr || *mock == '\0' || requested_capacity == nullptr) {
+        GTEST_SKIP() << "requires mock cluster and TT_PIPELINE_TEST_CORE_CAPACITY";
+    }
+    const std::string capacity_text(requested_capacity);
+    ASSERT_TRUE(capacity_text == "1" || capacity_text == "2");
+    const uint32_t capacity = std::stoul(capacity_text);
+    const char* requested_fabric = std::getenv("TT_PIPELINE_TEST_FABRIC");
+    const std::string fabric_mode = requested_fabric == nullptr ? "2D" : requested_fabric;
+    ASSERT_TRUE(fabric_mode == "2D" || fabric_mode == "TORUS_XY" || fabric_mode == "TORUS_Y");
+    auto fabric_config = FabricConfig::FABRIC_2D;
+    if (fabric_mode == "TORUS_XY") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_XY;
+    } else if (fabric_mode == "TORUS_Y") {
+        fabric_config = FabricConfig::FABRIC_2D_TORUS_Y;
+    }
+
+    const auto setup_start = std::chrono::steady_clock::now();
+    log_info(tt::LogFabric, "Pipeline test control-plane setup starting");
+    auto& context = tt::tt_metal::MetalContext::instance();
+    context.get_cluster().configure_ethernet_cores_for_fabric_routers(
+        fabric_config, std::numeric_limits<uint8_t>::max());
+    context.set_default_fabric_topology();
+    context.set_fabric_config(fabric_config, FabricReliabilityMode::RELAXED_SYSTEM_HEALTH_SETUP_MODE);
+    context.initialize_fabric_config();
+    log_info(
+        tt::LogFabric,
+        "Pipeline test control-plane setup finished: {:.3f}s",
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - setup_start).count());
+
+    // Initialization is collective; placement uses only local control-plane data.
+    const auto& world = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    if (*world->rank() == 0) {
+        EXPECT_NO_THROW(check_graph_capacity(context.get_control_plane(), capacity, fabric_mode));
+    }
+    // The helper keeps fatal assertions from skipping synchronization and cleanup.
+    world->barrier();
     context.get_cluster().configure_ethernet_cores_for_fabric_routers(FabricConfig::DISABLED);
 }
 
