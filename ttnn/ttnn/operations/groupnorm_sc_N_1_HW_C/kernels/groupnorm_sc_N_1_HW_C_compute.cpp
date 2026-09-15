@@ -181,51 +181,55 @@ void kernel_main() {
         cb_push_back(cb_colsum, pad);
     };
 
-    // ---- pass-1 row-chunk work: ops 2..5 of the block schedule for column group cg ----
+    // ---- pass-1 row-chunk work: ops 2..5 of the block schedule for one (valid_rows x valid_cols) block ----
+    auto colsum_chunk = [&](uint32_t valid_rows, uint32_t valid_cols, uint32_t rc) {
+        const uint32_t valid = valid_rows * valid_cols;
+        if constexpr (is_rm) {
+            tilize_ragged_block<cols, cb_x_rm, cb_x_pass1>(valid_rows, valid_cols);
+            groupnorm_ragged::pad_push(cb_x_pass1, chunk - valid, chunk);  // nominal chunk quantum
+            if constexpr (resident) {
+                cb_reserve_back(cb_x_pass2, chunk);  // pass-2 credit over the same (aliased) bytes
+                cb_push_back(cb_x_pass2, chunk);
+            }
+        }
+        // x^2 for the valid tiles (x stays fronted for the column sum); xsq keeps the nominal chunk quantum
+        cb_reserve_back(cb_xsq, chunk);
+        ckl::square<
+            input(cb_x_pass1, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
+            output(cb_xsq, ReservePolicy::None, PushPolicy::None)>(IterationShape::tiles(valid));
+        cb_push_back(cb_xsq, chunk);
+        // column sums of x and x^2 over valid_rows, accumulated across row chunks in cb_colsum = [S..; Q..]
+        ckl::reduce<
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_COL,
+            cb_x_pass1,
+            cb_scaler,
+            cb_colsum,
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+            ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::Accumulate::at(cb_colsum, rc));
+        pad_colsum_statistic(rc, valid_cols);
+        cb_pop_front(cb_x_pass1, chunk);
+        ckl::reduce<
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_COL,
+            cb_xsq,
+            cb_scaler,
+            cb_colsum,
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+            ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::Accumulate::at(cb_colsum, rc));
+        pad_colsum_statistic(rc, valid_cols);
+        cb_pop_front(cb_xsq, chunk);
+    };
+
+    // PreKBlockFn of the pass-1 matmul: the row chunks of column group cg (K-block cg).
     auto colsum_column_group = [&](uint32_t cg, uint32_t /*num_k_blocks*/, bool /*is_last*/) {
         const uint32_t valid_cols = col_axis.valid(cg, cols);
         for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
-            const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
-            const uint32_t valid = valid_rows * valid_cols;
-            if constexpr (is_rm) {
-                tilize_ragged_block<cols, cb_x_rm, cb_x_pass1>(valid_rows, valid_cols);
-                groupnorm_ragged::pad_push(cb_x_pass1, chunk - valid, chunk);  // nominal chunk quantum
-                if constexpr (resident) {
-                    cb_reserve_back(cb_x_pass2, chunk);  // pass-2 credit over the same (aliased) bytes
-                    cb_push_back(cb_x_pass2, chunk);
-                }
-            }
-            // x^2 for the valid tiles (x stays fronted for the column sum); xsq keeps the nominal chunk quantum
-            cb_reserve_back(cb_xsq, chunk);
-            ckl::square<
-                input(cb_x_pass1, WaitPolicy::Upfront, PopPolicy::None, InputTileMapping::Block),
-                output(cb_xsq, ReservePolicy::None, PushPolicy::None)>(IterationShape::tiles(valid));
-            cb_push_back(cb_xsq, chunk);
-            // column sums of x and x^2 over valid_rows, accumulated across row chunks in cb_colsum = [S..; Q..]
-            ckl::reduce<
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_COL,
-                cb_x_pass1,
-                cb_scaler,
-                cb_colsum,
-                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-                ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_colsum, rc));
-            pad_colsum_statistic(rc, valid_cols);
-            cb_pop_front(cb_x_pass1, chunk);
-            ckl::reduce<
-                ckernel::PoolType::SUM,
-                ckernel::ReduceDim::REDUCE_COL,
-                cb_xsq,
-                cb_scaler,
-                cb_colsum,
-                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
-                ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                ckl::Accumulate::at(cb_colsum, rc));
-            pad_colsum_statistic(rc, valid_cols);
-            cb_pop_front(cb_xsq, chunk);
+            colsum_chunk(row_axis.valid(rc, chunk_rows), valid_cols, rc);
         }
     };
 
@@ -439,8 +443,7 @@ void kernel_main() {
             }
 
             // ---- apply_block: y = x * a_T + b_T over every row chunk of this column group ----
-            for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
-                const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
+            auto apply_chunk = [&](uint32_t valid_rows, uint32_t rc) {
                 const uint32_t valid = valid_rows * valid_cols;
                 if constexpr (!resident) {
                     if constexpr (is_rm) {
@@ -479,6 +482,9 @@ void kernel_main() {
                 if constexpr (!resident) {
                     cb_pop_front(cb_x_pass2, chunk);
                 }
+            };
+            for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
+                apply_chunk(row_axis.valid(rc, chunk_rows), rc);
             }
             cb_pop_front(cb_a_full, cols);
             cb_pop_front(cb_b_full, cols);

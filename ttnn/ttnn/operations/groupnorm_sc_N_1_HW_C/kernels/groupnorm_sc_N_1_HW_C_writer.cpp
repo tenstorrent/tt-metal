@@ -140,18 +140,22 @@ void kernel_main() {
             for (uint32_t rc = 0; rc < num_row_chunks; ++rc) {
                 const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
                 const uint32_t valid = valid_rows * valid_cols;
+                // (r, c) walk instead of idx / valid_cols: the divisor is a runtime value here and a per-tile
+                // software divide on the RISC is measurable on the latency floor.
+                uint32_t idx = 0;
+                uint32_t r = row_begin + rc * chunk_rows;
+                uint32_t c = 0;
+                const uint32_t t0 = col_begin + cg * cols;
                 for (uint32_t b = 0; b < out_blocks_per_chunk; ++b) {
                     cb_wait_front(cb_out, out_block);
                     const uint32_t l1 = get_read_ptr(cb_out);
-                    for (uint32_t k = 0; k < out_block; ++k) {
-                        const uint32_t idx = b * out_block + k;  // linear tile index inside the chunk
-                        if (idx >= valid) {
-                            break;
-                        }
-                        const uint32_t r = row_begin + rc * chunk_rows + idx / valid_cols;
-                        const uint32_t t = col_begin + cg * cols + idx % valid_cols;
-                        const uint32_t page = n * Ht * Ct + r * Ct + t;
+                    for (uint32_t k = 0; k < out_block && idx < valid; ++k, ++idx) {
+                        const uint32_t page = n * Ht * Ct + r * Ct + t0 + c;
                         noc_async_write(l1 + k * y_tile_bytes, out_acc.get_noc_addr(page), y_tile_bytes);
+                        if (++c == valid_cols) {
+                            c = 0;
+                            ++r;
+                        }
                     }
                     noc_async_write_barrier();
                     cb_pop_front(cb_out, out_block);

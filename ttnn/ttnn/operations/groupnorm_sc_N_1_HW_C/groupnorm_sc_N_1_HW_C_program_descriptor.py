@@ -38,6 +38,22 @@ MEMBERSHIP_DEPTH = 1  # membership (E) blocks buffered
 OUT_BLOCK_TILES_TARGET = 8  # output tiles per writer barrier (examples/double_buffer: 4-8 in flight saturates)
 OUT_DEPTH_FACTOR = 2  # cb_out depth = OUT_DEPTH_FACTOR * out_block tiles (writer double-buffering)
 MIN_TILES_PER_CORE = 1  # grid-synchronisation lamp: fewer, fatter cores per image when raised
+# Tie-break among the core splits that use the most cores, per input layout:
+#   "wide" = largest Pc (narrowest per-core Ct_core) — TILE input: the pass-2 affine build (one matmul + chains per
+#            channel tile), membership generation and the column-group fixed costs all scale with Ct_core;
+#   "tall" = largest Pr (narrowest per-core Ht_core) — ROW_MAJOR input: the stick reader issues one NoC read per
+#            stick (32 * Ht_core per core per pass), which dominates the RM path.
+# Measured on the 11x10 BH grid (Refinement 1, (1,1,1024,640) G=32 bf16): TILE wide 18.4 us vs tall 22.8 us;
+# RM tall 28.7 us vs wide 34.8 us (resident).
+SPLIT_TIE_BREAK = {"TILE": "wide", "ROW_MAJOR": "tall"}
+# After the split, drop the cores that do not shorten the per-core critical extent: Pr -> ceil(Ht / Ht_core_max),
+# Pc -> ceil(Ct / Ct_core_max). Every remaining core still owns <= the same max block, so the critical path is
+# unchanged while the gather/multicast has fewer participants (measured ~1 us per 30 participants). Enabled for
+# ROW_MAJOR input, whose per-stick reader IS the critical path (RM (1,1,1024,640): 22x5=110 cores 28.9 us vs
+# 16x5=80 cores 28.0 us). Kept off for TILE: the DRAM-bound large shapes gain 3-4% from every extra core and
+# op_requirements.md pins device_num_cores >= 108 on the flagship shapes ((1,1,1024,640) TILE would drop to 80
+# cores at ~17.6 us vs 18.3 us — a finding for the perf rounds, not taken here).
+SHRINK_TO_CRITICAL_EXTENT = {"TILE": False, "ROW_MAJOR": True}
 L1_BUDGET_BYTES_DEFAULT = 1_000_000  # min(1 MB, worker L1 - 200 KiB) on WH/BH is the 1 MB term
 MATH_FIDELITY = ttnn.MathFidelity.HiFi4
 FP32_DEST_ACC_EN = True
@@ -164,14 +180,16 @@ class ImageGroup:
         )
 
 
-def _split_2d(Ht, Ct, p_target):
+def _split_2d(Ht, Ct, p_target, tie_break="wide"):
     """op_design.md -> In-image split: Pr <= min(P_n, Ht), Pc = min(P_n // Pr, Ct), maximising the used
-    core count Pr*Pc (tie -> taller Pr: each core's gamma/beta slice is the narrower Ct_core). No divisor
-    constraint — per-core extents are ceil/floor balanced (see _axis_range)."""
+    core count Pr*Pc; ties resolved by `tie_break` ("wide" -> largest Pc, "tall" -> largest Pr; see
+    SPLIT_TIE_BREAK). No divisor constraint — per-core extents are ceil/floor balanced (see _axis_range)."""
     best = (1, 1)
     for pr in range(1, min(p_target, Ht) + 1):
         pc = min(p_target // pr, Ct)
-        if pr * pc > best[0] * best[1] or (pr * pc == best[0] * best[1] and pr > best[0]):
+        used, best_used = pr * pc, best[0] * best[1]
+        tie_wins = (pc > best[1]) if tie_break == "wide" else (pr > best[0])
+        if used > best_used or (used == best_used and tie_wins):
             best = (pr, pc)
     return best
 
@@ -218,7 +236,14 @@ def _usable_grid(device):
     return Gx, Gy
 
 
-def _assign_images(N, Gx, Gy, Ht, Ct):
+def _shrink_to_critical_extent(Ht, Ct, pr, pc):
+    """Fewest cores per axis that keep the same ceil-balanced max extent (see SHRINK_TO_CRITICAL_EXTENT)."""
+    pr = math.ceil(Ht / math.ceil(Ht / pr))
+    pc = math.ceil(Ct / math.ceil(Ct / pc))
+    return pr, pc
+
+
+def _assign_images(N, Gx, Gy, Ht, Ct, tie_break="wide", shrink=False):
     """op_design.md → Work Distribution → Image rectangles / In-image split."""
     num_cores = Gx * Gy
     groups = []
@@ -239,7 +264,9 @@ def _assign_images(N, Gx, Gy, Ht, Ct):
 
     for n, (x0, y0, w, h) in enumerate(rects):
         p_target = min(w * h, max(1, (Ht * Ct) // MIN_TILES_PER_CORE))
-        pr, pc = _split_2d(Ht, Ct, p_target)
+        pr, pc = _split_2d(Ht, Ct, p_target, tie_break)
+        if shrink:
+            pr, pc = _shrink_to_critical_extent(Ht, Ct, pr, pc)
         p_used = pr * pc
         rw, rh = _tight_rect(p_used, w, h)
         cores = [(x0 + i, y0 + j) for j in range(rh) for i in range(rw)]
@@ -283,7 +310,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
 
     # ---- image rectangles + in-image split -------------------------------------------
     Gx, Gy = _usable_grid(device)
-    groups = _assign_images(N, Gx, Gy, Ht, Ct)
+    layout_key = "ROW_MAJOR" if is_rm else "TILE"
+    groups = _assign_images(N, Gx, Gy, Ht, Ct, SPLIT_TIE_BREAK[layout_key], SHRINK_TO_CRITICAL_EXTENT[layout_key])
     pr, pc = groups[0].pr, groups[0].pc
     assert all(g.pr == pr and g.pc == pc for g in groups), "uniform split across image rectangles"
     # Ragged split: per-core extents are ceil/floor balanced (RT args); CBs size to the largest.
