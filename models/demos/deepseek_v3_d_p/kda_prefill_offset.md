@@ -1,6 +1,7 @@
-# KDA device-local multi-group wrap: implementation and performance report
+# KDA prefill offsets: contract and measured performance
 
-Status: implemented and validated locally on Blackhole, 2026-09-15
+Historical performance measurements: Blackhole, 2026-09-15.
+Current cleanup and validation: `tt-metal_tracker-mf3`.
 Tracking: `tt-metal_tracker-ea6` and children `.5`, `.6`, `.7`, `.13`
 
 ## Verdict
@@ -79,13 +80,13 @@ the public `KdaState` remains replicated across SP.
 
 Key implementation locations:
 
-- `models/demos/deepseek_v3_d_p/tt/kda/recurrence.py`: G selection, head-only
+- `tt/kda/recurrence.py`: G selection, head-only
   reduction, one affine prefix, one recurrent scan, and final-state replication.
 - `ttnn/cpp/ttnn/operations/experimental/kda/recurrent_chunk_scan/device/`:
   one-pass segmented summary, streamed snapshot, and one in-group state reload.
 - `ttnn/cpp/ttnn/operations/experimental/kda/affine_exclusive_scan/device/`:
   constant-reset transform and head/tail input selection in one scan program.
-- `models/demos/deepseek_v3_d_p/tt/kda/convolution.py` and
+- `tt/kda/convolution.py` and
   `qkv_causal_conv1d_silu/device/`: one-tile carry packing and wrap-aware
   convolution state.
 
@@ -158,3 +159,31 @@ profiles and restored G=4 topology prove removal of the old serialization, but
 a tighter performance percentage requires a thermally stable lane or longer
 randomized sampling. No claim stronger than “the prior 17-20% penalty is gone”
 is supported by this run.
+
+
+## Supported offset contract
+
+The caller supplies the MLA block-cyclic activation for one complete prefill
+chunk, a nonnegative 32-aligned absolute start, and immutable recurrent and
+three-row convolution carries replicated on every SP rank within each TP line.
+Stream continuity is the caller's responsibility. Start zero is the default.
+A nonzero rank boundary rotates the chronological chip order; an in-chip split
+keeps its physical head and tail and retains the ordinary group geometry.
+
+The layer owns construction-time selector tensors and chooses the boundary rank
+once per forward. Convolution and recurrence consume the same selector. The
+private SP routes receive a normalized topology and axis. Public experimental
+TTNN operations remain independently validated trust entries.
+
+Summary modes are ordinary full-group `(A, B)` and segmented
+`(head_A, head_B, tail_A, tail_B)`. Segmented mode requires an indicator and a
+strictly interior wrap boundary. Ordinary mode rejects wrap controls. Public
+summary ranges and head-only mode are removed. Recurrent scans retain
+unconditional wrap with a tail state and no indicator.
+
+The local suite validates SP2xTP4 and SP4xTP2 production offsets on eight
+Blackhole devices. The separately selected SP8xTP4 Galaxy CI case requires
+32 devices; local eight-device evidence does not establish that topology.
+
+Historical prototype comparisons are preserved in Git history at
+`4d2c3bb3d57c7628c1cf671005a61143bac8ef18`; they describe superseded implementations.
