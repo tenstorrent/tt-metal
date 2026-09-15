@@ -71,9 +71,9 @@ def test_tanh_range(device, torch_dtype, ttnn_dtype, atol):
 
     assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=atol)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
-    # pcc_msg 0.9999663646890817, fast_and_approximate_mode=True pcc 0.9978378297942829
+    # pcc_msg 0.9999899271259238, fast_and_approximate_mode=True pcc 0.9999149051477796
     # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
-    # fp32 pcc_msg 0.9999829606828651 (fast_and_approximate_mode=False) , 0.9977552960423647 (fast_and_approximate_mode=True)
+    # fp32 pcc_msg 0.9999999999999983 (fast_and_approximate_mode=False) , 0.9999224853063899 (fast_and_approximate_mode=True)
     # Single-tile tanh: accurate = 7886ns, approx = 1789ns (~77% faster)
     assert pcc
 

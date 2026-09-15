@@ -5,6 +5,11 @@
 import sys
 
 import ttnn
+from ttnn.operations.golden_common import (
+    golden_compute_gradients,
+    golden_pack_complex_gradient,
+    golden_prepare_grad_inputs,
+)
 
 THIS_MODULE = sys.modules[__name__]
 
@@ -16,11 +21,7 @@ def _prepare_input_for_backward(input_tensor):
     Preserves tensors that already require gradients for backward goldens.
     """
 
-    if not input_tensor.requires_grad:
-        # Backward operations call backward() and return input_tensor.grad.
-        # Comparison-mode inputs are detached Torch tensors, so enable gradients locally.
-        input_tensor.requires_grad_(True)
-    return input_tensor
+    return golden_prepare_grad_inputs(input_tensor)[0]
 
 
 def _to_float32_with_bfloat16_daz(tensor):
@@ -60,26 +61,21 @@ def _round_with_bfloat16_ftz(tensor, output_dtype):
 def _golden_function_unary_backward(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    _prepare_input_for_backward(input_tensor)
+    input_tensor = _prepare_input_for_backward(input_tensor)
     if torch_op == "softsign":
         pyt_y = torch.nn.functional.softsign(input_tensor)
     else:
         pyt_fn = getattr(torch, torch_op)
         pyt_y = pyt_fn(input_tensor)
-    input_tensor.retain_grad()
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor.grad]
-    return golden_tensor
+    return golden_compute_gradients(pyt_y, (input_tensor,), grad_tensor)
 
 
 def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *args, **kwargs):
     import torch
 
-    _prepare_input_for_backward(input_tensor)
+    input_tensor = _prepare_input_for_backward(input_tensor)
     pyt_y = torch.where(torch.tensor(alpha) == 0, torch.zeros_like(input_tensor), torch.div(input_tensor, alpha))
-    input_tensor.retain_grad()
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor.grad]
+    golden_tensor = golden_compute_gradients(pyt_y, (input_tensor,), grad_tensor)
     golden_tensor[0] = torch.where(torch.isnan(golden_tensor[0]), torch.zeros_like(input_tensor), golden_tensor[0])
     return golden_tensor
 
@@ -87,16 +83,13 @@ def _golden_function_div_no_nan(torch_op, grad_tensor, input_tensor, alpha, *arg
 def _golden_function_unary_backward_with_float(torch_op, grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    _prepare_input_for_backward(input_tensor)
+    input_tensor = _prepare_input_for_backward(input_tensor)
     if torch_op in ["hardshrink", "softshrink", "leaky_relu", "elu", "celu"]:
         pyt_fn = getattr(torch.nn.functional, torch_op)
     else:
         pyt_fn = getattr(torch, torch_op)
     pyt_y = pyt_fn(input_tensor, *args, **kwargs)
-    input_tensor.retain_grad()
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor.grad]
-    return golden_tensor
+    return golden_compute_gradients(pyt_y, (input_tensor,), grad_tensor)
 
 
 def _golden_function_unary_backward_with_two_float(
@@ -104,16 +97,13 @@ def _golden_function_unary_backward_with_two_float(
 ):
     import torch
 
-    _prepare_input_for_backward(input_tensor)
+    input_tensor = _prepare_input_for_backward(input_tensor)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.clamp:
         pyt_y = torch.clamp(input_tensor, min=a, max=b)
     else:
         pyt_y = pyt_fn(input_tensor, a, b)
-    input_tensor.retain_grad()
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor.grad]
-    return golden_tensor
+    return golden_compute_gradients(pyt_y, (input_tensor,), grad_tensor)
 
 
 def _golden_function_backward_with_reverse_string(
@@ -121,16 +111,13 @@ def _golden_function_backward_with_reverse_string(
 ):
     import torch
 
-    _prepare_input_for_backward(input_tensor_a)
+    input_tensor_a = _prepare_input_for_backward(input_tensor_a)
     pyt_fn = getattr(torch, torch_op)
     if pyt_fn == torch.div:
         pyt_y = pyt_fn(input_tensor_b, input_tensor_a, rounding_mode=value)
     else:
         pyt_y = pyt_fn(input_tensor_b, input_tensor_a)
-    input_tensor_a.retain_grad()
-    pyt_y.backward(gradient=grad_tensor)
-    golden_tensor = [input_tensor_a.grad]
-    return golden_tensor
+    return golden_compute_gradients(pyt_y, (input_tensor_a,), grad_tensor)
 
 
 ttnn.attach_golden_function(
@@ -305,18 +292,10 @@ ttnn.attach_golden_function(
 def _golden_function_abs_cmplx(grad_tensor, input_tensor, *args, **kwargs):
     import torch
 
-    input_tensor.retain_grad()
-
+    input_tensor = _prepare_input_for_backward(input_tensor)
     pyt_y = torch.abs(input_tensor)
-
-    pyt_y.backward(gradient=grad_tensor)
-
-    grad_res_real = torch.real(input_tensor.grad)
-    grad_res_imag = torch.imag(input_tensor.grad)
-
-    golden_tensor = [torch.cat((grad_res_real, grad_res_imag), dim=-1)]
-
-    return golden_tensor
+    (input_gradient,) = golden_compute_gradients(pyt_y, (input_tensor,), grad_tensor)
+    return [golden_pack_complex_gradient(input_gradient)]
 
 
 def _golden_function(grad_tensor, input_tensor, min_val=None, max_val=None, *args, **kwargs):
@@ -349,20 +328,6 @@ def _golden_function(grad_tensor, input_tensor, beta=None, threshold=None, *args
 
 
 ttnn.attach_golden_function(ttnn.softplus_bw, golden_function=_golden_function)
-
-
-def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
-    import torch
-
-    input_tensor.retain_grad()
-
-    pyt_y = torch.trunc(input_tensor)
-    pyt_y.backward(gradient=grad_tensor)
-
-    return [input_tensor.grad]
-
-
-ttnn.attach_golden_function(ttnn.trunc_bw, golden_function=_golden_function)
 
 
 def _golden_function(grad_tensor, input_tensor, *args, **kwargs):
