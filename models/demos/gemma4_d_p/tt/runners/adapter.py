@@ -73,11 +73,12 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
     def allocate_kv_cache(self, *, mesh_device, hf_config, params):
         validate_params(params)
         from models.demos.gemma4_d_p.config import MeshConfig
+        from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
         from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
 
         return allocate_ring_kv_caches(
             MeshConfig(mesh_device),
-            hf_config,
+            Gemma4ModelArgs.from_hf_config(hf_config),
             num_users=params.num_users,
             max_seq_len=params.max_seq_len,
             prefill_chunk_size=params.chunk_size,

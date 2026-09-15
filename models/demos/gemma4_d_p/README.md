@@ -63,7 +63,7 @@ Run the end-to-end hardware check, which starts both the runner and producer:
 pytest models/demos/gemma4_d_p/tests/test_prefill_service.py -sv --basetemp=/tmp/gemma4-service-test
 ```
 
-It checks all six full-context prompts, finite final hidden states, nonzero first/last KV rows from every layer, distinct slot contents, and preservation of completed slots. Producer timings and logs are saved in the pytest temporary directory. For the canonical demo, add `--timeout=3600` if loading weights exceeds the repository's default 300-second timeout.
+It checks all six full-context prompts, final-chunk trace/eager PCC above 0.999, finite hidden states, nonzero first/last KV rows from every layer, distinct slot contents, and preservation of completed slots. It then reuses all six slots with 8193-token prompts to check padded final chunks. Producer timings and logs are saved in the pytest temporary directory. For the canonical demo, add `--timeout=3600` if loading weights exceeds the repository's default 300-second timeout.
 
 ## Model and cache interfaces
 
