@@ -1048,12 +1048,7 @@ class MiniMaxH3Vae:
 
             mark = time.perf_counter()
             decoded = decoder(tokens)
-            # fp32 before anything downstream touches the tiles: the mixed bf16-tile x fp32-ramp
-            # ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on current ttnn (garbage-scale
-            # output; the seam gate only covers fp32 tiles, which is exactly the path this keeps us
-            # on). The cast lands here, while `decoded` is still TILE, so it costs no extra layout
-            # conversion -- the price is fp32 through unpatchify and the gathers (2x bytes).
-            decoded = ttnn.typecast(decoded, ttnn.float32)
+            ttnn.deallocate(tokens)
             # Row-major from here to the DMA. `unpatchify_device`'s rank-8 intermediate has trailing dims
             # of 16, which a tiled reshape pads to 32x32 -- a 4x blowup for a view -- and the stitch's
             # slices and concats land off tile boundaries on this grid's overlaps. One conversion here
@@ -1068,8 +1063,10 @@ class MiniMaxH3Vae:
                 patch_size=self.config.spatial_compression_ratio,
                 patch_size_t=self.config.temporal_compression_ratio,
             )
-            # Co-locate every tile on every device. Two gathers, one per mesh axis.
+            # Co-locate every tile on every device. Two gathers, one per mesh axis, in the decoder's
+            # bf16: the gathered pile is `wave_size` tiles per device, so its bytes set the peak.
             gathered = ttnn.all_gather(pixels, 0, cluster_axis=0, topology=ttnn.Topology.Ring)
+            ttnn.deallocate(pixels)
             gathered = ttnn.all_gather(gathered, 0, cluster_axis=1, topology=ttnn.Topology.Ring)
             elapsed = time.perf_counter() - mark
             profile["device"] += elapsed
@@ -1079,9 +1076,13 @@ class MiniMaxH3Vae:
             # `ttnn.Shape` does not support slicing, so materialize it as a list once.
             gathered_shape = list(gathered.shape)
 
+            # The ROW_MAJOR blend in `DeviceTileStitcher` mis-executes on bf16 tiles against its fp32
+            # ramps (garbage-scale output; the seam gate covers fp32 tiles only), so each tile is cast
+            # as it leaves the pile. Typecast has a native row-major program, so no relayout here.
             def tile_at(offset: int, row: int, col: int) -> ttnn.Tensor:
                 index = position[offset + row * grid_cols + col]
-                return ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
+                tile = ttnn.slice(gathered, [index, 0, 0, 0, 0], [index + 1, *gathered_shape[1:]])
+                return ttnn.typecast(tile, ttnn.float32)
 
             # Stitch-then-read one chunk at a time: the gathered pile plus a single fp32 canvas
             # bounds device memory, where stitching the whole group first would hold every canvas.
