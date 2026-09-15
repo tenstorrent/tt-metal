@@ -343,33 +343,48 @@ class Llama31Model(nn.Module):
                 mapping[prefix + suffix] = own + suffix
         return mapping
 
-    def load_hf_state_dict(self, hf_state_dict: dict, strict: bool = True):
+    def load_hf_state_dict(self, hf_state_dict: dict, strict: bool = True, consume: bool = False):
         """Load a HuggingFace Llama-3.1-8B state dict.
 
         Weights are taken exactly as the checkpoint ships them — q/k stay permuted, so this model
         computes in the HF frame. Do not un-permute here: that would make the logits comparison
         against HF fail while making the KV golden accidentally right, which is the worst of both.
+
+        Copies into each parameter in place rather than assembling a dtype-converted dict and
+        handing it to ``load_state_dict``. That matters at this model's size: the dict would hold a
+        second full fp32 copy of the weights (~32 GB) alongside the model's own ~32 GB and the
+        checkpoint's ~16 GB, which is what OOM-killed golden-KV generation on a 62 GB host.
+
+        Args:
+            consume: drop each source tensor from ``hf_state_dict`` once copied, so the checkpoint's
+                ~16 GB is released as the load proceeds instead of at the end. Off by default
+                because it mutates the caller's dict; the golden generator sets it.
         """
         mapping = self.hf_key_map()
         own = dict(self.named_parameters())
-        loaded = {}
         missing = []
+        loaded_keys = set()
         for hf_key, own_key in mapping.items():
             if hf_key not in hf_state_dict:
                 missing.append(hf_key)
                 continue
             tensor = hf_state_dict[hf_key]
-            expected = tuple(own[own_key].shape)
+            param = own[own_key]
+            expected = tuple(param.shape)
             if tuple(tensor.shape) != expected:
                 raise ValueError(f"{hf_key}: checkpoint has {tuple(tensor.shape)}, model expects {expected}")
-            loaded[own_key] = tensor.to(own[own_key].dtype)
+            with torch.no_grad():
+                param.copy_(tensor)
+            loaded_keys.add(own_key)
+            if consume:
+                del hf_state_dict[hf_key]
 
         if missing and strict:
             raise KeyError(f"checkpoint is missing {len(missing)} expected keys, first few: {missing[:5]}")
-        result = self.load_state_dict(loaded, strict=False)
-        if strict and result.missing_keys:
-            raise KeyError(f"unloaded parameters after mapping: {result.missing_keys[:5]}")
-        return result
+        unloaded = sorted(set(own) - loaded_keys)
+        if strict and unloaded:
+            raise KeyError(f"unloaded parameters after mapping: {unloaded[:5]}")
+        return unloaded
 
 
 DEFAULT_CHECKPOINT = Path("/mnt/models/meta-llama/Llama-3.1-8B-Instruct")
@@ -403,8 +418,17 @@ def load_reference_model(
 
     ``num_layers`` below 32 loads a truncated stack, which is how the per-layer PCC tests stay
     affordable; the logits comparison needs all 32.
+
+    Loads with ``consume=True`` and does not keep a reference to the checkpoint dict, so the
+    checkpoint's ~16 GB is released tensor-by-tensor as it is copied in. At the full 32 layers in
+    fp32 the model alone is ~32 GB, and holding the checkpoint alongside it to the end is enough to
+    OOM a 62 GB host.
     """
     model = Llama31Model(num_layers=num_layers).to(dtype)
-    model.load_hf_state_dict(load_hf_state_dict(checkpoint_dir), strict=num_layers == Llama31_8BConfig.NUM_LAYERS)
+    model.load_hf_state_dict(
+        load_hf_state_dict(checkpoint_dir),
+        strict=num_layers == Llama31_8BConfig.NUM_LAYERS,
+        consume=True,
+    )
     model.eval()
     return model
