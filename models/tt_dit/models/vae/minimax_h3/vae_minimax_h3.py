@@ -50,6 +50,10 @@ from .encoder_minimax_h3 import MiniMaxH3Encoder3d
 
 DEFAULT_TILE_SIZE = 256
 DEFAULT_TILE_OVERLAP = 64
+# Every overlap `split_tiles` derives at the default tile size and overlap, for any multiple-of-32 edge.
+# The device stitcher binds one ramp per entry up front; pinned against `split_tiles` in
+# test_stitch_device_minimax_h3.py.
+TILE_BLEND_EXTENTS = (64, 80, 96, 112, 128, 144, 160, 192, 224)
 
 
 class MiniMaxH3VaeConfig:
@@ -1005,6 +1009,7 @@ class MiniMaxH3Vae:
         position = {shard: index for index, shard in enumerate(order)}
         if self._stitcher is None:
             self._stitcher = DeviceTileStitcher(self.mesh_device)
+            self._stitcher.bind_ramps(TILE_BLEND_EXTENTS, self.tile_size)
 
         canvases = []
         for group_start in range(0, len(chunk_latents), chunks_per_wave):

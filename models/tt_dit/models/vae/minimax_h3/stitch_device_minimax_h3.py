@@ -42,28 +42,35 @@ class DeviceTileStitcher:
 
     def __init__(self, mesh_device: ttnn.MeshDevice) -> None:
         self.mesh_device = mesh_device
-        self._ramps: dict[tuple, tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._ramps: dict[tuple, ttnn.Tensor] = {}
 
-    def _ramp_pair(self, shape: tuple[int, ...], extent: int, dim: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        """`(weight_a, weight_b)` broadcast to `shape`, where `weight_a = 1 - i/extent` along `dim`.
+    def _ramp(self, plane: tuple[int, int], rank: int, dim: int) -> ttnn.Tensor:
+        """`weight_a = 1 - i/extent` along `dim`, over the trailing `plane = (H, W)`.
 
-        Materialized at full tile shape rather than relying on ttnn broadcast semantics: a few MB,
-        built once, and it removes any question of which operand broadcasts.
+        Leading dims are 1: the row-major binary_ng reader strides them at zero, so one plane serves
+        every channel and frame of the tile and the cache stays a few KB per key.
         """
-        key = (shape, extent, dim)
+        key = (plane, dim)
         if key not in self._ramps:
+            extent = plane[dim - (rank - 2)]
             positions = torch.arange(extent, dtype=torch.float32)
-            view = [1] * len(shape)
+            view = [1] * rank
             view[dim] = extent
-            slab = list(shape)
-            slab[dim] = extent
+            slab = [1] * (rank - 2) + list(plane)
             weight_a = (1 - positions / extent).view(view).expand(slab).contiguous()
-            weight_b = (positions / extent).view(view).expand(slab).contiguous()
-            self._ramps[key] = tuple(
-                ttnn.from_torch(w, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
-                for w in (weight_a, weight_b)
+            self._ramps[key] = ttnn.from_torch(
+                weight_a, dtype=ttnn.float32, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
             )
         return self._ramps[key]
+
+    def bind_ramps(self, extents, tile: int) -> None:
+        """Every ramp up front, on both axes. The stitcher is first used inside warmup, before any trace
+        is captured, so a ramp built here keeps its address for good. One built later, mid-request,
+        lands where a replay writes and its seam band comes back as garbage on every later decode.
+        """
+        for extent in extents:
+            self._ramp((extent, tile), 5, 3)
+            self._ramp((tile, extent), 5, 4)
 
     @staticmethod
     def _slice(tensor: ttnn.Tensor, dim: int, start: int, stop: int) -> ttnn.Tensor:
@@ -86,8 +93,8 @@ class DeviceTileStitcher:
 
         tail_a = self._slice(a, axis, a.shape[axis] - blend_extent, a.shape[axis])
         head_b = self._slice(b, axis, 0, blend_extent)
-        weight_a, weight_b = self._ramp_pair(tuple(head_b.shape), blend_extent, axis)
-        blended = ttnn.add(ttnn.multiply(tail_a, weight_a), ttnn.multiply(head_b, weight_b))
+        weight_a = self._ramp((head_b.shape[-2], head_b.shape[-1]), rank, axis)
+        blended = ttnn.add(head_b, ttnn.multiply(ttnn.subtract(tail_a, head_b), weight_a))
 
         if blend_extent == b.shape[axis]:
             return blended
@@ -164,7 +171,7 @@ class NeighborTileBlender:
     @staticmethod
     def _band_matrix(pad: int, extent: int, overlap: int) -> torch.Tensor:
         """``(pad+extent, extent)`` mixing matrix: identity, with the first ``overlap`` outputs
-        cross-faded from the halo's last ``overlap`` positions -- `_ramp_pair`'s weights as matrix
+        cross-faded from the halo's last ``overlap`` positions -- `_ramp`'s weights as matrix
         entries. ``overlap == 0`` is the pure identity (edge tiles, pad slots)."""
         m = torch.zeros(pad + extent, extent, dtype=torch.float32)
         for k in range(extent):
