@@ -32,10 +32,8 @@ std::string ensure_pch(
     const std::string& opt_level,
     const std::string& cflags,
     const std::string& includes,
-    const std::string& umbrella_path,
-    const std::string& pch_root) {
-    const fs::path umbrella = umbrella_path;
-
+    const fs::path& umbrella,
+    const fs::path& pch_root) {
     // The umbrella's own text is part of the key, so editing it produces a new artifact
     // instead of silently reusing the one built from the previous contents. Re-reading a
     // ~1 KB file per compile costs nothing next to spawning a compiler.
@@ -49,7 +47,7 @@ std::string ensure_pch(
     hasher.update(includes);
     hasher.update(umbrella_text);
     const std::string key = fmt::format("{:016x}", hasher.digest());
-    const fs::path dir = fs::absolute(fs::path(pch_root) / key);
+    const fs::path dir = fs::absolute(pch_root / key);
 
     // A server handles multiple build keys and cache roots in one process; keep their
     // staged paths separate even when the compiler flags and umbrella text match.

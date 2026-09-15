@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <string_view>
 
@@ -19,7 +20,7 @@ std::string ensure_pch(
     const std::string& opt_level,
     const std::string& cflags,
     const std::string& includes,
-    const std::string& umbrella_path,
-    const std::string& pch_root);
+    const std::filesystem::path& umbrella,
+    const std::filesystem::path& pch_root);
 
 }  // namespace tt::jit_build

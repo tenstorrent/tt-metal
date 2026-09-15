@@ -679,7 +679,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         recipe.cflags,
         this->includes_,
         recipe.pch_umbrella,
-        fmt::format("{}{}/pch/", env_.out_root_, env_.build_key_));
+        fs::path(env_.out_root_) / std::to_string(env_.build_key_) / "pch");
 
     // Preserve the recipe's defines for watcher logging.
     std::vector<std::string> defines = recipe.defines;

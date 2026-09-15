@@ -189,7 +189,7 @@ void compile_one(
     const std::string& out_dir,
     size_t src_index,
     const std::string& temp_obj,
-    const std::string& pch_root) {
+    const fs::path& pch_root) {
     std::string obj_path = out_dir + target.objs[src_index];
     std::string obj_temp_path = out_dir + temp_obj;
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
@@ -284,7 +284,7 @@ void build_target(
     const std::string& gpp,
     const tt::tt_metal::jit_server::TargetRecipe& target,
     const std::string& out_dir,
-    const std::string& pch_root,
+    const fs::path& pch_root,
     tt::tt_metal::jit_server::CompileResponse& response) {
     if (target.srcs.size() != target.objs.size()) {
         throw std::runtime_error("srcs and objs must have the same size for target " + target.target_name);
@@ -415,8 +415,7 @@ tt::tt_metal::jit_server::CompileResponse compile_callback(const tt::tt_metal::j
                     resolve_uploaded_firmware_path(request.build_key, resolved_target).string();
             }
             std::string out_dir = target_cache_dir(request.build_key, request.kernel_name, target.target_name);
-            const std::string pch_root =
-                (fs::path(g_server_cache_root) / std::to_string(request.build_key) / "pch").string();
+            const fs::path pch_root = fs::path(g_server_cache_root) / std::to_string(request.build_key) / "pch";
             build_target(request.gpp, resolved_target, out_dir, pch_root, response);
         }
 
