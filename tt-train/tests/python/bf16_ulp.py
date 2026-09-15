@@ -32,9 +32,8 @@ def bf16_ulp_error(got, expected, p99_floor_binades: int | None = None) -> tuple
     """``|got - expected|`` in bf16 ULP.
 
     Returns ``(peak_ulp, p99_ulp)``: the max error in ULP at ``max |expected|``, then the p99 of
-    the per-element errors, each in ULP at its own element. With ``p99_floor_binades``, elements
-    more than that many binades below the peak are measured at the spacing that far down instead,
-    an absolute bound where cancellation makes the relative one unattainable.
+    the per-element errors, each in ULP at its own element. With ``p99_floor_binades=k``, elements
+    smaller than ``peak / 2**k`` are measured in ULP at ``peak / 2**k`` instead.
     """
     got, expected = np.asarray(got, np.float64), np.asarray(expected, np.float64)
     if got.shape != expected.shape:
@@ -59,12 +58,9 @@ def assert_within_bf16_ulp(
     """Assert ``got`` matches ``expected`` to ``max_ulp`` bf16 ULP at the peak and, if given, to
     ``max_ulp_p99`` at the 99th percentile of the per-element errors.
 
-    Per-element errors are relative, measured at each ``expected`` value's own spacing.
-    A correct result that cancels to near zero cannot meet that:
-    its absolute error comes from the intermediates, and once such
-    elements make up more than 1% of the tensor the p99 reflects the problem's conditioning, not
-    the kernel. ``p99_floor_binades`` then holds elements more than that many binades below the
-    peak to the spacing at the floor, an absolute bound; elements above it are unaffected.
+    Each per-element error is in ULP at its own ``expected`` value. With ``p99_floor_binades=k``,
+    elements smaller than ``peak / 2**k`` are measured at the spacing of ``peak / 2**k`` instead,
+    which makes their bound absolute; elements at or above the floor are unaffected.
     """
     try:
         ulp, ulp_p99 = bf16_ulp_error(got, expected, p99_floor_binades)
