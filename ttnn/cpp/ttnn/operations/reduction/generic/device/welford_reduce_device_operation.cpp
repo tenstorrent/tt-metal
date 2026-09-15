@@ -3,6 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "welford_reduce_device_operation.hpp"
+
+#include <cstdint>
+
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -16,14 +21,34 @@ WelfordReduceDeviceOperation::program_factory_t WelfordReduceDeviceOperation::se
     return WelfordReduceDeviceOperation::WelfordReduceProgramFactory{};
 }
 
+ttsl::hash::hash_t WelfordReduceDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto plan = WelfordReduceProgramFactory::select_plan(operation_attributes, tensor_args);
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<WelfordReduceDeviceOperation>, operation_attributes, tensor_args, plan.use_l1_replay);
+}
+
 void WelfordReduceDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     TT_FATAL(
         tensor_args.storage_type() == StorageType::DEVICE,
         "Operands to Std/Var reductions need to be on device! Got storage type: {}",
         tensor_args.storage_type());
-    TT_FATAL(tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
+    TT_FATAL(
+        tensor_args.buffer() != nullptr, "Operands to Std/Var reductions need to be allocated in buffers on device!");
+    TT_FATAL(
+        tensor_args.device()->arch() != tt::ARCH::QUASAR,
+        "Std/Var stable statistics are not supported on Quasar; the two-pass SFPU implementation currently supports "
+        "Wormhole and Blackhole only.");
     TT_FATAL((tensor_args.layout() == Layout::TILE), "Inputs to Std/Var reductions must be tilized");
+    const auto tile = tensor_args.tensor_spec().tile();
+    TT_FATAL(
+        tile.get_height() == tt::constants::TILE_HEIGHT && tile.get_width() == tt::constants::TILE_WIDTH,
+        "Std/Var TILE input requires tile shape {}x{}, got: {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        tile.get_height(),
+        tile.get_width());
     TT_FATAL(
         tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
             tensor_args.dtype() == DataType::BFLOAT8_B,
@@ -49,7 +74,7 @@ WelfordReduceDeviceOperation::spec_return_value_t WelfordReduceDeviceOperation::
         // host dispatch.  Since they will also be reduced, set their dimensions to 1.
         if (operation_attributes.reduce_batch_size > 1) {
             TT_FATAL(output_shape.rank() >= 3, "Output shape rank should be at least 3");
-            uint32_t remaining = operation_attributes.reduce_batch_size;
+            std::uint32_t remaining = operation_attributes.reduce_batch_size;
             for (int i = static_cast<int>(output_shape.rank()) - 3; i >= 0 && remaining > 1; --i) {
                 TT_FATAL(
                     remaining % output_shape[i] == 0,
@@ -90,7 +115,7 @@ ttnn::Tensor welford_reduce(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    uint32_t reduce_batch_size) {
+    std::uint32_t reduce_batch_size) {
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,

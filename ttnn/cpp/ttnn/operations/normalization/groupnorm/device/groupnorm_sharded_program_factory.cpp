@@ -760,6 +760,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     eltwise_binary_defines["FP32_DEST_ACC"] = fp32_dest_acc_en ? "true" : "false";
+    const bool use_sfpu_local_combine =
+        groupnorm_use_sfpu_local_combine(use_welford, device->arch(), fp32_dest_acc_en, tile_width);
+    if (use_sfpu_local_combine) {
+        reader_mcast_sender_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
+        if (has_receiver_kernel) {
+            reader_mcast_receiver_desc.defines.emplace_back("WELFORD_SFPU_LOCAL_COMBINE", "1");
+        }
+        eltwise_binary_defines["WELFORD_SFPU_LOCAL_COMBINE"] = "1";
+    }
 
     // Float32 input requires fp32_dest_acc_en=true on both GroupNorm paths:
     //  - Welford: prerequisite for UnpackToDestFp32 (set below), which bypasses the unpacker's
@@ -776,31 +785,16 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         "otherwise the DEST accumulator is bfloat16 and intermediate/accumulated results are silently "
         "rounded to bf16.");
 
-    // UnpackToDestFp32 only helps for CBs whose only consumer is an op that supports the
-    // unpack-to-DEST path (copy_tile or transpose_tile in fp32 mode).
-    // The welford_groupnorm_sharded_v2 kernel feeds both c_0 (non-TILIZE_IN) and c_1
-    // (TILIZE_IN) through both transpose_tile (welford intake) and sub_tiles_bcast_scalar
-    // (final (x - mean) normalization). The FPU consumer means neither CB can carry the flag
-    // directly. The workaround is the multi-buffer-index aliasing pattern: register
-    // c_29 as a second buffer index on c_0's SRAM and c_31 on c_1's, set
-    // UnpackToDestFp32 on the alias indices, and have the kernel read the welford intake
-    // transpose via the alias (UnpackToDest fp32 path preserves the full 23-bit mantissa into
-    // DEST for the SFPU welford) while keeping the final-stage sub_tiles_bcast_scalar on the
-    // primary index (Default mode, SrcA path).
-    //
-    // Other FP32 CBs were considered and rejected because, even though they pass through an
-    // unpack-to-DEST-capable op, the next consumer is a pack into a CB whose downstream
-    // reader is an FPU op reading via SrcA, which truncates to TF32 regardless of what
-    // was preserved in DEST. Setting the flag would incur the cost without improving precision:
-    //   - cb_xmm (c_2): the (x - mean) intermediate. copy_tile into DEST then pack to cb_x;
-    //     cb_x is read by add_tiles (FPU on SrcA) for accumulation.
-    //   - cb_x (c_13): accumulates (x - mean) results across groups via repeated add_tiles,
-    //     each of which reads cb_x via SrcA (truncating to TF32) before producing the next
-    //     FP32 sum. The final stored value does carry one add_tiles step's worth of FP32
-    //     precision, so an UnpackToDestFp32 alias on the final copy_tile would
-    //     preserve ~ one mantissa-bit step beyond TF32, but the accumulated TF32
-    //     errors from previous iteration dominate, so the gain doesn't justify the overhead.
+    // Float32 two-pass statistics and final normalization both need full-mantissa values in DEST.
+    // Register c_29/c_31 as UnpackToDestFp32 aliases of the input CBs so transpose_tile can consume
+    // them during statistics and the fused SFPU normalizer can consume them during finalization.
+    // The primary c_0/c_1 indices retain the default unpack mode for the non-FP32 FPU fallback.
+    // c_20/c_21 similarly alias the mean and inverse-standard-deviation state consumed by the
+    // fused finalizer; no intermediate (x - mean) CB is required on that path.
     const bool welford_fp32_alias = use_welford && fp32_dest_acc_en && in_data_format == tt::DataFormat::Float32;
+    const bool fp32_sfpu_normalizer = welford_fp32_alias;
+    constexpr uint32_t ex_global_fp32_alias_index = tt::CBIndex::c_20;
+    constexpr uint32_t ex2pe_fp32_alias_index = tt::CBIndex::c_21;
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (welford_fp32_alias) {
@@ -808,6 +802,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[static_cast<uint32_t>(tt::CBIndex::c_31)] =
             tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[ex_global_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+        unpack_to_dest_mode[ex2pe_fp32_alias_index] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
 
     // Welford-fp32 alias args. Only attached on the welford compute kernel; the non-welford
@@ -828,9 +824,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         {"enable_fp32_reconfig", static_cast<uint32_t>(enable_fp32_reconfig)},
     };
     if (use_welford) {
+        const auto local_count = block_ht * num_datum_row_per_group;
         compute_named_compile_time_args.push_back({"welford_fp32_alias", static_cast<uint32_t>(welford_fp32_alias)});
         compute_named_compile_time_args.push_back({"cb_in0_welford", cb_in0_welford_arg});
         compute_named_compile_time_args.push_back({"cb_in_welford", cb_in_welford_arg});
+        compute_named_compile_time_args.push_back(
+            {"fp32_sfpu_normalizer", static_cast<uint32_t>(fp32_sfpu_normalizer)});
+        compute_named_compile_time_args.push_back(
+            {"cb_ex_global_fp32", fp32_sfpu_normalizer ? ex_global_fp32_alias_index : tt::CBIndex::c_15});
+        compute_named_compile_time_args.push_back(
+            {"cb_ex2pe_fp32", fp32_sfpu_normalizer ? ex2pe_fp32_alias_index : tt::CBIndex::c_17});
+        compute_named_compile_time_args.push_back(
+            {"sfpu_two_pass_reciprocal", std::bit_cast<uint32_t>(1.0f / static_cast<float>(local_count))});
     }
 
     KernelDescriptor compute_sender_desc;
@@ -1127,7 +1132,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     // ex_global
     constexpr uint32_t ex_cb_index = tt::CBIndex::c_9;
     constexpr uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    desc.cbs.push_back(CBDescriptor{
+    CBDescriptor ex_global_desc{
         .total_size = static_cb.ex_global_CB_size,
         .core_ranges = all_cores,
         .format_descriptors =
@@ -1141,11 +1146,19 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                   .data_format = cb_data_format,
                   .page_size = single_tile_size,
               }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex_global_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(ex_global_fp32_alias_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        });
+    }
+    desc.cbs.push_back(std::move(ex_global_desc));
 
     // ex2pe
     constexpr uint32_t cb_ex2pe_index = tt::CBIndex::c_17;
-    desc.cbs.push_back(CBDescriptor{
+    CBDescriptor ex2pe_desc{
         .total_size = static_cb.ex2pe_CB_size,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
@@ -1153,7 +1166,15 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             .data_format = cb_data_format,
             .page_size = single_tile_size,
         }}},
-    });
+    };
+    if (fp32_sfpu_normalizer) {
+        ex2pe_desc.format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(ex2pe_fp32_alias_index),
+            .data_format = cb_data_format,
+            .page_size = single_tile_size,
+        });
+    }
+    desc.cbs.push_back(std::move(ex2pe_desc));
 
     constexpr uint32_t cb_ones_index = tt::CBIndex::c_26;
     desc.cbs.push_back(CBDescriptor{
@@ -1372,8 +1393,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
             // Tile id for negative mask is same as input mask. Wrap on the set size, not the whole
             // tensor: under the pad correction the caller's mask carries a second (row-masked) set
             // beyond the first that the sharded writer never reads.
-            input_mask_tile_start_id =
-                (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
+            input_mask_tile_start_id = (input_mask_tile_start_id + input_mask_num_tiles_per_core) % mask_set_tiles;
         }
     }
 
