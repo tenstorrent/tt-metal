@@ -217,6 +217,34 @@ def test_recurrent_chunk_scan_contract_and_trace(
     )
 
 
+def test_recurrent_chunk_scan_reseeds_only_at_wrap(device: ttnn.Device) -> None:
+    host_inputs = host_protocol(2, 4, 32, 32, seed=1741)
+    host_state = initial_state(2, 32, 32, seed=1742)
+    host_tail = initial_state(2, 32, 32, seed=1743)
+    head_output, _ = recurrent_oracle(tuple(tensor[:, :2] for tensor in host_inputs), host_state)
+    tail_output, expected_state = recurrent_oracle(tuple(tensor[:, 2:] for tensor in host_inputs), host_tail)
+    expected = (torch.cat((head_output, tail_output), dim=1), expected_state)
+
+    inputs = device_protocol(host_inputs, device)
+    state = to_device(host_state, device)
+    tail_state = to_device(host_tail, device)
+    indicator = to_device(torch.ones(1, 1, 1), device)
+    actual = run_recurrent(
+        inputs,
+        state,
+        tail_state=tail_state,
+        wrap_indicator=indicator,
+        wrap_chunk=2,
+    )
+
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("token_output", "final_state"),
+        context="wrap reseed",
+    )
+
+
 def _regression_inputs(
     device: ttnn.Device,
     *,

@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 #include "qkv_causal_conv1d_silu_nanobind.hpp"
+#include "pack_convolution_carry.hpp"
 #include "qkv_causal_conv1d_silu.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail {
@@ -41,6 +42,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         Keyword Args:
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
                 ``channel_chunk_size`` is expressed in logical channels.
+            wrap_indicator (ttnn.Tensor, optional): Per-device scalar tensor;
+                only a device whose local value is nonzero honours ``wrap_row``.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -68,6 +71,25 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("program_config").noconvert(),
         nb::arg("wrap_row") = 0,
+        nb::arg("wrap_indicator") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none());
+
+    ttnn::bind_function<"pack_convolution_carry", "ttnn.experimental.kda.">(
+        mod,
+        R"doc(
+        Pack the one-tile sequence-parallel causal-convolution publication.
+
+        Ordinary devices publish their physical final history. The device whose
+        local wrap indicator is nonzero publishes the history immediately before
+        wrap_row and retains its physical final history in the next rows.
+        )doc",
+        &ttnn::experimental::kda::pack_convolution_carry,
+        nb::arg("input").noconvert(),
+        nb::arg("wrap_indicator").noconvert(),
+        nb::arg("wrap_row"),
+        nb::kw_only(),
+        nb::arg("history_rows") = 3,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

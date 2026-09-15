@@ -12,6 +12,12 @@ ttnn::Tensor affine_exclusive_scan(
     const ttnn::Tensor& b,
     const ttnn::Tensor& initial_state,
     uint32_t groups_per_head,
+    const std::optional<ttnn::Tensor>& tail_a,
+    const std::optional<ttnn::Tensor>& tail_b,
+    const std::optional<ttnn::Tensor>& tail_state,
+    const std::optional<ttnn::Tensor>& wrap_indicator,
+    uint32_t wrap_group,
+    bool split_in_group,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
     TT_FATAL(
@@ -32,7 +38,18 @@ ttnn::Tensor affine_exclusive_scan(
         /*default_fp32_acc=*/true,
         /*default_l1_acc=*/false);
     return ttnn::experimental::prim::affine_exclusive_scan(
-        a, b, initial_state, groups_per_head, output_memory_config, kernel_config);
+        a,
+        b,
+        initial_state,
+        groups_per_head,
+        tail_a,
+        tail_b,
+        tail_state,
+        wrap_indicator,
+        wrap_group,
+        split_in_group,
+        output_memory_config,
+        kernel_config);
 }
 
 }  // namespace ttnn::experimental::kda

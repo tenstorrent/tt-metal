@@ -3,8 +3,8 @@
 
 #include "affine_exclusive_scan_device_operation.hpp"
 
-#include <algorithm>
 #include <array>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 
@@ -79,6 +79,38 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     TT_FATAL(
         state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
+    TT_FATAL(
+        attrs.segmented == (in.tail_a.has_value() && in.tail_b.has_value() && in.tail_state.has_value() &&
+                            in.wrap_indicator.has_value()),
+        "affine_exclusive_scan: segmented inputs must be provided together");
+    if (attrs.segmented) {
+        for (const auto& [tensor, name] :
+             {std::pair{&*in.tail_a, "tail_a"},
+              std::pair{&*in.tail_b, "tail_b"},
+              std::pair{&*in.tail_state, "tail_state"},
+              std::pair{&*in.wrap_indicator, "wrap_indicator"}}) {
+            kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+            kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+            kda_factory_detail::check_same_device(in.a, *tensor, operation_name, name);
+        }
+        kda_factory_detail::check_matching_dtype(in.a, *in.tail_a, operation_name, "a and tail_a");
+        kda_factory_detail::check_matching_dtype(in.b, *in.tail_b, operation_name, "b and tail_b");
+        kda_factory_detail::check_dtype(*in.tail_state, tt::tt_metal::DataType::FLOAT32, operation_name, "tail_state");
+        kda_factory_detail::check_dtype(
+            *in.wrap_indicator, tt::tt_metal::DataType::FLOAT32, operation_name, "wrap_indicator");
+        TT_FATAL(in.tail_a->logical_shape() == a_shape, "affine_exclusive_scan: tail_a shape must match a");
+        TT_FATAL(in.tail_b->logical_shape() == b_shape, "affine_exclusive_scan: tail_b shape must match b");
+        TT_FATAL(
+            in.tail_state->logical_shape() == state_shape,
+            "affine_exclusive_scan: tail_state shape must match initial_state");
+        TT_FATAL(
+            in.wrap_indicator->logical_volume() >= 1,
+            "affine_exclusive_scan: wrap_indicator must contain at least one scalar");
+        TT_FATAL(attrs.wrap_group < attrs.groups_per_head, "affine_exclusive_scan: wrap_group is out of range");
+        TT_FATAL(
+            attrs.wrap_group + static_cast<uint32_t>(attrs.split_in_group) > 0,
+            "affine_exclusive_scan: first tail group must follow at least one head group");
+    }
 
     constexpr uint32_t max_coordinate_table_workers = 128;
     const auto grid = in.a.device()->compute_with_storage_grid_size();
@@ -112,12 +144,17 @@ AffineExclusiveScanOperation::create_op_performance_model(
 
     const double key_dim = attrs.key_dim;
     const double value_dim = attrs.value_dim;
-    const double transitions = static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0);
+    const double reset_transitions = attrs.segmented ? attrs.batch_heads : 0.0;
+    const double transitions =
+        static_cast<double>(attrs.batch_heads) * (attrs.groups_per_head - 1.0) + reset_transitions;
     const KdaFpuWork work{
         .fpu_matrix_flops = transitions * 2.0 * key_dim * key_dim * value_dim,
         .fpu_add_ops = transitions * key_dim * value_dim,
     };
-    const std::array<const Tensor*, 3> inputs = {&in.a, &in.b, &in.initial_state};
+    std::vector<const Tensor*> inputs = {&in.a, &in.b, &in.initial_state};
+    if (attrs.segmented) {
+        inputs.insert(inputs.end(), {&*in.tail_a, &*in.tail_b, &*in.tail_state, &*in.wrap_indicator});
+    }
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -126,6 +163,12 @@ Tensor affine_exclusive_scan(
     const Tensor& b,
     const Tensor& state,
     uint32_t groups,
+    const std::optional<Tensor>& tail_a,
+    const std::optional<Tensor>& tail_b,
+    const std::optional<Tensor>& tail_state,
+    const std::optional<Tensor>& wrap_indicator,
+    uint32_t wrap_group,
+    bool split_in_group,
     const tt::tt_metal::MemoryConfig& mem,
     const DeviceComputeKernelConfig& cfg) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
@@ -139,15 +182,35 @@ Tensor affine_exclusive_scan(
         "affine_exclusive_scan: inputs must be rank 3");
     TT_FATAL(shape[0] > 0, "affine_exclusive_scan: leading dimension must be positive");
     TT_FATAL(shape[0] % groups == 0, "affine_exclusive_scan: leading dimension must be divisible by groups_per_head");
+    const bool segmented =
+        tail_a.has_value() || tail_b.has_value() || tail_state.has_value() || wrap_indicator.has_value();
+    TT_FATAL(
+        !segmented ||
+            (tail_a.has_value() && tail_b.has_value() && tail_state.has_value() && wrap_indicator.has_value()),
+        "affine_exclusive_scan: tail_a, tail_b, tail_state, and wrap_indicator must be provided together");
+    TT_FATAL(!segmented || wrap_group < groups, "affine_exclusive_scan: wrap_group must be less than groups_per_head");
+    TT_FATAL(
+        !segmented || wrap_group + static_cast<uint32_t>(split_in_group) > 0,
+        "affine_exclusive_scan: the first tail group must follow at least one head group");
     auto outputs = ::ttnn::device_operation::launch<AffineExclusiveScanOperation>(
         AffineExclusiveScanParams{
             .batch_heads = static_cast<uint32_t>(shape[0]) / groups,
             .groups_per_head = groups,
             .key_dim = static_cast<uint32_t>(shape[1]),
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
+            .wrap_group = wrap_group,
+            .split_in_group = split_in_group,
+            .segmented = segmented,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},
-        AffineExclusiveScanInputs{.a = a, .b = b, .initial_state = state});
+        AffineExclusiveScanInputs{
+            .a = a,
+            .b = b,
+            .initial_state = state,
+            .tail_a = tail_a,
+            .tail_b = tail_b,
+            .tail_state = tail_state,
+            .wrap_indicator = wrap_indicator});
     return outputs[0];
 }
 }  // namespace ttnn::experimental::prim

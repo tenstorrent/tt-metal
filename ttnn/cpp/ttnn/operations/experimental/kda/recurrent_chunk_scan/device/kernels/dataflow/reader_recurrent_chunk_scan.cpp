@@ -85,7 +85,32 @@ FORCE_INLINE void seed_identity(DataflowBuffer& buffer, Noc& noc, uint32_t value
     buffer.push_back(tile_count);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t Vt_full, uint32_t summary_pair>
+FORCE_INLINE void seed_identity_tile(DataflowBuffer& buffer, Noc& noc) {
+    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+    constexpr uint32_t face_elements = tt::constants::FACE_HW;
+    buffer.reserve_back(1);
+    noc.async_write_zeros(buffer, buffer.get_entry_size());
+    noc.write_zeros_l1_barrier();
+    {
+        auto lock = buffer.scoped_write_lock(1);
+        auto tile = lock.get_ptr<volatile uint32_t>();
+        for (uint32_t row = 0; row < tt::constants::FACE_HEIGHT; ++row) {
+            tile[row * tt::constants::FACE_WIDTH + row] = one_fp32;
+            tile[3 * face_elements + row * tt::constants::FACE_WIDTH + row] = one_fp32;
+        }
+    }
+    buffer.push_back(1);
+}
+
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t Vt_full,
+    uint32_t summary_pair,
+    uint32_t has_wrap_indicator,
+    uint32_t emit_tail_summaries,
+    uint32_t groups_per_head>
 TT_KERNEL void reader(
     uint32_t head,
     uint32_t value_block,
@@ -108,7 +133,28 @@ TT_KERNEL void reader(
     DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
     DataflowBuffer final_decay(dfb::final_decay);
+    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer wrap_mask(dfb::wrap_mask);
+    DataflowBuffer wrap_control(dfb::wrap_control);
+    DataflowBuffer summary_identity_tile(dfb::summary_identity_tile);
+    DataflowBuffer summary_zero_tile(dfb::summary_zero_tile);
     Noc noc;
+
+    // One mesh program serves every device. Resolve the candidate wrap against
+    // this device's scalar indicator. Compute follows the same chunk schedule on
+    // every device; only the source of the carry at reset_chunk differs.
+    bool device_wrap = reset_chunk != 0;
+    if constexpr (has_wrap_indicator) {
+        const auto wrap_indicator = TensorAccessor(tensor::wrap_indicator);
+        wrap_control.reserve_back(1);
+        noc.async_read(wrap_indicator, wrap_control, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        const auto control_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrap_control.get_write_ptr());
+        device_wrap = reset_chunk != 0 && control_ptr[0] != 0;
+        wrap_control.push_back(1);
+    }
+    const uint32_t device_active_chunks = active_chunks;
+    const uint32_t device_reset_chunk = (!summary_pair && device_wrap) ? reset_chunk : 0;
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -121,27 +167,74 @@ TT_KERNEL void reader(
         noc.write_zeros_l1_barrier();
         state.push_back(key_value_tiles);
         seed_identity<Kt, Vt>(summary_seed, noc, value_block);
+        if constexpr (emit_tail_summaries) {
+            seed_identity_tile(summary_identity_tile, noc);
+            summary_zero_tile.reserve_back(1);
+            noc.async_write_zeros(summary_zero_tile, summary_zero_tile.get_entry_size());
+            noc.write_zeros_l1_barrier();
+            summary_zero_tile.push_back(1);
+        }
     } else {
         const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
         read_and_publish_value_slice<Vt, Vt_full>(
             initial_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
     }
 
-    // num_chunks stays the tensor stride; active_chunks is the loop bound. They
-    // differ only for SUMMARY on a wrapped chip, which stops after the head chunks
-    // so that it publishes T(head).
-    for (uint32_t chunk = 0; chunk < active_chunks; ++chunk) {
+    // num_chunks stays the tensor stride; active_chunks is the loop bound.
+    for (uint32_t chunk = 0; chunk < device_active_chunks; ++chunk) {
         const uint32_t head_chunk = head * num_chunks + chunk_start + chunk;
         // Publish the post-wrap seed just in time, never before the loop. The state
         // DFB holds one kv payload and compute frees it only via pop_front at the
         // end of chunk 0, so hoisting this deadlocks; pushing it here reuses the
         // same capacity as a queue and costs no extra L1. reset_chunk is >= 1
         // whenever it is non-zero, so chunk 0 has always been consumed by now.
-        if constexpr (!summary_pair) {
+        if constexpr (summary_pair && emit_tail_summaries) {
             if (reset_chunk != 0 && chunk == reset_chunk) {
-                const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
-                read_and_publish_value_slice<Vt, Vt_full>(
-                    tail_state_accessor, state, noc, head * Kt * Vt_full, Kt, value_block);
+                // Zero keeps nothing on the boundary device; one preserves the
+                // ordinary devices' running summary.
+                wrap_mask.reserve_back(1);
+                noc.async_write_zeros(wrap_mask, wrap_mask.get_entry_size());
+                noc.write_zeros_l1_barrier();
+                if (!device_wrap) {
+                    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+                    auto mask_lock = wrap_mask.scoped_write_lock(1);
+                    auto mask = mask_lock.get_ptr<volatile uint32_t>();
+                    for (uint32_t word = 0; word < tt::constants::TILE_HW; ++word) {
+                        mask[word] = one_fp32;
+                    }
+                }
+                wrap_mask.push_back(1);
+                if (device_wrap) {
+                    seed_identity<Kt, Vt>(tail_state, noc, value_block);
+                } else {
+                    tail_state.reserve_back(key_value_tiles);
+                    noc.async_write_zeros(tail_state, key_value_tiles * tail_state.get_entry_size());
+                    noc.write_zeros_l1_barrier();
+                    tail_state.push_back(key_value_tiles);
+                }
+            }
+        } else if constexpr (!summary_pair) {
+            if (reset_chunk != 0 && chunk == reset_chunk) {
+                wrap_mask.reserve_back(1);
+                noc.async_write_zeros(wrap_mask, wrap_mask.get_entry_size());
+                noc.write_zeros_l1_barrier();
+                if (device_reset_chunk != 0) {
+                    constexpr uint32_t one_fp32 = __builtin_bit_cast(uint32_t, 1.0F);
+                    auto mask_lock = wrap_mask.scoped_write_lock(1);
+                    auto mask = mask_lock.get_ptr<volatile uint32_t>();
+                    for (uint32_t word = 0; word < tt::constants::TILE_HW; ++word) {
+                        mask[word] = one_fp32;
+                    }
+                    const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
+                    read_and_publish_value_slice<Vt, Vt_full>(
+                        tail_state_accessor, tail_state, noc, (head / groups_per_head) * Kt * Vt_full, Kt, value_block);
+                } else {
+                    tail_state.reserve_back(key_value_tiles);
+                    noc.async_write_zeros(tail_state, key_value_tiles * tail_state.get_entry_size());
+                    noc.write_zeros_l1_barrier();
+                    tail_state.push_back(key_value_tiles);
+                }
+                wrap_mask.push_back(1);
             }
         }
         if constexpr (summary_pair) {

@@ -29,6 +29,12 @@ Tensor affine_exclusive_scan(
     const Tensor&,
     const Tensor&,
     uint32_t,
+    const std::optional<Tensor>&,
+    const std::optional<Tensor>&,
+    const std::optional<Tensor>&,
+    const std::optional<Tensor>&,
+    uint32_t,
+    bool,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&);
 

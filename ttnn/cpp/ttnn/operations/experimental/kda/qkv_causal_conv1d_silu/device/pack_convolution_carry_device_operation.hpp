@@ -5,18 +5,18 @@
 
 #include <variant>
 
-#include "qkv_causal_conv1d_silu_device_operation_types.hpp"
-#include "qkv_causal_conv1d_silu_program_factory.hpp"
+#include "pack_convolution_carry_device_operation_types.hpp"
+#include "pack_convolution_carry_program_factory.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct QkvCausalConv1dSiluOperation {
-    using operation_attributes_t = QkvCausalConv1dSiluParams;
-    using tensor_args_t = QkvCausalConv1dSiluInputs;
+struct PackConvolutionCarryOperation {
+    using operation_attributes_t = PackConvolutionCarryParams;
+    using tensor_args_t = PackConvolutionCarryInputs;
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
-    using program_factory_t = std::variant<QkvCausalConv1dSiluProgramFactory>;
+    using program_factory_t = std::variant<PackConvolutionCarryProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
@@ -26,19 +26,11 @@ struct QkvCausalConv1dSiluOperation {
         const operation_attributes_t&, const tensor_args_t&, tensor_return_value_t&);
 };
 
-std::vector<Tensor> qkv_causal_conv1d_silu(
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
-    const Tensor&,
+std::vector<Tensor> pack_convolution_carry(
     const Tensor&,
     const Tensor&,
     uint32_t,
     uint32_t,
-    uint32_t,
-    uint32_t,
-    uint32_t,
-    const std::optional<Tensor>&,
     const tt::tt_metal::MemoryConfig&,
     const DeviceComputeKernelConfig&);
 

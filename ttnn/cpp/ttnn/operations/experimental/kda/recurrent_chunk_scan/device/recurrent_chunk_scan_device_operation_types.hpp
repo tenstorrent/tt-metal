@@ -30,6 +30,9 @@ struct RecurrentChunkScanParams {
     // end". Both uniform across the mesh.
     uint32_t chunk_start;
     uint32_t chunk_count;
+    // SUMMARY mode may additionally publish one tail transform per folded
+    // group. The ordinary two-output contract stays unchanged when false.
+    bool emit_tail_summaries;
     RecurrentChunkScanMode mode;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
@@ -47,6 +50,10 @@ struct RecurrentChunkScanInputs {
     // Seed for the post-wrap loop on the boundary chip: the prefix's final carry,
     // already replicated across SP. Absent when there is no wrap.
     std::optional<Tensor> tail_state;
+    // Per-device scalar: nonzero only on the rank whose local sequence wraps.
+    // Its value is data, not an operation attribute, so one mesh program can
+    // make a device-local summary limit or recurrent reseed decision.
+    std::optional<Tensor> wrap_indicator;
 };
 
 }  // namespace ttnn::experimental::prim

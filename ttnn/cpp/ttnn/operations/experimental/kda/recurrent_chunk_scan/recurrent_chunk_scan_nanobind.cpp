@@ -39,6 +39,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
                 ``[B*H, K, V]`` in FLOAT32. Required when ``wrap_chunk`` is nonzero
                 and ignored otherwise.
+            wrap_indicator (ttnn.Tensor, optional): Per-device scalar tensor;
+                only a device whose local value is nonzero reloads at
+                ``wrap_chunk``. When absent, a nonzero wrap applies to the device.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
             wrap_chunk (int, optional): Local chunk at which the causal stream
@@ -70,6 +73,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
         nb::arg("tail_state") = nb::none(),
+        nb::arg("wrap_indicator") = nb::none(),
         nb::arg("groups_per_head") = 1,
         nb::arg("wrap_chunk") = 0,
         nb::arg("memory_config") = nb::none(),
@@ -114,14 +118,17 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 group summarizes. Defaults to 0.
             chunk_count (int, optional): Chunks in that range, 0 meaning to the
                 end. Defaults to 0.
+            emit_tail_summaries (bool, optional): Return an additional ``(A,B)``
+                pair for the post-wrap part of every folded group. Defaults to false.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: New FLOAT32 TILE-layout tensors
-                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``.
+            tuple[ttnn.Tensor, ...]: New FLOAT32 TILE-layout tensors
+                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``. Segmented mode additionally
+                returns ``tail_A`` and ``tail_B`` with the same shapes.
 
         Note:
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
@@ -138,9 +145,12 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
+        nb::arg("wrap_indicator") = nb::none(),
+        nb::arg("wrap_chunk") = 0,
         nb::arg("groups_per_head") = 1,
         nb::arg("chunk_start") = 0,
         nb::arg("chunk_count") = 0,
+        nb::arg("emit_tail_summaries") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

@@ -3,6 +3,8 @@
 
 #include <cstdint>
 
+#include <tt-metalium/constants.hpp>
+
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
@@ -23,6 +25,46 @@ FORCE_INLINE void issue_tensor_block_read(
             buffer.get_entry_size(),
             {.page_id = page + tile},
             {.offset_bytes = tile * buffer.get_entry_size()});
+    }
+}
+
+template <uint32_t Kt, uint32_t Vt, typename AAccessor, typename BAccessor>
+FORCE_INLINE void issue_packed_affine_read(
+    Noc& noc, const AAccessor& a_accessor, const BAccessor& b_accessor, DataflowBuffer& buffer, uint32_t worker_index) {
+    const uint32_t tile_bytes = buffer.get_entry_size();
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Kt; ++column) {
+            noc.async_read(
+                a_accessor,
+                buffer,
+                tile_bytes,
+                {.page_id = worker_index * Kt * Kt + row * Kt + column},
+                {.offset_bytes = (row * (Kt + Vt) + column) * tile_bytes});
+        }
+        for (uint32_t column = 0; column < Vt; ++column) {
+            noc.async_read(
+                b_accessor,
+                buffer,
+                tile_bytes,
+                {.page_id = worker_index * Kt * Vt + row * Vt + column},
+                {.offset_bytes = (row * (Kt + Vt) + Kt + column) * tile_bytes});
+        }
+    }
+}
+
+template <uint32_t Kt, uint32_t Vt, typename BAccessor>
+FORCE_INLINE void issue_packed_b_read(
+    Noc& noc, const BAccessor& b_accessor, DataflowBuffer& buffer, uint32_t worker_index) {
+    const uint32_t tile_bytes = buffer.get_entry_size();
+    for (uint32_t row = 0; row < Kt; ++row) {
+        for (uint32_t column = 0; column < Vt; ++column) {
+            noc.async_read(
+                b_accessor,
+                buffer,
+                tile_bytes,
+                {.page_id = worker_index * Kt * Vt + row * Vt + column},
+                {.offset_bytes = (row * (Kt + Vt) + Kt + column) * tile_bytes});
+        }
     }
 }
 
@@ -109,7 +151,7 @@ FORCE_INLINE void synchronize_head_stage(
     release.wait_min(completed_stages);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G>
+template <uint32_t Kt, uint32_t Vt, uint32_t BH, uint32_t G, uint32_t segmented, uint32_t reset_group>
 TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -120,6 +162,10 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     const auto b_accessor = TensorAccessor(tensor::b);
     const auto initial_state_accessor = TensorAccessor(tensor::initial_state);
     const auto output_accessor = TensorAccessor(tensor::output);
+    const auto tail_a_accessor = TensorAccessor(tensor::tail_a);
+    const auto tail_b_accessor = TensorAccessor(tensor::tail_b);
+    const auto tail_state_accessor = TensorAccessor(tensor::tail_state);
+    const auto wrap_indicator_accessor = TensorAccessor(tensor::wrap_indicator);
     DataflowBuffer initial_a(dfb::initial_a);
     DataflowBuffer initial_b(dfb::initial_b);
     DataflowBuffer local_a(dfb::local_a);
@@ -129,22 +175,65 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
+    DataflowBuffer tail_affine(dfb::tail_affine);
+    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer wrap_control(dfb::wrap_control);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
     Semaphore release(sem::release);
 
+    bool device_wrap = false;
+    if constexpr (segmented) {
+        wrap_control.reserve_back(1);
+        noc.async_read(wrap_indicator_accessor, wrap_control, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read_barrier();
+        device_wrap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrap_control.get_write_ptr())[0] != 0;
+    }
+
     initial_a.reserve_back(affine_a_tiles);
     initial_b.reserve_back(affine_b_tiles);
     initial_state.reserve_back(affine_b_tiles);
-    issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
-    issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    if constexpr (segmented) {
+        if (device_wrap && group == reset_group) {
+            noc.async_write_zeros(initial_a, affine_a_tiles * initial_a.get_entry_size());
+            issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+        } else if (device_wrap && group > reset_group) {
+            issue_tensor_block_read(noc, tail_a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
+            issue_tensor_block_read(noc, tail_b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+        } else {
+            issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
+            issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+        }
+        if (group == reset_group) {
+            tail_affine.reserve_back(affine_a_tiles + affine_b_tiles);
+            if (device_wrap) {
+                issue_packed_affine_read<Kt, Vt>(noc, tail_a_accessor, tail_b_accessor, tail_affine, worker_index);
+            } else {
+                noc.async_write_zeros(tail_affine, (affine_a_tiles + affine_b_tiles) * tail_affine.get_entry_size());
+                issue_packed_b_read<Kt, Vt>(noc, b_accessor, tail_affine, worker_index);
+            }
+            tail_state.reserve_back(affine_b_tiles);
+            issue_tensor_block_read(
+                noc, tail_state_accessor, tail_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
+            noc.write_zeros_l1_barrier();
+        }
+    } else {
+        issue_tensor_block_read(noc, a_accessor, initial_a, worker_index * affine_a_tiles, affine_a_tiles);
+        issue_tensor_block_read(noc, b_accessor, initial_b, worker_index * affine_b_tiles, affine_b_tiles);
+    }
     issue_tensor_block_read(
         noc, initial_state_accessor, initial_state, (worker_index / G) * affine_b_tiles, affine_b_tiles);
     noc.async_read_barrier();
     initial_a.push_back(affine_a_tiles);
     initial_b.push_back(affine_b_tiles);
     initial_state.push_back(affine_b_tiles);
+    if constexpr (segmented) {
+        if (group == reset_group) {
+            tail_affine.push_back(affine_a_tiles + affine_b_tiles);
+            tail_state.push_back(affine_b_tiles);
+        }
+    }
 
     uint32_t completed_stages = 0;
 
