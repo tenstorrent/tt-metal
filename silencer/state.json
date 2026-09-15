@@ -1,5 +1,5 @@
 {
-  "last_scan_date": "2026-09-14",
+  "last_scan_date": "2026-09-15",
   "scanned_run_ids": [
     "30227858718",
     "30387358745",
@@ -56,7 +56,8 @@
     "34773537078",
     "34791548125",
     "34825924120",
-    "34802226325"
+    "34802226325",
+    "34912310664"
   ],
   "workflows_sampled": [
     "merge-gate.yaml",
@@ -521,7 +522,22 @@
       "last_state": "success",
       "number": 56449,
       "date": "2026-09-14"
+    },
+    {
+      "branch": "silencer/unused-var-layernorm-large-tensor-dfb-x-id",
+      "title": "[silencer] Silence unused dfb_x_id warning in layernorm_large_tensor kernel",
+      "pattern": "-Wunused-but-set-variable: dfb_x_id set but not used in layernorm_large_tensor.cpp:116 (RMSNORM && !FUSE_PRE_ADD branch) -- sibling of layernorm.cpp:128 already fixed by PR #55335, but that PR's diff did not touch this file. 3x in a 5000-line tail sample of vllm-model-tests Gemma4-12B job.",
+      "source_run_id": "34912310664",
+      "source_job_id": "104207008940",
+      "source_workflow": "vllm-model-tests.yaml",
+      "category": 1,
+      "validation_workflow_dispatched": "models-t3-e2e-tests",
+      "dispatched": "2026-09-15",
+      "status": "pr-opened-dispatch-requested",
+      "reported": false,
+      "nonterminal_reported": false,
+      "note": "PR opened this run: added [[maybe_unused]] to dfb_x_id in layernorm_large_tensor.cpp, matching the sibling fix already applied to layernorm.cpp by PR #55335 (which left this file unfixed). Dispatched models-t3-e2e-tests for validation; awaiting run outcome next scan."
     }
   ],
-  "backlog_cursor": "Phase A this run (2026-09-14): resolved PR #56449 (silencer/unused-var-fabric-atomic-inc-receiver) -- validation run 34825924120 (blackhole-e2e-tests) job 103920783526 completed/success, target warning confirmed absent, kernel confirmed JIT-compiled. Commented outcome and marked ready for review. Phase B this run: sampled models-t2-e2e-tests run 34802226325 (3 jobs: Llama 3.1-8B e2e tests, Llama 3.3-70B e2e tests, GPT-OSS 20B e2e tests, all bh_quietbox_2). Histogram showed critical/Always as by far the loudest category (6098 lines) -- entirely one message: 'TT_FATAL: Only TILE layout is supported for BFLOAT8_B dtype!' fired thousands of times per job during tt_transformers prefill warmup, yet jobs still PASSED with correct accuracy. Root cause ambiguous (why a TT_FATAL/throw doesn't abort the run, and where in the C++/ttnn stack a BFLOAT8_B+ROW_MAJOR tensor gets constructed during warmup) -- opened issue for maintainer triage rather than guessing a fix. This is this run's one target-producing action (create_issue). Also noted dfb_x_id unused-var warning in same jobs -- already tracked/in-flight (silencer/layernorm-rmsnorm-dfb-x-id-unused, status pr-opened-dispatch-requested). Next run: continue rotating through single-card-*, vllm-model-tests (not yet sampled this cycle); consider following up on the TT_FATAL issue once a maintainer responds, or investigate the residue channel further (mostly AI-job-summary boilerplate, tqdm-like REPEAT BATCH markers, and docker/triage script noise this round -- no new unrecognized shape found)."
+  "backlog_cursor": "Phase A this run (2026-09-15): checked in_flight_prs for unreported/nonterminal entries -- none found; all prior entries already reported/resolved as of 2026-09-14 run. No reconciliation action taken. Phase B this run: sampled single-card-demo-tests run 32053638633 (bge_m3-N150-func job) and vllm-model-tests run 34912310664 (Gemma4-12B, Llama-3.1-8B-Instruct sampling, vllm-plugin-unit-tests jobs). Histogram was thin (91 logger lines, mostly UMD info/Op warning, nothing new for demotion). Diagnostic channel caught the known dfb_x_id -Wunused-but-set-variable pattern (9x layernorm.cpp:128, already tracked/fixed by PR #55335) plus a previously-unnoticed sibling: layernorm_large_tensor.cpp:116 has the identical dead-on-this-branch dfb_x_id (3x in sample) that PR #55335 did not fix (its diff only touched layernorm.cpp). Opened a new PR for the sibling file with the same [[maybe_unused]] treatment -- this is this run's one target-producing action (create_pull_request). Also reconfirmed the known -Wdeprecated-declarations copy_dest_value (llk_math_eltwise_binary_sfpu_macros.h:55, already tracked as in-flight PR #56360, inconclusive/awaiting maintainer). Residue channel was mostly vllm-tests YAML env dumps, APIServer access-log lines, and git checkout progress -- no new unrecognized shape found. Next run: continue rotating through remaining unsampled tracked workflows (galaxy-*, models-t1/t2/t3-unit-tests, tt-metal-l2-nightly not yet sampled this cycle); reconcile this run's dispatch outcome once terminal."
 }
