@@ -67,9 +67,11 @@ uint32_t control_region_bytes(const DispatchFabric2dParams& args, uint32_t exten
         + (w + 1)                             // dispatch table, with its trailing sentinel column
         + w                                   // the running per-expert allocator
         + 3 * extent * args.experts_per_chip  // chip -> experts inverse, bucket lengths, bucket starts
-        + 3 * args.seq_len_per_chip * args.num_experts_per_tok          // (token, page, top-k slot) per entry
-        + extent * 2 * (extent / 2 + 2)                                 // fanout reach table
-        + 2 * relay_chunks_per_stream(extent) * args.experts_per_chip;  // chunk start offsets
+        + args.seq_len_per_chip *
+              dspf2d::routing_index_words_per_token(args.num_experts_per_tok)  // routing index, either mode
+        + 2                                                                    // fanout per-direction cursors
+        + extent * 2 * (extent / 2 + 2)                                        // fanout reach table
+        + 2 * relay_chunks_per_stream(extent) * args.experts_per_chip;         // chunk start offsets
     return args.seq_len_per_chip * pad_stride + words * static_cast<uint32_t>(sizeof(uint32_t));
 }
 
