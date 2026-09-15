@@ -1056,6 +1056,45 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
     }
 }
 
+// The comparison at sizes where the cyclic side uses every core. A group is
+// a C-core rectangle whose parity snake is all single hops, and 110 = 11 x 10
+// is tiled by such rectangles only for C in {1, 2, 5, 10, 11, 22, 55, 110};
+// with heads a multiple of the group count, every core is busy. Two-pass
+// always uses the whole grid, so these rows compare the kernels at equal
+// occupancy, and the pairs at 2816 rows x 10 heads (Bt = 2: C = 22, five
+// groups; Bt = 4: C = 11, ten groups) separate block height from fusion at
+// full chip. Direct shifts only.
+TEST_F(LoudboxRingSDPATest, DISABLED_CompareOnTheWholeGrid) {
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    std::cout << "ring backward on " << cp_size << " chips, whole grid on both sides, median of five\n";
+    for (const auto& cfg : std::vector<std::array<size_t, 5>>{
+             // batch, heads, rows per chip, head dim, Bt
+             {1, 11, 2560, 64, 4},   // C = 10, 11 groups
+             {1, 10, 2816, 64, 4},   // C = 11, 10 groups
+             {1, 10, 2816, 64, 2},   // C = 22, 5 groups x 2 slices
+             {1, 5, 2816, 64, 2},    // C = 22, 5 groups
+             {1, 5, 5632, 64, 4},    // C = 22, 5 groups
+             {1, 2, 14080, 64, 4},   // C = 55, 2 groups
+             {1, 1, 14080, 64, 2},   // C = 110, 1 group
+             {1, 1, 28160, 64, 4},   // C = 110, 1 group: the schedule's cap
+         }) {
+        const size_t rows_per_chip = cfg[2];
+        const auto Bt = static_cast<uint32_t>(cfg[4]);
+        const size_t seq_len = rows_per_chip * cp_size;
+        ASSERT_EQ(rows_per_chip % (2U * Bt * 32U), 0U);
+        using Kind = ttml::ops::distributed::RingBackwardKind;
+        const auto transport = RingShiftTransport::Direct;
+        const double two_pass = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::TwoPass, Bt, transport);
+        const double cyclic = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::Cyclic, Bt, transport);
+        const double in_place =
+            time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::CyclicInPlace, Bt, transport);
+        std::cout << "  heads=" << cfg[1] << " rows/chip=" << rows_per_chip << " d=" << cfg[3] << " Bt=" << Bt
+                  << " (C=" << rows_per_chip / (2U * Bt * 32U) << "): two-pass " << two_pass * 1e3 << " ms, cyclic "
+                  << cyclic * 1e3 << " ms (" << two_pass / cyclic << "x), cyclic in-place " << in_place * 1e3
+                  << " ms (" << two_pass / in_place << "x)\n";
+    }
+}
+
 // One whole backward per implementation and transport, with the phase
 // profile in ring_attention_sdpa switched on (TTML_RING_PROFILE), so the
 // whole-backward total above can be split into kernel, accumulate, shift
