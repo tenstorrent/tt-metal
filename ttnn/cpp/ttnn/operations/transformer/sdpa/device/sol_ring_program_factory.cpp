@@ -46,7 +46,7 @@ void sol_ring_fabric_mux_connection_ct_args(
 // SemaphoreDescriptor to `desc.semaphores`. The semaphore ID is the first
 // available ID on that core (so this is the descriptor-pattern equivalent of
 // CreateSemaphore(program, {worker_logical_core}, 0)). Returns the assigned ID.
-uint32_t allocate_per_core_semaphore(
+uint32_t sol_ring_allocate_per_core_semaphore(
     tt::tt_metal::ProgramDescriptor& desc, const CoreCoord& worker_logical_core, uint32_t initial_value = 0) {
     const auto sem_id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
     TT_FATAL(
@@ -96,12 +96,16 @@ void sol_ring_fabric_mux_connection_rt_args(
     worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, ch_id));
     worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, ch_id));
-    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // termination_sync_address
     worker_rt_args.push_back(
-        allocate_per_core_semaphore(desc, worker_logical_core));  // local_fabric_mux_status_address
-    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_flow_control_address
-    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_teardown_address
-    worker_rt_args.push_back(allocate_per_core_semaphore(desc, worker_logical_core));  // local_buffer_index_address
+        sol_ring_allocate_per_core_semaphore(desc, worker_logical_core));  // termination_sync_address
+    worker_rt_args.push_back(
+        sol_ring_allocate_per_core_semaphore(desc, worker_logical_core));  // local_fabric_mux_status_address
+    worker_rt_args.push_back(
+        sol_ring_allocate_per_core_semaphore(desc, worker_logical_core));  // local_flow_control_address
+    worker_rt_args.push_back(
+        sol_ring_allocate_per_core_semaphore(desc, worker_logical_core));  // local_teardown_address
+    worker_rt_args.push_back(
+        sol_ring_allocate_per_core_semaphore(desc, worker_logical_core));  // local_buffer_index_address
     worker_rt_args.push_back(termination_master_virtual_core.x);
     worker_rt_args.push_back(termination_master_virtual_core.y);
 }
@@ -1757,11 +1761,11 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
                 mux_writer_args.push_back(0);                                        // flow_control_address
                 mux_writer_args.push_back(0);                                        // buffer_index_address
                 mux_writer_args.push_back(0);                                        // channel_credits_stream_id
-                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // termination_sync
-                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_fabric_mux_status
-                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_flow_control
-                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_teardown
-                mux_writer_args.push_back(allocate_per_core_semaphore(desc, core));  // local_buffer_index
+                mux_writer_args.push_back(sol_ring_allocate_per_core_semaphore(desc, core));  // termination_sync
+                mux_writer_args.push_back(sol_ring_allocate_per_core_semaphore(desc, core));  // local_fabric_mux_status
+                mux_writer_args.push_back(sol_ring_allocate_per_core_semaphore(desc, core));  // local_flow_control
+                mux_writer_args.push_back(sol_ring_allocate_per_core_semaphore(desc, core));  // local_teardown
+                mux_writer_args.push_back(sol_ring_allocate_per_core_semaphore(desc, core));  // local_buffer_index
                 mux_writer_args.push_back(0);                                        // termination_master_noc_x
                 mux_writer_args.push_back(0);                                        // termination_master_noc_y
             }
@@ -1925,7 +1929,7 @@ void SolRingMeshWorkloadFactory::override_runtime_arguments(
     const CoreCoord sdpa_grid = sol_ring_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
                                                              : CoreCoord{user_grid.x - 1, user_grid.y};
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
-    const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
+    const uint32_t expected_reader_args = dyn::sol_ring_reader_arg_count(args.num_links);
 
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         // Hoisted out of the per-core loop, and by reference: a copy would clone the whole arg grid.
