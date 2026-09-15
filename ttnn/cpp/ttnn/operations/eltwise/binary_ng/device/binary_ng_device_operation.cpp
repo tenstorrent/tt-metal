@@ -62,9 +62,12 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
             return !fast_and_approximate_mode || (a == b && (a == FLOAT32 || a == INT32 || a == UINT32 || a == UINT16));
         case DIV: return !fast_and_approximate_mode || (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32);
         // logaddexp and logaddexp2 are fused SFPU kernels templated on the destination
-        // precision, so bfloat16 routes to them as well as float32.
+        // precision, so the 16-bit-destination formats route to them as well as float32:
+        // bfloat16, bfloat8_b and bfloat4_b all run with fp32_dest_acc_en off and take the
+        // same kernel path. Left on the composed EXP/ADD/LOG route, they overflow exactly
+        // where the fused kernels do not.
         case LOGADDEXP:
-        case LOGADDEXP2: return a == b && (a == FLOAT32 || a == BFLOAT16);
+        case LOGADDEXP2: return a == b && (a == FLOAT32 || a == BFLOAT16 || a == BFLOAT8_B || a == BFLOAT4_B);
         case LDEXP:
         case BIAS_GELU:
         case HYPOT: return (a == FLOAT32 && b == FLOAT32);

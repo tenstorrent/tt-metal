@@ -36,6 +36,9 @@ namespace ckernel::sfpu {
 //
 // Equal infinities and NaN operands are handled by _sfpu_logaddexp_max_ and
 // _sfpu_logaddexp_gap_ in ckernel_sfpu_logaddexp.h, shared with logaddexp.
+//
+// APPROXIMATION_MODE is accepted and ignored, as in calculate_log1p_fp32: the exponential
+// below is always the accurate one, because the approximate body is not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp2(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;

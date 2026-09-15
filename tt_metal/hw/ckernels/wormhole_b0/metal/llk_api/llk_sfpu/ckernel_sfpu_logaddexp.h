@@ -59,6 +59,9 @@ sfpi_inline void _sfpu_logaddexp_gap_(sfpi::vFloat& a, const sfpi::vFloat& b) {
 // Equal infinities and NaN operands are handled by the two helpers above, which
 // logaddexp2 shares. Without the gap helper the fused form would regress on equal
 // infinities, which the composed form returns as +/-inf.
+//
+// APPROXIMATION_MODE is accepted and ignored, as in calculate_log1p_fp32: the exponential
+// below is always the accurate one, because the approximate body is not accurate enough here.
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_sfpu_logaddexp(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     constexpr uint dst_tile_size_sfpi = 32;

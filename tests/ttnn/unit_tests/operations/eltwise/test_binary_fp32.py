@@ -845,3 +845,23 @@ def test_logaddexp_ops_broadcast(device, ttnn_function, torch_dtype, ttnn_dtype,
     _assert_logaddexp_matches(
         tt_out, z_torch, torch_dtype, f"{ttnn_function.__name__} {shape_a} x {shape_b} {torch_dtype}"
     )
+
+
+@pytest.mark.parametrize("ttnn_function", _LOGADDEXP_OPS)
+@pytest.mark.parametrize("ttnn_dtype, pcc", [(ttnn.bfloat8_b, 0.999), (ttnn.bfloat4_b, 0.97)])
+def test_logaddexp_ops_block_float(device, ttnn_function, ttnn_dtype, pcc):
+    # bfloat8_b and bfloat4_b take the same fused kernel as bfloat16. Before they were gated
+    # in they stayed on the composed exp/add/log route, whose exp() overflowed at these
+    # magnitudes and returned inf. The goldens use the dequantized inputs and the PCC bounds
+    # of test_bf4b_bf8b in test_binary_bcast.py; finiteness is what the fix is about.
+    torch.manual_seed(0)
+    x_torch = (torch.rand((1, 1, 32, 32)) * 600.0 - 300.0).to(torch.bfloat16)
+    y_torch = (torch.rand((1, 1, 32, 32)) * 600.0 - 300.0).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    z_torch = ttnn.get_golden_function(ttnn_function)(ttnn.to_torch(x_tt), ttnn.to_torch(y_tt))
+
+    tt_out = ttnn.to_torch(ttnn_function(x_tt, y_tt))
+
+    assert torch.isfinite(tt_out).all(), f"{ttnn_function.__name__} on {ttnn_dtype} returned a non-finite value"
+    assert ttnn.pearson_correlation_coefficient(z_torch, tt_out) >= pcc
