@@ -34,7 +34,10 @@ forced on and both `METAL2_CHECKS_FORCED` markers observed):
 | `unit_tests/operations/matmul/{test_matmul,test_custom_grids}.py` | **888 passed, 312 skipped, 0 failed** |
 | targeted configuration probes (8) | 7 pass; the 8th is Handoff 1 |
 | `test_parallel_sequential.py::TestMatmulFactories` | 9 passed, **8 failed** (all Handoff 4b), 17 skipped |
+| `nightly/unit_tests/operations/matmul/` (5 files) | **818 passed, 508 skipped, 0 failed** |
 | `unit_tests/operations/ccl/test_new_matmul_reduce_scatter.py` | 8 skipped — needs 8 devices |
+
+The gtests and all eight probes were re-run once more on the committed tree, after `clang-format` reflowed it at commit time and with the forced-legality scaffolding reverted (0 `METAL2_CHECKS_FORCED` markers then, as expected) — same results.
 
 ## Provenance
 
