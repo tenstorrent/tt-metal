@@ -68,6 +68,7 @@ def test_offset_handling_cost(
     tensor_parallel_axis: int,
     device_params: dict,
     sequence: int,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Measure interleaved warm trace wall time at each offset and report JSON."""
     mesh_shape = tuple(mesh_device.shape)
@@ -154,12 +155,39 @@ def test_offset_handling_cost(
         )
     )
     for name in ("baseline", "worst_case_split"):
-        programs = _log_device_program_times(
-            mesh_device,
-            layer,
-            hidden_tt,
-            f"{layout}-C{local_rows}-{name}",
-            actual_start=sweep[name],
+        dispatched_groups = {}
+        with monkeypatch.context() as patch:
+            for operation in ("summarize_chunk_recurrence", "affine_exclusive_scan", "recurrent_chunk_scan"):
+                original = getattr(ttnn.experimental.kda, operation)
+
+                def record(*args, _operation=operation, _original=original, **kwargs):
+                    groups = args[3] if _operation == "affine_exclusive_scan" else kwargs["groups_per_head"]
+                    dispatched_groups.setdefault(_operation, []).append(groups)
+                    return _original(*args, **kwargs)
+
+                patch.setattr(ttnn.experimental.kda, operation, record)
+            programs = _log_device_program_times(
+                mesh_device,
+                layer,
+                hidden_tt,
+                f"{layout}-C{local_rows}-{name}",
+                actual_start=sweep[name],
+            )
+        expected_groups = local_rows // (20 * 32)
+        assert set(dispatched_groups) == {"summarize_chunk_recurrence", "affine_exclusive_scan", "recurrent_chunk_scan"}
+        assert all(
+            values and all(groups == expected_groups for groups in values) for values in dispatched_groups.values()
+        ), dispatched_groups
+        print(
+            "KDA_OFFSET_DISPATCHED_GROUPS="
+            + json.dumps(
+                {
+                    "offset": name,
+                    "expected_groups": expected_groups,
+                    "calls": dispatched_groups,
+                },
+                sort_keys=True,
+            )
         )
         counts = {
             operation: sum(program["name"] == operation for program in programs)
