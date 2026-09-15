@@ -89,7 +89,7 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
         return;
     }
 
-    const uint32_t group_id = claimed_source - overlay::quasar::plic_source_base;
+    const uint32_t group_id = overlay::quasar::go_group_from_plic_source(claimed_source);
     if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
         overlay::quasar::plic_complete(claimed_source);
         return;
@@ -394,11 +394,11 @@ extern "C" uint32_t _start1() {
             overlay::fds_signalling::worker_config_group(
                 go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
         }
-        overlay::quasar::plic_set_threshold(0);
+        overlay::quasar::plic_set_threshold(overlay::quasar::plic_threshold_allow_all);
         for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
              ++go_group_id) {
-            const uint32_t plic_source = overlay::quasar::plic_source_base + go_group_id;
-            overlay::quasar::plic_set_priority(plic_source, 1);
+            const uint32_t plic_source = overlay::quasar::plic_source_for_go_group(go_group_id);
+            overlay::quasar::plic_set_priority(plic_source, overlay::quasar::plic_fds_priority);
             overlay::quasar::plic_enable_source(plic_source, true);
         }
         overlay::quasar::plic_drain_pendings();
