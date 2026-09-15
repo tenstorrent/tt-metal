@@ -216,17 +216,22 @@ jobs:
           fi
           echo "ref=${ref}" >> "$GITHUB_OUTPUT"
 
+      # actions/checkout's includeIf.gitdir auth does not apply in this container.
       - name: Checkout ttsim-private
         if: ${{ steps.arch.outputs.name == 'quasar' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        shell: bash
         timeout-minutes: 20
-        with:
-          repository: tenstorrent/ttsim-private
-          ref: ${{ steps.pin.outputs.ref }}
-          token: ${{ secrets.TTSIM_TOKEN }}
-          path: ttsim-private
-          persist-credentials: false
-          fetch-depth: 1
+        env:
+          TOKEN: ${{ secrets.TTSIM_TOKEN }}
+          REF: ${{ steps.pin.outputs.ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p ttsim-private
+          git -C ttsim-private init
+          git -C ttsim-private fetch --depth 1 \
+            "https://x-access-token:${TOKEN}@github.com/tenstorrent/ttsim-private.git" \
+            "${REF}"
+          git -C ttsim-private checkout --detach FETCH_HEAD
 
       - name: Install g++
         if: ${{ steps.arch.outputs.name == 'quasar' }}
