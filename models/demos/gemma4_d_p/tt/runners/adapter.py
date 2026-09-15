@@ -1,0 +1,90 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Gemma4-31B-it integration with the shared prefill service."""
+
+import os
+from pathlib import Path
+
+from models.demos.common.prefill.adapter import PrefillModelAdapter
+
+
+class Gemma4ServiceConfig:
+    NUM_LAYERS = 60
+    FABRIC_PAYLOAD_SIZE = 8192
+    MESH_SHAPE = (8, 4)
+    CHUNK_SIZE = 8192
+    MAX_SEQ_LEN = 262144
+    MAX_USERS = 6
+
+
+def validate_params(params):
+    expected = {
+        "mesh_shape": (8, 4),
+        "num_layers": 60,
+        "first_layer_idx": 0,
+        "is_first_rank": True,
+        "is_last_rank": True,
+        "max_seq_len": 262144,
+        "chunk_size": 8192,
+        "sp_axis": 0,
+        "tp_axis": 1,
+        "use_trace": True,
+        "tp_shard_kv": False,
+        "dflash_enabled": False,
+    }
+    for name, value in expected.items():
+        if getattr(params, name) != value:
+            raise ValueError(f"Gemma4 prefill requires {name}={value}, got {getattr(params, name)}")
+    if not 1 <= params.num_users <= Gemma4ServiceConfig.MAX_USERS:
+        raise ValueError("Gemma4 prefill requires 1 to 6 KV slots")
+
+
+class Gemma4PrefillAdapter(PrefillModelAdapter):
+    name = "gemma4_d_p"
+    model_config = Gemma4ServiceConfig
+    hf_model_default = "google/gemma-4-31B-it"
+    ttnn_cache_default = ""
+    prefill_trace_default = ""
+    pipeline_activation_emb_tp_sharded = False
+
+    @property
+    def model_path(self):
+        return os.environ.get("PREFILL_HF_MODEL") or os.environ.get("HF_MODEL") or self.hf_model_default
+
+    def load_hf_config(self):
+        from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs, validate_31b_config
+
+        config = Gemma4ModelArgs.load_hf_config(self.model_path)
+        config = getattr(config, "text_config", config)
+        validate_31b_config(config)
+        return config
+
+    def weight_cache_path(self, mesh_shape):
+        if tuple(mesh_shape) != Gemma4ServiceConfig.MESH_SHAPE:
+            raise ValueError("Gemma4 prefill requires an 8x4 mesh")
+        cache_root = os.environ.get("PREFILL_TTNN_CACHE") or os.environ.get("TT_CACHE_PATH")
+        if not cache_root:
+            from models.demos.gemma4_d_p.tt.model_config import Gemma4ModelArgs
+
+            cache_root = Gemma4ModelArgs.resolve_model_cache_path(self.model_path)
+        return Path(cache_root) / "tensor_cache_bf16_mesh8x4"
+
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params):
+        validate_params(params)
+        from models.demos.gemma4_d_p.config import MeshConfig
+        from models.demos.gemma4_d_p.tt.runners.kv_caches import allocate_ring_kv_caches
+
+        return allocate_ring_kv_caches(
+            MeshConfig(mesh_device),
+            hf_config,
+            num_users=params.num_users,
+            max_seq_len=params.max_seq_len,
+            prefill_chunk_size=params.chunk_size,
+        )
+
+    def build_runtime(self, *, mesh_device, hf_config, params):
+        validate_params(params)
+        from models.demos.gemma4_d_p.tt.runners.runtime import Gemma4PrefillRuntime
+
+        return Gemma4PrefillRuntime(mesh_device=mesh_device, model_path=self.model_path, config=params)
