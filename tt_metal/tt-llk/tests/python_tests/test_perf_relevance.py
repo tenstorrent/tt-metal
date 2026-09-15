@@ -990,7 +990,9 @@ def test_project_runtimes_raises_on_enum_field_drop():
         runtime_types=frozenset({UNPACK_TRANS_FACES}),
         runtime_fields=frozenset(),
     )
-    with pytest.raises(TypeError, match="Enum"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError, match="Enum"
+    ):
         project_runtimes([UNPACK_TRANS_FACES(Transpose.No)], spec)
 
 
@@ -1006,7 +1008,9 @@ def test_project_runtimes_raises_without_default_constructor():
             return "", ""
 
     spec = RunTypeRelevance(runtime_types=frozenset())
-    with pytest.raises(TypeError, match="no zero-argument"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        TypeError, match="no zero-argument"
+    ):
         project_runtimes([_NoDefault(1)], spec)
 
 
