@@ -6,11 +6,17 @@
 
 #include <utility>
 
-#include "sanitizer/operation.h"
 #include "sanitizer/settings.h"
-#include "sanitizer/types.h"
 
 #if defined(LLK_SAN_ENABLE)
+
+// The full type/operation model is only needed when the sanitizer is compiled in. With it off,
+// every TRISC translation unit still parsed these headers (about 1,500 lines, <bitset>, <tuple>,
+// <variant> and the State/StateStruct template instantiations) for nothing, which measurably
+// slowed first-time kernel compilation across CI; the disabled branch below keeps only what the
+// LLK API and firmware reference outside SAN_HOOK.
+#include "sanitizer/operation.h"
+#include "sanitizer/types.h"
 
 #include "sanitizer/impl.h"
 
@@ -157,10 +163,29 @@ public:
  */
 #define LLK_SAN_SILENT_ZONE() [[maybe_unused]] llk::san::SilentZone<> _silent_zone_
 
+#define SAN_HOOK(...)             \
+    do                            \
+    {                             \
+        using namespace llk::san; \
+        using llk::san::Operand;  \
+        __VA_ARGS__;              \
+    } while (false)
+
 #else
+
+#include <cstdint>
 
 namespace llk::san
 {
+
+// Mirrors types.h; only the thread tag is referenced by the disabled entry points below.
+enum class Thread : std::uint32_t
+{
+    TRISC0 = 0,
+    TRISC1 = 1,
+    TRISC2 = 2,
+    TRISC3 = 3
+};
 
 template <Thread T = Thread::TRISC0>
 static inline void thread_init()
@@ -208,12 +233,11 @@ static inline void unsupported()
     {                         \
     } while (false)
 
-#endif
-
-#define SAN_HOOK(...)             \
-    do                            \
-    {                             \
-        using namespace llk::san; \
-        using llk::san::Operand;  \
-        __VA_ARGS__;              \
+// With the sanitizer off the hook arguments are not parsed at all: they name StateVal/Operand/
+// Operation types that only exist in the enabled build.
+#define SAN_HOOK(...) \
+    do                \
+    {                 \
     } while (false)
+
+#endif
