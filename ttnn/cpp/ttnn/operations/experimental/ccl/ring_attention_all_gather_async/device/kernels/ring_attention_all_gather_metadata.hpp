@@ -132,7 +132,8 @@ inline uint32_t compute_gather_valid_Ht(
 // ChunkedSlidingHaloLayout::send_tail_start_tile. The result is linear in the chunk index
 // (current_group == chunk index for chunk-aligned prefill), so on the scalar path the host rewrites the
 // halo reader/writer page ranges every dispatch. A captured trace never runs that rewrite, which is why
-// this has to be recomputed here instead.
+// this has to be recomputed here instead. Unlike the host reference this does not wrap the source slab
+// for circular KV caches; the ring-joint op rejects circular caches on the metadata path until it does.
 inline uint32_t compute_halo_tail_start_Ht(
     uint32_t kv_actual_isl,
     uint32_t q_local_tile_rows,
