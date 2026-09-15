@@ -213,6 +213,9 @@ class LTXAudioDecoderAdapter:
             dtype=ttnn.float32,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            allow_depthwise_recovery=False,
+            use_local_tpad_tail=False,
+            legacy_replicate_tail=True,
         )
 
     def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:

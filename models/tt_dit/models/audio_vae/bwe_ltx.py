@@ -215,6 +215,7 @@ class VocoderWithBWE(Module):
         hop_length: int,
         mesh_device: ttnn.MeshDevice,
         dtype: ttnn.DataType = ttnn.float32,
+        allow_depthwise_recovery: bool = True,
     ) -> None:
         super().__init__()
         self.vocoder = vocoder
@@ -230,7 +231,13 @@ class VocoderWithBWE(Module):
         assert (
             ratio * input_sampling_rate == output_sampling_rate
         ), "output_sampling_rate must be an integer multiple of input_sampling_rate"
-        self.resampler = UpSample1d(ratio=ratio, window="hann", mesh_device=mesh_device, dtype=dtype)
+        self.resampler = UpSample1d(
+            ratio=ratio,
+            window="hann",
+            mesh_device=mesh_device,
+            dtype=dtype,
+            allow_recovery=allow_depthwise_recovery,
+        )
 
         # When set, each generator runs via capture-once/replay (forward_traced), removing
         # per-op host dispatch (~5x on its device graph). use_trace_bwe is separate so the

@@ -88,6 +88,7 @@ class AMPBlock1(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        allow_depthwise_recovery: bool = True,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -147,6 +148,7 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    allow_recovery=allow_depthwise_recovery,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -166,6 +168,7 @@ class AMPBlock1(Module):
                     dtype=dtype,
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
+                    allow_recovery=allow_depthwise_recovery,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -231,6 +234,9 @@ class Vocoder(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        allow_depthwise_recovery: bool = True,
+        use_local_tpad_tail: bool = True,
+        legacy_replicate_tail: bool = False,
     ) -> None:
         super().__init__()
 
@@ -257,6 +263,8 @@ class Vocoder(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.use_local_tpad_tail = use_local_tpad_tail
+        self.legacy_replicate_tail = legacy_replicate_tail
         self._tpad_mask_cache: dict = {}
         self._t_pad = 0  # set per-input by _host_to_device
         # Traced decode: _forward_device is @traced_function, keyed per input shape via
@@ -321,6 +329,7 @@ class Vocoder(Module):
                         parallel_config=parallel_config,
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
+                        allow_depthwise_recovery=allow_depthwise_recovery,
                     )
                 )
 
@@ -339,6 +348,7 @@ class Vocoder(Module):
             dtype=dtype,
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
+            allow_recovery=allow_depthwise_recovery,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -434,7 +444,7 @@ class Vocoder(Module):
         if sharded:
             factor = self.parallel_config.factor
             t_rows = x_BTC_torch.shape[1]
-            per_shard = max(-(-t_rows // factor), TILE_HEIGHT)  # ceil(t_rows / factor), floored at a tile
+            per_shard = max(-(-t_rows // factor), TILE_HEIGHT)
             t_pad = per_shard * factor - t_rows
             if t_pad:
                 x_BTC_torch = torch.nn.functional.pad(x_BTC_torch, (0, 0, 0, t_pad))
@@ -452,7 +462,7 @@ class Vocoder(Module):
 
         if sharded and not pre_unsharded:
             # Channel-TP path: original ordering, conv_pre consumes a T-shard and gathers C itself.
-            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            x_dev = _partition_t(x_dev, self.parallel_config)
 
         # Channel-TP: split C up front so conv_pre's gather reconstructs full C_in (gathering a
         # channel-replicated tensor would duplicate it). conv_post stays full, so no trailing gather.
@@ -473,6 +483,8 @@ class Vocoder(Module):
                 parallel_config=self.parallel_config,
                 cache=self._tpad_mask_cache,
                 ccl_manager=self.ccl_manager,
+                use_local_tail=self.use_local_tpad_tail,
+                legacy_replicate_tail=self.legacy_replicate_tail,
             )
 
         cumrate = 1
@@ -482,7 +494,7 @@ class Vocoder(Module):
         x_dev = self.conv_pre(x_dev)
 
         if sharded and pre_unsharded:
-            x_dev = _partition_t(x_dev, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            x_dev = _partition_t(x_dev, self.parallel_config)
 
         for i in range(self.num_upsamples):
             x_dev = _set_tail(x_dev, cumrate, "zeros")  # ups gathers T to full and zero-pads internally

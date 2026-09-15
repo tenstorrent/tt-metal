@@ -275,7 +275,7 @@ def _t_neighbor_pad(
     )
 
 
-def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
+def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache, allow_recovery: bool = True):
     """Valid depthwise filter (same K taps per channel) on padded ``(B, T_pad, C)`` ROW_MAJOR.
 
     Returns ``(B, T_out, C)`` with ``T_out = (T_pad - K) / stride + 1`` via a single
@@ -369,6 +369,12 @@ def depthwise_tap_filter(x_BTC, taps, stride, *, mesh_device, dtype, cache):
         reason = f" ({exc})" if exc is not None else ""
         logger.warning(f"depthwise conv1d failed at T_pad={T_pad}, C={C}, K={K}, stride={stride}; MAC fallback{reason}")
         return _depthwise_tap_mac(x_BTC, taps, stride, T_out=T_out, dtype=dtype)
+
+    # LTX production shapes used the direct conv1d path before the shared MiniMax-H3 recovery
+    # chain was added. Keep that behavior selectable so an LTX process cannot cache a short-shape
+    # chunk/MAC winner and reuse it for a much longer waveform. MiniMax-H3 keeps recovery enabled.
+    if not allow_recovery:
+        return try_direct()
 
     # Which candidate fits depends only on (C, K, stride), so it's stable across calls: cache the
     # winner found in warmup and try it first, skipping the dead ends that preceded it. A miss still
@@ -614,8 +620,6 @@ def _tpad_mask(mesh_device, parallel_config, dtype, global_T, tpad_image, cache)
         m[:, global_T - tpad_image :, :] = 0.0
         pair = []
         for t in (m, 1.0 - m):
-            # The mask ends up ROW_MAJOR anyway, so build it that way and skip the tile-aligned
-            # partition constraint entirely.
             mt = ttnn.from_torch(t, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
             pair.append(_partition_t(mt, parallel_config))
         cached = tuple(pair)
@@ -648,7 +652,18 @@ def _tpad_mask_suffix(mesh_device, parallel_config, dtype, global_T, tpad_image,
     return cached
 
 
-def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cache, ccl_manager=None):
+def _set_tpad_tail(
+    x_BTC,
+    tpad_image,
+    *,
+    mode,
+    mesh_device,
+    parallel_config,
+    cache,
+    ccl_manager=None,
+    use_local_tail=True,
+    legacy_replicate_tail=False,
+):
     """Set the trailing ``tpad_image`` tail rows: ``mode="zeros"`` zeros them, ``mode="replicate"`` fills the last real row.
 
     Uses a cached validity mask (body rows multiply by 1.0, staying bit-identical). CCL-free except when the
@@ -657,7 +672,7 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
     if tpad_image <= 0 or parallel_config is None or getattr(parallel_config, "factor", 0) <= 1:
         return x_BTC
     local_T = x_BTC.shape[1]
-    if tpad_image < local_T:
+    if tpad_image < local_T and use_local_tail:
         # The pad fits inside one shard's tail, so fix just those rows in place instead of
         # multiplying every body row by 1.0.
         return _set_tpad_tail_local(
@@ -671,6 +686,19 @@ def _set_tpad_tail(x_BTC, tpad_image, *, mode, mesh_device, parallel_config, cac
         return xm
     if mode != "replicate":
         raise ValueError(f"unknown mode {mode!r}")
+    if legacy_replicate_tail or tpad_image < local_T:
+        # LTX's validated trace path is CCL-free for every pad size. MiniMax keeps the holder-shard
+        # gather below, which fixes its fully padded short-clip shards.
+        global_T = local_T * parallel_config.factor
+        idx = (global_T - tpad_image - 1) % local_T
+        B, C = x_BTC.shape[0], x_BTC.shape[2]
+        last = ttnn.slice(x_BTC, [0, idx, 0], [B, idx + 1, C])
+        fill = ttnn.multiply(last, inv)
+        ttnn.deallocate(last)
+        out = ttnn.add(xm, fill)
+        ttnn.deallocate(xm)
+        ttnn.deallocate(fill)
+        return out
     # The real-last row's LOCAL offset is uniform across shards, but only the holder shard's row at that
     # offset is real -- on a fully-padded shard it is a pad row. Gather a tile-aligned 32-row window holding
     # that offset along the shard axis and take the holder's row, so every shard replicates the true last
@@ -1321,7 +1349,7 @@ class ConvTranspose1dViaConv3d(Module):
         y = self.conv(x_padded)
 
         if sharded:
-            y = _partition_t(y, self.parallel_config)  # ROW_MAJOR: no tile-aligned offset needed
+            y = _partition_t(y, self.parallel_config)
 
         if ch_axis is not None:
             # Re-pad C_out to unit so the per-chip C-shard is TILE-legal.
