@@ -63,7 +63,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Missing_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -121,7 +121,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Missing_AddrGen_SanityCheck) {
     SetRuntimeArgs(program, kernel, logical_core, {src_buf->address(), dst_buf->address()});
 
     EXPECT_DEATH(
-        LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true),
+        LaunchProgram(this->device(), std::move(program)),
         ".*Race Condition: cb_pop_front.*called while a NoC read is still pending.*");
 }
 
@@ -171,7 +171,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_Present_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");
@@ -224,7 +224,7 @@ TEST_F(UnitMeshFixture, NoC_Barrier_MultiRead_SingleBarrier_NoViolation) {
     SetRuntimeArgs(program, kernel, logical_core, {dst_buf->address()});
 
     // Must NOT abort — the single barrier cleared both in-flight reads.
-    LaunchProgram(this->device(), std::move(program), /*wait_until_cores_done=*/true);
+    LaunchProgram(this->device(), std::move(program));
     SUCCEED();
 
     ::unsetenv("TT_METAL_EMULE_ASAN");

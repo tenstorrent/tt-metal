@@ -220,7 +220,7 @@ inline void _llk_math_eltwise_unary_broadcast_mop_config_(const TensorShape& ten
  * @note @ref _llk_math_eltwise_unary_broadcast_ runs the configured op with matching template args.
  */
 template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest>
-inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_shape)
+inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape tensor_shape)
 {
     LLK_ASSERT(
         tensor_shape.face_r_dim == MAX_FACE_R_DIM && tensor_shape.num_faces_r_dim == MAX_NUM_FACES_R_DIM && tensor_shape.num_faces_c_dim == MAX_NUM_FACES_C_DIM,
@@ -243,8 +243,9 @@ inline void _llk_math_eltwise_unary_broadcast_(const std::uint32_t tile_idx)
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
 
     // Wait condition SRCB_VLD is required as MOVD2B doesn't automatically wait
-    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit.
-    TTI_STALLWAIT(p_stall::STALL_MATH, 0, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
+    // for SrcB[MatrixUnit.SrcBBank].AllowedClient == SrcClient::MatrixUnit. MATH drains the
+    // preceding math instructions so their source-bank release has landed before SRCB_VLD tests it.
+    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::MATH, p_stall::WAIT_SFPU, p_stall::SRCB_VLD); // TEN-4367 - SrcB sync workaround
 
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
 

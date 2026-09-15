@@ -15,6 +15,7 @@
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
+#include "rtoptions.hpp"
 #include "tensix.h"
 #include "hal_2xx_common.hpp"
 #include "overlay/meta/registers/overlay_reg_defines_core.h"
@@ -104,6 +105,8 @@ public:
                                                   : MEM_DM_GLOBAL_BASE;
             const DeviceAddr dm_local_base =
                 params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_BASE : MEM_DM_LOCAL_BASE;
+            const DeviceAddr dm_local_size =
+                params.core_type == HalProgrammableCoreType::DISPATCH ? MEM_DISPATCH_DM_LOCAL_SIZE : MEM_DM_LOCAL_SIZE;
             if (params.is_fw) {
                 const DeviceAddr dm_firmware_base = params.core_type == HalProgrammableCoreType::DISPATCH
                                                         ? MEM_DISPATCH_DM_FIRMWARE_BASE
@@ -113,10 +116,10 @@ public:
                 flags += fmt::format("-Wl,--defsym=__fw_data={} ", dm_global_base);
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             } else {
                 DeviceAddr kn_text = MEM_KERNEL_BASE;
                 if (params.core_type == HalProgrammableCoreType::DISPATCH) {
@@ -144,10 +147,10 @@ public:
                     dm_global_base + MEM_DM_GLOBAL_SIZE + (params.processor_id * MEM_DM_GLOBAL_SIZE));
                 flags += fmt::format("-Wl,--defsym=__data_size={} ", MEM_DM_GLOBAL_SIZE);
                 flags += fmt::format("-Wl,--defsym=__fw_tls={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__tls_size={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__tls_size={} ", dm_local_size);
                 flags += fmt::format("-Wl,--defsym=__min_stack={} ", MEM_DM_STACK_MIN_SIZE);
                 flags += fmt::format("-Wl,--defsym=__local_base={} ", dm_local_base);
-                flags += fmt::format("-Wl,--defsym=__local_stride={} ", MEM_DM_LOCAL_SIZE);
+                flags += fmt::format("-Wl,--defsym=__local_stride={} ", dm_local_size);
             }
         } else if (params.processor_class == HalProcessorClassType::COMPUTE) {
             if (params.is_fw) {
@@ -337,6 +340,7 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_QUASAR");
+        defines.push_back("NOC_API_V" + std::to_string(params.rtoptions.get_quasar_noc_api_version()));
         return defines;
     }
 
@@ -563,6 +567,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = true;
     this->supports_implicit_dfb_sync_ = true;

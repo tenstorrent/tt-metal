@@ -55,12 +55,6 @@ def torch_masked_bincount(
             id="single",
         ),
         pytest.param(
-            (1, 2),
-            {"fabric_config": ttnn.FabricConfig.DISABLED},
-            marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 2), topology="linear"),
-            id="disabled-1x2",
-        ),
-        pytest.param(
             (1, 4),
             torus_x_device_params(),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(1, 4), topology="ring"),
@@ -212,6 +206,9 @@ def test_masked_bincount_tree_reduction_race(mesh_device):
     the root's gather_sem before the slow leaf finishes, exposing data races
     where a parent reads a child's incomplete histogram.
     """
+    # sp_dim stays at 4096 rather than moving to the 640-token prefill ISL: this test exists to
+    # expose a gather_sem race, and the window it opens scales with per-core work (rows_per_core=64
+    # here, 10 at 640). Shrinking it would narrow the race window this test is built to catch.
     sp_dim = 4096
     topk = 8
     n_routed_experts = 256

@@ -24,6 +24,11 @@ from tests.scripts.common import get_updated_device_params, run_process_and_get_
 # Constants for device configurations
 SIX_U_NUM_PCIE_DEVICES = 32
 
+# Mirrors FabricEriscDatamoverBuilder::max_packet_payload_size_bytes_{wormhole,blackhole}
+# in tt_metal/fabric/erisc_datamover_builder.hpp (7 and 14 Bfp8_b tiles of 1088 B).
+# Not bound to Python; update here if the C++ constants change.
+MAX_FABRIC_PACKET_PAYLOAD_SIZE_BYTES = {"wormhole_b0": 7 * 1088, "blackhole": 14 * 1088}
+
 
 @pytest.fixture(scope="function")
 def reset_seeds():
@@ -506,6 +511,15 @@ def set_fabric(
 
         if fabric_manager is None:
             fabric_manager = ttnn.FabricManagerMode.DEFAULT
+
+        if fabric_router_config is not None:
+            requested_payload = fabric_router_config.max_packet_payload_size_bytes
+            arch_max_payload = MAX_FABRIC_PACKET_PAYLOAD_SIZE_BYTES.get(ttnn.get_arch_name())
+            if requested_payload is not None and arch_max_payload is not None and requested_payload > arch_max_payload:
+                pytest.skip(
+                    f"Test requests a fabric packet payload of {requested_payload} B, more than the "
+                    f"{arch_max_payload} B maximum on {ttnn.get_arch_name()}. Test not applicable for machine"
+                )
 
         # Build kwargs for set_fabric_config, only include fabric_router_config if provided
         if fabric_router_config is not None:

@@ -72,8 +72,8 @@ void kernel_main() {
     noc.async_read_barrier();
 
     // Semaphore setup
-    Semaphore<> sem_exchange(sem::exchange);
-    Semaphore<> sem_barrier(sem::barrier);
+    Semaphore sem_exchange(sem::exchange);
+    Semaphore sem_barrier(sem::barrier);
 
     // ROW_MAJOR per-core slice byte offset within each input/index DRAM row.
     // Each core owns a contiguous strip of `number_of_tiles_per_core` tiles

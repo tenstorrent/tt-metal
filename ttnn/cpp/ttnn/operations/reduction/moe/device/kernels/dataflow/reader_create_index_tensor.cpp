@@ -20,16 +20,16 @@ FORCE_INLINE void generate_index_tile(const DFBBindingToken dfb_id, const uint32
     // TODO: investigate moving to compile time (binary size is at risk)
     DataflowBuffer dfb(dfb_id);
     dfb.reserve_back(1);
-    CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
-    uint16_t wt_offset = wt << 5;
+    const CoreLocalMem<volatile uint32_t> ptr(dfb.get_write_ptr());
+    const uint16_t wt_offset = static_cast<uint16_t>(wt << 5);
 
     uint32_t count = 0;
     for (uint32_t i = 0; i < 2; ++i) {
         for (uint32_t j = 0; j < 2; ++j) {
             for (uint32_t k = 0; k < 16; ++k) {
                 for (uint32_t l = 0; l < 16; l += 2) {
-                    uint16_t value = l + 16 * j + wt_offset;
-                    ptr[count] = (value + 1) << 16 | value;
+                    const uint16_t value = static_cast<uint16_t>(l + (16 * j) + wt_offset);
+                    ptr[count] = (static_cast<uint32_t>(value + 1) << 16) | value;
                     count++;
                 }
             }
@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr auto Ht = get_arg(args::Ht);
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto K = get_arg(args::K);
-    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
+    constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : (K / 32) + 1;
 
     constexpr uint32_t onetile = 1;
 
@@ -52,7 +52,7 @@ void kernel_main() {
 
     const auto s2 = TensorAccessor(tensor::expert_mask);
 
-    Noc noc;
+    const Noc noc;
     DataflowBuffer dfb_in0(dfb::input);
     DataflowBuffer dfb_topk(dfb::topk_mask);
     DataflowBuffer dfb_expert(dfb::expert_mask);

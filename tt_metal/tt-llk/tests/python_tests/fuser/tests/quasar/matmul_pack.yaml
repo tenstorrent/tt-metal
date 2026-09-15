@@ -17,8 +17,8 @@ operands:
 operations:
   - math:
       - type: "Fpu"
-        src_a: "input_A"
-        src_b: "input_B"
+        in0: "input_A"
+        in1: "input_B"
         operation: "Matmul"
         unpacker: "MatmulUnpacker"
         math_fidelity: "HiFi2"

@@ -13,6 +13,7 @@ constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = get_compile_time_arg_val(3);
 constexpr bool HAS_MUX_CONNECTIONS = get_compile_time_arg_val(4);
 constexpr uint8_t NUM_MUXES_TO_TERMINATE = get_compile_time_arg_val(5);
 constexpr bool USE_UNICAST_SYNC_PACKETS = get_compile_time_arg_val(6);
+constexpr uint8_t NUM_START_GLOBAL_SYNC_ITERS = 10;
 
 using SyncKernelConfigType =
     SyncKernelConfig<NUM_SYNC_FABRIC_CONNECTIONS, IS_2D_FABRIC, NUM_LOCAL_SYNC_CORES, USE_UNICAST_SYNC_PACKETS>;
@@ -44,7 +45,9 @@ void kernel_main() {
 
     // Perform global sync (master sync core) for start of sync
     uint8_t local_sync_iter = 0, global_sync_iter = 0;
-    sync_config->global_sync(global_sync_iter++);
+    for (uint8_t i = 0; i < NUM_START_GLOBAL_SYNC_ITERS; i++) {
+        sync_config->global_sync(global_sync_iter++);
+    }
 
     // Perform local sync for start of sync
     sync_config->local_sync(local_sync_iter++);

@@ -10,6 +10,8 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
+#include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
@@ -20,6 +22,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "api/dataflow/dataflow_buffer.h"
+
+// The optional fused activation is applied to the final output tile in DEST, right before it is
+// packed into dfb_out (see "Write out the final output" below). The UNTILIZE_OUT branch routes the
+// output through a different CB chain (dfb_untilize_in_id), so that insertion point would not be
+// the last touch of the data — fail the build rather than fuse into the wrong place.
+#if defined(UNTILIZE_OUT) && defined(SFPU_OP_INIT_ACTIVATION)
+#error "fused activation + UNTILIZE_OUT not wired: untilize consumes dfb_untilize_in, not dfb_out"
+#endif
 
 void kernel_main() {
     /*
@@ -88,8 +98,8 @@ void kernel_main() {
      * Examples: "Start Welford Partial Tile" or "End Statistics Aggregation"
      */
 
-    constexpr uint32_t do_gamma = get_named_compile_time_arg_val("do_gamma");
-    constexpr uint32_t do_beta = get_named_compile_time_arg_val("do_beta");
+    constexpr bool do_gamma = get_named_compile_time_arg_val("do_gamma") == 1;
+    constexpr bool do_beta = get_named_compile_time_arg_val("do_beta") == 1;
     constexpr uint32_t num_cores_per_mcast_group = get_named_compile_time_arg_val("num_cores_per_mcast_group");
 
     constexpr uint32_t num_batches = get_named_compile_time_arg_val("batch");
@@ -226,7 +236,7 @@ void kernel_main() {
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
@@ -236,8 +246,8 @@ void kernel_main() {
 
     // Get pointer to the reciprocal LUT
     using recip_lut_t = std::array<uint32_t, reciprocal_size>;
-    auto p_reciprocal =
-        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_idx=*/0);
+    auto* p_reciprocal =
+        norm::kernel_util::compute::memory::get_pointer_to_cb_data<recip_lut_t>(dfb_reciprocals_id, /*tile_index=*/0);
 
     dfb_eps.wait_front(1);
     dfb_input_mask.wait_front(num_tiles_input_mask);
@@ -332,8 +342,8 @@ void kernel_main() {
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
                         // Start Welford Partial Tile Updates
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        const uint32_t cols_available = tile_width - group_offset;
+                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
 
                         welford_restore_state(mean_dst, g);
                         welford_update_rows<reciprocal_size>(
@@ -511,13 +521,9 @@ void kernel_main() {
                         if (group_offset != 0) {
                             // Not the first group for this tile: add what is already in cb_x.
                             reconfig_data_format_srca(dfb_x_id);
-                            binary_dest_reuse_tiles_init<
-                                EltwiseBinaryType::ELWADD,
-                                EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
+                            add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id);
                             dfb_x.wait_front(1);
-                            binary_dest_reuse_tiles<
-                                EltwiseBinaryType::ELWADD,
-                                EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id, 0, dst0);
+                            add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(dfb_x_id, 0, dst0);
                             dfb_x.pop_front(1);
                         }
                         tile_regs_commit();
@@ -532,8 +538,8 @@ void kernel_main() {
                         // The blocks after this loop assume srcb still carries cb_xmm's format.
                         reconfig_data_format_srcb(dfb_xmm_id);
 
-                        uint32_t cols_available = tile_width - group_offset;
-                        uint32_t cols_consumed = std::min(cols_available, channels_left);
+                        const uint32_t cols_available = tile_width - group_offset;
+                        const uint32_t cols_consumed = std::min(cols_available, channels_left);
                         channels_left -= cols_consumed;
                         group_offset += cols_consumed;
 
@@ -615,11 +621,21 @@ void kernel_main() {
                         reconfig_data_format_srca(dfb_x_id);
                     }
                     reconfig_data_format_srcb(do_beta ? dfb_beta_id : dfb_xmm_id, dfb_x_id);
-                    copy_tile_init(dfb_x_id);
+                    copy_init(dfb_x_id);
 
                     dfb_x.wait_front(1);
                     tile_regs_acquire();
                     copy_tile(dfb_x_id, 0, dst0);
+#ifdef SFPU_OP_INIT_ACTIVATION
+                    // Optional fused unary activation (e.g. SiLU). Applied here, after gamma and
+                    // beta and on the final output tile still in DEST, so the result equals
+                    // <act>(group_norm(x)) with the activation consuming the fp32 DEST value rather
+                    // than the rounded output a standalone activation op would read back.
+                    // Safe w.r.t. welford's SFPU replay state: this is the POST stage, all welford
+                    // accumulation for the batch is already finished.
+                    SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_FUNC_ACTIVATION
+#endif
                     tile_regs_commit();
                     dfb_x.pop_front(1);
                     dfb_out.reserve_back(1);

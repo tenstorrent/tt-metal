@@ -6,8 +6,11 @@
 #include "ttnn/operations/reduction/generic/device/reduce_op_device_operation.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
 
+#include <algorithm>
 #include <optional>
 #include <string>
+
+#include <tt-metalium/math.hpp>
 
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
@@ -86,6 +89,26 @@ Tensor reduce_min(
         true);
 }
 
+// Minimum H tiles required to take the H-axis split.
+static constexpr uint32_t k_min_ht_for_split_rm = 16;    // ~H >= 512 rows
+static constexpr uint32_t k_min_ht_for_split_tile = 20;  // ~H >= 640 rows
+
+static constexpr uint32_t k_min_ht_per_slice_rm = 1;
+static constexpr uint32_t k_min_ht_per_slice_tile = 1;
+
+// H-axis slice count; 1 leaves the reduce un-split.
+// Fill the grid, but never so thinly that a slice has fewer than min_ht_per_slice tiles. Extra
+// slices past that would add partial rows and stage-2 work without more parallelism.
+static uint32_t compute_h_slices(
+    uint32_t col_groups, uint32_t Ht, uint32_t grid_cores, uint32_t min_ht_for_split, uint32_t min_ht_per_slice) {
+    if (col_groups == 0 || col_groups >= grid_cores || Ht < min_ht_for_split) {
+        return 1;
+    }
+    const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
+    const uint32_t slices_at_min_work = Ht / min_ht_per_slice;     // floor => slice_Ht >= min_ht_per_slice
+    return std::max(std::min(slices_to_fill_grid, slices_at_min_work), 1u);
+}
+
 Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,
@@ -145,6 +168,26 @@ Tensor reduce(
         (input_tensor.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
          input_tensor.dtype() == tt::tt_metal::DataType::FLOAT32) &&
         (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM);
+
+    // A padded ROW_MAJOR tensor keeps its dim-1 slices H_padded rows apart, but the dense RM readers
+    // and the tilize into the tile path both step by H_logical, so every slice after the first lands
+    // on pad rows. Only a single slice padded up to the tile height is readable; refuse the rest.
+    // H alone, because H pad sits between pages: pad on W sits inside one, and the reader consumes
+    // only W_logical bytes of it over an identity-filled slab (see reader_unary_reduce_rm.cpp).
+    // Indexing is negative because reduce_impl normalizes every input to 4D before calling this.
+    if (input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR) {
+        const auto& logical = input_tensor.logical_shape();
+        const auto& padded = input_tensor.padded_shape();
+        const uint32_t tile_h = input_tensor.tensor_spec().tile().get_height();
+        TT_FATAL(
+            padded[-2] == logical[-2] ||
+                (padded[-4] * padded[-3] == 1 && padded[-2] == tt::div_up(logical[-2], tile_h) * tile_h),
+            "reduce: a ROW_MAJOR input padded on H is only supported when N and C fold to a single "
+            "slice and the padding rounds H up to the tile height, got logical {} padded {}. Convert "
+            "to TILE layout first, or drop the padding.",
+            logical,
+            padded);
+    }
 
     // A TILE request must be explicit: std::nullopt means "whatever the selected path emits".
     // The RM H path can emit both layouts, so it stays eligible; the RM W path can emit only
@@ -217,10 +260,8 @@ Tensor reduce(
     // reduce kernel.
     auto h_reduce_with_external_negate =
         [&](const Tensor& h_input, float h_scaler, float h_post_mul, tt::tt_metal::DataType h_out_dtype) {
-            // Keep neg_input in h_input's memory config (pass std::nullopt) so the
-            // pre-reduce negation stays in place; forcing output_mem_config here
-            // could trigger a reshard (DRAM↔L1, interleaved↔sharded) before the
-            // H-reduce.  Only the final neg enforces output_mem_config.
+            // Each neg inherits its input's memory config.  The final one must inherit h_out rather
+            // than output_mem_config: only h_out's shard shape is recomputed for the reduced height.
             Tensor neg_input = ttnn::neg(h_input, std::nullopt, std::nullopt, sub_core_grids);
             Tensor h_out = ttnn::prim::reduce(
                 neg_input,
@@ -233,7 +274,7 @@ Tensor reduce(
                 sub_core_grids,
                 /*negate=*/false,
                 /*post_mul_scaler=*/h_post_mul);
-            return ttnn::neg(h_out, output_mem_config, std::nullopt, sub_core_grids);
+            return ttnn::neg(h_out, std::nullopt, std::nullopt, sub_core_grids);
         };
 
     // The single-core HW path uses REDUCE_SCALAR mode, which applies the
@@ -287,7 +328,7 @@ Tensor reduce(
             /*row_major_h_dense_path=*/false,
             /*use_sfpu_reduce=*/use_sfpu_fp32_reduce);
 
-        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, sub_core_grids)) {
+        if (negate && !ttnn::prim::h_reduce_negate_fits_in_l1(output_tensor, output_mem_config, sub_core_grids)) {
             return h_reduce_with_external_negate(output_tensor, reduce_scaler, post_mul, out_final_dtype);
         }
 
@@ -308,15 +349,13 @@ Tensor reduce(
     }
 
     if (negate && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
-        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, sub_core_grids)) {
+        !ttnn::prim::h_reduce_negate_fits_in_l1(prepared_input, output_mem_config, sub_core_grids)) {
         return h_reduce_with_external_negate(
             prepared_input, reduce_scaler, post_mul, output_dtype.value_or(input_tensor.dtype()));
     }
 
     // H-axis split: the un-split RM-H path uses only NC*Wt cores, so tall-H shapes starve the grid.
-    // Split the reduction axis into S segments — stage 1 → (N,C,S,W) FP32 partials, stage 2 →
-    // collapse the slice axis with the user scaler and final dtype. Sum over H is the sum of the
-    // per-slice sums, so mean's 1/N applies once, in stage 2.
+    // Stage 1 emits (N,C,S,W) FP32 partials; stage 2 collapses the slice axis with the user scaler.
     if (use_rm_dense_h) {
         const auto& logical = input_tensor.logical_shape();
         const auto& padded = input_tensor.padded_shape();
@@ -330,14 +369,8 @@ Tensor reduce(
         const auto grid = input_tensor.device()->compute_with_storage_grid_size();
         const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
 
-        // Splitting an Ht_rm below this costs more (extra dispatch + rounding) than it gains.
-        constexpr uint32_t k_min_ht_for_split = 16;  // ~H >= 512 rows
-        uint32_t num_h_slices = 1;
-        if (col_groups > 0 && col_groups < grid_cores && Ht_rm >= k_min_ht_for_split) {
-            const uint32_t slices_to_fill_grid = grid_cores / col_groups;  // slices that keep the grid filled
-            num_h_slices =
-                (slices_to_fill_grid < Ht_rm) ? slices_to_fill_grid : Ht_rm;  // never more slices than H tiles
-        }
+        const uint32_t num_h_slices =
+            compute_h_slices(col_groups, Ht_rm, grid_cores, k_min_ht_for_split_rm, k_min_ht_per_slice_rm);
 
         if (num_h_slices >= 2) {
             // Stage 1 emits ROW_MAJOR partials; only stage 2 honors the requested layout.
@@ -374,6 +407,80 @@ Tensor reduce(
                 /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
                 /*num_h_slices=*/1,
                 /*output_layout=*/rm_dense_out_layout);
+        }
+    }
+
+    // Same split for TILE input: un-split also parallelizes only over NC*Wt. Stage 1 keeps the
+    // tiled reader/compute but emits ROW_MAJOR FP32 partials — a TILE partial would pack slices
+    // into one page. Stage 2 is the RM dense H collapse. Block-float rides along as whole tiles.
+    if (prepared_input.layout() == tt::tt_metal::Layout::TILE && reduce_dim == tt::tt_metal::ReduceOpDim::H &&
+        (reduce_math == tt::tt_metal::ReduceOpMath::AVG || reduce_math == tt::tt_metal::ReduceOpMath::SUM) && !negate &&
+        both_interleaved && !prepared_input.shard_spec().has_value() && prepared_input.logical_shape().rank() == 4 &&
+        (prepared_input.dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+         prepared_input.dtype() == tt::tt_metal::DataType::FLOAT32 ||
+         tt::tt_metal::is_block_float(prepared_input.dtype()))) {
+        const auto& logical = prepared_input.logical_shape();
+        const auto& padded = prepared_input.padded_shape();
+        const uint32_t tile_h = prepared_input.tensor_spec().tile().get_height();
+        const uint32_t tile_w = prepared_input.tensor_spec().tile().get_width();
+        const uint32_t NC = logical[0] * logical[1];
+        const uint32_t Wt = tt::div_up(padded[3], tile_w);
+        // Padded H, matching the factory's Ht so the reader's ht >= Ht guard indexes real tiles.
+        const uint32_t Ht = tt::div_up(padded[2], tile_h);
+        const uint32_t col_groups = NC * Wt;  // cores the un-split path would use
+
+        const auto grid = prepared_input.device()->compute_with_storage_grid_size();
+        const uint32_t grid_cores = sub_core_grids.has_value() ? sub_core_grids->num_cores() : (grid.x * grid.y);
+
+        const uint32_t num_h_slices =
+            compute_h_slices(col_groups, Ht, grid_cores, k_min_ht_for_split_tile, k_min_ht_per_slice_tile);
+
+        if (num_h_slices >= 2) {
+            // Stage 1: tiled H reduce, unit scaler, ROW_MAJOR FP32 partials.
+            const Tensor partials = ttnn::prim::reduce(
+                prepared_input,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                /*scaler=*/1.0f,
+                output_mem_config,
+                tt::tt_metal::DataType::FLOAT32,
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/1.0f,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/false,
+                /*use_sfpu_reduce=*/use_sfpu_fp32_reduce,
+                /*num_h_slices=*/num_h_slices,
+                /*output_layout=*/tt::tt_metal::Layout::ROW_MAJOR);
+
+            // Stage 2 folds FP32 partials on SFPU even if stage 1 used the FPU; FPU would round each to tf32.
+            // Scaler vs post-mul follows the partial dtype: SFPU ignores the scaler CB.
+            const bool s2_use_sfpu = !tt::tt_metal::is_block_float(input_tensor.dtype()) && arch != tt::ARCH::QUASAR &&
+                                     config.fp32_dest_acc_en;
+            const bool s2_post_mul =
+                ttnn::prim::requires_post_mul(tt::tt_metal::ReduceOpMath::SUM, partials.dtype(), scaler, s2_use_sfpu);
+            const float s2_scaler = s2_post_mul ? 1.0f : scaler;
+            const float s2_mul = s2_post_mul ? scaler : 1.0f;
+
+            // Stage 2: collapse the slice axis. TILE in defaults to TILE out.
+            return ttnn::prim::reduce(
+                partials,
+                tt::tt_metal::ReduceOpMath::SUM,
+                tt::tt_metal::ReduceOpDim::H,
+                s2_scaler,
+                output_mem_config,
+                output_dtype.value_or(input_tensor.dtype()),
+                config,
+                sub_core_grids,
+                /*negate=*/false,
+                /*post_mul_scaler=*/s2_mul,
+                /*row_major_w_dense_path=*/false,
+                /*row_major_h_dense_path=*/true,
+                /*use_sfpu_reduce=*/s2_use_sfpu,
+                /*num_h_slices=*/1,
+                /*output_layout=*/output_layout == tt::tt_metal::Layout::ROW_MAJOR ? tt::tt_metal::Layout::ROW_MAJOR
+                                                                                   : tt::tt_metal::Layout::TILE);
         }
     }
 

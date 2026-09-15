@@ -48,8 +48,15 @@ SubDeviceManagerTracker::SubDeviceManagerTracker(
 
 SubDeviceManagerTracker::~SubDeviceManagerTracker() {
     active_sub_device_manager_ = nullptr;
-    for (auto sub_device_manager = sub_device_managers_.begin(); sub_device_manager != sub_device_managers_.end();) {
-        this->remove_sub_device_manager((sub_device_manager++)->first);
+    for (auto it = sub_device_managers_.begin(); it != sub_device_managers_.end();) {
+        if (it->second.get() == default_sub_device_manager_) {
+            ++it;
+        } else {
+            this->remove_sub_device_manager((it++)->first);
+        }
+    }
+    if (default_sub_device_manager_ != nullptr) {
+        this->remove_sub_device_manager(default_sub_device_manager_->id());
     }
     default_sub_device_manager_ = nullptr;
 }
@@ -98,7 +105,7 @@ void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDe
 
 void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_device_manager_id) {
     TT_FATAL(
-        tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch(),
+        tt::tt_metal::MetalContext::instance(extract_context_id(device_)).rtoptions().get_fast_dispatch(),
         "Using sub device managers is unsupported with slow dispatch");
     if (active_sub_device_manager_->id() == sub_device_manager_id) {
         return;
@@ -113,9 +120,10 @@ void SubDeviceManagerTracker::load_sub_device_manager(SubDeviceManagerId sub_dev
     this->reset_sub_device_state(sub_device_manager->second);
     const auto& default_allocator = default_sub_device_manager_->allocator(SubDeviceId{0});
     default_allocator->reset_allocator_size(BufferType::L1);
-    // Shrink the global allocator size to make room for sub-device allocators
-    auto local_l1_size = sub_device_manager->second->local_l1_size();
-    default_allocator->shrink_allocator_size(BufferType::L1, local_l1_size, /*bottom_up=*/true);
+    // Reserve the full bottom-up span through the shifted sub-device regions:
+    // persistent arena occupancy followed by sub-device-local L1.
+    const auto bottom_reservation_size = sub_device_manager->second->global_l1_bottom_reservation_size();
+    default_allocator->shrink_allocator_size(BufferType::L1, bottom_reservation_size, /*bottom_up=*/true);
     active_sub_device_manager_ = sub_device_manager->second.get();
 }
 

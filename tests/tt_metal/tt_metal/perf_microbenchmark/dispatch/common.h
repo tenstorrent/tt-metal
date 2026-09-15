@@ -24,6 +24,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
+#include "tt_metal/impl/context/context_types.hpp"
 #include "tt_metal/impl/allocator/allocator.hpp"
 #include <variant>
 #include <llrt/tt_cluster.hpp>
@@ -651,6 +652,7 @@ namespace CommandBuilder {
 // Emits a single linear write, optionally multicast, with inline data
 template <bool flush_prefetch, bool inline_data>
 HostMemDeviceCommand build_linear_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     const CoreRange& worker_range,
     bool is_mcast,
@@ -659,12 +661,12 @@ HostMemDeviceCommand build_linear_write_command(
     uint32_t xfer_size_bytes) {
     // Calculate the command size using DeviceCommandCalculator
     // Pre-calculate the exact size to allocate correct amount of memory in HostMemDeviceCommand buffer
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_linear<flush_prefetch, inline_data>(xfer_size_bytes);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Add the dispatch write linear command
     cmd.add_dispatch_write_linear<flush_prefetch, inline_data>(
@@ -682,6 +684,7 @@ HostMemDeviceCommand build_linear_write_command(
 // payload is already stitched together for all pages in the chunk
 template <bool inline_data>
 HostMemDeviceCommand build_paged_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     uint32_t base_addr,
     uint32_t page_size_bytes,
@@ -689,12 +692,12 @@ HostMemDeviceCommand build_paged_write_command(
     uint16_t start_page_cmd,
     bool is_dram) {
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_paged<inline_data>(page_size_bytes, pages_in_chunk);
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Add the dispatch write paged command
     cmd.add_dispatch_write_paged<inline_data>(
@@ -713,6 +716,7 @@ HostMemDeviceCommand build_paged_write_command(
 // Serializes a packed-unicast command including sub-command table
 // and optional replicated payloads when stride is enabled
 inline HostMemDeviceCommand build_packed_write_command(
+    MetalContext& metal_ctx,
     const std::vector<uint32_t>& payload,
     const std::vector<CQDispatchWritePackedUnicastSubCmd>& sub_cmds,
     uint32_t common_addr,
@@ -729,7 +733,7 @@ inline HostMemDeviceCommand build_packed_write_command(
     const uint32_t payload_bytes = tt::align(sizeof(CQDispatchCmd) + sub_cmds_bytes, l1_alignment) + data_bytes;
 
     // Calculate the command size
-    DeviceCommandCalculator cmd_calc;
+    DeviceCommandCalculator cmd_calc(metal_ctx);
     cmd_calc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
         num_sub_cmds,        // num_sub_cmds
         payload_size_bytes,  // packed_data_sizeB
@@ -739,7 +743,7 @@ inline HostMemDeviceCommand build_packed_write_command(
     const uint32_t command_size_bytes = cmd_calc.write_offset_bytes();
 
     // Create the HostMemDeviceCommand with pre-calculated size
-    HostMemDeviceCommand cmd(command_size_bytes);
+    HostMemDeviceCommand cmd(metal_ctx, command_size_bytes);
 
     // Build data_collection pointing to the payload
     std::vector<std::pair<const void*, uint32_t>> data_collection;
@@ -912,6 +916,7 @@ inline std::vector<CQDispatchWritePackedUnicastSubCmd> build_sub_cmds(
 // even one alignment unit does not fit. A caller that gets 0 must not emit the command: a packed write of no payload
 // makes the dispatcher issue zero-length NOC writes, which the watcher NOC sanitizer stops the device for.
 inline uint32_t clamp_to_max_fetch(
+    MetalContext& metal_ctx,
     uint32_t max_fetch_bytes,
     uint32_t xfer_size_bytes,
     uint32_t num_sub_cmds,
@@ -922,7 +927,7 @@ inline uint32_t clamp_to_max_fetch(
     // size reports what both commands would occupy together -- the measurement then only grows as the loop below tries
     // smaller transfers, no size ever looks like it fits, and the loop walks the transfer down to nothing.
     const auto command_size_bytes = [&](uint32_t payload_bytes) {
-        DeviceCommandCalculator cmd_calc;
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_write_packed<CQDispatchWritePackedUnicastSubCmd>(
             num_sub_cmds,   // num_sub_cmds
             payload_bytes,  // packed_data_sizeB
@@ -1301,6 +1306,9 @@ protected:
         uint32_t num_iterations,
         bool wait_for_completion = true,
         bool wait_for_host_writes = false) {
+        tt::tt_metal::MetalContext& metal_ctx =
+            tt::tt_metal::MetalContext::instance(tt::tt_metal::extract_context_id(device_));
+
         // PHASE 2: Calculate total command buffer size
         uint64_t per_iter_total = 0;
         for (const auto& cmd : commands_per_iteration) {
@@ -1308,7 +1316,7 @@ protected:
         }
 
         // For the barrier wait command
-        DeviceCommandCalculator cmd_calc;
+        DeviceCommandCalculator cmd_calc(metal_ctx);
         cmd_calc.add_dispatch_wait();
 
         const uint64_t total_cmd_bytes = num_iterations * per_iter_total + cmd_calc.write_offset_bytes();
@@ -1327,7 +1335,7 @@ protected:
         // 2. Writing (HugepageDeviceCommand):
         //    - wraps a pointer that points directly to the issue queue memory (cmd_buffer_base)
         //    - the loop below copies staged commands into the issue queue memory
-        HugepageDeviceCommand dc(cmd_buffer_base, total_cmd_bytes);
+        HugepageDeviceCommand dc(metal_ctx, cmd_buffer_base, total_cmd_bytes);
 
         // Store the size of each command entry (per-chunk)
         std::vector<uint32_t> entry_sizes;
@@ -1350,7 +1358,7 @@ protected:
         // Without this, there can be occasional timeouts in MetalContext::initialize_and_launch_firmware()
         // between test fixtures possibly because the previously issued commands
         // are not completed before next firmware launch
-        HostMemDeviceCommand cmd(cmd_calc.write_offset_bytes());
+        HostMemDeviceCommand cmd(metal_ctx, cmd_calc.write_offset_bytes());
         cmd.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0, 0);
         dc.add_data(cmd.data(), cmd.size_bytes(), cmd.size_bytes());
         entry_sizes.push_back(cmd.size_bytes());

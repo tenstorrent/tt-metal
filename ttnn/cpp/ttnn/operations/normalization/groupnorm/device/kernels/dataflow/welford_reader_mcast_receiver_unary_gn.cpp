@@ -64,7 +64,7 @@ void kernel_main() {
     // When set, stats CBs hold fp32; the Welford combine reads/writes them as float not bf16.
     constexpr bool stats_is_fp32 = get_named_compile_time_arg_val("stats_is_fp32") != 0;
 
-    Noc noc;
+    const Noc noc;
     Semaphore<> reduce_receiver_sem(reduce_receiver_semaphore_id);
     Semaphore<> reduce_sender_sem(reduce_sender_semaphore_id);
     DataflowBuffer dfb_ex_partial(dfb_ex_partial_id);
@@ -73,7 +73,7 @@ void kernel_main() {
     DataflowBuffer dfb_in0_welford(dfb_in0_welford_id);
     DataflowBuffer dfb_repack(dfb_repack_id);
     DataflowBuffer dfb_repack_out(dfb_repack_out_id);
-    DataflowBuffer dfb_out0(dfb_out0_id);
+    const DataflowBuffer dfb_out0(dfb_out0_id);
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(dfb_ex_partial_id);
     constexpr uint32_t src0_tile_bytes = get_tile_size(dfb_in0_id);
@@ -113,7 +113,7 @@ void kernel_main() {
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t num_out_blocks_padded = num_out_blocks;
-    uint32_t extra_out_block = false;
+    bool extra_out_block = false;
     uint32_t out_block_h_last = out_block_h_normal;
     if constexpr (block_h % num_out_blocks != 0) {
         extra_out_block = true;
@@ -169,8 +169,8 @@ void kernel_main() {
 
         for (uint32_t m = 0; m < num_groups; ++m) {
             // Read mean and variance arrays from dfb_ex_partial, then combine using Welford
-            auto p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
-            auto p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
+            auto* p_local_means = reinterpret_cast<stats_read_t*>(local_means_ptr);
+            auto* p_local_vars = reinterpret_cast<stats_read_t*>(local_vars_ptr);
 
             auto local_result = combine_welford_stats<
                 tile_width,
@@ -178,23 +178,35 @@ void kernel_main() {
                 local_stride>(p_local_means, p_local_vars);
 
             // Write this to dfb_ex_global
-            auto p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
-            auto p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
+            auto* p_global_means = reinterpret_cast<volatile stats_write_t*>(global_means_ptr);
+            auto* p_global_vars = reinterpret_cast<volatile stats_write_t*>(global_vars_ptr);
             p_global_means[0] = local_result.mean;
             p_global_vars[0] = local_result.variance;
 
+#ifndef GN_DISTRIBUTED_AG
             // Signal to sender that our partial data is ready
             reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
 
             // Wait for sender to signal that it has sent the global data
             reduce_sender_sem.wait(VALID);
             reduce_sender_sem.set(INVALID);
+#endif
 
             local_means_ptr += local_stride_per_group;
             local_vars_ptr += local_stride_per_group;
             global_means_ptr += 2 * single_tile_size_bytes;
             global_vars_ptr += 2 * single_tile_size_bytes;
         }
+
+#ifdef GN_DISTRIBUTED_AG
+        // Batched handshake: signal the master ONCE that all groups' partials are ready, then wait
+        // ONCE for its single batched mcast-back of the GLOBAL (mean, var) for every group. The
+        // master defers its mcast-back until after the cross-device fabric exchange, so the
+        // per-group lock-step above would deadlock that single exchange.
+        reduce_receiver_sem.up(noc, mcast_sender_noc_x, mcast_sender_noc_y, 1);
+        reduce_sender_sem.wait(VALID);
+        reduce_sender_sem.set(INVALID);
+#endif
 
         dfb_ex_partial.pop_front(2);
         dfb_ex_global.push_back(2 * num_groups);

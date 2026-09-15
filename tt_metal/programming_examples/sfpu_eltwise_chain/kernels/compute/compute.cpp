@@ -19,7 +19,8 @@ void kernel_main() {
     constexpr uint32_t one_tile = 1;
 
     // Initialize the SFPU
-    init_sfpu(src_cb_index, result_cb_index);
+    compute_kernel_hw_startup(src_cb_index, result_cb_index);
+    copy_init(src_cb_index);
 
     // Wait for the SFPU to have registers available for us to use during
     // the computation.

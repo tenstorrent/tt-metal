@@ -637,10 +637,6 @@ float MetalEnv::get_eps() const { return impl_->get_hal().get_eps(); }
 float MetalEnv::get_nan() const { return impl_->get_hal().get_nan(); }
 float MetalEnv::get_inf() const { return impl_->get_hal().get_inf(); }
 
-tt::tt_fabric::ControlPlane& MetalEnv::get_control_plane() {
-    impl_->ensure_context_registered(*this);
-    return impl_->get_control_plane();
-}
 distributed::SystemMesh& MetalEnv::get_system_mesh() {
     impl_->ensure_context_registered(*this);
     return impl_->get_system_mesh();

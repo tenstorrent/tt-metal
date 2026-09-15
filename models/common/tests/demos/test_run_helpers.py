@@ -213,6 +213,31 @@ def test_perf_benchmark_host_argmax_path_preserves_timing_and_tokens(monkeypatch
     assert result.generated_token_ids == [[2, 3, 4, 5]]
 
 
+def test_perf_benchmark_slices_prefill_page_rows_but_keeps_full_decode_capacity(monkeypatch):
+    target = FakeExecutionTarget(
+        compile_prefill_output=_logits([2, 2, 2, 2]),
+        prefill_output=_logits([2, 2]),
+        decode_outputs=[(_logits([3, 3, 0, 0]), None)],
+    )
+    times = iter([0.0, 0.1, 1.0, 1.1])
+    monkeypatch.setattr(run_helpers.time, "perf_counter", lambda: next(times))
+    page_table = torch.arange(8, dtype=torch.int32).reshape(4, 2)
+
+    run_perf_benchmark(
+        target,
+        tokens=torch.tensor([[1, 2], [1, 2]]),
+        kv_cache=[],
+        page_table=page_table,
+        num_decode_tokens=1,
+        max_batch_size=4,
+    )
+
+    calls = {name: arguments for name, arguments in target.calls}
+    assert calls["compile_prefill"]["page_table"].shape[0] == 2
+    torch.testing.assert_close(calls["prefill_forward"]["page_table"], page_table[:2])
+    torch.testing.assert_close(calls["decode_forward"]["page_table"], page_table)
+
+
 def test_perf_benchmark_brackets_profiler_without_changing_host_argmax(monkeypatch):
     target = FakeExecutionTarget(
         compile_prefill_output=_logits([2]),
@@ -404,6 +429,252 @@ def test_special_token_guard_without_stop_tokens_keeps_generated_tail_visible(ex
 
     with expect_error(AssertionError, "1/1 users"):
         run_helpers.assert_no_special_tokens([[5, 3, 0]], tokenizer, is_ci_env=True)
+
+
+def test_eval_repeat_compares_decoded_text_like_tttv1_despite_different_bpe_segmentations():
+    pieces = {10: "12", 11: "3", 12: "1", 13: "23", 99: "<eos>", 77: "ignored"}
+    tokenizer = SimpleNamespace(decode=lambda token_ids: "".join(pieces[token] for token in token_ids))
+
+    first_segmentation = run_helpers.decode_eval_output(tokenizer, [10, 11, 99, 77], {99})
+    second_segmentation = run_helpers.decode_eval_output(tokenizer, [12, 13], {99})
+
+    assert first_segmentation == second_segmentation == "123"
+    # Repeat 1 rotates prompt 1 into slot 0 and prompt 0 into slot 1.
+    run_helpers.assert_cross_batch_consistency(
+        [
+            [first_segmentation, "456"],
+            ["456", second_segmentation],
+        ]
+    )
+
+
+def test_eval_page_table_ab_preserves_slots_or_prompt_physical_blocks(expect_error):
+    page_table = torch.tensor([[0, 1], [10, 11], [20, 21]], dtype=torch.int32)
+
+    assert run_helpers.eval_page_table_for_repeat(page_table, 2, mode="slot-stable") is page_table
+    torch.testing.assert_close(
+        run_helpers.eval_page_table_for_repeat(page_table, 1, mode="prompt-stable"),
+        torch.tensor([[10, 11], [20, 21], [0, 1]], dtype=torch.int32),
+    )
+    with expect_error(ValueError, "slot-stable.*prompt-stable"):
+        run_helpers.eval_page_table_for_repeat(page_table, 0, mode="unsupported")
+
+
+def test_eval_decode_ab_defaults_to_trace_and_can_isolate_eager_execution(expect_error):
+    assert run_helpers.eval_decode_trace_mode("traced") == "decode_only"
+    assert run_helpers.eval_decode_trace_mode("eager") == "none"
+    with expect_error(ValueError, "traced.*eager"):
+        run_helpers.eval_decode_trace_mode("unsupported")
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"EVAL_DECODE_MODE": "eager"},
+        {"EVAL_PAGE_TABLE_MODE": "prompt-stable"},
+        {"EVAL_IDENTICAL_PROMPT_INDEX": "8"},
+        {"EVAL_ACTIVE_BATCH_SIZE": "24"},
+    ],
+)
+def test_ci_rejects_diagnostic_eval_modes(override, expect_error):
+    with expect_error(RuntimeError, "diagnostic eval modes cannot replace the canonical CI gate"):
+        run_helpers.require_canonical_eval_modes_in_ci({"CI": "true", **override})
+
+
+def test_non_ci_diagnostics_and_canonical_ci_are_allowed():
+    run_helpers.require_canonical_eval_modes_in_ci({"EVAL_DECODE_MODE": "eager", "EVAL_IDENTICAL_PROMPT_INDEX": "8"})
+    run_helpers.require_canonical_eval_modes_in_ci(
+        {"CI": "true", "EVAL_DECODE_MODE": "traced", "EVAL_PAGE_TABLE_MODE": "slot-stable"}
+    )
+
+
+def test_host_argmax_diagnostic_reports_top1_minus_top2_margin():
+    logits = torch.tensor(
+        [
+            [[0.0, 4.0, 3.5]],
+            [[9.0, 1.0, 8.875]],
+        ]
+    )
+
+    tokens, margins = run_helpers._host_argmax_with_margins(logits, 2)
+
+    torch.testing.assert_close(tokens, torch.tensor([1, 0]))
+    torch.testing.assert_close(margins, torch.tensor([0.5, 0.125]))
+
+
+def test_eval_repeat_driver_canonicalizes_each_rotated_output_through_tokenizer(monkeypatch):
+    pieces = {10: "12", 11: "3", 12: "1", 13: "23", 20: "456"}
+    tokenizer = SimpleNamespace(
+        decode=lambda token_ids: "".join(pieces[token] for token in token_ids),
+        eos_token_id=None,
+        stop_tokens=[],
+        all_special_ids=[],
+    )
+    generated = iter(
+        [
+            [[10, 11], [20]],
+            [[20], [12, 13]],
+        ]
+    )
+    monkeypatch.setattr(
+        run_helpers,
+        "run_perf_benchmark",
+        lambda *_args, **_kwargs: SimpleNamespace(generated_token_ids=next(generated)),
+    )
+
+    class FakeEvalExecutor:
+        def cleanup(self):
+            pass
+
+    result = run_helpers.run_eval_repeat_batch32(
+        make_executor=FakeEvalExecutor,
+        allocate_kv_cache=lambda _executor: [],
+        page_table=torch.zeros(2, 1, dtype=torch.int32),
+        prompts=["prompt-0", "prompt-1"],
+        tokenizer=tokenizer,
+        tokenize_fn=lambda prompts: (torch.zeros(len(prompts), 1, dtype=torch.long), torch.ones(len(prompts))),
+        num_decode_tokens=2,
+        max_batch_size=2,
+        repeat_batches=2,
+    )
+
+    assert result.generated_token_ids == [[10, 11], [20]]
+
+
+def test_eval_repeat_still_rejects_genuine_decoded_text_divergence(expect_error):
+    with expect_error(AssertionError, "1/2 cross-batch consistency checks failed"):
+        run_helpers.assert_cross_batch_consistency(
+            [
+                ["123", "456"],
+                ["different", "123"],
+            ]
+        )
+
+
+def test_eval_repeat_failure_localizes_prompt_slots_and_first_token_divergence(expect_error):
+    with expect_error(
+        AssertionError,
+        r"repeat 0 slot 1 -> repeat 1 slot 0, prompt index 1; "
+        r"first token divergence at generation step 1 \(12 != 99\); "
+        r"top2 margins 0.125 and 0.25; prompt lengths 80 and 80",
+    ):
+        run_helpers.assert_cross_batch_consistency(
+            [
+                ["alpha", "beta-left"],
+                ["beta-right", "alpha"],
+            ],
+            per_repeat_token_ids=[
+                [[1], [11, 12, 13]],
+                [[11, 99, 13], [1]],
+            ],
+            per_repeat_prompt_lens=[
+                [64, 80],
+                [80, 64],
+            ],
+            per_repeat_argmax_margins=[
+                [[1.0], [0.5, 0.125, 0.75]],
+                [[0.5, 0.25, 0.75], [1.0]],
+            ],
+        )
+
+
+def test_identical_request_diagnostic_localizes_logical_slot_divergence(expect_error):
+    with expect_error(
+        AssertionError,
+        r"prompt index 8 differs between logical slots 0 and 1 at generation step 2 "
+        r"\(13 != 99\); top2 margins 0.125 and 0.25",
+    ):
+        run_helpers.assert_within_batch_slot_consistency(
+            ["same prefix left", "same prefix right"],
+            token_ids=[[11, 12, 13], [11, 12, 99]],
+            argmax_margins=[[1.0, 0.5, 0.125], [1.0, 0.5, 0.25]],
+            prompt_index=8,
+        )
+
+
+def test_identical_request_diagnostic_accepts_slot_invariant_decoded_text():
+    run_helpers.assert_within_batch_slot_consistency(
+        ["same", "same", "same"],
+        token_ids=[[1], [1], [1]],
+        argmax_margins=[[0.5], [0.5], [0.5]],
+        prompt_index=8,
+    )
+
+
+def test_identical_request_driver_uses_one_fixed_prompt_and_needs_no_repeat(monkeypatch):
+    seen_prompts = []
+    tokenizer = SimpleNamespace(
+        decode=lambda token_ids: "same",
+        eos_token_id=None,
+        stop_tokens=[],
+        all_special_ids=[],
+    )
+    monkeypatch.setattr(
+        run_helpers,
+        "run_perf_benchmark",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            generated_token_ids=[[1]],
+            argmax_top2_margins=[[0.5]],
+        ),
+    )
+
+    class FakeEvalExecutor:
+        def cleanup(self):
+            pass
+
+    run_helpers.run_eval_repeat_batch32(
+        make_executor=FakeEvalExecutor,
+        allocate_kv_cache=lambda _executor: [],
+        page_table=torch.zeros(2, 1, dtype=torch.int32),
+        prompts=["prompt-0", "prompt-1"],
+        tokenizer=tokenizer,
+        tokenize_fn=lambda prompts: (
+            seen_prompts.append(prompts) or torch.zeros(len(prompts), 1, dtype=torch.long),
+            torch.ones(len(prompts)),
+        ),
+        num_decode_tokens=1,
+        max_batch_size=2,
+        repeat_batches=1,
+        identical_prompt_index=1,
+        active_batch_size=1,
+    )
+
+    assert seen_prompts == [["prompt-1"]]
+
+
+def test_active_batch_diagnostic_requires_identical_request(expect_error):
+    with expect_error(ValueError, "active_batch_size requires identical_prompt_index"):
+        run_helpers.run_eval_repeat_batch32(
+            make_executor=lambda: None,
+            allocate_kv_cache=lambda _executor: [],
+            page_table=torch.zeros(2, 1, dtype=torch.int32),
+            prompts=["prompt-0", "prompt-1"],
+            tokenizer=SimpleNamespace(eos_token_id=None, stop_tokens=[], all_special_ids=[]),
+            tokenize_fn=lambda prompts: (torch.zeros(len(prompts), 1), torch.ones(len(prompts))),
+            num_decode_tokens=1,
+            max_batch_size=2,
+            repeat_batches=1,
+            active_batch_size=1,
+        )
+
+
+def test_cross_cardinality_consistency_accepts_fixed_request_prefixes():
+    run_helpers.assert_cross_cardinality_consistency(
+        {
+            1: {"r0": "a"},
+            2: {"r0": "a", "r1": "b"},
+            4: {"r0": "a", "r1": "b", "r2": "c", "r3": "d"},
+            32: {f"r{i}": chr(97 + i) for i in range(32)},
+        }
+    )
+
+
+def test_cross_cardinality_consistency_reports_request_and_cardinalities(expect_error):
+    with expect_error(AssertionError, "request 'r0' differs at cardinality 1->2"):
+        run_helpers.assert_cross_cardinality_consistency(
+            {1: {"r0": "same"}, 2: {"r0": "different", "r1": "x"}},
+            expected_cardinalities=(1, 2),
+        )
 
 
 def test_loop_policy_is_not_exported_from_production_executor():

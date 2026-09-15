@@ -254,7 +254,7 @@ public:
         // -fno-lto: emit a plain (non-LTO) object for this TU. With -flto the RVV builtins are
         // streamed as GIMPLE and re-expanded by the link-stage LTRANS units, which do not carry
         // the vector -march, breaking code generation at link time (observed with sfpi 7.70.0).
-        // The link itself stays stock (-flto=auto): a fat-free object simply opts out of LTO.
+        // The link itself stays stock: a fat-free object simply opts out of LTO.
         //
         // -fno-tree-vectorize -fno-tree-slp-vectorize: the vector unit is only reachable through
         // explicit intrinsics; keep the auto-vectorizers from touching scalar kernel/LLK code.
@@ -492,6 +492,7 @@ void Hal::initialize_bh(
         dev_msgs::AddressableCoreType::ETH,
         dev_msgs::AddressableCoreType::PCIE,
         dev_msgs::AddressableCoreType::DRAM};
+    this->virtualizes_non_worker_cores_ = true;
     this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
     this->has_tile_counter_registers_ = false;
     this->supports_implicit_dfb_sync_ = false;
