@@ -24,6 +24,15 @@
 
 namespace tt::tt_fabric {
 
+// Opt-in interface for workers that pass their teardown and buffer-index semaphores as raw
+// L1 addresses instead of program semaphore ids. Per translation unit: kernels built
+// without the define keep resolving ids.
+#if defined(TT_FABRIC_WORKER_SEMS_ARE_ADDRESSES)
+constexpr bool worker_sems_are_addresses = true;
+#else
+constexpr bool worker_sems_are_addresses = false;
+#endif
+
 template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS = 0, uint8_t VC_ID = 0>
 struct WorkerToFabricEdmSenderBase;
 
@@ -152,9 +161,21 @@ struct WorkerToFabricEdmSenderBase {
         // codepaths are split
         const StreamId my_fc_stream_channel_id = StreamId{std::numeric_limits<uint32_t>::max()};
 
-        auto worker_teardown_sem_addr =
-            reinterpret_cast<volatile uint32_t* const>(get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++)));
-        const auto worker_buffer_index_semaphore_addr = get_semaphore<my_core_type>(get_arg_val<uint32_t>(arg_idx++));
+        // Ids, or addresses under worker_sems_are_addresses. Both args are read first so the
+        // arg order is identical either way.
+        const uint32_t teardown_arg = get_arg_val<uint32_t>(arg_idx++);
+        const uint32_t buffer_index_arg = get_arg_val<uint32_t>(arg_idx++);
+        uintptr_t teardown_address;
+        uintptr_t buffer_index_address;
+        if constexpr (worker_sems_are_addresses) {
+            teardown_address = static_cast<uintptr_t>(teardown_arg);
+            buffer_index_address = static_cast<uintptr_t>(buffer_index_arg);
+        } else {
+            teardown_address = get_semaphore<my_core_type>(teardown_arg);
+            buffer_index_address = get_semaphore<my_core_type>(buffer_index_arg);
+        }
+        auto worker_teardown_sem_addr = reinterpret_cast<volatile uint32_t* const>(teardown_address);
+        const auto worker_buffer_index_semaphore_addr = buffer_index_address;
         return WorkerToFabricEdmSenderBase(
             is_persistent_fabric,
             edm_worker_x,
