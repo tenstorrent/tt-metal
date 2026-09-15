@@ -30,11 +30,18 @@ constexpr uint32_t kLoadUseOpsPerIter = 4;
 constexpr uint32_t kMultiLoadOpsPerIter = 10;
 constexpr uint32_t kInvalLoadOpsPerIter = 13;
 constexpr uint32_t kInvalOnlyOpsPerIter = 5;  // fence + sd + fence + addi + bnez
-// 27 pass words, then 4 HPM blocks of 4 counters each (Quasar only; zero elsewhere).
+// 27 pass words, then 4 HPM blocks of 4 counters each (Quasar only; zero elsewhere), then the
+// fence-cost sweep: one 4-word block per line count.
 constexpr uint32_t kHpmBase = 27;
-constexpr uint32_t kNumResultWords = kHpmBase + 16;
+constexpr uint32_t kFenceSweepBase = kHpmBase + 16;
+constexpr uint32_t kFenceSweepLines[] = {1, 2, 4, 8};  // must match kFenceSweepLines in the kernel
+constexpr uint32_t kFenceSweepIterations = 1000;       // must match the kernel
+constexpr uint32_t kNumFenceSweepPoints = sizeof(kFenceSweepLines) / sizeof(kFenceSweepLines[0]);
+constexpr uint32_t kNumResultWords = kFenceSweepBase + kNumFenceSweepPoints * 4;
 constexpr uint32_t kResultBytes = kNumResultWords * sizeof(uint32_t);
-constexpr uint32_t kLoadSrcBytes = 64;  // one cache line; contents unused, only the address matters
+// The fence sweep invalidates kFenceSweepLines.back() consecutive lines from the base; the extra
+// line covers a base that is 16 B- but not 64 B-aligned. Contents are unused, only the address is.
+constexpr uint32_t kLoadSrcBytes = (8 + 1) * 64;
 
 struct AluPassResult {
     uint32_t iterations;
@@ -308,6 +315,28 @@ bool run_alu_loop_ipc_bench(const std::shared_ptr<distributed::MeshDevice>& mesh
                 full_per_iter,
                 inval_per_iter,
                 full_per_iter < inval_per_iter ? "FULL INVALIDATE CHEAPER" : "PER-LINE CHEAPER");
+        }
+
+        // Fence cost: N separate invalidate_l2_cache_line calls vs one invalidate_l2_cache_range over
+        // the same N lines. Both issue N MMIO stores; the range form drops 2(N-1) fences. A flat
+        // per_line/range ratio near 1.0 means fences are free and over-invalidating a generous fixed
+        // extent in one call is the right policy; a ratio growing with N means fences dominate and
+        // batching is worth structure.
+        for (uint32_t i = 0; i < kNumFenceSweepPoints; ++i) {
+            const uint32_t lines = kFenceSweepLines[i];
+            const double per_line_cyc =
+                static_cast<double>(result_data[kFenceSweepBase + i * 4]) / kFenceSweepIterations;
+            const double range_cyc =
+                static_cast<double>(result_data[kFenceSweepBase + i * 4 + 2]) / kFenceSweepIterations;
+            log_info(
+                tt::LogTest,
+                "ALU_IPC fence_sweep lines={} per_line={:.1f} cyc range={:.1f} cyc delta={:.1f} "
+                "({:.1f} cyc per line saved, = cost of 2 fences)",
+                lines,
+                per_line_cyc,
+                range_cyc,
+                per_line_cyc - range_cyc,
+                lines <= 1 ? 0.0 : (per_line_cyc - range_cyc) / (lines - 1));
         }
 
         // HPM event calibration. Each pass has a known answer, so a counter that disagrees identifies a
