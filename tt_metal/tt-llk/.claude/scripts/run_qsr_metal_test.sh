@@ -4,7 +4,7 @@
 #
 # The caller owns the build and supplies a fresh TT_METAL_CACHE. This wrapper
 # owns only the scarce remote Aether execution: backend selection, the
-# cross-compute-host lock, preflight orphan cleanup, and failure cleanup.
+# reservation lock, tagged cleanup, and failure cleanup.
 set -u
 
 BIN=""
@@ -68,8 +68,18 @@ esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LLK_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+# shellcheck source=../../codegen/scripts/nng_channel.sh
+source "$LLK_ROOT/codegen/scripts/nng_channel.sh"
+_resolve_nng_channel || exit $?
+export NNG_SOCKET_LOCAL_PORT="$NNG_LOCAL" NNG_SOCKET_ADDR="$NNG_ADDR"
+export NNG_SOCKET_NAME="${NNG_SOCKET_NAME:-qsr-metal-${NNG_HOST}-$$}"
+ARCH=quasar
+
 REAP="$LLK_ROOT/codegen/scripts/reap_stale_emu.sh"
 LOCKFILE="${QSR_AETHER_LOCK:-/tmp/tt-llk-test.lock}"
+if [[ -n "${QSR_AETHER_LOCK:-}" && "${QSR_AETHER_LOCK_SCOPE:-host}" != global ]]; then
+  LOCKFILE="${LOCKFILE}.${NNG_HOST}"
+fi
 EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
 
 mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null ||
@@ -84,17 +94,18 @@ echo "[qsr-metal] acquired Aether lock (backend=$QSR_SIM_BACKEND)" >&2
 cleanup_needed=true
 cleanup() {
   if [[ "$cleanup_needed" == true && -x "$REAP" ]]; then
-    bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+    bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" \
+      --tag "$NNG_SOCKET_NAME" --force >&2 2>&1 || true
   fi
 }
 trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Anything still alive while the globally shared lock is ours is an orphan from
-# a dead previous owner.
-[[ -x "$REAP" ]] &&
-  bash "$REAP" --arch quasar --emu-host "$EMU_HOST" --lock "$LOCKFILE" --force >&2 2>&1 || true
+# Reap only the previous owner of this reservation lock, then record our tag.
+_reap_previous_nng_job "$NNG_SOCKET_NAME" || {
+  echo "ERROR: cannot record NNG ownership in $LOCKFILE" >&2; exit 3;
+}
 
 run_log="${LOG_DIR:+$LOG_DIR/metal_run_quasar.log}"
 set +e

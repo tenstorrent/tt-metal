@@ -595,6 +595,125 @@ def test_audit_combine_ignores_agent_summary_without_sealed_results(tmp_path, wo
     assert run["verification_reduction"]["classification"] == "partial"
 
 
+@pytest.mark.parametrize("mode", ["single", "multi"])
+@pytest.mark.parametrize(
+    ("review", "expected"),
+    [
+        (None, "failed"),
+        ({"verdict": "clean", "blocking_total": 0}, "failed"),
+        (
+            {"requirements_complete": None, "verdict": "clean", "blocking_total": 0},
+            "failed",
+        ),
+        # The selected tests passed, but only the first issue requirement landed.
+        (
+            {
+                "requirements_complete": False,
+                "verdict": "changes_requested",
+                "blocking_total": 1,
+                "summary": "R1 done; R2 packer state ownership missing",
+            },
+            "failed",
+        ),
+        (
+            {
+                "requirements_complete": True,
+                "verdict": "changes_requested",
+                "blocking_total": 1,
+            },
+            "failed",
+        ),
+        (
+            {"requirements_complete": True, "verdict": "clean", "blocking_total": 0},
+            "success",
+        ),
+    ],
+)
+def test_finalize_requires_whole_issue_review(
+    tmp_path, worktree, mode, review, expected
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 3,
+                "tests_passed": 3,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    log_dir = tmp_path / "combine-log"
+    state = json.loads((log_dir / "state.json").read_text())
+    state.update(
+        {
+            "RUN_KIND": "issue",
+            "RUN_MODE": mode,
+            "ISSUE_NUMBER": "1",
+            "TARGET_ARCH": "blackhole",
+            "CHANGED_FILES_JSON": [],
+            "COMBINED_STATUS": "success",
+        }
+    )
+    (log_dir / "state.json").write_text(json.dumps(state))
+    if review is not None:
+        (log_dir / "review_result.json").write_text(json.dumps(review))
+    finalized = _bash(
+        "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
+        worktree / "tt_metal" / "tt-llk",
+    )
+    assert finalized.returncode == 0, finalized.stdout + finalized.stderr
+    run = json.loads((log_dir / "run.json").read_text())
+    assert run["status"] == expected
+    # Incomplete scope must not erase the successful functional evidence.
+    assert run["arch_results"]["blackhole"]["tests_passed"] == 3
+    if expected == "failed":
+        assert run["solver_state"] == "not_working"
+        assert "incomplete" in run["final_message"]
+        if review and review.get("summary"):
+            assert review["summary"] in run["final_message"]
+        if mode == "multi":
+            assert run["combined_status"] == "partial"
+
+
+def test_review_round_does_not_require_whole_original_issue_completion(
+    tmp_path, worktree
+):
+    result, _ = _combine_case(
+        tmp_path,
+        worktree,
+        {
+            "llk": {
+                "status": "done",
+                "verdict": "SUCCESS",
+                "tests_total": 1,
+                "tests_passed": 1,
+            }
+        },
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    log_dir = tmp_path / "combine-log"
+    state = json.loads((log_dir / "state.json").read_text())
+    state.update(
+        {
+            "RUN_KIND": "review",
+            "RUN_MODE": "single",
+            "ISSUE_NUMBER": "1",
+            "TARGET_ARCH": "blackhole",
+            "CHANGED_FILES_JSON": [],
+        }
+    )
+    (log_dir / "state.json").write_text(json.dumps(state))
+    finalized = _bash(
+        "refresh_cost() { :; }; execute_step_mark_status success; execute_step_finalize_run",
+        worktree / "tt_metal" / "tt-llk",
+    )
+    assert finalized.returncode == 0, finalized.stdout + finalized.stderr
+    assert json.loads((log_dir / "run.json").read_text())["status"] == "success"
+
+
 def test_audit_finalize_downgrades_agent_requested_success(tmp_path, worktree):
     result, _ = _combine_case(
         tmp_path,

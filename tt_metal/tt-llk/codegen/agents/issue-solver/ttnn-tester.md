@@ -32,7 +32,7 @@ Read `ISSUE_NUMBER`, `RUN_MODE`, `TARGET_ARCH` or `TARGET_ARCHES_JSON`,
 Require:
 
 - `TTNN_TARGET=ttnn` and `TTNN_COVERAGE=existing|added`;
-- one `suite=ttnn` leaf per in-scope architecture;
+- at least one `suite=ttnn` leaf and exactly one per selected architecture;
 - the leaf backend to match the selected execution route;
 - the leaf selector to name an existing repository-relative `.py` file under
   `tests/ttnn`, `tests/sweep_framework`, a model `tests` directory, or TTNN's
@@ -59,8 +59,12 @@ on exit. Otherwise build the issue worktree directly. Follow the same clean
 tree/base checks as `metal-tester.md`; never apply a patch to an unrelated or
 dirty warm tree. Keep the cleanup trap active through local execution so the
 candidate is still present when TTNN JIT-compiles its device kernels.
-`TTNN_PYTHON` may point at a pre-provisioned TTNN environment; otherwise use
-the selected tree's `python_env`, then the active `python3`.
+Require `dashboard.hw_test.builder` from the companion `llk_code_gen` checkout
+to be importable by `python`. Preserve the dashboard-provided `PYTHONPATH`;
+for standalone runs, add the `llk_code_gen` checkout root to `PYTHONPATH`.
+Prepare the selected tree with the hardware builder helper. Export `TTNN_PYTHON`
+to choose the interpreter when creating a missing private `python_env`. After
+preparation, use the private environment and its selected-tree dependencies.
 
 ```bash
 set -euo pipefail
@@ -124,9 +128,16 @@ fi
 
 export CCACHE_BASEDIR="$(realpath "$HOME_TREE")"
 cd "$HOME_TREE"
+python -m dashboard.hw_test.builder --prepare-workspace "$HOME_TREE" --kind ttnn \
+  2>&1 | tee -a "$LOG_DIR/ttnn_build.log" \
+  || { echo "ENV_ERROR: workspace preparation failed"; exit 3; }
+TTNN_PYTHON="$HOME_TREE/python_env/bin/python3"
+export PATH="$HOME_TREE/python_env/bin:$PATH"
+export VIRTUAL_ENV="$HOME_TREE/python_env"
 if [ ! -f "$BUILD_DIR/CMakeCache.txt" ] ||
    ! rg -q '^ENABLE_CCACHE:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
-   ! rg -q '^WITH_PYTHON_BINDINGS:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt"; then
+   ! rg -q '^WITH_PYTHON_BINDINGS:BOOL=(1|ON|TRUE|YES)$' "$BUILD_DIR/CMakeCache.txt" ||
+   [ "$(sed -n 's/^Python3_EXECUTABLE:[^=]*=//p' "$BUILD_DIR/CMakeCache.txt")" != "$TTNN_PYTHON" ]; then
   ./build_metal.sh --enable-ccache --build-metal-tests \
     --build-dir "$BUILD_DIR" --configure-only \
     2>&1 | tee -a "$LOG_DIR/ttnn_build.log"
@@ -146,8 +157,6 @@ test -s "$HOME_TREE/ttnn/ttnn/_ttnn.so" || {
   echo "COMPILE_FAILED: could not stage the fresh _ttnn.so"; exit 2;
 }
 
-TTNN_PYTHON="${TTNN_PYTHON:-$HOME_TREE/python_env/bin/python3}"
-[ -x "$TTNN_PYTHON" ] || TTNN_PYTHON="$(command -v python3)"
 env TT_METAL_HOME="$HOME_TREE" TT_METAL_RUNTIME_ROOT="$HOME_TREE" \
   PYTHONPATH="$HOME_TREE/ttnn:$HOME_TREE:$HOME_TREE/tools${PYTHONPATH:+:$PYTHONPATH}" \
   PYTHONDONTWRITEBYTECODE=1 "$TTNN_PYTHON" -c 'import ttnn' \
@@ -159,7 +168,8 @@ failure. Record local compile wall time separately from any queue build time.
 
 ## Resolve and collect each sealed selector
 
-For each architecture, extract its exact selector from the manifest:
+Iterate only architectures with a sealed TTNN leaf and extract each exact
+selector from the manifest:
 
 ```bash
 mapfile -t SELECTOR_PARTS < <(python - "$(sg REQUIRED_VERIFICATION_MANIFEST)" "$arch" <<'PY'
@@ -183,8 +193,6 @@ export CODEGEN_RUN_ID="${SELECTOR_PARTS[2]}"
 export CODEGEN_ATTEMPT_ID="${SELECTOR_PARTS[3]}"
 export CODEGEN_REQUIREMENT_ID="${SELECTOR_PARTS[4]}"
 
-TTNN_PYTHON="${TTNN_PYTHON:-$HOME_TREE/python_env/bin/python3}"
-[ -x "$TTNN_PYTHON" ] || TTNN_PYTHON="$(command -v python3)"
 pytest_args=(--collect-only -q "$TEST_SELECTOR")
 [ -z "$K_FILTER" ] || pytest_args=(-k "$K_FILTER" "${pytest_args[@]}")
 env TT_METAL_HOME="$HOME_TREE" TT_METAL_RUNTIME_ROOT="$HOME_TREE" \
@@ -246,8 +254,6 @@ esac
 mkdir -p "$TTCACHE_ROOT"
 FRESH_CACHE="$(mktemp -d "$TTCACHE_ROOT/ttcache_${arch}.XXXXXX")"
 FRESH_CACHE_ARCH="$arch"
-TTNN_PYTHON="${TTNN_PYTHON:-$HOME_TREE/python_env/bin/python3}"
-[ -x "$TTNN_PYTHON" ] || TTNN_PYTHON="$(command -v python3)"
 pytest_args=(-x "$TEST_SELECTOR" --junitxml "$LOG_DIR/ttnn_${arch}.xml")
 [ -z "$K_FILTER" ] || pytest_args=(-x -k "$K_FILTER" "$TEST_SELECTOR" --junitxml "$LOG_DIR/ttnn_${arch}.xml")
 env_args=(

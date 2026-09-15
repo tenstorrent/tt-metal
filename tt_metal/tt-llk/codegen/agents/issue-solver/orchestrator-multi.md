@@ -143,6 +143,10 @@ may finish, but any in-scope terminal failure makes the final combined status
 Review the shared diff once. One review retry worker handles all blocking
 findings. After it edits the fix, rerun functional verification for all
 in-scope architectures and review the new shared diff before performance.
+The review must check all original requirements across the requested scope,
+including any omitted from the analysis. Apply the shared
+`requirements_complete` check; success on the selected architectures or the
+first requirement alone is not completion of the issue.
 
 ## Performance
 
@@ -161,14 +165,18 @@ summaries and CSV paths into one worker invocation. On `FIX_UPDATED`, rerun
 functional verification and review for all in-scope architectures, then
 remeasure every eligible architecture affected by the change.
 
-Use the shared performance outcome rules. A `no_regress` regression or
-`PERF_TEST_FAILED` on any architecture fails the run when retries are
-exhausted. `PERF_NOT_IMPROVED` preserves the functional result for an
+Use the shared performance outcome rules. Fail the run when retries are
+exhausted for a `no_regress` regression, `PERF_PLAN_ERROR`, or `PERF_TEST_FAILED`
+on any architecture. `PERF_NOT_IMPROVED` preserves the functional result for an
 optimization issue.
 
 ## Finalize
 
 This section is only for runs with at least one in-scope architecture.
+
+Apply the shared final completion review when `requirements_complete` was
+deferred for performance. It must cover every requested measurement across
+architectures before this run can succeed.
 
 Use the multi-architecture finalizer instead of the single-architecture verdict
 mapping:

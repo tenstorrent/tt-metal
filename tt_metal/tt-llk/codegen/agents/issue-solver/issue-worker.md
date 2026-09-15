@@ -19,6 +19,10 @@ multi-arch fix.
     represented there; document the technical reason. Required parameter or
     signature propagation is part of the sweep, not an exemption.
 - Prefer existing target-arch patterns over new abstractions.
+- Satisfy every actionable issue requirement, not only the first bullet or the
+  first hypothesis. Read `ISSUE_BODY` and `ISSUE_COMMENTS` and reconcile them
+  with the analysis Requirements table before editing. Restore any omitted
+  requirement. Minimal changes must still deliver the whole request.
 - Edit any path inside `$WORKTREE_DIR` when the analysis and code evidence show
   it is required for the issue. The ticket's hosting repository does not limit
   the tt-metal implementation scope.
@@ -167,6 +171,10 @@ runnable regression can be added inside the tt-metal worktree, return
 5. Apply the production and test changes.
 6. Update the analysis coverage state and routing with the exact implemented
    selectors.
+   Update every requirement's evidence and status. Keep implemented but
+   unverified items `pending` until the required test evidence exists. If a
+   requirement cannot be completed, record its blocker and return `BLOCKED`
+   with the completed and remaining IDs; do not silently narrow the task.
 7. Run `git diff --check`.
 8. For `TEST_BACKEND=local`, run a narrow cardless compile check appropriate
    to the changed layer. For LLK sources, provision the harness when needed
@@ -187,6 +195,7 @@ runnable regression can be added inside the tt-metal worktree, return
    | `DATA_MISMATCH` | wrong values/PCC/allclose | compare algorithm, face/order/addressing, init/uninit |
    | `RECONFIG_ESCAPE` | passes alone, fails after another test | inspect init/uninit symmetry; do not reset |
    | `MISSING_TEST_COVERAGE` | no applicable test or zero tests selected | add and register a focused runnable regression, then update analysis routing |
+   | `PERF_PLAN_ERROR` | required performance selector or measurement is missing or unsuitable | correct the Test Strategy using the perf artifact, then reseal through route verification |
    | `PERF_REGRESSION` | fixed tree is slower | localize added work from the perf artifact without weakening correctness |
    | `PERF_NOT_IMPROVED` | optimization goal missed | optimize the evidenced thread or refute the hypothesis |
    | `REVIEW_FINDINGS` | `review_result.json` has blockers | fix blocking findings only |
@@ -204,6 +213,8 @@ runnable regression can be added inside the tt-metal worktree, return
 
 3. Make only changes justified by the failure evidence.
 4. Update the analysis and plan when evidence changes scope or routing.
+   Recheck the full Requirements table after a retry; resolving the reported
+   failure does not waive the other requirements.
 5. If the evidence refutes the primary hypothesis, record the refutation and
    return `HYPOTHESIS_REFUTED`.
 6. Run a narrow compile check only for the local backend. Never invoke compile
@@ -269,7 +280,9 @@ why_compile_only_ok: ...
 ## Result
 
 Return `FIX_APPLIED` for an initial fix or `FIX_UPDATED` for a retry only after
-all required coverage is `existing` or `added`. Include the production and test
+all required implementation is complete and all required coverage is `existing`
+or `added`. These markers mean ready for verification, not that the issue is
+solved. Include requirement IDs, remaining verification, production and test
 files, checks, and plan path.
 
 The Test Strategy is executable input, not explanatory prose. Keep explanations
@@ -279,7 +292,10 @@ across `reproduction_tests` and `regression_tests`; when the same performance
 test provides both kinds of evidence, keep its single entry under
 `regression_tests`. List a performance module as its own regression entry
 whenever the issue explicitly requires measurement, even if later evidence
-refutes the primary hypothesis. Do not add waivers to the plan after observing
+refutes the primary hypothesis. For Blackhole/Wormhole silicon, also plan the
+applicable no-regression performance selector here, using `perf-tester.md` as
+a coverage reference. Select once before sealing; the perf tester executes
+that leaf. If no performance test covers the change, record why. Do not add waivers to the plan after observing
 a failure.
 
 `HYPOTHESIS_REFUTED` changes the result marker, not the plan schema. Before

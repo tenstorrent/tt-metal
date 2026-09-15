@@ -364,6 +364,88 @@ verifiable_in_llk_suite: yes
     ]
 
 
+def test_required_verification_keeps_bh_fixture_off_wh(tmp_path):
+    analysis = """\
+## Scope
+arch_scope:
+  blackhole: in_scope
+  wormhole: in_scope
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: partial
+llk_coverage: existing
+metal_verification:
+  architectures: ["blackhole"]
+  target: unit_tests_llk
+  coverage: existing
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: 'BlackholeFixture.Reduce'
+  dispatch: fast
+"""
+    plan = (
+        "## Test Strategy\nreproduction_tests:\n- arch: all\n  test: test_reduce.py\n"
+    )
+    _, output = _required_manifest(
+        tmp_path, analysis, plan, "--architectures-json", '["blackhole", "wormhole"]'
+    )
+    requirements = json.loads(output.read_text())["requirements"]
+    assert {(r["architecture"], r["suite"]) for r in requirements} == {
+        ("blackhole", "llk"),
+        ("wormhole", "llk"),
+        ("blackhole", "metal"),
+    }
+
+    missing_coverage = analysis.replace(
+        "verifiable_in_llk_suite: partial", "verifiable_in_llk_suite: no"
+    )
+    proc, _ = _required_manifest(
+        tmp_path / "missing",
+        missing_coverage,
+        "## Test Strategy\n",
+        "--architectures-json",
+        '["blackhole", "wormhole"]',
+        check=False,
+    )
+    assert proc.returncode != 0
+    assert "no executable requirement for: wormhole" in proc.stderr
+
+
+@pytest.mark.parametrize("suite", ["metal", "ttnn"])
+@pytest.mark.parametrize(
+    "architectures,reason",
+    [
+        ("blackhole", "must be a JSON list"),
+        ("<JSON list of architectures>", "must be a JSON list"),
+        ("42", "must be a nonempty subset"),
+        ("[]", "must be a nonempty subset"),
+        ('["blackhole", "blackhole"]', "must be a nonempty subset"),
+        ('["quasar"]', "must be a nonempty subset"),
+    ],
+)
+def test_required_verification_names_invalid_suite_architectures(
+    tmp_path, suite, architectures, reason
+):
+    target = "unit_tests_llk" if suite == "metal" else "ttnn"
+    analysis = f"""\
+## Scope
+in_scope: true
+## Verification
+verification_required: yes
+verifiable_in_llk_suite: no
+{suite}_verification:
+  architectures: {architectures}
+  target: {target}
+  coverage: existing
+  test_file: tests/tt_metal/tt_metal/llk/test_reduce.cpp
+  gtest_filter: 'Reduce.Test'
+  test: tests/ttnn/unit_tests/operations/test_reduce.py
+  dispatch: fast
+"""
+    proc, _ = _required_manifest(tmp_path, analysis, "## Test Strategy\n", check=False)
+    assert proc.returncode != 0
+    assert f"{suite}_verification architectures {reason}" in proc.stderr
+
+
 def test_required_verification_infers_llk_from_old_plan_without_verification_section(
     tmp_path,
 ):
@@ -380,7 +462,10 @@ reproduction_tests:
     assert requirement["selector"]["test_id"] == "test_reduce.py::test_reduce"
 
 
-def test_required_verification_retains_perf_when_hypothesis_is_refuted(tmp_path):
+@pytest.mark.parametrize("arches", [["blackhole"], ["blackhole", "quasar"]])
+def test_required_verification_retains_perf_when_hypothesis_is_refuted(
+    tmp_path, arches
+):
     analysis = """\
 ## Scope
 in_scope: true
@@ -398,7 +483,14 @@ regression_tests:
   test: perf_reduce.py
   coverage: existing
 """
-    _, output = _required_manifest(tmp_path, analysis, plan, "--performance-only")
+    _, output = _required_manifest(
+        tmp_path,
+        analysis,
+        plan,
+        "--performance-only",
+        "--architectures-json",
+        json.dumps(arches),
+    )
     requirements = json.loads(output.read_text())["requirements"]
     assert len(requirements) == 1
     assert requirements[0]["suite"] == "perf"
@@ -2958,3 +3050,114 @@ def test_link_siblings_preserves_other_fields(tmp_path):
     assert len(doc["step_history"]) == 2
     assert doc["step_history"][0]["result"] == "success"
     assert doc["sibling_runs"] == [{"arch": "wormhole", "run_id": "r_wh"}]
+
+
+@pytest.mark.parametrize(
+    "container,explicit,forwarded,local_port,expected",
+    [
+        (False, "", "", "", "tcp://runner-special-1:5555 5555"),
+        (False, "", "", "6000", "tcp://runner-special-1:6000 6000"),
+        (True, "", "54910", "", "tcp://runner:54910 5555"),
+        (True, "tcp://override:6001", "invalid", "6000", "tcp://override:6001 6000"),
+        (True, "", "invalid", "", None),
+    ],
+)
+def test_nng_callback_matches_bind_or_forwarded_port(
+    tmp_path, container, explicit, forwarded, local_port, expected
+):
+    helper = SCRIPT.with_name("nng_channel.sh").read_text()
+    marker = tmp_path / "dockerenv"
+    if container:
+        marker.touch()
+    helper = helper.replace("/.dockerenv", str(marker))
+    proc = subprocess.run(
+        [
+            "bash",
+            "-c",
+            helper + "\nhostname() { return 127; }\n"
+            "uname() { echo runner-special-1; }\n"
+            '_resolve_nng_channel || exit $?\nprintf "%s %s" "$NNG_ADDR" "$NNG_LOCAL"',
+        ],
+        env={
+            **os.environ,
+            "NNG_SOCKET_ADDR": explicit,
+            "P_USER_DBD_PORT": forwarded,
+            "NNG_SOCKET_LOCAL_PORT": local_port,
+        },
+        capture_output=True,
+        text=True,
+    )
+    if expected is None:
+        assert proc.returncode == 3
+        assert "valid P_USER_DBD_PORT" in proc.stderr
+    else:
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == expected
+
+
+def test_qsr_wrapper_reaps_previous_lock_owner_and_only_its_failed_job(tmp_path):
+    scripts = tmp_path / "llk" / ".claude" / "scripts"
+    scripts.mkdir(parents=True)
+    wrapper = scripts / "run_qsr_metal_test.sh"
+    wrapper.write_text(RUN_TEST.with_name(wrapper.name).read_text())
+    reap = scripts.parents[1] / "codegen" / "scripts" / "reap_stale_emu.sh"
+    reap.parent.mkdir(parents=True)
+    (reap.parent / "nng_channel.sh").write_text(
+        SCRIPT.with_name("nng_channel.sh").read_text()
+    )
+    reap.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >> "$REAP_LOG"\n')
+    reap.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    hostname = fake_bin / "hostname"
+    hostname.write_text('#!/bin/bash\necho "$TEST_HOST"\n')
+    hostname.chmod(0o755)
+    log = tmp_path / "reaped.txt"
+    lock = tmp_path / "aether.lock"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "QSR_AETHER_LOCK": str(lock),
+        "QSR_AETHER_LOCK_SCOPE": "host",
+        "NNG_SOCKET_ADDR": "tcp://callback:54910",
+        "NNG_SOCKET_NAME": "",
+        "QSR_SIM_BACKEND": "emu",
+        "QSR_EMU_SIM_PATH": str(tmp_path),
+        "EMU_HOST": "remote",
+        "REAP_LOG": str(log),
+    }
+
+    def run(host, command="true"):
+        proc = subprocess.run(
+            [
+                "bash",
+                str(wrapper),
+                "--tt-metal-home",
+                str(tmp_path),
+                "--cache",
+                str(tmp_path / "cache"),
+                "--",
+                command,
+            ],
+            env={**env, "TEST_HOST": host},
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert proc.returncode == (0 if command == "true" else 1), proc.stderr
+        return Path(f"{lock}.{host}").read_text().split()[1]
+
+    # Seed the identity left by a hard-killed predecessor on this reservation.
+    Path(f"{lock}.runner-a").write_text("old-remote previous-pid-tag\n")
+    first = run("runner-a")
+    assert "--emu-host old-remote" in log.read_text()
+    assert "--tag previous-pid-tag --force" in log.read_text()
+    lines = log.read_text().splitlines()
+    peer = run("runner-b")
+    assert log.read_text().splitlines() == lines
+    second = run("runner-a", "false")
+    lines = log.read_text().splitlines()
+    assert len(lines) == 3
+    assert f"--tag {first} --force" in lines[1]
+    assert f"--tag {second} --force" in lines[2]
+    assert peer not in log.read_text()

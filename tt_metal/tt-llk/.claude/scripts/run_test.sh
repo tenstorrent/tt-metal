@@ -86,8 +86,6 @@ GRACE_SECS="${GRACE_SECS:-30}"          # wait after SIGINT before SIGKILL
 READY_RE='tt-exalens ready|\[4B MODE\]'
 QSR_SIM_BACKEND="${QSR_SIM_BACKEND:-emu}"
 EMU_HOST="${EMU_HOST:-${QSR_AETHER_HOST:-${SSH_MACHINE_NAME:-soc-l-12}}}"
-NNG_LOCAL_BASE="5555"                   # local NNG bind (infra-forwarded; fixed)
-DBD_BASE="54910"                        # non-Docker legacy debuda port
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -118,35 +116,8 @@ done
 
 _vlog() { [[ "$VERBOSE" == "true" ]] && echo "[run_test] $*" >&2; return 0; }
 
-_resolve_nng_channel() {
-  local callback_host dbd_port
-
-  NNG_LOCAL="${NNG_SOCKET_LOCAL_PORT:-$NNG_LOCAL_BASE}"
-  if [[ -n "${NNG_SOCKET_ADDR:-}" ]]; then
-    NNG_ADDR="$NNG_SOCKET_ADDR"
-    return 0
-  fi
-
-  if [[ -f /.dockerenv ]]; then
-    dbd_port="${P_USER_DBD_PORT:-}"
-    if [[ -z "$dbd_port" ]]; then
-      dbd_port="$(bash -lc 'printf "%s" "${P_USER_DBD_PORT:-}"' 2>/dev/null)"
-    fi
-    if [[ ! "$dbd_port" =~ ^[0-9]+$ ]]; then
-      echo "ERROR: NNG_SOCKET_ADDR is unset and IRD did not provide a valid P_USER_DBD_PORT" >&2
-      return 3
-    fi
-
-    callback_host="$(hostname)"
-    callback_host="${callback_host%%-special-*}"
-    NNG_ADDR="tcp://${callback_host}:${dbd_port}"
-    return 0
-  fi
-
-  # Non-container legacy flow: the host is directly reachable, so retain the
-  # historical fixed debuda port unless the caller supplied an explicit address.
-  NNG_ADDR="tcp://$(hostname):${DBD_BASE}"
-}
+# shellcheck source=../../codegen/scripts/nng_channel.sh
+source "$(dirname "${BASH_SOURCE[0]}")/../../codegen/scripts/nng_channel.sh"
 
 # Activate the venv only if it exists (external setup); else use the ambient
 # python (tt-metal Docker image, deps installed system-wide).
@@ -822,8 +793,8 @@ _run_under_lock() {
 
   # Pre-flight reap under the lock: any live emu job now is an orphan from a run
   # whose peer died non-gracefully. Clear it before booting ours.
-  if [[ "$MODE" == "simulator" && -x "$REAP" ]]; then
-    bash "$REAP" --arch "$ARCH" --emu-host "$EMU_HOST" --lock "$LOCKFILE" --tag "$RUN_TAG" --force >&2 2>&1 || true
+  if [[ "$MODE" == "simulator" ]]; then
+    _reap_previous_nng_job "$RUN_TAG" || return 3
   fi
 
   local collection_rc=0

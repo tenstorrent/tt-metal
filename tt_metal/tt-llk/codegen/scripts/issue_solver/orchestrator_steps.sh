@@ -1648,6 +1648,32 @@ PY
         fi
     fi
 
+    # Functional success covers only the selected tests. The existing reviewer
+    # must also have checked that the selected fix completes the original issue.
+    if [ "$(sg RUN_KIND)" != review ] && [[ "$(sg STATUS)" =~ ^(success|compiled)$ ]]; then
+        local review_error
+        review_error="$(python - "$_L/review_result.json" <<'PY'
+import json, sys
+try:
+    review = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    review = {}
+if not isinstance(review, dict) or review.get("requirements_complete") is not True:
+    print("issue requirements are incomplete or their completion was not reviewed")
+    if isinstance(review, dict) and review.get("summary"):
+        print(review["summary"])
+elif review.get("blocking_total") != 0 or review.get("verdict") != "clean":
+    print("unresolved_review_findings")
+PY
+)" || return 1
+        if [ -n "$review_error" ]; then
+            [ -n "$(sg OBSTACLE)" ] || ss OBSTACLE "$review_error"
+            ss FINAL_MESSAGE "issue #${num} incomplete: ${review_error}"
+            [ "$mode" != multi ] || ss COMBINED_STATUS partial
+            execute_step_mark_status failed test_failure
+        fi
+    fi
+
     status="$(sg STATUS)"; fr="$(sg FINAL_RESULT)"; ss_state="$(sg SOLVER_STATE)"
     end="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     local fmsg; fmsg="$(sg FINAL_MESSAGE)"
