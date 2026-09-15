@@ -543,6 +543,7 @@
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: e2e
 
 # Long-context ISL coverage. The tier-1 entry above only exercises the 128-token
 # bucket, so the chunk-outer traced prefill path it shares with vLLM is never
@@ -564,6 +565,7 @@
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: e2e
 
 # Teacher-forced accuracy trend: top-1/top-5 vs HF plus full-vocab logit PCC over
 # 128 steps. Loads the HF reference on the host, so it is slow and sits at tier 3.
@@ -583,6 +585,7 @@
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: e2e
 
 # T3K (1x8) e2e for the 27B -- the demo path on Wormhole TP=8, which no other entry runs.
 # Single ISL only: the bh_quietbox_2 tier-1 entry stays the primary e2e gate, this covers the
@@ -600,6 +603,7 @@
       release_ready: false
   owner_id: U08HL8X1ECD # Aniruddha Tupe
   team: models
+  budget_type: e2e
 
 # ── Gemma ──────────────────────────────────────────────────────────
 
