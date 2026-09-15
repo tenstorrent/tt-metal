@@ -57,8 +57,8 @@ _BIAS_CAPABLE_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.SituGlu,
 )
 
-# Activations moe_fused_swiglu implements; its own validation rejects the rest. Both ops now cover
-# all three, so this only constrains which experts a hybrid split may hand to the fused op.
+# Activations moe_fused_swiglu implements; its own validation rejects the rest. ClampedSiluGlu is
+# absent (only unified_routed_expert_moe has it), so a hybrid split cannot hand it to the fused op.
 _FUSED_OP_ACTIVATIONS = (
     ttnn.RoutedExpertActivation.Silu,
     ttnn.RoutedExpertActivation.SituGlu,
@@ -376,12 +376,13 @@ class TtRoutedExpert(LightweightModule):
         # Required RoutedExpertActivation, chosen explicitly by the caller (no
         # silent default): pass ttnn.RoutedExpertActivation.Silu for the DeepSeek
         # path (byte-identical), .SwiGluOai for the MiniMax-M3 / gpt-oss clamped
-        # swigluoai activation, or .SituGlu for Kimi K3's SiTU-GLU. Enforcing presence
-        # avoids silently running the wrong activation when a caller forgets to set it.
+        # swigluoai activation, .SituGlu for Kimi K3's SiTU-GLU, or .ClampedSiluGlu for
+        # DeepSeek-V4's clamped SiLU-GLU. Enforcing presence avoids silently running the
+        # wrong activation when a caller forgets to set it.
         if activation is None:
             raise ValueError(
                 "TtRoutedExpert requires an explicit `activation` "
-                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai or .SituGlu)"
+                "(ttnn.RoutedExpertActivation.Silu, .SwiGluOai, .SituGlu or .ClampedSiluGlu)"
             )
         self.activation = activation
         # Hybrid routed-expert dispatch. None keeps the single-op path. An int T splits the
