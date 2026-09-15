@@ -229,7 +229,6 @@ def _reshape_chunks_for_groups(
 
 def _summarize_chunk_groups(
     grouped: _PreparedChunks,
-    geometry: _RecurrenceGeometry,
     *,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -481,7 +480,6 @@ def _scan_grouped_chunks(
     wrap_indicator = wrap_indicators[topology.boundary_chip].is_boundary if split else None
     summary = _summarize_chunk_groups(
         grouped,
-        geometry,
         summary_memory_config=summary_memory_config,
         compute_config=compute_config,
         groups_per_head=groups_per_head,
