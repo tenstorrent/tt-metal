@@ -91,7 +91,8 @@ void CyclicSDPABackwardDeviceOperation::validate_on_program_cache_miss(
         query.device()->compute_with_storage_grid_size(),
         N,
         args.rows_per_block_tiles,
-        static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]));
+        static_cast<uint32_t>(shape[0]) * static_cast<uint32_t>(shape[1]),
+        args.max_groups);
 }
 
 CyclicSDPABackwardDeviceOperation::spec_return_value_t CyclicSDPABackwardDeviceOperation::compute_output_specs(
@@ -163,14 +164,16 @@ ttml_cyclic_sdpa_bw(
     bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    uint32_t max_groups) {
     using OperationType = ttml::metal::ops::cyclic_sdpa_bw::device::CyclicSDPABackwardDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
         .rows_per_block_tiles = rows_per_block_tiles,
         .mask_type = mask_type,
         .use_barrier = use_barrier,
-        .accumulate_into_outputs = accumulate_into_outputs};
+        .accumulate_into_outputs = accumulate_into_outputs,
+        .max_groups = max_groups};
     auto tensor_args = OperationType::tensor_args_t{
         .query = query,
         .key = key,

@@ -36,6 +36,11 @@ struct CyclicSDPABackwardParams {
     // way; this extends it to dK and dV, whose first visit otherwise starts
     // from zero without reading it.
     bool accumulate_into_outputs{false};
+
+    // Cap on the number of groups running side by side (0 = as many as fit).
+    // The groups run the remaining slices in turn either way; the cap exists
+    // so a test can force that loop at a size where every slice would fit.
+    uint32_t max_groups{0U};
 };
 
 struct CyclicSDPABackwardInputs {

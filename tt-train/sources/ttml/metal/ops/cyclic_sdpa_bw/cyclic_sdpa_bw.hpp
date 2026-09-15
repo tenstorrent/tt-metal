@@ -42,7 +42,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> cyclic_sdpa_bw(
     bool accumulate_into_outputs = false,
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    uint32_t max_groups = 0U);
 
 // The same thing, taking what a forward pass actually hands back.
 //
