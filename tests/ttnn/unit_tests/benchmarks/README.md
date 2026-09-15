@@ -93,6 +93,14 @@ TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TTNN_MINIMAL_MATMUL_NUM_CHIPS=16 \
 
 ## Device-side utilization
 
-With a build that has `ENABLE_TRACY=ON`, set `TT_METAL_DEVICE_PROFILER=1` on any of the above (single chip
-only) to add `device_time_ms`, `device_tflops` and `device_utilization_pct` columns computed from the
-average TRISC1 (math) kernel duration, which excludes host dispatch.
+With a build that has `ENABLE_TRACY=ON`, set `TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1`
+on any of the above (single chip only) to add `device_time_ms`, `device_tflops` and `device_utilization_pct`
+columns computed from the average TRISC1 (math) kernel duration, which excludes host dispatch, with the
+theoretical peak taken at the clock the profiler reports. The mid-run dump flag is required: without it
+the device log is only written at device close and the test fails looking for it. This is the same
+measurement the `ttnn.matmul` numbers in `tech_reports/GEMM_FLOPS` use, so it is the one to compare against.
+
+```bash
+TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 \
+  pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py -k "peak_search and BF16 and K16384"
+```

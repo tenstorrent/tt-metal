@@ -48,8 +48,10 @@
 #   tflops             2*M*N*K / time_avg          (TFLOP/s; "flops" in the CSV is the op count 2*M*N*K)
 #   theoretical_tflops num_cores * freq_hz * (8*16*16) * 2 / passes / 1e12
 #   utilization_pct    tflops / theoretical_tflops * 100
-#   device_* columns   only with a profiler build (TT_METAL_DEVICE_PROFILER set) and N=1: the same rates
-#                      from the average TRISC1 (math) kernel duration.
+#   device_* columns   only with a profiler build, TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+#                      and N=1: the same rates from the average TRISC1 (math) kernel duration, with the peak
+#                      taken at the profiler-reported clock. The mid-run dump flag is required, otherwise the
+#                      device log is only written at device close.
 #
 # Running (manual-only, gated by an env var so it never runs in CI by accident):
 #   TTNN_RUN_GEMM_FLOPS_BENCHMARK=1 pytest tests/ttnn/unit_tests/benchmarks/test_minimal_matmul_block_sweep.py
