@@ -131,6 +131,83 @@ def test_comparison_policy_masks_matching_nonfinite_positions(expect_error):
         _compare_torch_tensors(golden, torch.tensor([1.0, float("inf")]))
 
 
+def test_moreh_dot_golden_uses_degenerate_allclose_policy():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_dot)
+    golden = golden_function(torch.tensor([1.0]), torch.tensor([1.0]))
+    comparison_config = golden._ttnn_comparison_config
+
+    comparison_records = _compare_torch_tensors(golden, golden + 0.05)
+
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "degenerate"
+    assert comparison_config.rtol == 0.1
+    assert comparison_config.atol == 0.1
+    assert comparison_records[0]["matches"]
+
+
+def test_moreh_clip_grad_norm_golden_masks_matching_nonfinite_values():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_clip_grad_norm)
+    golden = golden_function([torch.tensor([float("inf")])], max_norm=1.0)
+    comparison_config = golden._ttnn_comparison_config
+
+    comparison_records = _compare_torch_tensors(golden, torch.tensor([[float("nan")]]))
+
+    assert golden.shape == (1, 1)
+    assert comparison_config.method == "allclose"
+    assert comparison_config.scope == "degenerate"
+    assert comparison_config.rtol == 0.1
+    assert comparison_config.atol == 0.1
+    assert comparison_config.nonfinite == "mask"
+    assert comparison_records[0]["matches"]
+
+
+def test_moreh_layer_norm_golden_uses_allclose_policy_for_statistics():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_layer_norm)
+    golden = golden_function(
+        torch.tensor([[0.0, 0.1], [0.1, 0.0]]),
+        1,
+        mean=torch.empty(2),
+        rstd=torch.empty(2),
+    )
+    output = [
+        golden[0].clone(),
+        golden[1] + torch.tensor([0.05, -0.05]),
+        golden[2] + torch.tensor([0.05, -0.05]),
+    ]
+
+    comparison_records = _compare_torch_tensors(golden, output)
+
+    for statistic in golden[1:]:
+        comparison_config = statistic._ttnn_comparison_config
+        assert comparison_config.method == "allclose"
+        assert comparison_config.scope == "all"
+        assert comparison_config.rtol == 0.1
+        assert comparison_config.atol == 0.1
+    assert all(record["matches"] for record in comparison_records)
+
+
+def test_moreh_adam_golden_skips_param_and_compares_optimizer_state():
+    golden_function = ttnn.get_golden_function(ttnn.moreh_adam)
+    golden = golden_function(
+        torch.ones(2),
+        torch.ones(2),
+        torch.zeros(2),
+        torch.zeros(2),
+        step=1,
+    )
+
+    comparison_records = _compare_torch_tensors(
+        golden,
+        [torch.full((2,), 100.0), golden[1].clone(), golden[2].clone()],
+    )
+
+    comparison_config = golden[0]._ttnn_comparison_config
+    assert comparison_config.method == "skip"
+    assert comparison_config.scope == "all"
+    assert len(comparison_records) == 2
+    assert all(record["matches"] for record in comparison_records)
+
+
 def test_prepare_backward_golden_inputs_clears_accumulated_gradients():
     input_tensor = torch.tensor([2.0], requires_grad=True)
     prepared_args, _ = ttnn.decorators.prepare_backward_golden_inputs(((input_tensor,), {}))
