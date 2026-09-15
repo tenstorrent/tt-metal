@@ -181,6 +181,39 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
 
 
+@pytest.mark.parametrize(
+    "indicator_value,wrap_chunk,emit_tail",
+    [
+        (0, 0, False),
+        (1, 0, False),
+        (0, 2, False),
+        (1, 2, False),
+        (None, 2, False),
+        (None, 2, True),
+        (1, 0, True),
+        (1, 4, True),
+    ],
+)
+def test_summarize_chunk_recurrence_rejects_unsupported_wrap_modes(
+    device: ttnn.Device,
+    indicator_value: int | None,
+    wrap_chunk: int,
+    emit_tail: bool,
+    expect_error,
+) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32, seed=821), device)
+    indicator = None if indicator_value is None else to_device(torch.tensor([[[float(indicator_value)]]]), device)
+    with expect_error(RuntimeError, "wrap|tail summaries"):
+        run_summary(inputs, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=emit_tail)
+
+
+@pytest.mark.parametrize("keyword", ["chunk_start", "chunk_count"])
+def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, keyword: str, expect_error) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
+
+
 def _segmented_summary_oracle(
     host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
 ) -> tuple[torch.Tensor, ...]:
@@ -307,21 +340,37 @@ def test_summarize_chunk_recurrence_segmented_cache_trace_and_ordinary_equivalen
         context="segmented summary cache hit",
     )
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = run_summary(
-        inputs_b,
-        wrap_indicator=indicator_b,
-        wrap_chunk=wrap_chunk,
-        groups_per_head=groups_per_head,
-        emit_tail_summaries=True,
-    )
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    for name, cached, replayed in zip(("head_a", "head_b", "tail_a", "tail_b"), outputs_b, traced, strict=True):
-        assert_bit_identical(ttnn.to_torch(cached), ttnn.to_torch(replayed), name=f"segmented {name} trace replay")
-    ttnn.release_trace(device, trace_id)
+    trace_id = None
+    capturing = False
+    traced = None
+    try:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        capturing = True
+        traced = run_summary(
+            inputs_b,
+            wrap_indicator=indicator_b,
+            wrap_chunk=wrap_chunk,
+            groups_per_head=groups_per_head,
+            emit_tail_summaries=True,
+        )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        capturing = False
+        for replay in range(3):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            for name, cached, replayed in zip(("head_a", "head_b", "tail_a", "tail_b"), outputs_b, traced, strict=True):
+                assert_bit_identical(
+                    ttnn.to_torch(cached), ttnn.to_torch(replayed), name=f"segmented {name} trace replay"
+                )
+    finally:
+        try:
+            if capturing:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(device, trace_id)
+            if traced is not None:
+                for tensor in traced:
+                    ttnn.deallocate(tensor)
 
     host_o, inputs_o, ordinary_indicator = make(1933, False)
     baseline = run_summary(inputs_o)
@@ -662,39 +711,6 @@ def test_summarize_chunk_recurrence_does_not_expose_prototype_modes(
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{removed_keyword: True})
-
-
-@pytest.mark.parametrize(
-    "indicator_value,wrap_chunk,emit_tail",
-    [
-        (0, 0, False),
-        (1, 0, False),
-        (0, 2, False),
-        (1, 2, False),
-        (None, 2, False),
-        (None, 2, True),
-        (1, 0, True),
-        (1, 4, True),
-    ],
-)
-def test_summarize_chunk_recurrence_rejects_unsupported_wrap_modes(
-    device: ttnn.Device,
-    indicator_value: int | None,
-    wrap_chunk: int,
-    emit_tail: bool,
-    expect_error,
-) -> None:
-    inputs = device_protocol(host_protocol(2, 4, 32, 32, seed=821), device)
-    indicator = None if indicator_value is None else to_device(torch.tensor([[[float(indicator_value)]]]), device)
-    with expect_error(RuntimeError, "wrap|tail summaries"):
-        run_summary(inputs, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=emit_tail)
-
-
-@pytest.mark.parametrize("keyword", ["chunk_start", "chunk_count"])
-def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, keyword: str, expect_error) -> None:
-    inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
-    with expect_error(TypeError, "incompatible function arguments"):
-        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
 
 
 def test_segmented_k128_sharded_summary_rebinds_indicator(device: ttnn.Device, isolated_program_cache: None) -> None:

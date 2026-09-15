@@ -355,23 +355,36 @@ def test_affine_exclusive_scan_segmented_cache_hit_and_trace_rebind_all_inputs(
     assert_accurate(expected_a, ttnn.to_torch(output_a), name="segmented cache miss", pcc_threshold=0.999)
     assert_accurate(expected_b, ttnn.to_torch(output_b), name="segmented cache hit", pcc_threshold=0.999)
 
-    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
-    traced = _run(
-        *tensors_b[:3],
-        groups_per_head,
-        tail_a=tensors_b[3],
-        tail_b=tensors_b[4],
-        tail_state=tensors_b[5],
-        wrap_indicator=tensors_b[6],
-        wrap_group=wrap_group,
-        split_in_group=split_in_group,
-    )
-    ttnn.end_trace_capture(device, trace_id, cq_id=0)
-    for _ in range(2):
-        ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
-    ttnn.synchronize_device(device)
-    assert_bit_identical(ttnn.to_torch(output_b), ttnn.to_torch(traced), name="segmented trace replay")
-    ttnn.release_trace(device, trace_id)
+    trace_id = None
+    capturing = False
+    traced = None
+    try:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        capturing = True
+        traced = _run(
+            *tensors_b[:3],
+            groups_per_head,
+            tail_a=tensors_b[3],
+            tail_b=tensors_b[4],
+            tail_state=tensors_b[5],
+            wrap_indicator=tensors_b[6],
+            wrap_group=wrap_group,
+            split_in_group=split_in_group,
+        )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        capturing = False
+        for replay in range(3):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert_bit_identical(ttnn.to_torch(output_b), ttnn.to_torch(traced), name="segmented trace replay")
+    finally:
+        try:
+            if capturing:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(device, trace_id)
+            if traced is not None:
+                ttnn.deallocate(traced)
 
 
 def _composed_ttnn_baseline(
