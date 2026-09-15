@@ -58,6 +58,14 @@ profiles:
       # critical path; 0 means "one group spanning the whole mesh" (round-robin).
       # env: DEEPSEEK_V4_PIPELINE_GROUP_SIZE
       group_size: 1
+      # Chips per ``1 x tp_size`` tensor-parallel stage. A stage shards the attention
+      # projections across its chips; the stages then run as a pipeline. TP4 uses two
+      # stages (8 chips) and leaves any rest of a larger mesh idle, so a 32-chip Galaxy
+      # still decodes over 8 chips -- see the galaxy32 profile below. The decode demo
+      # selects the same layout through its own ``tp_size`` test parameter, and the CLI
+      # and server read it from here.
+      # env: DEEPSEEK_V4_TP_SIZE
+      tp_size: 1
       # Decode steps allowed in flight across batches; 0 = one per batch.
       # env: DEEPSEEK_V4_PIPELINE_DEPTH
       depth: 0
@@ -223,6 +231,12 @@ profiles:
     description: 32x Blackhole Galaxy; capacity-tuned starting point, latency needs TP/EP
 
     pipeline:
+      # The latency path this profile is written for: two 1x4 TP stages, 8 chips, the
+      # other 24 Galaxy chips left idle (see the layout note above). TP1 over all 32
+      # chips is *not* faster per token -- the 43 layers become ~1-2 per chip and the
+      # socket hops go from ~7 to ~31 -- so TP4 is the default here, matching what
+      # ``test_full_model_decode_demo.py`` runs on the same mesh.
+      tp_size: 4
       # Still 1: contiguous slices keep each token's socket hops at the minimum
       # the placement allows. Worth A/B-ing against 2 and 4 once the machine is
       # up -- at 43 layers over 32 devices most devices own a single layer, so

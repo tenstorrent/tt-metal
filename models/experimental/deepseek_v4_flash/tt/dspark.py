@@ -666,6 +666,26 @@ class DSparkModel(DeepSeekV4Module):
         self._trace_replay_thread = threading.Thread(target=_run, name="dspark-trace-replay", daemon=True)
         self._trace_replay_thread.start()
 
+    def shutdown(self) -> None:
+        """Stop the trace-replay thread started by :meth:`_ensure_trace_replay_thread`.
+
+        The thread is a daemon whose target closes over ``self``, and nothing ever tells it
+        to stop. CPython does not unwind a daemon thread's frame at shutdown, so the closure
+        keeps this model -- and every ttnn tensor it owns -- alive until the process exits,
+        where nanobind's ``Py_AtExit`` leak check reports it. Stopping the thread releases
+        that reference so the model can be collected normally.
+
+        Idempotent, and safe whether or not a traced replay ever ran. Not safe to call
+        concurrently with :meth:`replay_traced`/:meth:`decode_traced_async`.
+        """
+        thread, self._trace_replay_thread = self._trace_replay_thread, None
+        if thread is None:
+            return
+        # Drain what is already queued, then end the loop. The thread's only work is
+        # non-blocking ``execute_trace`` dispatch, so joining cannot park on the device.
+        self._trace_replay_queue.put(None)
+        thread.join()
+
     def _capture_trace(self, target_hiddens: torch.Tensor, anchor_id: int) -> None:
         packet = self._trace_input_page(target_hiddens, anchor_id)
         alignment = active_system_config().pipeline.pcie_alignment

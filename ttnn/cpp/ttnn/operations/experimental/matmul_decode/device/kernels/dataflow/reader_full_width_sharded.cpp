@@ -116,6 +116,7 @@ void kernel_main() {
 #endif
     full_in0_cb.push_back(full_num_tiles);
 #else
+    const bool is_hub0 = (role == 1);
     const bool is_hub1 = (role == 2);
     if (is_sender) {
         const bool owned_by_hub0 = sender_id < split_H;
