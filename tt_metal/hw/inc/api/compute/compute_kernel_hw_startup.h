@@ -111,13 +111,56 @@ ALWI void compute_kernel_hw_startup(uint32_t icb0, uint32_t ocb) {
 
 // clang-format off
 /**
- * Resets (re-arms) the MATH<->PACK Dest synchronization: re-initializes the MATH thread's
- * pack-sync state and the packer's Dest state for `ocb`.
+ * Resets (re-arms) the MATH<->PACK Dest synchronization mechanism for the output circular buffer (ocb)
  *
- * This is an alternative to re-running the more expensive compute_kernel_hw_startup for example
- * in middle of a kernel. An op that disrupts the Dest handshake (e.g., a preceding matmul, reduce,
- * tilize_uninit, SFPU section, unpack-to-dest path, etc.) may need the handshake being reset
- * before the next op can be started.
+ * Background: the MATH<->PACK Dest handshake.
+ *
+ * During standard kernel operation the MATH thread writes its results into the Dest register and
+ * the PACK thread moves those results to L1. How the two threads share Dest is determined by DstSync
+ * mode (a compile-time flag passed into the kernel). DstSync::SyncFull lets only one thread (either
+ * MATH or PACK) use Dest at a time, while DstSync::SyncHalf lets MATH and PACK work concurrently.
+ *
+ * Under DstSync::SyncHalf, Dest is split into two halves, such that MATH computes into one
+ * half while PACK drains the other. MATH and PACK are coordinated by a single bounded counting
+ * semaphore, semaphore::MATH_PACK, whose current value is the number of Dest sections MATH has
+ * committed that PACK has not yet released: a half of the Dest under SyncHalf, the whole Dest under
+ * SyncFull. The semaphore::MATH_PACK is initialized with a max value (2 under SyncHalf, 1 under SyncFull)
+ * and a starting value of 0. Additionally, each thread tracks the section of Dest it should be
+ * working on in private software state. Both MATH and PACK start at section 0.
+ *
+ * A compute kernel loops over the following handshake, one Dest section per iteration, using the
+ * tile_regs_* API. Call this the handshake loop:
+ *
+ *   tile_regs_acquire()   MATH   blocks while the semaphore value is at the max value (no free half)
+ *   tile_regs_commit()    MATH   posts semaphore (+1), "a section is full", then updates its own tracker
+ *   tile_regs_wait()      PACK   blocks while the value is zero (nothing to drain)
+ *   tile_regs_release()   PACK   gets semaphore (-1), "I drained one", then flips its own tracker
+ *
+ * Quiescent: semaphore::MATH_PACK is zero and both trackers point at the same Dest section.
+ *
+ * Note that in a correct kernel the second clause (both trackers point at the same Dest section) follows
+ * from the first, since trackers advance only on commit and release; it is stated separately to
+ * exclude a tracker reset from outside the handshake, described below.
+ *
+ * Quiescence is the handshake loop's precondition. A simple balanced loop body preserves it: each
+ * complete iteration posts once, gets once, and advances both trackers once, so the loop exits
+ * quiescent and another handshake loop can follow immediately.
+ *
+ * Note that "after the loop" is thread-relative. MATH and PACK are pipelined, so MATH leaves the
+ * loop up to max sections ahead of PACK, and at that instant the state is not yet quiescent; it is
+ * PACK's exit, the last one, that is quiescent.
+ *
+ * Please also note that quiescent does not mean "at section 0". A balanced loop with an odd iteration
+ * count exits with both trackers on section 1, which is a valid entry state for the next loop.
+ *
+ * In a kernel that uses only the tile_regs_* API calls and keeps its commits and releases balanced,
+ * the handshake can still breaks due to an compute-API operation, run between handshake loops, whose uninit
+ * has left the packer configured inconsistently with the handshake.
+ * This function re-establishes the canonical quiescent state in precisely this case: it drains any outstanding
+ * packs, re-seeds MATH_PACK, and returns both trackers to section 0 with `ocb` as the packer's destination.
+ * To restore the pack MOP one needs to also add the llk_pack_init<PackMode::Default>.
+ *
+ * Caution: calling this function on a (buggy) kernel whose commits and releases do not balance will hang.
  *
  * Return value: None
  *
