@@ -50,7 +50,7 @@ constexpr Thread get_thread()
 } // namespace detail
 
 template <Thread T = detail::get_thread()>
-static inline void thread_init()
+SAN_FUNC static inline void thread_init()
 {
     detail::exu_dispatch([](auto exu) { detail::exu_init<exu.value, T>(*state); });
 }
@@ -60,31 +60,31 @@ static inline void thread_init()
 // ------------
 
 template <Thread T = detail::get_thread(), typename... Vs>
-static inline void configure(Vs&&... values)
+SAN_FUNC static inline void configure(Vs&&... values)
 {
     detail::configure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <Thread T = detail::get_thread(), typename... Vs>
-static inline void reconfigure(Vs&&... values)
+SAN_FUNC static inline void reconfigure(Vs&&... values)
 {
     detail::reconfigure<T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void init(Vs&&... values)
+SAN_FUNC static inline void init(Vs&&... values)
 {
     detail::init<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void execute(Vs&&... values)
+SAN_FUNC static inline void execute(Vs&&... values)
 {
     detail::execute<Op, T>(*state, std::forward<Vs>(values)...);
 }
 
 template <typename Op, Thread T = detail::get_thread(), typename... Vs>
-static inline void uninit(Vs&&... values)
+SAN_FUNC static inline void uninit(Vs&&... values)
 {
     detail::uninit<Op, T>(*state, std::forward<Vs>(values)...);
 }
@@ -100,7 +100,7 @@ namespace detail
 
 } // namespace detail
 
-static inline void unsupported()
+SAN_FUNC static inline void unsupported()
 {
     detail::unsupported_operation();
 }
