@@ -17,7 +17,6 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #include "ckernel_sfpu_erf.h"  // ERF_LUT, ERF_NUM_DEGREE, ERF_DEN_DEGREE (INP_FLOAT32 branch for FP32 path)
 #include "ckernel_sfpu_piecewise_rational.h"
-#include "ckernel_sfpu_tanh.h"  // _sfpu_tanh_fp32_accurate_ for gelu_tanh
 #include "ckernel_sfpu_sigmoid.h"  // _sfpu_sigmoid_ for gelu_tanh cancellation-free logistic form
 #include "sfpi.h"
 
@@ -364,7 +363,7 @@ inline void calculate_gelu_tanh() {
         sfpi::vFloat p = GELU_TANH_K * x2 + 1.0f;
         sfpi::vFloat q = x * p;
         sfpi::vFloat u = SQRT_2_OVER_PI * q;
-        sfpi::vFloat sig = _sfpu_sigmoid_<is_fp32_dest_acc_en>(2.0f * u);
+        sfpi::vFloat sig = _sfpu_sigmoid_<true>(2.0f * u);
 
         // reload due to register pressure
         x = sfpi::dst_reg[0];
@@ -380,7 +379,7 @@ inline void calculate_gelu_tanh() {
 
 inline void gelu_tanh_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
-    // Logistic form needs reciprocal constants (mirrors sigmoid_init)
+    // Logistic form needs reciprocal constants (mirrors Blackhole sigmoid_init; setup shared by per-op init wrapper)
     sfpu_reciprocal_init<false>();
 }
 
