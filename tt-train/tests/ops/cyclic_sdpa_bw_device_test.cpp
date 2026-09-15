@@ -463,7 +463,9 @@ Gradients run_algorithm2(
              static_cast<uint32_t>(coordinator.y), static_cast<uint32_t>(mcast_start.x),
              static_cast<uint32_t>(mcast_start.y), static_cast<uint32_t>(mcast_end.x),
              static_cast<uint32_t>(mcast_end.y), c == 1u ? 1u : 0u});
-        SetRuntimeArgs(program, compute, core, {c});
+        // The compute kernel is shared with the relay and takes the number of
+        // slices this core runs; one, here.
+        SetRuntimeArgs(program, compute, core, {c, 1u});
     }
 
     auto workload = tt_dist::MeshWorkload();
@@ -751,6 +753,10 @@ Gradients run_relay(
                 relay_reader_args.push_back(static_cast<uint32_t>(rc.x));
                 relay_reader_args.push_back(static_cast<uint32_t>(rc.y));
             }
+            // One slice per group here; the kernels loop over slices and read
+            // the count and stride after their other arguments.
+            relay_reader_args.push_back(1u);  // slice_count
+            relay_reader_args.push_back(1u);  // slice_stride
             SetRuntimeArgs(program, reader, core, relay_reader_args);
             SetRuntimeArgs(
                 program, writer, core,
@@ -758,8 +764,8 @@ Gradients run_relay(
                  static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
                  static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
                  static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1u ? 1u : 0u});
-            SetRuntimeArgs(program, compute, core, {c});
+                 c == 1u ? 1u : 0u, 1u, 1u});
+            SetRuntimeArgs(program, compute, core, {c, 1u});
         }
     }
 
