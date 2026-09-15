@@ -1647,6 +1647,28 @@ TEST(MultiHost, T3K2x2AssignZDirectionControlPlaneInit) {
     check_asic_mapping_against_golden("T3K2x2AssignZDirectionControlPlaneInit");
 }
 
+TEST(MultiHost, T3KFabricConfigMismatchAcrossRanksFatal) {
+    const auto world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_world_context();
+    if (*world_ctx->size() < 2) {
+        GTEST_SKIP() << "Requires at least 2 ranks";
+    }
+
+    const auto my_rank = static_cast<int>(*world_ctx->rank());
+    const auto fabric_config =
+        my_rank % 2 == 0 ? tt::tt_fabric::FabricConfig::FABRIC_2D : tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y;
+
+    const std::filesystem::path dual_t3k_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_mesh_graph_descriptor.textproto";
+    EXPECT_ANY_THROW({
+        auto control_plane = make_control_plane(
+            dual_t3k_mesh_graph_desc_path.string(),
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        control_plane->configure_routing_tables_for_fabric_ethernet_channels();
+    });
+}
+
 // Negative test: mesh 2 is a single (1x1) exit chip cabled to BOTH mesh 0 and mesh 1, and both boundaries are
 // marked assign_z_direction. They both try to claim mesh 2's one Z lane; the losing boundary is Z-only (never
 // falls back to NESW), so it resolves zero routers -> control-plane initialization must fail. This exercises

@@ -8,7 +8,6 @@
 
 // UMD: EthCoord is a UMD type alias used in the private method
 // get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
-#include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -91,26 +90,6 @@ struct PortDescriptor {
     ChipId src_chip = 0;
     FabricNodeId dst_node{MeshId{0}, 0};
 };
-
-// One rank's view of the FabricConfig it is about to initialize for one logical mesh it binds to.
-// Gathered from every rank before routing tables, FabricContext or router launch, so that a
-// disagreement is reported locally instead of hanging in the fabric peer handshake (see #56298).
-struct MeshFabricConfigObservation {
-    MeshId mesh_id{0};
-    uint32_t rank = 0;
-    uint32_t mesh_host_rank = 0;
-    FabricConfig fabric_config = FabricConfig::DISABLED;
-};
-
-// Enforces the immediate policy for heterogeneous FabricConfig:
-//   1. every rank bound to a logical mesh must report the same FabricConfig (big mesh);
-//   2. every mesh connected through the mesh graph descriptor must report the same FabricConfig
-//      (intermesh, e.g. M0=FABRIC_2D with M1=FABRIC_2D_TORUS_Y is rejected).
-// Throws with the offending observations on violation. Per-mesh configs are tracked by #56561.
-void validate_fabric_config_consistency(
-    tt::stl::Span<const MeshFabricConfigObservation> observations,
-    const InterMeshConnectivity& inter_mesh_connectivity,
-    const std::string& mesh_graph_desc_path);
 
 // Stores the gathered inter-mesh cable records between the src mesh and its neighbor meshes.
 // Keyed src_mesh -> neighbor_mesh -> one PortDescriptor per physical cable channel.
