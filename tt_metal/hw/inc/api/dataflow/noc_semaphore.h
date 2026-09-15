@@ -9,6 +9,10 @@
 #include "api/debug/assert.h"
 #include "api/dataflow/semaphore_binding_token.h"
 
+// Never hardcode TENSIX here: sem_l1_base[] is populated for every core type, so a wrong index
+// silently resolves to a valid pointer into another core type's kernel-config region.
+constexpr ProgrammableCoreType semaphore_core_type = static_cast<ProgrammableCoreType>(PROGRAMMABLE_CORE_TYPE);
+
 /**
  * @brief Semaphore synchronization primitive for programmable cores.
  *
@@ -36,7 +40,7 @@
  *  - relay_unicast(dst_sem, ...): Set a different remote semaphore on one core to this semaphore's local value.
  *  - relay_multicast(dst_sem, ...): Multicast this semaphore's local value into a different destination semaphore.
  */
-template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
+template <ProgrammableCoreType core_type = semaphore_core_type, SemScope SCOPE = SemScope::LOCAL_NONATOMIC>
 class Semaphore {
     // Lets relay_unicast / relay_multicast read dst_sem's private members without a public accessor.
     template <ProgrammableCoreType OT, SemScope OS>
@@ -46,8 +50,8 @@ class Semaphore {
     static __attribute__((always_inline)) inline uintptr_t sem_l1_offset(uint32_t id) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         if constexpr (SCOPE == SemScope::DM_LOCAL_CACHED) {
-            ASSERT(id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW);
-            return static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + id * MEM_DM_CACHED_SEM_ROW;
+            ASSERT(id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW);
+            return static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + id * MEM_SEM_CACHED_POOL_ROW;
         }
 #endif
         return get_semaphore<core_type>(id);
@@ -59,15 +63,15 @@ class Semaphore {
     uint32_t external_lock_l1_offset() const {
         const uint32_t id =
             (static_cast<uint32_t>(l1_offset_) - static_cast<uint32_t>(get_semaphore<core_type>(0))) / L1_ALIGNMENT;
-        ASSERT(id * L1_ALIGNMENT < MEM_NOC_SEM_LOCK_SIZE);
-        return MEM_NOC_SEM_LOCK_BASE + id * L1_ALIGNMENT;
+        ASSERT(id * L1_ALIGNMENT < MEM_SEM_LOCK_SIZE);
+        return MEM_SEM_LOCK_BASE + id * L1_ALIGNMENT;
     }
     // This hart's private CAS-return slot.
     static uint32_t cas_ret_slot() {
         uint64_t hart;
         asm volatile("csrr %0, mhartid" : "=r"(hart));
-        ASSERT(static_cast<uint32_t>(hart) * 4 < MEM_NOC_CAS_RET_SIZE);
-        return MEM_NOC_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
+        ASSERT(static_cast<uint32_t>(hart) * 4 < MEM_SEM_CAS_RET_SIZE);
+        return MEM_SEM_CAS_RET_BASE + static_cast<uint32_t>(hart) * 4;
     }
 #endif
 
@@ -458,4 +462,4 @@ private:
 
 // `Semaphore s(sem::name);` adopts the mechanism the host baked into the token.
 template <std::uint32_t SEM_ID, SemScope TOK_SCOPE>
-Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) -> Semaphore<ProgrammableCoreType::TENSIX, TOK_SCOPE>;
+Semaphore(SemaphoreBindingToken<SEM_ID, TOK_SCOPE>) -> Semaphore<semaphore_core_type, TOK_SCOPE>;

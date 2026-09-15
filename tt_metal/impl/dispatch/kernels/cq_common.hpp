@@ -90,40 +90,35 @@ FORCE_INLINE volatile T tt_l1_ptr* uncached_l1_ptr(uintptr_t addr) {
     return reinterpret_cast<volatile T tt_l1_ptr*>(l1_uncached_addr(addr));
 }
 
-// Mechanism for the credits dispatch and dispatch_s return to prefetch. A cached AMO reaches only the
-// local L1's pool row, so every accessor must be a DM on the semaphore's own node;
-// expand_quasar_dispatch_engine_pool_for_fd_assignment gives FD that by putting all three stages on one
-// dispatch-engine core. Emule models no cached pool.
+// Credits dispatch and dispatch_s return to prefetch. A cached AMO reaches only the local node's pool
+// row, which FD satisfies by co-locating all three stages on one dispatch engine
+// (expand_quasar_dispatch_engine_pool_for_fd_assignment). Emule has no cached pool.
 #if defined(ARCH_QUASAR) && !defined(TT_EMULE_USE_L1_POOL)
 constexpr SemScope fd_upstream_sem_scope = SemScope::DM_LOCAL_CACHED;
 #else
 constexpr SemScope fd_upstream_sem_scope = SemScope::LOCAL_NONATOMIC;
 #endif
 
-// Semaphore over a plain id and an explicit mechanism; the token is synthesized because the token
-// constructor is the only one accepting a scope other than LOCAL_NONATOMIC.
-//
-// Build at the point of use, never store: non-cached scopes resolve through sem_l1_base, which
-// firmware does not populate until firmware_config_init() runs.
+// The token is synthesized because its constructor is the only one accepting a scope other than
+// LOCAL_NONATOMIC. Build at the point of use, never store: non-cached scopes resolve through
+// sem_l1_base, which firmware does not populate until firmware_config_init() runs.
 template <uint32_t sem_id, SemScope scope>
 FORCE_INLINE auto fd_semaphore() {
     return Semaphore<programmable_core_type, scope>(SemaphoreBindingToken<sem_id, scope>{});
 }
 
-// Copy a cached semaphore's host-written init value into its pool row: the pool sits outside the
-// kernel config buffer, so the host's init write lands only in the ordinary semaphore slot.
-//
-// A plain store, running while the consumer kernels are already live, so it must not race their
-// increments. Ordering is by data dependency, not timing: a consumer returns credits only after
-// consuming a command, which prefetch can only have sent after seeding. Releasing credits before
-// consuming one would break this silently.
+// The pool sits outside the kernel config buffer, so the host's init write reaches only the ordinary
+// semaphore slot; copy it across. A plain store is safe despite the consumers already running: a
+// consumer returns credits only after consuming a command, which prefetch can only send after seeding.
+// A consumer that released credits before consuming one would break this silently.
 template <uint32_t sem_id>
 FORCE_INLINE void fd_seed_upstream_sem() {
     if constexpr (fd_upstream_sem_scope == SemScope::DM_LOCAL_CACHED) {
 #if defined(ARCH_QUASAR) && !defined(COMPILE_FOR_TRISC)
         static_assert(
-            sem_id < MEM_DM_CACHED_SEM_SIZE / MEM_DM_CACHED_SEM_ROW, "semaphore id has no row in the cached pool");
-        *reinterpret_cast<uint32_t*>(static_cast<uintptr_t>(MEM_DM_CACHED_SEM_BASE) + sem_id * MEM_DM_CACHED_SEM_ROW) =
+            sem_id < MEM_SEM_CACHED_POOL_SIZE / MEM_SEM_CACHED_POOL_ROW, "semaphore id has no row in the cached pool");
+        *reinterpret_cast<uint32_t*>(
+            static_cast<uintptr_t>(MEM_SEM_CACHED_POOL_BASE) + sem_id * MEM_SEM_CACHED_POOL_ROW) =
             *uncached_l1_ptr<uint32_t>(get_semaphore<programmable_core_type>(sem_id));
 #endif
     }
@@ -388,7 +383,6 @@ public:
         // Required for trace which steals downstream credits and may make the value negative
         uint32_t heartbeat = 0;
         do {
-            invalidate_l1_cache();
             IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
         } while (wrap_gt(n, additional_count + my_sem.value()));
         WAYPOINT("DAPD");
@@ -405,9 +399,8 @@ public:
         n &= 0x7fffffff;
 
         WAYPOINT("TAPW");
-        do {
-            invalidate_l1_cache();
-        } while (((additional_count + my_sem.value()) & 0x7fffffff) != n);  // mask off terminate bit
+        while (((additional_count + my_sem.value()) & 0x7fffffff) != n) {  // mask off terminate bit
+        }
         WAYPOINT("TAPD");
     }
 
