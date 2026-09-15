@@ -907,9 +907,11 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
     TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // Semaphores for KV chain forwarding (non-causal only).
+    // Semaphores for KV chain forwarding (non-causal only, and only when no mask disabled it above --
+    // otherwise sender/receiver/valid semaphore_id all default to 0 and this would push three
+    // descriptors at the same id).
     // IDs match the order they were assigned above: sender=0, receiver=1, valid=2.
-    if (!is_causal) {
+    if (!is_causal && !use_provided_mask) {
         desc.semaphores.push_back(SemaphoreDescriptor{
             .id = sender_semaphore_id,
             .core_type = tt::CoreType::WORKER,
