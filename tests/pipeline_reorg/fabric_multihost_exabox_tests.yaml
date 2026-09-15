@@ -127,3 +127,69 @@
   team: scaleout
   budget_type: e2e
   sp_config: sc4
+
+# ============================================================================
+# Inter-mesh Z routers under a 2D Torus -- HW coverage for the #56298 fix
+# (fabric_context.cpp: Z routers must not enable deadlock avoidance under Torus).
+# Opens the quad 8x4 RING/RING galaxies (Z-connected via assign_z_direction) as a
+# Torus, so the inter-mesh neighbor exchange drives the Z routers while the fabric
+# is torused. Before the fix the torus end compiled the Z router with deadlock
+# avoidance on while its mesh peer had it off, starving the Z pair.
+# ============================================================================
+- name: "DC validation (quad) Z-torus inter-mesh"
+  cmd: |
+    TTRUN_DIR=/etc/ttop
+    WORKER_HOME=/home/user/tt-metal
+    mkdir -p "${PIPELINE_DIR}"
+
+    echo "--- ${TTRUN_DIR} ---"
+    ls -la "$TTRUN_DIR" 2>&1 || true
+    for f in hostfile rankfile; do
+      echo "--- ${f} ---"
+      cat "${TTRUN_DIR}/${f}" 2>&1 || true
+    done
+
+    count_hosts() { tr ',' '\n' <<< "$1" | grep -c . || true; }
+
+    PIPELINE_HOSTS=$(sed -n 's/^rank[[:space:]]*[0-9]*=\([^[:space:]]*\).*/\1/p' "${TTRUN_DIR}/rankfile" 2>/dev/null \
+      | awk '!seen[$0]++' | paste -sd, -)
+    NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
+    if [ "${NHOSTS:-0}" -ne 4 ]; then
+      echo "rankfile yielded ${NHOSTS} host(s); falling back to hostfile order"
+      PIPELINE_HOSTS=$(awk 'NF {print $1}' "${TTRUN_DIR}/hostfile" 2>/dev/null \
+        | awk '!seen[$0]++' | paste -sd, -)
+      NHOSTS=$(count_hosts "$PIPELINE_HOSTS")
+    fi
+    echo "Ring order (${NHOSTS} hosts): $PIPELINE_HOSTS"
+    if [ "${NHOSTS:-0}" -ne 4 ]; then
+      echo "::error::Could not determine the 4 quad hosts from ${TTRUN_DIR} (see the dump above)"
+      exit 1
+    fi
+
+    set -o pipefail
+    ./tools/scaleout/exabox/run_fabric_tests.sh \
+      --hosts "$PIPELINE_HOSTS" \
+      --image none \
+      --config 4x32z \
+      --test-binary "$WORKER_HOME/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric" \
+      --test-config "$WORKER_HOME/tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_z_torus_intermesh.yaml" \
+      --mesh-graph-desc-path "$WORKER_HOME/tt_metal/fabric/mesh_graph_descriptors/quad_bh_galaxy_4x4x8_z_torus_graph_descriptor.textproto" \
+      --filter name.ZTorus \
+      --mpi-if none \
+      --mpi-args "--wdir $WORKER_HOME" 2>&1 | tee "${PIPELINE_DIR}/dc_quad_ztorus_result.log"
+
+    if ! grep -qE "Tests: [1-9][0-9]* executed" "${PIPELINE_DIR}/dc_quad_ztorus_result.log"; then
+      echo "::error::Z-torus inter-mesh validation ran no tests (check the --test-config path and --filter)"
+      exit 1
+    fi
+
+    if [ -d fabric_test_logs ]; then
+      cp -a fabric_test_logs "${PIPELINE_DIR}/" || true
+    fi
+  skus:
+    bh_sc4:
+      timeout: 20
+  owner_id: U0845EV7A5U # Umair Cheema
+  team: scaleout
+  budget_type: e2e
+  sp_config: sc4
