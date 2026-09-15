@@ -255,7 +255,7 @@ public:
             }
             sync_threads();
             if (get_my_thread_id() != 0) {
-                setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_dfb_id);
+                setup_prefetcher_pipe_interface(interface_, config_page_addr, dense_entry_size, relay_word);
             }
         }
         if (!is_sender) {
