@@ -19,6 +19,7 @@
 #include "api/debug/waypoint.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
+#include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/cyclic_dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -94,7 +95,9 @@ void kernel_main() {
         read_tiles_by_row(cb_grad_output, grad_output, (i - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         read_tiles_by_row(cb_lse, lse, (i - 1u) * Bt, Bt, interm_bytes, Bt);
         read_tiles_by_row(cb_u_scalar, u_scalar, (i - 1u) * Bt, Bt, interm_bytes, Bt);
-
+        // L and D are in L1: the writer makes the row-layout statistic tiles.
+        cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
+        cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
         if (t > 0u) {
             WAYPOINT("BARW");
             do {

@@ -27,6 +27,7 @@
 
 #include "metal/common/program_utils.hpp"
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -374,14 +375,22 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_5, Bt, tt::DataFormat::Float32);      // D_i
     make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);     // causal mask
     // Intermediates.
-    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P
-    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);  // dP
-    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);  // dS
-    make_cb(tt::CBIndex::c_13, scoreT, tt::DataFormat::Float32);  // dS^T
-    make_cb(tt::CBIndex::c_14, scoreT, tt::DataFormat::Float32);  // P^T
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
+    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
+    make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // L remainder, row layout
+    make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
+    make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2 * 64, {{tt::CBIndex::c_31, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_31, 64));  // stats-ready signal
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);  // dS^T
+    make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
+    make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     // Each gradient: seed from the reader, accumulator, output to the writer.
     make_cb(tt::CBIndex::c_15, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
     make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
@@ -423,11 +432,15 @@ Gradients run_algorithm2(
     // needs the reciprocal to divide the statistic it subtracts.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
-    // Every buffer that is copied into DST rather than fed to a matmul keeps
-    // FP32 through the copy: P for the elementwise dS chain, and the gradient
-    // seeds and accumulators, which carry running sums.
+    // The dQ seed -- the packet's running accumulator, and its transposed
+    // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
+    // at every hop; through a Src register it would lose 13 of them per
+    // timestep, which was the dominant dQ error. Nothing else may take this
+    // mode: a buffer in it cannot also be read by a matmul, and these two are
+    // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{
@@ -616,12 +629,20 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);      // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);      // V_j
     make_cb(tt::CBIndex::c_6, 1, tt::DataFormat::Float16_b);         // causal mask
-    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_11, scoreT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_13, scoreT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_14, scoreT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float32);  // dQ accumulator
+    make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
+    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
+    make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // L remainder, row layout
+    make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
+    make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2 * 64, {{tt::CBIndex::c_31, tt::DataFormat::Float16_b}})
+            .set_page_size(tt::CBIndex::c_31, 64));  // stats-ready signal
+    make_cb(tt::CBIndex::c_12, scoreT, tt::DataFormat::Float32);  // dS^T
+    make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
+    make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
+    make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
     make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);  // dQ to the relay
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);  // dK seed
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
@@ -688,6 +709,11 @@ Gradients run_relay(
     for (const auto* t : {&grad_key, &grad_value}) {
         tt::tt_metal::TensorAccessorArgs(*t->buffer()).append_to(writer_args);
     }
+    // After the accessor args, where the kernel finds them by offset: the
+    // packet-readiness semaphores, which the writer polls to start on a
+    // timestep's statistics as soon as they land.
+    writer_args.push_back(ready_imm0_sem);
+    writer_args.push_back(ready_imm1_sem);
     const auto writer = CreateKernel(
         program, kRelayWriterPath, region,
         DataMovementConfig{
@@ -702,8 +728,15 @@ Gradients run_relay(
     // needs the reciprocal to divide the statistic it subtracts.
     const uint32_t inv_scaler = std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d)));
     const uint32_t custom_inf = std::bit_cast<uint32_t>(tt::tt_metal::hal::get_inf());
+    // The dQ seed -- the packet's running accumulator, and its transposed
+    // scratch copy -- is unpacked straight into DST, so it keeps all 32 bits
+    // at every hop; through a Src register it would lose 13 of them per
+    // timestep, which was the dominant dQ error. Nothing else may take this
+    // mode: a buffer in it cannot also be read by a matmul, and these two are
+    // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
-    unpack_mode[tt::CBIndex::c_10] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
+    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     const auto compute = CreateKernel(
         program, kComputePath, region,
         ComputeConfig{
@@ -826,6 +859,25 @@ void check_algorithm2(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t d =
     const uint32_t N = 2u * C * kTile;  // T = 2C blocks of B = 32 rows
     const auto ref = make_reference(N, d);
     const auto got = run_algorithm2(C, ref, grid_w, grid_h);
+    if (std::getenv("CYCLIC_DUMP_BLOCKS") != nullptr) {
+        // Per 32-row block: the largest |got| and |ref| of each gradient.
+        for (const auto& [name, g, r] : {std::tuple{"dQ", &got.dQ, &ref.dQ}, std::tuple{"dK", &got.dK, &ref.dK},
+                                          std::tuple{"dV", &got.dV, &ref.dV}}) {
+            std::cout << "  " << name << " blocks:";
+            for (uint32_t b = 0; b < N / kTile; ++b) {
+                float mg = 0.0F, mr = 0.0F, md = 0.0F;
+                for (uint32_t rr = b * kTile; rr < (b + 1u) * kTile; ++rr) {
+                    for (uint32_t c = 0; c < d; ++c) {
+                        mg = std::max(mg, std::abs((*g)(rr, c)));
+                        mr = std::max(mr, std::abs((*r)(rr, c)));
+                        md = std::max(md, std::abs((*g)(rr, c) - (*r)(rr, c)));
+                    }
+                }
+                std::cout << " [" << b + 1u << ": got " << mg << " ref " << mr << " diff " << md << "]";
+            }
+            std::cout << "\n";
+        }
+    }
     expect_close(got.dQ, ref.dQ, 0.06F, "dQ");
     expect_close(got.dK, ref.dK, 0.06F, "dK");
     expect_close(got.dV, ref.dV, 0.06F, "dV");
@@ -903,15 +955,15 @@ TEST(CyclicSdpaBwAlgorithm2Test, SixteenCores) {
 }
 
 // A wider head dimension, so every matmul runs over four inner tiles.
-// Disabled: since the dQ update stopped copying its seed through an L1
-// accumulator (the compute kernel got faster by 3 to 9%), this variant's dV
-// comes out nearly zero at d = 128 with a value that changes from run to run
-// -- a timing race in the non-resident variant's per-timestep dV seed and
-// handover, not an arithmetic error: the resident op path passes at d = 128
-// at every block height, three runs out of three, and this test passed with
-// the previous kernel. The DRAM variant is a debugging reference and not the
-// op; the race is an open item, recorded in tt-flash-attn's ring-plan.md.
-TEST(CyclicSdpaBwAlgorithm2Test, DISABLED_FourCoresWiderHead) {
+//
+// This was the test that first showed dV coming out near zero, varying from
+// run to run, once the dQ update got faster. The cause was found later, when
+// the two-core case failed the same way every run: a dest-register transpose
+// (transpose_dest) in the dQ update was overlapping the unpack of the next
+// matmul's SrcB operand, and its end-of-transpose clear wiped that operand.
+// The dQ update now keeps its transposes behind buffer handshakes; see the
+// compute kernel.
+TEST(CyclicSdpaBwAlgorithm2Test, FourCoresWiderHead) {
     check_algorithm2(4, 2, 2, /*d=*/128);
 }
 
@@ -1068,10 +1120,23 @@ void report_op_error(
     const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, slices), device);
     const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, slices), device);
     const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, slices), device);
+    // CYCLIC_TRUNC_STATS=1 truncates L and D to 19 bits (what a Src register
+    // keeps of a Float32) before upload: a kernel that only ever sees them
+    // through a Src register gives identical results with it set.
+    auto lse_tile = ref.lse_tile;
+    auto u_tile = ref.u_tile;
+    if (std::getenv("CYCLIC_TRUNC_STATS") != nullptr) {
+        for (auto* t : {&lse_tile, &u_tile}) {
+            for (auto& v : *t) {
+                uint32_t bits = std::bit_cast<uint32_t>(v) & 0xFFFFE000u;
+                v = std::bit_cast<float>(bits);
+            }
+        }
+    }
     const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
-        repeat_4d(ref.lse_tile, slices), device);
+        repeat_4d(lse_tile, slices), device);
     const auto row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
-        repeat_4d(ref.u_tile, slices), device);
+        repeat_4d(u_tile, slices), device);
 
     const auto [gq, gk, gv] = ttml::metal::cyclic_sdpa_bw(
         query, key, value, grad_output, lse, row_scalar, Bt, /* use_barrier */ false,
@@ -1092,11 +1157,44 @@ void report_op_error(
         }
         return worst;
     };
+    // RMS of the error over RMS of the reference, slice 0: the max above is
+    // one element's story, this is everyone's.
+    const auto rms_relative = [&](const xt::xarray<float>& got, const xt::xarray<float>& want) {
+        double num = 0.0, den = 0.0;
+        for (uint32_t r = 0; r < want.shape()[0]; ++r) {
+            for (uint32_t c = 0; c < want.shape()[1]; ++c) {
+                const double e = got(0, 0, r, c) - want(r, c);
+                num += e * e;
+                den += double(want(r, c)) * want(r, c);
+            }
+        }
+        return den > 0.0 ? std::sqrt(num / den) : std::sqrt(num);
+    };
+    const auto gq_h = ttml::core::to_xtensor(gq);
+    const auto gk_h = ttml::core::to_xtensor(gk);
+    const auto gv_h = ttml::core::to_xtensor(gv);
     std::cout << "  " << (dense ? "dense " : "causal") << (positive ? " uniform(0,2)" : " zero-mean ")
               << " C=" << C << " Bt=" << Bt << " d=" << d
-              << " N=" << N << " slices=" << slices << ": dQ " << relative(ttml::core::to_xtensor(gq), ref.dQ)
-              << " dK " << relative(ttml::core::to_xtensor(gk), ref.dK) << " dV "
-              << relative(ttml::core::to_xtensor(gv), ref.dV) << "\n";
+              << " N=" << N << " slices=" << slices << ": dQ " << relative(gq_h, ref.dQ)
+              << " dK " << relative(gk_h, ref.dK) << " dV " << relative(gv_h, ref.dV)
+              << "   rms: dQ " << rms_relative(gq_h, ref.dQ) << " dK " << rms_relative(gk_h, ref.dK) << " dV "
+              << rms_relative(gv_h, ref.dV) << "\n";
+    if (std::getenv("CYCLIC_DUMP_BLOCKS") != nullptr) {
+        for (const auto& [name, g, r] : {std::tuple{"dQ", &gq_h, &ref.dQ}, std::tuple{"dK", &gk_h, &ref.dK},
+                                          std::tuple{"dV", &gv_h, &ref.dV}}) {
+            std::cout << "    " << name << " per block, max |diff|:";
+            for (uint32_t b = 0; b < N / kTile; ++b) {
+                float md = 0.0F;
+                for (uint32_t rr = b * kTile; rr < (b + 1u) * kTile; ++rr) {
+                    for (uint32_t c = 0; c < d; ++c) {
+                        md = std::max(md, std::abs((*g)(0, 0, rr, c) - (*r)(rr, c)));
+                    }
+                }
+                std::cout << " " << md;
+            }
+            std::cout << "\n";
+        }
+    }
 }
 
 TEST(CyclicSdpaBwOpTest, DISABLED_ReportErrorAcrossBlockHeights) {

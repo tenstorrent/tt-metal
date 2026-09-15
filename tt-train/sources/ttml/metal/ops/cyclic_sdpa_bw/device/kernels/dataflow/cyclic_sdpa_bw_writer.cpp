@@ -29,6 +29,7 @@
 #include "api/debug/waypoint.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/cyclic_schedule.hpp"
+#include "tt-train/sources/ttml/metal/ops/cyclic_sdpa_bw/device/kernels/dataflow/cyclic_dataflow_utils.hpp"
 
 void kernel_main() {
     uint32_t arg = 0;
@@ -63,12 +64,22 @@ void kernel_main() {
     constexpr uint32_t cb_grad_key = tt::CBIndex::c_20;
     constexpr uint32_t cb_grad_value = tt::CBIndex::c_23;
     constexpr uint32_t cb_scratch = tt::CBIndex::c_24;
+    // The statistics the reader loads, one slot, and the tiles made of them.
+    constexpr uint32_t cb_lse = tt::CBIndex::c_4;
+    constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
+    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
+    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
+    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_30;
+    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
 
     using ttml::metal::ops::cyclic_sdpa_bw::CyclicSchedule;
     constexpr CyclicSchedule sched(kCores);
     constexpr uint32_t kTimesteps = 2u * kCores + 1u;
 
-    generate_causal_mask_tile(cb_attn_mask);
+    // The compute kernel forms S^T, so its diagonal tile takes the transposed
+    // causal mask: live where the key index is at most the query index.
+    cyclic_dataflow::generate_transposed_causal_mask_tile(cb_attn_mask);
+    cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_query);
     const auto grad_query = TensorAccessor(grad_query_args, grad_query_addr, grad_bytes);
@@ -79,12 +90,26 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(arrive_sem_id));
     const uint32_t scratch_l1 = get_write_ptr(cb_scratch);
     volatile tt_l1_ptr uint32_t* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch_l1);
+    const uint32_t interm_bytes = get_tile_size(cb_lse);
+    const uint32_t base_lse = get_write_ptr(cb_lse);  // one slot: always here
+    const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * interm_bytes);
+    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
     const uint64_t arrive_noc_addr = get_noc_addr(coord_noc_x, coord_noc_y, get_semaphore(arrive_sem_id));
     const uint64_t release_mcast_addr = get_noc_multicast_addr(
         mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(release_sem_id));
 
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
+
+        // The statistic tiles for this timestep, once the reader has L and D.
+        cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
+        invalidate_l1_cache();
+        cyclic_dataflow::produce_statistic_tiles(
+            base_lse, base_u_scalar, Bt, interm_bytes, cb_lse_row, cb_u_row, cb_lse_rem, cb_u_rem);
+        cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
 
         write_tiles_by_row(cb_grad_query, grad_query, (pair.i - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
         write_tiles_by_row(cb_grad_key, grad_key, (pair.j - 1u) * row_tiles, row_tiles, grad_bytes, row_tiles);
