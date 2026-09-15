@@ -121,6 +121,21 @@ assert not (TP_SHARD_KV and USE_TRACE) or _ALLOW_TP_SHARD_TRACE, (
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", ADAPTER.ttnn_cache_default)
 
+# DO NOT MERGE -- observability for the hang-injection experiment. A rank that wedges
+# during teardown emits nothing and leaves no stack, which is what made the 2026-08-07
+# SC4 incident unresolvable. Periodic all-thread dumps make it self-diagnosing; SIGQUIT
+# gives an on-demand dump. Only covers stalls above Py_FinalizeEx -- a stall inside a
+# C++ destructor still needs eu-stack/gdb on the pid.
+_FAULTHANDLER_SECONDS = os.environ.get("TT_INJECT_FAULTHANDLER_SECONDS")
+if _FAULTHANDLER_SECONDS:
+    import faulthandler
+
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(float(_FAULTHANDLER_SECONDS), repeat=True, exit=False)
+    if hasattr(signal, "SIGQUIT"):
+        faulthandler.register(signal.SIGQUIT, all_threads=True)
+    logger.warning(f"[fault-injection] faulthandler armed: all-thread stack dump every {_FAULTHANDLER_SECONDS}s")
+
 _shutdown = False
 
 
