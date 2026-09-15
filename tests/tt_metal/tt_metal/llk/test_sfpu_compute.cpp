@@ -62,9 +62,8 @@ namespace unit_tests::sfpu_util {
 const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = {
     // FIXME: #1157
     {"relu", {{"SFPU_OP_CHAIN_0", "relu_tile_init(); relu_tile(0);"}}},
-    // Threshold 5.0f (0x40A00000) matches the LLK unary sweep (RELU_MIN/MAX_THRESHOLD).
-    {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A00000u);"}}},
-    {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A00000u);"}}},
+    {"relu_min", {{"SFPU_OP_CHAIN_0", "relu_min_tile_init(); relu_min_tile(0, 0x40A33333u);"}}},  // 5.1f
+    {"relu_max", {{"SFPU_OP_CHAIN_0", "relu_max_tile_init(); relu_max_tile(0, 0x40A33333u);"}}},  // 5.1f
     {"exponential", {{"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}}},
     {"reciprocal", {{"SFPU_OP_CHAIN_0", "recip_tile_init(); recip_tile(0);"}}},
     {"gelu", {{"SFPU_OP_CHAIN_0", "gelu_tile_init(); gelu_tile(0);"}}},
@@ -145,10 +144,10 @@ float sfpu_function(const std::string& op_name, float input) {
         return fmaxf(input, 0.0f);
     }
     if (op_name == "relu_min") {
-        return fmaxf(input, 5.0f);
+        return fmaxf(input, 5.1f);
     }
     if (op_name == "relu_max") {
-        return fmaxf(0.0f, fminf(input, 5.0f));
+        return fmaxf(0.0f, fminf(input, 5.1f));
     }
     if (op_name == "exponential") {
         return std::exp(input);
@@ -330,7 +329,6 @@ vector<uint32_t> generate_packed_sfpu_input(const unsigned int numel, const std:
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 2.0f, numel, seed);
     }
     if ((op_name == "relu_min") || (op_name == "relu_max")) {
-        // Span below/above the 5.0f threshold (and negatives, which relu_max clamps to 0).
         return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-2.0f, 10.0f, numel, seed);
     }
     return generate_packed_uniform_random_vector<uint32_t, bfloat16>(-1.0f, 1.0f, numel, seed);
@@ -402,7 +400,7 @@ std::pair<float, float> sfpu_tolerance(const std::string& op_name, bool fp32_des
     if (op_name == "tanh") {
         return {0.175f, 0.1f};
     }
-    if ((op_name == "gelu") || (op_name == "relu") || (op_name == "relu_min") || (op_name == "relu_max")) {
+    if ((op_name == "gelu") || (op_name == "relu")) {
         return {0.15f, 0.001f};
     }
     if (op_name == "gelu_accurate") {
@@ -885,16 +883,12 @@ bool run_sfpu_all_same_buffer(distributed::MeshDevice& mesh_device, const SfpuCo
 
     // Input
     const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
-    // The Float32 device path only wires up the relu family in v1; the golden/input/check helpers
-    // below are format-generic, so this is the single place that pins the supported-op set for Float32.
     const bool is_relu_family =
         test_config.sfpu_op == "relu" || test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     TT_FATAL(!is_fp32 || is_relu_family, "Float32 SFPU path supports relu / relu_min / relu_max only in v1");
     const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
     const size_t numel = byte_size / element_size;
     const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-    // Float32 packs 1:1 into uint32 words (pack_vector accepts sizeof(PackType) >= sizeof(ValueType)),
-    // so the bf16 uniform-random generator works for both; relu uses the [-1, 1] default range.
     const bool relu_threshold_op = test_config.sfpu_op == "relu_min" || test_config.sfpu_op == "relu_max";
     std::vector<uint32_t> packed_input =
         is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(
