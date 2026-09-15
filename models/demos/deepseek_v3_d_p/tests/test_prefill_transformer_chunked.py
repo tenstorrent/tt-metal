@@ -178,7 +178,11 @@ def _pad_overrun_summary(seq_len_cache, overruns):
     )
 
 
-# Per-chunk per-layer threshold; error accumulates with depth. Calibrate + tighten.
+# Per-chunk per-layer threshold; error accumulates with depth. Kept at 0.88 after the DEVICE ->
+# DEVICE_FP32 rename because the gate is only one of several drift sources and FP32 does not
+# meaningfully improve the depth-dominated tail: on DEVICE_FP32 the measured min per-layer PCC at
+# L61 is 0.888930 (deepseek_v3, torus-xy-8x4, chunks11, layer 60), so 0.88 stays the tightest safe
+# floor across all L61 variants (Kimi/GLM/Mistral share this constant).
 LAYER_PCC_THRESHOLD = 0.88
 # Floors for the deep KV / indexer-K cache PCC. Set at the observed L78 minimum (not below it) so a
 # future regression fails the test. KVPE nope bottoms ~0.86 (glm_5_2 @L75); indexer-K nope 0.952
