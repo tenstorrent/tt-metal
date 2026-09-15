@@ -637,22 +637,10 @@ def test_eltwise_unary_sfpu_edges(
 # 16-bit output narrows NaN to inf on the way to L1, which is how the defect originally stayed
 # hidden, so only a 32-bit output can show a regression.
 @pytest.mark.nightly
-def test_sqrt_custom_infinity_regression(request):
+def test_sqrt_custom_infinity_regression():
     formats = InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     dest_acc = DestAccumulation.Yes
     input_dimensions = [32, 32]
-
-    # Quasar still carries the pre-fix kernel (its ckernel_sfpu_sqrt_custom.h guards only
-    # val != 0.0f), so it is expected to fail here rather than silently not being covered.
-    # Non-strict: fixing Quasar should XPASS and prompt removing this, not error.
-    if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-        request.node.add_marker(
-            pytest.mark.xfail(
-                reason="Quasar's sfpu_sqrt_custom has not had the non-finite guard applied; "
-                "sqrt_custom(+inf) is still NaN there. See tt-metal issue #52930.",
-                strict=False,
-            )
-        )
 
     # If this ever goes False the pipeline stopped delivering +inf and the assertion below
     # would pass vacuously -- fail loudly instead of quietly testing nothing.
