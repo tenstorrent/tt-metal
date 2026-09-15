@@ -457,11 +457,21 @@ def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_l
 
 
 # --------------------------------------------------------------------------------------------------
-# Fan-out chunk arithmetic, on host. Fan-out replaces the per-expert chunk with one per (origin,
-# destination): a token picking several experts on one chip crosses the cable once, carrying a page
-# list. That breaks the length derivation the dense region rests on -- per-expert counts are
-# marginals and a fan-out length depends on the joint -- so the length has to come from a presence
-# table instead. This checks the replacement derivation before any kernel is written.
+# Per-chip dedup chunk arithmetic, on host. One send per (origin, destination chip) rather than per
+# (origin, destination, expert): a token picking several experts on one chip crosses the cable once,
+# carrying a page list.
+#
+# The op does NOT implement this -- it implements multicast (see the next block), which subsumes it.
+# Kept deliberately, as the A/B that says how much of the win each half is worth. Measured on the
+# busiest directed link at production geometry with cross-group routing:
+#
+#     routing      today      dedup only       multicast
+#     uniform      6,441      6,086 (1.06x)    5,262 (1.22x)
+#     hot          9,625      8,589 (1.12x)    6,582 (1.46x)
+#     hottest     12,832     10,786 (1.19x)    7,482 (1.72x)
+#
+# Two thirds of the win is multicast. Without this comparison the natural assumption is that dedup --
+# much the simpler change -- is most of it, and it is not.
 # --------------------------------------------------------------------------------------------------
 
 
@@ -496,7 +506,7 @@ def _fanout_presence(indices, table, offs, capacity, G, H, seq, topk, num_routed
 @pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
 @pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
 def test_dispatch_fabric2d_fanout_chunk_agreement(extent, num_links, capacity_div):
-    """What one chip writes into its neighbour's region is what that neighbour reads, under fan-out."""
+    """Region agreement under per-chip dedup. Retained for the dedup-vs-multicast A/B, not shipped."""
     G, seq, topk = 2, 16, 4
     num_routed_experts = extent * topk * G
     experts_per_chip = num_routed_experts // G // extent
