@@ -449,13 +449,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
     KernelHandle dm_kernel0{};
     KernelHandle dm_kernel1{};
     KernelHandle compute_kernel{};
-    if (is_quasar) {
-        // MAX_DMS is read inside the kernel's COMPILE_FOR_DM block, which only Quasar compiles.
-        const uint32_t max_dms = tt::tt_metal::MetalContext::instance().hal().get_processor_types_count(
-            HalProgrammableCoreType::TENSIX, ttsl::as_underlying_type(HalProcessorClassType::DM));
-        dm_defines0.emplace("MAX_DMS", std::to_string(max_dms));
-        dm_defines1.emplace("MAX_DMS", std::to_string(max_dms));
-    } else {
+    if (!is_quasar) {
         dm_kernel0 = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
@@ -621,6 +615,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     uint32_t rta_base_dm1 = rta_base_dm0 + (2048 * sizeof(uint32_t));
     uint32_t rta_base_compute = rta_base_dm1 + (4096 * sizeof(uint32_t));
 
+    TT_FATAL(cr_set.ranges().size() >= 2, "Expected two core ranges, got {}", cr_set.ranges().size());
     auto it = cr_set.ranges().begin();
     CoreRange core_range_0 = *it;
     std::advance(it, 1);
@@ -642,26 +637,98 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             {"NUM_COMMON_RUNTIME_ARGS", std::to_string(num_common_runtime_args)},
             {"RESULTS_ADDR", std::to_string(results_addr)}};
     };
-    std::vector<KernelHandle> kernels = {
-        CreateKernel(
-            program,
-            kernel_path,
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
-                .defines = make_defines("DATA_MOVEMENT", rta_base_dm0)}),
-        CreateKernel(
-            program,
-            kernel_path,
-            cr_set,
-            DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
-                .defines = make_defines("DATA_MOVEMENT", rta_base_dm1)}),
-        CreateKernel(
-            program, kernel_path, cr_set, ComputeConfig{.defines = make_defines("COMPUTE", rta_base_compute)})};
     const uint32_t rta_bases[] = {rta_base_dm0, rta_base_dm1, rta_base_compute};
+    const bool is_quasar = mesh_device->arch() == ARCH::QUASAR;
+
+    std::vector<KernelHandle> kernels;
+    // Gen2 kernel names, indexed [core range][result base].
+    std::vector<std::vector<experimental::KernelSpecName>> gen2_kernels;
+
+    if (is_quasar) {
+        using namespace tt::tt_metal::experimental;
+        const CoreRange ranges[] = {core_range_0, core_range_1};
+        const uint32_t num_args_per_range[] = {num_runtime_args_for_cr0, num_runtime_args_for_cr1};
+
+        // A vararg count is fixed per kernel, so rather than one kernel binary reading a different
+        // count per core (the Gen1 shape, via CR1_START_Y), each range gets its own kernels. The
+        // per-node override that would preserve the shared binary is deprecated.
+        std::vector<KernelSpec> kernel_specs;
+        std::vector<WorkUnitSpec> work_units;
+        for (size_t r = 0; r < 2; r++) {
+            gen2_kernels.emplace_back();
+            std::vector<KernelSpecName> work_unit_kernels;
+            for (size_t role = 0; role < 3; role++) {
+                const bool compute = role == 2;
+                const KernelSpecName name{"multi_crs_" + std::to_string(r) + "_" + std::to_string(role)};
+                gen2_kernels[r].push_back(name);
+
+                auto defines_map = make_defines(compute ? "COMPUTE" : "DATA_MOVEMENT", rta_bases[role]);
+                // Each kernel covers exactly one range, so the shared-binary discriminators are unused.
+                defines_map.erase("NUM_RUNTIME_ARGS_CR1");
+                defines_map.erase("CR1_START_Y");
+                defines_map["NUM_RUNTIME_ARGS"] = std::to_string(num_args_per_range[r]);
+
+                KernelSpec::CompilerOptions::Defines defines;
+                for (const auto& [key, value] : defines_map) {
+                    defines.emplace(key, value);
+                }
+
+                kernel_specs.push_back(KernelSpec{
+                    .unique_id = name,
+                    .source =
+                        std::filesystem::path{"tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel_2_0.cpp"},
+                    .num_threads = 1,
+                    .compiler_options = {.defines = std::move(defines)},
+                    .hw_config =
+                        compute ? std::variant<DataMovementHardwareConfig, ComputeHardwareConfig>{ComputeHardwareConfig{
+                                      ComputeGen2Config{}}}
+                                : std::variant<
+                                      DataMovementHardwareConfig,
+                                      ComputeHardwareConfig>{DataMovementHardwareConfig{DataMovementGen2Config{}}},
+                    .advanced_options =
+                        KernelAdvancedOptions{
+                            .num_runtime_varargs = num_args_per_range[r],
+                            .num_common_runtime_varargs = num_common_runtime_args,
+                        },
+                });
+                work_unit_kernels.push_back(name);
+            }
+
+            // Work units must not overlap in target nodes, so the range's kernels share one.
+            work_units.push_back(WorkUnitSpec{
+                .name = "wu_" + std::to_string(r),
+                .kernels = work_unit_kernels,
+                .target_nodes = CoreRangeSet{ranges[r]},
+            });
+        }
+
+        ProgramSpec spec{
+            .name = "multi_crs_runtime_args",
+            .kernels = kernel_specs,
+            .work_units = work_units,
+        };
+        program = MakeProgramFromSpec(*mesh_device, spec);
+    } else {
+        kernels = {
+            CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
+                    .noc = NOC::RISCV_0_default,
+                    .defines = make_defines("DATA_MOVEMENT", rta_base_dm0)}),
+            CreateKernel(
+                program,
+                kernel_path,
+                cr_set,
+                DataMovementConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::RISCV_1_default,
+                    .defines = make_defines("DATA_MOVEMENT", rta_base_dm1)}),
+            CreateKernel(
+                program, kernel_path, cr_set, ComputeConfig{.defines = make_defines("COMPUTE", rta_base_compute)})};
+    }
 
     uint32_t idx = 0;
     workload.add_program(device_range, std::move(program));
@@ -684,27 +751,52 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
             common_args.push_back(idx++);
         }
 
-        for (const CoreCoord& core_coord : core_range_0) {
-            for (KernelHandle k : kernels) {
-                SetRuntimeArgs(program_, k, core_coord, cr0_args);
-            }
-        }
-        for (const CoreCoord& core_coord : core_range_1) {
-            for (KernelHandle k : kernels) {
-                SetRuntimeArgs(program_, k, core_coord, cr1_args);
-            }
-        }
+        if (is_quasar) {
+            using namespace tt::tt_metal::experimental;
+            const CoreRange ranges[] = {core_range_0, core_range_1};
+            const std::vector<uint32_t>* args_per_range[] = {&cr0_args, &cr1_args};
 
-        if (iter == 0) {
-            for (KernelHandle k : kernels) {
-                SetCommonRuntimeArgs(program_, k, common_args);
+            ProgramRunArgs run_args;
+            for (size_t r = 0; r < gen2_kernels.size(); r++) {
+                for (const auto& name : gen2_kernels[r]) {
+                    ProgramRunArgs::KernelRunArgs kernel_run_args{.kernel = name};
+                    for (const CoreCoord& core_coord : ranges[r]) {
+                        kernel_run_args.advanced_options.runtime_varargs[core_coord] = *args_per_range[r];
+                    }
+                    kernel_run_args.advanced_options.common_runtime_varargs = common_args;
+                    run_args.kernel_run_args.push_back(std::move(kernel_run_args));
+                }
+            }
+            // Update rather than re-set on later iterations, matching the in-place CRTA update the
+            // Gen1 path exercises via GetCommonRuntimeArgs.
+            if (iter == 0) {
+                SetProgramRunArgs(program_, run_args);
+            } else {
+                UpdateProgramRunArgs(program_, run_args);
             }
         } else {
-            for (KernelHandle k : kernels) {
-                memcpy(
-                    GetCommonRuntimeArgs(program_, k).rt_args_data,
-                    common_args.data(),
-                    common_args.size() * sizeof(uint32_t));
+            for (const CoreCoord& core_coord : core_range_0) {
+                for (KernelHandle k : kernels) {
+                    SetRuntimeArgs(program_, k, core_coord, cr0_args);
+                }
+            }
+            for (const CoreCoord& core_coord : core_range_1) {
+                for (KernelHandle k : kernels) {
+                    SetRuntimeArgs(program_, k, core_coord, cr1_args);
+                }
+            }
+
+            if (iter == 0) {
+                for (KernelHandle k : kernels) {
+                    SetCommonRuntimeArgs(program_, k, common_args);
+                }
+            } else {
+                for (KernelHandle k : kernels) {
+                    memcpy(
+                        GetCommonRuntimeArgs(program_, k).rt_args_data,
+                        common_args.data(),
+                        common_args.size() * sizeof(uint32_t));
+                }
             }
         }
 
@@ -1802,8 +1894,13 @@ TEST_F(UnitMeshCQFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
     for (const auto& device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
-        CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
-        CoreRange cr1({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
+        // This test is about updating args across iterations, so it only needs two disjoint ranges.
+        // Keep the original split where the grid is tall enough; Quasar's 2x1 grid has no row 5.
+        const auto [cr0, cr1] = worker_grid_size.y > 5
+                                    ? std::pair{
+                                          CoreRange({0, 0}, {worker_grid_size.x - 1, 3}),
+                                          CoreRange({0, 5}, {worker_grid_size.x - 1, worker_grid_size.y - 1})}
+                                    : local_test_functions::two_disjoint_core_ranges(*device);
         CoreRangeSet cr_set(std::vector{cr0, cr1});
 
         DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
