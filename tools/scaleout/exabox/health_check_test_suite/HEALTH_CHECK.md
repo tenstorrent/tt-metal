@@ -3,8 +3,8 @@
 Pre-cluster hardware sanity check for Blackhole Galaxy 6U systems. Captures a
 `tt-smi` snapshot, decodes per-chip telemetry, runs a reset stability loop,
 invokes the `unit_tests_deployment` gtest binary, and on the longer tiers folds
-in the first-step triage tools. Emits a single JSON report with
-per-check PASS/WARN/FAIL/SKIP status grouped by IP.
+in the first-step triage tools and a cluster-debug ETH dump. Emits a single JSON
+report with per-check PASS/WARN/FAIL/SKIP status grouped by IP.
 
 ## Quick start
 
@@ -27,11 +27,11 @@ Output goes to `./diag_report.json` by default; gtest logs to `./logs/<test>.log
 
 ## Tiers
 
-| Tier | Resets | Tests | Triage | Duration | Use when |
-|---|---|---|---|---|---|
-| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | ~75 s   | Smoke check on every new unit |
-| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | ~5 min + triage | Pre-deployment validation |
-| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | ~18 min + triage | Final deploy gate |
+| Tier | Resets | Tests | Triage | Cluster debug | Duration | Use when |
+|---|---|---|---|---|---|---|
+| `light`  | `tt-smi -r` × 1                            | eth_link_up                                                                | — | — | ~75 s   | Smoke check on every new unit |
+| `medium` | `tt-smi -r`, `tt-smi -glx_reset`, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + gddr_fast (DRAM_TEST_FAST=1)                | host_side + device_side | yes, if installed | ~5 min + triage + ~7 min | Pre-deployment validation |
+| `deploy` | `tt-smi -r`, `tt-smi -glx_reset` × 2, then `-glx_reset` after the tests | eth_link_up + eth_bandwidth + full gddr matrix (3 DramDeployment tests) + didt_matmul_galaxy (pytest, ~9 min) | host_side + device_side | yes, if installed | ~18 min + triage + ~7 min | Final deploy gate |
 
 The eth deployment tests are registered as `TensixDeploymentEthernet<NN><Name>`
 (e.g. `TensixDeploymentEthernet00LinkUp`, `TensixDeploymentEthernet01Bandwidth`,
@@ -156,6 +156,115 @@ for want of a capability rather than a mount:
 Also note `/proc/driver/tenstorrent/<N>/pids` lists *host* PIDs, which don't resolve
 in the container's PID namespace — the holder count is right, the names are not.
 
+## Cluster debug phase
+
+`medium` and `deploy` finish by collecting an ETH dump with
+`tt-bh-glx-cluster-debug collect --parallelize`, when that binary is on PATH.
+
+**It answers a question nothing else in this suite reaches.** The snapshot phase
+reads `ETH_LIVE_STATUS` out of tt-smi telemetry — a bitmask per chip — and the
+eth gtests push traffic over links that already came up. Neither can say *which
+far end* a port is actually talking to. The dump carries the expected partner
+and the firmware's own `remote_info` on each of the 448 port records, so a
+miscabled or half-trained link becomes a comparison instead of an inference. Its
+cage and module records are also the only inventory of what is physically
+plugged in, which is what makes "this module has thrown errors in three
+different cages" answerable later from stored runs.
+
+### Where it comes from, and what happens without it
+
+The tool ships in the syseng cluster-debug **.deb**, built with PyInstaller — one
+binary on PATH, no repo, no venv, no import path to arrange. So the phase probes
+for a *command* rather than for a checkout the way the triage phase probes for
+its scripts, and a host that has not had the package installed simply **SKIPs
+with that reason on the report**. Nothing needs configuring to turn it on:
+install the package and the next `medium` run collects a dump.
+
+It runs last, after the post-test `-glx_reset`, for the two reasons the triage
+phase sits there — it opens every chip, so it must not overlap the gtests, and
+it has no SIGBUS handler, so a concurrent reset would kill it outright rather
+than being reported. Reading the links *after* that reset is also the reading
+that matters: it is the state the machine is being left in.
+
+### The conversion layer
+
+The dump is an inventory, not a verdict. By design it states what the topology
+expects and what the firmware found, side by side, and leaves the comparison to
+the reader — nothing in it says PASS or FAIL, and its JSONL record shape looks
+nothing like this suite's report.
+
+`cluster_debug_ingest.py` is that reader. Each fault class it derives is one of
+the access patterns the dump was shaped to answer (`cluster_debug_spec.md`
+§10.3, declared as SQL in the tool's own `visualizer/queries.py`), re-derived in
+Python over a single dump so the health check needs neither the merge step nor
+the SQLite database. It emits **the same shape the triage scripts emit** —
+`{"checks": [{"name", "status", "details", "ip", "data"}]}` — so
+`normalize_external_check()` folds it in on the same path, with the same
+defences, and the checks reach the JSON report, the console summary and the
+Superset CSVs with nothing downstream needing to know the phase exists.
+
+That shared normalizer is why names carry a `clusterdbg_` prefix (the analyzer
+keys `CHECK_CATEGORY`, `EXCLUDED_CHECKS` and `_find_check()` on the bare name
+across *all* phases) and why an unrecognised status or `ip` is folded rather than
+passed through. It also honours an optional `console_visible: false`, which is
+how the store-only checks below stay out of the console without leaving the JSON
+— the same treatment the snapshot phase gives its `gddr_info_*` counters.
+
+The ingest module is separately runnable, with the triage scripts' interface, so
+a dump collected on a sick machine is reviewable at a desk:
+
+```bash
+python3 cluster_debug_ingest.py cluster_dump_bh-glx-110-a07u02.jsonl --json out.json
+```
+
+### Coverage depends on the descriptor, and the checks say so
+
+Internal links — the 104 soldered ones — always have an expected partner, from
+the topology table built into the collector. Cage-attached links only get one
+from a `factory_system_descriptor.textproto`, passed with
+`--cluster-debug-descriptor`. **Both halves of "a descriptor applied" matter**: a
+file that was supplied but does not name this host leaves the cabled links
+exactly as undescribed as no file at all, so the ingest checks `PRESENT` *and*
+`MATCHED_HOSTNAME`.
+
+Without one, `clusterdbg_cage_gaps` SKIPs (an empty cage cannot be told from an
+unused one) and an undescribed trained link is recorded without alerting rather
+than reported as a surprise — otherwise every one of the ~36 cabled links inside
+the chassis would be a finding on every run.
+
+### Failure modes are SKIP or WARN, never a silent PASS
+
+Same discipline as the triage phase, for the same reason.
+
+- Tier doesn't ask, package not installed, ingest module missing → **SKIP with
+  the reason**. A check that silently disappears reads as coverage we had.
+- Timed out, wrote no dump, or the dump would not parse → **WARN**: lost
+  coverage, not a statement about the hardware.
+- Findings from the dump → recorded as-is, except that **FAIL is held at WARN
+  unless `--cluster-debug-gating` is passed**, matching `--triage-gating` while
+  the tool beds in.
+
+One subtlety worth knowing: `collect` exits non-zero *only* when nothing at all
+could be collected. A descriptor it could not open, a BMC that would not answer
+and a cage sweep that fell over are all recorded in the dump as findings and
+still exit 0. So the phase judges on the dump, not the exit code — a readable
+dump after a non-zero exit is still read, and a clean exit with no dump is still
+a failure to collect. The collector's own `FINDINGS` list is surfaced as
+`clusterdbg_findings`, which is what stops a clean exit code reading as a clean
+run.
+
+The dump lands in `<output_dir>/logs/cluster_dump_<host>.jsonl` (~3.4 MB with
+cages) alongside `cluster_debug.txt` and `cluster_debug.log`, so
+`collect_run_artifacts()` attaches all three to the JIRA ticket with no extra
+wiring.
+
+**Budget.** The cage sweep is the dominant cost and the tool self-bounds it at
+its own 600 s `--qsfp-budget`; a full run measures ~7 min. The phase's own
+timeout is 1200 s as a backstop. That has to stay well inside
+`run_health_check.py`'s whole-run `--timeout-minutes` (30 by default), which
+kills the process group and takes the report with it — so raise it when running
+`medium` or `deploy` on a host that has the package.
+
 ## Flags
 
 | Flag | Default | Purpose |
@@ -167,6 +276,10 @@ in the container's PID namespace — the holder count is right, the names are no
 | `--skip-triage` | off | Skip the post-test reset and the triage phase entirely. `--skip-reset` also suppresses the post-test reset. |
 | `--triage-dir PATH` | `$HC_TRIAGE_DIR`, else `<repo>/tools/scaleout/kmd_triage` | Directory holding the triage scripts. Override only to run a working copy against a deployed checkout. |
 | `--triage-gating` | off | Let triage FAILs gate the run. Off holds them at WARN (noted in `details`); findings are recorded either way. |
+| `--skip-cluster-debug` | off | Skip the cluster debug ETH dump entirely |
+| `--cluster-debug-path PATH` | `tt-bh-glx-cluster-debug` on PATH | Override the collector binary. A path that doesn't resolve is reported as its own SKIP rather than silently ignored. |
+| `--cluster-debug-descriptor PATH` | — | `factory_system_descriptor.textproto`, which gives the cage-attached links an expected partner. Without it only the soldered internal links are compared against a topology. |
+| `--cluster-debug-gating` | off | Let cluster debug FAILs gate the run. Off holds them at WARN; findings are recorded either way. |
 | `--input-snapshot PATH` | — | Use a stored snapshot instead of calling tt-smi |
 | `--tt-smi-path PATH` | `/opt/tt_metal_infra/.../tt-smi` else `tt-smi` on PATH | Override tt-smi binary or repo path |
 | `--tt-metal-path PATH` | `$TT_METAL_HOME` | tt-metal repo root (must contain the deployment-test binary under `build_Release/`) |
@@ -240,6 +353,38 @@ while `eth_links_up` reads the `ETH_LIVE_STATUS` telemetry from the snapshot.
 ### Thermal (JSON-only)
 `asic_thermal_precheck` records the hottest chip / temp vs `thm_limit` for forensics.
 
+### Cluster debug (medium / deploy, when the package is installed)
+
+Derived from the ETH dump; see [the phase section](#cluster-debug-phase) above
+for how they get here and why FAILs are advisory by default. Checks marked
+JSON-only are store-only forensics kept out of the console summary.
+
+| Check | Rule | On fail |
+|---|---|---|
+| `clusterdbg_collect` | The collect run itself | **WARN** on timeout, no dump, or an unreadable one. **SKIP** when the tier doesn't ask, the package isn't installed, or the ingest module is missing. |
+| `clusterdbg_inventory` | 4 UBBs, 32 ASICs, 14 ETH ports per ASIC. Reaches the chips over the collector's own PCI enumeration and BMC reads rather than tt-smi, so it deliberately overlaps `pcie_enum_count` — two paths agreeing is worth more than either alone, and the collector records a *reason* per absent slot. | **FAIL** on a short count or an absent slot. **WARN** on unparseable dump lines. |
+| `clusterdbg_board_rev` | All UBBs report one `BOARD_REV`, and all 8 ASICs of each agree on `board_id`. The revision selects the internal topology table, so a bad read invalidates the partner checks below too, not just this one. | **FAIL** on mixed revisions or intra-UBB disagreement |
+| `clusterdbg_board_rev_agrees` | The dump's revision against the snapshot phase's `detected_board_rev` — two reads of one register down independent paths | **FAIL** on disagreement. **SKIP** when either side didn't determine one. |
+| `clusterdbg_findings` | The collector's own `FINDINGS` list (unreadable descriptor, unusable ipmitool, a cage sweep that fell over) | **WARN** — lost coverage. This is what stops `collect`'s exit code 0 reading as a clean run. |
+| `clusterdbg_collection_failures` | No record is `READ_FAILED` / `UNREACHABLE` / `ABSENT` | **FAIL** — a part that did not answer |
+| `clusterdbg_collection_partial` | No record is `PARTIAL` / `SKIPPED` | **WARN** — lost coverage, kept separate from the above so it doesn't read as a fault. JSON-only when clean. |
+| `clusterdbg_link_training` | Every in-service port (not harvested, `PORT_TYPE` not `PCIE`/`UNCONNECTED`/`INVALID_LOCATION`) reports `TRAIN_STATUS == LINK_TRAIN_PASS`. Unread ports are excluded — a failed read is not a failed link. | **FAIL**, naming the ports |
+| `clusterdbg_link_asymmetry` | Both ends of a resolved link agree on `LINK_UP`. Reported once per link, not once per record. | **FAIL** — the asymmetry names the end at fault. JSON-only when clean. |
+| `clusterdbg_missing_channel` | Every port with an expected partner saw one. A pair blind at both ends collapses to one row. | **FAIL**. **SKIP** when no port carries an expectation. |
+| `clusterdbg_miscabled` | The partner the firmware found is the one expected | **FAIL** on a wrong end. **WARN** on a link nobody described, but only when a descriptor matched this host — otherwise recorded without alerting. |
+| `clusterdbg_partner_disagreement` | A names B and B names A. Needs no expectation at all, so it holds without a descriptor. | **FAIL** — the hardware contradicting itself. JSON-only when clean. |
+| `clusterdbg_outside_channel` | Trained links leading to hardware this dump didn't read | never alerts — one galaxy is collected, so every inter-galaxy cable lands here. JSON-only. |
+| `clusterdbg_cage_gaps` | Cages match the expected cabling | **WARN**. **SKIP** without expected cabling, or when the sweep didn't run. |
+| `clusterdbg_eth_counters` | Store-only: `RETRAIN_COUNT`, `CORR_CW`, `UNCORR_CW` totals plus the worst ports | never alerts — JSON-only, like `gddr_info_*` |
+| `clusterdbg_modules` | Store-only: the transceiver inventory (vendor PN/SN, length, cage) | never alerts — JSON-only |
+
+An all-zero `remote_info` is treated as **no answer, not an answer**: an
+untrained port still carries a zero-filled one, and reading it as a partner
+makes every untrained link look trained to the same imaginary far end. Measured
+on `bh-glx6u-37`, 320 of 384 ports were in that state, and before the
+collector's own query grew this guard it called all 208 internal links
+miscabled.
+
 ## Known issues
 
 - **PCIe Gen1 fallback**: host-PCIe chips occasionally train down to Gen1 instead
@@ -309,6 +454,8 @@ tools/scaleout/exabox/health_check_test_suite/
 ├── run_diag.sh         # bash dispatcher (sets TT_METAL_HOME / PYTHONPATH / LD_LIBRARY_PATH, execs runner)
 ├── diag_runner.py      # Python orchestrator (all check logic lives here). Also exposes run_diag() as a
 │                       #   programmatic entry point returning (exit_code, report_dict).
+├── cluster_debug_ingest.py  # cluster-debug JSONL dump -> checks. No hardware in it: a stored dump is all
+│                       #   it needs, so it is iterated on and tested at a desk. Runnable standalone.
 ├── HEALTH_CHECK.md     # this file
 └── test_infrastructure/  # scheduled/CI harness around the diag suite
     ├── run_health_check.py              # entrypoint: run diag as a subprocess, then JIRA + CSV + SFTP

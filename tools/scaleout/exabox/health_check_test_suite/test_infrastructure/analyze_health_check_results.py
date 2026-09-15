@@ -62,8 +62,24 @@ ACKNOWLEDGED_CHECKS = {"cpld_fw_old"}
 # verdict, so it is re-labelled EXCLUDED: kept visible, counts as nothing.
 EXCLUDED_CHECKS = {"snapshot_capture"}
 
-# checks whose details list offending BDFs - keep more text for triage.
-DETAIL_RICH = {"pcie_gen", "gddr_speed", "pcie_lane_width", "physical_vs_fw_location", "asic_location_per_ubb"}
+# checks whose details list offending BDFs or ETH port paths - keep more text
+# for triage. The clusterdbg_* entries name the ports at fault ("ubb=2/asic=1/
+# eth=6 -> ..."), which is the whole value of the row: truncated to 140 they
+# say a link is down without saying which.
+DETAIL_RICH = {
+    "pcie_gen",
+    "gddr_speed",
+    "pcie_lane_width",
+    "physical_vs_fw_location",
+    "asic_location_per_ubb",
+    "clusterdbg_link_training",
+    "clusterdbg_missing_channel",
+    "clusterdbg_miscabled",
+    "clusterdbg_partner_disagreement",
+    "clusterdbg_link_asymmetry",
+    "clusterdbg_cage_gaps",
+    "clusterdbg_collection_failures",
+}
 
 # numeric forensic checks: dropped from checks_fact, folded into runs rollups.
 GDDR_INFO_PREFIX = "gddr_info_"
