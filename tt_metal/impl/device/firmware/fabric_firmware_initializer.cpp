@@ -309,11 +309,6 @@ void FabricFirmwareInitializer::init(
         // Reject fabric launch on a single-host mesh with fewer than 2 opened chips.
         // Multi-host meshes with 1 local chip per rank are unaffected: peers live on other ranks.
         const auto local_mesh_ids = control_plane_.get_local_mesh_id_bindings();
-        TT_FATAL(
-            !local_mesh_ids.empty(),
-            "FabricFirmwareInitializer: control plane has no local mesh id binding; cannot validate "
-            "fabric participation for config {}.",
-            enchantum::to_string(fabric_config));
         const size_t num_hosts = control_plane_.get_mesh_graph().get_host_ranks(local_mesh_ids.front()).size();
         TT_FATAL(
             devices_.size() >= 2 || num_hosts > 1,
