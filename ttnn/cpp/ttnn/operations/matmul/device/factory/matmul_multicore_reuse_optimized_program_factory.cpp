@@ -274,9 +274,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     const KernelSpecName COMPUTE_G1{"compute_g1"};
     const KernelSpecName COMPUTE_G2{"compute_g2"};
 
-    // DFB names are the shared compute kernel's vocabulary: the Metal 2.0 fork of
-    // bmm_large_block_zm_fused_bias_activation.cpp binds them under exactly these accessor names,
-    // and a factory adopting that fork inherits them rather than choosing its own.
     const DFBSpecName IN0_DFB{"in0"};
     const DFBSpecName IN1_DFB{"in1"};
     const DFBSpecName BIAS_DFB{"bias"};
@@ -338,9 +335,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseOptimizedProgramFac
     if (output_is_sharded) {
         out_dfb_spec.borrowed_from = OUTPUT;
         if (share_out_interm_buffer) {
-            // The shared legacy descriptor carried one backing tensor for both buffer indices, so
-            // the intermediate lived in the output's shard too. Aliased DFBs must also agree on
-            // borrowed-vs-owned memory, so the borrow applies to both members or neither.
             intermed0_dfb_spec.borrowed_from = OUTPUT;
         }
     }
