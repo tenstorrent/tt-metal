@@ -60,7 +60,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
     const tt::tt_metal::experimental::DFBSpecName tail_affine_dfb_name{"tail_affine"};
     const tt::tt_metal::experimental::DFBSpecName tail_state_dfb_name{"tail_state"};
     const tt::tt_metal::experimental::DFBSpecName reset_b_dfb_name{"reset_b"};
-    const tt::tt_metal::experimental::DFBSpecName wrap_control_dfb_name{"wrap_control"};
+    const tt::tt_metal::experimental::ScratchpadSpecName wrap_control_scratch_name{"wrap_control"};
 
     const tt::tt_metal::experimental::SemaphoreSpecName ready_semaphore_name{"ready"};
     const tt::tt_metal::experimental::SemaphoreSpecName arrival_semaphore_name{"arrival"};
@@ -99,7 +99,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
         make_dfb(tail_affine_dfb_name, segmented_affine_tiles, summary_format),
         make_dfb(tail_state_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
         make_dfb(reset_b_dfb_name, segmented_state_tiles, tt::DataFormat::Float32),
-        make_dfb(wrap_control_dfb_name, 1, tt::DataFormat::Float32),
     };
     // Initial inputs/state and final output are one-shot transfers. TO_REMOTE stays single-slot because dataflow
     // releases the current block before the remote input that makes compute runnable.
@@ -145,7 +144,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                     final_dfb_name, "final", tt::tt_metal::experimental::DFBEndpointType::CONSUMER},
                 tt::tt_metal::experimental::ProducerOf(tail_affine_dfb_name, "tail_affine"),
                 tt::tt_metal::experimental::ProducerOf(tail_state_dfb_name, "tail_state"),
-                tt::tt_metal::experimental::ProducerOf(wrap_control_dfb_name, "wrap_control"),
             },
         .semaphore_bindings =
             {
@@ -153,6 +151,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 tt::tt_metal::experimental::SemaphoreBinding{arrival_semaphore_name, "arrival"},
                 tt::tt_metal::experimental::SemaphoreBinding{release_semaphore_name, "release"},
             },
+        .scratchpad_bindings = {{wrap_control_scratch_name, "wrap_control"}},
         .tensor_bindings =
             {
                 tt::tt_metal::experimental::TensorBinding{a_tensor_name, "a"},
@@ -184,8 +183,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
           from_remote_affine_dfb_name,
           initial_state_dfb_name,
           tail_state_dfb_name,
-          reset_b_dfb_name,
-          wrap_control_dfb_name}) {
+          reset_b_dfb_name}) {
         unpack_modes[name] = tt::tt_metal::UnpackMode::UnpackToSrc;
     }
     if (summary_format == tt::DataFormat::Float32) {
@@ -226,7 +224,6 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 tt::tt_metal::experimental::ConsumerOf(tail_state_dfb_name, "tail_state"),
                 tt::tt_metal::experimental::ProducerOf(reset_b_dfb_name, "reset_b"),
                 tt::tt_metal::experimental::ConsumerOf(reset_b_dfb_name, "reset_b"),
-                tt::tt_metal::experimental::ConsumerOf(wrap_control_dfb_name, "wrap_control"),
             },
         .compile_time_args =
             {{"Kt", key_tiles},
@@ -266,6 +263,7 @@ ttnn::device_operation::ProgramArtifacts AffineExclusiveScanProgramFactory::crea
                 tt::tt_metal::experimental::SemaphoreSpec{.unique_id = arrival_semaphore_name, .target_nodes = cores},
                 tt::tt_metal::experimental::SemaphoreSpec{.unique_id = release_semaphore_name, .target_nodes = cores},
             },
+        .scratchpads = {{.unique_id = wrap_control_scratch_name, .size_per_node = sizeof(uint32_t)}},
         .tensor_parameters =
             {
                 tt::tt_metal::experimental::TensorParameter{.unique_id = a_tensor_name, .spec = a.tensor_spec()},

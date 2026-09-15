@@ -9,6 +9,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 
@@ -177,7 +178,7 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer final(dfb::final);
     DataflowBuffer tail_affine(dfb::tail_affine);
     DataflowBuffer tail_state(dfb::tail_state);
-    DataflowBuffer wrap_control(dfb::wrap_control);
+    Scratchpad<volatile uint32_t> wrap_control(scratch::wrap_control);
     Noc noc;
     Semaphore ready(sem::ready);
     Semaphore arrival(sem::arrival);
@@ -185,10 +186,14 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
 
     bool device_wrap = false;
     if constexpr (segmented) {
-        wrap_control.reserve_back(1);
-        noc.async_read(wrap_indicator_accessor, wrap_control, sizeof(uint32_t), {.page_id = 0}, {});
+        noc.async_read(
+            wrap_indicator_accessor,
+            CoreLocalMem<uint32_t>(wrap_control.get_base_address()),
+            sizeof(uint32_t),
+            {.page_id = 0},
+            {});
         noc.async_read_barrier();
-        device_wrap = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wrap_control.get_write_ptr())[0] != 0;
+        device_wrap = wrap_control[0] != 0;
     }
 
     initial_a.reserve_back(affine_a_tiles);
