@@ -999,7 +999,13 @@ void move_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
  * Postcondition: `dfb_sum` holds num_tiles produced (the running sum) at the physical front; prev+cur
  * consumed.
  */
-void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
+// 3-deep DST-frugal variant. Used ONLY when num_tiles+1 > dst_size (WH fp32, dst_size=4, Sq_chunk_t=4
+// => 5 > 4): holds 1 DST tile via two single-tile L1-accum passes. Reserves the running sum in a THIRD
+// window [2*num_tiles,3*num_tiles) then move_block's it to the front. NOTE: this move_block rebase is
+// NOT valid on Quasar — the sticky-dest packer + linear (no-wrap) tile addressing leave the running sum
+// off rd_ptr==0, desyncing the next chunk's offset read (seq512 PCC 0.034). So this variant is gated to
+// the WH-fp32 path only; Quasar (dst_size=8) uses fma_block_merged_sum_2deep instead.
+void fma_block_merged_sum_3deep(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
     DataflowBuffer d_sum(dfb_sum);
     DataflowBuffer d_emd(dfb_emd);
     d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
@@ -1045,6 +1051,45 @@ void fma_block_merged_sum(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offse
     reconfig_data_format_srca(dfb_sum);
     pack_reconfig_out(dfb_sum);
     move_block<true>(dfb_sum, dfb_sum, num_tiles);
+}
+
+// 2-deep pop-both-repush-to-front variant (the proven sdpa_decode design). Used when num_tiles+1 <=
+// dst_size (Quasar: fp32 forced off => dst_size=8, Sq_chunk_t+1=5 <= 8). Holds num_tiles result regs +
+// 1 cur scratch reg. Merged sum_A is 2-deep: prev@front [0,num_tiles), cur@[cur_offset,+num_tiles).
+// Computes running=cur+prev*bcast(emd) into DST, pops BOTH prev and cur, reserves num_tiles at the
+// FRONT, packs IN-ORDER, pushes — pops==pushes==2*num_tiles so the ring rebases to rd_ptr==0 with the
+// running sum as the single contiguous front block. NO move_block (which is what desyncs on Quasar).
+// Same bcast-cols requirement as the 3-deep: prefill's prev/cur are FULL tiles (final matmul_reduce is
+// after the K-loop) while emd is a column vector, so prev*emd MUST broadcast emd's col 0.
+void fma_block_merged_sum_2deep(uint32_t dfb_sum, uint32_t dfb_emd, uint32_t cur_offset, uint32_t num_tiles) {
+    DataflowBuffer d_sum(dfb_sum);
+    DataflowBuffer d_emd(dfb_emd);
+    d_sum.wait_front(cur_offset + num_tiles);  // prev@front [0,num_tiles) + cur@[cur_offset,+num_tiles)
+    d_emd.wait_front(num_tiles);
+    reconfig_data_format(dfb_sum, dfb_emd);
+    pack_reconfig_out(dfb_sum);
+    const uint32_t cur_scratch = num_tiles;  // one scratch DST reg above the num_tiles result regs
+    tile_regs_acquire();
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        // dst[i] = prev[i] * bcast(emd[i])  (prev at front idx i; emd col 0 broadcast)
+        mul_bcast_cols_init(dfb_sum, dfb_emd);
+        mul_tiles_bcast_cols(dfb_sum, dfb_emd, i, i, i);
+        // dst[cur_scratch] = cur[i]  (cur at ring offset cur_offset + i)
+        copy_init(dfb_sum);
+        copy_tile(dfb_sum, cur_offset + i, cur_scratch);
+        // dst[i] = prev[i]*emd[i] + cur[i]
+        add_binary_tile_init();
+        add_binary_tile(i, cur_scratch, i);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    d_sum.pop_front(cur_offset + num_tiles);  // drop the consumed prev AND cur blocks
+    d_sum.reserve_back(num_tiles);            // fresh reserve at the FRONT (rd_ptr==0 after the pop)
+    for (uint32_t i = 0; i < num_tiles; i++) {
+        pack_tile(i, dfb_sum, i);  // in-order into the front reserve
+    }
+    tile_regs_release();
+    d_sum.push_back(num_tiles);  // running sum is now the single contiguous front block at rd_ptr==0
 }
 
 void copy_block(uint32_t in_dfb, uint32_t out_dfb, uint32_t num_tiles) {
@@ -1949,8 +1994,9 @@ void sdpa_inner_loop(
         }  // If ring attention
 
         // Set up ping pong buffers.
-        // STANDARD (no attention sink) merges the running-sum ping-pong into a single 3-deep DFB
-        // (dfb_sum_A, depth 3*Sq_chunk_t; its dfb_sum_B is dropped by the factory and aliased to
+        // STANDARD (no attention sink) merges the running-sum ping-pong into a single merged DFB
+        // (dfb_sum_A, depth 2* or 3*Sq_chunk_t per the fma variant — see the fma call-site gate below;
+        // its dfb_sum_B is dropped by the factory and aliased to
         // dfb_sum_A). prev sits at the ring front [0,Sq_chunk_t); sub_exp_block_bcast_cols_inplace
         // reserve_back's cur right behind it [Sq_chunk_t,2*Sq_chunk_t) (its out-of-order pack writes to
         // the reserved region, so no producer offset is needed); fma_block_merged_sum reads
@@ -2246,7 +2292,17 @@ void sdpa_inner_loop(
                 if constexpr (merged_sum) {
                     // prev at ring front, cur behind at offset Sq_chunk_t in the single dfb_sum_A;
                     // fused pass reads both and writes the running sum back as the single front block.
-                    fma_block_merged_sum(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                    // Pick the fma variant by DST capacity (dst_size = fp32 ? 4 : 8): the 2-deep
+                    // pop-both-repush-to-front version (no move_block) is correct on Quasar and needs
+                    // Sq_chunk_t+1 <= dst_size; when that overflows (WH fp32, dst_size=4, Sq_chunk_t=4 =>
+                    // 5>4) fall back to the DST-frugal 3-deep version (WH only — its move_block rebase
+                    // desyncs on Quasar). The factory sizes sum_A to match (2* vs 3*statistics_tiles).
+                    constexpr uint32_t fma_dst_size = DST_ACCUM_MODE ? 4 : 8;
+                    if constexpr (Sq_chunk_t + 1 <= fma_dst_size) {
+                        fma_block_merged_sum_2deep(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                    } else {
+                        fma_block_merged_sum_3deep(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t, Sq_chunk_t);
+                    }
                 } else {
                     mul_tiles_bcast_cols_inplace(alias_prev_sum, dfb_exp_max_diff, Sq_chunk_t);
                     add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);

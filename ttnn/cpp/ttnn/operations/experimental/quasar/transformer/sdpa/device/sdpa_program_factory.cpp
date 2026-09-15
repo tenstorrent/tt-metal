@@ -711,11 +711,15 @@ ttnn::device_operation::ProgramArtifacts SDPAOperation::SDPAProgramFactory::crea
     // compute_common.hpp sdpa_inner_loop (merged_sum).
     const bool merge_sum = !use_streaming_compute && !use_attention_sink;
     if (merge_sum) {
+        // The merged-sum fma variant depends on DST capacity (must match compute_common.hpp's call-site
+        // gate). 2-deep pop-both-repush-to-front when statistics_tiles+1 <= dst_size (Quasar fp32-off =>
+        // dst_size=8); else the 3-deep DST-frugal + move_block variant (WH fp32 => dst_size=4).
+        const uint32_t sum_depth = (statistics_tiles + 1 <= dst_size) ? 2 : 3;
         for (auto& dfb : dfbs) {
             if (dfb.unique_id == SUM_A) {
-                // 3-deep: prev [0,statistics_tiles), cur [statistics_tiles,2*), and the running-sum
-                // region [2*,3*) that fma_block_merged_sum reserves before re-basing to the front.
-                dfb.num_entries = 3 * statistics_tiles;
+                // depth*statistics_tiles: prev [0,stats), cur [stats,2*stats), and (3-deep only) the
+                // running-sum window [2*stats,3*stats). 2-deep rebases via pop-both-repush, no 3rd window.
+                dfb.num_entries = sum_depth * statistics_tiles;
             }
         }
         std::erase_if(dfbs, [&](const DataflowBufferSpec& dfb) { return dfb.unique_id == SUM_B; });
