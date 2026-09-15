@@ -73,7 +73,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 class PrefillBlockThresholds:
     dense: float = 0.996
     moe_gate_host: float = 0.996
-    moe_gate_device_fp32: float = 0.992
+    # Floor set just under the measured 0.999895 (pcc-prompt_5k, mesh-8x4, deepseek_v3, balanced).
+    moe_gate_device_fp32: float = 0.999
     kvpe_kv: float = 0.999
     kvpe_pe: float = 0.999
 
