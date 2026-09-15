@@ -12,6 +12,8 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ColumnParallelLinear, RowParallelLinear, RunMode
 
+from ttml.parallel import TPStrategy
+
 
 class GroupedQueryAttention(AbstractModuleBase):
     """Grouped-query attention (GQA) with optional tensor-parallel linear layers.
@@ -30,7 +32,7 @@ class GroupedQueryAttention(AbstractModuleBase):
         dropout: float,
         rope_params: ttml.ops.rope.RotaryEmbeddingParams,
         bias_linears: bool = False,
-        use_tp: bool = False,
+        tp_strategy: TPStrategy = TPStrategy.NONE,
         out_proj_init: Optional[Callable] = None,
     ) -> None:
         super().__init__()
@@ -41,9 +43,16 @@ class GroupedQueryAttention(AbstractModuleBase):
                 f"Provided embedding_size={embedding_size}, num_heads={num_heads}"
             )
 
+        use_tp = tp_strategy.tensor_parallel
+        sequence_parallel = tp_strategy.sequence_parallel
+
         self.embedding_size = embedding_size
         self.dropout_prob = dropout
         self.rope_params = rope_params
+        self.sequence_parallel = sequence_parallel
+        # Identical masks across tp ranks that hold identical activations,
+        # per-device masks once SP gives each rank its own tokens.
+        self._per_device_dropout_seed = not use_tp or sequence_parallel
 
         head_dim = embedding_size // num_heads
         qkv_dim = (num_heads + 2 * num_groups) * head_dim  # == embedding_size + 2 * num_groups * head_dim
@@ -67,6 +76,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 has_bias=bias_linears,
                 bias_init=ttml.init.zeros(),
                 gather_output=False,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
             self.out_linear = RowParallelLinear(
@@ -76,6 +86,7 @@ class GroupedQueryAttention(AbstractModuleBase):
                 weight_init=out_proj_init,
                 bias_init=ttml.init.zeros(),
                 input_is_parallel=True,
+                sequence_parallel=sequence_parallel,
                 axis_name="tp",
             )
         else:
@@ -116,9 +127,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return out
 
@@ -163,9 +173,8 @@ class GroupedQueryAttention(AbstractModuleBase):
 
         out = self.out_linear(attention)
 
-        # Apply dropout if in training mode (using RunMode from AbstractModuleBase)
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
-            out = ttml.ops.dropout.dropout(out, self.dropout_prob)
+            out = ttml.ops.dropout.dropout(out, self.dropout_prob, use_per_device_seed=self._per_device_dropout_seed)
 
         return out
 
@@ -179,6 +188,9 @@ class GroupedQueryAttention(AbstractModuleBase):
     ) -> ttml.autograd.Tensor:
         if kv_cache is None:
             return self.forward_no_kv(input, mask)
+        if self.sequence_parallel:
+            # Single-token decode has no sequence to shard.
+            raise NotImplementedError("sequence_parallel does not support the KV-cache path")
         if layer_idx is None or new_tokens is None:
             raise ValueError("forward with kv_cache requires layer_idx and new_tokens to be set")
         return self.forward_kv(input, mask, kv_cache, layer_idx, new_tokens)
