@@ -16,7 +16,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.qwen3_vl.tt.common import nearest_multiple
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
 class VisionModelOptimizations:
@@ -67,6 +67,10 @@ class VisionModelArgs(ModelArgs):
 
         self.optimizations = VisionModelOptimizations(self.model_name)
 
+        # Rebuilt at the tower's depth (27), not the text stack's (18), or
+        # VisionAttention's layer-18+ lookup raises KeyError.
+        self.model_config["DECODERS_OPTIMIZATIONS"] = DecodersPrecision(self.n_vision_layers, self.model_name)
+
         num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
         k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
         n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
@@ -90,6 +94,23 @@ class VisionModelArgs(ModelArgs):
         assert (
             vision_cfg.out_hidden_size % tp == 0
         ), f"vision out_hidden_size ({vision_cfg.out_hidden_size}) must be divisible by TP={tp}"
+
+    def load_state_dict(self):
+        """Load the checkpoint, converting the text QKV with the *text* head dim.
+
+        The base implementation permutes the text q/k projections into meta RoPE
+        format using ``self.head_dim``, which this subclass has redefined to the
+        vision tower's 72. Left alone it computes 2048/72 = 28 text heads and
+        dies on a reshape. Restore the text value for the duration of the load;
+        the vision projections are untouched by that path and get their own
+        permute in ``weight_mapping._to_meta_rope_format``.
+        """
+        vision_head_dim = self.head_dim
+        self.head_dim = self.hf_config.text_config.head_dim
+        try:
+            return super().load_state_dict()
+        finally:
+            self.head_dim = vision_head_dim
 
     def prepare_residual_tensor_prefill(self, x_bsh):
         """Shard the patch sequence along hidden, which is the blocks' I/O contract."""

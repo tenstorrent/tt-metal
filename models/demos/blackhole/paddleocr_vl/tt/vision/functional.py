@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import torch
 
+from models.tt_transformers.tt.load_checkpoints import convert_rope_style_hf_to_meta
+
 # PaddleOCR's vision rotary embedding is built with theta 10000 over head_dim//2
 # (PaddleOCRVisionRotaryEmbedding, modeling_paddleocr_vl.py:103).
 VISION_ROPE_THETA = 10000.0
@@ -53,18 +55,40 @@ def block_permutation(grid_thw: torch.Tensor, spatial_merge_size: int) -> torch.
 
 
 def vision_rope_tables(position_ids: torch.Tensor, head_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
-    """cos/sin of shape ``[N, head_dim]`` for the given ``(row, col)`` ids.
+    """cos/sin of shape ``[N, head_dim]`` in **HuggingFace** layout.
 
     Mirrors ``PaddleOCRVisionRotaryEmbedding`` followed by the encoder's
     ``rotary_embeddings.repeat(1, 2)`` (``modeling_paddleocr_vl.py:860-862``):
     half the head dim carries the row frequency bank and half the column bank,
     then the whole thing is duplicated for the rotate-half convention.
+
+    This is the reference-matching form, and it is *not* what the device wants;
+    see ``meta_rope_tables``.
     """
     dim = head_dim // 2
     inv_freq = 1.0 / (VISION_ROPE_THETA ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
     freqs = (position_ids.float().unsqueeze(-1) * inv_freq).flatten(1)  # [N, 2 * dim/2] = [N, head_dim/2]
     emb = freqs.repeat(1, 2)  # [N, head_dim]
     return emb.cos(), emb.sin()
+
+
+def meta_rope_tables(position_ids: torch.Tensor, head_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """cos/sin in the interleaved layout ``rotary_embedding_llama`` expects.
+
+    Two conventions have to agree for rotation to come out right, and they are
+    easy to get half-right. HuggingFace splits each head in two and rotates one
+    half against the other, so its tables read ``[c0..c_{d/2-1}, c0..c_{d/2-1}]``.
+    tt-metal rotates adjacent *pairs*, so its tables read ``[c0, c0, c1, c1, ...]``
+    and it expects q/k rows ordered to match -- which is what the q/k permute in
+    ``weight_mapping._to_meta_rope_format`` arranges.
+
+    Permuting the weights without converting the tables leaves the rotation
+    applying the right angles to the wrong components. It degrades rather than
+    breaks (the first encoder layer scored PCC 0.84 that way, not garbage), which
+    is exactly why it is worth naming here.
+    """
+    cos_hf, sin_hf = vision_rope_tables(position_ids, head_dim)
+    return convert_rope_style_hf_to_meta(cos_hf, sin_hf)
 
 
 def pad_to_bucket(x: torch.Tensor, bucket: int, *, value: float = 0.0, cos_pad: bool = False) -> torch.Tensor:
@@ -102,7 +126,7 @@ def preprocess(
         perm = block_permutation(grid_thw, spatial_merge_size)
         pos = pos[perm]
 
-    cos, sin = vision_rope_tables(pos, head_dim)
+    cos, sin = meta_rope_tables(pos, head_dim)
 
     seq_len = n if bucket is None else bucket
     if bucket is not None:

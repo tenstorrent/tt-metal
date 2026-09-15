@@ -7,7 +7,8 @@ The two checkpoints are dimensionally identical, so this reuses
 ``models/demos/blackhole/qwen36/tt/vision`` and only renames keys onto its
 layout. Three tensors have no qwen36 counterpart and are returned separately
 for the host seam to consume instead: the patch embedding, the position
-table, and ``ln_post``.
+table, and ``ln_post`` (kept on device rather than the host, unlike the other
+two, since it feeds straight into the merger).
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from __future__ import annotations
 import re
 
 import torch
+
+from models.tt_transformers.tt.load_checkpoints import reverse_permute
 
 # Keys the host seam consumes. Everything else under ``visual.`` is a block weight.
 PATCH_EMBED_WEIGHT = "visual.vision_model.embeddings.patch_embedding._linear.weight"
@@ -41,6 +44,8 @@ _MERGER_RENAMES = {
     "projector.pre_norm": "visual.merger.norm",
     "projector.linear_1": "visual.merger.linear_fc1",
     "projector.linear_2": "visual.merger.linear_fc2",
+    # Tower-final LayerNorm; applied on device between the blocks and the merger.
+    LN_POST_PREFIX: "visual.ln_post",
 }
 
 
@@ -53,16 +58,8 @@ class UnmappedVisionKeys(RuntimeError):
 
 
 def split_host_tensors(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-    """Pull out the tensors the host seam owns (patch embed, pos table, ln_post)."""
-    host = {}
-    for k in (PATCH_EMBED_WEIGHT, PATCH_EMBED_BIAS, POS_EMBED):
-        if k in state_dict:
-            host[k] = state_dict[k]
-    for suffix in ("weight", "bias"):
-        k = f"{LN_POST_PREFIX}.{suffix}"
-        if k in state_dict:
-            host[k] = state_dict[k]
-    return host
+    """Pull out the tensors the host seam owns (patch embedding, position table)."""
+    return {k: state_dict[k] for k in (PATCH_EMBED_WEIGHT, PATCH_EMBED_BIAS, POS_EMBED) if k in state_dict}
 
 
 def _rename_layer_key(layer_num: str, rest: str) -> str | None:
@@ -73,8 +70,32 @@ def _rename_layer_key(layer_num: str, rest: str) -> str | None:
     return None
 
 
+def _to_meta_rope_format(key: str, tensor: torch.Tensor, vision_head_dim: int) -> torch.Tensor:
+    """Permute a vision q/k projection into the interleaved meta RoPE layout.
+
+    ``ModelArgs.load_state_dict`` converts the *text* projections (with the text
+    head dim) but passes vision weights through untouched -- see
+    ``map_hf_to_meta_keys_vision_only``, which only renames. The reused
+    ``VisionAttention`` applies ``rotary_embedding_llama``, which expects the
+    meta interleaving, so the permute has to happen here and with the *vision*
+    head dim of 72. This mirrors what qwen36 does when it converts its
+    vision-only state dict.
+
+    Only q and k are affected; v and the output projection carry no rotation.
+    """
+    if not (".attention.wq." in key or ".attention.wk." in key):
+        return tensor
+    n_heads = tensor.shape[0] // vision_head_dim
+    if tensor.dim() == 2:
+        return reverse_permute(tensor, n_heads, tensor.shape[0], tensor.shape[1])
+    return reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
+
+
 def map_vision_state_dict(
-    state_dict: dict[str, torch.Tensor], *, strict: bool = True
+    state_dict: dict[str, torch.Tensor],
+    *,
+    vision_head_dim: int = 72,
+    strict: bool = True,
 ) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
     """Split a converted PaddleOCR-VL state dict into (device weights, host weights).
 
@@ -82,6 +103,9 @@ def map_vision_state_dict(
     host-side tensors. Text weights (``layers.*``, ``tok_embeddings``, ``norm``,
     ``output``) are passed through untouched so the caller can hand the same
     dict to both the text and vision models.
+
+    ``vision_head_dim`` is the tower's own head dim (1152/16), not the text
+    decoder's 128; it only affects the q/k RoPE permute.
     """
     host = split_host_tensors(state_dict)
     device: dict[str, torch.Tensor] = {}
@@ -101,7 +125,7 @@ def map_vision_state_dict(
             if renamed is None:
                 unmapped.append(k)
             else:
-                device[renamed] = v
+                device[renamed] = _to_meta_rope_format(renamed, v, vision_head_dim)
             continue
 
         for src, dst in _MERGER_RENAMES.items():
