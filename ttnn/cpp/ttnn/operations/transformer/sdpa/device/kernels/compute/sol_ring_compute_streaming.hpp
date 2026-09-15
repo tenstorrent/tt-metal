@@ -2454,9 +2454,17 @@ void sdpa_ring_v2(
 
     // Block-sparse skip: chunks this Q row does not select — drain K/V from CBs and skip. Must agree
     // exactly with the pre-scan below, which decides which chunk is last and therefore normalizes.
+    // Chunk 0 is never skipped, which keeps per_q_valid_kv >= 1. With zero valid chunks the loop body
+    // never runs, so is_last_k never fires, nothing normalizes, and the writer waits for an output
+    // that is never produced -- a device hang, not a wrong answer.
+    //
+    // This is an experiment-only floor, and it is the wrong shape for real routing: the ring visits
+    // one shard per iteration, so a query row legitimately selects nothing from most iterations. A
+    // correct implementation defers normalization to the last iteration that had work instead of
+    // forcing work into every one.
     auto block_sparse_skips = [](uint32_t k_chunk) -> bool {
         if constexpr (chunk_keep_every > 1) {
-            return (k_chunk % chunk_keep_every) != 0;
+            return k_chunk != 0 && (k_chunk % chunk_keep_every) != 0;
         }
         return false;
     };
