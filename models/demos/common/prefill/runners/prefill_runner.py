@@ -333,8 +333,6 @@ class _ChunkEndWatcher:
         self._rank = rank
         self._q: "queue.Queue" = queue.Queue()
         self.last_end: Optional[float] = None
-        self.last_chunk: int = -1
-        self.ends: dict = {}
         self.failed: Optional[str] = None
         self._thread = threading.Thread(target=self._run, name=f"chunk-end-watcher-{rank}", daemon=True)
         self._thread.start()
@@ -349,8 +347,7 @@ class _ChunkEndWatcher:
             try:
                 ttnn.event_synchronize(ev)
                 now = time.time()
-                self.last_end, self.last_chunk = now, c
-                self.ends[c] = now
+                self.last_end = now
                 logger.info(f"[pp rank {self._rank}] CHUNK_END c={c} compute_end={now:.6f}")
             except Exception as e:  # never let instrumentation kill a run
                 self.failed = f"{type(e).__name__}: {e}"
