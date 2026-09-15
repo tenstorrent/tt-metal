@@ -1769,10 +1769,18 @@ void call_binary_sfpu_operation_init()
     {
         SFPU_BINARY_INIT_FN(fmod_int32, fmod_int32_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE)
+    {
+        // isclose_init programs vConstIntPrgm0 with the 0x7FFFFFFF sign-clear mask
+        // that calculate_sfpu_isclose relies on for its Inf/NaN bit-pattern check
+        // (see ckernel_sfpu_isclose.h). Without this call the mask register is left
+        // unprogrammed and the kernel's Inf/NaN fix-up silently no-ops.
+        SFPU_BINARY_INIT_FN_NO_ARGS(isclose, sfpu::isclose_init);
+    }
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
