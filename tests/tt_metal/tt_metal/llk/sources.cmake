@@ -5,6 +5,7 @@ set(UNIT_TESTS_LLK_SRC
     test_broadcast.cpp
     test_compute_kernel_sentinel.cpp
     test_copy_block_matmul_partials.cpp
+    test_copy_dest_values.cpp
     test_cumsum.cpp
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
