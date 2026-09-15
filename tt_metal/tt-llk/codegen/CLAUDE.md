@@ -127,9 +127,11 @@ For `REQUEST_TYPE=generate` on quasar, put the run in motion before creating the
 
 ```bash
 source codegen/scripts/quasar/orchestrator_steps.sh
-execute_step_begin_setup {kernel} {target_arch} "/proj_sw/user_dev/${USER}/llk_code_gen"
+execute_step_begin_setup {kernel} {target_arch} "/proj_sw/user_dev/llk_code_gen"
 # Echoes LOG_DIR, RUN_ID, START_TIME — carry these to Step 3.
 ```
+
+The log base is the shared dashboard tree, literally `/proj_sw/user_dev/llk_code_gen`. If the step prints `REJECT:`, nothing was created; fix the argument and rerun it.
 
 Set up an isolated worktree so all code changes happen on a dedicated branch
 based on `CODEGEN_BASE_COMMIT` when set, or `origin/main` otherwise.
@@ -175,7 +177,7 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set TARGET_ARCH 
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set SFPI_MODE       "{SFPI_MODE}" --json
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set QSR_SIM_BACKEND "{emu|vcs}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set WORKTREE_BRANCH "{worktree_branch}"
-python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/${USER}/llk_code_gen"
+python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR_BASE    "/proj_sw/user_dev/llk_code_gen"
 # From execute_step_begin_setup (Step 2) so the orchestrator reuses the same run identity:
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set LOG_DIR    "{log_dir}"
 python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set RUN_ID     "{run_id}"
@@ -184,7 +186,8 @@ python codegen/scripts/state.py --worktree-dir "{worktree_dir}" set START_TIME "
 Optional per-run override flags — set the same way (`state.py --worktree-dir … set <FLAG> true`) only when the request asks for them:
 - `LOCK_TESTS` — the tester runs test-locked: it treats the existing test as the immutable source of truth, authors or modifies no test, and only runs it and debugs the kernel; the writer→tester→refiner loop is otherwise unchanged.
 - `REMOVE_TESTS` — the orchestrator's Step 2c git-removes-and-commits the op's dedicated test files on the worktree branch, then the tester authors the test fresh from the analysis spec after writing the kernel; overrides `LOCK_TESTS`. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
-- `HIDE_EXISTING_KERNEL` — the orchestrator's Step 2b git-removes-and-commits every layer of the target op's existing implementation on the worktree branch — the metal LLK-API wrapper, the tt-llk lib impl anywhere under the arch tree (`common/inc/sfpu/`, `common/inc/experimental/`, or any other subfolder), and the compute-level API entry point (`tt_metal/hw/inc/api/compute/*/{op}.h`) — so it regenerates blind. Only the metal LLK-API dest (`GENERATED_KERNEL`) is written back, by the writer; the hidden tt-llk lib impl and compute-level entry point get no new version. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
+- `HIDE_EXISTING_KERNEL` — the orchestrator's Step 2b git-removes-and-commits every layer of the target op's existing implementation on the worktree branch — the metal LLK-API wrapper, the tt-llk lib impl anywhere under the arch tree (`common/inc/sfpu/`, `common/inc/experimental/`, or any other subfolder), and the compute-level API entry point (`tt_metal/hw/inc/api/compute/*/{op}.h`) — so it regenerates blind. Only the metal LLK-API dest (`GENERATED_KERNEL`) is written back, by the writer; the hidden tt-llk lib impl and compute-level entry point get no new version. Test includes of the hidden header are repointed at `llk_sfpu/ckernel_sfpu_{op}.h` in the same commit; nothing else in a test is edited. Never `rm` the files in the prompt; set this flag and let the orchestrator do it.
+- Perf comparison against the original kernel runs whenever `HIDE_EXISTING_KERNEL=true` and `LOCK_TESTS=true` and a Quasar perf module collects the op. Step 2a measures the original before the hide; the optimizer uses up to `PERF_MAX_ATTEMPTS` attempts (default 3), keeps only candidates that pass the functional test and are not slower, and aims its attempts at any variant still slower than the original. The run reports `PERF_IMPROVED` / `PERF_NEUTRAL` / `PERF_REGRESSED` for the median variant and names regressed variants; this never changes the run status. `PERF_COMPARE false` opts out; `PERF_REGRESS_PCT` (default `2.0`) sets the threshold in percent.
 
 Then invoke the orchestrator, telling it only `WORKTREE_DIR={worktree_dir}` —
 it reads everything else back the same way, via `state.py --worktree-dir`.

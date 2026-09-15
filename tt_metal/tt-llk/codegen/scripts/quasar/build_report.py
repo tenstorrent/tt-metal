@@ -213,6 +213,37 @@ def build(d: dict, log_dir: str) -> str:
     A(
         f"  Optimized:         {'YES' if d.get('optimized') else 'NO'} ({d.get('optimization_type', 'none')})"
     )
+    perf = _d(d.get("perf"))
+    if perf.get("enabled"):
+        A("----------------------------------------")
+        A("Performance vs original kernel:")
+        A(
+            f"  Verdict:           {perf.get('verdict', 'not_measured')}{perf.get('verdict_note') or ''}"
+        )
+        A(
+            f"  Metric:            {perf.get('metric', '')}  (regress threshold {_f(perf.get('regress_pct')):.1f}%)"
+        )
+        A(
+            f"  Delta:             median {_f(perf.get('delta_pct_median')):+.2f}%  worst {_f(perf.get('delta_pct_worst')):+.2f}%  "
+            f"({_i(perf.get('variants_compared'))} variants: {_i(perf.get('variants_improved'))} improved, "
+            f"{_i(perf.get('variants_neutral'))} neutral, {_i(perf.get('variants_regressed'))} regressed)"
+        )
+        A(
+            f"  Worst variant:     {perf.get('worst_variant') or '?'}  original {_f(perf.get('baseline_cycles')):.1f}  ->  "
+            f"generated {_f(perf.get('current_cycles')):.1f} cycles/tile"
+        )
+        A(
+            f"  Rule:              verdict follows the median variant; attempts target any variant "
+            f"slower than the original by more than {_f(perf.get('regress_pct')):.1f}%"
+        )
+        A(
+            f"  Optimizer loop:    {_i(perf.get('attempts'))} attempt(s), {_i(perf.get('kept'))} kept; shipped: {perf.get('best', '')}"
+        )
+        A(
+            f"  Perf test:         {perf.get('module') or ''} --k '{perf.get('k') or ''}'"
+        )
+    elif perf:
+        A(f"  Perf vs original:  not measured ({perf.get('reason') or 'gate not met'})")
     A("----------------------------------------")
     A("Per Cycle:")
     for ph in _l(d.get("per_phase")):
