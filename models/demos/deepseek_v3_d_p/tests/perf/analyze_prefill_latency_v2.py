@@ -46,6 +46,8 @@ E2E_V2 = re.compile(
 E2E_V1 = re.compile(r"\[pp rank (\d+)\] E2E_CLOCK first_compute_start=([0-9.na/]+) last_compute_end=([0-9.]+)")
 DRAIN_GAP = re.compile(r"\[pp rank (\d+)\] E2E_DRAIN_GAP gap_ms=([0-9.-]+)")
 JIT = re.compile(r"JIT cache stats: (\d+)/(\d+) hits \(([0-9.]+)%\)")
+CHUNK_END = re.compile(r"\[pp rank (\d+)\] CHUNK_END c=(\d+) compute_end=([0-9.]+)")
+SENTINEL_LAG = re.compile(r"\[pp rank (\d+)\] E2E_SENTINEL_LAG lag_ms=([0-9.-]+)")
 # Rank teardown legitimately logs `TT_FATAL: cq_id 0 is out of range` from the D2D stream-service
 # destructors after the device is closed, so a bare TT_FATAL grep fails every healthy run.
 BENIGN = re.compile(r"cq_id \d+ is out of range")
@@ -73,9 +75,15 @@ def parse(path):
     v1 = {int(r): (a, float(b)) for r, a, b in E2E_V1.findall(txt)}
     gaps = {int(r): float(g) for r, g in DRAIN_GAP.findall(txt)}
     jit = [(int(a), int(b), float(c)) for a, b, c in JIT.findall(txt)]
+    ends = {}
+    for rk, c, t in CHUNK_END.findall(txt):
+        ends.setdefault(int(rk), []).append((int(c), float(t)))
+    for rk in ends:
+        ends[rk].sort()
+    lags = {int(r): float(g) for r, g in SENTINEL_LAG.findall(txt)}
     bad = [ln for ln in txt.splitlines() if FAILURE.search(ln) and not BENIGN.search(ln)]
     kv = re.search(r"PREFILL_KV_ONLY_LAST_LAYER *= *(\w+)", txt)
-    return chunks, v2, v1, gaps, jit, bad, (kv.group(1).lower() == "true") if kv else None
+    return chunks, v2, v1, gaps, jit, bad, (kv.group(1).lower() == "true") if kv else None, ends, lags
 
 
 def split_requests(rows):
@@ -96,7 +104,7 @@ def main():
     min_req = 2
     if "--min-request" in sys.argv:
         min_req = int(sys.argv[sys.argv.index("--min-request") + 1])
-    chunks, v2, v1, gaps, jit, bad, kv_only = parse(path)
+    chunks, v2, v1, gaps, jit, bad, kv_only, ends, lags = parse(path)
 
     print(f"log        : {path}")
     if not chunks:
@@ -226,6 +234,25 @@ def main():
             print(
                 f"    WARNING ranks {neg}: request 2 starts BEFORE request 1 on that rank, which one "
                 f"slot\n    cannot do -- the request split is wrong, so the capture column is junk."
+            )
+
+    if ends.get(last):
+        # CHUNK_END is stamped when the device actually finished that chunk (ttnn event, watcher
+        # thread), so its deltas are a DEVICE-side service-rate series -- independent of the
+        # host-side CHUNK_START deltas above, which can be skewed by host scheduling. They should
+        # agree; a disagreement means the host was not the thing pacing the pipeline.
+        de = [t for _, t in ends[last]][-n_chunks:]
+        if len(de) > 1:
+            dd = [(b - a) * 1000.0 for a, b in zip(de, de[1:])]
+            host = ivs[1:]
+            print(f"\n  device-side per-chunk (CHUNK_END deltas, ms): " + " ".join(f"{x:.1f}" for x in dd))
+            if len(host) == len(dd) and dd:
+                worst = max(abs(h - d) for h, d in zip(host, dd))
+                print(f"  vs host-side (CHUNK_START deltas): worst disagreement {worst:.1f} ms")
+        if lags:
+            print(
+                "\n  sentinel lag per rank (ms) -- what the old sentinel-time stamp would have absorbed:\n    "
+                + "  ".join(f"r{rk}:{lags[rk]:.1f}" for rk in sorted(lags))
             )
 
     if last in v1:
