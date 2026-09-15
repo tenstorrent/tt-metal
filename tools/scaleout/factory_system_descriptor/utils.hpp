@@ -8,6 +8,7 @@
 #include <set>
 #include <optional>
 #include <cabling_generator/cabling_generator.hpp>
+#include <factory_system_descriptor/query.hpp>
 #include <vector>
 #include <tuple>
 
@@ -63,6 +64,9 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
 //   - min_connections: If specified, enables relaxed validation mode where missing connections
 //                      are not reported as errors if each expected ASIC pair has at least this many
 //                      discovered connections (checked at per-ASIC-pair granularity)
+//   - scope: If set, the expected connections are the FSD links of one hierarchy tier of one subgroup (see
+//            HierarchyTierScope) instead of "every FSD link whose endpoints were both discovered". Callers
+//            doing phased, per-subgroup bring-up want this; whole-system callers leave it null.
 // Returns: Set of physical channel connections that are missing or mismatched
 std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     const fsd::proto::FactorySystemDescriptor& fsd_proto,
@@ -70,7 +74,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     bool strict_validation = true,
     bool assert_on_connection_mismatch = true,
     bool log_output = true,
-    std::optional<uint32_t> min_connections = std::nullopt);
+    std::optional<uint32_t> min_connections = std::nullopt,
+    const HierarchyTierScope* scope = nullptr);
 
 // Validate cabling descriptor against discovered system topology
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(

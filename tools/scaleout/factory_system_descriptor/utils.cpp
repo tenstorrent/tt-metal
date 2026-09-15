@@ -31,6 +31,9 @@
 
 namespace tt::scaleout_tools {
 
+// `generated_connections` here is the EXPECTED set for this GSD, already narrowed to what the GSD can be held
+// answerable for. Seeding from a wider set (e.g. the whole FSD against a subgroup-scoped GSD) would score every
+// out-of-scope pair as 0 and make relaxed mode permanently unsatisfiable.
 bool check_min_connection_count_satisfied(
     const std::set<PhysicalChannelConnection>& discovered_connections,
     const std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>>& generated_connections,
@@ -89,8 +92,8 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     bool strict_validation,
     bool assert_on_connection_mismatch,
     bool log_output,
-    std::optional<uint32_t> min_connections = std::nullopt) {
-
+    std::optional<uint32_t> min_connections = std::nullopt,
+    const HierarchyTierScope* scope = nullptr) {
     const auto& hosts = generated_fsd.hosts();
 
     // Compare the FSD with the discovered GSD
@@ -460,12 +463,39 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
     std::set<PhysicalChannelConnection> missing_in_gsd;
     std::set<PhysicalChannelConnection> extra_in_gsd;
 
-    // Always find connections in FSD but not in GSD (both validation modes check this)
+    // Narrow the FSD to the connections this GSD is answerable for. Exactly one place decides scope; everything
+    // downstream (missing set, relaxed-mode counts, the reported total) consumes the result.
+    //
+    // With a scope: membership comes from the FSD hierarchy, so a host that should be present but never showed up
+    // keeps its links in the expected set and they surface as missing.
+    // Without one: fall back to "both endpoints discovered", which self-scopes a partial GSD but cannot tell an
+    // absent host from an out-of-scope one.
+    std::set<std::string> scope_hosts;
+    if (scope != nullptr) {
+        scope_hosts = scope->query->subgroup_hosts(scope->member_hostname, scope->depth);
+    }
+    std::set<std::pair<PhysicalChannelEndpoint, PhysicalChannelEndpoint>> expected_connections;
     for (const auto& conn : generated_connections) {
-        if (discovered_hostnames.contains(conn.first.hostname) && discovered_hostnames.contains(conn.second.hostname)) {
-            if (not discovered_connections.contains(conn)) {
-                missing_in_gsd.insert(conn);
-            }
+        const bool in_scope =
+            (scope != nullptr)
+                ? (scope_hosts.contains(conn.first.hostname) && scope_hosts.contains(conn.second.hostname) &&
+                   scope->query->hierarchy_depth(conn.first.hostname, conn.second.hostname) == scope->depth)
+                : (discovered_hostnames.contains(conn.first.hostname) &&
+                   discovered_hostnames.contains(conn.second.hostname));
+        if (in_scope) {
+            expected_connections.insert(conn);
+        }
+    }
+
+    // NOTE: with a scope, `expected_connections` can name a host absent from the GSD (that is the point — an
+    // absent host's links stay in scope and are reported missing rather than dropped). Callers that turn the
+    // returned set into ASIC-level topology must tolerate endpoints they cannot resolve; see
+    // generate_asic_topology_from_connections.
+
+    // Always find connections in FSD but not in GSD (both validation modes check this)
+    for (const auto& conn : expected_connections) {
+        if (not discovered_connections.contains(conn)) {
+            missing_in_gsd.insert(conn);
         }
     }
 
@@ -527,7 +557,7 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
 
     if (min_connections.has_value()) {
         relaxed_mode_satisfied = check_min_connection_count_satisfied(
-            discovered_connections, generated_connections, min_connections.value(), insufficient_connections);
+            discovered_connections, expected_connections, min_connections.value(), insufficient_connections);
     }
 
     if (!missing_in_gsd.empty() || !extra_in_gsd.empty()) {
@@ -568,11 +598,18 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd_impl(
                 "Connection mismatch detected" + mode_text + ". Check console output for details.");
         }
     } else {
-        // Success message differs based on validation mode
-        if (log_output) {
+        // Success message differs based on validation mode.
+        //
+        // Suppressed entirely when a scope is in play: this runs on every rank of every subgroup, so the only copy
+        // that reaches the console is whichever subgroup world rank 0 happens to land in — a subgroup that may own
+        // nothing at this tier. Reporting one arbitrary subgroup's count against the whole-FSD denominator invites
+        // exactly the wrong reading (a small count looks like a coverage shortfall). The caller aggregates all
+        // subgroups into one per-tier summary instead; see phased_bring_up_tier. Mismatches above are still reported
+        // here, since the summary only counts them and the specific connections are what you need to act on.
+        if (log_output && scope == nullptr) {
             if (strict_validation) {
-                std::cout << "All connections match between FSD and GSD (" << generated_connections.size()
-                          << " connections)" << std::endl;
+                std::cout << "All connections match between FSD and GSD (" << expected_connections.size() << " of "
+                          << generated_connections.size() << " FSD connections in scope)" << std::endl;
             } else {
                 std::cout << "All GSD connections found in FSD (" << discovered_connections.size()
                           << " connections checked)" << std::endl;
@@ -616,9 +653,10 @@ std::set<PhysicalChannelConnection> validate_fsd_against_gsd(
     bool strict_validation,
     bool assert_on_connection_mismatch,
     bool log_output,
-    std::optional<uint32_t> min_connections) {
+    std::optional<uint32_t> min_connections,
+    const HierarchyTierScope* scope) {
     return validate_fsd_against_gsd_impl(
-        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output, min_connections);
+        fsd_proto, gsd_yaml_node, strict_validation, assert_on_connection_mismatch, log_output, min_connections, scope);
 }
 
 std::set<PhysicalChannelConnection> validate_cabling_descriptor_against_gsd(

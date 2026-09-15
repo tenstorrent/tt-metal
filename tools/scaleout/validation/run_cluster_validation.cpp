@@ -294,23 +294,6 @@ PhysicalSystemDescriptor generate_physical_system_descriptor(const InputArgs& in
     return physical_system_descriptor;
 }
 
-AsicTopology run_connectivity_validation(
-    const InputArgs& input_args, PhysicalSystemDescriptor& physical_system_descriptor) {
-    if (!input_args.validate_connectivity) {
-        return {};
-    }
-    YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
-    auto fsd_proto = get_factory_system_descriptor(
-        input_args.cabling_descriptor_path,
-        input_args.deployment_descriptor_path,
-        input_args.fsd_path,
-        physical_system_descriptor.get_all_hostnames());
-    auto missing_topology = validate_connectivity(
-        fsd_proto, gsd_yaml_node, input_args.fail_on_warning, physical_system_descriptor, input_args.min_connections);
-
-    return missing_topology;
-}
-
 void print_usage_info(CommandMode mode = CommandMode::VALIDATE) {
     if (mode == CommandMode::LINK_RETRAIN) {
         auto options = create_link_reset_options();
@@ -371,56 +354,126 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
-    AsicTopology missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
-
     bool links_reset = false;
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const bool link_retrain_supported = cluster.supports_ethernet_link_retraining();
     constexpr uint32_t MAX_RETRAINS_BEFORE_FAILURE =
-        5;  // If links don't come up after 5 retrains, the system is in an unrecoverable state.
-    uint32_t num_retrains = 0;
+        5;  // Per-tier budget: if a tier's links don't come up after 5 retrains, the system is unrecoverable.
+    uint32_t total_retrains = 0;
     std::unordered_map<EthChannelIdentifier, uint32_t> link_retrain_counts;
-    while (!missing_asic_topology.empty() && link_retrain_supported && num_retrains < MAX_RETRAINS_BEFORE_FAILURE) {
-        auto retrained_links = collect_retrained_link_identifiers(missing_asic_topology, physical_system_descriptor);
-        for (const auto& link_id : retrained_links) {
-            link_retrain_counts[link_id]++;
-        }
-        log_output_rank0(
-            "Link Retrain Iteration " + std::to_string(num_retrains + 1) + ": Retraining " +
-            std::to_string(retrained_links.size()) + " link endpoints");
+    AsicTopology missing_asic_topology;
 
-        reset_ethernet_links(physical_system_descriptor, missing_asic_topology);
-        links_reset = true;
-        num_retrains++;
-        // Refresh the cluster descriptor from hardware so the retrained links are reflected in the
-        // re-discovery below. run_physical_system_discovery() derives its entire ethernet topology from
-        // cluster_desc.get_ethernet_connections(), which is only rebuilt by rediscover_ethernet_links().
-        // Without this, re-discovery returns the stale (pre-reset) topology, missing_asic_topology never
-        // shrinks, and the loop always exhausts MAX_RETRAINS_BEFORE_FAILURE even when the retrain succeeded.
-        cluster.rediscover_ethernet_links();
-        // Re-run discovery
-        auto& context_ref = tt::tt_metal::MetalContext::instance();
-        physical_system_descriptor.clear();
-        auto new_psd = tt::tt_metal::run_physical_system_discovery(
-            *context_ref.get_cluster().get_cluster_desc(),
-            context_ref.get_distributed_context_ptr(),
-            context_ref.rtoptions().get_target_device(),
-            true,
-            true);
-        physical_system_descriptor.merge(std::move(new_psd));
-        missing_asic_topology = run_connectivity_validation(input_args, physical_system_descriptor);
+    if (input_args.validate_connectivity) {
+        // Build the golden FSD and its instance_path hierarchy query once (hostnames are stable across
+        // rediscovery). Bring the system up tier by tier: the closest links (longest common instance_path
+        // prefix) first, then progressively looser tiers, ending with links that cross the top of the hierarchy.
+        auto fsd_proto = get_factory_system_descriptor(
+            input_args.cabling_descriptor_path,
+            input_args.deployment_descriptor_path,
+            input_args.fsd_path,
+            physical_system_descriptor.get_all_hostnames());
+        FsdQuery fsd_query(fsd_proto);
+
+        // Prerequisite for phasing: every host the FSD describes must actually be present. The hierarchy split
+        // cannot enforce this — world is whatever mpirun launched, and a split color with no participants is legal
+        // — and discovery only reports what gathered. Without this check a run launched against fewer hosts than
+        // the FSD describes validates a fragment and reports success, because the absent hosts' connections simply
+        // never enter scope.
+        {
+            const auto discovered = physical_system_descriptor.get_all_hostnames();
+            const std::set<std::string> discovered_hosts(discovered.begin(), discovered.end());
+            std::string absent;
+            for (const auto& host : fsd_proto.hosts()) {
+                if (!discovered_hosts.contains(host.hostname())) {
+                    absent += (absent.empty() ? "" : ", ") + host.hostname();
+                }
+            }
+            TT_FATAL(
+                absent.empty(),
+                "Factory System Descriptor describes {} host(s) but discovery found {}; absent: {}. Launch one rank "
+                "per FSD host (mpirun --pernode over the full host list), or supply a descriptor matching the hosts "
+                "actually under test.",
+                fsd_proto.hosts().size(),
+                discovered_hosts.size(),
+                absent);
+        }
+
+        auto rediscover = [&physical_system_descriptor]() {
+            auto& context_ref = tt::tt_metal::MetalContext::instance();
+            physical_system_descriptor.clear();
+            auto new_psd = tt::tt_metal::run_physical_system_discovery(
+                *context_ref.get_cluster().get_cluster_desc(),
+                context_ref.get_distributed_context_ptr(),
+                context_ref.rtoptions().get_target_device(),
+                true,
+                true);
+            physical_system_descriptor.merge(std::move(new_psd));
+        };
+
+        // Validate against the whole system. Never assert mid-bring-up: outer tiers are legitimately down until
+        // their turn, so their mismatches must not fail the run. The authoritative pass runs after all tiers.
+        auto validate = [&](bool assert_on_mismatch) {
+            YAML::Node gsd_yaml_node = physical_system_descriptor.generate_yaml_node();
+            return validate_connectivity(
+                fsd_proto, gsd_yaml_node, assert_on_mismatch, physical_system_descriptor, input_args.min_connections);
+        };
+
+        uint32_t tier_num = 0;
+        bool tier_bring_up_failed = false;
+        for (uint32_t depth : fsd_query.hierarchy_tiers_deepest_first()) {
+            ++tier_num;
+            log_output_rank0("Starting Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
+            // Per-subgroup phased bring-up: split into depth-`depth` hierarchy-node subgroups, discover and
+            // retrain each subgroup's own tier links to convergence. No global PSD needed (subgroup-scoped
+            // validation via the both-endpoints-discovered guard).
+            if (link_retrain_supported) {
+                tier_bring_up_failed = !phased_bring_up_tier(
+                    fsd_proto,
+                    fsd_query,
+                    depth,
+                    physical_system_descriptor,
+                    MAX_RETRAINS_BEFORE_FAILURE,
+                    input_args.min_connections,
+                    link_retrain_counts);
+            }
+            log_output_rank0("Ending Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) + ")");
+            // Stop widening if this tier's links never came up: later tiers own strictly different links (the
+            // `== depth` filter excludes this tier's), so they cannot recover it — they would only burn retrain
+            // budget and re-report the same failure at every tier. `converged` is world-consistent, so every rank
+            // leaves the loop here together. Fall through to the authoritative pass, which produces the
+            // whole-system diagnosis (log_unretrainable_channels) and fails the run.
+            if (tier_bring_up_failed) {
+                log_output_rank0(
+                    "Tier " + std::to_string(tier_num) + " (depth " + std::to_string(depth) +
+                    ") did not converge; skipping remaining tiers and proceeding to authoritative validation");
+                break;
+            }
+        }
+        links_reset = !link_retrain_counts.empty();
+        // Retrain attempts to report: the most any single link was retrained. Tiers retrain disjoint link sets, so a
+        // per-link maximum is what the summary and the unretrainable-channel YAML actually describe ("failed to
+        // retrain after N attempts") — summing rounds across tiers would overstate what any one link endured.
+        for (const auto& [link_id, count] : link_retrain_counts) {
+            if (count > total_retrains) {
+                total_retrains = count;
+            }
+        }
+
+        // Authoritative pass: one whole-system discovery, then a global validation with real fail semantics.
+        rediscover();
+        missing_asic_topology = validate(input_args.fail_on_warning);
     }
 
     distributed_context.barrier();
-    if (num_retrains == MAX_RETRAINS_BEFORE_FAILURE && !missing_asic_topology.empty()) {
-        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+    if (link_retrain_supported && !missing_asic_topology.empty()) {
+        log_link_retrain_summary(link_retrain_counts, total_retrains, input_args.output_path);
         log_unretrainable_channels(
-            missing_asic_topology, physical_system_descriptor, num_retrains, input_args.output_path);
+            missing_asic_topology, physical_system_descriptor, total_retrains, input_args.output_path);
         log_output_rank0("Encountered unrecoverable state. Please check the system and try again.");
         return -1;
     }
     if (links_reset) {
-        log_link_retrain_summary(link_retrain_counts, num_retrains, input_args.output_path);
+        log_link_retrain_summary(link_retrain_counts, total_retrains, input_args.output_path);
         log_output_rank0("Rediscovering ethernet links after successful link retraining");
         cluster.rediscover_ethernet_links();
     }
