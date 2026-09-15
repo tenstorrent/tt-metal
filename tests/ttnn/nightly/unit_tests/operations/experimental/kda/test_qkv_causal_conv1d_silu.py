@@ -600,3 +600,89 @@ def test_qkv_causal_conv1d_silu_rejects_sharded_output(device: ttnn.Device, expe
             channel_chunk_size=384,
             memory_config=sharded_config,
         )
+
+
+def test_split_history_planes_and_pack_rebind_fresh_controls(device: ttnn.Device, isolated_program_cache: None) -> None:
+    widths = (32, 32, 32)
+    retained = []
+    entries = None
+    for seed, boundary in ((2011, True), (2012, False), (2013, True)):
+        host, tensors = _device_inputs(device, widths=widths, sequence=64, history_rows=6, seed=seed)
+        inputs, history, taps = host
+        input_tt, history_tt, taps_tt = tensors
+        indicator = _to_device(torch.tensor([[[float(boundary)]]]), device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        all_inputs = (input_tt, history_tt, *taps_tt, indicator)
+        before = tuple(ttnn.to_torch(t).clone() for t in all_inputs)
+        outputs = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            input_tt,
+            history_tt,
+            *taps_tt,
+            *widths,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            wrap_row=32,
+            wrap_indicator=indicator,
+        )
+        if boundary:
+            head = _reference(inputs[:, :32], history[:, :3], taps, widths)
+            tail = _reference(inputs[:, 32:], history[:, 3:], taps, widths)
+            expected = tuple(torch.cat((h, t), dim=1) for h, t in zip(head, tail, strict=True))
+        else:
+            expected = _reference(inputs, history[:, :3], taps, widths)
+        packed = ttnn.experimental.kda.pack_convolution_carry(input_tt, indicator, 32)
+        expected_pack = torch.zeros(1, 32, 96, dtype=torch.bfloat16)
+        expected_pack[:, :3] = inputs[:, 29:32] if boundary else inputs[:, -3:]
+        if boundary:
+            expected_pack[:, 3:6] = inputs[:, -3:]
+        assert_bit_identical(expected_pack, ttnn.to_torch(packed), name=f"pack boundary={boundary}")
+        assert tuple(packed.shape) == (1, 32, 96)
+        for name, golden, output in zip(("Q", "K", "V"), expected, outputs, strict=True):
+            assert_accurate(golden, ttnn.to_torch(output), name=f"split history {name} boundary={boundary}")
+            assert tuple(output.shape) == (1, 64, 32)
+        addresses = {t.buffer_address() for t in all_inputs}
+        for output in (*outputs, packed):
+            assert output.dtype == ttnn.bfloat16 and output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+            assert output.buffer_address() not in addresses
+            addresses.add(output.buffer_address())
+        for old, tensor in zip(before, all_inputs, strict=True):
+            assert_bit_identical(old, ttnn.to_torch(tensor), name="split history/pack input immutability")
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+            assert indicator.buffer_address() != retained[-1][6].buffer_address()
+        retained.append((*all_inputs, *outputs, packed))
+    for invocation in retained:
+        for tensor in invocation:
+            ttnn.deallocate(tensor)
+
+
+@pytest.mark.parametrize("history_rows,wrap_row", [(3, 32), (6, 0), (6, 1), (6, 64)])
+def test_split_convolution_rejects_invalid_history_geometry(
+    device: ttnn.Device,
+    history_rows: int,
+    wrap_row: int,
+    expect_error,
+) -> None:
+    _, (inputs, history, taps) = _device_inputs(device, widths=(32, 32, 32), history_rows=history_rows)
+    with expect_error(RuntimeError, "history|wrap_row"):
+        ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            inputs,
+            history,
+            *taps,
+            32,
+            32,
+            32,
+            program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=96),
+            wrap_row=wrap_row,
+        )
+
+
+@pytest.mark.parametrize("wrap_row,history_rows", [(0, 3), (1, 3), (64, 3), (32, 0), (32, 17)])
+def test_carry_pack_rejects_invalid_geometry(
+    device: ttnn.Device, wrap_row: int, history_rows: int, expect_error
+) -> None:
+    _, (inputs, _, _) = _device_inputs(device, widths=(32, 32, 32))
+    indicator = _to_device(torch.ones(1, 1, 1), device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "wrap_row|history_rows"):
+        ttnn.experimental.kda.pack_convolution_carry(inputs, indicator, wrap_row, history_rows=history_rows)
