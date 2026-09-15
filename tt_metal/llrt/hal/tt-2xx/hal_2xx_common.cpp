@@ -46,6 +46,16 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                         case experimental::quasar::QuasarComputeProcessor::NEO_2_COMPUTE_2:
                         case experimental::quasar::QuasarComputeProcessor::NEO_3_COMPUTE_2:
                             defines.push_back("UCK_CHLKC_PACK");
+                            // The DEST-register DPRINT rendezvous (ckernel_debug.h) is unpack<->math
+                            // only; the pack thread never prints. The pack firmware is the largest of
+                            // the three compute firmwares, so compiling the DPRINT ring machinery into
+                            // it overflows the fixed TRISC firmware code region (MEM_TRISC_FIRMWARE_SIZE).
+                            // Force DPRINT off for the pack firmware so the machinery is elided and it
+                            // fits without enlarging the region. Firmware only -- a pack kernel may print.
+                            if (params.is_fw &&
+                                params.rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+                                defines.push_back("FORCE_DPRINT_OFF");
+                            }
                             break;
                         case experimental::quasar::QuasarComputeProcessor::NEO_0_COMPUTE_3:
                         case experimental::quasar::QuasarComputeProcessor::NEO_1_COMPUTE_3:
