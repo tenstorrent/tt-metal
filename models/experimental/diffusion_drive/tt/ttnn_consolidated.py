@@ -250,12 +250,26 @@ class TtnnPerceptionForward:
                 ttnn.deallocate(t)
         ttnn.synchronize_device(self._d)
 
+        capture_ended = False
         try:
             self._perc_trace_id = ttnn.begin_trace_capture(self._d, cq_id=0)
             self._perc_out = _traced()
             ttnn.end_trace_capture(self._d, self._perc_trace_id, cq_id=0)
+            capture_ended = True
         except Exception:
+            # Never leave an open trace. end_trace_capture() comes FIRST and is not
+            # optional: it is the only path to record_end(), which clears the command
+            # queue's recording state (trace_id_ and sysmem bypass mode). release_trace()
+            # merely drops the trace buffer, so releasing alone leaves the queue
+            # recording and every later H2D dies with
+            # "Writes are not supported during trace capture." — turning one setup
+            # failure into an unbounded run of misattributed errors.
             if self._perc_trace_id is not None:
+                if not capture_ended:
+                    try:
+                        ttnn.end_trace_capture(self._d, self._perc_trace_id, cq_id=0)
+                    except Exception:
+                        pass
                 try:
                     ttnn.release_trace(self._d, self._perc_trace_id)
                 except Exception:
