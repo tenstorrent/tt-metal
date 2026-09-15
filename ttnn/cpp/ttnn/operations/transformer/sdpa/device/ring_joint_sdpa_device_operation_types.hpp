@@ -39,6 +39,12 @@ struct RingJointSDPAParams {
     uint32_t kv_cache_num_layers = 1;
     uint32_t kv_cache_layer_idx = 0;
     std::optional<uint32_t> sliding_window_size = std::nullopt;
+    // Circular (bounded) sliding KV cache: the local K/V shard is a circular buffer of whole
+    // Q-sized slabs (chunk group g lives in local slab g % n_slabs; the writer wraps host-side).
+    // The slab count is DERIVED on-device from the cache/Q geometry (N_local_kv / N_local_q) —
+    // callers only opt in. false = unbounded cache (byte-identical to the pre-existing behavior).
+    // Requires chunked sliding + kv_actual_isl.
+    bool circular_kv_cache = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -61,7 +67,8 @@ struct RingJointSDPAParams {
         uint32_t latent_v_head_dim = 0,
         uint32_t kv_cache_num_layers = 1,
         uint32_t kv_cache_layer_idx = 0,
-        std::optional<uint32_t> sliding_window_size = std::nullopt) :
+        std::optional<uint32_t> sliding_window_size = std::nullopt,
+        bool circular_kv_cache = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -81,7 +88,8 @@ struct RingJointSDPAParams {
         latent_v_head_dim(latent_v_head_dim),
         kv_cache_num_layers(kv_cache_num_layers),
         kv_cache_layer_idx(kv_cache_layer_idx),
-        sliding_window_size(sliding_window_size) {}
+        sliding_window_size(sliding_window_size),
+        circular_kv_cache(circular_kv_cache) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -109,6 +117,7 @@ struct RingJointSDPAParams {
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
         "sliding_window_size",
+        "circular_kv_cache",
         "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
@@ -128,6 +137,7 @@ struct RingJointSDPAParams {
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
             std::cref(sliding_window_size),
+            std::cref(circular_kv_cache),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
@@ -166,6 +176,10 @@ struct RingJointSDPAInputs {
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 
     bool is_chunked() const { return input_q.logical_shape()[2] < local_kv_seq_len(); }
+
+    // Circular sliding KV: Q-sized chunk slabs per device in the K/V cache (validation requires
+    // whole slabs, and at least two of them, before this is read).
+    uint32_t kv_slab_count() const { return local_kv_seq_len() / static_cast<uint32_t>(input_q.logical_shape()[2]); }
 
     // Latent-V optimization: absent V means the reader reuses K's buffer
     // and reads the first vDHt head-dim tiles (V's logical head dim).

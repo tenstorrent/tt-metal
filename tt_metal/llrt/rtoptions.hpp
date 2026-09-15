@@ -24,11 +24,11 @@
 #include <utility>
 #include <vector>
 #include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
-#include "core_coord.hpp"
-#include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>  // For DispatchCoreConfig
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
 
@@ -49,6 +49,8 @@ class SystemMesh;
 namespace tt::llrt {
 // Forward declaration - full definition in rtoptions.cpp
 enum class EnvVarID;
+
+enum class BriscFirmwareVariant : uint8_t { Default, Blaze };
 
 inline std::string g_root_dir;
 inline std::once_flag g_root_once;
@@ -411,6 +413,9 @@ class RunTimeOptions {
 
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
+
+    // BRISC firmware variant selected by TT_METAL_FW_SRC_BRISC.
+    BriscFirmwareVariant brisc_firmware_variant = BriscFirmwareVariant::Default;
 
     // Time (in microseconds) between DEVICE_PRINT dispatch stall-detection passes
     // and full-dispatch passes on dispatch_s.
@@ -954,6 +959,7 @@ public:
 
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
+    BriscFirmwareVariant get_brisc_firmware_variant() const { return brisc_firmware_variant; }
 
     uint32_t get_device_print_dispatch_stall_us() const { return device_print_dispatch_stall_us; }
     void set_device_print_dispatch_stall_us(uint32_t v) { device_print_dispatch_stall_us = v; }

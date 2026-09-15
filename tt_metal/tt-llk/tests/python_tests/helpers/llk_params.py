@@ -232,6 +232,7 @@ class MathOperation(Enum):
     TopKLocalSort = OpSpec("topk_local_sort", MathOpType.SFPU_UNARY)
     TopKMerge = OpSpec("topk_merge", MathOpType.SFPU_UNARY)
     TopKRebuild = OpSpec("topk_rebuild", MathOpType.SFPU_UNARY)
+    TopKDefuse = OpSpec("topk_defuse", MathOpType.SFPU_UNARY)
     # =============================================================================
     # SFPU BINARY OPERATIONS
     # =============================================================================
@@ -591,6 +592,17 @@ class FastMode(Enum):
 
 
 class StableSort(Enum):
+    Yes = True
+    No = False
+
+    @property
+    def cpp_enum_value(self):
+        return str(self.value).lower()
+
+
+class FusedSort(Enum):
+    """Fused-key stable topk: [bf16|u16] packed keys sorted by the unstable network."""
+
     Yes = True
     No = False
 

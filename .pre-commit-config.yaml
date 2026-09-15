@@ -61,10 +61,17 @@ repos:
       entry: python3 scripts/check_file_size.py
       language: system
       types: [file]
-    - id: validate-metalium-includes
-      name: validate-metalium-includes
-      entry: python3 scripts/validate_api/validate_includes.py tt_metal/api
+    - id: validate-metalium-api
+      name: validate-metalium-api
+      entry: python3 scripts/validate_api/validate_api.py tt_metal/api
       language: system
+      always_run: true
+      pass_filenames: false
+    - id: test-metalium-api
+      name: test-metalium-api
+      entry: python3 -m unittest discover -s scripts/validate_api -p 'test_*.py'
+      language: system
+      files: ^scripts/validate_api/
       pass_filenames: false
 - repo: local
   hooks:

@@ -13,6 +13,7 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "dataflow_common.hpp"
@@ -208,9 +209,7 @@ void kernel_main() {
     constexpr auto dfb_attention_sink = dfb::q_in;  // placeholder
 #endif
 #ifdef IS_CHUNKED
-    constexpr auto dfb_id_page_table = dfb::page_table;
-#else
-    constexpr auto dfb_id_page_table = dfb::q_in;  // placeholder
+    constexpr auto scratch_id_page_table = scratch::page_table;
 #endif
 #ifdef FLEXIBLE_CHUNKED
     constexpr auto dfb_id_chunk_start_idx_compute = dfb::chunk_start_idx_compute;
@@ -279,7 +278,9 @@ void kernel_main() {
     DataflowBuffer dfb_attn_sink(dfb_attention_sink);
 #endif
 #ifdef IS_CHUNKED
-    DataflowBuffer dfb_page_table(dfb_id_page_table);
+    // Single-entry private scratchpad: the reader stages the page table here and indexes it via
+    // page_table_ptr. The read pointer stays at the base, so there is no rotation to track.
+    Scratchpad<volatile uint32_t> page_table_scratch(scratch_id_page_table);
 #endif
 
     uint32_t chunked_q_chunk_offset = 0;
@@ -376,27 +377,22 @@ void kernel_main() {
                 }
 #ifdef IS_CHUNKED
                 {
-                    if (prev_nb != static_cast<uint32_t>(-1)) {
-                        dfb_page_table.pop_front(1);
-                    }
-                    dfb_page_table.reserve_back(1);
-                    // Inlined page-table read. It is kept here rather than in a shared dataflow_common.hpp
-                    // helper because such a helper would take a TensorAccessorArgs + raw address, and a
-                    // tensor:: binding token cannot cross into a shared header -- so the read is inlined
-                    // against the page_table TensorBinding. The redundant page-size 3rd accessor arg is
-                    // dropped (the binding supplies the aligned page size); page_table_stick_size remains
-                    // the read size.
-                    uint32_t page_table_dfb_wr_ptr = dfb_page_table.get_write_ptr();
+                    // Inlined page-table read into the single-entry scratchpad. It is kept here rather than
+                    // in a shared dataflow_common.hpp helper because such a helper would take a
+                    // TensorAccessorArgs + raw address, and a tensor:: binding token cannot cross into a
+                    // shared header -- so the read is inlined against the page_table TensorBinding. The
+                    // redundant page-size 3rd accessor arg is dropped (the binding supplies the aligned
+                    // page size); page_table_stick_size remains the read size.
+                    const uint32_t page_table_addr = page_table_scratch.get_base_address();
                     const auto page_table_reader = TensorAccessor(tensor::page_table);
                     noc.async_read(
                         page_table_reader,
-                        CoreLocalMem<uint32_t>(page_table_dfb_wr_ptr),
+                        CoreLocalMem<uint32_t>(page_table_addr),
                         page_table_stick_size,
                         {.page_id = decoded.nb},
                         {});
                     noc.async_read_barrier();
-                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_dfb_wr_ptr);
-                    dfb_page_table.push_back(1);
+                    page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_addr);
                 }
 #endif
             }
@@ -853,10 +849,5 @@ void kernel_main() {
 #endif
             }  // close k_chunk
         }  // close global_q_iter
-#ifdef IS_CHUNKED
-        if (prev_nb != static_cast<uint32_t>(-1)) {
-            dfb_page_table.pop_front(1);
-        }
-#endif
     }  // close phase
 }

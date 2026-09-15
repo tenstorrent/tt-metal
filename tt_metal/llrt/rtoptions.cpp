@@ -250,6 +250,7 @@ enum class EnvVarID {
     // JIT BUILD CONFIGURATION
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
+    TT_METAL_FW_SRC_BRISC,            // BRISC firmware variant to JIT-build instead of the in-tree one
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
 
     // ========================================
@@ -990,8 +991,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
-                constexpr uint32_t L1_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8);
-                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_BITS;
+                // PROFILE_PERF_COUNTERS_L1_0 to L1_5: the six L1 mux groups, which share one set of counters.
+                constexpr uint32_t L1_GROUP_BITS = (1 << 3) | (1 << 4) | (1 << 6) | (1 << 7) | (1 << 8) | (1 << 9);
+                uint32_t l1_selected = this->profiler_perf_counter_mode & L1_GROUP_BITS;
                 if (l1_selected && (l1_selected & (l1_selected - 1))) {
                     TT_THROW(
                         "Multiple L1 perf counter banks cannot be enabled simultaneously. "
@@ -1773,6 +1775,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false
         // Usage: export TT_METAL_DISABLE_PRECOMPILED_FW=1
         case EnvVarID::TT_METAL_DISABLE_PRECOMPILED_FW: this->set_disable_precompiled_fw(is_env_enabled(value)); break;
+
+        // TT_METAL_FW_SRC_BRISC
+        // Select a supported BRISC firmware variant instead of
+        // tt_metal/hw/firmware/src/tt-1xx/brisc.cc. A non-empty value also disables the precompiled firmware.
+        // Default: unset
+        // Usage: export TT_METAL_FW_SRC_BRISC=blaze
+        case EnvVarID::TT_METAL_FW_SRC_BRISC: {
+            if (value != nullptr && *value != '\0') {
+                const std::string variant = to_lower_copy(trim_copy(value));
+                TT_FATAL(
+                    variant == "blaze", "Unsupported TT_METAL_FW_SRC_BRISC value '{}'; supported values: blaze", value);
+                this->brisc_firmware_variant = BriscFirmwareVariant::Blaze;
+                this->set_disable_precompiled_fw(true);
+            }
+            break;
+        }
 
         // TT_METAL_DEVICE_PRINT_DISPATCH_STALL_US
         // Period in microseconds between dispatch_s DEVICE_PRINT stall-detection passes.

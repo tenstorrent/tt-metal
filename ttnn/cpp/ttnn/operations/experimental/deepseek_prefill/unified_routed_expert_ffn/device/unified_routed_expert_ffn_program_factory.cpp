@@ -111,13 +111,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // token counts, so no host-side small-M grid tuning is needed.
     //
     // chunk_M_tiles here is the CB-sized MAXIMUM chunk (op.chunk_M_tiles, default
-    // 64 => per_core_M_max 8). All three kernels pick the ACTUAL chunk_M /
+    // 32 => per_core_M_max 4). All three kernels pick the ACTUAL chunk_M /
     // per_core_M / num_chunks at runtime from the device token count, never
     // exceeding this max; the CBs below are sized to the max so a smaller pick
     // simply uses fewer of the reserved tiles.
     uint32_t GRID_X = kCoreGridX;
     uint32_t GRID_Y = kCoreGridY;
-    // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 8). The host
+    // chunk_M_tiles is the CB-sized MAXIMUM chunk (per_core_M_max = 4). The host
     // deliberately does NOT pick a chunk from M_tiles_full any more: all three
     // kernels derive the ACTUAL chunk_M_tiles / per_core_M / num_chunks at runtime
     // from the device-read per-expert token count (adaptive_chunk.hpp) and never
@@ -125,7 +125,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // pick just uses fewer of the reserved tiles. Sizing per EXPERT at runtime
     // also beats any single host-side seed here, since each local expert carries a
     // different token count. (Owned by the op, not the caller.)
-    constexpr uint32_t kMaxChunkMTiles = 8 * kCoreGridY;  // per_core_M <= 8 (L1 cap)
+    //
+    // The REQUESTED per_core_M_max, not necessarily the final one. 4 rather than the
+    // 8 L1 can hold because per_core_M_max and the gate/up K-block width
+    // in0_block_w_gu compete for the same L1, and on most shapes the width is worth
+    // more: the x-staging CBs are sized M * in0_block_w_gu tiles, so per_core_M_max
+    // sets the PRICE of a wider K-block. At M=8 width 16 does not fit and the L1 fit
+    // below narrows it, multiplying the K-block count; each block costs a fixed
+    // mcast-ready barrier round plus read tail that does NOT shrink with width. On
+    // shapes where the halved chunk count outweighs that, the L1 fit doubles this
+    // back to 8 -- see kWidenMMinTilesPerBlock.
+    //
+    // Keep this a POWER OF TWO * kCoreGridY: per_core_M_for_chunk() quantizes tail
+    // chunks to divisors of per_core_M_max.
+    constexpr uint32_t kMaxChunkMTiles = 4 * kCoreGridY;  // per_core_M <= 4 (see above)
     uint32_t chunk_M_tiles = kMaxChunkMTiles;
     uint32_t in0_block_w_gu = 16;
     const auto grid_size = t.x.device()->compute_with_storage_grid_size();
@@ -302,54 +315,70 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         L1_SCRATCH_MARGIN);
     const uint64_t l1_budget = static_cast<uint64_t>(l1_device->l1_size_per_core()) - l1_reserved - L1_SCRATCH_MARGIN;
 
-    // If the requested config — (per_core_M_max, in0_block_w_gu) from the CB-sized
-    // max chunk and the default in0_block_w_gu=16 — overflows the real L1 budget,
-    // shrink to fit: reduce per_core_M first (fewer weight re-reads, the dominant
-    // DRAM cost), then narrow in0_block_w_gu to the largest divisor of K_gate_tiles
-    // that fits. No-op when the requested config already fits (all DSV3 / M2.7
-    // dims).
-    if (cb_footprint_bytes(per_core_M, in0_block_w_gu) > l1_budget) {
-        // Candidate gate/up K-block widths: divisors of K_gate_tiles no wider
-        // than the requested in0_block_w_gu, largest first.
-        std::vector<uint32_t> w_gu_candidates;
-        w_gu_candidates.reserve(std::min<uint32_t>(in0_block_w_gu, K_gate_tiles));
-        for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
-            if (K_gate_tiles % w == 0) {
-                w_gu_candidates.push_back(w);
+    // Fit (per_core_M, in0_block_w_gu) to the real L1 budget. Candidate widths are
+    // divisors of K_gate_tiles no wider than the request, largest first; candidate
+    // Ms are DIVISORS of the request, largest first. Walking M down by 1 could stop
+    // on a prime: at per_core_M=5 a 16-tile tail needs 2 rows/core but the only
+    // divisors are {1,5}, so it would run 5 - 2.5x the M-work. Restricting to
+    // divisors of the request keeps per_core_M_for_chunk()'s tail ladder as fine as
+    // the request's own.
+    const auto fit_config = [&](uint32_t requested_M) -> std::pair<uint32_t, uint32_t> {
+        for (uint32_t M = requested_M; M >= 1; --M) {
+            if (requested_M % M != 0) {
+                continue;
             }
-        }
-        TT_FATAL(!w_gu_candidates.empty(), "K_gate_tiles ({}) has no valid in0_block_w_gu", K_gate_tiles);
-
-        uint32_t fit_M = 0;
-        uint32_t fit_w = 0;
-        for (uint32_t M = per_core_M; M >= 1; --M) {
-            for (const uint32_t w : w_gu_candidates) {
-                if (cb_footprint_bytes(M, w) <= l1_budget) {
-                    fit_M = M;
-                    fit_w = w;
-                    break;
+            for (uint32_t w = std::min<uint32_t>(in0_block_w_gu, K_gate_tiles); w >= 1; --w) {
+                if (K_gate_tiles % w == 0 && cb_footprint_bytes(M, w) <= l1_budget) {
+                    return {M, w};
                 }
             }
-            if (fit_M != 0) {
-                break;
-            }
         }
-        TT_FATAL(
-            fit_M != 0,
-            "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
-            "(per_core_M=1, in0_block_w_gu={}): need {} B but only {} B available "
-            "(emb={}, hidden={}, grid {}x{}). Reduce model dims.",
-            w_gu_candidates.back(),
-            cb_footprint_bytes(1, w_gu_candidates.back()),
-            l1_budget,
-            N_down_tiles_full * TILE,
-            N_gate_tiles_full * TILE,
-            GRID_X,
-            GRID_Y);
-        per_core_M = fit_M;
-        in0_block_w_gu = fit_w;
-        chunk_M_tiles = per_core_M * GRID_Y;
+        return {0, 0};
+    };
+
+    auto [fit_M, fit_w] = fit_config(per_core_M);
+    TT_FATAL(
+        fit_M != 0,
+        "unified_routed_expert_ffn: per-core CBs do not fit in L1 even at the smallest config "
+        "(per_core_M=1, in0_block_w_gu=1): need {} B but only {} B available "
+        "(emb={}, hidden={}, grid {}x{}). Reduce model dims.",
+        cb_footprint_bytes(1, 1),
+        l1_budget,
+        N_down_tiles_full * TILE,
+        N_gate_tiles_full * TILE,
+        GRID_X,
+        GRID_Y);
+
+    // Doubling per_core_M halves the M-chunk count, and every chunk re-reads the
+    // full gate/up/down weights (adaptive_chunk.hpp) - the dominant DRAM cost. It is
+    // not free: per_core_M and in0_block_w_gu compete for the same L1, so the widest
+    // width that still fits narrows, and each gate/up K-block carries a fixed
+    // mcast-ready barrier plus read tail that does NOT shrink with width. Take the
+    // doubling only when each extra K-block buys enough avoided weight traffic:
+    //
+    //     weight tiles per extra gate/up K-block
+    //         = (2*K_gate*N_gate + K_down*N_down) / (K_gate/w_wide - K_gate/w_narrow)
+    //
+    // Measured on a BH p150b at ISL 5120, tiles per extra block: kimi_k3 4608,
+    // kimi_k26 / dsv4_flash / glm_51 3072, gptoss_120b 2700, minimax_m3 1536,
+    // dsv4_pro 658. Only kimi_k3 clears the bar, and it is the only shape the
+    // doubling measurably helps: +3-4% at ISL >= 512, -3% at ISL <= 256, against
+    // 1.5-1.85x LOSSES on the shapes below it. The bar sits between 3072 and 4608;
+    // it is calibrated on one favourable shape, so widen it only with measurements.
+    constexpr uint32_t kWidenMMinTilesPerBlock = 4096;
+    const auto [wide_M, wide_w] = fit_config(per_core_M * 2);
+    if (wide_M == per_core_M * 2 && wide_w < fit_w) {
+        const uint32_t extra_blocks = K_gate_tiles / wide_w - K_gate_tiles / fit_w;
+        const uint32_t weight_tiles = 2 * K_gate_tiles * N_gate_tiles_full + K_down_tiles * N_down_tiles_full;
+        if (extra_blocks > 0 && weight_tiles / extra_blocks >= kWidenMMinTilesPerBlock) {
+            fit_M = wide_M;
+            fit_w = wide_w;
+        }
     }
+
+    per_core_M = fit_M;
+    in0_block_w_gu = fit_w;
+    chunk_M_tiles = per_core_M * GRID_Y;
 
     // in0_block_w_gu must divide K_gate_tiles (the gate/up K-loop bound); the
     // divisor-snap after the short_seq picker and the L1 guard above both
@@ -440,7 +469,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // a turn as sender exactly once per chunk.
     const uint32_t act_ready_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
     const uint32_t act_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
-    // Two-RISC weight read: use the writer (NCRISC, idle until the down output)
+    // Two-RISC weight read: use the writer (BRISC, idle until the down output)
     // as a second read engine for `up`, read on NoC 1 concurrent with the
     // reader's NoC-0 `gate` read. Two delivery schemes:
     //
@@ -464,6 +493,47 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const bool reader_mcasts_up = (up_mode == 0 || up_mode == 2);  // reader NoC-0 mcasts up
     // Local same-core handshake sems (UP_SPLIT only): up_go (reader -> writer:
     // slot reserved) and up_done (writer -> reader: up in L1). Monotonic.
+    // COUNTS_BCAST: one core reads counts/idx and multicasts them; this gates the rest.
+    const uint32_t counts_valid_sem_id = tt::tt_metal::CreateSemaphore(program, core_range_set, 0);
+    // DOWN_SPLIT: share each down K-block's K-rows between the reader (NoC 0) and the
+    // writer (NoC 1). The down read was the only weight read left on the reader's
+    // critical path once UP_SPLIT hides gate/up.
+    //
+    // SPLIT, not a full handoff: these reads are issue-bound, not bandwidth-bound
+    // (~43 cycles of RISC command-buffer time per 576 B bfp4 tile against ~9 cycles of
+    // NoC port), so the limit is one RISC's issue rate. Two RISCs issuing half each
+    // roughly doubles it; handing the whole block to one RISC only moves the serial cost
+    // from the reader to the writer, and measured 1.03x against 1.13x for the split.
+    //
+    // A split needs >= 2 K-rows to divide; in0_block_w_d is per_core_N_gu.
+    // IN1_WRITER_MCAST: hand the gate/up weight multicast to the WRITER, which owns NoC 1,
+    // so it overlaps the reader's NoC-0 weight reads. The reader cannot multicast on NoC 1
+    // itself -- in DM_DEDICATED_NOC both RISCs use the same command-buffer indices and only
+    // avoid collision by each owning one NoC -- so the other RISC must be SIGNALLED to do it.
+    //
+    // !! FABRIC HAZARD, KNOWINGLY ACCEPTED !!
+    // This puts a WORKER MULTICAST on NoC 1, which is what retired the earlier
+    // UP_WRITER_MCAST scheme: the NoC-1 worker multicast + posted atomics collide with
+    // fabric CCL ops on NoC 1 and hang the run. UP_SPLIT's fabric-safety argument is
+    // specifically that it keeps NoC 1 READ-ONLY, and enabling this voids that argument.
+    // Single-device perf/functional tests CANNOT detect it -- the failure is a collision
+    // with CCL traffic that is absent there, so a green sweep here is NOT evidence of
+    // fabric safety. Validate against a fabric-enabled run with concurrent CCL before
+    // trusting this in production. Set DS_NO_WRITER_MCAST=1 to fall back to the reader's
+    // NoC-0 multicast.
+    const bool kWriterMcastsIn1 = std::getenv("DS_NO_WRITER_MCAST") == nullptr;
+    const uint32_t mcast_go_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t mcast_done_sem_id = kWriterMcastsIn1 ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+
+    const bool kEnableSplitDown = in0_block_w_d >= 2;
+    // Rows the READER keeps; the writer takes [down_split_k, in0_block_w_d).
+    const uint32_t down_split_k = kEnableSplitDown ? (in0_block_w_d / 2) : in0_block_w_d;
+    // DEDICATED sems, not up_go/up_done: the UP_SPLIT writer indexes its cb_in1_up slot
+    // off (up_seq - 1) % slots, which only holds while up_seq counts gate/up blocks
+    // alone. Adding down blocks to that counter shifts the up slot by num_blocks_d per
+    // chunk and silently corrupts the GATE/UP path from the second chunk on.
+    const uint32_t down_go_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
+    const uint32_t down_done_sem_id = kEnableSplitDown ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_go_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
     const uint32_t up_done_sem_id = (up_mode == 2) ? tt::tt_metal::CreateSemaphore(program, core_range_set, 0) : 0;
 
@@ -596,7 +666,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
     // Reader's `start` scratch. Same sizing; separate CB so
-    // reader (BRISC) and writer (NCRISC) never share one scratch page.
+    // reader (NCRISC) and writer (BRISC) never share one scratch page.
     tt::tt_metal::CircularBufferConfig start_reader_cb_cfg =
         tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH_READER, tt::DataFormat::UInt32}})
             .set_page_size(CB_START_SCRATCH_READER, start_scratch_bytes);
@@ -666,11 +736,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // X_RM_ELEM_BYTES — byte size of one row-major x element (x is bf16 in
         // the row-major path).
         tt::datum_size(tt::DataFormat::Float16_b),
+        // DOWN_SPLIT: K-rows of each down block this RISC keeps; the writer reads the
+        // rest on NoC 1. Equals in0_block_w_d when the split is off.
+        down_split_k,                             // 30
+        // IN1_WRITER_MCAST: 1 => the writer runs the gate/up multicast on NoC 1.
+        static_cast<uint32_t>(kWriterMcastsIn1),  // 31
         // Active-token band. Experts outside it are dropped like a zero count, so a
         // hybrid dispatch can hand this op one load regime and moe_fused_swiglu the other
         // over the SAME counts vector. Wide open by default.
-        op.min_active_tokens,
-        op.max_active_tokens,
+        op.min_active_tokens,                     // 32
+        op.max_active_tokens,                     // 33
     };
     tt::tt_metal::TensorAccessorArgs(x_buffer).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buffer).append_to(reader_ct_args);
@@ -739,8 +814,20 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         in0_block_w_gu,                       // 17
         K_gate_tiles,                         // 18
         static_cast<uint32_t>(up_mode == 2),  // 19 writer_split_up
-        op.min_active_tokens,                 // 20
-        op.max_active_tokens,                 // 21
+        // DOWN_SPLIT down-weight read: the writer reads the UPPER K-rows of each down block
+        // on NoC 1 while the reader reads the lower rows on NoC 0.
+        CB_IN1_DOWN,            // 20
+        in0_block_w_d,          // 21
+        K_down_tiles,           // 22
+        d_num_blocks,           // 23
+        d_in1_block_num_tiles,  // 24
+        down_split_k,           // 25 rows the READER keeps
+        // IN1_WRITER_MCAST: cb_in1_gate so the writer can multicast it, plus the flag.
+        CB_IN1_GATE,                              // 26
+        static_cast<uint32_t>(kWriterMcastsIn1),  // 27 writer_mcasts_in1
+        // Active-token band, after the DOWN_SPLIT block rather than at 20/21.
+        op.min_active_tokens,                     // 28
+        op.max_active_tokens,                     // 29
     };
     // Accessor compile-arg stream order MUST match the writer kernel:
     // out, then start, then up (UP_SPLIT).
@@ -748,6 +835,8 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
     // up accessor follows start; used only when the writer handles `up`.
     tt::tt_metal::TensorAccessorArgs(up_buffer).append_to(writer_ct_args);
+    // DOWN_SPLIT: down accessor follows up in the writer's compile-arg stream.
+    tt::tt_metal::TensorAccessorArgs(down_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -898,19 +987,41 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t my_nt_gu = gx;
         const uint32_t my_nt_d = gx;
 
-        // Weight-multicast topology for in1 (gate/up/down). For each N-col
-        // group (fixed gx), the sender is the gy=0 core. Receivers are the
-        // GRID_Y-1 cores at gy=1..GRID_Y-1 sharing the same gx. NoC
-        // multicast destination rectangle is a single NoC column spanning
-        // those receiver rows.
-        const bool is_in1_sender = (gy == 0);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
-        // GRID_Y == 1: no receivers — point the unused receiver coords at the
-        // sender row (gy=1 doesn't exist); the reader skips the mcast.
-        const CoreCoord first_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, 1} : CoreCoord{gx, 0};
-        const CoreCoord last_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, GRID_Y - 1} : CoreCoord{gx, 0};
-        const auto first_recv_noc = device->worker_core_from_logical_core(first_recv_logical);
-        const auto last_recv_noc = device->worker_core_from_logical_core(last_recv_logical);
+        // ---------------- DRAM-read sender placement ----------------
+        // Every DRAM read here is issued by a "sender" core that multicasts the block
+        // to the cores sharing it: one per N-column for the weights (gate/up/down,
+        // shared down the column) and one per M-row for x (shared across the row).
+        //
+        // Placement matters because these reads are ISSUE-bound, not bandwidth-bound: a
+        // 576 B bfp4 tile needs ~9 cycles of a 64 B/cycle NoC port but ~43 cycles of
+        // RISC time to push into the command buffer, so a sender delivers only
+        // ~13 B/cycle (~20% of its port) and its RISC, not DRAM, is the limit. With the
+        // weight senders all on row 0 and the x senders all on column 0, core (0,0)
+        // owned BOTH streams and serially issued x + gate + down while cores off both
+        // lines sat nearly idle.
+        //
+        // So stagger the two sender sets so no core is in both:
+        //   weight sender for column gx -> row    gx % GRID_Y
+        //   x      sender for row    gy -> column (gy + 1) % GRID_X
+        // A core is in both only if gx == (gx % GRID_Y + 1) % GRID_X, which has no
+        // solution on the 11x8 grid; the TT_FATAL keeps that honest for other grids.
+        const uint32_t in1_sender_row = gx % GRID_Y;
+        const uint32_t in0_sender_col = (gy + 1) % GRID_X;
+        TT_FATAL(
+            !(gy == in1_sender_row && gx == in0_sender_col),
+            "sender placement collision at ({}, {}): a core must not own both the weight and x DRAM read",
+            gx,
+            gy);
+
+        const bool is_in1_sender = (gy == in1_sender_row);
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, in1_sender_row});
+        // The rectangle spans the WHOLE column, sender included: a multicast rectangle
+        // must be contiguous and the sender is no longer on an edge row, so "everything
+        // but the sender" is not expressible as one rectangle. The non-loopback
+        // multicast drops the sender's own copy (it already holds the block), so
+        // num_dests stays GRID_Y - 1.
+        const auto first_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
+        const auto last_recv_noc = device->worker_core_from_logical_core(CoreCoord{gx, GRID_Y - 1});
         const uint32_t in1_num_receivers = GRID_Y - 1;
         const uint32_t in1_mcast_nx_start = first_recv_noc.x;
         const uint32_t in1_mcast_ny_start = first_recv_noc.y;
@@ -919,11 +1030,11 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         const uint32_t in1_sender_nx = sender_noc.x;
         const uint32_t in1_sender_ny = sender_noc.y;
 
-        // x (in0) multicast topology: per M-row, sender at gx=0, receivers
-        // at gx=1..GRID_X-1.
-        const bool is_in0_sender = (gx == 0);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{1, gy});
+        // x (in0) multicast: per M-row, sender at in0_sender_col; the rectangle spans
+        // the whole row for the same reason as the weight column above.
+        const bool is_in0_sender = (gx == in0_sender_col);
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{in0_sender_col, gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
         const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
@@ -943,8 +1054,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //  16..25: in0 multicast args
         //  26: act_ready_sem_id  27: act_valid_sem_id
         //  28: up_go_sem_id  29: up_done_sem_id
-        //  30..30+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
-        //  30+2*GRID_X: start_addr (expert_region_offsets)
+        //  30..36: COUNTS_BCAST (is_counts_reader, rect x0,y0,x1,y1, sem, receivers)
+        //  37..38: DOWN_SPLIT go/done sem ids
+        //  39..39+2*GRID_X-1: M-row NoC coord table (GRID_X pairs of x, y)
+        //  39+2*GRID_X: start_addr (expert_region_offsets)
         std::vector<uint32_t> reader_args = {
             x_buffer->address(),
             counts_buffer->address(),
@@ -978,6 +1091,28 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
             up_go_sem_id,
             up_done_sem_id,
         };
+        // COUNTS_BCAST args (7, at COUNTS_BCAST_RT). Every core needs counts/idx to
+        // derive its chunking, but all of them reading the same two DRAM pages at once
+        // serialises on one bank. Logical (0,0) reads them and multicasts to a rectangle
+        // spanning the whole worker grid; the non-loopback multicast drops the sender's
+        // own copy, so num_dests is one less than the grid.
+        {
+            const auto grid_first = device->worker_core_from_logical_core(CoreCoord{0, 0});
+            const auto grid_last = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, GRID_Y - 1});
+            reader_args.push_back(static_cast<uint32_t>(gx == 0 && gy == 0));  // is_counts_reader
+            reader_args.push_back(static_cast<uint32_t>(grid_first.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_first.y));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.x));
+            reader_args.push_back(static_cast<uint32_t>(grid_last.y));
+            reader_args.push_back(counts_valid_sem_id);
+            reader_args.push_back(GRID_X * GRID_Y - 1);
+        }
+        // DOWN_SPLIT go/done sems (dedicated; see down_go_sem_id).
+        reader_args.push_back(down_go_sem_id);
+        reader_args.push_back(down_done_sem_id);
+        // IN1_WRITER_MCAST go/done sems.
+        reader_args.push_back(mcast_go_sem_id);
+        reader_args.push_back(mcast_done_sem_id);
         // M-row NoC coord table: for our M-row (gy=my_mt), the NoC (x, y) of
         // each of the GRID_X cores (gx=0..GRID_X-1). Reader uses this per
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
@@ -1038,6 +1173,24 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         for (uint32_t e = 0; e < experts_per_chip; ++e) {
             writer_args.push_back(t.up_projs[e].buffer()->address());
         }
+        // DOWN_SPLIT: per-expert down base addresses follow the up block (DOWN_RT),
+        // then the two dedicated go/done sem ids.
+        for (uint32_t e = 0; e < experts_per_chip; ++e) {
+            writer_args.push_back(t.down_projs[e].buffer()->address());
+        }
+        writer_args.push_back(down_go_sem_id);
+        writer_args.push_back(down_done_sem_id);
+        // IN1_WRITER_MCAST (9): the NoC-0 rectangle (the writer swaps the corners for
+        // NoC 1), receiver count, the shared in1 ready/valid sems, and its go/done pair.
+        writer_args.push_back(in1_mcast_nx_start);
+        writer_args.push_back(in1_mcast_ny_start);
+        writer_args.push_back(in1_mcast_nx_end);
+        writer_args.push_back(in1_mcast_ny_end);
+        writer_args.push_back(in1_num_receivers);
+        writer_args.push_back(in1_ready_sem_id);
+        writer_args.push_back(in1_valid_sem_id);
+        writer_args.push_back(mcast_go_sem_id);
+        writer_args.push_back(mcast_done_sem_id);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
 
         // Compute: how many of this core's N subblocks hold REAL output columns.
@@ -1126,10 +1279,16 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
         writer_args[3] = start_addr;
-        // Per-expert `up` addresses occupy the final N slots.
-        size_t u = writer_args.size() - N;
+        // Per-expert `up` then `down` base addresses follow the 8 fixed args (the kernel's
+        // UP_RT / DOWN_RT). Indexed from the FRONT: the tail holds the DOWN_SPLIT sem pair
+        // and the IN1_WRITER_MCAST block, so counting back from the end overwrites those
+        // and leaves both address blocks stale on a program-cache hit.
+        size_t wa = 8;
         for (uint32_t e = 0; e < N; ++e) {
-            writer_args[u++] = t.up_projs[e].buffer()->address();
+            writer_args[wa++] = t.up_projs[e].buffer()->address();
+        }
+        for (uint32_t e = 0; e < N; ++e) {
+            writer_args[wa++] = t.down_projs[e].buffer()->address();
         }
     }
 }

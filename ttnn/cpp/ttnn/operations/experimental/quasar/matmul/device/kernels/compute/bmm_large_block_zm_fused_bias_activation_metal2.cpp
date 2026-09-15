@@ -291,7 +291,7 @@ void kernel_main() {
 #endif
 
                 if constexpr (batch > 1 || num_blocks_h_dim > 1 || num_blocks_w_dim > 1) {
-                    PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+                    pack_reconfig_data_format(mm_partials_cb_id);
                 }
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
@@ -307,7 +307,7 @@ void kernel_main() {
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_cb_id, in0_transpose_cb_id);
                         transpose_init(in0_transpose_cb_id);
-                        PACK((pack_reconfig_data_format(in0_cb_id)));
+                        pack_reconfig_data_format(in0_cb_id);
 #ifdef PACKER_L1_ACC
                         pack_reconfig_l1_acc(0);
 #endif
@@ -315,7 +315,7 @@ void kernel_main() {
                         reconfig_data_format_srca(in0_transpose_cb_id, in1_cb_id);
                         matmul_block_init(
                             in0_cb_id, in1_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
-                        PACK((pack_reconfig_data_format(mm_partials_cb_id)));
+                        pack_reconfig_data_format(mm_partials_cb_id);
                     }
 
                     // [DEBUG mcast2d compute stall] Which input wait does the unpacker (UPMW) block on?
@@ -385,7 +385,7 @@ void kernel_main() {
                                 tile_regs_wait();
 
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                                PACK((pack_reconfig_data_format(mm_out_cb_id)));
+                                pack_reconfig_data_format(mm_out_cb_id);
 #endif
 
 #ifdef PACKER_L1_ACC
@@ -479,7 +479,7 @@ void kernel_main() {
                 pack_relu_config(ReluConfig::zero());
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                PACK((pack_reconfig_data_format(out_cb_id)));
+                pack_reconfig_data_format(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                 pack_reconfig_l1_acc(0);
@@ -550,7 +550,7 @@ void kernel_main() {
 #ifndef FUSE_BIAS
                     reconfig_data_format_srca(in1_cb_id, mm_partials_cb_id);
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
-                    PACK((pack_reconfig_data_format(out_cb_id)));
+                    pack_reconfig_data_format(out_cb_id);
 #endif
 #ifdef PACKER_L1_ACC
                     pack_reconfig_l1_acc(0);
