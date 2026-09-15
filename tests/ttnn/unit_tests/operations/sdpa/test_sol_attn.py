@@ -91,3 +91,39 @@ def test_sol_attn_is_deterministic(device):
     outs = [ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False)) for _ in range(3)]
     for i, o in enumerate(outs[1:], start=1):
         assert torch.equal(outs[0], o), f"launch {i} differs from launch 0"
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+@pytest.mark.parametrize(("b", "nh", "seq", "d"), [(1, 2, 1024, 128)], ids=["s1024"])
+def test_sol_attn_keep_every_one_is_dense(device, b, nh, seq, d):
+    """`chunk_keep_every=1` instantiates the skip branches with a predicate that never fires.
+
+    So a failure is the loop breaking, not skipping being wrong -- in particular the accumulator
+    alias parity, which `KV_chunks_processed_in_iter` drives and which a misplaced skip would desync.
+    """
+    q, k, v = _qkv(b, nh, seq, d)
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    parent = ttnn.to_torch(ttnn.transformer.scaled_dot_product_attention(tt_q, tt_k, tt_v, is_causal=False))
+    fork = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=1))
+    assert torch.equal(parent, fork), "chunk_keep_every=1 diverged from dense"
+
+
+@skip_for_wormhole_b0("sol_attn targets Blackhole")
+@pytest.mark.parametrize(("b", "nh", "seq", "d"), [(1, 2, 1024, 128)], ids=["s1024"])
+def test_sol_attn_chunk_stride_is_in_the_program_hash(device, b, nh, seq, d):
+    """Different strides must produce different programs, in one process.
+
+    `chunk_keep_every` is a compile-time arg, so if it were missing from the program hash the cache
+    would hand a later call the earlier program and every density would time identically -- a
+    fabricated "skipping is free" result rather than a crash.
+    """
+    q, k, v = _qkv(b, nh, seq, d, seed=3)
+    dev = lambda x: ttnn.from_torch(x, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_q, tt_k, tt_v = dev(q), dev(k), dev(v)
+    dense = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=1))
+    sparse = ttnn.to_torch(ttnn.transformer.sol_attn(tt_q, tt_k, tt_v, is_causal=False, chunk_keep_every=4))
+    assert not torch.equal(
+        dense, sparse
+    ), "keep_every=1 and 4 gave identical output; the stride is not reaching the program hash"
+    assert torch.isfinite(sparse.float()).all(), "skipped-chunk output must still normalise"
