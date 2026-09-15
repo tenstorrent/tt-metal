@@ -35,6 +35,14 @@
 # capped at 16 per the dI/dt guidance in the meeting notes. With N=1 the ordinary conftest `device`
 # fixture is used and no mesh is opened.
 #
+# Peak search (test_minimal_matmul_peak_search): the sheet shapes stream both operands from DRAM and top out
+# where the DRAM pipeline does, so a second test measures the compute-bound point of the op instead. It sizes
+# M and N so that each core's whole output is a single M_block x N_block (PEAK_BLOCKS per axis, on the grid in
+# use) and sweeps K (PEAK_K), K_block and the sub-block. Every input tile then crosses DRAM exactly once and
+# the bandwidth the FPU needs at peak falls with the block size (about 480 GB/s for 8x8 tiles at the BF16
+# HiFi2 peak on 12x10, about 240 GB/s for 16x16). Rows go to generated/minimal_matmul_peak_gemm.csv and the
+# best rate per dtype column is logged at session end.
+#
 # Metrics per row:
 #   time_avg_ms        per-op time from the traced execution (see Timing)
 #   tflops             2*M*N*K / time_avg          (TFLOP/s; "flops" in the CSV is the op count 2*M*N*K)
@@ -97,6 +105,7 @@ MAX_PARALLEL_CHIPS = 16  # dI/dt guidance from the meeting notes: at most ~16 ch
 TRACE_EXECUTIONS = 3  # timed executions of the captured trace per config; the minimum is reported
 
 SWEEP_CSV_NAME = "minimal_matmul_block_sweep.csv"
+PEAK_CSV_NAME = "minimal_matmul_peak_gemm.csv"
 BEST_BLOCKING_JSON_NAME = "minimal_matmul_best_blocking.json"
 
 # Candidate block sizes (tiles). Sub-block candidates are derived per (M_block, N_block): every divisor
@@ -104,6 +113,11 @@ BEST_BLOCKING_JSON_NAME = "minimal_matmul_best_blocking.json"
 # get_dest_reg_count in ttnn/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp), keeping
 # only the pairs of maximal area, e.g. 1x8 / 2x4 / 4x2 / 8x1 for an 8x8 block, 1x4 for a 1x4 block.
 DEFAULT_BLOCK_SIZES = [1, 2, 4, 8, 16]
+
+# Peak search: one output block per core (M = M_block*32*cores along M, N = N_block*32*cores along N), so
+# every input tile crosses DRAM once and the compute-to-traffic ratio is set by the block size alone.
+PEAK_BLOCKS = [8, 16]
+PEAK_K = [4096, 8192, 16384]
 DEST_REGS = {False: 8, True: 4}
 
 FLOP_PER_CORE_PER_CYCLE = 8 * 16 * 16 * 2  # 8x16x16 MAC array, multiply + add
@@ -290,6 +304,44 @@ def sweep_report():
     summarize_best_blocking(sweep_csv_path, artifacts_dir / BEST_BLOCKING_JSON_NAME)
 
 
+def summarize_peak(peak_csv_path):
+    best = {}
+    with open(peak_csv_path, newline="") as f:
+        for row in csv.DictReader(f):
+            key = row["dtype_column"]
+            if key not in best or float(row["tflops"]) > float(best[key]["tflops"]):
+                best[key] = row
+    for key, r in sorted(best.items()):
+        logger.info(
+            f"PEAK {key}: {float(r['tflops']):.1f} TFLOP/s ({float(r['utilization_pct']):.1f}% of "
+            f"{float(r['theoretical_tflops']):.0f}) at {r['M']}x{r['N']}x{r['K']} blocks "
+            f"{r['M_block']}/{r['K_block']}/{r['N_block']} sub {r['subblock_h']}x{r['subblock_w']} grid {r['grid']}"
+        )
+
+
+@pytest.fixture(scope="session")
+def peak_report():
+    """Row appender for the peak-search CSV (same columns and append/reset rules as the sweep CSV)."""
+    artifacts_dir = Path(os.environ["TT_METAL_HOME"]) / "generated"
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    peak_csv_path = artifacts_dir / PEAK_CSV_NAME
+    reuse = False
+    if peak_csv_path.exists() and os.getenv(SWEEP_RESET_ENV) != "1":
+        with open(peak_csv_path, newline="") as f:
+            reuse = next(csv.reader(f), None) == csv_columns()
+    if not reuse:
+        with open(peak_csv_path, "w", newline="") as f:
+            csv.writer(f).writerow(csv_columns())
+    lock = threading.Lock()
+
+    def append(row):
+        with lock, open(peak_csv_path, "a", newline="") as f:
+            csv.writer(f).writerow([row.get(c, "") for c in csv_columns()])
+
+    yield append
+    summarize_peak(peak_csv_path)
+
+
 @pytest.fixture(scope="module")
 def sweep_chips(request):
     """The chips the sweep runs on. N=1: the conftest `device` fixture, requested per test. N>1: the system
@@ -311,6 +363,31 @@ def sweep_chips(request):
 # ---------------------------------------------------------------------------
 # Sweep test: one item per (shape, dtype column), configs dealt round-robin across chips
 # ---------------------------------------------------------------------------
+
+
+def run_candidates_on_chips(chips, candidates, ctx, report):
+    """Deal the candidates round-robin to the chips, one thread per chip; returns the collected results."""
+    results = []
+    if len(chips) == 1:
+        sweep_chip_worker(0, chips[0], candidates, ctx, report, results)
+        return results
+    errors = []
+
+    def run(chip_index, chip):
+        try:
+            sweep_chip_worker(chip_index, chip, candidates[chip_index :: len(chips)], ctx, report, results)
+        except BaseException as e:  # re-raised in the main thread
+            logger.exception(f"chip {chip_index} worker failed")
+            errors.append(e)
+
+    threads = [threading.Thread(target=run, args=(i, chip), name=f"sweep-chip-{i}") for i, chip in enumerate(chips)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if errors:
+        raise errors[0]
+    return results
 
 
 def sweep_chip_worker(chip_index, chip, candidates, ctx, report, results):
@@ -446,27 +523,80 @@ def test_minimal_matmul_block_sweep(
         f"{shape_id((M, N, K))} {dtype_column}: {len(candidates) - 1} sweep candidates + oob on {len(chips)} chip(s)"
     )
 
-    results = []
-    if len(chips) == 1:
-        sweep_chip_worker(0, chips[0], candidates, ctx, sweep_report, results)
-    else:
-        errors = []
-
-        def run(chip_index, chip):
-            try:
-                sweep_chip_worker(chip_index, chip, candidates[chip_index :: len(chips)], ctx, sweep_report, results)
-            except BaseException as e:  # re-raised in the main thread
-                logger.exception(f"chip {chip_index} worker failed")
-                errors.append(e)
-
-        threads = [threading.Thread(target=run, args=(i, chip), name=f"sweep-chip-{i}") for i, chip in enumerate(chips)]
-        for t in threads:
-            t.start()
-        for t in threads:
-            t.join()
-        if errors:
-            raise errors[0]
-
+    results = run_candidates_on_chips(chips, candidates, ctx, sweep_report)
     assert results, f"No runnable config for {dtype_column} {shape_id((M, N, K))}"
     best = max(results, key=lambda r: r[0])
     logger.info(f"BEST {dtype_column} {shape_id((M, N, K))}: {best[2]} ({best[1]}) at {best[0]:.1f} TFLOP/s")
+
+
+def peak_shape(Mb, Nb, grid_x, grid_y):
+    """M, N such that every core owns exactly one Mb x Nb output block under the op's grid mapping
+    (M over grid y and N over grid x, transposed when M > N). Returns None if no orientation is consistent."""
+    for m_cores, n_cores in ((grid_y, grid_x), (grid_x, grid_y)):
+        M, N = Mb * 32 * m_cores, Nb * 32 * n_cores
+        transposed = M > N
+        if (m_cores == grid_x) == transposed:
+            return M, N
+    return None
+
+
+@pytest.mark.skipif(
+    os.getenv(GEMM_FLOPS_BENCHMARK_ENV) != "1",
+    reason=f"Benchmark is manual-only; set {GEMM_FLOPS_BENCHMARK_ENV}=1 to run",
+)
+@pytest.mark.timeout(0)
+@pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
+@pytest.mark.parametrize("Mb, Nb", list(product(PEAK_BLOCKS, PEAK_BLOCKS)), ids=lambda v: f"{v}")
+@pytest.mark.parametrize("K", PEAK_K, ids=lambda k: f"K{k}")
+@pytest.mark.parametrize("dtype_column", SWEPT_COLUMNS)
+@pytest.mark.parametrize("num_warmup_iterations", [3])
+@pytest.mark.parametrize("num_measurement_iterations", [10])
+def test_minimal_matmul_peak_search(
+    request,
+    device_params,
+    grid_size,
+    peak_report,
+    sweep_chips,
+    Mb,
+    Nb,
+    K,
+    dtype_column,
+    num_warmup_iterations,
+    num_measurement_iterations,
+):
+    """Compute-bound point of the op: one output block per core, K_block and sub-block swept."""
+    chips = sweep_chips if sweep_chips is not None else [request.getfixturevalue("device")]
+    spec = DTYPE_COLUMNS[dtype_column]
+
+    grid_x, grid_y = resolve_grid(chips[0], grid_size)
+    shape = peak_shape(Mb, Nb, grid_x, grid_y)
+    if shape is None:
+        pytest.skip(f"no consistent grid orientation for blocks {Mb}x{Nb} on {grid_x}x{grid_y}")
+    M, N = shape
+    grid_str = f"{grid_x}x{grid_y}"
+    num_cores = grid_x * grid_y
+
+    ctx = dict(
+        shape=(M, N, K),
+        dtype_column=dtype_column,
+        spec=spec,
+        core_grid=ttnn.CoreCoord(grid_x, grid_y),
+        compute_kernel_config=make_compute_kernel_config(chips[0], spec),
+        num_warmup_iterations=num_warmup_iterations,
+        num_measurement_iterations=num_measurement_iterations,
+        calc_device_utilization=device_utilization_enabled(),
+    )
+    candidates = [
+        ("peak", (Mb, Kb, Nb, sh, sw), (Mb, Kb, Nb, sh, sw), num_cores, grid_str)
+        for Kb in get_block_sizes()
+        for sh, sw in iter_subblocks(Mb, Nb, DEST_REGS[spec["fp32_acc"]])
+    ]
+    logger.info(
+        f"peak {dtype_column} {shape_id((M, N, K))} blocks {Mb}x{Nb} per core: {len(candidates)} candidates on {len(chips)} chip(s)"
+    )
+
+    results = run_candidates_on_chips(chips, candidates, ctx, peak_report)
+    if not results:
+        pytest.skip(f"no runnable K_block / sub-block for {dtype_column} blocks {Mb}x{Nb} (L1)")
+    best = max(results, key=lambda r: r[0])
+    logger.info(f"PEAK-CANDIDATE {dtype_column} {shape_id((M, N, K))}: {best[2]} at {best[0]:.1f} TFLOP/s")

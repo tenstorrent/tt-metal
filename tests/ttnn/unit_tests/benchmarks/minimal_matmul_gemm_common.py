@@ -179,7 +179,10 @@ def runtime_error_reason(error):
     """First informative line of a TT_THROW message (the assert text rather than the TT_THROW location)."""
     lines = [line.strip() for line in str(error).splitlines() if line.strip()]
     for line in lines:
-        if "TT_THROW" not in line:
+        if any(sub in line.lower() for sub in SKIPPABLE_RUNTIME_ERROR_SUBSTRINGS):
+            return line
+    for line in lines:
+        if "TT_THROW" not in line and not line.endswith(":"):
             return line
     return lines[0] if lines else str(error)
 
