@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// mcast_pipe helper unit test: F3 SENDER-IN-RECT kernel driving Pipe with INCLUDE_SRC
-// (the bake-off winner for sender-in-rect loopback). The sender is one core of the mcast
-// rectangle and ends up with the payload in its OWN cb_dst via hardware loopback. It
-// immediately publishes that CB to pipe_f3_compute.cpp on the same core, then writes the
+// SenderPipe regression: the sender belongs to the multicast rectangle and receives
+// the payload in its own cb_dst through hardware loopback. It
+// immediately publishes that CB to pipe_loopback_compute.cpp on the same core, then writes the
 // compute result to its own output shard. The other rect cores run pipe_receiver.cpp. Also
 // exercises the degenerate guard when rect_len==1 (area==1, excl==0).
 #include <stdint.h>
@@ -15,7 +14,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
@@ -23,8 +22,10 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     // Handshake is off here (McastConfig(handshake=false)), so the sender broadcasts without the ack.
-    constexpr auto mc = McastArgs</*CT=*/2, /*RT=*/2>();              // mcast config (CT 2..) + dest rect (RT 2..)
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();  // = 7, right after the mcast CT block
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t SCALARS = 2;
     constexpr uint32_t payload_pages = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_iters = get_compile_time_arg_val(SCALARS + 2);
@@ -34,11 +35,9 @@ void kernel_main() {
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
     const uint32_t input_start_id = get_arg_val<uint32_t>(1);
-    // RT 2..5 = the dest rect INCLUDING this sender's own core (loopback); a 1x1 self-rect (R==1) is the
-    // degenerate case the SenderPipe collapses to a local copy. The sender's own output words follow the
-    // 4-word rect (RT 6,7 = mc.next_runtime_args_offset()+0/+1).
-    const uint32_t output_addr = get_arg_val<uint32_t>(mc.next_runtime_args_offset() + 0);
-    const uint32_t self_start_id = get_arg_val<uint32_t>(mc.next_runtime_args_offset() + 1);
+    // Operation arguments precede the appended multicast block.
+    const uint32_t output_addr = get_arg_val<uint32_t>(2 + 0);
+    const uint32_t self_start_id = get_arg_val<uint32_t>(2 + 1);
 
     constexpr uint32_t payload_bytes = payload_pages * page_bytes;
 

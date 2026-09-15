@@ -314,3 +314,12 @@ asserted.
 
 The complete host descriptor and inline dataflow/compute kernels are in
 `program_descriptor_with_inline_kernels.py`; `__main__.py` provides the CLI.
+
+## Multicast helper API
+
+Each multicast variant builds one `McastFamily` with a group for each disjoint receiver
+rectangle. Fixed groups supply their root; all-gather groups supply every sender in the
+same order as the gather slots. Native descriptor attachment adopts the declared multicast
+semaphores and appends each core's arguments. Gather/progress semaphores remain owned by
+the algorithm. Embedded kernels read the published named offsets rather than assuming a
+multicast block size.

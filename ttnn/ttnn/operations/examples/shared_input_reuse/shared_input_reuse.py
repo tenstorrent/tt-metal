@@ -28,7 +28,7 @@ TILE = 32
 CB_IN = 0  # one input chunk at a time (chunk_tiles), streamed into L1
 CB_ZERO = 2  # a single all-zero tile (built on-device), the +0 operand for the acc_to_dest add
 CB_OUT = 16  # per-core output: the running tile-sum (1 tile)
-# The multicast semaphores are owned/allocated by ttnn.Mcast2D (base_sem_id=0 -> data_ready + consumer_ready).
+# Native multicast attachment allocates the data-ready and consumer-ready semaphores.
 
 VARIANTS = ("per_core_dram", "mcast")
 
@@ -70,20 +70,22 @@ _SENDER_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/1>();  // mcast CT block at 1..; dest rect at RT 1..
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t SCALARS = 1;
     constexpr uint32_t chunk_tiles = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t tile_bytes = get_compile_time_arg_val(SCALARS + 1);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(SCALARS + 2);
     constexpr auto in_args = TensorAccessorArgs<SCALARS + 3>();
 
-    const uint32_t x_addr = get_arg_val<uint32_t>(0);  // RT 1.. = dest rect, consumed by mc.sender()
+    const uint32_t x_addr = get_arg_val<uint32_t>(0);
     constexpr uint32_t chunk_bytes = chunk_tiles * tile_bytes;
 
     Noc noc;
@@ -117,14 +119,16 @@ _RECEIVER_KERNEL = r"""
 #include "api/dataflow/endpoints.h"
 #include "api/tensor/noc_traits.h"
 #include "hostdevcommon/common_values.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args.hpp"
 
 using namespace dataflow_kernel_lib;
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
-    constexpr auto mc = McastArgs</*CT=*/1, /*RT=*/0>();  // sender coords at RT 0..
-    constexpr uint32_t SCALARS = mc.next_compile_time_args_offset();
+    constexpr auto mc = McastArgs<
+        get_named_compile_time_arg_val("mcast_ct_offset"),
+        get_named_compile_time_arg_val("mcast_rt_offset")>();
+    constexpr uint32_t SCALARS = 1;
     constexpr uint32_t chunk_tiles = get_compile_time_arg_val(SCALARS + 0);
     constexpr uint32_t num_chunks = get_compile_time_arg_val(SCALARS + 1);
 
@@ -318,12 +322,13 @@ def create_program_descriptor(x_in, output, *, variant, chunk_rows):
     # McastArgs wire (compile-time block + per-core runtime args) the kernels decode.
     injector = cores[0]
     receivers = cores[1:]
-    mc = ttnn.Mcast2D(device, all_crs, ttnn.CoreCoord(*injector), ttnn.McastConfig(handshake=True, base_sem_id=0))
-    semaphores = mc.owned_semaphores()
+    mc = ttnn.Mcast2D(
+        device, all_crs, ttnn.Mcast2DFixedSenderConfig(ttnn.CoreCoord(*injector)), ttnn.McastConfig(handshake=True)
+    )
 
-    sender_ct = [CB_IN, *mc.compile_time_args(), chunk_tiles, tile_bytes, num_chunks, *x_ct]
+    sender_ct = [CB_IN, chunk_tiles, tile_bytes, num_chunks, *x_ct]
     sender_rt = ttnn.RuntimeArgs()
-    sender_rt[injector[0]][injector[1]] = [x_addr, *mc.runtime_args(ttnn.CoreCoord(*injector))]
+    sender_rt[injector[0]][injector[1]] = [x_addr]
     sender_kernel = ttnn.KernelDescriptor(
         kernel_source=_SENDER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
@@ -333,10 +338,10 @@ def create_program_descriptor(x_in, output, *, variant, chunk_rows):
         config=ttnn.ReaderConfigDescriptor(),  # NCRISC (the shared writer runs on BRISC — no conflict)
     )
 
-    recv_ct = [CB_IN, *mc.compile_time_args(), chunk_tiles, num_chunks]
+    recv_ct = [CB_IN, chunk_tiles, num_chunks]
     recv_rt = ttnn.RuntimeArgs()
     for cx, cy in receivers:
-        recv_rt[cx][cy] = list(mc.runtime_args(ttnn.CoreCoord(cx, cy)))
+        recv_rt[cx][cy] = []
     receiver_kernel = ttnn.KernelDescriptor(
         kernel_source=_RECEIVER_KERNEL,
         source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
@@ -345,11 +350,10 @@ def create_program_descriptor(x_in, output, *, variant, chunk_rows):
         runtime_args=recv_rt,
         config=ttnn.ReaderConfigDescriptor(),
     )
-    return ttnn.ProgramDescriptor(
-        kernels=[sender_kernel, receiver_kernel, compute_kernel, writer_kernel],
-        semaphores=semaphores,
-        cbs=[cb_in, cb_zero, cb_out],
-    )
+    descriptor = ttnn.ProgramDescriptor(cbs=[cb_in, cb_zero, cb_out])
+    mc.attach(descriptor, "mcast", [sender_kernel, receiver_kernel])
+    descriptor.kernels = [sender_kernel, receiver_kernel, compute_kernel, writer_kernel]
+    return descriptor
 
 
 def shared_input_reuse(x_in, output, *, variant="mcast", chunk_rows):

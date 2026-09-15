@@ -30,7 +30,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/local_copy_helpers_dataflow.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe_spec.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_spec.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
@@ -43,7 +43,7 @@ void kernel_main() {
     DataflowBuffer dfb_in(dfb::in_shard);
     DataflowBuffer dfb_mean_src(dfb::mean_src);
     DataflowBuffer dfb_mean(dfb::mean);
-    constexpr auto mc = MCAST_ARGS(mean_bcast);
+    constexpr auto mc = MCAST_SPEC_ARGS(mean_bcast);
 
     const float scaler_f = __builtin_bit_cast(float, scaler_bits);
     dataflow_kernel_lib::prepare_reduce_scaler<dfb::scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(

@@ -77,3 +77,10 @@ scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/t
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_structural
 scripts/run_safe_pytest.sh --run-all tests/ttnn/unit_tests/operations/examples/test_shared_input_reuse.py::test_shared_input_reuse_device_perf
 ```
+
+## Multicast helper API
+
+The factory constructs `Mcast2D` with `Mcast2DFixedSenderConfig` and attaches it to the
+sender and receiver kernels together. Native attachment allocates the semaphore pair and
+publishes named argument offsets. The caller's scalar and tensor-accessor arguments precede
+the appended multicast blocks; the completed kernels are then assigned to the descriptor.
