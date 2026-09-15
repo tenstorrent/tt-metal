@@ -27,6 +27,7 @@
 
 #include "metal/common/program_utils.hpp"
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -757,6 +758,10 @@ Gradients run_relay(
             // the count and stride after their other arguments.
             relay_reader_args.push_back(1u);  // slice_count
             relay_reader_args.push_back(1u);  // slice_stride
+            // One chunk, one pair (0, 0): the whole sequence against itself.
+            for (const uint32_t v : {1u, 1u, 0u, 0u}) {
+                relay_reader_args.push_back(v);
+            }
             SetRuntimeArgs(program, reader, core, relay_reader_args);
             SetRuntimeArgs(
                 program, writer, core,
@@ -764,7 +769,7 @@ Gradients run_relay(
                  static_cast<uint32_t>(coordinator.x), static_cast<uint32_t>(coordinator.y),
                  static_cast<uint32_t>(mcast_start.x), static_cast<uint32_t>(mcast_start.y),
                  static_cast<uint32_t>(mcast_end.x), static_cast<uint32_t>(mcast_end.y),
-                 c == 1u ? 1u : 0u, 1u, 1u});
+                 c == 1u ? 1u : 0u, 1u, 1u, /* chunks */ 1u, /* pairs */ 1u, 0u, 0u});
             SetRuntimeArgs(program, compute, core, {c, 1u});
         }
     }
@@ -1186,6 +1191,174 @@ TEST(CyclicSdpaBwDenseOpTest, BarrierAndEndpointAgreeBitwise) {
         EXPECT_TRUE(with_barrier[k] == with_endpoints[k])
             << names[k] << " differs between the barrier and endpoint variants of the dense schedule";
     }
+}
+
+// ---------------------------------------------------------- chunk pairs
+// Sub-problems as chunk pairs: the local sequence is two chunks back to back,
+// and a launch names which (query chunk, key chunk) pairs to run. This is
+// what a zigzag ring step is made of. Pinned bitwise against the op run on
+// the chunks as separate tensors, which is the same arithmetic on the same
+// tiles with only the addressing different.
+namespace {
+
+struct TwoChunkProblem {
+    uint32_t n{};  // rows per chunk
+    uint32_t d{};
+    Reference a, b;                        // chunk 0 and chunk 1
+    ttnn::Tensor query, key, value, grad_output, lse, row_scalar;  // [a | b], (1, 1, 2n, d)
+};
+
+TwoChunkProblem make_two_chunk_problem(uint32_t C, uint32_t Bt, uint32_t d = 64) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    TwoChunkProblem p;
+    p.n = 2u * C * Bt * kTile;
+    p.d = d;
+    // Two different draws, so a wrong chunk address cannot pass by accident.
+    p.a = make_reference_inputs_only(p.n, d);
+    p.b = make_dense_reference(p.n, d);
+    const auto cat = [](const xt::xarray<float>& x, const xt::xarray<float>& y) {
+        return xt::xarray<float>(xt::concatenate(xt::xtuple(x, y), 0));
+    };
+    const auto cat4 = [](const xt::xarray<float>& x, const xt::xarray<float>& y) {
+        return xt::xarray<float>(xt::concatenate(xt::xtuple(x, y), 2));
+    };
+    p.query = ttml::core::from_xtensor(as_4d(cat(p.a.Q, p.b.Q)), device);
+    p.key = ttml::core::from_xtensor(as_4d(cat(p.a.K, p.b.K)), device);
+    p.value = ttml::core::from_xtensor(as_4d(cat(p.a.V, p.b.V)), device);
+    p.grad_output = ttml::core::from_xtensor(as_4d(cat(p.a.dO, p.b.dO)), device);
+    p.lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(cat4(p.a.lse_tile, p.b.lse_tile), device);
+    p.row_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(cat4(p.a.u_tile, p.b.u_tile), device);
+    return p;
+}
+
+// The op on one chunk pair as separate tensors: the reference for the pair.
+Gradients run_on_chunks(
+    const TwoChunkProblem& p, uint32_t row_chunk, uint32_t col_chunk, uint32_t Bt, ttml::metal::AttentionMaskType mask) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const Reference& rows = row_chunk == 0u ? p.a : p.b;
+    const Reference& cols = col_chunk == 0u ? p.a : p.b;
+    const auto q = ttml::core::from_xtensor(as_4d(rows.Q), device);
+    const auto k = ttml::core::from_xtensor(as_4d(cols.K), device);
+    const auto v = ttml::core::from_xtensor(as_4d(cols.V), device);
+    const auto dO = ttml::core::from_xtensor(as_4d(rows.dO), device);
+    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(rows.lse_tile, device);
+    const auto u = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(rows.u_tile, device);
+    const auto [dq, dk, dv] = ttml::metal::cyclic_sdpa_bw(q, k, v, dO, lse, u, Bt, false, mask);
+    return {ttml::core::to_xtensor(dq), ttml::core::to_xtensor(dk), ttml::core::to_xtensor(dv)};
+}
+
+xt::xarray<float> chunk_rows(const xt::xarray<float>& x, uint32_t chunk, uint32_t n) {
+    return xt::xarray<float>(xt::view(x, xt::all(), xt::all(), xt::range(chunk * n, (chunk + 1u) * n), xt::all()));
+}
+
+void check_chunk_pairs(
+    uint32_t C,
+    uint32_t Bt,
+    ttml::metal::AttentionMaskType mask,
+    const std::vector<uint32_t>& row_chunks,
+    const std::vector<uint32_t>& col_chunks) {
+    const auto p = make_two_chunk_problem(C, Bt);
+    const auto [dq, dk, dv] = ttml::metal::cyclic_sdpa_bw(
+        p.query, p.key, p.value, p.grad_output, p.lse, p.row_scalar, Bt, false, mask,
+        /* accumulate */ false, std::nullopt, std::nullopt, std::nullopt, /* max_groups */ 0u,
+        /* sequence_chunks */ 2u, row_chunks, col_chunks);
+    const auto dQ = ttml::core::to_xtensor(dq);
+    const auto dK = ttml::core::to_xtensor(dk);
+    const auto dV = ttml::core::to_xtensor(dv);
+
+    // Every named pair matches the op on its chunks, bitwise.
+    std::array<bool, 2> row_touched{false, false};
+    std::array<bool, 2> col_touched{false, false};
+    for (size_t i = 0; i < row_chunks.size(); ++i) {
+        const auto ref = run_on_chunks(p, row_chunks[i], col_chunks[i], Bt, mask);
+        row_touched[row_chunks[i]] = true;
+        col_touched[col_chunks[i]] = true;
+        EXPECT_TRUE(chunk_rows(dQ, row_chunks[i], p.n) == ref.dQ) << "dQ of pair " << i;
+        EXPECT_TRUE(chunk_rows(dK, col_chunks[i], p.n) == ref.dK) << "dK of pair " << i;
+        EXPECT_TRUE(chunk_rows(dV, col_chunks[i], p.n) == ref.dV) << "dV of pair " << i;
+    }
+    // A chunk no pair names is left as the op allocated it: zero.
+    for (uint32_t c = 0; c < 2u; ++c) {
+        if (!row_touched[c]) {
+            EXPECT_TRUE(xt::all(xt::equal(chunk_rows(dQ, c, p.n), 0.0F))) << "dQ chunk " << c << " should be untouched";
+        }
+        if (!col_touched[c]) {
+            EXPECT_TRUE(xt::all(xt::equal(chunk_rows(dK, c, p.n), 0.0F))) << "dK chunk " << c << " should be untouched";
+            EXPECT_TRUE(xt::all(xt::equal(chunk_rows(dV, c, p.n), 0.0F))) << "dV chunk " << c << " should be untouched";
+        }
+    }
+}
+
+}  // namespace
+
+TEST(CyclicSdpaBwChunkPairTest, OneCausalPairOnTheSecondChunk) {
+    check_chunk_pairs(/* C */ 4, /* Bt */ 1, ttml::metal::AttentionMaskType::Causal, {1}, {1});
+}
+
+TEST(CyclicSdpaBwChunkPairTest, BothTrianglesInOneLaunch) {
+    // The diagonal step of a zigzag ring, causal half.
+    check_chunk_pairs(/* C */ 4, /* Bt */ 1, ttml::metal::AttentionMaskType::Causal, {0, 1}, {0, 1});
+}
+
+TEST(CyclicSdpaBwChunkPairTest, TheOffDiagonalBlock) {
+    // The diagonal step's full block: later local chunk against the earlier one.
+    check_chunk_pairs(/* C */ 4, /* Bt */ 1, ttml::metal::AttentionMaskType::None, {1}, {0});
+}
+
+// Two pairs that share a chunk cannot be slices of one launch: they would
+// race on it. The op says so instead of computing something.
+TEST(CyclicSdpaBwChunkPairTest, RefusesPairsThatShareAChunk) {
+    const auto p = make_two_chunk_problem(/* C */ 4, /* Bt */ 1);
+    for (const auto& [rows, cols] : std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>>{
+             {{0, 1}, {0, 0}},  // a shared key chunk
+             {{1, 1}, {0, 1}},  // a shared query chunk
+         }) {
+        EXPECT_THROW(
+            (void)ttml::metal::cyclic_sdpa_bw(
+                p.query, p.key, p.value, p.grad_output, p.lse, p.row_scalar, 1u, false,
+                ttml::metal::AttentionMaskType::None, false, std::nullopt, std::nullopt, std::nullopt, 0u, 2u, rows,
+                cols),
+            std::exception);
+    }
+}
+
+TEST(CyclicSdpaBwChunkPairTest, WithTallBlocks) {
+    check_chunk_pairs(/* C */ 2, /* Bt */ 2, ttml::metal::AttentionMaskType::None, {1}, {0});
+}
+
+// Two launches, each accumulating into the same outputs, add up: the second
+// pair's dK, dV for the shared key chunk start from the first's. The seed
+// passes through the Src registers on its way in and loses low mantissa bits
+// (review item 2), so the sum differs from the summed separate runs at the
+// 5e-4 level, not the 1e-7 of FP32; graded by RMS at 2e-3.
+TEST(CyclicSdpaBwChunkPairTest, TwoLaunchesAccumulateIntoASharedKeyChunk) {
+    constexpr uint32_t C = 4u;
+    constexpr uint32_t Bt = 1u;
+    const auto p = make_two_chunk_problem(C, Bt);
+    auto acc_q = ttnn::zeros_like(p.query, ttnn::DataType::FLOAT32);
+    auto acc_k = ttnn::zeros_like(p.key, ttnn::DataType::FLOAT32);
+    auto acc_v = ttnn::zeros_like(p.value, ttnn::DataType::FLOAT32);
+    for (const uint32_t row_chunk : {0u, 1u}) {
+        std::tie(acc_q, acc_k, acc_v) = ttml::metal::cyclic_sdpa_bw(
+            p.query, p.key, p.value, p.grad_output, p.lse, p.row_scalar, Bt, false,
+            ttml::metal::AttentionMaskType::None,
+            /* accumulate */ true, acc_q, acc_k, acc_v, 0u, 2u, {row_chunk}, {0u});
+    }
+    const auto dQ = ttml::core::to_xtensor(acc_q);
+    const auto dK = ttml::core::to_xtensor(acc_k);
+    const auto dV = ttml::core::to_xtensor(acc_v);
+    const auto r0 = run_on_chunks(p, 0, 0, Bt, ttml::metal::AttentionMaskType::None);
+    const auto r1 = run_on_chunks(p, 1, 0, Bt, ttml::metal::AttentionMaskType::None);
+    const xt::xarray<float> want_dK = r0.dK + r1.dK;
+    const xt::xarray<float> want_dV = r0.dV + r1.dV;
+    const auto rms = [](const xt::xarray<float>& x, const xt::xarray<float>& y) {
+        return std::sqrt(xt::mean(xt::square(x - y))()) / (std::sqrt(xt::mean(xt::square(y))()) + 1e-12F);
+    };
+    EXPECT_LT(rms(chunk_rows(dK, 0, p.n), want_dK), 2e-3F);
+    EXPECT_LT(rms(chunk_rows(dV, 0, p.n), want_dV), 2e-3F);
+    EXPECT_TRUE(chunk_rows(dQ, 0, p.n) == r0.dQ);
+    EXPECT_TRUE(chunk_rows(dQ, 1, p.n) == r1.dQ);
+    EXPECT_TRUE(xt::all(xt::equal(chunk_rows(dK, 1, p.n), 0.0F)));
 }
 
 // ---------------------------------------------------------- the slice loop

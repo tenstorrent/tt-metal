@@ -4,6 +4,8 @@
 
 #include "ring_cyclic_sdpa_bw_program_factory.hpp"
 
+#include <vector>
+
 #include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "metal/ops/cyclic_sdpa_bw/device/cyclic_sdpa_bw_device_operation_types.hpp"
 
@@ -23,20 +25,34 @@ namespace cyclic = ttml::metal::ops::cyclic_sdpa_bw::device;
 struct StepPlan {
     bool execute{};
     AttentionMaskType mask_type{AttentionMaskType::Causal};
+    // Zigzag only: the chunk pairs this chip runs, as slices of one program.
+    uint32_t sequence_chunks{1U};
+    std::vector<uint32_t> row_chunks{};
+    std::vector<uint32_t> col_chunks{};
 };
 
 StepPlan plan_for(const operation_attributes_t& args, uint32_t device_ring_id) {
+    if (args.layout == ops::RingLayout::Zigzag) {
+        // Two chunks per chip, two live pairs a step, no chip idle. The
+        // launch's mask type says which pairs: the triangles or the blocks.
+        auto sub = ops::zigzag_sub_problems(
+            device_ring_id, args.step, args.ring_size, args.mask_type, args.ring_direction);
+        return {sub.execute, args.mask_type, 2U, std::move(sub.row_chunks), std::move(sub.col_chunks)};
+    }
     const auto [should_execute, effective_mask_type] = ops::get_device_execution_info(
         device_ring_id, args.step, args.ring_size, args.mask_type, args.ring_direction);
-    return {should_execute, effective_mask_type};
+    return {should_execute, effective_mask_type, 1U, {}, {}};
 }
 
-cyclic::operation_attributes_t cyclic_attrs(const operation_attributes_t& args, AttentionMaskType mask_type) {
+cyclic::operation_attributes_t cyclic_attrs(const operation_attributes_t& args, const StepPlan& plan) {
     return cyclic::operation_attributes_t{
         .rows_per_block_tiles = args.rows_per_block_tiles,
-        .mask_type = mask_type,
+        .mask_type = plan.mask_type,
         .use_barrier = args.use_barrier,
-        .accumulate_into_outputs = args.accumulate_into_outputs};
+        .accumulate_into_outputs = args.accumulate_into_outputs,
+        .sequence_chunks = plan.sequence_chunks,
+        .row_chunks = plan.row_chunks,
+        .col_chunks = plan.col_chunks};
 }
 
 cyclic::tensor_args_t cyclic_tensors(const tensor_args_t& t, tensor_return_value_t& out) {
@@ -76,7 +92,7 @@ RingCyclicSDPABackwardProgramFactory::create_mesh_workload(
             continue;
         }
 
-        auto attrs = cyclic_attrs(args, plan.mask_type);
+        auto attrs = cyclic_attrs(args, plan);
         auto tensors = cyclic_tensors(tensor_args, tensor_return_value);
         auto cached_program =
             cyclic::CyclicSDPABackwardProgramFactory::create(attrs, tensors, tensor_return_value);
@@ -99,7 +115,7 @@ void RingCyclicSDPABackwardProgramFactory::override_runtime_arguments(
         const uint32_t device_ring_id = coord_range.start_coord()[args.ring_axis];
         const auto plan = plan_for(args, device_ring_id);
 
-        auto attrs = cyclic_attrs(args, plan.mask_type);
+        auto attrs = cyclic_attrs(args, plan);
         auto tensors = cyclic_tensors(tensor_args, tensor_return_value);
         auto proxy = cyclic::CyclicSDPABackwardProgramFactory::cached_program_t::proxy(program, shared);
         cyclic::CyclicSDPABackwardProgramFactory::override_runtime_arguments(

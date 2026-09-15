@@ -101,7 +101,8 @@ ttml_ring_cyclic_sdpa_bw(
     bool accumulate_into_outputs,
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value) {
+    const std::optional<ttnn::Tensor>& preallocated_grad_value,
+    ttml::metal::ops::RingLayout layout) {
     using OperationType = ttml::metal::ops::ring_cyclic_sdpa_bw::RingCyclicSDPABackwardDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
@@ -112,7 +113,8 @@ ttml_ring_cyclic_sdpa_bw(
         .ring_direction = ring_direction,
         .rows_per_block_tiles = rows_per_block_tiles,
         .use_barrier = use_barrier,
-        .accumulate_into_outputs = accumulate_into_outputs};
+        .accumulate_into_outputs = accumulate_into_outputs,
+        .layout = layout};
     auto tensors = OperationType::tensor_args_t{
         .query = query,
         .key = key,

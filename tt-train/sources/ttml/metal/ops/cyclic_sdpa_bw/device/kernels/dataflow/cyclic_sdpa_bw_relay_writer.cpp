@@ -66,6 +66,11 @@ void kernel_main() {
     // the relay reader.
     const uint32_t slice_count = get_arg_val<uint32_t>(arg++);
     const uint32_t slice_stride = get_arg_val<uint32_t>(arg++);
+    // Chunk pairs, as in the relay reader. Only the column chunk matters
+    // here: dK and dV belong to the key side.
+    const uint32_t chunks = get_arg_val<uint32_t>(arg++);
+    const uint32_t pairs = get_arg_val<uint32_t>(arg++);
+    const uint32_t pair_table_arg = arg;
 
     constexpr uint32_t kCores = get_compile_time_arg_val(0);
     constexpr uint32_t qWt = get_compile_time_arg_val(1);
@@ -113,9 +118,11 @@ void kernel_main() {
         mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(release_sem_id));
 
     for (uint32_t s = 0; s < slice_count; ++s) {
-    const uint32_t bh = first_slice + s * slice_stride;
-    row_base = bh * 2u * kCores * row_tiles;
-    val_base = bh * 2u * kCores * val_tiles;
+    const uint32_t sl = first_slice + s * slice_stride;
+    const uint32_t bh = sl / pairs;
+    const uint32_t col_chunk = get_arg_val<uint32_t>(pair_table_arg + 2u * (sl % pairs) + 1u);
+    row_base = (bh * chunks + col_chunk) * 2u * kCores * row_tiles;
+    val_base = (bh * chunks + col_chunk) * 2u * kCores * val_tiles;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
         const auto pair = sched.pair(my_core, t);
         // Global timestep across slices; the progress word and the barrier

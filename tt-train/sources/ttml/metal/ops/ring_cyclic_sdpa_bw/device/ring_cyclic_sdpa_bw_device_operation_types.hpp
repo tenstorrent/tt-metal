@@ -6,6 +6,7 @@
 
 #include "metal/common/const_utils.hpp"
 #include "metal/ttnn_all_includes.hpp"
+#include "metal/ops/common/ring_sdpa_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::metal::ops::ring_cyclic_sdpa_bw {
@@ -30,6 +31,13 @@ struct RingCyclicSDPABackwardParams {
     // per-step gradient the caller must then add. A chip the causal schedule
     // skips has no program and leaves them untouched, which is exactly right.
     bool accumulate_into_outputs{false};
+
+    // Contiguous or Zigzag; see ops::RingLayout. Under Zigzag every local
+    // tensor is two chunks back to back, mask_type names the launch -- Causal
+    // for the two triangles of the diagonal step, None for the full blocks of
+    // any step -- and each chip runs the chunk pairs zigzag_sub_problems
+    // gives it as slices of one program.
+    ops::RingLayout layout{ops::RingLayout::Contiguous};
 };
 
 struct RingCyclicSDPABackwardInputs {
