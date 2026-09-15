@@ -42,6 +42,10 @@ void kernel_main() {
     constexpr auto H = get_arg(args::H);
     constexpr auto tile_height = get_arg(args::tile_height);
     constexpr auto Wt = get_arg(args::Wt);
+#ifdef WELFORD_SFPU_LEAF_COMBINE
+    constexpr auto W = get_arg(args::W);
+    constexpr auto tile_width = get_arg(args::tile_width);
+#endif
 #ifdef WELFORD_POST_MUL
     // Packed fp32 post-multiplier applied to the reduced output via mul_unary_tile (SFPU).
     // For var this is scalar^2, for std it is |scalar| (see welford_reduce_program_factory).
@@ -135,15 +139,17 @@ void kernel_main() {
                 }
 #endif
 #ifdef WELFORD_SFPU_LEAF_COMBINE
-                // Combine the live 32-lane statistics without expanding them to
-                // full tiles. The writer reads element zero and expects summed
-                // lane variance, including the centred variance-of-means term.
-                // DST[3] is scratch; both input passes have finished using it.
-                two_pass_stats_finalize_and_combine_to_face<true /* dual_m2 */, false /* average_variance */>(
-                    mean_dst, 0, two_pass_variance_reciprocal);
-#else
-                two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
+                if (W % tile_width == 0 || wt < Wt - 1) {
+                    // Full tiles represent 32 equally populated columns. DST[3]
+                    // is scratch; both input passes have finished using it.
+                    two_pass_stats_finalize_and_combine_to_face<true /* dual_m2 */, false /* average_variance */>(
+                        mean_dst, 0, two_pass_variance_reciprocal);
+                } else
 #endif
+                {
+                    // Keep tail columns separate so the writer can exclude padding.
+                    two_pass_stats_finalize_to_row(mean_dst, two_pass_variance_reciprocal);
+                }
                 tile_regs_commit();
 
                 // Publish row-zero mean/variance statistics in full-tile storage.

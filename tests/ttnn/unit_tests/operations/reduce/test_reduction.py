@@ -69,7 +69,7 @@ def test_std_var_hw_large_constant(device, ttnn_op, correction, value):
         "uneven_tree",
         "batch_selector_boundary",
         "below_selector_boundary",
-        "partial_width_fallback",
+        "partial_width_tail",
         "hw_below_replay_boundary",
         "hw_replay_partial_height",
         "hw_replay_batch_columns",
@@ -110,6 +110,40 @@ def test_std_var_hw_compact_lane_mean_variance(device, enabled_program_cache, he
         for _ in range(3):
             actual = ttnn.to_torch(ttnn_op(tt_input, dim=(-2, -1), keepdim=True, correction=False)).double()
             assert_numeric_metrics(expected, actual, rtol=2e-4, atol=1e-7, frobenius_threshold=2e-4)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("tail_columns", [1, 15, 16, 31])
+@pytest.mark.parametrize("batches", [1, 3, 32, 33])
+@pytest.mark.parametrize("height", [33, 512], ids=["partial_height", "replay"])
+def test_std_var_hw_compact_partial_width(device, enabled_program_cache, dtype, tail_columns, batches, height):
+    # Each batch contributes four compact leaves and a scalar tail. The tails
+    # cross leaf boundaries, sometimes filling the final leaf exactly, while
+    # the two outputs exercise repeated publication through the same buffers.
+    width = 128 + tail_columns
+    torch.manual_seed(31)
+    values = torch.randn((2, batches, height, width)) * 2 + 1024
+    values += torch.arange(width).float() * 0.125
+    values += torch.arange(batches).reshape(1, batches, 1, 1).float() * 16
+    tt_input = ttnn.from_torch(values, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_input = ttnn.fill_implicit_tile_padding(tt_input, -65536.0)
+    reference_input = ttnn.to_torch(tt_input).double()
+    dim = (1, 2, 3)
+    tolerance = 2e-4 if dtype == ttnn.float32 else 0.02 if dtype == ttnn.bfloat16 else 0.04
+    for correction in (False, True):
+        for torch_op, ttnn_op in ((torch.var, ttnn.var), (torch.std, ttnn.std)):
+            expected = torch_op(reference_input, dim=dim, keepdim=True, correction=int(correction))
+            for _ in range(2):
+                output = ttnn_op(tt_input, dim=dim, keepdim=True, correction=correction)
+                padded = output.cpu().to_torch_with_padded_shape()
+                actual = padded[..., :1, :1].double()
+                assert torch.isfinite(padded).all()
+                assert_numeric_metrics(
+                    expected, actual, rtol=tolerance, atol=1e-6, frobenius_threshold=tolerance, check_pcc=False
+                )
+                padding = padded.clone()
+                padding[..., 0, 0] = 0
+                assert torch.count_nonzero(padding) == 0
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])

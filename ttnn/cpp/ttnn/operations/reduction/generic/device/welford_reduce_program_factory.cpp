@@ -59,17 +59,15 @@ WelfordReducePlan WelfordReduceDeviceOperation::WelfordReduceProgramFactory::sel
     plan.narrow_scratch_to_bf16 = !plan.is_std && !plan.use_post_mul && plan.output_format == DataFormat::Float16_b;
     plan.combined_format = plan.narrow_scratch_to_bf16 ? DataFormat::Float16_b : DataFormat::Float32;
     const auto arch = tensor_arg.device()->arch();
-    // The compact SFPU helper combines 32 equally populated column lanes and the
-    // writer assigns that full population to each leaf. A partial width needs a
-    // valid-lane reduction and a smaller tail population; zeroing padding alone
-    // would still bias the mean/variance. Until that protocol is supported, the
-    // scalar writer handles partial widths, which can be much slower for wide HW reductions.
+    // Compact SFPU combining handles full-width tiles. A partial final tile keeps
+    // per-column statistics; the writer accumulates only its valid columns into
+    // separate leaves, excluding padding from both the statistics and population.
     // Blackhole measurements favour compact combining even for one full tile.
     // Retain Wormhole's existing four-tile crossover until its smaller cases are calibrated.
     constexpr std::uint64_t min_wormhole_compact_columns = 4 * tt::constants::TILE_WIDTH;
     plan.use_sfpu_leaf_combine =
         plan.reduce_hw && (arch == tt::ARCH::BLACKHOLE || arch == tt::ARCH::WORMHOLE_B0) && plan.fp32_dest_acc_en &&
-        plan.W % plan.tile_width == 0 &&
+        plan.W >= plan.tile_width &&
         (arch == tt::ARCH::BLACKHOLE ||
          static_cast<std::uint64_t>(plan.W) * plan.reduce_batch_size >= min_wormhole_compact_columns);
 
@@ -475,6 +473,8 @@ WelfordReduceDeviceOperation::WelfordReduceProgramFactory::create_program_artifa
             {"H", H},
             {"tile_height", tile_height},
             {"Wt", Wt},
+            {"W", W},
+            {"tile_width", tile_width},
             {"post_mul_scaler_bits", post_mul_scaler_bits},
             {"reduce_batch_size", reduce_batch_size},
             {"is_std", static_cast<uint32_t>(is_std)},

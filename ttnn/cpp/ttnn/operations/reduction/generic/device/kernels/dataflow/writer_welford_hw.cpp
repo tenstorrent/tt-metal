@@ -6,7 +6,8 @@
 //
 // Phase 1 (per output): Reads Wt partial (mean, var) tile pairs from
 // dfb::partial. The compute kernel either writes 32 per-column statistics or,
-// on the SFPU leaf-combine path, one precombined 32-column leaf per tile.
+// on the SFPU leaf-combine path, one precombined 32-column leaf per full tile.
+// Partial-width tiles retain per-column statistics, of which only W % 32 are valid.
 // This kernel combines those equal-sized populations across W, applies
 // Bessel's correction, and writes the combined scalar into dfb::combined for
 // the compute kernel to apply
@@ -120,9 +121,6 @@ void kernel_main() {
     constexpr std::uint32_t reduce_batch_size = get_arg(args::reduce_batch_size);
     constexpr bool combined_is_bf16 = get_arg(args::combined_is_bf16) != 0;
     static_assert(tile_width == welford_block_size);
-#ifdef WELFORD_SFPU_LEAF_COMBINE
-    static_assert(W % tile_width == 0, "SFPU leaf combine requires every input tile to have a full-width population");
-#endif
 
     constexpr std::uint32_t num_partials = reduce_batch_size * W;
     static_assert(num_partials > 0);
@@ -198,46 +196,52 @@ void kernel_main() {
                 auto* vars_ptr = reinterpret_cast<volatile float*>(vars_addr);
 
 #ifdef WELFORD_SFPU_LEAF_COMBINE
-                const WelfordBlockStats block = {
-                    .mean = means_ptr[0],
-                    .variance_sum = vars_ptr[0],
-                };
-                push_full_block(tree, block, completed_blocks);
-                ++completed_blocks;
-#else
-                const std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
-                for (std::uint32_t c = 0; c < num_cols; ++c) {
-                    // In tile row format, columns 0-15 are in Face 0 and
-                    // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
-                    const std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
-                    const float partial_mean = means_ptr[idx];
-                    const float partial_var = vars_ptr[idx];
+                if (W % tile_width == 0 || wt < Wt - 1) {
+                    const WelfordBlockStats block = {
+                        .mean = means_ptr[0],
+                        .variance_sum = vars_ptr[0],
+                    };
+                    push_full_block(tree, block, completed_blocks);
+                    ++completed_blocks;
+                } else
+#endif
+                {
+                    // Tail columns accumulate across batches independently of compact
+                    // leaves. Once full they enter the same equal-count tree; only
+                    // num_partials % 32 columns remain for the final weighted merge.
+                    const std::uint32_t num_cols = (wt < Wt - 1) ? tile_width : last_tile_cols;
+                    for (std::uint32_t c = 0; c < num_cols; ++c) {
+                        // In tile row format, columns 0-15 are in Face 0 and
+                        // columns 16-31 are in Face 1 (offset by FACE_ELEMENTS).
+                        const std::uint32_t idx = (c < FACE_W) ? c : (FACE_ELEMENTS + c - FACE_W);
+                        const float partial_mean = means_ptr[idx];
+                        const float partial_var = vars_ptr[idx];
 
-                    // Every partial summarizes the same H samples. The total population
-                    // variance is therefore the average partial variance plus the
-                    // population variance of the partial means.
-                    if (block_count == 0) {
-                        block_base_mean = partial_mean;
-                        block_mean_delta_sum = 0.0f;
-                        block_mean_delta_sq_sum = 0.0f;
-                        block_partial_var_sum = partial_var;
-                    } else {
-                        const float delta = partial_mean - block_base_mean;
-                        block_mean_delta_sum += delta;
-                        block_mean_delta_sq_sum += delta * delta;
-                        block_partial_var_sum += partial_var;
-                    }
-                    ++block_count;
+                        // Every partial summarizes the same H samples. The total population
+                        // variance is therefore the average partial variance plus the
+                        // population variance of the partial means.
+                        if (block_count == 0) {
+                            block_base_mean = partial_mean;
+                            block_mean_delta_sum = 0.0f;
+                            block_mean_delta_sq_sum = 0.0f;
+                            block_partial_var_sum = partial_var;
+                        } else {
+                            const float delta = partial_mean - block_base_mean;
+                            block_mean_delta_sum += delta;
+                            block_mean_delta_sq_sum += delta * delta;
+                            block_partial_var_sum += partial_var;
+                        }
+                        ++block_count;
 
-                    if (block_count == welford_block_size) {
-                        auto block = finalize_block<welford_block_size>(
-                            block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
-                        push_full_block(tree, block, completed_blocks);
-                        ++completed_blocks;
-                        block_count = 0;
+                        if (block_count == welford_block_size) {
+                            auto block = finalize_block<welford_block_size>(
+                                block_base_mean, block_mean_delta_sum, block_mean_delta_sq_sum, block_partial_var_sum);
+                            push_full_block(tree, block, completed_blocks);
+                            ++completed_blocks;
+                            block_count = 0;
+                        }
                     }
                 }
-#endif
 
                 dfb_partial.pop_front(2);
             }
