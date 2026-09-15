@@ -133,6 +133,9 @@ ALWI void mul_reduce_scalar_chunked_tile(uint32_t icb0, uint32_t icb1, uint32_t 
             mul_reduce_scalar_init(icb0, icb1);
         }
         for (uint32_t j = 0; j < count; ++j) {
+            // Products reuse DEST slots across chunks; preserve the running
+            // accumulator while clearing only the next multiplication's tile.
+            MATH((llk_math_rmsnorm_clear_product_tile<dst_capacity, is_fp32_dest_acc_en>(j)));
             UNPACK((llk_unpack_AB(icb0, icb1, input_start + j, input_start + j)));
             MATH((llk_math_eltwise_mul_reduce_scalar<is_fp32_dest_acc_en, MATH_FIDELITY>(j, icb0)));
         }
