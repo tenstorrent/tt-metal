@@ -1607,7 +1607,9 @@ def test_logsigmoid_golden_refuses_a_batched_row():
     golden = BinarySFPUGolden()
     threshold = BinarySFPUGolden._LOGSIGMOID_EXP_BRANCH
     row = torch.tensor([threshold - 1.0, threshold + 1.0], dtype=torch.float32)
-    with pytest.raises(AssertionError, match="per-element golden"):
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        AssertionError, match="per-element golden"
+    ):
         golden._logsigmoid(row, torch.exp(-row))
 
     # Scalars on both sides of the branch still work.
