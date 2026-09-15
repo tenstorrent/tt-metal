@@ -66,103 +66,112 @@ inline void generate_transposed_causal_mask_tile(uint32_t cb_id) {
 // relative error of up to 2^-10 in L and D, which the exponential turns into
 // the same relative error on every P of a query row, and which the
 // subtraction dP - D amplifies wherever the two nearly cancel. So each
-// statistic travels in two parts: the value itself, whose top 19 bits the
-// register keeps, and its remainder -- the value of the 13 bits the register
-// drops -- as a separate small number that the register keeps 10 bits of.
-// Together that is about 20 significant bits.
-
-// The remainder of a Float32 after truncation to 19 bits, as a Float32 with
-// the same sign: value(x) - value(x & 0xFFFFE000). Integer arithmetic only;
-// the data-movement RISCs have no floating point unit.
-inline uint32_t float_remainder_bits(uint32_t x) {
-    const uint32_t m = x & 0x1FFFu;
-    if (m == 0u) {
-        return 0u;
+// statistic travels in two parts that both survive the register:
+//
+//     hi = x - z          where z = 2^(e-137) is the value of the lowest of
+//                         the ten kept mantissa bits; hi has no bits below
+//                         it, so the register keeps it exactly,
+//     lo = z + rem        where rem is the value of the 13 dropped bits, as a
+//                         Float32 whose exponent is z's and whose mantissa is
+//                         those 13 bits shifted up -- hence no normalisation,
+//                         and hi + lo = x exactly.
+//
+// The register keeps 10 bits of lo, a bfloat16 7; with hi that is 20 or 17
+// significant bits of x. Integer arithmetic only: the data-movement RISCs
+// have no floating point unit, and this runs once per row per timestep.
+inline void split_statistic(uint32_t x, uint32_t& hi, uint32_t& lo) {
+    const uint32_t sign = x & 0x80000000u;
+    const uint32_t mag = x & 0x7FFFFFFFu;
+    const uint32_t e = mag >> 23;
+    if (e < 11u) {
+        // z would be subnormal: x is below 2^-116, the whole of it fits.
+        hi = x;
+        lo = 0u;
+        return;
     }
-    const uint32_t e = (x >> 23) & 0xFFu;
-    // Leading bit of the 13-bit remainder, p in 0..12; the remainder is
-    // m * 2^(e - 150) = (m / 2^p) * 2^(e - 150 + p), so the exponent field
-    // becomes e - 23 + p.
-    uint32_t p = 0u;
-    uint32_t v = m;
-    if (v >> 8) { p += 8u; v >>= 8; }
-    if (v >> 4) { p += 4u; v >>= 4; }
-    if (v >> 2) { p += 2u; v >>= 2; }
-    if (v >> 1) { p += 1u; }
-    const int32_t ep = static_cast<int32_t>(e) - 23 + static_cast<int32_t>(p);
-    if (ep <= 0) {
-        return 0u;  // would be denormal: negligible against the value itself
-    }
-    const uint32_t mant = (m << (23u - p)) & 0x7FFFFFu;
-    return (x & 0x80000000u) | (static_cast<uint32_t>(ep) << 23) | mant;
+    // Subtracting z from the 19-bit pattern borrows into the exponent when
+    // the kept mantissa bits are zero, and below that power of two the kept
+    // bits are worth half as much: the result is 2^(e-128) (2 - 2^-9).
+    hi = sign | (((mag & 0x7FE000u) != 0u) ? ((mag & 0x7FFFE000u) - 0x2000u) : (((e - 1u) << 23) | 0x7FC000u));
+    lo = sign | ((e - 10u) << 23) | ((mag & 0x1FFFu) << 10);
 }
 
-// Column 0 of a Float32 tile into row 0 of another: value r of the source
-// (row r, column 0) lands at (row 0, column r) of the destination, with its
-// sign flipped when kNegate is set. Only row 0 of the destination is
-// written; the row broadcast reads nothing else. When rem_l1 is given, the
-// remainder (see above) of each value goes to row 0 of that tile the same way.
-template <bool kNegate = false>
-inline void gather_statistic_row(uint32_t src_l1, uint32_t dst_l1, uint32_t rem_l1 = 0u) {
+// The statistic tiles of one row tile: from column 0 of the Float32 tile at
+// src_l1 (one value per row), negated when kNegate is set,
+//
+//   * hi into row 0 of the Float32 tile at row_l1 (value r at column r), for
+//     the compute kernel's row broadcast,
+//   * lo, when rem_row_l1 is given, into row 0 of that Float32 tile the same
+//     way, for the path that adds it on the SFPU,
+//   * lo, when rem_col_l1 is given, as bfloat16 into column 0 of that tile
+//     (row r), for the rank-one matmul term against a column of ones.
+//
+// Only row 0 / column 0 are written; the rest of each tile must be zero.
+template <bool kNegate>
+inline void gather_statistic(uint32_t src_l1, uint32_t row_l1, uint32_t rem_row_l1, uint32_t rem_col_l1) {
     const uint32_t* src = reinterpret_cast<const uint32_t*>(src_l1);
-    uint32_t* dst = reinterpret_cast<uint32_t*>(dst_l1);
-    uint32_t* rem = reinterpret_cast<uint32_t*>(rem_l1);
+    uint32_t* row = reinterpret_cast<uint32_t*>(row_l1);
+    uint32_t* rem_row = reinterpret_cast<uint32_t*>(rem_row_l1);
+    uint16_t* rem_col = reinterpret_cast<uint16_t*>(rem_col_l1);
     constexpr uint32_t sign = kNegate ? 0x80000000u : 0u;
     for (uint32_t r = 0; r < 2u * kFaceRows; ++r) {
-        // Source: face 0 for rows 0..15, face 2 for rows 16..31; column 0.
-        const uint32_t src_face = (r < kFaceRows) ? 0u : 2u;
-        const uint32_t src_idx = src_face * kFaceElems + (r % kFaceRows) * kFaceRows;
-        // Destination: row 0 of face 0 for columns 0..15, face 1 for 16..31.
-        const uint32_t dst_face = (r < kFaceRows) ? 0u : 1u;
-        const uint32_t v = src[src_idx] ^ sign;
-        dst[dst_face * kFaceElems + (r % kFaceRows)] = v;
-        if (rem_l1 != 0u) {
-            rem[dst_face * kFaceElems + (r % kFaceRows)] = float_remainder_bits(v);
+        // Source and column destination: face 0 for rows 0..15, face 2 for
+        // rows 16..31; column 0. Row destination: row 0 of face 0 for
+        // columns 0..15, face 1 for 16..31.
+        const uint32_t col_idx = ((r < kFaceRows) ? 0u : 2u) * kFaceElems + (r % kFaceRows) * kFaceRows;
+        const uint32_t row_idx = ((r < kFaceRows) ? 0u : 1u) * kFaceElems + (r % kFaceRows);
+        uint32_t hi = 0;
+        uint32_t lo = 0;
+        split_statistic(src[col_idx] ^ sign, hi, lo);
+        row[row_idx] = hi;
+        if (rem_row_l1 != 0u) {
+            rem_row[row_idx] = lo;
+        }
+        if (rem_col_l1 != 0u) {
+            rem_col[col_idx] = static_cast<uint16_t>(lo >> 16);  // bfloat16: the top half, truncated
         }
     }
 }
 
-// The remainders of column 0 of a Float32 tile, negated, as bfloat16 in
-// column 0 of a bfloat16 tile (same rows). This is the matmul's form of the
-// correction: a rank-one product with a column of ones adds -D's remainder
-// to every row of dP^T. Only column 0 is written; the rest must be zero.
-inline void gather_negated_remainder_column(uint32_t src_l1, uint32_t dst_l1) {
-    const uint32_t* src = reinterpret_cast<const uint32_t*>(src_l1);
-    uint16_t* dst = reinterpret_cast<uint16_t*>(dst_l1);
-    for (uint32_t r = 0; r < 2u * kFaceRows; ++r) {
-        const uint32_t face = (r < kFaceRows) ? 0u : 2u;
-        const uint32_t idx = face * kFaceElems + (r % kFaceRows) * kFaceRows;
-        const uint32_t rem = float_remainder_bits(src[idx] ^ 0x80000000u);
-        dst[idx] = static_cast<uint16_t>(rem >> 16);  // bfloat16: the top half, truncated
-    }
-}
-
-// The four statistic tiles the compute kernel takes per row tile of a
-// packet, from the L and D tiles at l_l1 / d_l1: L and -D in row layout, L's
-// remainder in row layout, -D's remainder as a bfloat16 column. Done by the
-// writer RISC, which is otherwise idle while the reader relays packets, as
-// soon as the reader has the statistics in L1.
+// The statistic tiles the compute kernel takes per row tile of a packet,
+// from the L and D tiles at l_l1 / d_l1: -L and -D (their hi parts) in row
+// layout, their lo parts as bfloat16 columns, and -L's lo part as a Float32
+// row as well where the exponential carries the softmax scale (kFold false:
+// the compute kernel then adds it on the SFPU and takes no column). Done by
+// the writer RISC, which is otherwise idle while the reader relays packets,
+// as soon as the statistics are in L1.
+template <bool kFold>
 inline void produce_statistic_tiles(
     uint32_t l_l1, uint32_t d_l1, uint32_t Bt, uint32_t interm_bytes,
-    uint32_t cb_lse_row, uint32_t cb_u_row, uint32_t cb_lse_rem, uint32_t cb_u_rem) {
-    cb_reserve_back(cb_lse_row, Bt);
-    cb_reserve_back(cb_u_row, Bt);
-    cb_reserve_back(cb_lse_rem, Bt);
-    cb_reserve_back(cb_u_rem, Bt);
-    const uint32_t lrow = get_write_ptr(cb_lse_row);
-    const uint32_t urow = get_write_ptr(cb_u_row);
-    const uint32_t lrem = get_write_ptr(cb_lse_rem);
-    const uint32_t urem = get_write_ptr(cb_u_rem);
-    const uint32_t rem_bytes = get_tile_size(cb_u_rem);
+    uint32_t cb_neg_lse_row, uint32_t cb_neg_u_row, uint32_t cb_neg_lse_rem_row,
+    uint32_t cb_neg_lse_rem, uint32_t cb_neg_u_rem) {
+    cb_reserve_back(cb_neg_lse_row, Bt);
+    cb_reserve_back(cb_neg_u_row, Bt);
+    cb_reserve_back(cb_neg_lse_rem_row, Bt);
+    cb_reserve_back(cb_neg_lse_rem, Bt);
+    cb_reserve_back(cb_neg_u_rem, Bt);
+    const uint32_t lrow = get_write_ptr(cb_neg_lse_row);
+    const uint32_t urow = get_write_ptr(cb_neg_u_row);
+    const uint32_t lrem_row = get_write_ptr(cb_neg_lse_rem_row);
+    const uint32_t lrem = get_write_ptr(cb_neg_lse_rem);
+    const uint32_t urem = get_write_ptr(cb_neg_u_rem);
+    const uint32_t rem_bytes = get_tile_size(cb_neg_u_rem);
     for (uint32_t k = 0; k < Bt; ++k) {
-        gather_statistic_row(l_l1 + k * interm_bytes, lrow + k * interm_bytes, lrem + k * interm_bytes);
-        gather_statistic_row</* negate */ true>(d_l1 + k * interm_bytes, urow + k * interm_bytes);
-        gather_negated_remainder_column(d_l1 + k * interm_bytes, urem + k * rem_bytes);
+        if constexpr (kFold) {
+            gather_statistic</* negate */ true>(
+                l_l1 + k * interm_bytes, lrow + k * interm_bytes, 0u, lrem + k * rem_bytes);
+        } else {
+            gather_statistic</* negate */ true>(
+                l_l1 + k * interm_bytes, lrow + k * interm_bytes, lrem_row + k * interm_bytes, 0u);
+        }
+        gather_statistic</* negate */ true>(
+            d_l1 + k * interm_bytes, urow + k * interm_bytes, 0u, urem + k * rem_bytes);
     }
-    cb_push_back(cb_lse_row, Bt);
-    cb_push_back(cb_u_row, Bt);
-    cb_push_back(cb_lse_rem, Bt);
-    cb_push_back(cb_u_rem, Bt);
+    cb_push_back(cb_neg_lse_row, Bt);
+    cb_push_back(cb_neg_u_row, Bt);
+    cb_push_back(cb_neg_lse_rem_row, Bt);
+    cb_push_back(cb_neg_lse_rem, Bt);
+    cb_push_back(cb_neg_u_rem, Bt);
 }
 
 // The reader pushes one page here once a timestep's L and D are in L1, and

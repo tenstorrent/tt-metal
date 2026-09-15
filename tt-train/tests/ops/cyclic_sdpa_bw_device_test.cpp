@@ -378,7 +378,8 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
     make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
-    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // L remainder, row layout
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // -L remainder, row layout
+    make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
     make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
     CreateCircularBuffer(
@@ -398,11 +399,21 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
+    make_cb(tt::CBIndex::c_27, rowT, tt::DataFormat::Float16_b);  // a * K, where the scale folds
     make_cb(tt::CBIndex::c_24, 1, tt::DataFormat::Float32);  // control word
 
     const uint32_t arrive_sem = CreateSemaphore(program, region, 0);
     const uint32_t release_sem = CreateSemaphore(program, region, 0);
 
+    // Fold the softmax scale into K where that is exact, as the op does, so
+    // this variant stays bitwise comparable with it (see the compute kernel).
+    std::map<std::string, std::string> fold_defines;
+    {
+        const float a = 1.0F / std::sqrt(static_cast<float>(ref.d));
+        if ((std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u) {
+            fold_defines["FOLD_SCALE_INTO_KEY"] = "1";
+        }
+    }
     std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem, Bt};
     for (const auto* t : {&query, &key, &value, &grad_output, &lse, &u_scalar, &grad_query,
                           &grad_key, &grad_value}) {
@@ -424,7 +435,8 @@ Gradients run_algorithm2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
-            .compile_args = writer_args});
+            .compile_args = writer_args,
+            .defines = fold_defines});
 
     const uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(ref.d)));
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);
@@ -452,7 +464,8 @@ Gradients run_algorithm2(
             // half-sync buys.
             .dst_full_sync_en = Bt > 2,
             .unpack_to_dest_mode = unpack_mode,
-            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler}});
+            .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
+            .defines = fold_defines});
 
     const auto coordinator_logical = placement_of(C, grid_w, 1);
     const auto coordinator = device->worker_core_from_logical_core(
@@ -632,7 +645,8 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
     make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
-    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // L remainder, row layout
+    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // -L remainder, row layout
+    make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
     make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
     CreateCircularBuffer(
@@ -686,6 +700,8 @@ Gradients run_relay(
         const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
         if (exact) {
             compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
+            // The writer makes L's remainder in the form this path takes.
+            sync_defines["FOLD_SCALE_INTO_KEY"] = "1";
         }
     }
 
