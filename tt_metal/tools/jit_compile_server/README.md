@@ -1,4 +1,4 @@
-<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC -->
+<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc. -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
 # JIT Compile Server — User's Guide
@@ -12,12 +12,10 @@
 > - **No authentication.** The server trusts any client that can open a TCP connection to it.
 > - **No encryption.** The transport is Cap'n Proto over plain TCP. If the link crosses an
 >   untrusted network, tunnel it (SSH, WireGuard, VPN).
-> - **Remote code execution is the feature.** The client tells the server which compiler to
->   run and with which flags; the server runs it. Anyone who can reach the endpoint can
->   execute code as the server's user. (Shell injection specifically is mitigated —
->   `posix_spawn` with an explicit argv, never `system()` — and client-supplied path
->   components are rejected if absolute or containing `..`. That hardens the edges; it does
->   not change the fact that the server exists to run compilers on the client's behalf.)
+> - **Remote code execution is the feature.** The client specifies the compiler and flags;
+>   the server runs them as its own user. `posix_spawn` with an explicit argv (never
+>   `system()`) and rejection of absolute/`..` path components harden the edges; they do not
+>   change that anyone who can reach the endpoint can compile as the server.
 > - **Default bind is `localhost:9876`**, so out of the box only local processes can reach
 >   it. Widening the bind address is an explicit, deliberate act.
 >
@@ -61,32 +59,30 @@ still get correct results but you fragment the dedup and the cache.
 
 ## 2. When to expect a performance gain
 
-Two different mechanisms are at work, and they are worth keeping apart because they scale
-very differently.
+**Avoided compiles.** In-flight dedup and the server's on-disk cache compile a kernel once
+instead of once per process. That requires **kernel overlap**: the same kernel hash needed
+by more than one process, or more than once over time. On co-located setups this is most
+of the speedup.
 
-**Avoided compiles.** In-flight dedup and the server's on-disk cache make a kernel get
-compiled once instead of once per process. This requires **kernel overlap** — the same kernel
-hash being needed by more than one compiling process, or by the same process more than once
-over time. Essentially all of the speedup lives here, and it scales with how much your
-kernel sets overlap.
-
-**Relocated compiles.** Separately, and even with zero overlap, the compiling itself happens
-on the server's CPU instead of the application's. This does not reduce the total amount of
-work — it only changes who pays for it — and it adds RPC round-trips and ELF transfer.
-So it helps only when the application host's CPU is the constraint and the server's is not.
-Treat it as a secondary effect: it is what makes the co-located multi-host setup (§4b)
-affordable, not a reason to deploy the server on its own.
+**Relocated compiles.** Work runs on the server's CPU even with zero overlap. Shifting the
+same work to an idle box of similar size is modest and can lose to RPC and ELF transfer —
+useful in the co-located multi-host setup (§4b), not a reason to deploy on its own.
+**Scale-out** is the stronger form: a farm with more compile CPU than the application
+hosts, given a large unique kernel list. Kernels hash-shard across endpoints
+(`kernel_hash % num_endpoints`), so the farm compiles them in parallel in a way a single
+local thread pool cannot. That is the CPU-farm / cache-warming pattern (§4c).
 
 | Situation | Expect | Mechanism |
 | --- | --- | --- |
 | N processes compile largely the same kernel set, concurrently | Best case — ideally 1 compile instead of N | avoided compiles |
 | Same kernels requested later by a different process or host | Server cache hit; near-free | avoided compiles |
-| No overlap, but the application host is CPU-contended while the server host is idle | Modest, and it can still be eaten by the RPC and transfer overhead | relocated compiles |
-| One process, all-unique kernels, cold caches, uncontended host | **Net loss.** You pay RPC, source shipping, and ELF transfer for work the local parallel build would have done anyway | neither |
-| Warm local `TT_METAL_CACHE` | No requests sent at all — identical to not using the server | n/a |
+| Large unique kernel list on a scaled-out server pool | Wins if the farm has more CPU than the application hosts | relocated compiles (scale-out) |
+| No overlap, similar CPU both sides, app host contended / server idle | Modest; RPC and transfer can eat it | relocated compiles |
+| One process, unique kernels, uncontended host, no extra compile machines | **Net loss** — RPC and transfer for work local compile would have done | neither |
+| Warm local `TT_METAL_CACHE` | No requests — same as not using the server | n/a |
 
-Rule of thumb: if your workload is a single process with a unique kernel set, don't bother.
-If it is many processes converging on a shared kernel set, the server is where the win is.
+Rule of thumb: deploy for overlap, or for a large unique kernel list on a bigger CPU pool.
+A single process with unique kernels on a same-size box is not a win.
 
 ---
 
@@ -100,12 +96,11 @@ If it is many processes converging on a shared kernel set, the server is where t
 ./build/tools/jit_compile_server
 ```
 
-The server **never opens a device** — no accelerator required on the machine that runs it.
-What it does need is the tt-metal source tree and the SFPI toolchain present at the absolute
-paths the *client* names in its requests (see §5). The server takes no configuration from
-`TT_METAL_HOME` itself; the tree just has to be there.
+The server **never opens a device**. It does need the tt-metal source tree and the SFPI
+toolchain at the absolute paths the *client* names in its requests (see §5). The server
+does not read `TT_METAL_HOME`; the tree just has to be on disk at those paths.
 
-A more realistic invocation, with a relocated cache root and a widened bind:
+A typical invocation with a relocated cache root and a widened bind:
 
 ```bash
 export TT_METAL_JIT_SERVER_ENDPOINT=0.0.0.0:9876        # widen the bind — see the disclaimer
@@ -121,19 +116,17 @@ the whole box.
 
 ### Cache root
 
-`TT_METAL_JIT_SERVER_CACHE_ROOT` is the directory where the server stores compiled objects,
-ELFs, and uploaded firmware, partitioned by `build_key`. It is **not** the same as a
-client's `TT_METAL_CACHE`: clients still write their own local copy of each ELF after the
-server returns it. The server cache exists so a later request for the same kernel (from
-this process or another) can skip recompilation.
+`TT_METAL_JIT_SERVER_CACHE_ROOT` is where the server stores compiled objects, ELFs, and
+uploaded firmware, partitioned by `build_key`. It is **not** a client's `TT_METAL_CACHE`:
+clients still write their own ELF copy after the server returns it. The server cache lets
+a later request for the same kernel skip recompilation.
 
-The default is `/tmp/tt-metal-cache/`. Relocate it when `/tmp` is too small or too
-ephemeral — kernel object files and ELFs accumulate for every unique kernel the server has
-ever seen, and the cache is never garbage-collected. A few large workloads can fill a
-tmpfs. Point it at a node-local disk with enough headroom, and keep it distinct from any
-client `TT_METAL_CACHE` (the layouts differ). If you share a host with clients that have
-neither `TT_METAL_CACHE` nor `$HOME` set (common in containers), they also fall back to
-`/tmp/tt-metal-cache/` — set both explicitly to avoid colliding.
+The default is `/tmp/tt-metal-cache/`. Relocate it when `/tmp` is too small or ephemeral —
+objects and ELFs accumulate for every unique kernel, with no garbage collection, and a few
+large workloads can fill a tmpfs. Use a node-local disk with headroom, and keep it distinct
+from any client `TT_METAL_CACHE` (the layouts differ). Clients with neither `TT_METAL_CACHE`
+nor `$HOME` (common in containers) also fall back to `/tmp/tt-metal-cache/` — set both
+explicitly so they do not collide.
 
 ### Point a client at it
 
@@ -143,9 +136,8 @@ export TT_METAL_JIT_SERVER_ENDPOINTS=localhost:9876
 pytest tests/... # or your application
 ```
 
-That's the whole client-side change. If `TT_METAL_JIT_SERVER_ENABLE=1` is set but no
-endpoint is configured, the client fails fast with a clear error rather than silently
-falling back to local compilation.
+That's all on the client. If `TT_METAL_JIT_SERVER_ENABLE=1` is set with no endpoint, the
+client fails fast instead of falling back to local compilation.
 
 ---
 
@@ -155,10 +147,9 @@ falling back to local compilation.
 
 *Several ranks, pytest workers, or model instances on one machine.*
 
-Each process needs its **own** `TT_METAL_CACHE` (a shared cache directory across concurrent
-processes causes compilation conflicts). That isolation is exactly why local caching gives
-you no cross-process reuse: process 2 cannot see what process 1 just compiled. The server
-fixes that, and the in-flight deduper means simultaneous starts collapse instead of racing.
+Each process needs its **own** `TT_METAL_CACHE` (sharing one across concurrent processes
+causes compilation conflicts). That isolation is why a local cache gives no cross-process
+reuse. The server's in-flight deduper collapses simultaneous compiles of the same kernel.
 
 ```bash
 # Terminal 1 — server
@@ -172,22 +163,20 @@ TT_METAL_CACHE=/tmp/cache_rank1 python my_workload.py --rank 1 &
 wait
 ```
 
-Nothing special about the source tree here: the server runs from the same checkout as the
-application, so §5's shared-tree requirement is satisfied for free.
+The server runs from the same checkout as the application, so §5's shared-tree requirement
+is free.
 
 ### 4b. Multiple hosts, servers co-located with the workload
 
 *Multi-host run; one server per host; no extra machines.*
 
-This does **not** require dedicated hardware. During the compile phase the application is
-mostly waiting, so the CPU it isn't using is what the server spends. The work is shifted,
-not duplicated.
+This does **not** require dedicated hardware. During compile the application is mostly
+waiting, so the CPU it isn't using is what the server spends.
 
-The gain over "just use a local-disk `TT_METAL_CACHE` on each host" is structural: local
-caches cannot be reused across hosts, so every host pays for every kernel. With the server
-fleet, a kernel needed by ranks on 4 hosts is compiled once — by whichever server the
-hash routes to — and the other three get it from that server's cache or from the in-flight
-dedup. **Whenever kernel sets overlap across hosts, the gain is real, not speculative.**
+Unlike a per-host local-disk `TT_METAL_CACHE`, the server fleet can reuse a kernel across
+hosts: it is compiled once on whichever server the hash routes to, and the others take the
+cache or in-flight result. **Whenever kernel sets overlap across hosts, that gain is
+guaranteed**; local disk cannot do it.
 
 ```bash
 # On every host: start a server (widened bind so peers can reach it)
@@ -249,8 +238,7 @@ export TT_METAL_JIT_SERVER_ENDPOINTS=$(seq -s, -f 'cpu%g:9876' 0 15)
 python warm_all_kernels.py
 ```
 
-This is the pattern most likely to hit the source-visibility problem in §5, because the
-farm hosts are not the hosts that generated the kernel sources. Read §5 before deploying it.
+This is the pattern most likely to hit the source-visibility problem in §5.
 
 ---
 
@@ -272,11 +260,9 @@ Consequently the server must have, at the same absolute paths as the client:
 How this plays out per pattern:
 
 - **Single host (§4a):** free. The application and the server run from the same checkout.
-- **Multiple hosts (§4b):** usually satisfied by **NFS** — every host mounts the same tree at
-  the same path. If the tree is instead replicated per host, *you* are responsible for
-  keeping the replicas byte-identical and mounted at the same path. A stale replica does
-  not produce a clean error; it produces confusing compile failures, or worse, a binary
-  built from different sources than you think.
+- **Multiple hosts (§4b):** usually **NFS** at the same path on every host. If the tree is
+  replicated instead, keep replicas byte-identical at that path. A stale replica does not
+  fail cleanly; it can build from different sources than you think.
 - **CPU farm (§4c):** the farm hosts must mount the tree too, or use preprocess mode below.
 
 ### 5b. Application-generated kernel sources must be visible to the server
@@ -300,38 +286,32 @@ export TT_METAL_JIT_PREPROCESS=1        # ship self-contained translation units
 python warm_all_kernels.py
 ```
 
-In this mode the client runs the preprocessor (`-E`) itself with the exact compile flags and
-ships the resulting self-contained `.ii` — headers and defines inlined. The server then needs
-nothing but the toolchain: no include tree, no source files, no shared filesystem. The
-source tree is not even read or sent.
+In this mode the client runs `-E` with the exact compile flags and ships a self-contained
+`.ii` (headers and defines inlined). The server then needs only the toolchain — no include
+tree, no source files, no shared filesystem.
 
-**Do not enable it otherwise.** The preprocessing runs on the *client*, which is the CPU you
-were trying to free, and the payloads get substantially larger. It also disables server-side
-object reuse for those units: a `.ii` has no real include tree, so no valid object dependency
-hash can be computed, and the server conservatively recompiles next time. (Client-side reuse
-still works — it rides on a `.fulldephash` sidecar written next to the ELF after a successful
-compile.) Reserve preprocess mode for the case it exists to solve: a farm that cannot see
+**Do not enable it otherwise.** Preprocessing runs on the *client* (the CPU you were trying
+to free), payloads get larger, and `.ii` units have no include tree so the server cannot
+write an object dephash and conservatively recompiles next time. Client-side reuse still
+works via a `.fulldephash` sidecar next to the ELF. Use this only when the farm cannot see
 your sources.
 
 ### 5c. Other limitations and gotchas
 
 - **Precompiled kernels are not supported in remote mode.** A kernel with a
   `PrecompiledKernelConfig` is not handled on the remote path.
-- **Recipe changes are not fully fingerprinted server-side.** Local builds write a
-  `.build_state` hash over the full compile/link recipe and force a rebuild on mismatch. The
-  server does not; it partitions its cache by `build_key` + kernel path and validates via
-  dependency hashes. In practice the kernel path includes the compile hash, so this is
-  almost always fine — but reusing the same `build_key` and kernel path while changing only
-  flags could theoretically serve a stale object. If you are changing build flags and see
-  something impossible, wipe `TT_METAL_JIT_SERVER_CACHE_ROOT`.
-- **Firmware is uploaded once per (endpoint, build_key) per client process** and must remain
-  in the server's cache root. If you clear the server cache while clients are running,
-  compiles fail until those clients restart. Don't point the cache root at something that
-  gets cleaned under you. See §3 for what the cache root is and why you would relocate it.
-- **`TT_METAL_JIT_SERVER_ENDPOINT` means different things on each side:** the *bind* address
-  for the server, a single-endpoint *target* for the client. Don't export one value into both
-  roles by accident; prefer `TT_METAL_JIT_SERVER_ENDPOINTS` on clients and keep
-  `TT_METAL_JIT_SERVER_ENDPOINT` for the server's bind.
+- **Recipe changes are not fully fingerprinted server-side.** Local builds store a
+  `.build_state` hash of the compile/link recipe. The server only partitions by
+  `build_key` + kernel path and checks dependency hashes. The kernel path usually includes
+  the compile hash, so this is almost always fine — but changing only flags under the same
+  `build_key` and kernel path could theoretically reuse a stale object. Wipe
+  `TT_METAL_JIT_SERVER_CACHE_ROOT` if that happens.
+- **Firmware is uploaded once per (endpoint, build_key) per client process** and must stay
+  in the cache root. Clearing the cache while clients are running fails compiles until
+  those clients restart.
+- **`TT_METAL_JIT_SERVER_ENDPOINT` means different things on each side:** bind address on
+  the server, single-endpoint target on the client. Prefer `TT_METAL_JIT_SERVER_ENDPOINTS`
+  on clients.
 - **A server failure is fatal to the client.** There is no automatic fallback to local
   compilation — an unreachable endpoint or a failed compile throws. For unattended runs,
   keep `TT_METAL_JIT_SERVER_ENABLE` easy to turn off.
@@ -372,5 +352,5 @@ your sources.
 | Compile fails with "No such file or directory" on a header or kernel source | §5a/§5b: the server does not see the same tree, or the generated source isn't on a shared filesystem. Fix the mount, or use `TT_METAL_JIT_PREPROCESS=1`. |
 | `Firmware artifact not found for build_key ...` | Server cache root was cleared after the client uploaded firmware. Restart the client (or don't clear the cache mid-run). |
 | `Absolute <field> is not allowed` / `must not contain '..'` | The server rejected a client-supplied path component. Expected for a malformed or mismatched client; report it if it happens in a normal run. |
-| No speedup at all | Kernel sets likely don't overlap — see §2. |
+| No speedup at all | No kernel overlap, or unique kernels without extra compile CPU — see §2. |
 | Slower than local | Single process with unique kernels, or `TT_METAL_JIT_PREPROCESS` left on unnecessarily. |
