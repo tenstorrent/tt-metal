@@ -708,3 +708,37 @@ def test_moreh_norm_backward_callback(dim_rtol_atol, keepdim, device, is_linalg_
     logger.info(f"num_program_cache_entries_list={num_program_cache_entries_list}")
     assert num_program_cache_entries_list[0] > 0
     assert num_program_cache_entries_list[0] == num_program_cache_entries_list[1]
+
+
+@pytest.mark.parametrize("p", [float("inf"), float("-inf"), 0.0])
+@pytest.mark.parametrize("dim", [None, 1])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_norm_backward_inf_orders(device, p, dim, keepdim):
+    torch.manual_seed(0)
+    x = torch.randn(2, 64, dtype=torch.float32, requires_grad=True)
+    dy = torch.randn(2, 1 if keepdim or dim is None else 64, dtype=torch.float32)
+
+    ord_val = p
+    if p == 0.0:
+        ord_val = 0
+    elif p == float("inf"):
+        ord_val = float("inf")
+    else:
+        ord_val = float("-inf")
+
+    y = torch.linalg.vector_norm(x, ord=ord_val, dim=dim, keepdim=keepdim)
+    if p == 0.0:
+        expected_grad = torch.zeros_like(x)
+    else:
+        y.backward(dy if dim is not None else dy.squeeze())
+        expected_grad = x.grad
+
+    t_x = ttnn.from_torch(x.detach().bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    t_y = ttnn.from_torch(y.detach().bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    t_dy = ttnn.from_torch(dy.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    t_grad = ttnn.operations.moreh.norm_backward(t_x, t_y, t_dy, p=p, dim=dim, keepdim=keepdim)
+    actual_grad = ttnn.to_torch(t_grad).float()
+
+    assert torch.allclose(actual_grad, expected_grad, atol=0.1, rtol=0.1)
+
