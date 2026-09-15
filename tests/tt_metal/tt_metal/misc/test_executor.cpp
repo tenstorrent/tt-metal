@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -10,6 +13,35 @@
 #include "common/executor.hpp"
 
 namespace tt::tt_metal {
+
+TEST(ExecutorTest, ThreadCountRespectsCpuAffinity) {
+#if defined(__linux__)
+    cpu_set_t original_affinity;
+    ASSERT_EQ(sched_getaffinity(0, sizeof(original_affinity), &original_affinity), 0);
+
+    int selected_cpu = -1;
+    for (int cpu_index = 0; cpu_index < CPU_SETSIZE; ++cpu_index) {
+        if (CPU_ISSET(cpu_index, &original_affinity)) {
+            selected_cpu = cpu_index;
+            break;
+        }
+    }
+    ASSERT_NE(selected_cpu, -1);
+
+    cpu_set_t restricted_affinity;
+    CPU_ZERO(&restricted_affinity);
+    CPU_SET(selected_cpu, &restricted_affinity);
+    ASSERT_EQ(sched_setaffinity(0, sizeof(restricted_affinity), &restricted_affinity), 0);
+
+    const size_t detected_thread_count = detail::get_executor_thread_count();
+    const int restore_result = sched_setaffinity(0, sizeof(original_affinity), &original_affinity);
+
+    EXPECT_EQ(detected_thread_count, 1);
+    ASSERT_EQ(restore_result, 0);
+#else
+    GTEST_SKIP() << "CPU affinity detection is Linux-specific";
+#endif
+}
 
 TEST(ExecutorTest, AsyncRunsInline) {
     std::atomic<int> value{0};
