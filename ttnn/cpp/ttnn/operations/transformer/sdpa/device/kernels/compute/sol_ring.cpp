@@ -11,7 +11,7 @@
 #include "api/compute/compute_kernel_hw_startup.h"
 #include <tt-metalium/constants.hpp>
 #include "compute_common.hpp"
-#include "compute_streaming.hpp"
+#include "sol_ring_compute_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_fused_op_indexer.hpp"
 
 void kernel_main() {
@@ -193,7 +193,7 @@ void kernel_main() {
         // cb_q_in (q_base_tiles) and which L1 FIFO entry it merges (handled inside sdpa_ring_v2).
         for (uint32_t pass = 0; pass < q_count; ++pass) {
             const uint32_t global_q_chunk = q_base + pass * q_stride;
-            sdpa_ring_v2<
+            sol_ring_kernel::sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
                 0,  // Skt — not used for ring
