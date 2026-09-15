@@ -69,6 +69,58 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
     return table
 
 
+# Routing profiles, as (share of picks landing in this dispatch group, weight on the hot half of its
+# chips). Both knobs matter and both were wrong before:
+#
+# - Drawing every pick from the group's own experts makes ~4x too many picks land in-group, which
+#   makes collisions on one destination chip far more likely than production and OVERSTATES fan-out
+#   by roughly 3x. Production spreads picks over all 256 experts across 4 groups.
+# - Drawing uniformly across chips is fan-out's worst case: one copy per direction saves nothing when
+#   no two of a token's destinations share a direction. It reports ~1.2x, which reads as noise.
+#
+# The interesting configurations are the hot ones, because that is where the layers the perf harness
+# selects actually sit. Calibrate the exact shares on a perf-qualified machine; this host cannot
+# measure and the profiles are only meant to span the range.
+ROUTING_PROFILES = {
+    "uniform": (0.250, 1.0),
+    "hot": (0.372, 2.0),
+    "hottest": (0.473, 3.0),
+}
+
+
+def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weight):
+    """topk distinct experts per token, drawn from ALL experts with a controllable in-group skew.
+
+    How many of a token's picks land in its own dispatch group is drawn FIRST, then that many distinct
+    in-group experts and the rest from the other groups. Weighting the whole expert list and drawing
+    topk distinct picks from it does not work: sampling without replacement pulls the share well above
+    the weight it was solved for (47.3% asked, 63.3% delivered), and a share that drifts up is the
+    measurement trap this generator exists to avoid.
+
+    Within the group, the chips in its hot half are weighted `hot_weight`, which is what concentrates
+    traffic onto one directed link -- the thing multicast is measured on.
+    """
+    experts_per_group = num_routed_experts // G
+    experts_per_chip = experts_per_group // H
+    in_weights = torch.ones(experts_per_group, dtype=torch.float64)
+    in_weights[experts_per_chip * (H // 2) :] = hot_weight
+
+    indices = torch.zeros(G, H, seq, topk, dtype=torch.int64)
+    for g in range(G):
+        base = g * experts_per_group
+        elsewhere = torch.cat([torch.arange(0, base), torch.arange(base + experts_per_group, num_routed_experts)])
+        for h in range(H):
+            for t in range(seq):
+                n_in = int((torch.rand(topk) < in_group_share).sum())
+                picks = torch.empty(0, dtype=torch.int64)
+                if n_in > 0:
+                    picks = base + torch.multinomial(in_weights, n_in, replacement=False)
+                if n_in < topk:
+                    picks = torch.cat([picks, elsewhere[torch.randperm(elsewhere.numel())[: topk - n_in]]])
+                indices[g, h, t] = picks
+    return indices
+
+
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
     [
@@ -102,8 +154,20 @@ def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, nu
 # one page per token per direction and lets every chip en route keep what is addressed to it; unicast
 # sends one per (token, expert). Nothing about the output distinguishes them, which is the point.
 @pytest.mark.parametrize("fanout", [False, True], ids=lambda f: "multicast" if f else "unicast")
+# In-group routing gives every token somewhere to go and is what the byte-exactness gate was built on.
+# Production routes over all experts, so most picks resolve to -1 and the surviving ones concentrate on
+# a few chips -- a distribution this op had never been run against.
+@pytest.mark.parametrize("routing", [None, "hottest"], ids=lambda r: r or "in-group")
 def test_dispatch_fabric2d(
-    mesh_device, device_params, num_links, seq_len_per_chip, capacity_div, num_routed_experts, emb_dim, fanout
+    mesh_device,
+    device_params,
+    num_links,
+    seq_len_per_chip,
+    capacity_div,
+    num_routed_experts,
+    emb_dim,
+    fanout,
+    routing,
 ):
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
@@ -124,12 +188,16 @@ def test_dispatch_fabric2d(
     # Per group, route only into that group's own experts so every token has somewhere to go.
     experts_per_group = num_routed_experts // G
     indices = torch.zeros(G, H, seq_len_per_chip, num_experts_per_tok, dtype=torch.int64)
-    for g in range(G):
-        base = g * experts_per_group
-        for h in range(H):
-            for t in range(seq_len_per_chip):
-                pick = torch.randperm(experts_per_group)[:num_experts_per_tok]
-                indices[g, h, t] = base + pick
+    if routing is not None:
+        share, hot_weight = ROUTING_PROFILES[routing]
+        indices = _draw_indices(G, H, seq_len_per_chip, num_experts_per_tok, num_routed_experts, share, hot_weight)
+    else:
+        for g in range(G):
+            base = g * experts_per_group
+            for h in range(H):
+                for t in range(seq_len_per_chip):
+                    pick = torch.randperm(experts_per_group)[:num_experts_per_tok]
+                    indices[g, h, t] = base + pick
 
     offs = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
     counts = torch.zeros(G, H, num_routed_experts, dtype=torch.int32)
@@ -392,7 +460,11 @@ def test_dispatch_fabric2d_chunk_agreement(extent, num_links, capacity_div):
 @pytest.mark.parametrize("seq_len_per_chip", [32, 128], ids=lambda s: f"seq{s}")
 @pytest.mark.parametrize("num_links", [1, 2], ids=lambda n: f"{n}link")
 @pytest.mark.parametrize("capacity_div", [1, 64], ids=lambda d: "roomy" if d == 1 else "tight")
-def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_links, capacity_div):
+# Production routes over ALL experts, so only about a quarter of a token's picks land in this dispatch
+# group and the rest resolve to -1. Every other test here routes entirely in-group, which is the
+# simplification that hides whatever the -1 path does to the chunk arithmetic.
+@pytest.mark.parametrize("cross_group", [False, True], ids=lambda c: "cross-group" if c else "in-group")
+def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_links, capacity_div, cross_group):
     """The device matrix's own geometry, checked on host: does any stream's region exceed the host bound?
 
     Same question the kernel's ASSERT(at <= fwd_pages_per_stream) asks, but reachable without a galaxy
@@ -409,7 +481,10 @@ def test_dispatch_fabric2d_region_bound_production_shape(seq_len_per_chip, num_l
     for g in range(G):
         for h in range(extent):
             for t in range(seq_len_per_chip):
-                indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:topk]
+                if cross_group:
+                    indices[g, h, t] = torch.randperm(num_routed_experts)[:topk]
+                else:
+                    indices[g, h, t] = g * experts_per_group + torch.randperm(experts_per_group)[:topk]
 
     m = extent // 2
     per_pair = seq_len_per_chip * min(topk, experts_per_chip)
