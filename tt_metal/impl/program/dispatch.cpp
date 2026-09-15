@@ -594,10 +594,7 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Mock devices compile kernels and read their binaries like silicon does; they only skip
-    // loading them, so lay the binaries out as well: that gives them the real kernel_text_size and
-    // the real "program too large for kernel config buffer" check. Emulated devices JIT-compile
-    // lazily inside execute_program_emulated, so no binaries exist yet here; keep skipping them.
+    // Emule doesn't have real binaries, skip finalization.
     if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
