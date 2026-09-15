@@ -283,3 +283,40 @@ def test_build_indexed_rope_enforces_layout_constraints(expect_error):
         build_indexed_rope(StubMesh(), max_seq_len=4096, chunk_size=100, sp_axis=0)
     with expect_error(ValueError, "multiple of chunk_size"):
         build_indexed_rope(StubMesh(), max_seq_len=5000, chunk_size=512, sp_axis=0)
+
+
+def test_block_cyclic_reorder_matches_the_deepseek_original():
+    """This module's ``block_cyclic_reorder`` is byte-identical to the one it was restated from.
+
+    It is restated rather than imported because importing ``deepseek_v3_d_p.tt.mla.utils`` pulls
+    safetensors and transformers onto the prefill runtime's import path (see the function's
+    docstring). That trade is only safe if the copy cannot drift, so grade it against the original
+    here — this test is device-free but not import-light, which is exactly the point: the heavy
+    import lives in the test instead of in the module under serving.
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder as original
+    from models.demos.llama_3p1_8b_d_p.tt.rope import block_cyclic_reorder as ours
+
+    for sp, chunk_local, seq_len in ((4, 64, 1024), (4, 32, 512), (2, 128, 1024), (1, 64, 256), (8, 32, 2048)):
+        table = torch.arange(seq_len, dtype=torch.float32).reshape(1, 1, seq_len, 1).expand(1, 1, seq_len, 4)
+        torch.testing.assert_close(
+            ours(table.contiguous(), chunk_local, sp, seq_dim=2),
+            original(table.contiguous(), chunk_local, sp, seq_dim=2),
+            rtol=0,
+            atol=0,
+        )
+
+
+def test_block_cyclic_reorder_rejects_indivisible_layouts(expect_error):
+    """The two divisibility rules are raised, not asserted away under ``python -O``.
+
+    The DeepSeek original uses bare ``assert``, which ``-O`` strips; a stripped check here would
+    silently reorder a partial block and put rope rows on the wrong chip.
+    """
+    from models.demos.llama_3p1_8b_d_p.tt.rope import block_cyclic_reorder
+
+    table = torch.zeros(1, 1, 100, 4)
+    with expect_error(ValueError, "multiple of chunk_local"):
+        block_cyclic_reorder(table, 32, 4, seq_dim=2)
+    with expect_error(ValueError, "multiple of sp_factor"):
+        block_cyclic_reorder(torch.zeros(1, 1, 96, 4), 32, 4, seq_dim=2)

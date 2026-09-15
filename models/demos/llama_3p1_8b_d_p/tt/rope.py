@@ -49,9 +49,34 @@ import math
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.mla.utils import block_cyclic_reorder
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 from models.tt_transformers.tt.common import get_rot_transformation_mat
+
+
+def block_cyclic_reorder(matrix: torch.Tensor, chunk_local: int, sp_factor: int, seq_dim: int = 2) -> torch.Tensor:
+    """Reorder a ``[.., seq, ..]`` tensor into block-cyclic order keyed by ``chunk_local``.
+
+    Splits the sequence into blocks of ``chunk_local`` rows and concatenates them so that device
+    ``c``'s contiguous shard (after a plain SP shard over ``seq_dim``) holds blocks
+    ``c, c+sp, c+2sp, ...`` — the same block-cyclic layout the per-chip KV cache is written in. That
+    is what makes the indexed-RoPE op's contiguous, offset read of each device's cos/sin shard land
+    on the right global positions, including the boundary chip's older-then-wrap rows.
+
+    Restated from ``deepseek_v3_d_p/tt/mla/utils.py`` rather than imported. It is a dozen lines of
+    pure index arithmetic, but importing it puts ``models.demos.deepseek_v3_d_p.tt.mla`` on this
+    module's import path, which pulls in **safetensors and transformers** — and this module is on
+    the prefill runtime's path, which the H2D producers import. ``test_rope_vs_ref`` grades this
+    copy against the DeepSeek original, so the two cannot drift.
+    """
+    seq_len = matrix.shape[seq_dim]
+    if seq_len % chunk_local:
+        raise ValueError(f"seq_len {seq_len} must be a multiple of chunk_local {chunk_local}")
+    num_blocks = seq_len // chunk_local
+    if num_blocks % sp_factor:
+        raise ValueError(f"num_blocks {num_blocks} must be a multiple of sp_factor {sp_factor}")
+    blocks = list(torch.split(matrix, chunk_local, dim=seq_dim))
+    order = [b for c in range(sp_factor) for b in range(c, num_blocks, sp_factor)]
+    return torch.cat([blocks[b] for b in order], dim=seq_dim)
 
 
 def llama3_inv_freq(

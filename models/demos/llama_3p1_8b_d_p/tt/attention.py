@@ -293,7 +293,7 @@ class TtLlamaAttention(LightweightModule):
         *,
         kv_cache: Optional[Llama31KVCache] = None,
         ccl_manager=None,
-        layer_idx: int = 0,
+        cache_layer_idx: int = 0,
         user_id: int = 0,
         cached_len: int = 0,
         indexed_rope: bool = False,
@@ -306,6 +306,9 @@ class TtLlamaAttention(LightweightModule):
                 ``rope.build_indexed_rope`` builds once.
             kv_cache: written with post-RoPE K and raw V. Required for the sequence-parallel path;
                 ``None`` only on the single-device unit-test path.
+            cache_layer_idx: this layer's slot *within* ``kv_cache``, i.e. rank-local, not the
+                layer's global index in the 32-layer stack. See ``tt/decoder.py`` for why the two
+                are separate.
             cached_len: valid prefix length already in the cache *before* this chunk (0 = first).
             indexed_rope: use the on-device indexed RoPE, which derives this chunk's start row from
                 ``cached_len`` + the device's SP coordinate instead of a per-chunk host reshard.
@@ -348,12 +351,12 @@ class TtLlamaAttention(LightweightModule):
                 k,
                 v,
                 slot_idx=user_id,
-                layer_idx=layer_idx,
+                layer_idx=cache_layer_idx,
                 kv_actual=cached_len,
                 sp_axis=self.mesh_config.sp_axis,
             )
 
-        attn = self._attend(q, k, v, kv_cache, ccl_manager, layer_idx, user_id, cached_len, seq_len, sp)
+        attn = self._attend(q, k, v, kv_cache, ccl_manager, cache_layer_idx, user_id, cached_len, seq_len, sp)
         ttnn.deallocate(q)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
@@ -414,7 +417,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(k)
         return q_rot, k_rot
 
-    def _attend(self, q, k, v, kv_cache, ccl_manager, layer_idx, user_id, cached_len, seq_len, sp):
+    def _attend(self, q, k, v, kv_cache, ccl_manager, cache_layer_idx, user_id, cached_len, seq_len, sp):
         """Full-causal GQA attention over the prefix, by whichever path the geometry allows."""
         # Sequence-parallel prefill reads the accumulated prefix out of the block-cyclic cache with
         # the ring-joint SDPA, which gathers K/V across the SP axis internally via online softmax
@@ -424,7 +427,7 @@ class TtLlamaAttention(LightweightModule):
         if sp > 1 and kv_cache is not None and (cached_len > 0 or kv_cache.max_seq_len > seq_len * sp):
             if ccl_manager is None:
                 raise ValueError("sequence-parallel attention needs a ccl_manager")
-            cache_k, cache_v, cache_batch_idx, cache_capacity = kv_cache.layer_view(user_id, layer_idx)
+            cache_k, cache_v, cache_batch_idx, cache_capacity = kv_cache.layer_view(user_id, cache_layer_idx)
             return self._ring_joint(
                 q,
                 cache_k,

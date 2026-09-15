@@ -69,6 +69,7 @@ class TtLlamaDecoderLayer(LightweightModule):
         mesh_config,
         torch_weights: Optional[dict] = None,
         layer_idx: int = 0,
+        cache_layer_idx: Optional[int] = None,
         emb_dim: int = Llama31_8BConfig.EMB_SIZE,
         hidden_dim: int = Llama31_8BConfig.INTERMEDIATE_SIZE,
         n_heads: int = Llama31_8BConfig.NUM_ATTENTION_HEADS,
@@ -90,14 +91,23 @@ class TtLlamaDecoderLayer(LightweightModule):
                 ``reference/model.py:hf_key_map`` produces once the ``model.layers.N.`` prefix is
                 stripped, so a checkpoint slice needs no renaming. Random weights when omitted,
                 which is shape bring-up only.
-            layer_idx: this layer's index. Used for the per-layer KV-cache slot, so it must be the
-                real index within the stack, not 0 for every layer.
+            layer_idx: this layer's GLOBAL index in the 32-layer stack. Identity only — weight
+                names, logging, and the per-layer completion sink, which keys on it across ranks.
+            cache_layer_idx: this layer's slot index *within this rank's* KV cache. Defaults to
+                ``layer_idx``, which is right whenever a rank holds the whole stack.
+
+                Separate from ``layer_idx`` so a pipeline rank allocates only the layers it fills.
+                The cache packs slots as ``user_id * num_layers + cache_layer_idx``; addressing it
+                by the global index instead would make a rank holding layers 24..31 index slots
+                24..31 of its own 8-slot cache, so every rank would have to allocate all 32 layers'
+                worth of KV to use 8 of it.
         """
         super().__init__()
 
         self.mesh_device = mesh_device
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
+        self.cache_layer_idx = layer_idx if cache_layer_idx is None else cache_layer_idx
         self.emb_dim = emb_dim
         self.emb_dim_per_chip = mesh_config.shard_size(emb_dim)
 
@@ -182,8 +192,8 @@ class TtLlamaDecoderLayer(LightweightModule):
         """``x``: TP-sharded ``[1, 1, seq, emb_dim / tp]`` -> the same layout.
 
         Arguments other than ``x`` are forwarded to attention unchanged; see
-        ``tt/attention.py:TtLlamaAttention.forward``. ``layer_idx`` is not an argument because the
-        layer owns its index — a caller passing the wrong one would write another layer's KV slot.
+        ``tt/attention.py:TtLlamaAttention.forward``. The cache slot index is not an argument
+        because the layer owns it — a caller passing the wrong one would write another layer's KV.
         """
         tp = self.mesh_device.shape[self.mesh_config.tp_axis]
         expected = self.emb_dim if tp == 1 else self.emb_dim_per_chip
@@ -200,7 +210,7 @@ class TtLlamaDecoderLayer(LightweightModule):
             transformation_mat,
             kv_cache=kv_cache,
             ccl_manager=ccl_manager,
-            layer_idx=self.layer_idx,
+            cache_layer_idx=self.cache_layer_idx,
             user_id=user_id,
             cached_len=cached_len,
             indexed_rope=indexed_rope,

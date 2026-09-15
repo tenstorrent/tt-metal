@@ -10,7 +10,10 @@ NdShard, written by ``ttnn.experimental.deepseek_prefill.update_padded_kv_cache`
 
 The batch dim is **user-major**: ``slot = user_id * num_layers + layer_idx``, so each user's layers
 stay contiguous and the packing matches ``update_padded_kv_cache``'s ``slot_idx`` / ``layer_idx``
-indexing. At TP=8 the 8 KV heads shard one-per-chip across the TP columns, so a chip's cache holds
+indexing. Both ``num_layers`` and ``layer_idx`` here are **rank-local** — a pipeline rank holding
+layers 24..31 allocates 8 slots per user and indexes them 0..7, so it does not pay for the 24
+layers it never fills (see ``tt/decoder.py``'s ``cache_layer_idx``).
+At TP=8 the 8 KV heads shard one-per-chip across the TP columns, so a chip's cache holds
 exactly one head and a KV chunk for a given layer lives on exactly one chip — which is what
 collapses the migration layer's DeviceGroup to a single node. The sequence is block-cyclic over the
 4 SP rows.
