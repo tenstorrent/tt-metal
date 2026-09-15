@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -71,8 +72,9 @@ class Repo:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content)
 
-    def git(self, *args: str) -> None:
-        subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True)
+    def git(self, *args: str) -> str:
+        result = subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, text=True)
+        return result.stdout.strip()
 
     def commit_base(self) -> None:
         self.git("add", "-A")
@@ -132,6 +134,119 @@ def repo(tmp_path: Path) -> Repo:
 
 def legs_for(payload, name):
     return [leg for leg in payload["run_legs"] if leg["name"] == name]
+
+
+@pytest.fixture
+def gate(monkeypatch, repo):
+    spec = importlib.util.spec_from_file_location("verify_changed_tests", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.chdir(repo.root)
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    monkeypatch.delenv("MATRIX_EVENT_NAME", raising=False)
+    monkeypatch.setattr(module, "fetch_reviews", lambda *args: [])
+    return module
+
+
+def run_gate(gate, repo, *extra):
+    code = gate.main(
+        [
+            "--base",
+            repo.base,
+            "--sku-config",
+            ".github/sku_config.yaml",
+            "--review-skus",
+            DEFAULT_REVIEW_SKUS,
+            "--non-matrix-files",
+            DEFAULT_NON_MATRIX,
+            "--unsupported-files",
+            "sample_vllm_tests.yaml",
+            "--prepare-script",
+            str(SCRIPT.with_name("prepare_test_matrix.py")),
+            "--output",
+            "result.json",
+            *extra,
+        ]
+    )
+    assert code == 0
+    return json.loads((repo.root / "result.json").read_text())
+
+
+@pytest.mark.parametrize("checkout", ["merge", "pr", "merge_group"])
+@pytest.mark.parametrize("edit", ["code", "entry", "rename"])
+def test_scope_excludes_changes_landed_on_main(repo, gate, checkout, edit):
+    """An older PR must not inherit upstream test edits from its test merge."""
+    unit_path = "tests/pipeline_reorg/sample_unit_tests.yaml"
+    repo.git("checkout", "-b", "pr")
+    if edit == "code":
+        repo.write("feature.cpp", "// unrelated source change\n")
+    else:
+        repo.write(unit_path, BASE_TESTS_YAML.replace("./build/test/alpha", "./build/test/alpha --pr"))
+        if edit == "rename":
+            renamed = "tests/pipeline_reorg/renamed_unit_tests.yaml"
+            repo.git("mv", unit_path, renamed)
+    repo.git("add", "-A")
+    repo.git("commit", "-m", "PR change")
+    pr_head = repo.git("rev-parse", "HEAD")
+
+    repo.git("checkout", "-b", "upstream", repo.base)
+    # Main changes both another entry in the same file and a different pipeline.
+    repo.write(unit_path, BASE_TESTS_YAML.replace("./build/test/beta", "./build/test/beta --main"))
+    repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_main"))
+    repo.git("add", "-A")
+    repo.git("commit", "-m", "Main advances")
+    main_head = repo.git("rev-parse", "HEAD")
+    repo.git("merge", "--no-ff", "pr", "-m", "PR test merge")
+
+    if checkout == "pr":
+        repo.git("checkout", "pr")
+        repo.base = main_head
+    elif checkout == "merge_group":
+        repo.base = main_head
+
+    event = "merge_group" if checkout == "merge_group" else "pull_request"
+    payload = run_gate(gate, repo, "--event", event, "--head-sha", pr_head)
+    assert payload["review_legs"] == []
+    if edit == "code":
+        assert payload["status"] == "no_op"
+        assert payload["changed_files"] == []
+    else:
+        assert payload["status"] == "run"
+        assert payload["changed_files"] == [renamed if edit == "rename" else unit_path]
+        assert {leg["name"] for leg in payload["run_legs"]} == {"unit alpha"}
+        assert payload["expected_leg_count"] == 2
+
+
+@pytest.mark.parametrize("non_runnable", ["unsupported", "metadata", "deleted", "review_only"])
+def test_matrix_generation_ignores_files_without_runnable_legs(repo, gate, capsys, non_runnable):
+    """Use the real parser: a cmd-less review leg must never reach it."""
+    vllm_path = "tests/pipeline_reorg/sample_vllm_tests.yaml"
+    vllm = BASE_GALAXY_YAML.replace("  cmd: pytest tests/galaxy/test_alpha.py\n", "")
+    repo.write(vllm_path, vllm)
+    repo.commit_base()
+    repo.write("tests/pipeline_reorg/sample_unit_tests.yaml", BASE_TESTS_YAML.replace("alpha", "alpha2"))
+    if non_runnable == "unsupported":
+        repo.write(vllm_path, vllm.replace("galaxy alpha", "new model"))
+    elif non_runnable == "metadata":
+        repo.write(vllm_path, vllm.replace("U003", "U999"))
+    elif non_runnable == "deleted":
+        (repo.root / vllm_path).unlink()
+    else:
+        repo.write("tests/pipeline_reorg/sample_galaxy_tests.yaml", BASE_GALAXY_YAML.replace("test_alpha", "test_beta"))
+
+    payload = run_gate(gate, repo)
+    assert len(payload["legs"]) == 2
+    assert {row["source_yaml"] for row in payload["legs"]} == {"sample_unit_tests"}
+    assert sorted(path.name for path in (repo.root / "gate-matrices").iterdir()) == ["sample_unit_tests.github-output"]
+    if non_runnable in {"unsupported", "review_only"}:
+        assert payload["status"] == "blocked"
+        assert len(payload["review_legs"]) == 1
+        reason = "unsupported_yaml" if non_runnable == "unsupported" else "review_only_sku"
+        assert payload["review_legs"][0]["blocked_by"] == reason
+        assert "PR needs an approving review" in capsys.readouterr().err
+    else:
+        assert payload["status"] == "run"
+        assert payload["review_legs"] == []
 
 
 # --- nothing to do -----------------------------------------------------------

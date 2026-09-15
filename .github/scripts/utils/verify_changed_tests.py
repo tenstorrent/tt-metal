@@ -128,14 +128,24 @@ def git_show(ref, path):
     return None if result.returncode != 0 else result.stdout
 
 
-def merge_base(base):
+def merge_base(base, pr_head=""):
     """
-    Resolve base to its merge base with HEAD.
+    Resolve the base for the checked-out tree.
 
-    Diffing against the merge base rather than the base tip keeps commits that
-    landed on main after the branch point out of scope, and makes the working
-    tree visible -- which is what makes this runnable locally before pushing.
+    Actions checks out a synthetic PR merge whose second parent is the PR head.
+    Its first parent is the main revision actually merged, which can be newer
+    than the event's base SHA. Comparing that merge to the stale event base would
+    attribute changes already on main to the PR.
+
+    Otherwise use the merge base with HEAD, so a local branch checkout excludes
+    later main commits while still including uncommitted working-tree changes.
     """
+    if pr_head:
+        result = subprocess.run(["git", "show", "-s", "--format=%P", "HEAD"], capture_output=True, text=True)
+        parents = result.stdout.split()
+        if result.returncode == 0 and len(parents) == 2 and parents[1] == pr_head:
+            return parents[0]
+
     result = subprocess.run(["git", "merge-base", base, "HEAD"], capture_output=True, text=True)
     if result.returncode != 0:
         return base
@@ -618,7 +628,7 @@ def parse_matrix_output(text, path):
 
 def build_matrices(scope, prepare_script, sku_config, work_dir):
     """
-    Run prepare_test_matrix.py over each changed yaml and collect its matrix.
+    Run prepare_test_matrix.py over each yaml with runnable legs.
 
     Invoked exactly as the pipelines invoke it -- ALL_SKUS_IN_TESTS, no
     sku-allowlist -- so the rows carry the same runs_on, cmd, timeout and
@@ -628,12 +638,11 @@ def build_matrices(scope, prepare_script, sku_config, work_dir):
     """
     work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    skipped = set(scope.get("skipped_files") or [])
-
     matrices = {}
-    for path in scope["changed_files"]:
-        if path in skipped:
-            continue
+    # Unsupported pipelines may have no cmd at all. Their owner review must not
+    # depend on parsing them as runnable matrices. Metadata-only edits and deleted
+    # files likewise have no rows to resolve.
+    for path in sorted({leg["file"] for leg in scope["run_legs"]}):
         stem = Path(path).stem
         capture = work_dir / f"{stem}.github-output"
         capture.write_text("")
@@ -918,7 +927,7 @@ def run(args):
     tracy_files = set(split_list(args.tracy_files))
     non_matrix_files = set(split_list(args.non_matrix_files))
     unsupported_files = set(split_list(args.unsupported_files))
-    base = merge_base(args.base)
+    base = merge_base(args.base, args.head_sha if args.event == "pull_request" else "")
     files = args.files if args.files is not None else changed_files(base)
     files = [f for f in files if f.startswith(TESTS_DIR + "/")]
 
