@@ -17,6 +17,13 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, parametrize
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_p150
+
+# The kernel is brought up and validated on P150 alone; no other board has executed it. The
+# group suite that collects this directory runs -x on several SKUs, so an unproven failure
+# here would abort tests that belong to other teams. is_p150() reads tt-smi only, taking no
+# device lock, so it is safe to evaluate at collection time.
+pytestmark = pytest.mark.skipif(not is_p150(), reason="mhc_split_sinkhorn is validated on P150 only")
 
 PCC = 0.999
 
