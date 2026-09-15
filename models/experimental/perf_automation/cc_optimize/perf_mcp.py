@@ -1514,6 +1514,22 @@ def _op_ladder_status(open_op: dict, op_code: str, attempts: list) -> tuple[bool
     _rung_tries = collections.Counter(
         _normalise_rung(a.get("kernel_kind")) for a in matches if not a.get("measurement_failed")
     )
+    # A RUNG THAT CANNOT SUCCEED MUST STOP BEING OFFERED, the same rule host_overhead already applies
+    # a few lines below ("an attempt that wedged the device may never have got far enough to have
+    # [kernel_detected_in_source]") -- generalised here to every rung, not just the dispatch one.
+    # `attempts` is the caller's kernel_detected_in_source-filtered list, which a wedge never
+    # populates (the config was rejected or the board died before any kernel could be detected in
+    # source), so _rung_tries above is permanently blind to every wedge -- the same matmul comes back
+    # at `grid` every round, forever, no matter how many times it has already crashed the device.
+    #
+    # Read from the FULL log, not `attempts`, for the same reason host_overhead does. Counted only
+    # when `retryable` is explicitly False -- a real config rejection or a dead board, per
+    # fault_kind_for -- never when it is True (our own watchdog killed it; nothing was learned about
+    # the lever, and it deserves another go) or absent (two pre-existing records predate this field;
+    # treating an unknown as non-retryable would exclude them on a missing value, not a judgement).
+    for _a in _load_attempts_all():
+        if _a.get("wedged") and _a.get("retryable") is False and _op_match(op_code, _a):
+            _rung_tries[_normalise_rung(_a.get("kernel_kind"))] += 1
     grid = (open_op.get("grid") or "").lower()
     wdtype = (open_op.get("weight_dtype") or "").lower()
     fidelity = (open_op.get("fidelity") or "").lower()
@@ -5533,6 +5549,17 @@ def _rung_allowance(op_signature: str, kernel_kind: str, attempts: list) -> tupl
         if _normalise_rung(a.get("kernel_kind")) == rung
         and not a.get("measurement_failed")
         and a.get("measured_ms") is not None
+    )
+    # A WEDGE NEVER HAS measured_ms, so the sum above cannot see it -- a rung that crashes every time
+    # would never close, the CLOSED refusal below never fires, and the caller re-records the same
+    # doomed rung indefinitely. Counted only when `retryable` is explicitly False (a real config
+    # rejection or a dead board, per fault_kind_for) -- not True (our own watchdog killed it, nothing
+    # was learned) and not absent (pre-existing records from before this field existed; an unknown
+    # must not be read as a judgement). Mirrors the same split in _op_ladder_status.
+    tries += sum(
+        1
+        for a in matches
+        if _normalise_rung(a.get("kernel_kind")) == rung and a.get("wedged") and a.get("retryable") is False
     )
     # SAME FILTER AS `tries` ABOVE, for the same reason. went_deeper cuts the knob allowance from
     # _MAX_KNOB_RETRIES to 1 because "a second knob search is not worth it after a structural or

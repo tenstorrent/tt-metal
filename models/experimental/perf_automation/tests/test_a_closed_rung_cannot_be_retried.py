@@ -127,6 +127,74 @@ def test_a_different_op_at_the_same_rung_is_untouched(mcp):
     assert tries == 0
 
 
+# ---------------------------------------------------------------- a wedge that cannot succeed closes the rung
+
+
+def _wedge(sig, kind, retryable):
+    """A device-crash record, shaped like _autorecord_wedge actually writes one: no measured_ms (a
+    crash measures nothing), kernel_detected_in_source always False (the config never got that far)."""
+    _SEQ["n"] += 1
+    return {
+        "op_signature": sig,
+        "kernel_kind": kind,
+        "measured_ms": None,
+        "wedged": True,
+        "retryable": retryable,
+        "kernel_detected_in_source": False,
+        "note": "wedge %d" % _SEQ["n"],
+    }
+
+
+def test_a_config_rejection_counts_the_same_as_a_measured_try(mcp):
+    """A knob rung still gets its full _MAX_KNOB_RETRIES -- a wedge does not shortcut the cap, it
+    just stops being invisible to it. One wedge alone leaves the same allowance one clean try would."""
+    _history(mcp, [_wedge("Matmul A", "grid", retryable=False)])
+    tries, allowed = mcp._rung_allowance("Matmul A", "grid", mcp._load_attempts_all())
+    assert (tries, allowed) == (1, mcp._MAX_KNOB_RETRIES)
+
+
+def test_a_config_rejection_closes_a_knob_rung_once_the_cap_is_spent(mcp):
+    """fault_kind_for's own example: 'TT_FATAL: ... must be smaller than or equal to ...' is a clean
+    assert, not a fluke -- it fails identically every time, so _MAX_KNOB_RETRIES wedges close it
+    exactly as _MAX_KNOB_RETRIES clean no-gains already would."""
+    _history(mcp, [_wedge("Matmul A", "grid", retryable=False), _wedge("Matmul A", "grid", retryable=False)])
+    tries, allowed = mcp._rung_allowance("Matmul A", "grid", mcp._load_attempts_all())
+    assert tries >= allowed
+
+
+def test_a_config_rejection_closes_a_deep_rung_immediately(mcp):
+    """Deep rungs (tt-lang/cpp) get exactly one attempt, same as a measured one -- a crashing kernel
+    does not get a second chance a working one wouldn't either."""
+    _history(mcp, [_wedge("Matmul A", "cpp", retryable=False)])
+    tries, allowed = mcp._rung_allowance("Matmul A", "cpp", mcp._load_attempts_all())
+    assert (tries, allowed) == (1, 1)
+
+
+def test_a_watchdog_timeout_does_not_close_the_rung(mcp):
+    """retryable=True means WE killed it -- nothing was learned about the lever, so it still deserves
+    its real attempts. Conflating this with a config rejection would make a busy box's timeouts look
+    like proof a lever can never work."""
+    _history(mcp, [_wedge("Matmul A", "grid", retryable=True)])
+    tries, allowed = mcp._rung_allowance("Matmul A", "grid", mcp._load_attempts_all())
+    assert tries < allowed
+
+
+def test_an_unstamped_wedge_does_not_close_the_rung(mcp):
+    """Records from before `retryable` existed carry no value for it. Reading that as non-retryable
+    would exclude them on a missing field, not the judgement the fix is supposed to make."""
+    row = _wedge("Matmul A", "grid", retryable=False)
+    row.pop("retryable")
+    _history(mcp, [row])
+    tries, allowed = mcp._rung_allowance("Matmul A", "grid", mcp._load_attempts_all())
+    assert tries < allowed
+
+
+def test_a_wedge_on_a_different_rung_does_not_close_this_one(mcp):
+    _history(mcp, [_wedge("Matmul A", "block", retryable=False)])
+    tries, _allowed = mcp._rung_allowance("Matmul A", "grid", mcp._load_attempts_all())
+    assert tries == 0
+
+
 # ---------------------------------------------------------------- the refusal is what enforces it
 
 
@@ -264,3 +332,40 @@ def test_the_climb_order_is_cheapest_first(mcp):
     budget on tt-lang/C++ before reaching a cheaper restructure."""
     order = mcp.ladder_order()
     assert order.index("grid") < order.index("structural") < order.index("tt-lang") < order.index("cpp")
+
+
+# ---------------------------------------------------------------- the ladder itself stops re-offering a wedge
+
+
+def _open_op(code, grid="partial"):
+    """A shape that lands on `knob:grid` with no history, matching
+    test_the_grid_still_comes_first_when_it_is_not_full."""
+    return {
+        "op_code": code,
+        "shape": code,
+        "grid": grid,
+        "bound_by": "memory",
+        "weight_dtype": "bf8_b",
+        "fidelity": "lofi",
+    }
+
+
+def test_next_rung_advances_past_a_config_rejection(mcp):
+    """The observed repeat: 'Matmul 32x2688x131072'/grid crashed the device 5 times in one run
+    because _op_ladder_status's attempts came from the caller's kernel_detected_in_source-filtered
+    list, which a wedge never populates -- so the rung looked untried every single round. `attempts`
+    here is [], simulating that same filtered list; the wedge is only visible via the ladder's own
+    full-log read, exactly like the fix."""
+    code = "MatmulDeviceOperation 512 x 3072 x 8192"
+    _history(mcp, [_wedge(code, "grid", retryable=False), _wedge(code, "grid", retryable=False)])
+    _done, rung, _reason = mcp._op_ladder_status(_open_op(code), code, [])
+    assert rung != "knob:grid", rung
+
+
+def test_next_rung_still_offers_grid_after_a_watchdog_timeout(mcp):
+    """A wedge we caused ourselves proves nothing about the lever -- it must not advance the ladder
+    past a rung that was never really tried."""
+    code = "MatmulDeviceOperation 512 x 3072 x 8192"
+    _history(mcp, [_wedge(code, "grid", retryable=True), _wedge(code, "grid", retryable=True)])
+    _done, rung, _reason = mcp._op_ladder_status(_open_op(code), code, [])
+    assert rung == "knob:grid", rung
