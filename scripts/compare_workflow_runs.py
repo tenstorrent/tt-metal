@@ -448,7 +448,7 @@ def main():
         "perf-device-models.yaml",
         # T3000 (T3K)
         "t3000-tests.yaml",
-        "t3000-manual-tests.yaml",
+        "t3000-dispatch-tests.yaml",
         # Galaxy
         "blaze-models-prefill-tests.yaml",
         "galaxy-e2e-tests.yaml",
