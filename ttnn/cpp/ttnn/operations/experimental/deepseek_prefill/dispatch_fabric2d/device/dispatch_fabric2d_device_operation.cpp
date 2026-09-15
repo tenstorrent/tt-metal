@@ -77,9 +77,8 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(
         !args.fanout,
-        "dispatch_fabric2d: fanout is not implemented yet. It needs a per-(source, destination) token "
-        "presence table that no routing-setup op computes: chunk lengths are derived from per-expert "
-        "counts, which are marginals, and a fan-out chunk's length depends on the joint.");
+        "dispatch_fabric2d: fanout is not implemented yet. The reach table is plumbed and the chunk "
+        "arithmetic is proved on host, but the reader does not yet stage or consume multicast pages.");
     TT_FATAL(
         args.num_routed_experts % 16 == 0,
         "dispatch_fabric2d: num_routed_experts must be a multiple of 16 (got {}); a row of the offsets "
