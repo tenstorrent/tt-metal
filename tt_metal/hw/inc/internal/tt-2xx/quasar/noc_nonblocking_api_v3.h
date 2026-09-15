@@ -37,8 +37,17 @@
 //    contract writes the XY coordinate register and cannot be expressed over
 //    ATT operands;
 //  - every multicast (write, inline write, atomic increment) decodes its
-//    worker rectangle through the active map below into the flat start
-//    operand plus the DEST_COORD extent and MCAST_DESTS count.
+//    worker rectangle through the active map below. Regular writes and
+//    atomics program the start operand in DEST_ADDR plus the width/height
+//    extent in DEST_COORD: their destination travels in the packet's
+//    return-address field, which the NOC translation stage
+//    (tt_noc_att_and_routing.sv) turns into start = translated tile,
+//    end = start + extent - 1. Inline writes carry their destination in the
+//    target-address field instead, which that stage translates WITHOUT the
+//    rectangle math (the end coordinate becomes the translated tile, the
+//    start coordinate fields pass through), so they program the END tile's
+//    operand in DEST_ADDR and the rectangle's NOC coordinates in DEST_COORD.
+//    MCAST_DESTS carries the caller's destination count on both forms.
 //
 // Shared RoCC command-buffer definitions (register wrappers, MISC/VC values,
 // counters, init, barriers) come from noc_cmd_buf_common.h.
@@ -63,6 +72,14 @@
 // The full ATT operand for an address in this initiator's own L1.
 inline __attribute__((always_inline)) constexpr uint64_t noc_v3_local_operand(uint32_t local_address) {
     return (uint64_t{NOC_ATT_LOCAL_WINDOW_BASE}) | local_address;
+}
+
+// DEST_COORD for an inline multicast: the rectangle's NOC coordinates in the
+// XY register layout (the start fields survive translation, the end fields are
+// replaced by the translated DEST_ADDR tile); see the header note.
+inline __attribute__((always_inline)) uint32_t noc_v3_inline_mcast_coord(const noc_att::NocMulticastAddress& target) {
+    return NOC_MULTICAST_COORD(
+        target.start_node_xy & 0x3f, target.start_node_xy >> 6, target.end_node_xy & 0x3f, target.end_node_xy >> 6);
 }
 
 // with_state issue operand: the set_state base (offset field zero by contract)
@@ -204,9 +221,9 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
             // transaction with an unresolved operand.
             __builtin_trap();
         }
-        // HW needs MCAST_DESTS to match the rectangle; catch caller/descriptor
-        // mismatches in checked builds.
-        ASSERT(num_dests == mcast_target.rectangle_count);
+        // The sender is not included on this path, so a rectangle containing it
+        // has one destination fewer than its area; catch gross mismatches.
+        ASSERT(num_dests <= mcast_target.rectangle_count);
         dest_addr = mcast_target.start_address;
     }
 
@@ -379,41 +396,43 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool posted = false,
     uint32_t customized_src_addr = 0) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    // A multicast dest_addr is the packed software rectangle descriptor; decode
-    // it through the active map exactly as ncrisc_noc_fast_write does. The
-    // decoded rectangle count is the destination count the hardware acks.
+    // Register recipe per cmdbuff_api.hpp (the reference): an inline write is a
+    // plain write transaction whose data arrives with the inline-issue
+    // instruction. LEN is the transfer size. The INLINE_WR/BYTE_ENABLE MISC bits
+    // with a byte-enable mask in LEN never complete on this NIU (no ack, no
+    // data), and one such issue wedges every later barrier on the core.
+    ASSERT(be == 0xF);  // the RoCC inline write carries one full dword
     uint32_t num_dests = 1;
-    uint32_t mcast_extent_xy = 0;
+    uint32_t mcast_coord = 0;
     if (mcast) {
+        // A multicast dest_addr is the packed software rectangle descriptor;
+        // decode it through the active map exactly as ncrisc_noc_fast_write does.
         const noc_att::NocMulticastAddress mcast_target =
             noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(dest_addr, sizeof(uint32_t));
         if (mcast_target.rectangle_count == 0) {
-            // Invalid descriptor: trap unconditionally rather than issue a
-            // transaction with an unresolved operand.
             __builtin_trap();
         }
-        dest_addr = mcast_target.start_address;
+        // Inline-write form: end operand + rectangle coordinates (header note).
+        dest_addr = mcast_target.end_address;
         num_dests = mcast_target.rectangle_count;
-        mcast_extent_xy = mcast_target.extent_xy;
+        mcast_coord = noc_v3_inline_mcast_coord(mcast_target);
     }
 
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    // linked follows the reference (linked = multicast); the sender is not
+    // included, matching the Blackhole inline-multicast semantics.
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0) |
+                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
-
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
-
-    // The decoded operand keeps the local address bits, so the byte-enable
-    // position is the same under ATT as under XY.
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
     if (mcast) {
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_extent_xy);
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_coord);
         // HW needs MCAST_DESTS to match the number of cores in the rectangle
         // so it can track per-destination acks for the multicast.
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -444,37 +463,36 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
     uint32_t customized_src_addr = 0,
     uint32_t num_dests = 1) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
-    // Same flow as noc_fast_write_dw_inline with mcast; the caller's num_dests
-    // must agree with the decoded rectangle (checked builds).
-    uint32_t mcast_extent_xy = 0;
+    // Same recipe as noc_fast_write_dw_inline (see there); the caller supplies
+    // the destination count. The sender is not included, so a rectangle that
+    // contains it has one destination fewer than its area.
+    ASSERT(be == 0xF);
+    uint32_t mcast_coord = 0;
     if (mcast) {
         const noc_att::NocMulticastAddress mcast_target =
             noc_att::resolve_worker_multicast<ACTIVE_ATT_MAP>(dest_addr, sizeof(uint32_t));
         if (mcast_target.rectangle_count == 0) {
             __builtin_trap();
         }
-        ASSERT(num_dests == mcast_target.rectangle_count);
-        dest_addr = mcast_target.start_address;
-        mcast_extent_xy = mcast_target.extent_xy;
+        ASSERT(num_dests <= mcast_target.rectangle_count);
+        // Inline-write form: end operand + rectangle coordinates (header note).
+        dest_addr = mcast_target.end_address;
+        mcast_coord = noc_v3_inline_mcast_coord(mcast_target);
     }
 
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0) | (posted ? CMD_BUF_MISC_POSTED : 0);
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0) |
+                    (mcast ? (CMD_BUF_MISC_MULTICAST | CMD_BUF_MISC_LINKED) : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
-
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
         mcast ? NOC_OVERLAY_MCAST_RESP_VC : NOC_OVERLAY_WR_RESP_VC);
-
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, dest_addr);
     if (mcast) {
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_extent_xy);
-        // HW needs MCAST_DESTS to match the number of cores in the rectangle
-        // so it can track per-destination acks for the multicast.
+            TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, mcast_coord);
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MCAST_DESTS_REG_OFFSET / 8, num_dests);
     }
@@ -759,8 +777,10 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
 template <bool posted = false, bool set_val = false>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
-    uint64_t misc = CMD_BUF_MISC_INLINE_WRITE | CMD_BUF_MISC_BYTE_ENABLE | CMD_BUF_MISC_SRC_INCLUDE |
-                    (posted ? CMD_BUF_MISC_POSTED : 0);
+    // Reference recipe (cmdbuff_api.hpp): plain write, LEN = dword; see
+    // noc_fast_write_dw_inline for why the INLINE_WR/BYTE_ENABLE form is wrong.
+    ASSERT(be == 0xF);
+    uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -772,8 +792,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     // local bits never survive into updated issues.
     noc_v3_inline_write_state_base = noc_v3_state_base_of(dest_addr);
 
-    uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
-    __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
+    __builtin_riscv_ttrocc_scmdbuf_wr_reg(
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, sizeof(uint32_t));
 }
 
 // The V2 update_addr_hi variant patches the destination coordinate register -
