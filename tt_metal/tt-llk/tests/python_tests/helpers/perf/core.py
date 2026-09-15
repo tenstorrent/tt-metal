@@ -109,11 +109,6 @@ def read_perf_zone_names_from_elf(elf_dir: Path) -> list[str] | None:
     return [INIT_MARKER, TILE_LOOP_MARKER]  # zone 0 = INIT, zone 1 = TILE_LOOP
 
 
-# All perf run types in canonical order. Tests that exercise the full pipeline
-# pass this; a test may still pass a subset (e.g. [MATH_ISOLATE]) when that is
-# all it can measure. Defined next to the maps in relevance.py so adding a
-# PerfRunType updates both the default map keys and the driver list together.
-
 # Run-type → kernel components for the ELF_SIZE column. L1_CONGESTION omitted.
 _CODE_SIZE_COMPONENTS = {
     PerfRunType.L1_TO_L1: ["unpack", "math", "pack"],

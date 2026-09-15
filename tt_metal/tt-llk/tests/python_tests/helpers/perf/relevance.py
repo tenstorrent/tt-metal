@@ -164,6 +164,9 @@ _PACK_FORMATS = frozenset({"pack_src", "pack_dst", "pack_S_src", "pack_S_dst"})
 _MATH_FORMATS = frozenset({"math"})
 _IO_FORMATS = _UNPACK_FORMATS | _PACK_FORMATS
 
+# Canonical order shared by the default relevance map and the public driver
+# list re-exported from core.py. Tests may still pass only the subset they can
+# measure (for example, MATH_ISOLATE alone).
 ALL_PERF_RUN_TYPES = (
     PerfRunType.L1_TO_L1,
     PerfRunType.UNPACK_ISOLATE,
@@ -798,8 +801,10 @@ def _format_field_pinned(name: str, spec: RunTypeRelevance) -> bool:
 # -- project_stimuli ---------------------------------------------------------
 
 # Stimuli format attrs hashed into variant_id under SoL. Pin them when every
-# matching FormatConfig field would be pinned, so pack-output sweeps still
-# reuse UNPACK_ISOLATE compiles.
+# matching FormatConfig field would be pinned. The A/B/S rows are intentionally
+# inert today because all of their unpack fields are _INIT_LIVE_FORMATS; keeping
+# them here makes that rule explicit and central. T/result rows can pin, enabling
+# pack-output sweeps to reuse UNPACK_ISOLATE compiles.
 _STIMULI_FORMAT_FIELDS = (
     ("stimuli_A_format", ("unpack_A_src", "unpack_A_dst")),
     ("stimuli_B_format", ("unpack_B_src", "unpack_B_dst")),
@@ -895,10 +900,12 @@ def _operand_tile_counts(
 ) -> dict[str, int] | None:
     """Projected L1 tiles per operand, or None if the spec cannot derive a layout.
 
-    CRK: A is r×k, B is k×c, Res is r×c. Other operands use the Res footprint.
-    Invisible CRK dims pin to 1. Pack block runtimes: every operand is
-    NUM_BLOCKS × NUM_TILES_IN_BLOCK. The caller still clamps each count to the
-    original. Never synthesize a 1-tile layout when neither source is present.
+    CRK: A is r×k, B is k×c, and result-like operands are
+    r×c×visible-NUM_BLOCKS. Inputs are reused across destination handoff blocks.
+    Invisible CRK dims and block fields pin to 1. Without CRK dimensions, pack
+    block runtimes size every operand as NUM_BLOCKS × NUM_TILES_IN_BLOCK. The
+    caller still clamps each count to the original. Never synthesize a 1-tile
+    layout when neither source is present.
 
     Per-operand rather than one scalar because the operands genuinely differ in
     shape: collapsing them would both mis-size the buffers and, since
@@ -928,9 +935,14 @@ def _operand_tile_counts(
             r = _as_int(crk.r_dimm) if _runtime_field_visible("r_dimm", spec) else 1
             c = _as_int(crk.c_dimm) if _runtime_field_visible("c_dimm", spec) else 1
             k = _as_int(crk.k_dimm) if _runtime_field_visible("k_dimm", spec) else 1
+            block_count = 1
+            if _runtime_type_visible(NUM_BLOCKS, spec):
+                blocks = next((p for p in runtimes if isinstance(p, NUM_BLOCKS)), None)
+                if blocks is not None and _runtime_field_visible("num_blocks", spec):
+                    block_count = _as_int(blocks.num_blocks)
             a = max(r * k, 1)
             b = max(k * c, 1)
-            res = max(r * c, 1)
+            res = max(r * c * block_count, 1)
             return {
                 "tile_count_A": a,
                 "tile_count_B": b,
@@ -945,9 +957,17 @@ def _operand_tile_counts(
         blocks = next((p for p in runtimes if isinstance(p, NUM_BLOCKS)), None)
         tiles = next((p for p in runtimes if isinstance(p, NUM_TILES_IN_BLOCK)), None)
         if blocks is not None and tiles is not None:
-            count = max(
-                _as_int(blocks.num_blocks) * _as_int(tiles.num_tiles_in_block), 1
+            block_count = (
+                _as_int(blocks.num_blocks)
+                if _runtime_field_visible("num_blocks", spec)
+                else 1
             )
+            tiles_per_block = (
+                _as_int(tiles.num_tiles_in_block)
+                if _runtime_field_visible("num_tiles_in_block", spec)
+                else 1
+            )
+            count = max(block_count * tiles_per_block, 1)
             return {attr: count for attr in _STIMULI_TILE_ATTRS}
     return None
 

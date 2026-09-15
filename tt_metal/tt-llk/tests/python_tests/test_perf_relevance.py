@@ -667,26 +667,25 @@ def test_unpack_tilize_sol_pack_keeps_dim_tile_cnt_invariant():
     assert dims.full_rt_dim * dims.full_ct_dim == tiles.tile_cnt
 
 
-def test_math_matmul_sol_pack_keeps_faces_partial_tile_dims():
-    """Everything the pack thread reads survives projection for ``PACK_ISOLATE``.
+def test_math_matmul_sol_isolates_keep_faces_partial_tile_dims():
+    """Tiny-tile geometry survives projection for MATH and PACK isolates.
 
     Face count stays ``2``, the partial-face flag stays set, the narrow input
-    row dimension stays ``16``, and the dest index stays ``0``. Under SoL these
-    are inlined as ``constexpr``, so pinning any of them would change the kernel
-    the pack measurement actually executes.
+    row dimension stays ``16``, and the dest index stays ``0``. MATH_ISOLATE
+    keeps the face count because its idle unpack/pack threads consume it during
+    INIT before returning from TILE_LOOP.
     """
     runtimes = _math_matmul_runtimes(num_faces=2, partial=True, in0_r=16)
-    projected = project_runtimes(
-        runtimes, MATH_MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
-    )
-    faces = next(p for p in projected if isinstance(p, NUM_FACES))
-    partial = next(p for p in projected if isinstance(p, PARTIAL_FACE))
-    dims = next(p for p in projected if isinstance(p, IN_TILE_DIMS))
-    dest = next(p for p in projected if isinstance(p, DEST_INDEX))
-    assert faces.num_faces == 2
-    assert partial.partial_face_pack is True
-    assert dims.in0_r_dim == 16
-    assert dest.dst_index == 0
+    for run_type in (PerfRunType.MATH_ISOLATE, PerfRunType.PACK_ISOLATE):
+        projected = project_runtimes(runtimes, MATH_MATMUL_RELEVANCE[run_type])
+        faces = next(p for p in projected if isinstance(p, NUM_FACES))
+        partial = next(p for p in projected if isinstance(p, PARTIAL_FACE))
+        dims = next(p for p in projected if isinstance(p, IN_TILE_DIMS))
+        dest = next(p for p in projected if isinstance(p, DEST_INDEX))
+        assert faces.num_faces == 2
+        assert partial.partial_face_pack is True
+        assert dims.in0_r_dim == 16
+        assert dest.dst_index == 0
 
 
 def test_pack_sol_pack_keeps_dest_index():
@@ -847,6 +846,47 @@ def test_project_stimuli_pack_uses_per_operand_counts():
     assert projected.tile_count_A == 1
     assert projected.tile_count_B == 16
     assert projected.tile_count_res == 16
+
+
+def test_project_stimuli_math_matmul_keeps_multiblock_result_count():
+    """CRK inputs are reused across blocks while result storage is not.
+
+    A 2x2x1 matmul needs two A tiles and two B tiles regardless of block count,
+    but four destination-handoff blocks need 2x2x4 = 16 result tiles. Dropping
+    that multiplier would move the projected result buffer into its inputs.
+    """
+    runtimes = _math_matmul_runtimes(num_blocks=4)
+    original = _stimuli(2, res_count=16)
+    projected = project_stimuli(
+        original, runtimes, MATH_MATMUL_RELEVANCE[PerfRunType.PACK_ISOLATE]
+    )
+    assert projected.tile_count_A == 2
+    assert projected.tile_count_B == 2
+    assert projected.tile_count_res == 16
+
+
+def test_project_stimuli_block_fields_are_order_independent():
+    """Raw and runtime-projected block shapes produce the same L1 counts.
+
+    ``num_blocks`` is invisible in this synthetic policy, so it folds to one
+    whether ``project_stimuli`` sees the original value four or the already
+    projected runtime. ``num_tiles_in_block`` remains three.
+    """
+    spec = RunTypeRelevance(
+        runtime_types=frozenset({NUM_BLOCKS, NUM_TILES_IN_BLOCK}),
+        runtime_fields=frozenset({"num_tiles_in_block"}),
+    )
+    runtimes = [NUM_BLOCKS(4), NUM_TILES_IN_BLOCK(3)]
+    projected_runtimes = project_runtimes(runtimes, spec)
+    original = _stimuli(12)
+    from_raw = project_stimuli(original, runtimes, spec)
+    from_projected = project_stimuli(original, projected_runtimes, spec)
+    assert from_raw.tile_count_A == 3
+    assert from_raw.tile_count_B == 3
+    assert from_raw.tile_count_res == 3
+    assert from_projected.tile_count_A == from_raw.tile_count_A
+    assert from_projected.tile_count_B == from_raw.tile_count_B
+    assert from_projected.tile_count_res == from_raw.tile_count_res
 
 
 def test_project_stimuli_pack_relevance_keeps_block_layout():
@@ -1906,10 +1946,10 @@ def test_sol_refresh_tile_sizes_keeps_narrow_tile_rescale(monkeypatch):
     """Narrow tiles stay narrow through projection and through a manual size refresh.
 
     With 2 faces and a 16-row input, the tile size is half the full ``Float16``
-    tile, and it holds after applying ``L1_TO_L1``, after applying
-    ``PACK_ISOLATE``, and after a direct ``_refresh_tile_sizes`` on the passed
-    parameters. Rescaling back to a full tile would have the kernel address L1
-    in strides the stimuli never allocated.
+    tile, and it holds after applying ``L1_TO_L1``, ``MATH_ISOLATE``,
+    ``PACK_ISOLATE``, and a direct ``_refresh_tile_sizes`` on the passed
+    parameters. MATH matters because its idle unpack/pack threads run INIT with
+    this geometry before returning.
     """
     monkeypatch.setattr(TestConfig, "SPEED_OF_LIGHT", True)
     monkeypatch.setattr(TestConfig, "BUILD_MODE", BuildMode.CONSUME)
@@ -1922,7 +1962,11 @@ def test_sol_refresh_tile_sizes_keeps_narrow_tile_rescale(monkeypatch):
     cfg = PerfConfig(
         test_name="perf_math_matmul",
         formats=_format(DataFormat.Float16, DataFormat.Float16),
-        run_types=[PerfRunType.L1_TO_L1, PerfRunType.PACK_ISOLATE],
+        run_types=[
+            PerfRunType.L1_TO_L1,
+            PerfRunType.MATH_ISOLATE,
+            PerfRunType.PACK_ISOLATE,
+        ],
         templates=templates,
         runtimes=runtimes,
         variant_stimuli=_stimuli(4, face_r_dim=16),
@@ -1935,6 +1979,10 @@ def test_sol_refresh_tile_sizes_keeps_narrow_tile_rescale(monkeypatch):
     assert cfg.unpack_size_a == expected
     l1 = _run_config(cfg, PerfRunType.L1_TO_L1)
     cfg._apply_run_config(*l1)
+    assert cfg.pack_size == expected
+    assert cfg.unpack_size_a == expected
+    math = _run_config(cfg, PerfRunType.MATH_ISOLATE)
+    cfg._apply_run_config(*math)
     assert cfg.pack_size == expected
     assert cfg.unpack_size_a == expected
     pack = _run_config(cfg, PerfRunType.PACK_ISOLATE)

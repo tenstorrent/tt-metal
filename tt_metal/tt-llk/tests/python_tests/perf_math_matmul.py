@@ -64,7 +64,11 @@ class MathMatmulRelevance(MatmulRelevance):
         {NUM_BLOCKS, NUM_FACES, PARTIAL_FACE, IN_TILE_DIMS, DEST_INDEX}
     )
     unpack_runtimes = MatmulRelevance.unpack_runtimes | _EXTRA
-    math_runtimes = MatmulRelevance.math_runtimes | _EXTRA | frozenset({DEST_INDEX})
+    # MATH_ISOLATE still runs unpack/pack INIT, which configure tiny-tile
+    # geometry from NUM_FACES before those threads return from TILE_LOOP.
+    math_runtimes = (
+        MatmulRelevance.math_runtimes | _EXTRA | frozenset({DEST_INDEX, NUM_FACES})
+    )
     pack_runtimes = MatmulRelevance.pack_runtimes | _PACK_EXTRA
     cong_runtimes = MatmulRelevance.cong_runtimes | _EXTRA | frozenset({DEST_INDEX})
     pack_runtime_fields = _runtime_fields(*pack_runtimes, drop={"k_dimm"})
