@@ -18,8 +18,9 @@ import json
 import os
 
 import pytest
+from vllm_tt_plugin.spec_decode import SpecPlan, SpecReject
 
-from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM, SpecPlan, SpecReject
+from models.demos.gemma4.tt.generator_vllm import Gemma4DFlashForCausalLM
 
 _VERIFY = 5
 

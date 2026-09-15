@@ -28,11 +28,15 @@ class _StubSession:
     def __init__(self, scripted):
         self.scripted = list(scripted)
         self.calls = []
+        self.released = False
 
     def serving_step(self, cur_token, cur_pos):
         self.calls.append((cur_token, cur_pos))
         committed = self.scripted.pop(0)
         return committed, len(committed) - 1  # m = accepted, committed = m+1
+
+    def serving_release(self):
+        self.released = True
 
 
 class _Harness:
@@ -48,14 +52,18 @@ class _Harness:
         self._spec_cur = (11, start_pos)
         self._spec_pending = None  # no bootstrap on this path
         self._spec_pending_owner = None
+        # No page table is passed on this path, so ownership is unknown on both
+        # sides and the live session is served -- see _spec_active_is_mine.
+        self._spec_active_owner = None
         self._eos = 1
 
     def _eos_fill_id(self):
         return self._eos
 
     # real implementations, so the tests exercise shipped logic
-    _spec_pt_identity = MTP._spec_pt_identity
+    _spec_pt_identity = staticmethod(MTP._spec_pt_identity)
     _spec_pending_is_mine = MTP._spec_pending_is_mine
+    _spec_active_is_mine = MTP._spec_active_is_mine
     run = MTP.decode_forward
 
 
@@ -122,3 +130,71 @@ def test_horizon_exhaustion_emits_eos_without_stepping():
     out = _row(h)
     assert out[0].tolist() == [1, 1, 1, 1, 1, 1]
     assert h._spec.calls == []
+
+
+def _live_session_instance(monkeypatch, scripted, owner, baseline="baseline-out"):
+    """A real Gemma4MTPForCausalLM with a live session and no device.
+
+    ``__new__`` skips the device-bound ``__init__``; the attributes below are
+    everything ``decode_forward`` reads on the solo path. The BASE class's
+    ``decode_forward`` is the plain-baseline fallback the ownership check hands
+    off to, so it is stubbed to a sentinel -- the stub harness above cannot
+    reach it at all (zero-arg ``super()`` needs a real instance).
+    """
+    from types import SimpleNamespace
+
+    from models.demos.gemma4.tt.generator_vllm import Gemma4ForCausalLM
+
+    monkeypatch.setattr(Gemma4ForCausalLM, "decode_forward", lambda self, *a, **k: baseline)
+    h = MTP.__new__(MTP)
+    h._spec = _StubSession(scripted)
+    h._spec_cur = (11, 100)
+    h._spec_pending = None
+    h._spec_pending_owner = None
+    h._spec_active_owner = owner
+    h._spec_budget_end = 10_000
+    h._spec_horizon = 2048
+    h._spec_first_step = False
+    h.model = [SimpleNamespace(hf_config=SimpleNamespace(eos_token_id=1))]
+    return h
+
+
+def test_live_session_is_refused_for_a_request_that_does_not_own_it(monkeypatch):
+    """A solo decode step can be scheduled for a request that is NOT the live
+    session's owner: async scheduling skips a request that has reached
+    max_tokens (upstream guards that skip on num_output_placeholders), so the
+    owner can drop out of a step while its session is still armed. Serving the
+    block loop here emits the OWNER's speculation for this request, against the
+    single placeholder the scheduler reserved for a non-owner. The session must
+    be released and the step served as plain baseline instead.
+    """
+    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
+    other = ("not-this-request",)
+    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], other)
+    session = h._spec
+
+    out = h.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([[100]], dtype=torch.int32),
+        page_table=pt,
+    )
+
+    assert out == "baseline-out"
+    assert h._spec is None  # released
+    assert session.calls == []  # never speculated for the non-owner
+    assert h._spec_active_owner is None
+
+
+def test_live_session_is_served_for_its_own_owner(monkeypatch):
+    """The companion: a matching identity keeps the session and blocks."""
+    pt = torch.tensor([[3, 4, 5]], dtype=torch.int32)
+    h = _live_session_instance(monkeypatch, [[21, 22, 23, 24, 25, 26]], MTP._spec_pt_identity(pt))
+
+    out = h.decode_forward(
+        tokens=torch.tensor([[11]], dtype=torch.int32),
+        start_pos=torch.tensor([[100]], dtype=torch.int32),
+        page_table=pt,
+    )
+
+    assert out[0].tolist() == [21, 22, 23, 24, 25, 26]
+    assert h._spec is not None
