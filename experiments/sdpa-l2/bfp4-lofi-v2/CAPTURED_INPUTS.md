@@ -72,6 +72,18 @@ Timing uses blocking trace-replay wall time with warmup and medians, separately 
 
 ## Verification status
 
+For a fresh-checkout synthetic smoke, generate a new local fixture rather than expecting the ignored `.pt` artifact to be committed. From the built Blackhole repository environment, use fresh paths whose parent directory exists:
+
+```sh
+python_env/bin/python experiments/sdpa-l2/bfp4-lofi-v2/capture_smoke_fixture.py \
+  --output /path/to/fresh-synthetic.pt --heads 2 --length 1024 --seed 1240
+python_env/bin/python experiments/sdpa-l2/bfp4-lofi-v2/captured_fullchip.py \
+  /path/to/fresh-synthetic.pt --output /path/to/fresh-synthetic-results.jsonl \
+  --cores 4 --sample-rows 1024 --iters 0
+```
+
+This runs the six default variants with all-Q reference coverage and no timing. It creates a new explicitly synthetic artifact, not a real model capture or a replacement for saved historical evidence. Generator metadata and serialization can change its artifact hash; compare recorded logical input hashes before comparing output hashes with historical runs. The saved strict final audit validates its fixed recorded qualification files, not arbitrary newly generated filenames.
+
 The 13 companion CPU tests use synthetic inputs only and cover load/hash preservation, rejection cases, restricted deserialization, allowlist restoration, atomic path replacement rejection, deterministic sampling, FP64 reference versus dense softmax, zero/constant-reference metrics, all six host configurations, and source-pin resolution.
 
 The completed [synthetic interface smoke v2](captured-interface-smoke-v2.jsonl) used [the explicitly synthetic fixture script](capture_smoke_fixture.py): seed 1240, N1024/H2/D128, four cores, square noncausal attention, **every query row** against original-input FP64 attention. All six variants returned finite outputs with unchanged original input hashes and bitwise-identical combined trace replay. Applicable LoFi device preprocessing passed its exact oracle checks; the four BF16-input controls do not preprocess and correctly record that gate as not applicable. No timing was collected (`iters=0`). V2's six complete-output hashes and metric objects are identical to [historical v1](captured-interface-smoke-v1.jsonl). After source formatting, both are historical records; the fresh [final captured smoke](final-captured-v1.jsonl) now supplies current-source qualification and exactly matches all six v2 complete-output hashes. See the [strict final audit](final-smoke-audit-v1.json) and [qualification scope](FINAL_QUALIFICATION.md).
