@@ -112,13 +112,20 @@ void bind_moe_compute(nb::module_& mod) {
           multiple layers are packed into a single DRAM-resident weight tensor.
 
         - ``activation_type`` (optional, default ``None`` ≡ ``SILU``): The expert FFN
-          activation function — one of ``ttnn.experimental.MoEActivationFunction``
+          activation function — one of ``ttnn.operations.ccl.MoEActivationFunction``
           ``{SILU, SWIGLU, GELU}`` — applied between the W0/W1 and W2 projections.
 
         - ``compute_only`` (default ``False``): When ``True``, run only the expert
           matmuls and skip the A2A combine. The op then returns **5** tensors (the
           matmul output is the final output, slot 4) instead of 6, and all combine-path
           arguments below must be left unset (notably ``cluster_axis`` must be ``None``).
+
+        - ``local_combine`` (default ``False``): Run an independent fused local combine
+          at every mesh coordinate. ``cluster_axis`` must identify a degenerate (size-one)
+          mesh axis, for example axis 0 on a 1x4 expert-parallel mesh. This represents one
+          replicated logical token without fabric dispatch; the caller must reduce the
+          weighted partials across the non-degenerate expert-parallel axis. It must not be
+          used with ``compute_only=True`` or with shared experts.
 
         The matmul ring size is **auto-detected** from the live DRAM-bank count — 12 on
         Wormhole (no DRAM-bank harvesting), 7/8 on Blackhole (up to one bank may be fused
@@ -164,8 +171,10 @@ void bind_moe_compute(nb::module_& mod) {
         When ``compute_only=False``, the op also runs the fused selective_reduce_combine
         stage and returns **6** tensors. There are two combine modes:
 
-        - Single-device fused mode: pass ``cluster_axis=None`` on a 1x1 mesh. The combine runs
-          locally with no fabric, mux cores, links, topology, or cross-device semaphore.
+        - Local fused mode: set ``local_combine=True`` and select a degenerate mesh axis.
+          The combine runs independently at each coordinate with no fabric, mux cores,
+          links, topology, or cross-device semaphore. The legacy 1x1 call with
+          ``cluster_axis=None`` remains supported without setting ``local_combine``.
         - Multi-device fused mode: pass ``cluster_axis=0`` or ``cluster_axis=1`` on a multi-device
           mesh. The combine reduces along that mesh axis using the fabric.
 
@@ -175,8 +184,9 @@ void bind_moe_compute(nb::module_& mod) {
         defaults. An empty ``CoreRangeSet`` still counts as a provided ``mux_core_range_set``
         and is rejected in compute-only mode.
 
-        - ``cluster_axis``: ``None`` for ``compute_only=True`` and for single-device fused mode;
-          otherwise the mesh axis along which multi-device fused mode reduces.
+        - ``cluster_axis``: ``None`` for ``compute_only=True`` and legacy 1x1 fused mode;
+          the degenerate local axis for ``local_combine=True``; otherwise the mesh axis
+          along which multi-device fused mode reduces.
         - ``topology`` (optional, default ``None`` ≡ fabric default): Combine fabric
           topology for multi-device fused mode; must be ``None`` for single-device fused
           mode and ``compute_only=True``. Only ``ttnn.Topology.Linear`` and
@@ -246,6 +256,7 @@ void bind_moe_compute(nb::module_& mod) {
         nb::arg("optional_cross_device_semaphore") = nb::none(),
         nb::arg("activation_type") = nb::none(),
         nb::arg("compute_only") = false,
+        nb::arg("local_combine") = false,
         nb::arg("num_shared_experts_per_device") = nb::none());
 }
 

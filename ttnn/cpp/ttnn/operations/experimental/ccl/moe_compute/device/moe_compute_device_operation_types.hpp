@@ -21,8 +21,9 @@ namespace ttnn::experimental::prim {
 // Mode selector for the moe_compute op.
 // - `FullCcl` runs the production multi-device pipeline (matmul + fused
 //   selective_reduce_combine over fabric). Requires cluster_axis and CCL options.
-// - `FullLocal` runs a single-device fused pipeline (matmul + local combine) with no
-//   CCL/fabric. Used on a 1x1 mesh with cluster_axis=None. Returns 6 tensors like FullCcl.
+// - `FullLocal` runs independent fused pipelines (matmul + local combine) with no
+//   CCL/fabric. It supports 1x1 and a degenerate axis of a 1xN/Nx1 mesh. Returns 6
+//   tensors like FullCcl; a caller using EP across the other axis reduces the partials.
 // - `ComputeOnly` bypasses the combine path: no combine cores allocated, no fabric setup,
 //   no global semaphores; op emits 5 tensors instead of 6 (matmul_output is the final output).
 enum class MoEComputePath : uint8_t { FullCcl = 0, FullLocal = 2, ComputeOnly = 1 };
