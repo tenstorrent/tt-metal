@@ -72,8 +72,8 @@ SubDeviceManagerId SubDeviceManagerTracker::create_sub_device_manager(
 
 void SubDeviceManagerTracker::reset_sub_device_state(const std::unique_ptr<SubDeviceManager>& sub_device_manager) {
     auto num_sub_devices = sub_device_manager->num_sub_devices();
-    MetalContext& metal_context = MetalContext::instance(extract_context_id(device_));
-    const bool fds_signalling_enabled = metal_context.get_dispatch_query_manager().fds_signalling_enabled();
+    const bool fds_signalling_enabled =
+        MetalContext::instance(extract_context_id(device_)).get_dispatch_query_manager().fds_signalling_enabled();
     std::vector<uint32_t> workers_per_sub_device;
     workers_per_sub_device.reserve(num_sub_devices);
     for (uint8_t i = 0; i < num_sub_devices; ++i) {
