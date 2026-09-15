@@ -148,9 +148,12 @@ void kernel_main() {
                     // [#48552] invalidate_l1_cache() is a no-op on Quasar DM; the memmove below CPU-reads the
                     // cb_pad_align slot just NOC-written (reused self-loop scratch) -> discard the stale L2 line.
                     invalidate_l2_cache_range(cb_pad_align.get_read_ptr(), (size_t)stick_size_bytes);
+                    // Go through uintptr_t: L1 addresses are uint32_t but Quasar's data
+                    // movement cores are RV64, so a direct integer-to-pointer cast is a
+                    // hard error there (-Werror=int-to-pointer-cast).
                     memmove(
-                        (void*)(l1_write_addr + stick_size_padded_front),
-                        (void*)(cb_pad_align.get_read_ptr()),
+                        (void*)(uintptr_t)(l1_write_addr + stick_size_padded_front),
+                        (void*)(uintptr_t)(cb_pad_align.get_read_ptr()),
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
                     uint32_t temp_addr = cb_pad_align.get_write_ptr();

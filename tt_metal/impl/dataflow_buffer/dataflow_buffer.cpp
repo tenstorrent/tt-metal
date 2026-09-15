@@ -2029,7 +2029,12 @@ void ProgramImpl::finalize_single_dfb_config(
         config.tensix_scope.has_value() && *config.tensix_scope == TensixScope::INTRA;
 
     // Intra-tensix: producer and consumer share the same Neo bit — overlap is intentional.
-    if (!is_intra_tensix) {
+    // A self-loop (one kernel is both producer and consumer of a private buffer) likewise
+    // overlaps by construction. clientL/clientR are credit-flow endpoint ids, and
+    // ClientTypeAllocator::allocate_for_consumer already keeps clientR != clientL even when
+    // both sides sit on the same RISC. The check exists to catch two *different* endpoints
+    // wired onto one RISC, which neither case is.
+    if (!is_intra_tensix && !config.is_self_loop) {
         TT_FATAL(
             (config.producer_risc_mask & config.consumer_risc_mask) == 0,
             "producer_risc_mask and consumer_risc_mask must not overlap");

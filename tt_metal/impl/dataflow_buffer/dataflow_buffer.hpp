@@ -66,6 +66,12 @@ struct DataflowBufferConfig {
     // instead of allocating its own L1 region. The actual base address must be
     // supplied before launch via DataflowBufferImpl::set_borrowed_memory_base_addr.
     bool borrows_memory = false;
+    // Set when one kernel binds this DFB as both producer and consumer. The producer and
+    // consumer risc masks then overlap by construction, which is a legal topology rather
+    // than a wiring error, so the overlap check is skipped. Distinct from tensix_scope: a
+    // data-movement self-loop needs no Tensix packer/unpacker scope and must not take the
+    // intra-Tensix path.
+    bool is_self_loop = false;
 };
 
 // Note: This API and the DataflowBufferConfig are placeholder only, the final DataflowBuffer APIs will conform with

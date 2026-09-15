@@ -305,13 +305,21 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                             cb_data_format_output == tt::DataFormat::UInt32;
     // Style B compute config: build ComputeGen1Config directly, matching the legacy
     // ComputeConfigDescriptor{.fp32_dest_acc_en=...} (all other fields at legacy defaults).
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    // Quasar is a Gen2 architecture and its Metal 2.0 program spec asserts on the
+    // compute config's generation (program_spec.cpp: "Trying to construct a Gen2 compute
+    // config but the kernel's ComputeHardwareConfig does not hold a ComputeGen2Config").
+    // Gen1 and Gen2 carry the same fields this factory sets, so pick the variant by arch
+    // and leave every other architecture on exactly the Gen1 config it always had.
+    ComputeHardwareConfig compute_cfg_hw =
+    input_tensor.device()->arch() == tt::ARCH::QUASAR
+    ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+    : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
     // Metal 2.0 requires an explicit unpack_modes entry for every Float32 DFB the compute
     // kernel consumes when enable_32_bit_dest = true. The compute kernel consumes SRC_CB
     // (via tilize) and TILIZE_CB (self-loop). Legacy default (Default) → UnpackToSrc.
     // (Float32-only; Int32/UInt32 not required yet — issue #49936.)
     if (cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToSrc}, {TILIZE_CB, UnpackMode::UnpackToSrc}};
+        unpack_modes(compute_cfg_hw) = {{SRC_CB, UnpackMode::UnpackToSrc}, {TILIZE_CB, UnpackMode::UnpackToSrc}};
     }
 
     KernelSpec compute{
@@ -331,7 +339,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreBlocke
                  .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args = {{"x_block_size", x_block_size}, {"w_block_size", w_block_size}},
         .runtime_arg_schema = {.runtime_arg_names = {"num_blocks"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+        .hw_config = std::move(compute_cfg_hw),
     };
 
     // ---- Varargs (core-invariant) ----

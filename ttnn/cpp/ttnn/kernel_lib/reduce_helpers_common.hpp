@@ -18,6 +18,25 @@
 enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
 
 /**
+ * @brief Is this a MIN reduce? Always false on Quasar.
+ *
+ * Quasar's PoolType has only SUM, AVG and MAX (tt-llk/tt_llk_quasar/llk_lib/llk_defs.h:30);
+ * Wormhole and Blackhole also have MIN. The host never asks Quasar for a MIN reduce -- it
+ * lowers MIN to math_op=MAX with negate=true (see the note in the Quasar reduce device
+ * operation) -- but the shared reduce helpers still name PoolType::MIN in branches that are
+ * dead there, and naming a non-existent enumerator is a hard compile error. Route every such
+ * comparison through this predicate so those branches compile away on Quasar.
+ */
+template <ckernel::PoolType pool_type>
+constexpr bool is_min_pool() {
+#ifdef ARCH_QUASAR
+    return false;
+#else
+    return pool_type == ckernel::PoolType::MIN;
+#endif
+}
+
+/**
  * @brief Determines whether a reduce operation should use the SFPU path.
  *
  * Int32 MAX, MIN and SUM on REDUCE_ROW/COL use SFPU (GMPOOL/matmul have no Int32 support).
@@ -36,7 +55,7 @@ template <
 constexpr bool is_sfpu_reduce_path() {
     if constexpr (
         pool_type != ckernel::PoolType::MAX && pool_type != ckernel::PoolType::SUM &&
-        pool_type != ckernel::PoolType::MIN) {
+        !is_min_pool<pool_type>()) {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {

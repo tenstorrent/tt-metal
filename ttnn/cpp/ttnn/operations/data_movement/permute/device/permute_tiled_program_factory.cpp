@@ -173,11 +173,19 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        // Quasar is a Gen2 architecture and its Metal 2.0 program spec asserts on the
+        // compute config's generation (program_spec.cpp: "Trying to construct a Gen2 compute
+        // config but the kernel's ComputeHardwareConfig does not hold a ComputeGen2Config").
+        // Gen1 and Gen2 carry the same fields this factory sets, so pick the variant by arch
+        // and leave every other architecture on exactly the Gen1 config it always had.
+        ComputeHardwareConfig compute_cfg_hw =
+        input_tensor.device()->arch() == tt::ARCH::QUASAR
+        ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+        : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
-            compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
+            unpack_modes(compute_cfg_hw) = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
@@ -189,7 +197,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg_hw),
         });
     }
 
@@ -476,11 +484,19 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                                 cb_data_format == tt::DataFormat::UInt32;
-        ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+        // Quasar is a Gen2 architecture and its Metal 2.0 program spec asserts on the
+        // compute config's generation (program_spec.cpp: "Trying to construct a Gen2 compute
+        // config but the kernel's ComputeHardwareConfig does not hold a ComputeGen2Config").
+        // Gen1 and Gen2 carry the same fields this factory sets, so pick the variant by arch
+        // and leave every other architecture on exactly the Gen1 config it always had.
+        ComputeHardwareConfig compute_cfg_hw =
+        input_tensor.device()->arch() == tt::ARCH::QUASAR
+        ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+        : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
         if (cb_data_format == tt::DataFormat::Float32) {
-            compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
+            unpack_modes(compute_cfg_hw) = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
             .unique_id = COMPUTE,
@@ -492,7 +508,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
                  DFBBinding{
                      .dfb_spec_name = OUT16, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
             .runtime_arg_schema = {.runtime_arg_names = {"NHtWt"}},
-            .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+            .hw_config = std::move(compute_cfg_hw),
         });
     }
 
@@ -739,7 +755,15 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     all_cores = num_cores > padded_num_cores ? all_cores : padded_all_cores;
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
-    uint32_t input_page_size = detail::tile_size(tensor_return_value) + misalignment;
+    // The trailing `misalignment` bytes are transient staging for a phase-corrected NoC
+    // read (see the reader kernel), not payload. A Gen1 circular buffer tolerates the
+    // resulting non-tile page, but on Quasar the Tensix reaches this buffer through the
+    // tile-indexed TDMA path, which requires entry_size to be a whole number of tiles
+    // (tensix.cpp: qsr_tdma_dfb_tiles_per_entry). Keep the entry exactly one tile there
+    // and give the reader a separate scratch buffer to stage into instead.
+    const bool qsr_tile_aligned_entries = input_tensor.device()->arch() == tt::ARCH::QUASAR;
+    uint32_t input_page_size =
+        detail::tile_size(tensor_return_value) + (qsr_tile_aligned_entries ? 0 : misalignment);
 
     // ---- Resource names ----
     const TensorParamName INPUT{"input"};
@@ -748,6 +772,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     const DFBSpecName TILIZE_CB{"cb_tilize"};  // legacy c_1 (compute self-loop)
     const DFBSpecName OUT_CB{"cb_out"};        // legacy c_2 (compute → writer)
     const DFBSpecName PAD_CB{"cb_pad"};        // legacy c_3 (reader → writer, only when needs_y_padding)
+    const DFBSpecName MISALIGN_CB{"cb_misalign"};  // Quasar-only read-staging scratch
     const KernelSpecName READER{"reader"};
     const KernelSpecName WRITER{"writer"};
     const KernelSpecName COMPUTE{"compute"};
@@ -777,13 +802,32 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
             .num_entries = 1,
             .data_format_metadata = cb_data_format});
     }
+    // Quasar-only staging scratch: two alignment windows, so the reader can always find a
+    // 32-byte slot whose address phase matches the NoC source. Producer and consumer are
+    // both the reader -- a private self-loop, no credit handshake is used.
+    const bool qsr_misalign_scratch = qsr_tile_aligned_entries && misalignment > 0;
+    if (qsr_misalign_scratch) {
+        dataflow_buffers.push_back(DataflowBufferSpec{
+            .unique_id = MISALIGN_CB,
+            .entry_size = 2 * read_alignment,
+            .num_entries = 1,
+            .data_format_metadata = cb_data_format});
+    }
 
     uint32_t non_x_rows = num_rows / x;
 
     // ---- Compute config (Style B: build ComputeGen1Config directly, mirroring legacy) ----
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
                             cb_data_format == tt::DataFormat::UInt32;
-    ComputeGen1Config compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
+    // Quasar is a Gen2 architecture and its Metal 2.0 program spec asserts on the
+    // compute config's generation (program_spec.cpp: "Trying to construct a Gen2 compute
+    // config but the kernel's ComputeHardwareConfig does not hold a ComputeGen2Config").
+    // Gen1 and Gen2 carry the same fields this factory sets, so pick the variant by arch
+    // and leave every other architecture on exactly the Gen1 config it always had.
+    ComputeHardwareConfig compute_cfg_hw =
+    input_tensor.device()->arch() == tt::ARCH::QUASAR
+    ? ComputeHardwareConfig{ComputeGen2Config{.enable_32_bit_dest = fp32_dest_acc_en}}
+    : ComputeHardwareConfig{ComputeGen1Config{.enable_32_bit_dest = fp32_dest_acc_en}};
     // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
     // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).
     // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
@@ -791,7 +835,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
     // (Float32-only; Int32/UInt32 deferred, #49936.)
     if (cb_data_format == tt::DataFormat::Float32) {
-        compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
+        unpack_modes(compute_cfg_hw) = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
     // ---- Conditional cb_pad (legacy c_3) bindings + gating define (needs_y_padding) ----
@@ -801,6 +845,17 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     Group<DFBBinding> writer_dfb = {
         DFBBinding{.dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::CONSUMER}};
     Group<std::string> writer_rta_names = {"start_block", "end_block"};
+    if (qsr_misalign_scratch) {
+        pad_defines.insert({"QSR_MISALIGN_SCRATCH", "1"});
+        reader_dfb.push_back(DFBBinding{
+            .dfb_spec_name = MISALIGN_CB,
+            .accessor_name = "cb_misalign",
+            .endpoint_type = DFBEndpointType::PRODUCER});
+        reader_dfb.push_back(DFBBinding{
+            .dfb_spec_name = MISALIGN_CB,
+            .accessor_name = "cb_misalign",
+            .endpoint_type = DFBEndpointType::CONSUMER});
+    }
     if (needs_y_padding) {
         pad_defines.insert({"NEEDS_Y_PADDING", "1"});
         reader_dfb.push_back(
@@ -864,7 +919,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
              DFBBinding{
                  .dfb_spec_name = OUT_CB, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER}},
         .runtime_arg_schema = {.runtime_arg_names = {"start_block", "end_block"}},
-        .hw_config = ComputeHardwareConfig{std::move(compute_cfg)},
+        .hw_config = std::move(compute_cfg_hw),
     };
 
     KernelSpec writer{

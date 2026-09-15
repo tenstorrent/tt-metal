@@ -274,13 +274,18 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; b++) {
         if constexpr (get_batch_from_reader) {
             // Check whether this batch is valid
-            bool is_batch_valid = false;
-            UNPACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            MATH(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            PACK(is_batch_valid = (bool)mailbox_read(ckernel::ThreadId::BriscThreadId);)
-            if (!is_batch_valid) {
-                continue;
-            }
+            // Carried over from the Blackhole kernel, where ThreadId::BriscThreadId names
+            // the DM core that writes the batch-valid mailbox. Quasar has no BRISC: its
+            // ckernel ThreadId enumerates only the Tensix threads (Unpack/Math/Pack/
+            // IsolateSfpu) and mailbox_read() indexes a Tensix-thread-to-Tensix-thread
+            // mailbox with no DM slot, so there is no equivalent read. The name fails to
+            // resolve even in a discarded `if constexpr` branch, which is why trisc0 could
+            // not build. Every Quasar matmul factory passes get_batch_from_reader = 0, so
+            // assert that rather than silently skipping the validity check.
+            static_assert(
+                !get_batch_from_reader,
+                "get_batch_from_reader is unsupported on Quasar: mailbox_read() has no DM "
+                "slot (ThreadId covers only the Tensix threads).");
         }
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {

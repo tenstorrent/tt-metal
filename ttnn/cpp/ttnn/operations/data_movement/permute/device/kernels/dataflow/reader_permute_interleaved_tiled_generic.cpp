@@ -208,7 +208,23 @@ void kernel_main() {
                         uint64_t final_src_addr = s.get_noc_addr((uint32_t)tile, total_offset);
                         uint32_t l1_base = l1_col_base + cb_w_offset;
                         if ((final_src_addr & read_alignment_minus_one) != (l1_base & read_alignment_minus_one)) {
+#ifdef QSR_MISALIGN_SCRATCH
+                            // On Quasar the DFB entry is exactly one tile (the Tensix reads
+                            // it tile-indexed), so there is no in-entry headroom to stage
+                            // into. Stage in a dedicated scratch instead, at the slot whose
+                            // address phase matches the NoC source -- which is the whole
+                            // point of the offset, not merely finding spare bytes.
+                            DataflowBuffer mis_dfb(dfb::cb_misalign);
+                            const uint32_t scratch = mis_dfb.get_write_ptr();
+                            const uint32_t want_phase = final_src_addr & read_alignment_minus_one;
+                            uint32_t misaligned_addr =
+                                (scratch & ~read_alignment_minus_one) + want_phase;
+                            if (misaligned_addr < scratch) {
+                                misaligned_addr += (read_alignment_minus_one + 1);
+                            }
+#else
                             uint32_t misaligned_addr = l1_base + misalignment;
+#endif
                             CoreLocalMem<uint32_t> mis_dst(misaligned_addr);
                             noc.async_read(
                                 s,

@@ -256,7 +256,10 @@ void kernel_main() {
     uint32_t padding_config_l1_addr = 0;
 #ifdef CONFIG_TENSOR_IN_DRAM
     // DRAM config: async-read the per-core page into a private L1 scratch, then read it.
-    constexpr uint32_t config_read_index = get_arg(args::config_read_index);
+    // Runtime arg, not compile-time: untilize_with_halo_program_factory.cpp registers
+    // config_read_index in runtime_arg_schema and gives it a per-node value, so it
+    // cannot be constexpr.
+    const uint32_t config_read_index = get_arg(args::config_read_index);
     TensorAccessor gather_config_acc(tensor::gather_config);
     DataflowBuffer gather_config_scratch(dfb::gather_config_scratch);
     gather_config_l1_addr = gather_config_scratch.get_write_ptr();

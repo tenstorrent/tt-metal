@@ -2613,7 +2613,8 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .tensix_scope = tensix_scope,
         // DFB borrowed memory mode is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime.
-        .borrows_memory = dfb_spec->borrowed_from.has_value()};
+        .borrows_memory = dfb_spec->borrowed_from.has_value(),
+        .is_self_loop = is_self_loop};
 }
 
 // ----------------------------------------------------------------------------

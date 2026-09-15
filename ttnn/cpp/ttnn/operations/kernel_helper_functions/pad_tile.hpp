@@ -335,6 +335,12 @@ void fill_pad_tile_blockfloat(uint32_t l1_tile_ptr) {
  */
 template <DataFormat data_format>
 constexpr uint32_t blockfloat_mantissa_bits() {
+#ifdef ARCH_QUASAR
+    // Gen2 replaces the block-float formats with MXFP, so Quasar's DataFormat has no
+    // Bfp* members at all -- the names below do not even parse there, discarded
+    // `if constexpr` branch or not. No block-float formats means no mantissa bits.
+    return 0;
+#else
     if constexpr (data_format == DataFormat::Bfp8 || data_format == DataFormat::Bfp8_b) {
         return 8;
     } else if constexpr (data_format == DataFormat::Bfp4 || data_format == DataFormat::Bfp4_b) {
@@ -344,6 +350,7 @@ constexpr uint32_t blockfloat_mantissa_bits() {
     } else {
         return 0;
     }
+#endif
 }
 
 /**
