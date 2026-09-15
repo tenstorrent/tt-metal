@@ -94,17 +94,29 @@ std::optional<std::string> get_mgd_path(uint32_t num_devices) {
     return mgd_path;
 }
 
-void enable_fabric(uint32_t num_devices) {
+void enable_fabric(uint32_t num_devices, std::optional<size_t> max_packet_payload_size_bytes) {
     auto mgd_path = get_mgd_path(num_devices);
+
+    tt::tt_fabric::FabricRouterConfig router_config{};
+    router_config.max_packet_payload_size_bytes = max_packet_payload_size_bytes;
+    const auto set = [&](tt::tt_fabric::FabricConfig fabric_config) {
+        tt::tt_fabric::SetFabricConfig(
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            std::nullopt,
+            tt::tt_fabric::FabricTensixConfig::DISABLED,
+            tt::tt_fabric::FabricUDMMode::DISABLED,
+            tt::tt_fabric::FabricManagerMode::DEFAULT,
+            router_config);
+    };
 
     if (mgd_path.has_value()) {
         // Infer the fabric config from the MGD's dim_types (LINE vs RING per axis)
         // This automatically selects FABRIC_2D, FABRIC_2D_TORUS_X, FABRIC_2D_TORUS_Y, or FABRIC_2D_TORUS_XY
-        auto fabric_config = infer_fabric_config_from_mgd(mgd_path.value());
-        tt::tt_fabric::SetFabricConfig(fabric_config);
+        set(infer_fabric_config_from_mgd(mgd_path.value()));
     } else {
         // No MGD available, use default FABRIC_2D
-        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D);
+        set(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 }
 

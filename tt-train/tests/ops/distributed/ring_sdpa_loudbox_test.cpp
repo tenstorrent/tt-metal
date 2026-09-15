@@ -84,6 +84,7 @@
 namespace {
 
 using ttml::ttnn_fixed::distributed::RingShiftDirection;
+using ttml::ttnn_fixed::distributed::RingShiftTransport;
 
 constexpr uint32_t kExpectedChips = 8U;
 
@@ -304,7 +305,19 @@ public:
         } catch (const std::exception&) {
             // Already initialized. Nothing to do.
         }
-        ttml::ttnn_fixed::distributed::enable_fabric(kExpectedChips);
+        // The fabric packet payload. tt-metal's default of 4352 bytes carries
+        // one 4 KB FP32 tile per packet, which keeps the socket ops from
+        // packing pages by bank and halves the shift's bandwidth for the
+        // accumulators (TimeTheShift: 4 MB in 616 us at 4352, 254 us at
+        // 8704). 8704 is what tt-metal's own socket benchmark uses; Blackhole
+        // allows up to 15232, which measured the same. Both transports and
+        // both backwards run under the same value, so it moves nothing
+        // between them. TTML_LOUDBOX_FABRIC_PAYLOAD overrides it.
+        std::optional<size_t> payload = 8704U;
+        if (const char* env = std::getenv("TTML_LOUDBOX_FABRIC_PAYLOAD"); env != nullptr && *env != '\0') {
+            payload = static_cast<size_t>(std::strtoul(env, nullptr, 10));
+        }
+        ttml::ttnn_fixed::distributed::enable_fabric(kExpectedChips, payload);
         ttml::autograd::ctx().open_device(
             tt::tt_metal::distributed::MeshShape(topology().rows, topology().cols));
         ttml::autograd::ctx().set_seed(42);
@@ -378,6 +391,88 @@ TEST_F(LoudboxRingSDPATest, RingShiftAroundTheCpAxis) {
             EXPECT_TRUE(xt::allclose(before[src], after[dst], 1e-3F, 1e-5F))
                 << "device " << dst << " should hold what device " << src << " had";
         }
+    }
+
+    // The direct transport is a different socket, different kernels and a
+    // different number of cores; it has to land the same bytes. Both
+    // directions, both dtypes the ring moves, and every link count from one
+    // up to what the fabric offers, bitwise against the Fifo result.
+    const ttnn::Tensor fp32 = ttnn::typecast(tt_tensor, ttnn::DataType::FLOAT32);
+    for (const auto direction : {RingShiftDirection::Backward, RingShiftDirection::Forward}) {
+        for (const ttnn::Tensor& source : {tt_tensor, fp32}) {
+            const auto fifo = core::to_xtensor<float>(
+                ttnn_fixed::distributed::ring_shift(source, cp_axis, direction, RingShiftTransport::Fifo),
+                core::IdentityComposer{});
+            for (const uint32_t connections : {1U, 0U}) {
+                const auto direct = core::to_xtensor<float>(
+                    ttnn_fixed::distributed::ring_shift(
+                        source, cp_axis, direction, RingShiftTransport::Direct, connections),
+                    core::IdentityComposer{});
+                ASSERT_EQ(fifo.size(), direct.size());
+                for (size_t dev = 0; dev < fifo.size(); ++dev) {
+                    EXPECT_TRUE(fifo[dev] == direct[dev])
+                        << "direct transport (" << (connections == 0U ? "all links" : "one link") << ") differs from fifo on device "
+                        << dev;
+                }
+            }
+        }
+    }
+}
+
+// How fast a ring shift moves bytes, per transport, at the sizes the ring
+// attention backward shifts: K-sized bf16 and an FP32 accumulator of the same
+// shape. The breakdown of a step found the Fifo shift at 2 MB in 1.2 ms and
+// 4 MB in 2.2 ms, under 2.5 GB/s; this is the number to move, and the
+// direct transport is the candidate.
+TEST_F(LoudboxRingSDPATest, DISABLED_TimeTheShift) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& pctx = autograd::ctx().get_parallelism_context();
+    const uint32_t cp_axis = pctx.get_cp_axis().value();
+    const uint32_t cp_size = pctx.get_cp_size();
+    auto& rng = autograd::ctx().get_generator();
+
+    const auto median_us = [&](const std::function<void()>& f) {
+        f();
+        std::vector<double> samples;
+        for (uint32_t k = 0; k < 7; ++k) {
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            const auto start = std::chrono::steady_clock::now();
+            f();
+            tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
+            samples.push_back(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+        }
+        std::sort(samples.begin(), samples.end());
+        return samples[samples.size() / 2] * 1e6;
+    };
+
+    std::cout << "ring_shift on " << cp_size << " chips, heads=4 d=64 (us, median of 7; GB/s per chip)\n";
+    for (const size_t rows_per_chip : {128UL, 512UL, 2048UL, 4096UL, 8192UL}) {
+        const std::array<std::size_t, 4> shape{1UL, 4UL, rows_per_chip * cp_size, 64UL};
+        const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, /*dim=*/2, cp_axis);
+        const auto k = core::from_xtensor<float, ttnn::DataType::BFLOAT16>(
+            ttml::test_utils::make_uniform_xarray<float>(shape, 0.0F, 2.0F, rng()), device, ttnn::Layout::TILE,
+            mapper.get());
+        const ttnn::Tensor acc = ttnn::zeros_like(k, ttnn::DataType::FLOAT32);
+        const double bf16_bytes = static_cast<double>(4 * rows_per_chip * 64 * 2);
+        std::ostringstream line;
+        line << "  rows/chip=" << rows_per_chip << " (bf16 " << bf16_bytes / 1e6 << " MB, fp32 " << 2 * bf16_bytes / 1e6
+             << " MB):";
+        const auto report = [&](const char* name, const ttnn::Tensor& t, const double bytes,
+                                const RingShiftTransport transport, const uint32_t connections) {
+            const double us = median_us([&]() {
+                (void)ttnn_fixed::distributed::ring_shift(
+                    t, cp_axis, RingShiftDirection::Forward, transport, connections);
+            });
+            line << " " << name << " " << us << " (" << bytes / us / 1e3 << " GB/s)";
+        };
+        report("| fifo bf16", k, bf16_bytes, RingShiftTransport::Fifo, 1U);
+        report("direct-1 bf16", k, bf16_bytes, RingShiftTransport::Direct, 1U);
+        report("direct-all bf16", k, bf16_bytes, RingShiftTransport::Direct, 0U);
+        report("| fifo fp32", acc, 2 * bf16_bytes, RingShiftTransport::Fifo, 1U);
+        report("direct-1 fp32", acc, 2 * bf16_bytes, RingShiftTransport::Direct, 1U);
+        report("direct-all fp32", acc, 2 * bf16_bytes, RingShiftTransport::Direct, 0U);
+        std::cout << line.str() << "\n";
     }
 }
 
@@ -457,7 +552,8 @@ void run_ring_attention(
     const size_t num_heads,
     const size_t seq_len,
     const size_t head_dim,
-    const bool test_backward) {
+    const bool test_backward,
+    const RingShiftTransport transport = RingShiftTransport::Fifo) {
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -499,7 +595,8 @@ void run_ring_attention(
     // Causal masking is generated on device from the mask type; the op rejects
     // an explicit mask tensor in CP mode.
     auto output_tensor = ops::distributed::ring_attention_sdpa(
-        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal);
+        query_tensor, key_tensor, value_tensor, /*mask=*/std::nullopt, ttml::metal::AttentionMaskType::Causal,
+        ops::distributed::RingBackwardKind::TwoPass, /*rows_per_block_tiles=*/1U, transport);
 
     const auto per_device_output = core::to_xtensor<float>(output_tensor->get_value(), core::IdentityComposer{});
     // The two mesh rows are replicas of one another. Checking them against
@@ -594,6 +691,12 @@ TEST_F(LoudboxRingSDPATest, LargerSequenceCausalBackward) {
 
 TEST_F(LoudboxRingSDPATest, LargerBatchCausalBackward) {
     run_ring_attention(2, 8, seq_for(64), 64, /*test_backward=*/true);
+}
+
+// The same reference check with every shift in the forward and the backward
+// on the direct transport: six shifts a step, both dtypes, both directions.
+TEST_F(LoudboxRingSDPATest, CausalBackwardWithDirectShifts) {
+    run_ring_attention(1, 4, seq_for(128), 64, /*test_backward=*/true, RingShiftTransport::Direct);
 }
 
 // ------------------------------------------- the two backward implementations
@@ -844,7 +947,8 @@ double time_ring_backward(
     const size_t seq_len,
     const size_t head_dim,
     ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
-    uint32_t rows_per_block_tiles = 1U) {
+    uint32_t rows_per_block_tiles = 1U,
+    RingShiftTransport transport = RingShiftTransport::Fifo) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -864,7 +968,8 @@ double time_ring_backward(
         auto value = autograd::create_tensor(
             to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())), true);
         auto out = ops::distributed::ring_attention_sdpa(
-            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles);
+            query, key, value, std::nullopt, ttml::metal::AttentionMaskType::Causal, kind, rows_per_block_tiles,
+            transport);
         out->set_grad(to_device(ttml::test_utils::make_uniform_xarray<float>(qkv_shape, 0.0F, 2.0F, rng())));
         tt::tt_metal::distributed::Synchronize(device, std::nullopt, {});
 
@@ -915,14 +1020,19 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
             continue;  // the cyclic schedule needs whole cores per chunk
         }
         using Kind = ttml::ops::distributed::RingBackwardKind;
-        const double two_pass = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::TwoPass, Bt);
-        const double cyclic = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::Cyclic, Bt);
-        const double in_place = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::CyclicInPlace, Bt);
-        std::cout << "  batch=" << cfg[0] << " heads=" << cfg[1] << " N=" << seq_len << " d=" << cfg[3]
-                  << " Bt=" << Bt << " (" << rows_per_chip << " rows/chip, C=" << rows_per_chip / (2U * Bt * 32U)
-                  << "): two-pass " << two_pass * 1e3 << " ms, cyclic " << cyclic * 1e3 << " ms ("
-                  << two_pass / cyclic << "x), cyclic in-place " << in_place * 1e3 << " ms (" << two_pass / in_place
-                  << "x)\n";
+        for (const auto transport : {RingShiftTransport::Fifo, RingShiftTransport::Direct}) {
+            const double two_pass =
+                time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::TwoPass, Bt, transport);
+            const double cyclic = time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::Cyclic, Bt, transport);
+            const double in_place =
+                time_ring_backward(cfg[0], cfg[1], seq_len, cfg[3], Kind::CyclicInPlace, Bt, transport);
+            std::cout << "  batch=" << cfg[0] << " heads=" << cfg[1] << " N=" << seq_len << " d=" << cfg[3]
+                      << " Bt=" << Bt << " (" << rows_per_chip << " rows/chip, C=" << rows_per_chip / (2U * Bt * 32U)
+                      << ") " << (transport == RingShiftTransport::Fifo ? "fifo  " : "direct")
+                      << " shifts: two-pass " << two_pass * 1e3 << " ms, cyclic " << cyclic * 1e3 << " ms ("
+                      << two_pass / cyclic << "x), cyclic in-place " << in_place * 1e3 << " ms ("
+                      << two_pass / in_place << "x)\n";
+        }
     }
 }
 
@@ -991,6 +1101,16 @@ TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
             (void)ttnn_fixed::distributed::ring_shift(acc, cp_axis, RingShiftDirection::Forward);
         });
         std::cout << "  ring_shift of one accumulator (fp32)        " << shift32 << "\n";
+        const double direct_shift = median([&]() {
+            (void)ttnn_fixed::distributed::ring_shift(
+                k, cp_axis, RingShiftDirection::Forward, RingShiftTransport::Direct);
+        });
+        std::cout << "  ... the same, direct transport (bf16)       " << direct_shift << "\n";
+        const double direct_shift32 = median([&]() {
+            (void)ttnn_fixed::distributed::ring_shift(
+                acc, cp_axis, RingShiftDirection::Forward, RingShiftTransport::Direct);
+        });
+        std::cout << "  ... the same, direct transport (fp32)       " << direct_shift32 << "\n";
         const double zero = median([&]() { ttnn::copy(zero_bf16, step_bf16); });
         std::cout << "  zero one step buffer (copy)                 " << zero << "\n";
         const double add = median([&]() {
@@ -1026,7 +1146,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_BreakDownOneStep) {
         // 3 zeroes, 3 accumulates, 4 shifts (2 tensors + 2 accumulators).
         std::cout << "  => per-step glue: 3 zero + 3 add + 4 shift ~ "
                   << 3 * zero + 3 * add + 2 * shift + 2 * shift32 << " us, x" << cp_size << " steps ~ "
-                  << (3 * zero + 3 * add + 2 * shift + 2 * shift32) * cp_size / 1e3 << " ms\n";
+                  << (3 * zero + 3 * add + 2 * shift + 2 * shift32) * cp_size / 1e3 << " ms; with direct shifts ~ "
+                  << 3 * zero + 3 * add + 2 * direct_shift + 2 * direct_shift32 << " us/step\n";
     }
 }
 
