@@ -168,6 +168,8 @@ uint64_t compute_build_key(const JitDeviceConfig& config, const llrt::RunTimeOpt
     hasher.update(static_cast<uint32_t>(config.resolved_dispatch_core_type));
     hasher.update(static_cast<uint32_t>(config.dispatch_core_axis));
 
+    hasher.update(static_cast<uint32_t>(config.fds_signalling));
+
     // Hash the number of hardware command queues
     hasher.update(static_cast<uint32_t>(config.num_hw_cqs));
 
