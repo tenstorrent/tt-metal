@@ -28,8 +28,12 @@ by the matching flag before anything is built, so ``--iters 20`` and ``ITERS=20`
 
 The decoder targets need the shipped checkpoint (``DIFFVAE_CHECKPOINT``) and read the same
 ``DIFFVAE_*`` knobs as the runner scripts; the block targets fill seeded weights and need nothing.
-The trace targets additionally need ``TT_DIT_STAGE_TIMING`` and ``DIFFVAE_STAGES_WSP`` unset: the
-first syncs inside the capture, the second hangs it (see ``diffvae_bench.trace_replay``).
+The trace targets additionally need ``TT_DIT_STAGE_TIMING`` unset: its spans sync the mesh inside
+the capture.
+
+``--hang-dump N`` prints every thread's Python stack after N seconds of runtime and exits. A
+device hang holds the GIL inside one ttnn call, so ordinary logging and the heartbeat thread go
+silent; this names the call instead.
 """
 
 from __future__ import annotations
@@ -66,6 +70,9 @@ def _parse(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--output", default="float", help="decoder: comma-separated output types to time, e.g. float,yuv")
     p.add_argument("--trace", action="store_true", help="decoder / det_stages: capture a trace and time the replay")
     p.add_argument("--mesh", default="4x8", help="mesh shape RxC")
+    p.add_argument(
+        "--hang-dump", type=float, metavar="SECONDS", help="dump every thread's stack after this long and exit"
+    )
     p.add_argument(
         "--fabric",
         choices=list(FABRICS),
@@ -153,6 +160,10 @@ def _decoder_targets(args, mesh) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if args.hang_dump:
+        import faulthandler
+
+        faulthandler.dump_traceback_later(args.hang_dump, exit=True)
     if args.target == "det_stages" and not args.trace:
         raise SystemExit("det_stages only has a traced instrument; pass --trace (or use `decoder` for an eager decode)")
     _export("ITERS", args.iters)

@@ -48,6 +48,7 @@ from __future__ import annotations
 import math
 
 import ttnn
+from models.tt_dit.utils.tensor import full as device_full
 
 #: Sites in one brick, i.e. rows in one hardware tile.
 SITES_PER_BRICK = 32
@@ -118,14 +119,16 @@ def to_bricked_grid(tensor: ttnn.Tensor, *, volume: tuple[int, int, int], brick:
 
     # Ghost sites are appended by concatenating zeros rather than with ttnn.pad: pad only
     # reaches the lowest 3 dimensions of a rank>4 tensor, and the time axis (dim 1 here) is
-    # exactly the one stage 5 needs -- 25 frames against a brick 2 deep.
+    # exactly the one stage 5 needs -- 25 frames against a brick 2 deep. The zeros are filled on
+    # device: ``ttnn.zeros(device=...)`` builds them on the host and writes them over, which a
+    # trace capture refuses.
     padded = (padded_time, padded_height, padded_width)
     for axis, (current, target) in enumerate(zip(volume, padded), start=1):
         if target == current:
             continue
         ghost_shape = list(tensor.shape)
         ghost_shape[axis] = target - current
-        ghost = ttnn.zeros(ghost_shape, dtype=tensor.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=tensor.device())
+        ghost = device_full(ghost_shape, 0.0, dtype=tensor.dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=tensor.device())
         tensor = ttnn.concat([tensor, ghost], dim=axis)
         ttnn.deallocate(ghost)
 

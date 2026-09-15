@@ -569,9 +569,9 @@ def trace_replay(
     ``TT_DIT_STAGE_TIMING`` should be unset: its per-stage timers sync the mesh, and a synchronize
     inside a captured region is both untraceable and a distorted measurement.
 
-    Leave ``DIFFVAE_STAGES_WSP`` unset too. With the deterministic stages W-sharded on the bricked
-    executor, ``begin_trace_capture`` never returns and the mesh is left unable to run a program
-    until a reset (measured 2026-09-15, both regions); replicated stages capture in seconds.
+    ``run`` must do no host-to-device writes; the capture refuses them with "Writes are not
+    supported during trace capture", once per chip. ``ttnn.zeros`` / ``ttnn.full`` with a device
+    argument are such writes; ``utils.tensor.full`` is the device-side form.
     """
     eager_ms = []
     eager_ref = None
@@ -600,7 +600,15 @@ def trace_replay(
 
     log("[trace] begin_trace_capture")
     tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-    out_t = run()
+    try:
+        out_t = run()
+    except BaseException:
+        # An op that cannot be captured (a host write, most often) raises mid-region. Close the
+        # region before unwinding: with it left open, close_mesh_device blocks and the mesh has to
+        # be reset, and the exception itself is never printed.
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.release_trace(mesh, tid)
+        raise
     ttnn.end_trace_capture(mesh, tid, cq_id=0)
     log(f"[trace] captured id={tid} out={tuple(out_t.shape)}")
 
@@ -654,7 +662,12 @@ def trace_validate(decoder: DiffVAEDecoder, mesh, latent_a: torch.Tensor, latent
     log(f"[eager] A reproducible: {reproducible}")
 
     tid = ttnn.begin_trace_capture(mesh, cq_id=0)
-    out_t = run(latent_a)
+    try:
+        out_t = run(latent_a)
+    except BaseException:
+        ttnn.end_trace_capture(mesh, tid, cq_id=0)
+        ttnn.release_trace(mesh, tid)
+        raise
     ttnn.end_trace_capture(mesh, tid, cq_id=0)
     log(f"[trace] captured {tid}")
 

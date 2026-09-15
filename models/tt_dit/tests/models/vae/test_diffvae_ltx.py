@@ -611,9 +611,8 @@ def test_decode_tail_timing(*, mesh_device):
 
 # Trace capture and replay of the whole decode (``decode``) or the deterministic stages alone
 # (``det_context``). The upload stays outside the captured region, so the raw latent is uploaded
-# once into a buffer the capture reads and the replays read again. TT_DIT_STAGE_TIMING and
-# DIFFVAE_STAGES_WSP must both be unset (see ``diffvae_bench.trace_replay`` for why the second hangs
-# the capture). ``time_module decoder --trace`` / ``time_module det_stages --trace`` are the CLI twins.
+# once into a buffer the capture reads and the replays read again. TT_DIT_STAGE_TIMING must be
+# unset. ``time_module decoder --trace`` / ``time_module det_stages --trace`` are the CLI twins.
 @pytest.mark.parametrize(
     "device_params",
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": bench.TRACE_REGION_SIZE}],
