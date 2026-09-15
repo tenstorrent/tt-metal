@@ -58,8 +58,14 @@ namespace dspf2d {
 // Depth of the reader -> sender L1 ring, in tokens, and the half-ring batch slots move in. Both are
 // packed as compile-time args, so this is their one definition. BATCH <= NUM_L1_SLOTS/2 is what proves
 // the reader cannot claim every slot before publishing any.
-constexpr uint32_t NUM_L1_SLOTS = 8;
-constexpr uint32_t BATCH = NUM_L1_SLOTS / 2;
+//
+// The ring is sized from BATCH rather than the other way round, and BATCH is the DRAM channel count:
+// pages of an interleaved buffer land on consecutive banks, so a batch of reads only reaches every
+// bank once it is at least as wide as there are banks. At half that the relay leaves half the DRAM
+// idle no matter how deep the queue is.
+constexpr uint32_t DRAM_CHANNELS = 8;  // blackhole_140_arch.yaml, `dram:`
+constexpr uint32_t BATCH = DRAM_CHANNELS;
+constexpr uint32_t NUM_L1_SLOTS = 2 * BATCH;
 
 // Tokens whose routing metadata the reader prefetches in one batch, and the pad each record gets. 64 B
 // because a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, which a packed record of
@@ -182,6 +188,10 @@ constexpr uint64_t CMD_END = 0;          // end of stream; the slot carries no t
 constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload and metadata to their pages
 constexpr uint64_t CMD_FORWARD = 2;      // push one page further along the stream
 constexpr uint64_t CMD_FORWARD_END = 3;  // as CMD_FORWARD, and the last page of its chunk
+// Fan-out only: every destination this page had was on this chip, so nothing goes on the cable. The
+// slot still has to travel the ring in order -- handing it back would reorder the sender's view of it
+// -- so the sender frees it and sends nothing.
+constexpr uint64_t CMD_SKIP = 4;
 
 // One (origin chip, destination chip) term of a stream's forwarding region, narrowed to the share the two
 // chips agreed on. Generated identically by the chip that writes the region and the chip that reads it,
@@ -289,7 +299,7 @@ constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t bl
         // Four words per destination, not four in total: a token can hold several experts on one chip
         // and each gets its own page, so several metadata writes are in flight out of this scratch at
         // once and they cannot share a buffer.
-        case kCbMcMeta: return MC_META_SLOT_BYTES * FO_MAX_DESTS;
+        case kCbMcMeta: return MC_META_SLOT_BYTES * FO_MAX_DESTS * BATCH;
         case kCbMcCount: return 4u * 2u;
         case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);
         case kCbInStart: return 4u * control_chunk_start_slots(g);
