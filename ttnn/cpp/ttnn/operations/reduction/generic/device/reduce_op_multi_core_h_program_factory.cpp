@@ -66,10 +66,12 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
 
     // Populate the RM-only locals (chunk sizes, page bytes, padding identity, datum sizes) into
     // a single struct so the per-site formulas don't drift between this factory and the W one.
-    // tt::datum_size(...) inside make_rm_plan throws for block-float formats; guard the call
-    // behind rm_path since validate_rm_preconditions already gates the RM branch to BF16/FP32.
+    // TILE H-axis split uses the RM writer for ROW_MAJOR partials, so it needs the plan too.
+    // Width-sharding is excluded: that branch reassigns cores after num_cols and ignores slices.
+    const bool tile_h_split = !rm_path && !use_width_sharding && operation_attributes.num_h_slices > 1;
+
     RmPlan plan{};
-    if (rm_path) {
+    if (rm_path || tile_h_split) {
         plan = make_rm_plan(
             shape,
             logical_shape,
@@ -81,17 +83,20 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             ReduceOpDim::H);
     }
 
-    // H-axis split geometry: every slice reduces a uniform `slice_Ht` tiles, the last one's overhang
-    // past Ht_rm identity-padded by the reader. Clamped to Ht_rm so no slice is empty.
-    const uint32_t num_h_slices = rm_path ? std::min(std::max(operation_attributes.num_h_slices, 1u), plan.Ht_rm) : 1;
-    const uint32_t slice_Ht = rm_path ? tt::div_up(plan.Ht_rm, num_h_slices) : 0;
-    // compute_output_specs sizes the output's H from the unclamped attribute, so the clamp above must
-    // be a no-op; the host already bounds num_h_slices by Ht_rm.
+    // Uniform slice_Ht; the last slice's overhang is identity-padded. RM counts logical H tiles,
+    // TILE counts padded H so the ids match the reader.
+    const uint32_t Ht_for_split = rm_path ? plan.Ht_rm : Ht;
+    const uint32_t num_h_slices =
+        (rm_path || tile_h_split) ? std::min(std::max(operation_attributes.num_h_slices, 1u), Ht_for_split) : 1;
+    const uint32_t slice_Ht =
+        rm_path ? tt::div_up(plan.Ht_rm, num_h_slices) : (tile_h_split ? tt::div_up(Ht, num_h_slices) : 0);
+    // Host already bounds num_h_slices; the clamp must be a no-op so output spec and kernels agree.
     TT_FATAL(
-        !rm_path || operation_attributes.num_h_slices <= plan.Ht_rm,
-        "Reduce H (dense RM): num_h_slices {} exceeds Ht_rm {}; the output spec and the kernels would disagree",
+        !(rm_path || tile_h_split) || operation_attributes.num_h_slices <= Ht_for_split,
+        "Reduce H: num_h_slices {} exceeds the reduction-axis tile count {}; the output spec and the "
+        "kernels would disagree",
         operation_attributes.num_h_slices,
-        plan.Ht_rm);
+        Ht_for_split);
 
     uint32_t chunk_size = use_width_sharding ? 1 : ttnn::get_dest_reg_count(operation_attributes.compute_kernel_config);
 
@@ -150,11 +155,15 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     const TensorParamName INPUT_TENSOR{"input"};
     const TensorParamName OUTPUT_TENSOR{"output"};
 
-    // The column reader batches a dest chunk; a core that owns fewer columns stays unbatched.
+    // The column reader batches a dest chunk; a core that owns fewer columns stays unbatched. The
+    // H-axis split has one column per core, so it batches down the slice instead — but those tiles
+    // feed a single accumulator, so the batch costs compute the chance to start on each tile as it
+    // lands. That trade only pays while the reads dominate, which fp32 input is too slow to do.
     const uint32_t min_cols_per_core = num_cols_per_core_group_2 == 0
                                            ? num_cols_per_core_group_1
                                            : std::min(num_cols_per_core_group_1, num_cols_per_core_group_2);
-    const uint32_t reader_tiles_per_batch = min_cols_per_core < chunk_size ? 1u : chunk_size;
+    const bool batch_down_slice = tile_h_split && src0_cb_data_format != tt::DataFormat::Float32;
+    const uint32_t reader_tiles_per_batch = (batch_down_slice || min_cols_per_core >= chunk_size) ? chunk_size : 1u;
 
     ProgramSpec spec;
     spec.name = rm_path ? "reduce_multi_core_h_dense_rm"
@@ -458,6 +467,9 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             {"use_welford", 0u},
             {"enable_fp32_sfpu", fp32_sfpu_reduce ? 1u : 0u},
             {"tiles_per_batch", reader_tiles_per_batch},
+            // {1, Ht} is the un-split reduce.
+            {"num_h_slices", tile_h_split ? num_h_slices : 1u},
+            {"slice_Ht", tile_h_split ? slice_Ht : Ht},
         };
         reader_rta_names = {"col_start_tile_id", "curr_col_in_batch", "num_cols"};
         // Pass DEST config so reader can compute DEST_AUTO_LIMIT
@@ -498,10 +510,10 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
     Group<TensorBinding> writer_tensor_bindings;
     KernelSpec::CompilerOptions::Defines writer_defines;
 
-    if (rm_path) {
+    if (rm_path || tile_h_split) {
         writer_source =
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/writer_reduce_rm_scalar.cpp";
-        // One writer for both layouts; tile_output picks whole-tile pages over (nc, slice) RM pages.
+        // One writer for both layouts. TILE split always emits ROW_MAJOR partials.
         writer_ct_args =
             build_rm_writer_ct_args(plan, operation_attributes.output_layout == Layout::TILE, num_h_slices);
         writer_rta_names = {"rt_count", "rt_start"};
@@ -554,13 +566,11 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
         [&](auto& compute_cfg) {
             compute_cfg.sfpu_precision_mode = Precision::Precise;  // legacy math_approx_mode = false
             if (fp32_sfpu_reduce) {
-                // Legacy: unpack_to_dest_mode[src0_cb_index] = UnpackToDestFp32 — unpacks the reduce
-                // input straight into the fp32 DEST, bypassing the SrcA tf32 truncation. The RM
-                // path's chunk accumulator (legacy c_5) gets the same treatment so partials
-                // round-trip in fp32.
+                // Unpack FP32 inputs, RM rows, and partials to DEST so SrcA does not truncate them to tf32.
                 compute_cfg.unpack_modes.emplace(IN_DFB, UnpackMode::UnpackToDest);
                 if (rm_path) {
                     compute_cfg.unpack_modes.emplace(ACC_DFB, UnpackMode::UnpackToDest);
+                    compute_cfg.unpack_modes.emplace(RM_DFB, UnpackMode::UnpackToDest);
                 }
             }
             // Legacy left every other entry at Default (= UnpackToSrc). Metal 2.0 nonetheless requires an
@@ -661,7 +671,8 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             };
         } else {
             ct_args = {
-                {"Ht", Ht},
+                // Per-slice H under the H-axis split.
+                {"Ht", tile_h_split ? slice_Ht : Ht},
                 {"Wt", group_compute_Wt},
                 {"NC", group_compute_NC},
                 // packed fp32 user scalar (only used if REDUCE_POST_MUL is set)
@@ -847,20 +858,35 @@ ReduceDeviceOperation::ReduceMultiCoreHProgramFactory::create_program_artifacts(
             } else {
                 TT_THROW("Core not in specified core ranges");
             }
-            AddRuntimeArgsForNode(
-                reader_run_args.runtime_arg_values,
-                core,
-                {{"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
-                 {"curr_col_in_batch", num_cols_read % Wt},
-                 {"num_cols", num_cols_per_core}});
+            if (tile_h_split) {
+                // Split reader takes the global work-unit id; curr_col_in_batch unused.
+                // RM writer names the same span rt_count/rt_start.
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"col_start_tile_id", num_cols_read},
+                     {"curr_col_in_batch", 0u},
+                     {"num_cols", num_cols_per_core}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {{"rt_count", num_cols_per_core}, {"rt_start", num_cols_read}});
+            } else {
+                AddRuntimeArgsForNode(
+                    reader_run_args.runtime_arg_values,
+                    core,
+                    {{"col_start_tile_id", (num_cols_read / Wt * HtWt) + (num_cols_read % Wt)},
+                     {"curr_col_in_batch", num_cols_read % Wt},
+                     {"num_cols", num_cols_per_core}});
 
-            AddRuntimeArgsForNode(
-                writer_run_args.runtime_arg_values,
-                core,
-                {// number of tiles to write
-                 {"num_pages", num_cols_per_core},
-                 // output tile start index
-                 {"start_id", num_cols_read}});
+                AddRuntimeArgsForNode(
+                    writer_run_args.runtime_arg_values,
+                    core,
+                    {// number of tiles to write
+                     {"num_pages", num_cols_per_core},
+                     // output tile start index
+                     {"start_id", num_cols_read}});
+            }
             num_cols_read += num_cols_per_core;
             if (i == num_cores - 1) {
                 TT_FATAL(
