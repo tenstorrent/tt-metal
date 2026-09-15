@@ -1,0 +1,1185 @@
+{
+  "label": "asym256k-denom-b8_b4-v1",
+  "destination": "fast_bf16",
+  "denom_only": true,
+  "kv_formats": "b8_b4",
+  "length": 262144,
+  "heads": 10,
+  "cores": 110,
+  "seed": 1240,
+  "distribution": "normal",
+  "sample_rows": 128,
+  "check_preprocess": false,
+  "read_barrier_tiles": 2,
+  "max_l2": 40.0,
+  "warmup": 3,
+  "iters": 5,
+  "trace_repeats": 1,
+  "actual_cores": 110,
+  "q_jobs": 10240,
+  "jobs_per_core": [
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93
+  ],
+  "chain_length": 11,
+  "assignments": [
+    {
+      "head": 0,
+      "rank": 0,
+      "first_flat_q_job": 0,
+      "jobs": 94
+    },
+    {
+      "head": 0,
+      "rank": 1,
+      "first_flat_q_job": 94,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 2,
+      "first_flat_q_job": 187,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 3,
+      "first_flat_q_job": 280,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 4,
+      "first_flat_q_job": 373,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 5,
+      "first_flat_q_job": 466,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 6,
+      "first_flat_q_job": 559,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 7,
+      "first_flat_q_job": 652,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 8,
+      "first_flat_q_job": 745,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 9,
+      "first_flat_q_job": 838,
+      "jobs": 93
+    },
+    {
+      "head": 0,
+      "rank": 10,
+      "first_flat_q_job": 931,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 0,
+      "first_flat_q_job": 1024,
+      "jobs": 94
+    },
+    {
+      "head": 1,
+      "rank": 1,
+      "first_flat_q_job": 1118,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 2,
+      "first_flat_q_job": 1211,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 3,
+      "first_flat_q_job": 1304,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 4,
+      "first_flat_q_job": 1397,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 5,
+      "first_flat_q_job": 1490,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 6,
+      "first_flat_q_job": 1583,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 7,
+      "first_flat_q_job": 1676,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 8,
+      "first_flat_q_job": 1769,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 9,
+      "first_flat_q_job": 1862,
+      "jobs": 93
+    },
+    {
+      "head": 1,
+      "rank": 10,
+      "first_flat_q_job": 1955,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 0,
+      "first_flat_q_job": 2048,
+      "jobs": 94
+    },
+    {
+      "head": 2,
+      "rank": 1,
+      "first_flat_q_job": 2142,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 2,
+      "first_flat_q_job": 2235,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 3,
+      "first_flat_q_job": 2328,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 4,
+      "first_flat_q_job": 2421,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 5,
+      "first_flat_q_job": 2514,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 6,
+      "first_flat_q_job": 2607,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 7,
+      "first_flat_q_job": 2700,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 8,
+      "first_flat_q_job": 2793,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 9,
+      "first_flat_q_job": 2886,
+      "jobs": 93
+    },
+    {
+      "head": 2,
+      "rank": 10,
+      "first_flat_q_job": 2979,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 0,
+      "first_flat_q_job": 3072,
+      "jobs": 94
+    },
+    {
+      "head": 3,
+      "rank": 1,
+      "first_flat_q_job": 3166,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 2,
+      "first_flat_q_job": 3259,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 3,
+      "first_flat_q_job": 3352,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 4,
+      "first_flat_q_job": 3445,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 5,
+      "first_flat_q_job": 3538,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 6,
+      "first_flat_q_job": 3631,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 7,
+      "first_flat_q_job": 3724,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 8,
+      "first_flat_q_job": 3817,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 9,
+      "first_flat_q_job": 3910,
+      "jobs": 93
+    },
+    {
+      "head": 3,
+      "rank": 10,
+      "first_flat_q_job": 4003,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 0,
+      "first_flat_q_job": 4096,
+      "jobs": 94
+    },
+    {
+      "head": 4,
+      "rank": 1,
+      "first_flat_q_job": 4190,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 2,
+      "first_flat_q_job": 4283,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 3,
+      "first_flat_q_job": 4376,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 4,
+      "first_flat_q_job": 4469,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 5,
+      "first_flat_q_job": 4562,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 6,
+      "first_flat_q_job": 4655,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 7,
+      "first_flat_q_job": 4748,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 8,
+      "first_flat_q_job": 4841,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 9,
+      "first_flat_q_job": 4934,
+      "jobs": 93
+    },
+    {
+      "head": 4,
+      "rank": 10,
+      "first_flat_q_job": 5027,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 0,
+      "first_flat_q_job": 5120,
+      "jobs": 94
+    },
+    {
+      "head": 5,
+      "rank": 1,
+      "first_flat_q_job": 5214,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 2,
+      "first_flat_q_job": 5307,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 3,
+      "first_flat_q_job": 5400,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 4,
+      "first_flat_q_job": 5493,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 5,
+      "first_flat_q_job": 5586,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 6,
+      "first_flat_q_job": 5679,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 7,
+      "first_flat_q_job": 5772,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 8,
+      "first_flat_q_job": 5865,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 9,
+      "first_flat_q_job": 5958,
+      "jobs": 93
+    },
+    {
+      "head": 5,
+      "rank": 10,
+      "first_flat_q_job": 6051,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 0,
+      "first_flat_q_job": 6144,
+      "jobs": 94
+    },
+    {
+      "head": 6,
+      "rank": 1,
+      "first_flat_q_job": 6238,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 2,
+      "first_flat_q_job": 6331,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 3,
+      "first_flat_q_job": 6424,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 4,
+      "first_flat_q_job": 6517,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 5,
+      "first_flat_q_job": 6610,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 6,
+      "first_flat_q_job": 6703,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 7,
+      "first_flat_q_job": 6796,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 8,
+      "first_flat_q_job": 6889,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 9,
+      "first_flat_q_job": 6982,
+      "jobs": 93
+    },
+    {
+      "head": 6,
+      "rank": 10,
+      "first_flat_q_job": 7075,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 0,
+      "first_flat_q_job": 7168,
+      "jobs": 94
+    },
+    {
+      "head": 7,
+      "rank": 1,
+      "first_flat_q_job": 7262,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 2,
+      "first_flat_q_job": 7355,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 3,
+      "first_flat_q_job": 7448,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 4,
+      "first_flat_q_job": 7541,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 5,
+      "first_flat_q_job": 7634,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 6,
+      "first_flat_q_job": 7727,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 7,
+      "first_flat_q_job": 7820,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 8,
+      "first_flat_q_job": 7913,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 9,
+      "first_flat_q_job": 8006,
+      "jobs": 93
+    },
+    {
+      "head": 7,
+      "rank": 10,
+      "first_flat_q_job": 8099,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 0,
+      "first_flat_q_job": 8192,
+      "jobs": 94
+    },
+    {
+      "head": 8,
+      "rank": 1,
+      "first_flat_q_job": 8286,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 2,
+      "first_flat_q_job": 8379,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 3,
+      "first_flat_q_job": 8472,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 4,
+      "first_flat_q_job": 8565,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 5,
+      "first_flat_q_job": 8658,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 6,
+      "first_flat_q_job": 8751,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 7,
+      "first_flat_q_job": 8844,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 8,
+      "first_flat_q_job": 8937,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 9,
+      "first_flat_q_job": 9030,
+      "jobs": 93
+    },
+    {
+      "head": 8,
+      "rank": 10,
+      "first_flat_q_job": 9123,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 0,
+      "first_flat_q_job": 9216,
+      "jobs": 94
+    },
+    {
+      "head": 9,
+      "rank": 1,
+      "first_flat_q_job": 9310,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 2,
+      "first_flat_q_job": 9403,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 3,
+      "first_flat_q_job": 9496,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 4,
+      "first_flat_q_job": 9589,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 5,
+      "first_flat_q_job": 9682,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 6,
+      "first_flat_q_job": 9775,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 7,
+      "first_flat_q_job": 9868,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 8,
+      "first_flat_q_job": 9961,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 9,
+      "first_flat_q_job": 10054,
+      "jobs": 93
+    },
+    {
+      "head": 9,
+      "rank": 10,
+      "first_flat_q_job": 10147,
+      "jobs": 93
+    }
+  ],
+  "input_slots": 2,
+  "cb_bytes_per_core": 890880,
+  "cb_audit": [
+    {
+      "cb": 0,
+      "tiles": 64,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 131072,
+      "aliases": []
+    },
+    {
+      "cb": 1,
+      "tiles": 128,
+      "page_bytes": 1088,
+      "dtype": "DataType.BFLOAT8_B",
+      "total_bytes": 139264,
+      "aliases": []
+    },
+    {
+      "cb": 2,
+      "tiles": 128,
+      "page_bytes": 576,
+      "dtype": "DataType.BFLOAT4_B",
+      "total_bytes": 73728,
+      "aliases": []
+    },
+    {
+      "cb": 3,
+      "tiles": 1,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 2048,
+      "aliases": []
+    },
+    {
+      "cb": 4,
+      "tiles": 1,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 2048,
+      "aliases": []
+    },
+    {
+      "cb": 5,
+      "tiles": 1,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 2048,
+      "aliases": []
+    },
+    {
+      "cb": 6,
+      "tiles": 128,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 262144,
+      "aliases": []
+    },
+    {
+      "cb": 8,
+      "tiles": 32,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 65536,
+      "aliases": []
+    },
+    {
+      "cb": 9,
+      "tiles": 32,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 65536,
+      "aliases": []
+    },
+    {
+      "cb": 10,
+      "tiles": 8,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 16384,
+      "aliases": []
+    },
+    {
+      "cb": 11,
+      "tiles": 8,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 16384,
+      "aliases": []
+    },
+    {
+      "cb": 12,
+      "tiles": 16,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 32768,
+      "aliases": []
+    },
+    {
+      "cb": 13,
+      "tiles": 16,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 32768,
+      "aliases": []
+    },
+    {
+      "cb": 14,
+      "tiles": 8,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 16384,
+      "aliases": []
+    },
+    {
+      "cb": 16,
+      "tiles": 16,
+      "page_bytes": 2048,
+      "dtype": "DataType.BFLOAT16",
+      "total_bytes": 32768,
+      "aliases": []
+    }
+  ],
+  "input_audit": [
+    {
+      "input": "Q",
+      "cb": 0,
+      "tensor_dtype": "DataType.BFLOAT16",
+      "cb_dtype": "DataType.BFLOAT16",
+      "page_bytes": 2048,
+      "capacity_tiles": 64,
+      "slot_tiles": 32
+    },
+    {
+      "input": "K",
+      "cb": 1,
+      "tensor_dtype": "DataType.BFLOAT8_B",
+      "cb_dtype": "DataType.BFLOAT8_B",
+      "page_bytes": 1088,
+      "capacity_tiles": 128,
+      "slot_tiles": 64
+    },
+    {
+      "input": "V",
+      "cb": 2,
+      "tensor_dtype": "DataType.BFLOAT4_B",
+      "cb_dtype": "DataType.BFLOAT4_B",
+      "page_bytes": 576,
+      "capacity_tiles": 128,
+      "slot_tiles": 64
+    }
+  ],
+  "raw_l1_headroom_bytes": 681984,
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_STREAMING_ACCURACY": "1",
+    "SDPA_OUT_A_CB": "8",
+    "SDPA_OUT_B_CB": "9",
+    "SDPA_LOFI_FIX_CORRECTION": "1",
+    "SDPA_LOFI_SAFE_RESCALE": "1"
+  },
+  "fidelity": "LoFi",
+  "fp32_dst": false,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "head_dim": 128,
+  "k_format": "b8",
+  "v_format": "b4",
+  "q_preprocessing": "Per-value RNE7; BF16 storage",
+  "k_preprocessing": "Per-value RNE5 then native BFP8 RNA",
+  "v_preprocessing": "Shared-exponent BFP4 RNE",
+  "device_preprocessing": true,
+  "preprocessing_checks": [],
+  "bfp8_pack_precise": false,
+  "fix_correction": true,
+  "safe_rescale": true,
+  "reader": "Per-head KV chain; source-linear K; K published before V reservation",
+  "executed_matmul_factor": 1,
+  "output_dtype": "BF16",
+  "accuracy": {
+    "l2_pct": 12.565543141336734,
+    "max_relative_error_pct": 1347186.6266548196,
+    "zero_reference_mismatch_count": 0,
+    "max_relative_reference": 3.312729238516177e-08,
+    "max_relative_actual": 0.000446319580078125,
+    "reference_rms": 0.0032395695916987008,
+    "max_relative_error_above_1pct_rms_pct": 3521.7035654175443,
+    "pcc": 0.9923956892481891,
+    "gain": 0.9946794443938739,
+    "gain_corrected_l2_pct": 12.554273826757798,
+    "max_abs": 0.0018397522518818093,
+    "row_l2_pct_median": 12.555330186259143,
+    "row_l2_pct_p95": 14.510817574088648
+  },
+  "sampled_query_rows": [
+    0,
+    2064,
+    4128,
+    6192,
+    8256,
+    10320,
+    12384,
+    14448,
+    16512,
+    18577,
+    20641,
+    22705,
+    24769,
+    26833,
+    28897,
+    30961,
+    33025,
+    35090,
+    37154,
+    39218,
+    41282,
+    43346,
+    45410,
+    47474,
+    49538,
+    51602,
+    53667,
+    55731,
+    57795,
+    59859,
+    61923,
+    63987,
+    66051,
+    68115,
+    70180,
+    72244,
+    74308,
+    76372,
+    78436,
+    80500,
+    82564,
+    84628,
+    86692,
+    88757,
+    90821,
+    92885,
+    94949,
+    97013,
+    99077,
+    101141,
+    103205,
+    105270,
+    107334,
+    109398,
+    111462,
+    113526,
+    115590,
+    117654,
+    119718,
+    121782,
+    123847,
+    125911,
+    127975,
+    130039,
+    132103,
+    134167,
+    136231,
+    138295,
+    140360,
+    142424,
+    144488,
+    146552,
+    148616,
+    150680,
+    152744,
+    154808,
+    156872,
+    158937,
+    161001,
+    163065,
+    165129,
+    167193,
+    169257,
+    171321,
+    173385,
+    175450,
+    177514,
+    179578,
+    181642,
+    183706,
+    185770,
+    187834,
+    189898,
+    191962,
+    194027,
+    196091,
+    198155,
+    200219,
+    202283,
+    204347,
+    206411,
+    208475,
+    210540,
+    212604,
+    214668,
+    216732,
+    218796,
+    220860,
+    222924,
+    224988,
+    227052,
+    229117,
+    231181,
+    233245,
+    235309,
+    237373,
+    239437,
+    241501,
+    243565,
+    245630,
+    247694,
+    249758,
+    251822,
+    253886,
+    255950,
+    258014,
+    260078,
+    262143
+  ],
+  "accuracy_scope": "Original BF16 Q/K/V FP64 reference; all heads and KV, explicit sampled Q rows; all output finite",
+  "useful_flops": 351843720888320,
+  "attention": {
+    "median_ms": 1578.7902559386566,
+    "replay_ms": [
+      1573.6850129906088,
+      1577.0684169838205,
+      1578.7902559386566,
+      1581.0695609543473,
+      1583.919396973215
+    ]
+  },
+  "preprocessing": {
+    "median_ms": 9.019796969369054,
+    "replay_ms": [
+      9.019555989652872,
+      9.023876045830548,
+      9.02463507372886,
+      9.019796969369054,
+      8.995156036689878
+    ]
+  },
+  "combined": {
+    "median_ms": 1598.6905440222472,
+    "replay_ms": [
+      1594.9824299896136,
+      1597.3432570463046,
+      1598.6905440222472,
+      1600.6443810183555,
+      1601.7441800795496
+    ]
+  },
+  "attention_tflops": 222.8565318064585,
+  "combined_tflops": 220.0824432244992,
+  "trace_equal": true,
+  "output_sha256": "af779133a96325a54400e1896f20fb44e3fb249d4815d2273d7e97728aacb4dd",
+  "source_sha256": {
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/asymmetric_fullchip.py": "14dcb7d6bafd5e183b184595fccb05e357afa44bf3aeadeb75b86eed16c0058c",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/compute.cpp": "aecc5af269872b6b39162b38561e9d9bc5f9cd098b2939d4248066e175b6392d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py": "5739cb3e247632b1dd902ba8747bfe6b074049776331c589524b7ea521d117ac",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/compute.cpp": "2ed1fbbc192cfc730c489a08ede6eaef60d6d90015a3a299c34796f510003993",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader.cpp": "b5d0c77bd5b7af346c96370e48cc54acad75c720a6e8d9f69c17d3ca0ee098d0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/reader_chain.cpp": "21049c515ad9df9851e53d89196d59a5664876636f7d8b8085fe48e0c80b94de",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip/writer.cpp": "503d5f40fd0aef7140406ab23183724029855170ae147c58d3622a22b593fc18",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "398c81573378ab24b0ea54a8a2f9f0c0bf532c35a531f69265c6a7c7f8bbe539",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "6c99e3dbf7d372e6fa021c401b8c7cf7903af4326fed973e79fd3cdf595335d0",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp": "43a24c466c97beb5d34269630fde6a7831a23246d9df99a03f8c88265044cd9f"
+  },
+  "warning": "Private common chain reader, not production SDPA dispatch; useful FLOPs exclude preprocessing"
+}

@@ -1,0 +1,145 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "0cc1609c814bebaee77f661dc9ca10e4a8608bdbd1e3beffd8a1011971775505",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "7a235145fcbe6e05a6ea74fec1930a1b0938bf1c5c0be88a2c34cb9292eccd10",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident.py": "b8307c86eb5c42db7b9c087fd61eb29b5d23af230a491509b88d069d21c7e48e",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "85dbc4ecfeeb682bfc59c7c24a28446f80bafd00f1604178c201efb232dd3aa8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/round_p.hpp": "02559f0c4e110fb0d671fdd23f36983fd86205ee5822f72ee5c944c83a944559",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "6c99e3dbf7d372e6fa021c401b8c7cf7903af4326fed973e79fd3cdf595335d0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fast_correction.hpp": "1e6905b04d9afdea8498b4bbdbe43c0ae988896b5051dfa46137df1389d9f632",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_refiner.hpp": "bfd75a1f702827ceefebc7255a47621b96d0438eefa5f79af60dbba62f791a00",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_native.hpp": "711b86bbef10cee71b69cd8eeeed498fe3ce36c8a0a2400362d4be89ca060940",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_SAFE_RESCALE": "1",
+    "SDPA_MATCH_HIFI2": "1",
+    "SDPA_LOFI_NATIVE_EXP": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      2,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "native-exp-resident-v1",
+    "variant": "q7kv8_rawp",
+    "qkv_route": "host",
+    "no_p_round": false,
+    "skip_residual_reconfig": false,
+    "destination": "fp32",
+    "denom_only": false,
+    "fix_correction": false,
+    "exp_quality": "cheap",
+    "exp_degree": 3,
+    "native_exp": true,
+    "fidelity": "LoFi",
+    "safe_rescale": true,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 20,
+    "iters": 10,
+    "seed": 1240,
+    "distribution": "normal",
+    "distinct_kv": false,
+    "hybrid_block_pack": false,
+    "mode": "fp32_hifi2_cheap"
+  }
+}

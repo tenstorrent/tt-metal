@@ -1,0 +1,46 @@
+{
+  "label": "bf16_fpu-normal-v1",
+  "mean_mode": "bf16_fpu",
+  "quant_mode": "b8_rne5",
+  "length": 4096,
+  "heads": 3,
+  "cores": 4,
+  "distribution": "normal",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 3,
+  "trace_repeats": 10,
+  "actual_center_cores": 4,
+  "precision": {
+    "input": "original BF16 K (device resident)",
+    "accumulation": "FP32 DST",
+    "reduction": "FPU/GMPOOL HiFi4",
+    "reciprocal": "1/N truncated to BF16 (not RNE)",
+    "final_bias": "BF16, explicit repeated column bias",
+    "full_input_fp32_cast_in_timing": false,
+    "reduction_output_columns": 12
+  },
+  "mean_metrics": {
+    "bf16_bias_mismatches_vs_fp64": 17,
+    "mean_l2_pct_vs_fp64": 0.16050080351751073,
+    "mean_max_abs_vs_fp64": 0.00011618295684456825,
+    "ideal_bf16_rounding_l2_pct": 0.16037721246252024,
+    "reduction_output_l2_pct_before_explicit_narrow": 0.16050080351751073,
+    "bf16_truncated_reciprocal_relative_error": 0.0
+  },
+  "centered_quantization_mismatches": 0,
+  "mean_median_ms": null,
+  "mean_plus_center_median_ms": null,
+  "mean_times_ms": [],
+  "mean_plus_center_times_ms": [],
+  "timing": "trace replay wall-time per invocation",
+  "host_precomputed_bias": false,
+  "source_sha256": {
+    "center_mean.py": "21094fe07529b5ac63dbcf3a5456aebf53a2b6cb209911d122aebec5325abd9c",
+    "center_preprocess.py": "065c808f4e063724705798d6899df7686e4ca1bcf7c9a8bc48f77b3164209109",
+    "center_preprocess/compute.cpp": "d73a10b87113190636a1d694f5d489f8c6a490c34a7a028efbd9fff3298c567b",
+    "center_preprocess/reader.cpp": "19cf28da522ecd9a8881ab62be949202771096c9f0602886648510b74bf91b9f",
+    "center_preprocess/writer.cpp": "08d17c3263073a9128b55d49b32840d2bd05a446a912df1d49426c5bac2631c1",
+    "center_preprocess/round.hpp": "b882c76b024d21994fecfa49a5f2bd9e6a098696ef44ef58d4c0615d564c9048"
+  }
+}

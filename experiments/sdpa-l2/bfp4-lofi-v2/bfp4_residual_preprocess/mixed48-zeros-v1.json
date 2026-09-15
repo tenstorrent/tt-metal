@@ -1,0 +1,36 @@
+{
+  "label": "mixed48-zeros-v1",
+  "components": 2,
+  "second_format": "b8_rne5",
+  "length": 4096,
+  "cores": 1,
+  "batch": null,
+  "fp32_dst": false,
+  "distribution": "zeros",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "host_only": false,
+  "actual_cores": 1,
+  "actual_batch": 4,
+  "component_mismatches": [
+    0,
+    0
+  ],
+  "numel": 524288,
+  "prefix_reconstruction_l2_pct": [
+    0.0,
+    0.0
+  ],
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/compute.cpp": "4d51e36904fa75172669f3315a7d7fe327de6415a126b595b151d24327f4de8d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/reader.cpp": "87255a083ca2574372d6348d2b3853e20cdad2246b10620c93ee7d93bbd8bb2a",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/writer.cpp": "93874351690d4feda9f298e342a1e3e5d2fff307e996c0d75779331340bd3dfb",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/round.hpp": "9477d68f3e9215e845847d1a3673403ad92b2fb61a4c94e73dee72e6bd55b308"
+  }
+}

@@ -1,0 +1,148 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/reader.cpp": "12a87da4aa500067779536486fd2db39c59071cd5cfe131948df699e55c43b40",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/writer.cpp": "bc743cf37bb903393b424fd8667b63e2e3a2df9f7a81aeb40bb2c893bb4b8ce8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute.cpp": "873e846ea21da85a752db4cfcb27b290a6a4e64585832a2ac24ba1c3e4fd99a2",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "d08c15e304dd088b71161540c433c9a4aebe564619753311a470f41e75a5108b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming.py": "80f56139dd4edd19dc1d93ce0fad37e021fbf00198f4d0f60a14df05f0a74ecc",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "6c99e3dbf7d372e6fa021c401b8c7cf7903af4326fed973e79fd3cdf595335d0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/round_p.hpp": "02559f0c4e110fb0d671fdd23f36983fd86205ee5822f72ee5c944c83a944559",
+    "experiments/sdpa-l2/bfp4-lofi-v2/v_bias.hpp": "e6f3c02b81326001f0848c41168cbcdfa30d47514c484529184a328f1fb14bcb",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "57b0ec356833d356597b4076add6732e731c0422067ccda8caef47f7f062899b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_HYBRID_STATE": "1",
+    "SDPA_HYBRID_BLOCK_PACK": "1",
+    "SDPA_MATCH_HIFI2": "1",
+    "SDPA_LOFI_SAFE_RESCALE": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      128,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      2,
+      128,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      8,
+      16,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      16,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "hybrid-fused-q7kv8_rawp-32768-v1",
+    "variant": "q7kv8_rawp",
+    "fidelity": "LoFi",
+    "q_prescale": 1.0,
+    "no_p_round": false,
+    "round_p": false,
+    "skip_residual_reconfig": false,
+    "center_k": false,
+    "center_v": false,
+    "v_mean_correction": false,
+    "qkv_route": "host",
+    "length": 32768,
+    "seed": 1240,
+    "distribution": "normal",
+    "exp_quality": "cheap",
+    "destination": "hybrid",
+    "safe_rescale": true,
+    "device_preprocess": true,
+    "iters": 0,
+    "warmup": 5,
+    "mode": "hybrid",
+    "hybrid_block_pack": true,
+    "q_repeats": 1,
+    "k_chunks": 64,
+    "distinct_kv": true
+  }
+}

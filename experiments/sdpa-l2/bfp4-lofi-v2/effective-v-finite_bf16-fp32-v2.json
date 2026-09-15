@@ -1,0 +1,41 @@
+{
+  "label": "effective-v-finite_bf16-fp32-v2",
+  "length": 4096,
+  "heads": 1,
+  "cores": 1,
+  "batch": 4,
+  "fp32_dst": true,
+  "distribution": "finite_bf16",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 5,
+  "trace_repeats": 10,
+  "mismatch": 0,
+  "nonzero_bit_mismatch": 0,
+  "numel": 524288,
+  "signed_zero_canonicalizations": 8,
+  "raw_bit_mismatch_count": 8,
+  "raw_bit_pairs": [
+    {
+      "input": "0x8000",
+      "raw_expected": "0x8000",
+      "actual": "0x0000",
+      "count": 8
+    }
+  ],
+  "raw_pair_count": 1,
+  "contract": "Exact nonzero decoded BF16 bits AND0xfff8 (trunc5 toward zero, NOT RNE); signed zeros canonicalized to+0",
+  "actual_cores": 1,
+  "median_ms": null,
+  "replay_ms": [],
+  "bytes_read_written": 2097152,
+  "read_write_GBps": null,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/effective_v_preprocess.py": "0f77beb5d7f87a7715d466dc3c68ace6ac1c04c3de4629d684c8c14b7cb92fe2",
+    "experiments/sdpa-l2/bfp4-lofi-v2/effective_v_preprocess/reader.cpp": "bbb11b4a98e03775837c2df73804bc3409f8b8a8436429ed87a503d2cbb6218c",
+    "experiments/sdpa-l2/bfp4-lofi-v2/effective_v_preprocess/writer.cpp": "37fb0927b4d8bea331943b38beb1a48464a836fd45bd8fedf224a3a448964183",
+    "experiments/sdpa-l2/bfp4-lofi-v2/effective_v_preprocess/compute.cpp": "7bcf247c8af9cf30e0801ebb43cf25cea2d857ecbba9c4500bb7434112047ba8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11"
+  }
+}

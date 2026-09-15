@@ -1,0 +1,50 @@
+{
+  "label": "adaptive-minus-bf16-normal-v1",
+  "length": 4096,
+  "cores": 1,
+  "search": "minus",
+  "output_format": "bf16",
+  "distribution": "normal",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "host_only": false,
+  "actual_cores": 1,
+  "mismatch": 0,
+  "decoded_bit_mismatch": 0,
+  "numel": 524288,
+  "oracle": {
+    "groups": 32768,
+    "selected_counts": {
+      "-1": 6061,
+      "0": 26707,
+      "1": 0
+    },
+    "selection_differs_fp64_groups": 0,
+    "baseline_tie_counts": {
+      "-1": 17
+    },
+    "induced_exponent_mismatches": 0,
+    "native_grid_roundtrip_mismatches": 0,
+    "score_contract": "FP32 power-of-two normalized magnitudes, separate FTZ subtract/square/add, even+odd then cyclic ror1/2/4; only lane0 retained/broadcast; strict less-than; candidate order0,-1,+1"
+  },
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/adaptive_bfp4_round.py": "1074e14517fcac32a08df4d89337a7185174c7869227796615a43bdcdecc2ff8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/adaptive_bfp4_round/compute.cpp": "b76a5e1377bb9997c63431229bbec7e0f5ea2c32b3a4376231a121ffe44ea106",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round.py": "5739cb3e247632b1dd902ba8747bfe6b074049776331c589524b7ea521d117ac",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_round/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11"
+  },
+  "fp32_dst": true,
+  "dst_tiles_reserved": 3,
+  "batch": 1,
+  "cb_payload_per_core": 8192,
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "actual_sha256": "b11ad46d4ee4e604260c557580171e68d739afc8e0b0e97508185e6cedce79e2",
+  "expected_sha256": "b11ad46d4ee4e604260c557580171e68d739afc8e0b0e97508185e6cedce79e2",
+  "hash_contract": "Decoded FP32 bits with signed zeros canonicalized, not raw packed DRAM bytes",
+  "quantization_l2_pct": 11.126049648182185
+}

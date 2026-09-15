@@ -1,0 +1,298 @@
+{
+  "label": "tiny-mean-perf-32768-v1",
+  "length": 32768,
+  "cases": [
+    "split1",
+    "batched8",
+    "padded32"
+  ],
+  "cores": 110,
+  "per_core_n": 16,
+  "seed": 1240,
+  "distribution": "normal",
+  "common_mode": 32,
+  "max_l2": 0.1,
+  "iters": 15,
+  "warmup": 10,
+  "trace_repeats": 20,
+  "cases_results": [
+    {
+      "case": "split1",
+      "tile_shape": [
+        1,
+        32
+      ],
+      "logical_rows_per_call": 1,
+      "matmul_calls_per_invocation": 8,
+      "distinct_mean_rows": 8,
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=16,per_core_M=1,per_core_N=16,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores={[0-0 - 0-0], [1-0 - 1-0], [2-0 - 2-0], [3-0 - 3-0], [4-0 - 4-0], [5-0 - 5-0], [6-0 - 6-0], [7-0 - 7-0], [8-0 - 8-0], [9-0 - 9-0], [10-0 - 10-0], [0-1 - 0-1], [1-1 - 1-1], [2-1 - 2-1], [3-1 - 3-1], [4-1 - 4-1], [5-1 - 5-1], [6-1 - 6-1], [7-1 - 7-1], [8-1 - 8-1], [9-1 - 9-1], [10-1 - 10-1], [0-2 - 0-2], [1-2 - 1-2], [2-2 - 2-2], [3-2 - 3-2], [4-2 - 4-2], [5-2 - 5-2], [6-2 - 6-2], [7-2 - 7-2], [8-2 - 8-2], [9-2 - 9-2], [10-2 - 10-2], [0-3 - 0-3], [1-3 - 1-3], [2-3 - 2-3], [3-3 - 3-3], [4-3 - 4-3], [5-3 - 5-3], [6-3 - 6-3], [7-3 - 7-3], [8-3 - 8-3], [9-3 - 9-3], [10-3 - 10-3], [0-4 - 0-4], [1-4 - 1-4], [2-4 - 2-4], [3-4 - 3-4], [4-4 - 4-4], [5-4 - 5-4], [6-4 - 6-4], [7-4 - 7-4], [8-4 - 8-4], [9-4 - 9-4], [10-4 - 10-4], [0-5 - 0-5], [1-5 - 1-5], [2-5 - 2-5], [3-5 - 3-5], [4-5 - 4-5], [5-5 - 5-5], [6-5 - 6-5], [7-5 - 7-5], [8-5 - 8-5], [9-5 - 9-5], [10-5 - 10-5], [0-6 - 0-6], [1-6 - 1-6], [2-6 - 2-6], [3-6 - 3-6], [4-6 - 4-6], [5-6 - 5-6], [6-6 - 6-6], [7-6 - 7-6], [8-6 - 8-6], [9-6 - 9-6], [10-6 - 10-6], [0-7 - 0-7], [1-7 - 1-7], [2-7 - 2-7], [3-7 - 3-7], [4-7 - 4-7], [5-7 - 5-7], [6-7 - 6-7], [7-7 - 7-7], [8-7 - 8-7], [9-7 - 9-7], [10-7 - 10-7], [0-8 - 0-8], [1-8 - 1-8], [2-8 - 2-8], [3-8 - 3-8], [4-8 - 4-8], [5-8 - 5-8], [6-8 - 6-8], [7-8 - 7-8], [8-8 - 8-8], [9-8 - 9-8], [10-8 - 10-8], [0-9 - 0-9], [1-9 - 1-9], [2-9 - 2-9], [3-9 - 3-9], [4-9 - 4-9], [5-9 - 5-9], [6-9 - 6-9], [7-9 - 7-9], [8-9 - 8-9], [9-9 - 9-9], [10-9 - 10-9]},stream_in1=0)",
+      "active_cores_per_call": 64,
+      "allowed_cores": 110,
+      "partition": "1D multicast means (in0), partition output N across workers",
+      "requested_per_core_n_tiles": 16,
+      "effective_per_core_n_tiles": 16,
+      "out_block_n_tiles": 16,
+      "n_blocks_per_worker": 1,
+      "buffering": "Fixed1xout_block_n output blocks; per-core N ownership grows at long contexts, CB blocks do not",
+      "input_layout": "BF16 original K32x32; BF16 mean tiny tiles",
+      "output_dtype": "FP32",
+      "fidelity": "HiFi4",
+      "fp32_dst": true,
+      "packer_l1_acc": false,
+      "correction_output_bytes": 1048576,
+      "useful_flops": 67108864,
+      "physical_tile_row_equivalents_per_invocation": 64,
+      "estimated_mvmul_count": 524288,
+      "compulsory_k_read_bytes": 67108864,
+      "k_read_warning": "Algorithmic minimum per invocation, not measured traffic; no K read sharing across calls",
+      "producer_and_retiling_included": false,
+      "comparison_warning": "padded32 is ONE32-row call for eight means; legacy32 is EIGHT32-row calls",
+      "all_physical_rows_accuracy": [
+        {
+          "l2_pct": 0.032264919841689596,
+          "max_abs": 0.001620246097445488,
+          "gain": 1.000043863930073,
+          "pcc": 0.9999999489150826
+        },
+        {
+          "l2_pct": 0.03043409122738157,
+          "max_abs": 0.001454705372452736,
+          "gain": 1.0000418146289063,
+          "pcc": 0.9999999545654622
+        },
+        {
+          "l2_pct": 0.031317286051232386,
+          "max_abs": 0.0015459060668945312,
+          "gain": 1.000046107370356,
+          "pcc": 0.9999999520288719
+        },
+        {
+          "l2_pct": 0.028944070160208155,
+          "max_abs": 0.001309804618358612,
+          "gain": 1.0000395518625185,
+          "pcc": 0.9999999588990865
+        },
+        {
+          "l2_pct": 0.03017867148387096,
+          "max_abs": 0.0013975538313388824,
+          "gain": 1.000040297977825,
+          "pcc": 0.9999999552775224
+        },
+        {
+          "l2_pct": 0.03159190342231952,
+          "max_abs": 0.0014635100960731506,
+          "gain": 1.00004610674675,
+          "pcc": 0.9999999511648371
+        },
+        {
+          "l2_pct": 0.03054364779539587,
+          "max_abs": 0.001582510769367218,
+          "gain": 1.000042746178317,
+          "pcc": 0.9999999542722112
+        },
+        {
+          "l2_pct": 0.03191604250943322,
+          "max_abs": 0.0015088971704244614,
+          "gain": 1.0000366974532213,
+          "pcc": 0.9999999497532696
+        }
+      ],
+      "unique_eight_rows_accuracy": {
+        "l2_pct": 0.03088634607135456,
+        "max_abs": 0.001620246097445488,
+        "gain": 1.0000422559468758,
+        "pcc": 0.9999999531984032
+      },
+      "versus_first_case": null,
+      "replay_ms": [
+        0.2341736515518278,
+        0.23405160172842443,
+        0.23409309796988964,
+        0.23415415198542178,
+        0.2341781451832503,
+        0.23447414860129356,
+        0.2341976505704224,
+        0.23431210429407656,
+        0.23420415236614645,
+        0.2339676022529602,
+        0.23432265152223408,
+        0.23407015250995755,
+        0.23422709782607853,
+        0.23420064826495945,
+        0.23425514809787273
+      ],
+      "median_ms": 0.2341976505704224,
+      "unique_useful_tflops": 0.2865479813164078,
+      "trace_equal": true,
+      "partial_tile_input_output_conversion_exact": true
+    },
+    {
+      "case": "batched8",
+      "tile_shape": [
+        8,
+        32
+      ],
+      "logical_rows_per_call": 8,
+      "matmul_calls_per_invocation": 1,
+      "distinct_mean_rows": 8,
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=16,per_core_M=1,per_core_N=16,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores={[0-0 - 0-0], [1-0 - 1-0], [2-0 - 2-0], [3-0 - 3-0], [4-0 - 4-0], [5-0 - 5-0], [6-0 - 6-0], [7-0 - 7-0], [8-0 - 8-0], [9-0 - 9-0], [10-0 - 10-0], [0-1 - 0-1], [1-1 - 1-1], [2-1 - 2-1], [3-1 - 3-1], [4-1 - 4-1], [5-1 - 5-1], [6-1 - 6-1], [7-1 - 7-1], [8-1 - 8-1], [9-1 - 9-1], [10-1 - 10-1], [0-2 - 0-2], [1-2 - 1-2], [2-2 - 2-2], [3-2 - 3-2], [4-2 - 4-2], [5-2 - 5-2], [6-2 - 6-2], [7-2 - 7-2], [8-2 - 8-2], [9-2 - 9-2], [10-2 - 10-2], [0-3 - 0-3], [1-3 - 1-3], [2-3 - 2-3], [3-3 - 3-3], [4-3 - 4-3], [5-3 - 5-3], [6-3 - 6-3], [7-3 - 7-3], [8-3 - 8-3], [9-3 - 9-3], [10-3 - 10-3], [0-4 - 0-4], [1-4 - 1-4], [2-4 - 2-4], [3-4 - 3-4], [4-4 - 4-4], [5-4 - 5-4], [6-4 - 6-4], [7-4 - 7-4], [8-4 - 8-4], [9-4 - 9-4], [10-4 - 10-4], [0-5 - 0-5], [1-5 - 1-5], [2-5 - 2-5], [3-5 - 3-5], [4-5 - 4-5], [5-5 - 5-5], [6-5 - 6-5], [7-5 - 7-5], [8-5 - 8-5], [9-5 - 9-5], [10-5 - 10-5], [0-6 - 0-6], [1-6 - 1-6], [2-6 - 2-6], [3-6 - 3-6], [4-6 - 4-6], [5-6 - 5-6], [6-6 - 6-6], [7-6 - 7-6], [8-6 - 8-6], [9-6 - 9-6], [10-6 - 10-6], [0-7 - 0-7], [1-7 - 1-7], [2-7 - 2-7], [3-7 - 3-7], [4-7 - 4-7], [5-7 - 5-7], [6-7 - 6-7], [7-7 - 7-7], [8-7 - 8-7], [9-7 - 9-7], [10-7 - 10-7], [0-8 - 0-8], [1-8 - 1-8], [2-8 - 2-8], [3-8 - 3-8], [4-8 - 4-8], [5-8 - 5-8], [6-8 - 6-8], [7-8 - 7-8], [8-8 - 8-8], [9-8 - 9-8], [10-8 - 10-8], [0-9 - 0-9], [1-9 - 1-9], [2-9 - 2-9], [3-9 - 3-9], [4-9 - 4-9], [5-9 - 5-9], [6-9 - 6-9], [7-9 - 7-9], [8-9 - 8-9], [9-9 - 9-9], [10-9 - 10-9]},stream_in1=0)",
+      "active_cores_per_call": 64,
+      "allowed_cores": 110,
+      "partition": "1D multicast means (in0), partition output N across workers",
+      "requested_per_core_n_tiles": 16,
+      "effective_per_core_n_tiles": 16,
+      "out_block_n_tiles": 16,
+      "n_blocks_per_worker": 1,
+      "buffering": "Fixed1xout_block_n output blocks; per-core N ownership grows at long contexts, CB blocks do not",
+      "input_layout": "BF16 original K32x32; BF16 mean tiny tiles",
+      "output_dtype": "FP32",
+      "fidelity": "HiFi4",
+      "fp32_dst": true,
+      "packer_l1_acc": false,
+      "correction_output_bytes": 1048576,
+      "useful_flops": 67108864,
+      "physical_tile_row_equivalents_per_invocation": 8,
+      "estimated_mvmul_count": 65536,
+      "compulsory_k_read_bytes": 8388608,
+      "k_read_warning": "Algorithmic minimum per invocation, not measured traffic; no K read sharing across calls",
+      "producer_and_retiling_included": false,
+      "comparison_warning": "padded32 is ONE32-row call for eight means; legacy32 is EIGHT32-row calls",
+      "all_physical_rows_accuracy": [
+        {
+          "l2_pct": 0.03088634607135456,
+          "max_abs": 0.001620246097445488,
+          "gain": 1.0000422559468758,
+          "pcc": 0.9999999531984032
+        }
+      ],
+      "unique_eight_rows_accuracy": {
+        "l2_pct": 0.03088634607135456,
+        "max_abs": 0.001620246097445488,
+        "gain": 1.0000422559468758,
+        "pcc": 0.9999999531984032
+      },
+      "versus_first_case": {
+        "l2_pct": 0.0,
+        "max_abs": 0.0,
+        "gain": 1.0,
+        "pcc": 1.000000000000003
+      },
+      "replay_ms": [
+        0.030991947278380394,
+        0.03081195172853768,
+        0.030947447521612048,
+        0.030843453714624047,
+        0.031133001903072,
+        0.030944449827075005,
+        0.030778947984799743,
+        0.03089394886046648,
+        0.030978454742580652,
+        0.03081195172853768,
+        0.03086394863203168,
+        0.0308209506329149,
+        0.03092394908890128,
+        0.03086394863203168,
+        0.030970951775088906
+      ],
+      "median_ms": 0.03089394886046648,
+      "unique_useful_tflops": 2.172233284359321,
+      "trace_equal": true,
+      "partial_tile_input_output_conversion_exact": true
+    },
+    {
+      "case": "padded32",
+      "tile_shape": [
+        32,
+        32
+      ],
+      "logical_rows_per_call": 32,
+      "matmul_calls_per_invocation": 1,
+      "distinct_mean_rows": 8,
+      "program_config": "MatmulMultiCoreReuseMultiCast1DProgramConfig(compute_with_storage_grid_size=11-10,in0_block_w=4,out_subblock_h=1,out_subblock_w=4,out_block_h=1,out_block_w=16,per_core_M=1,per_core_N=16,fuse_batch=1,fused_activation=std::nullopt,mcast_in0=1,gather_in0=0,hop_cores={},num_global_cb_receivers=1,untilize_out=0,allowed_worker_cores={[0-0 - 0-0], [1-0 - 1-0], [2-0 - 2-0], [3-0 - 3-0], [4-0 - 4-0], [5-0 - 5-0], [6-0 - 6-0], [7-0 - 7-0], [8-0 - 8-0], [9-0 - 9-0], [10-0 - 10-0], [0-1 - 0-1], [1-1 - 1-1], [2-1 - 2-1], [3-1 - 3-1], [4-1 - 4-1], [5-1 - 5-1], [6-1 - 6-1], [7-1 - 7-1], [8-1 - 8-1], [9-1 - 9-1], [10-1 - 10-1], [0-2 - 0-2], [1-2 - 1-2], [2-2 - 2-2], [3-2 - 3-2], [4-2 - 4-2], [5-2 - 5-2], [6-2 - 6-2], [7-2 - 7-2], [8-2 - 8-2], [9-2 - 9-2], [10-2 - 10-2], [0-3 - 0-3], [1-3 - 1-3], [2-3 - 2-3], [3-3 - 3-3], [4-3 - 4-3], [5-3 - 5-3], [6-3 - 6-3], [7-3 - 7-3], [8-3 - 8-3], [9-3 - 9-3], [10-3 - 10-3], [0-4 - 0-4], [1-4 - 1-4], [2-4 - 2-4], [3-4 - 3-4], [4-4 - 4-4], [5-4 - 5-4], [6-4 - 6-4], [7-4 - 7-4], [8-4 - 8-4], [9-4 - 9-4], [10-4 - 10-4], [0-5 - 0-5], [1-5 - 1-5], [2-5 - 2-5], [3-5 - 3-5], [4-5 - 4-5], [5-5 - 5-5], [6-5 - 6-5], [7-5 - 7-5], [8-5 - 8-5], [9-5 - 9-5], [10-5 - 10-5], [0-6 - 0-6], [1-6 - 1-6], [2-6 - 2-6], [3-6 - 3-6], [4-6 - 4-6], [5-6 - 5-6], [6-6 - 6-6], [7-6 - 7-6], [8-6 - 8-6], [9-6 - 9-6], [10-6 - 10-6], [0-7 - 0-7], [1-7 - 1-7], [2-7 - 2-7], [3-7 - 3-7], [4-7 - 4-7], [5-7 - 5-7], [6-7 - 6-7], [7-7 - 7-7], [8-7 - 8-7], [9-7 - 9-7], [10-7 - 10-7], [0-8 - 0-8], [1-8 - 1-8], [2-8 - 2-8], [3-8 - 3-8], [4-8 - 4-8], [5-8 - 5-8], [6-8 - 6-8], [7-8 - 7-8], [8-8 - 8-8], [9-8 - 9-8], [10-8 - 10-8], [0-9 - 0-9], [1-9 - 1-9], [2-9 - 2-9], [3-9 - 3-9], [4-9 - 4-9], [5-9 - 5-9], [6-9 - 6-9], [7-9 - 7-9], [8-9 - 8-9], [9-9 - 9-9], [10-9 - 10-9]},stream_in1=0)",
+      "active_cores_per_call": 64,
+      "allowed_cores": 110,
+      "partition": "1D multicast means (in0), partition output N across workers",
+      "requested_per_core_n_tiles": 16,
+      "effective_per_core_n_tiles": 16,
+      "out_block_n_tiles": 16,
+      "n_blocks_per_worker": 1,
+      "buffering": "Fixed1xout_block_n output blocks; per-core N ownership grows at long contexts, CB blocks do not",
+      "input_layout": "BF16 original K32x32; BF16 mean tiny tiles",
+      "output_dtype": "FP32",
+      "fidelity": "HiFi4",
+      "fp32_dst": true,
+      "packer_l1_acc": false,
+      "correction_output_bytes": 4194304,
+      "useful_flops": 67108864,
+      "physical_tile_row_equivalents_per_invocation": 32,
+      "estimated_mvmul_count": 262144,
+      "compulsory_k_read_bytes": 8388608,
+      "k_read_warning": "Algorithmic minimum per invocation, not measured traffic; no K read sharing across calls",
+      "producer_and_retiling_included": false,
+      "comparison_warning": "padded32 is ONE32-row call for eight means; legacy32 is EIGHT32-row calls",
+      "all_physical_rows_accuracy": [
+        {
+          "l2_pct": 0.030886346071351187,
+          "max_abs": 0.001620246097445488,
+          "gain": 1.0000422559468742,
+          "pcc": 0.9999999531984032
+        }
+      ],
+      "unique_eight_rows_accuracy": {
+        "l2_pct": 0.03088634607135456,
+        "max_abs": 0.001620246097445488,
+        "gain": 1.0000422559468758,
+        "pcc": 0.9999999531984032
+      },
+      "versus_first_case": {
+        "l2_pct": 0.0,
+        "max_abs": 0.0,
+        "gain": 1.0,
+        "pcc": 1.000000000000003
+      },
+      "replay_ms": [
+        0.046837900299578905,
+        0.04670644993893802,
+        0.0466454541310668,
+        0.04691839567385614,
+        0.04697740077972412,
+        0.04679844714701176,
+        0.0467028992716223,
+        0.046862399904057384,
+        0.04658295074477792,
+        0.04682344733737409,
+        0.046760402619838715,
+        0.046607450349256396,
+        0.04670839989557862,
+        0.04676544922403991,
+        0.0466209021396935
+      ],
+      "median_ms": 0.046760402619838715,
+      "unique_useful_tflops": 1.4351643749861167,
+      "trace_equal": true,
+      "partial_tile_input_output_conversion_exact": true
+    }
+  ],
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/tiny_mean_matmul_probe.py": "250fe5f577026954c0f11118a7fac0f882066651abe21133b1d54c214f0347fd",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h": "3d67dd08c70dcd9005282d3afd0de5eb150e73c8ad68876a6f44e69ec2366768",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h": "8466abbf207c6fea121c30facae03aea423e74b9125e63c6b2788de0cc3cbb92",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_tile_api.h": "d0a28b25d2140603f73b73a42374675c31056584dec14229e5d5c75f4f650f44",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_math_matmul.h": "41e1b2e27caa7177f4c8c8e8b7b8f0c3e1475a4faab7b8b9e34053f0b25afa3d",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_unpack_AB_matmul.h": "039ad371e959a2e3cd6ff703d86cfa289b707f445fc2baf4860fec9cd4922cdc",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h": "072ade56a8004b61646373ba4b659177edd578af744db2b85b42683aefb8ad0e",
+    "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp": "6945eb328115f1898b12c4c528ec4b98c76c77c2e1e3acf06b841eb25bde1173",
+    "ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp": "403768276b4d155d925c9ed9ea06aa363edb0b317d3254503cb5b544d3a0d4d2",
+    "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp": "f3b30a1cafe3207fa6f503e58a016be553677a38a75ab30e985903e95ad99da9",
+    "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_padding.cpp": "b0d94f7980382e810c1e11ed9cb6de17f729dd5238672e00b799c6f608ef29ce",
+    "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp": "3cafe648c754d5dd68a8c5b62e04aa8b7d2f717a166c573e6012169c90f42fc0",
+    "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp": "b1ef4a28e9a6f8af13e812e5c7b033c2b7d06e3b734538f3c988d4a0b34648e4",
+    "ttnn/cpp/ttnn/operations/matmul/device/matmul_device_operation.cpp": "f06c6298dbba8b3f9346187f0ef08bebd538b8f7e5eb13e091a76a6f490cdcec",
+    "ttnn/cpp/ttnn/operations/matmul/matmul.cpp": "a6e437395467a7fe065e890bec7c6a91545c68e44161531798cf0450948cab36",
+    "ttnn/cpp/ttnn/operations/matmul/matmul_nanobind.cpp": "44753d57c922ec81e734bf60e3896e2ab5722377815f3644af850da3aa061035"
+  },
+  "host_means_sha256": "dfb43e0985fa56d0b3cfd1a9c9cd7cb4d3ebcf50af21f3bcab9fd2a967ed2a05",
+  "original_k_sha256": "4d26d8568d538a2ef75e8f5e432eb465e9ce13eff0031e728b557e3b9efb80ca",
+  "timing_scope": "Device matmul primitive only; host means/upload/retiling/producer/attention integration excluded",
+  "accuracy_scope": "FP64 original BF16 mean @ original BF16 K; every physical output row and eight unique rows"
+}

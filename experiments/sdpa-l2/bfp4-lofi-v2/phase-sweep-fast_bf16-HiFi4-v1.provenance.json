@@ -1,0 +1,138 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "0cc1609c814bebaee77f661dc9ca10e4a8608bdbd1e3beffd8a1011971775505",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "59850a78447ef45ed0b613ab29bcd833c057ecaef941e2fb24fa56bc061d092d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident.py": "0ef21da49abc58ced3b039883c283661b2cbedf31a6e0d06a1d9bdfbf0145e04",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "d08c15e304dd088b71161540c433c9a4aebe564619753311a470f41e75a5108b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/round_p.hpp": "02559f0c4e110fb0d671fdd23f36983fd86205ee5822f72ee5c944c83a944559",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "6c99e3dbf7d372e6fa021c401b8c7cf7903af4326fed973e79fd3cdf595335d0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_STREAMING_ACCURACY": "1",
+    "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+    "SDPA_OUT_A_CB": "8",
+    "SDPA_OUT_B_CB": "9",
+    "SDPA_LOFI_SAFE_RESCALE": "1",
+    "SDPA_DENOM_PHASES": "2"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      6,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      8,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      9,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      13,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      14,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      16,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "phase-sweep-fast_bf16-HiFi4-v1",
+    "variant": "pervalue_rawp",
+    "qkv_route": "host",
+    "no_p_round": false,
+    "skip_residual_reconfig": false,
+    "destination": "fast_bf16",
+    "exp_quality": "cheap",
+    "fidelity": "HiFi4",
+    "safe_rescale": true,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 20,
+    "iters": 10,
+    "seed": 1236,
+    "distribution": "normal",
+    "distinct_kv": false,
+    "hybrid_block_pack": false,
+    "mode": "fast"
+  }
+}

@@ -1,0 +1,839 @@
+{
+  "label": "b8-pipeline-v1",
+  "count": 524288,
+  "distributions": [
+    "normal",
+    "dense_fixed_ties"
+  ],
+  "cores": 110,
+  "seed": 1252,
+  "host_only": false,
+  "records": [
+    {
+      "distribution": "normal",
+      "input_shape": [
+        1,
+        1,
+        4096,
+        128
+      ],
+      "numel": 524288,
+      "input_sha256": "0796012f113bab2523eefc7f0283d3d876e6cf31463f52f14eced396f153f84d",
+      "model_vs_input": {
+        "single_shared_RNA": {
+          "finite": true,
+          "mismatch": 418052,
+          "mismatch_pct": 79.73709106445312,
+          "gain": 1.0028406184414875,
+          "gain_error_pct": 0.284061844148753,
+          "l2_pct": 0.7670869216323806,
+          "gain_removed_l2_pct": 0.7125526044007565,
+          "max_absolute_error": 0.03125,
+          "mean_error": -5.126413611833414e-06
+        },
+        "perdatum_RNE7_then_shared_RNA": {
+          "finite": true,
+          "mismatch": 418472,
+          "mismatch_pct": 79.81719970703125,
+          "gain": 1.0018380141650696,
+          "gain_error_pct": 0.1838014165069568,
+          "l2_pct": 0.8099240147007851,
+          "gain_removed_l2_pct": 0.7887927160408637,
+          "max_absolute_error": 0.0390625,
+          "mean_error": 8.314433785017172e-06
+        },
+        "perdatum_RNA7_then_shared_RNA": {
+          "finite": true,
+          "mismatch": 418472,
+          "mismatch_pct": 79.81719970703125,
+          "gain": 1.005383277662048,
+          "gain_error_pct": 0.5383277662047936,
+          "l2_pct": 0.9343850538531384,
+          "gain_removed_l2_pct": 0.7637268130668159,
+          "max_absolute_error": 0.046875,
+          "mean_error": -1.0472228950675344e-07
+        },
+        "single_shared_RNE": {
+          "finite": true,
+          "mismatch": 418052,
+          "mismatch_pct": 79.73709106445312,
+          "gain": 0.9999506967692442,
+          "gain_error_pct": -0.0049303230755803895,
+          "l2_pct": 0.7670869216323806,
+          "gain_removed_l2_pct": 0.7670710770547505,
+          "max_absolute_error": 0.03125,
+          "mean_error": 5.509288030225434e-07
+        }
+      },
+      "routes": {
+        "typecast_bf16_to_b8": {
+          "contract": "High-level ttnn.typecast of BF16 device tensor; internal DST not forced",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 418052,
+            "mismatch_pct": 79.73709106445312,
+            "gain": 1.0028406184414875,
+            "gain_error_pct": 0.284061844148753,
+            "l2_pct": 0.7670869216323806,
+            "gain_removed_l2_pct": 0.7125526044007565,
+            "max_absolute_error": 0.03125,
+            "mean_error": -5.126413611833414e-06
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 47884,
+              "mismatch_pct": 9.133148193359375,
+              "gain": 1.000970011379904,
+              "gain_error_pct": 0.09700113799040455,
+              "l2_pct": 0.7140080257044089,
+              "gain_removed_l2_pct": 0.7073883233407847,
+              "max_absolute_error": 0.0625,
+              "mean_error": -1.3440847396850586e-05
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 61330,
+              "mismatch_pct": 11.697769165039062,
+              "gain": 0.9974339161091179,
+              "gain_error_pct": -0.2566083890882087,
+              "l2_pct": 0.8561096439536404,
+              "gain_removed_l2_pct": 0.8167471194439385,
+              "max_absolute_error": 0.0625,
+              "mean_error": -5.02169132232666e-06
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 54257,
+              "mismatch_pct": 10.348701477050781,
+              "gain": 1.0028612826351644,
+              "gain_error_pct": 0.2861282635164386,
+              "l2_pct": 0.7583397279598267,
+              "gain_removed_l2_pct": 0.7022889432557398,
+              "max_absolute_error": 0.0625,
+              "mean_error": -5.677342414855957e-06
+            }
+          },
+          "exact_matching_models": [
+            "single_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "host_pack_b8": {
+          "contract": "ttnn.from_torch FP32 host values equal to BF16 input; no device typecast",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 418052,
+            "mismatch_pct": 79.73709106445312,
+            "gain": 0.9999506967692442,
+            "gain_error_pct": -0.0049303230755803895,
+            "l2_pct": 0.7670869216323806,
+            "gain_removed_l2_pct": 0.7670710770547505,
+            "max_absolute_error": 0.03125,
+            "mean_error": 5.509288030225434e-07
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 54257,
+              "mismatch_pct": 10.348701477050781,
+              "gain": 0.9970979833193327,
+              "gain_error_pct": -0.2902016680667252,
+              "l2_pct": 0.756157553698388,
+              "gain_removed_l2_pct": 0.6982529898729188,
+              "max_absolute_error": 0.0625,
+              "mean_error": 5.677342414855957e-06
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 53575,
+              "mismatch_pct": 10.218620300292969,
+              "gain": 0.9980823890065135,
+              "gain_error_pct": -0.19176109934865293,
+              "l2_pct": 0.8241816899647326,
+              "gain_removed_l2_pct": 0.8015629350523155,
+              "max_absolute_error": 0.0625,
+              "mean_error": -7.763504981994629e-06
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 115030,
+              "mismatch_pct": 21.940231323242188,
+              "gain": 0.9945465460176935,
+              "gain_error_pct": -0.5453453982306455,
+              "l2_pct": 1.1412679200921096,
+              "gain_removed_l2_pct": 1.002542199640481,
+              "max_absolute_error": 0.0625,
+              "mean_error": 6.556510925292969e-07
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            }
+          },
+          "exact_matching_models": [
+            "single_shared_RNE"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "preprocess_bits8_bf16_dst": {
+          "contract": "Existing preprocess.build(bits=8, output_format=b8, fp32_dst=False, batch=4); 110 cores. RNE8 SFPU step should be identity on BF16 input.",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 418472,
+            "mismatch_pct": 79.81719970703125,
+            "gain": 1.005383277662048,
+            "gain_error_pct": 0.5383277662047936,
+            "l2_pct": 0.9343850538531384,
+            "gain_removed_l2_pct": 0.7637268130668159,
+            "max_absolute_error": 0.046875,
+            "mean_error": -1.0472228950675344e-07
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 61330,
+              "mismatch_pct": 11.697769165039062,
+              "gain": 1.002505466360797,
+              "gain_error_pct": 0.25054663607970706,
+              "l2_pct": 0.8582833709125877,
+              "gain_removed_l2_pct": 0.8208999500147586,
+              "max_absolute_error": 0.0625,
+              "mean_error": 5.02169132232666e-06
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 61455,
+              "mismatch_pct": 11.721611022949219,
+              "gain": 1.0035112400514374,
+              "gain_error_pct": 0.35112400514374364,
+              "l2_pct": 0.7952648052128575,
+              "gain_removed_l2_pct": 0.7135531118438136,
+              "max_absolute_error": 0.0625,
+              "mean_error": -8.419156074523926e-06
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 115030,
+              "mismatch_pct": 21.940231323242188,
+              "gain": 1.0053811960490793,
+              "gain_error_pct": 0.5381196049079273,
+              "l2_pct": 1.147467601666489,
+              "gain_removed_l2_pct": 1.0134639548044762,
+              "max_absolute_error": 0.0625,
+              "mean_error": -6.556510925292969e-07
+            }
+          },
+          "exact_matching_models": [
+            "perdatum_RNA7_then_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "preprocess_bits8_fp32_dst": {
+          "contract": "Existing preprocess.build(bits=8, output_format=b8, fp32_dst=True, batch=4); 110 cores. RNE8 SFPU step should be identity on BF16 input.",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 418472,
+            "mismatch_pct": 79.81719970703125,
+            "gain": 1.005383277662048,
+            "gain_error_pct": 0.5383277662047936,
+            "l2_pct": 0.9343850538531384,
+            "gain_removed_l2_pct": 0.7637268130668159,
+            "max_absolute_error": 0.046875,
+            "mean_error": -1.0472228950675344e-07
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 61330,
+              "mismatch_pct": 11.697769165039062,
+              "gain": 1.002505466360797,
+              "gain_error_pct": 0.25054663607970706,
+              "l2_pct": 0.8582833709125877,
+              "gain_removed_l2_pct": 0.8208999500147586,
+              "max_absolute_error": 0.0625,
+              "mean_error": 5.02169132232666e-06
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 61455,
+              "mismatch_pct": 11.721611022949219,
+              "gain": 1.0035112400514374,
+              "gain_error_pct": 0.35112400514374364,
+              "l2_pct": 0.7952648052128575,
+              "gain_removed_l2_pct": 0.7135531118438136,
+              "max_absolute_error": 0.0625,
+              "mean_error": -8.419156074523926e-06
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 115030,
+              "mismatch_pct": 21.940231323242188,
+              "gain": 1.0053811960490793,
+              "gain_error_pct": 0.5381196049079273,
+              "l2_pct": 1.147467601666489,
+              "gain_removed_l2_pct": 1.0134639548044762,
+              "max_absolute_error": 0.0625,
+              "mean_error": -6.556510925292969e-07
+            }
+          },
+          "exact_matching_models": [
+            "perdatum_RNA7_then_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        }
+      },
+      "route_pairs": {
+        "typecast_bf16_to_b8__vs__host_pack_b8": {
+          "finite": true,
+          "mismatch": 54257,
+          "mismatch_pct": 10.348701477050781,
+          "gain": 1.0028612826351644,
+          "gain_error_pct": 0.2861282635164386,
+          "l2_pct": 0.7583397279598267,
+          "gain_removed_l2_pct": 0.7022889432557398,
+          "max_absolute_error": 0.0625,
+          "mean_error": -5.677342414855957e-06
+        },
+        "typecast_bf16_to_b8__vs__preprocess_bits8_bf16_dst": {
+          "finite": true,
+          "mismatch": 61330,
+          "mismatch_pct": 11.697769165039062,
+          "gain": 0.9974339161091179,
+          "gain_error_pct": -0.2566083890882087,
+          "l2_pct": 0.8561096439536404,
+          "gain_removed_l2_pct": 0.8167471194439385,
+          "max_absolute_error": 0.0625,
+          "mean_error": -5.02169132232666e-06
+        },
+        "typecast_bf16_to_b8__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 61330,
+          "mismatch_pct": 11.697769165039062,
+          "gain": 0.9974339161091179,
+          "gain_error_pct": -0.2566083890882087,
+          "l2_pct": 0.8561096439536404,
+          "gain_removed_l2_pct": 0.8167471194439385,
+          "max_absolute_error": 0.0625,
+          "mean_error": -5.02169132232666e-06
+        },
+        "host_pack_b8__vs__preprocess_bits8_bf16_dst": {
+          "finite": true,
+          "mismatch": 115030,
+          "mismatch_pct": 21.940231323242188,
+          "gain": 0.9945465460176935,
+          "gain_error_pct": -0.5453453982306455,
+          "l2_pct": 1.1412679200921096,
+          "gain_removed_l2_pct": 1.002542199640481,
+          "max_absolute_error": 0.0625,
+          "mean_error": 6.556510925292969e-07
+        },
+        "host_pack_b8__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 115030,
+          "mismatch_pct": 21.940231323242188,
+          "gain": 0.9945465460176935,
+          "gain_error_pct": -0.5453453982306455,
+          "l2_pct": 1.1412679200921096,
+          "gain_removed_l2_pct": 1.002542199640481,
+          "max_absolute_error": 0.0625,
+          "mean_error": 6.556510925292969e-07
+        },
+        "preprocess_bits8_bf16_dst__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        }
+      },
+      "identity_checks": {
+        "bits8_to_bf16_bf16_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        },
+        "bits8_to_bf16_fp32_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        }
+      },
+      "matrices_and_failure_examples": "experiments/sdpa-l2/bfp4-lofi-v2/b8-pipeline-v1-normal.pt"
+    },
+    {
+      "distribution": "dense_fixed_ties",
+      "input_shape": [
+        1,
+        1,
+        4096,
+        128
+      ],
+      "numel": 524288,
+      "input_sha256": "c34d4855eb36279910a44891ae0294e4c762108eb1a331f60b18ff0e4516b4fb",
+      "model_vs_input": {
+        "single_shared_RNA": {
+          "finite": true,
+          "mismatch": 423123,
+          "mismatch_pct": 80.70430755615234,
+          "gain": 1.0013434042785825,
+          "gain_error_pct": 0.1343404278582483,
+          "l2_pct": 0.6062302375845665,
+          "gain_removed_l2_pct": 0.591157974153033,
+          "max_absolute_error": 2.0,
+          "mean_error": 0.0008461930001431028
+        },
+        "perdatum_RNE7_then_shared_RNA": {
+          "finite": true,
+          "mismatch": 423123,
+          "mismatch_pct": 80.70430755615234,
+          "gain": 1.000646668695464,
+          "gain_error_pct": 0.06466686954640366,
+          "l2_pct": 0.6253015363301455,
+          "gain_removed_l2_pct": 0.6219487175965067,
+          "max_absolute_error": 2.5,
+          "mean_error": -0.0023961166707522352
+        },
+        "perdatum_RNA7_then_shared_RNA": {
+          "finite": true,
+          "mismatch": 423123,
+          "mismatch_pct": 80.70430755615234,
+          "gain": 1.0022409636961718,
+          "gain_error_pct": 0.22409636961717716,
+          "l2_pct": 0.6793802424634329,
+          "gain_removed_l2_pct": 0.6413566332190582,
+          "max_absolute_error": 3.0,
+          "mean_error": -0.027893021641830273
+        },
+        "single_shared_RNE": {
+          "finite": true,
+          "mismatch": 423123,
+          "mismatch_pct": 80.70430755615234,
+          "gain": 1.0000341858781912,
+          "gain_error_pct": 0.003418587819115082,
+          "l2_pct": 0.6062302375845665,
+          "gain_removed_l2_pct": 0.6062205986430796,
+          "max_absolute_error": 2.0,
+          "mean_error": -0.0010038614827863057
+        }
+      },
+      "routes": {
+        "typecast_bf16_to_b8": {
+          "contract": "High-level ttnn.typecast of BF16 device tensor; internal DST not forced",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 423123,
+            "mismatch_pct": 80.70430755615234,
+            "gain": 1.0013434042785825,
+            "gain_error_pct": 0.1343404278582483,
+            "l2_pct": 0.6062302375845665,
+            "gain_removed_l2_pct": 0.591157974153033,
+            "max_absolute_error": 2.0,
+            "mean_error": 0.0008461930001431028
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 27938,
+              "mismatch_pct": 5.3287506103515625,
+              "gain": 1.0006825551236187,
+              "gain_error_pct": 0.06825551236187,
+              "l2_pct": 0.491539526171857,
+              "gain_removed_l2_pct": 0.486777455128546,
+              "max_absolute_error": 4.0,
+              "mean_error": 0.003242309670895338
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 32002,
+              "mismatch_pct": 6.1038970947265625,
+              "gain": 0.999087973698199,
+              "gain_error_pct": -0.09120263018009833,
+              "l2_pct": 0.5259631672811501,
+              "gain_removed_l2_pct": 0.5179954957184787,
+              "max_absolute_error": 4.0,
+              "mean_error": 0.028739214641973376
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 26399,
+              "mismatch_pct": 5.035209655761719,
+              "gain": 1.001297666695225,
+              "gain_error_pct": 0.12976666952249083,
+              "l2_pct": 0.47778845357344274,
+              "gain_removed_l2_pct": 0.45982868315179126,
+              "max_absolute_error": 4.0,
+              "mean_error": 0.0018500544829294086
+            }
+          },
+          "exact_matching_models": [
+            "single_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "host_pack_b8": {
+          "contract": "ttnn.from_torch FP32 host values equal to BF16 input; no device typecast",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 423123,
+            "mismatch_pct": 80.70430755615234,
+            "gain": 1.0000341858781912,
+            "gain_error_pct": 0.003418587819115082,
+            "l2_pct": 0.6062302375845665,
+            "gain_removed_l2_pct": 0.6062205986430796,
+            "max_absolute_error": 2.0,
+            "mean_error": -0.0010038614827863057
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 26399,
+              "mismatch_pct": 5.035209655761719,
+              "gain": 0.9986829533650251,
+              "gain_error_pct": -0.13170466349748944,
+              "l2_pct": 0.477164215389545,
+              "gain_removed_l2_pct": 0.45862792115322165,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.0018500544829294086
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 29957,
+              "mismatch_pct": 5.713844299316406,
+              "gain": 0.9993741801762581,
+              "gain_error_pct": -0.062581982374188,
+              "l2_pct": 0.509494510101209,
+              "gain_removed_l2_pct": 0.505636382497715,
+              "max_absolute_error": 4.0,
+              "mean_error": 0.0013922551879659295
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 58401,
+              "mismatch_pct": 11.139106750488281,
+              "gain": 0.9977732929911517,
+              "gain_error_pct": -0.22267070088483054,
+              "l2_pct": 0.7098689525160751,
+              "gain_removed_l2_pct": 0.6740413108361173,
+              "max_absolute_error": 4.0,
+              "mean_error": 0.026889160159043968
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            }
+          },
+          "exact_matching_models": [
+            "single_shared_RNE"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "preprocess_bits8_bf16_dst": {
+          "contract": "Existing preprocess.build(bits=8, output_format=b8, fp32_dst=False, batch=4); 110 cores. RNE8 SFPU step should be identity on BF16 input.",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 423123,
+            "mismatch_pct": 80.70430755615234,
+            "gain": 1.0022409636961718,
+            "gain_error_pct": 0.22409636961717716,
+            "l2_pct": 0.6793802424634329,
+            "gain_removed_l2_pct": 0.6413566332190582,
+            "max_absolute_error": 3.0,
+            "mean_error": -0.027893021641830273
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 32002,
+              "mismatch_pct": 6.1038970947265625,
+              "gain": 1.000885954094549,
+              "gain_error_pct": 0.08859540945489464,
+              "l2_pct": 0.526436221911244,
+              "gain_removed_l2_pct": 0.5189276916523844,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.028739214641973376
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 28444,
+              "mismatch_pct": 5.425262451171875,
+              "gain": 1.0015833997366137,
+              "gain_error_pct": 0.15833997366136998,
+              "l2_pct": 0.4959208217261473,
+              "gain_removed_l2_pct": 0.4699637370717538,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.025496904971078038
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 58401,
+              "mismatch_pct": 11.139106750488281,
+              "gain": 1.0021859403607383,
+              "gain_error_pct": 0.218594036073827,
+              "l2_pct": 0.7114369167859879,
+              "gain_removed_l2_pct": 0.677022255142927,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.026889160159043968
+            }
+          },
+          "exact_matching_models": [
+            "perdatum_RNA7_then_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        },
+        "preprocess_bits8_fp32_dst": {
+          "contract": "Existing preprocess.build(bits=8, output_format=b8, fp32_dst=True, batch=4); 110 cores. RNE8 SFPU step should be identity on BF16 input.",
+          "vs_input": {
+            "finite": true,
+            "mismatch": 423123,
+            "mismatch_pct": 80.70430755615234,
+            "gain": 1.0022409636961718,
+            "gain_error_pct": 0.22409636961717716,
+            "l2_pct": 0.6793802424634329,
+            "gain_removed_l2_pct": 0.6413566332190582,
+            "max_absolute_error": 3.0,
+            "mean_error": -0.027893021641830273
+          },
+          "vs_models": {
+            "single_shared_RNA": {
+              "finite": true,
+              "mismatch": 32002,
+              "mismatch_pct": 6.1038970947265625,
+              "gain": 1.000885954094549,
+              "gain_error_pct": 0.08859540945489464,
+              "l2_pct": 0.526436221911244,
+              "gain_removed_l2_pct": 0.5189276916523844,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.028739214641973376
+            },
+            "perdatum_RNE7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 28444,
+              "mismatch_pct": 5.425262451171875,
+              "gain": 1.0015833997366137,
+              "gain_error_pct": 0.15833997366136998,
+              "l2_pct": 0.4959208217261473,
+              "gain_removed_l2_pct": 0.4699637370717538,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.025496904971078038
+            },
+            "perdatum_RNA7_then_shared_RNA": {
+              "finite": true,
+              "mismatch": 0,
+              "mismatch_pct": 0.0,
+              "gain": 1.0,
+              "gain_error_pct": 0.0,
+              "l2_pct": 0.0,
+              "gain_removed_l2_pct": 0.0,
+              "max_absolute_error": 0.0,
+              "mean_error": 0.0
+            },
+            "single_shared_RNE": {
+              "finite": true,
+              "mismatch": 58401,
+              "mismatch_pct": 11.139106750488281,
+              "gain": 1.0021859403607383,
+              "gain_error_pct": 0.218594036073827,
+              "l2_pct": 0.7114369167859879,
+              "gain_removed_l2_pct": 0.677022255142927,
+              "max_absolute_error": 4.0,
+              "mean_error": -0.026889160159043968
+            }
+          },
+          "exact_matching_models": [
+            "perdatum_RNA7_then_shared_RNA"
+          ],
+          "interpretation": "Exact on this dataset only"
+        }
+      },
+      "route_pairs": {
+        "typecast_bf16_to_b8__vs__host_pack_b8": {
+          "finite": true,
+          "mismatch": 26399,
+          "mismatch_pct": 5.035209655761719,
+          "gain": 1.001297666695225,
+          "gain_error_pct": 0.12976666952249083,
+          "l2_pct": 0.47778845357344274,
+          "gain_removed_l2_pct": 0.45982868315179126,
+          "max_absolute_error": 4.0,
+          "mean_error": 0.0018500544829294086
+        },
+        "typecast_bf16_to_b8__vs__preprocess_bits8_bf16_dst": {
+          "finite": true,
+          "mismatch": 32002,
+          "mismatch_pct": 6.1038970947265625,
+          "gain": 0.999087973698199,
+          "gain_error_pct": -0.09120263018009833,
+          "l2_pct": 0.5259631672811501,
+          "gain_removed_l2_pct": 0.5179954957184787,
+          "max_absolute_error": 4.0,
+          "mean_error": 0.028739214641973376
+        },
+        "typecast_bf16_to_b8__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 32002,
+          "mismatch_pct": 6.1038970947265625,
+          "gain": 0.999087973698199,
+          "gain_error_pct": -0.09120263018009833,
+          "l2_pct": 0.5259631672811501,
+          "gain_removed_l2_pct": 0.5179954957184787,
+          "max_absolute_error": 4.0,
+          "mean_error": 0.028739214641973376
+        },
+        "host_pack_b8__vs__preprocess_bits8_bf16_dst": {
+          "finite": true,
+          "mismatch": 58401,
+          "mismatch_pct": 11.139106750488281,
+          "gain": 0.9977732929911517,
+          "gain_error_pct": -0.22267070088483054,
+          "l2_pct": 0.7098689525160751,
+          "gain_removed_l2_pct": 0.6740413108361173,
+          "max_absolute_error": 4.0,
+          "mean_error": 0.026889160159043968
+        },
+        "host_pack_b8__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 58401,
+          "mismatch_pct": 11.139106750488281,
+          "gain": 0.9977732929911517,
+          "gain_error_pct": -0.22267070088483054,
+          "l2_pct": 0.7098689525160751,
+          "gain_removed_l2_pct": 0.6740413108361173,
+          "max_absolute_error": 4.0,
+          "mean_error": 0.026889160159043968
+        },
+        "preprocess_bits8_bf16_dst__vs__preprocess_bits8_fp32_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        }
+      },
+      "identity_checks": {
+        "bits8_to_bf16_bf16_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        },
+        "bits8_to_bf16_fp32_dst": {
+          "finite": true,
+          "mismatch": 0,
+          "mismatch_pct": 0.0,
+          "gain": 1.0,
+          "gain_error_pct": 0.0,
+          "l2_pct": 0.0,
+          "gain_removed_l2_pct": 0.0,
+          "max_absolute_error": 0.0,
+          "mean_error": 0.0
+        }
+      },
+      "matrices_and_failure_examples": "experiments/sdpa-l2/bfp4-lofi-v2/b8-pipeline-v1-dense_fixed_ties.pt"
+    }
+  ],
+  "identity_and_finite_checks_pass": true,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/b8_pipeline_probe.py": "e2dea9e9a595d4e4afc13605a5d812a515c14dd38d005b5a26d518def222ab79",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "57b0ec356833d356597b4076add6732e731c0422067ccda8caef47f7f062899b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11"
+  },
+  "model_contract": "Independent finite-normal-BF16/zero integer models; native groups16; exponent reselected at each stage; BFP8 magnitude127 saturation; no frozen-v1 exponent clamp. Gain=(actual\u00b7reference)/(reference\u00b7reference). Exact matches identify these datasets, not an architectural guarantee or all-range contract.",
+  "note": "Unknown rounding model is reported, not asserted away; complete outputs and mismatch groups are saved"
+}

@@ -1,0 +1,1088 @@
+{
+  "cpu_only": true,
+  "threads": 4,
+  "records": [
+    {
+      "case": "identity",
+      "fidelity": "LoFi",
+      "order": "tile_phase_half",
+      "l2_pct": 2.3552841161586087,
+      "max_abs": 0.109375,
+      "exact": 246,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "e281b06db5acc98432cb420b2f0181f82b18da9d0cd46e388dda8d6092d4ad5b",
+      "device_l2_pct": 2.3552841161586087,
+      "device_exact": 246,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "LoFi",
+      "order": "half_phase",
+      "l2_pct": 2.3552841161586087,
+      "max_abs": 0.109375,
+      "exact": 246,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "e281b06db5acc98432cb420b2f0181f82b18da9d0cd46e388dda8d6092d4ad5b",
+      "device_l2_pct": 2.3552841161586087,
+      "device_exact": 246,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "LoFi",
+      "order": "phase_global",
+      "l2_pct": 2.3552841161586087,
+      "max_abs": 0.109375,
+      "exact": 246,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "e281b06db5acc98432cb420b2f0181f82b18da9d0cd46e388dda8d6092d4ad5b",
+      "device_l2_pct": 2.3552841161586087,
+      "device_exact": 246,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi2",
+      "order": "tile_phase_half",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi2",
+      "order": "half_phase",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi2",
+      "order": "phase_global",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi4",
+      "order": "tile_phase_half",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi4",
+      "order": "half_phase",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi4",
+      "order": "phase_global",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "identity",
+      "fidelity": "HiFi4",
+      "ablation": "extra13_product_alignment_bits",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 0,
+        "16": 0
+      },
+      "output_sha256": "80ea1fd5bc72cfabf41d06c778a1135c75d79833bf46b2d3965157bd4bfe1083"
+    },
+    {
+      "case": "one_term",
+      "fidelity": "LoFi",
+      "order": "tile_phase_half",
+      "l2_pct": 2.4318802117033633,
+      "max_abs": 0.2607421875,
+      "exact": 180,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 226,
+        "16": 1399
+      },
+      "output_sha256": "6aa0f431f2eae963fa7c7ae74299a2ae150b9ee6b2224c068b2242eb210fdf48",
+      "device_l2_pct": 2.4318802117033633,
+      "device_exact": 180,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "LoFi",
+      "order": "half_phase",
+      "l2_pct": 2.4318802117033633,
+      "max_abs": 0.2607421875,
+      "exact": 180,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 226,
+        "16": 1399
+      },
+      "output_sha256": "6aa0f431f2eae963fa7c7ae74299a2ae150b9ee6b2224c068b2242eb210fdf48",
+      "device_l2_pct": 2.4318802117033633,
+      "device_exact": 180,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "LoFi",
+      "order": "phase_global",
+      "l2_pct": 2.4318802117033633,
+      "max_abs": 0.2607421875,
+      "exact": 180,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 0,
+        "12": 0,
+        "13": 226,
+        "16": 1399
+      },
+      "output_sha256": "6aa0f431f2eae963fa7c7ae74299a2ae150b9ee6b2224c068b2242eb210fdf48",
+      "device_l2_pct": 2.4318802117033633,
+      "device_exact": 180,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi2",
+      "order": "tile_phase_half",
+      "l2_pct": 0.25875843334406023,
+      "max_abs": 0.024169921875,
+      "exact": 1152,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 410,
+        "12": 1250,
+        "13": 1505,
+        "16": 1863
+      },
+      "output_sha256": "b00b1d26634cc7d558b1c88ab8a693f2d02316c410172aff3979a3d086c6ec92",
+      "device_l2_pct": 0.25875843334406023,
+      "device_exact": 1152,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi2",
+      "order": "half_phase",
+      "l2_pct": 0.25875843334406023,
+      "max_abs": 0.024169921875,
+      "exact": 1152,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 410,
+        "12": 1250,
+        "13": 1505,
+        "16": 1863
+      },
+      "output_sha256": "b00b1d26634cc7d558b1c88ab8a693f2d02316c410172aff3979a3d086c6ec92",
+      "device_l2_pct": 0.25875843334406023,
+      "device_exact": 1152,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi2",
+      "order": "phase_global",
+      "l2_pct": 0.25875843334406023,
+      "max_abs": 0.024169921875,
+      "exact": 1152,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 410,
+        "12": 1250,
+        "13": 1505,
+        "16": 1863
+      },
+      "output_sha256": "b00b1d26634cc7d558b1c88ab8a693f2d02316c410172aff3979a3d086c6ec92",
+      "device_l2_pct": 0.25875843334406023,
+      "device_exact": 1152,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi4",
+      "order": "tile_phase_half",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 847,
+        "12": 1596,
+        "13": 1772,
+        "16": 1948
+      },
+      "output_sha256": "53885059167ff9c997fcf6798b1e861475e0e4904419fd647a67b2c961d44989",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi4",
+      "order": "half_phase",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 847,
+        "12": 1596,
+        "13": 1772,
+        "16": 1948
+      },
+      "output_sha256": "53885059167ff9c997fcf6798b1e861475e0e4904419fd647a67b2c961d44989",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi4",
+      "order": "phase_global",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 847,
+        "12": 1596,
+        "13": 1772,
+        "16": 1948
+      },
+      "output_sha256": "53885059167ff9c997fcf6798b1e861475e0e4904419fd647a67b2c961d44989",
+      "device_l2_pct": 0.0,
+      "device_exact": 2048,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "one_term",
+      "fidelity": "HiFi4",
+      "ablation": "extra13_product_alignment_bits",
+      "l2_pct": 0.0,
+      "max_abs": 0.0,
+      "exact": 2048,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 0,
+        "10": 847,
+        "12": 1596,
+        "13": 1772,
+        "16": 1948
+      },
+      "output_sha256": "53885059167ff9c997fcf6798b1e861475e0e4904419fd647a67b2c961d44989"
+    },
+    {
+      "case": "dense32",
+      "fidelity": "LoFi",
+      "order": "tile_phase_half",
+      "l2_pct": 2.638044833850965,
+      "max_abs": 0.7190265655517578,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 4,
+        "10": 175,
+        "12": 992,
+        "13": 1371,
+        "16": 1899
+      },
+      "output_sha256": "bf10d60fae127927bf9a061a6e99d767325ba05ee284ded95e2d1e8fb6ed9a68",
+      "device_l2_pct": 2.638044833850965,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "LoFi",
+      "order": "half_phase",
+      "l2_pct": 2.638044833850965,
+      "max_abs": 0.7190265655517578,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 4,
+        "10": 175,
+        "12": 992,
+        "13": 1371,
+        "16": 1899
+      },
+      "output_sha256": "bf10d60fae127927bf9a061a6e99d767325ba05ee284ded95e2d1e8fb6ed9a68",
+      "device_l2_pct": 2.638044833850965,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "LoFi",
+      "order": "phase_global",
+      "l2_pct": 2.638044833850965,
+      "max_abs": 0.7190265655517578,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 4,
+        "10": 175,
+        "12": 992,
+        "13": 1371,
+        "16": 1899
+      },
+      "output_sha256": "bf10d60fae127927bf9a061a6e99d767325ba05ee284ded95e2d1e8fb6ed9a68",
+      "device_l2_pct": 2.638044833850965,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi2",
+      "order": "tile_phase_half",
+      "l2_pct": 0.40819327046527054,
+      "max_abs": 0.09726142883300781,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1342,
+        "10": 1804,
+        "12": 1974,
+        "13": 2001,
+        "16": 2039
+      },
+      "output_sha256": "1eaff89a1d3a27f26e26602f573bdae478899be0e4fdfb812604437b893cf6d2",
+      "device_l2_pct": 0.40819327046527054,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi2",
+      "order": "half_phase",
+      "l2_pct": 0.40819327046527054,
+      "max_abs": 0.09726142883300781,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1342,
+        "10": 1804,
+        "12": 1974,
+        "13": 2001,
+        "16": 2039
+      },
+      "output_sha256": "1eaff89a1d3a27f26e26602f573bdae478899be0e4fdfb812604437b893cf6d2",
+      "device_l2_pct": 0.40819327046527054,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi2",
+      "order": "phase_global",
+      "l2_pct": 0.40819327046527054,
+      "max_abs": 0.09726142883300781,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1342,
+        "10": 1804,
+        "12": 1974,
+        "13": 2001,
+        "16": 2039
+      },
+      "output_sha256": "1eaff89a1d3a27f26e26602f573bdae478899be0e4fdfb812604437b893cf6d2",
+      "device_l2_pct": 0.40819327046527054,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi4",
+      "order": "tile_phase_half",
+      "l2_pct": 0.03151840900773224,
+      "max_abs": 0.00945138931274414,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1976,
+        "10": 2018,
+        "12": 2038,
+        "13": 2043,
+        "16": 2048
+      },
+      "output_sha256": "79fbe6cfc99e614a6030b70bbcb3e4e9a1bdb96286475e7726751e8c4cb6b610",
+      "device_l2_pct": 0.03151840900773224,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi4",
+      "order": "half_phase",
+      "l2_pct": 0.03151850984915353,
+      "max_abs": 0.00945138931274414,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1976,
+        "10": 2018,
+        "12": 2038,
+        "13": 2043,
+        "16": 2048
+      },
+      "output_sha256": "b97a99a4f4e7e06501138cb1e58fd02b3d5e5879c13db3d542b12546254689b7",
+      "device_l2_pct": 0.03151840900773224,
+      "device_exact": 0,
+      "device_hash_match": false,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi4",
+      "order": "phase_global",
+      "l2_pct": 0.03151840900773224,
+      "max_abs": 0.00945138931274414,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1976,
+        "10": 2018,
+        "12": 2038,
+        "13": 2043,
+        "16": 2048
+      },
+      "output_sha256": "79fbe6cfc99e614a6030b70bbcb3e4e9a1bdb96286475e7726751e8c4cb6b610",
+      "device_l2_pct": 0.03151840900773224,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense32",
+      "fidelity": "HiFi4",
+      "ablation": "extra13_product_alignment_bits",
+      "l2_pct": 4.74568146853659e-06,
+      "max_abs": 2.115964889526367e-06,
+      "exact": 1246,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2012,
+        "10": 2034,
+        "12": 2045,
+        "13": 2046,
+        "16": 2048
+      },
+      "output_sha256": "6a28c038ed83c78517c077d2c498658cf091216bd40a0d1d6e750db427e23a4a"
+    },
+    {
+      "case": "dense128",
+      "fidelity": "LoFi",
+      "order": "tile_phase_half",
+      "l2_pct": 2.6370167524387127,
+      "max_abs": 1.1787478923797607,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 122,
+        "10": 832,
+        "12": 1540,
+        "13": 1738,
+        "16": 1995
+      },
+      "output_sha256": "6873f4df8638e189616f6d6c7587380720e94841bb2a836caced2b7b1bea65f3",
+      "device_l2_pct": 2.6370167524387127,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "LoFi",
+      "order": "half_phase",
+      "l2_pct": 2.6370167524387127,
+      "max_abs": 1.1787478923797607,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 122,
+        "10": 832,
+        "12": 1540,
+        "13": 1738,
+        "16": 1995
+      },
+      "output_sha256": "6873f4df8638e189616f6d6c7587380720e94841bb2a836caced2b7b1bea65f3",
+      "device_l2_pct": 2.6370167524387127,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "LoFi",
+      "order": "phase_global",
+      "l2_pct": 2.6370167524387127,
+      "max_abs": 1.1787478923797607,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 122,
+        "10": 832,
+        "12": 1540,
+        "13": 1738,
+        "16": 1995
+      },
+      "output_sha256": "6873f4df8638e189616f6d6c7587380720e94841bb2a836caced2b7b1bea65f3",
+      "device_l2_pct": 2.6370167524387127,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi2",
+      "order": "tile_phase_half",
+      "l2_pct": 0.39778434120121714,
+      "max_abs": 0.16181063652038574,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1734,
+        "10": 1930,
+        "12": 2008,
+        "13": 2026,
+        "16": 2046
+      },
+      "output_sha256": "4e2d6a938105ddeeaadeb6e94c53778b36deeabf4b16478c95a7852407ac4e85",
+      "device_l2_pct": 0.39778434120121714,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi2",
+      "order": "half_phase",
+      "l2_pct": 0.39778434120121714,
+      "max_abs": 0.16181063652038574,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1734,
+        "10": 1930,
+        "12": 2008,
+        "13": 2026,
+        "16": 2046
+      },
+      "output_sha256": "4e2d6a938105ddeeaadeb6e94c53778b36deeabf4b16478c95a7852407ac4e85",
+      "device_l2_pct": 0.39778434120121714,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi2",
+      "order": "phase_global",
+      "l2_pct": 0.39778434120121714,
+      "max_abs": 0.16181063652038574,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1734,
+        "10": 1930,
+        "12": 2008,
+        "13": 2026,
+        "16": 2046
+      },
+      "output_sha256": "4e2d6a938105ddeeaadeb6e94c53778b36deeabf4b16478c95a7852407ac4e85",
+      "device_l2_pct": 0.39778434120121714,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi4",
+      "order": "tile_phase_half",
+      "l2_pct": 0.03167401068676379,
+      "max_abs": 0.014603078365325928,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2015,
+        "10": 2038,
+        "12": 2045,
+        "13": 2046,
+        "16": 2047
+      },
+      "output_sha256": "6a8d0700a07971b587c2453a374aa22a8c62048f256b0ae48eb4bb3389570662",
+      "device_l2_pct": 0.03167401068676379,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi4",
+      "order": "half_phase",
+      "l2_pct": 0.03167410802828407,
+      "max_abs": 0.014606893062591553,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2009,
+        "10": 2039,
+        "12": 2044,
+        "13": 2046,
+        "16": 2048
+      },
+      "output_sha256": "78698215c62697e955b3ae1b145e1df703a57b746ce508e8ec8ff0c5d4db4888",
+      "device_l2_pct": 0.03167401068676379,
+      "device_exact": 0,
+      "device_hash_match": false,
+      "device_low_bits_match": false
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi4",
+      "order": "phase_global",
+      "l2_pct": 0.03167377450993656,
+      "max_abs": 0.014606893062591553,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2025,
+        "10": 2041,
+        "12": 2046,
+        "13": 2046,
+        "16": 2048
+      },
+      "output_sha256": "c0825331ad513ee3cb28bb024c58d783acb5a3a84e77f2fbf6ea8dbe187967d4",
+      "device_l2_pct": 0.03167401068676379,
+      "device_exact": 0,
+      "device_hash_match": false,
+      "device_low_bits_match": false
+    },
+    {
+      "case": "dense128",
+      "fidelity": "HiFi4",
+      "ablation": "extra13_product_alignment_bits",
+      "l2_pct": 1.2093125982887496e-05,
+      "max_abs": 8.821487426757812e-06,
+      "exact": 177,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2028,
+        "10": 2042,
+        "12": 2045,
+        "13": 2047,
+        "16": 2048
+      },
+      "output_sha256": "02e470466e1ac82ee32aaa8b7322dc3883edd74603b5377bc502e831a41998c8"
+    },
+    {
+      "case": "positive128",
+      "fidelity": "LoFi",
+      "order": "tile_phase_half",
+      "l2_pct": 2.239935067020306,
+      "max_abs": 2.946317195892334,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1670,
+        "10": 1951,
+        "12": 2029,
+        "13": 2040,
+        "16": 2047
+      },
+      "output_sha256": "7271db8e6097366df79b41d1e532ee549f7bce38f62cdc0ada49a59e9cc97cc6",
+      "device_l2_pct": 2.239935067020306,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "LoFi",
+      "order": "half_phase",
+      "l2_pct": 2.239935067020306,
+      "max_abs": 2.946317195892334,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1670,
+        "10": 1951,
+        "12": 2029,
+        "13": 2040,
+        "16": 2047
+      },
+      "output_sha256": "7271db8e6097366df79b41d1e532ee549f7bce38f62cdc0ada49a59e9cc97cc6",
+      "device_l2_pct": 2.239935067020306,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "LoFi",
+      "order": "phase_global",
+      "l2_pct": 2.239935067020306,
+      "max_abs": 2.946317195892334,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 1670,
+        "10": 1951,
+        "12": 2029,
+        "13": 2040,
+        "16": 2047
+      },
+      "output_sha256": "7271db8e6097366df79b41d1e532ee549f7bce38f62cdc0ada49a59e9cc97cc6",
+      "device_l2_pct": 2.239935067020306,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi2",
+      "order": "tile_phase_half",
+      "l2_pct": 0.2833953238345926,
+      "max_abs": 0.4054189473390579,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2035,
+        "10": 2045,
+        "12": 2047,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "fa18c3c7bfa33d1664bdc76efbe32bf3c1c3fae22c9103d2c2b9f2d0b1c1acd1",
+      "device_l2_pct": 0.2833953238345926,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi2",
+      "order": "half_phase",
+      "l2_pct": 0.2833953238345926,
+      "max_abs": 0.4054189473390579,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2035,
+        "10": 2045,
+        "12": 2047,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "fa18c3c7bfa33d1664bdc76efbe32bf3c1c3fae22c9103d2c2b9f2d0b1c1acd1",
+      "device_l2_pct": 0.2833953238345926,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi2",
+      "order": "phase_global",
+      "l2_pct": 0.2833953238345926,
+      "max_abs": 0.4054189473390579,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2035,
+        "10": 2045,
+        "12": 2047,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "fa18c3c7bfa33d1664bdc76efbe32bf3c1c3fae22c9103d2c2b9f2d0b1c1acd1",
+      "device_l2_pct": 0.2833953238345926,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi4",
+      "order": "tile_phase_half",
+      "l2_pct": 0.011827140939423754,
+      "max_abs": 0.025153934955596924,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2040,
+        "10": 2047,
+        "12": 2048,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "b74bcdd76ea32608918bd92ee2c6b76e3a957c0cf6986e2f1b8bbf86e31a3a10",
+      "device_l2_pct": 0.011827140939423754,
+      "device_exact": 0,
+      "device_hash_match": true,
+      "device_low_bits_match": true
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi4",
+      "order": "half_phase",
+      "l2_pct": 0.011826573872384937,
+      "max_abs": 0.025153934955596924,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2039,
+        "10": 2047,
+        "12": 2048,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "dfff0cc11854278be83361e0fd89023d15b556570fce6b137a877fa665bfe416",
+      "device_l2_pct": 0.011827140939423754,
+      "device_exact": 0,
+      "device_hash_match": false,
+      "device_low_bits_match": false
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi4",
+      "order": "phase_global",
+      "l2_pct": 0.011830778858222283,
+      "max_abs": 0.025146305561065674,
+      "exact": 0,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2042,
+        "10": 2048,
+        "12": 2048,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "f2854eac6c5d94677bb0c8639e3bf18f3e5f4500853d531072f8376dae0b2a59",
+      "device_l2_pct": 0.011827140939423754,
+      "device_exact": 0,
+      "device_hash_match": false,
+      "device_low_bits_match": false
+    },
+    {
+      "case": "positive128",
+      "fidelity": "HiFi4",
+      "ablation": "extra13_product_alignment_bits",
+      "l2_pct": 2.2670440669907525e-05,
+      "max_abs": 5.480647087097168e-05,
+      "exact": 2,
+      "elements": 2048,
+      "low_bits_nonzero": {
+        "8": 2040,
+        "10": 2045,
+        "12": 2048,
+        "13": 2048,
+        "16": 2048
+      },
+      "output_sha256": "f0f137dddb86f313a8bc93fd4ef9d829cee90342f970932afc20fdf89d282b61"
+    }
+  ],
+  "discriminators": [
+    {
+      "small_term_index": 1,
+      "actual": 1.0,
+      "expected": 1.000244140625
+    },
+    {
+      "small_term_index": 7,
+      "actual": 1.0,
+      "expected": 1.000244140625
+    },
+    {
+      "small_term_index": 8,
+      "actual": 1.000244140625,
+      "expected": 1.000244140625
+    },
+    {
+      "small_term_index": 15,
+      "actual": 1.000244140625,
+      "expected": 1.000244140625
+    },
+    {
+      "small_term_index": 16,
+      "actual": 1.000244140625,
+      "expected": 1.000244140625
+    }
+  ],
+  "model_provenance": {
+    "ttsim_git_commit": "8c47553e0c28e4b2239497ffa4f5a44f02e1683f",
+    "ttmetal_git_commit": "637d956c8874d356c9080e467b9a1664133fa780",
+    "isa_git_commit": "5287a62727350bcef35f7b411d1b8a706172ec4c",
+    "source_sha256": {
+      "ttsim-private/src/tensix.cpp": "73facffeb1e7d508a256dcc8cc1bba1120e870964283b1e5ef65c9ce71e7b9d5",
+      "ttsim-private/tests/rtl/tt_fp_lane/sim_main.cpp": "7b29a2968c99e81cfb133163d1aea7f81218600c6397d06eecb8b4209811975a",
+      "ttsim-private/tests/rtl/tt_fp_lane/fp_lane_top.sv": "c676cf5ab1364c5487749f08ab5a1763d1ea0fc043628cd8b9557d1aef80545e",
+      "tt_llk_blackhole/llk_lib/llk_math_matmul.h": "41e1b2e27caa7177f4c8c8e8b7b8f0c3e1475a4faab7b8b9e34053f0b25afa3d",
+      "tt_llk_blackhole/llk_lib/llk_math_common.h": "4acbd6def0385cbfb085c3c90afd3802586102672afc3dafac33f69f56409668",
+      "tt_llk_blackhole/common/inc/cunpack_common.h": "ec0582f7e16f37c9d4d39706d882357e8920f44e3a9d90848a3120b94f1774f9"
+    }
+  },
+  "device_provenance": [
+    {
+      "kind": "provenance",
+      "source_sha256": "edd6e13ff77bc745b4e56fbd0ee9e99adbc694a84bbcded50681aac80811426b",
+      "contract": "Diagnose the observed ~0.03% public-matmul FP32-output error floor.\n\nExact BF16 upload checks, one-term products, identity copies and dense sums.\nNo performance or integrated-attention claims.\n",
+      "label": "matmul-fp32-floor-v1"
+    }
+  ],
+  "source_sha256": "23d2f742c3779ad4f0a2af78164f2f6d34acd423dad8351bedad3f4a9c65ac6d",
+  "device_records_sha256": "1bca137c03a4b145f73ecfc5e1ac3158e46391644c688b0d9e2c434d4c79d89e",
+  "model_source": "Local ttsim-private/src/tensix.cpp; exact public API kernel replay order is inferred, tested by hash",
+  "warning": "Internal research model; not an IEEE guarantee or a public ISA precision specification"
+}

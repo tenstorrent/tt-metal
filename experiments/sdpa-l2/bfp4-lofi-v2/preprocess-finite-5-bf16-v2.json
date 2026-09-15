@@ -1,0 +1,26 @@
+{
+  "label": "preprocess-finite-5-bf16-v2",
+  "length": 4096,
+  "bits": 5,
+  "output_format": "bf16",
+  "cores": 110,
+  "batch": 4,
+  "bf16_dst": false,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "seed": 1240,
+  "distribution": "finite_bf16",
+  "actual_cores": 110,
+  "mismatch": 0,
+  "numel": 524288,
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "57b0ec356833d356597b4076add6732e731c0422067ccda8caef47f7f062899b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97"
+  }
+}

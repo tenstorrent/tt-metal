@@ -1,0 +1,150 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "0cc1609c814bebaee77f661dc9ca10e4a8608bdbd1e3beffd8a1011971775505",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/compute.cpp": "59850a78447ef45ed0b613ab29bcd833c057ecaef941e2fb24fa56bc061d092d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident.py": "222e885ca07922801fb2c7faa0d48ad8906cc7c9dc8cd111db2e0dda1d87024e",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "d08c15e304dd088b71161540c433c9a4aebe564619753311a470f41e75a5108b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/round_p.hpp": "02559f0c4e110fb0d671fdd23f36983fd86205ee5822f72ee5c944c83a944559",
+    "experiments/sdpa-l2/bfp4-lofi-v2/safe_rescale.hpp": "6c99e3dbf7d372e6fa021c401b8c7cf7903af4326fed973e79fd3cdf595335d0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "49e78bc7291d689095d63ee737e93517c3c16129f64d14753d3d19d8c468073a"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_RESIDUALS": "1",
+    "SDPA_LOFI_DENOM": "1",
+    "SDPA_LOFI_SAME_FORMAT_RESIDUAL": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      2,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      17,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      18,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ]
+  ],
+  "arguments": {
+    "label": "resident-rne44-skip-v1",
+    "variant": "residual44_pervalue",
+    "qkv_route": "host",
+    "no_p_round": true,
+    "skip_residual_reconfig": true,
+    "destination": "fp32",
+    "exp_quality": "cheap",
+    "fidelity": "LoFi",
+    "safe_rescale": false,
+    "q_repeats": 16,
+    "k_chunks": 512,
+    "warmup": 20,
+    "iters": 10,
+    "seed": 1236,
+    "distribution": "normal",
+    "distinct_kv": false,
+    "hybrid_block_pack": false,
+    "mode": "fp32_hifi2_cheap"
+  }
+}

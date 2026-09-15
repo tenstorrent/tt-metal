@@ -1,0 +1,230 @@
+{
+  "label": "padded-p16-blocked-resident-fp32-cubic-v1",
+  "p_format": "fp32",
+  "native_exp": false,
+  "p_pack_width": 4,
+  "q_repeats": 16,
+  "k_chunks": 512,
+  "seed": 1240,
+  "distribution": "normal",
+  "skip_preprocess_check": false,
+  "max_l2": 10,
+  "iters": 10,
+  "warmup": 20,
+  "trace_repeats": 1,
+  "clock_mhz": 1350,
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "head_dim": 128,
+  "input_slots": {
+    "q": 2,
+    "k": 1,
+    "v": 1
+  },
+  "cb_bytes_per_core": 1212416,
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      2,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_DENOM": "1",
+    "SDPA_DIAG_EXP_MODE": "1",
+    "SDPA_PADDED_P16_PACK_WIDTH": "4"
+  },
+  "preprocess_mismatches": [
+    0,
+    0,
+    0
+  ],
+  "prepared_input_sha256": [
+    "716a293228baf4c74267722e7ce35f245550c50969b92bd4ebc01c09f9e91d57",
+    "38828a0833b72c24be3cc9d09b2022f427362369f4990b44715ff758be9801c1",
+    "c0670e911a813e4a9cf857b414490bae44dd003f9bf40224d46328cf40755b8c"
+  ],
+  "p_storage": "in-place FP32 CB6/7",
+  "probability_pack_width": 4,
+  "p_sfpu_prerounding": false,
+  "exp_fit": "unbiased relative fit",
+  "denominator": "LoFi P times ones; same stored P as PV",
+  "raw_l1_headroom_bytes": 360448,
+  "p_page_bytes": 4096,
+  "p_native_tile_bytes": 4096,
+  "p_alias_dtype": "FP32",
+  "p_allocation_aliases_score": true,
+  "p_fifo_counters_independent": true,
+  "blocked_p_pack_supported": true,
+  "p_pack_algorithm": "standard LLK",
+  "p_pack_replay_slots": null,
+  "p_pack_replay_reload": null,
+  "reserved_l1_bytes_assumed": 111616,
+  "estimated_allocator_headroom_bytes": 248832,
+  "allocation_warning": "Reserved-L1 estimate 111616 B from prior device allocation; actual allocator is authoritative",
+  "input_preprocess_bfp8_pack_precise": false,
+  "input_storage": "Q RNE7/BF16; K/V RNE5/native-BFP8",
+  "maxima": "BF16",
+  "recurrence": "FP32",
+  "preprocessing_in_timing": false,
+  "recurring_input_dm": false,
+  "invocation_boundary_bytes": 335872,
+  "accuracy": {
+    "l2_pct": 2.1963469992354607,
+    "max_relative_error_pct": 1195900.9372616606,
+    "zero_reference_mismatch_count": 0,
+    "max_relative_reference": -6.316352789648935e-08,
+    "max_relative_actual": 0.00075531005859375,
+    "reference_rms": 0.07184712150427482,
+    "max_relative_error_above_1pct_rms_pct": 596.2832441579255,
+    "pcc": 0.999758829242699,
+    "gain": 0.9990621037620219,
+    "gain_corrected_l2_pct": 2.1943435573124073,
+    "max_abs": 0.007960342989500165,
+    "row_l2_pct_median": 2.160555816065807,
+    "row_l2_pct_p95": 2.645143603120445
+  },
+  "reference_scope": "all256 query rows; exact repeated-KV equivalence; not distinct262K keys",
+  "useful_flops": 549755813888,
+  "median_ms": 533.2557305227965,
+  "replay_ms": [
+    533.2428540568799,
+    533.2450750283897,
+    533.2479750504717,
+    533.2506150007248,
+    533.2702139858156,
+    533.2608460448682,
+    533.2688740454614,
+    533.2720259902999,
+    533.2405349472538,
+    533.2685039611533
+  ],
+  "tflops_per_core": 1.0309421585568843,
+  "nominal_lofi_peak_tflops_per_core": 5.5296,
+  "nominal_lofi_utilization_pct": 18.644063920661246,
+  "timing_scope": "resident kernel including one initialization read and final Q output write; no recurring input DM",
+  "trace_equal": true,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_resident.py": "03cb6c0975225ad89a4f18d4c3c5cff9a834d2e166ccb86b6d793344e4d56f90",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming.py": "901eff326d67ee06244366355e411f4ff1ac53ddf929bed8f9c8bb87e2396a9a",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "398c81573378ab24b0ea54a8a2f9f0c0bf532c35a531f69265c6a7c7f8bbe539",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_native.hpp": "711b86bbef10cee71b69cd8eeeed498fe3ce36c8a0a2400362d4be89ca060940",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming/compute_streaming.hpp": "286a1f84fa289bb07dce414cc09f2ed44ac5e2b84b78a213729ef408a39ea75c",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming/compute_resident.cpp": "a8bee81472c3e97370ab275e08c52e08311c410f1af6e668e854d93636c3d12b",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming/padded_pack.hpp": "f5e62c720c6846c955a6ace05a317a13ea8b30f15ba8f9c9087f31ceb6a3bd22",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming/reader_resident.cpp": "319b6e6dd51f98ca086e6da28f5c80097340e8e62a44788bfcfaccf4163d9bfe",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_p16_streaming/writer_resident.cpp": "cf2dc275f712dffb00550a9558860fd44c20e82e9a67dd17af44a80c06a0d16d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "0cc1609c814bebaee77f661dc9ca10e4a8608bdbd1e3beffd8a1011971775505",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_pack_common_api.h": "7dcb439848891c6224d0299686257fab00745d66f0e2b847e680cc2e92e6fccf",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h": "8466abbf207c6fea121c30facae03aea423e74b9125e63c6b2788de0cc3cbb92",
+    "tt_metal/tt-llk/tt_llk_blackhole/llk_lib/llk_pack.h": "072ade56a8004b61646373ba4b659177edd578af744db2b85b42683aefb8ad0e",
+    "tt_metal/tt-llk/tt_llk_blackhole/common/inc/cpack_common.h": "ca05bc107002c1b5a8b044b44296ffe25e65540cf1f157612ef2254890d3afb7",
+    "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_template.h": "67e57bc7deac124ebd3f132fb972ba51fdfcbce36f17105b06d3ba833785c1ce",
+    "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel.h": "d4d90c7e1e9e263e2fed838d43d8337cba7f0504a65aa2d4161052249a8d3fba",
+    "tt_metal/tt-llk/tt_llk_blackhole/common/inc/ckernel_structs.h": "33908bf28c10a4c4162007db609787eb952cbb8ca64bf144659dc5a6cae411d2"
+  },
+  "output_sha256": "4b99be6281639bcab823dd211299215e98f13cfbae3d1ab589e695b573dc2575"
+}

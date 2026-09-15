@@ -1,0 +1,85 @@
+{
+  "label": "padded-b8-2048-fp32-v1",
+  "format": "b8",
+  "page_bytes": 2048,
+  "fp32_dst": true,
+  "distribution": "exact",
+  "tiles": 8,
+  "seed": 1250,
+  "iters": 0,
+  "warmup": 5,
+  "trace_repeats": 10,
+  "clock_mhz": 1200,
+  "cores": 1,
+  "batch": 4,
+  "pack_width": 1,
+  "input_shape": [
+    1,
+    1,
+    32,
+    256
+  ],
+  "output_shape": [
+    1,
+    1,
+    32,
+    256
+  ],
+  "resident_input_tiles": 8,
+  "saved_output_tiles": 8,
+  "exact_required": true,
+  "correctness_pass": true,
+  "padded_vs_compact_mismatches": 0,
+  "cases": [
+    {
+      "name": "compact",
+      "page_bytes": 1088,
+      "native_payload_bytes": 1088,
+      "cb_bytes_per_core": 41472,
+      "finite": true,
+      "mismatch_vs_input": 0,
+      "max_absolute_error": 0.0,
+      "quantization_l2_pct": 0.0,
+      "output_sha256": "7de8bcb328d074750c8cd1bdcbdb439a132b012562689e5143168dccfbfa3376",
+      "median_ms": null,
+      "replay_ms_per_invocation": [],
+      "roundtrip_tiles_per_second": null,
+      "nominal_l1_payload_GBps": null,
+      "estimated_cycles_per_roundtrip_tile": null,
+      "trace_equal": null
+    },
+    {
+      "name": "padded",
+      "page_bytes": 2048,
+      "native_payload_bytes": 1088,
+      "cb_bytes_per_core": 49152,
+      "finite": true,
+      "mismatch_vs_input": 0,
+      "max_absolute_error": 0.0,
+      "quantization_l2_pct": 0.0,
+      "output_sha256": "7de8bcb328d074750c8cd1bdcbdb439a132b012562689e5143168dccfbfa3376",
+      "median_ms": null,
+      "replay_ms_per_invocation": [],
+      "roundtrip_tiles_per_second": null,
+      "nominal_l1_payload_GBps": null,
+      "estimated_cycles_per_roundtrip_tile": null,
+      "trace_equal": null
+    }
+  ],
+  "matrices_file": "experiments/sdpa-l2/bfp4-lofi-v2/padded_bfp_roundtrip/padded-b8-2048-fp32-v1.pt",
+  "matrix_keys": [
+    "input_bf16",
+    "compact_output_bf16",
+    "padded_output_bf16"
+  ],
+  "clock_source": "CLI assumption, not measured",
+  "timing_source": "Blocking host wall-clock trace replay divided by trace_repeats",
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_bfp_roundtrip.py": "80e8beea7b431ae6d6a3184b0859db82420f8c3ded38e969d4aeabb1e2a328fd",
+    "experiments/sdpa-l2/bfp4-lofi-v2/pack_resident.py": "fad8cc9e8f0cb2fdb3f520e9b1c74503fc76099cad3429f96f98341578072aa5",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_bfp_roundtrip/compute.cpp": "fc3c13767a07d404ed15e194cfa607cb29fb9480b01441d815f2a1223f36b185",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_bfp_roundtrip/reader.cpp": "ce188a03df4844c9e41a8615f4c6be83aa3bcc936c1590380bb49b30ab40332f",
+    "experiments/sdpa-l2/bfp4-lofi-v2/padded_bfp_roundtrip/writer.cpp": "91d8b0fc7e119fe721d13350d9b0e7cc800568c01fb015c46ee0907d96730e8d"
+  },
+  "warning": "Padded-page copy/unpack roundtrip only: no storage aliasing, matmul consumer, or padding canary. Payload GB/s is nominal accounting, not measured physical L1 traffic. Each invocation reads eight initial source tiles and saves eight final output tiles."
+}

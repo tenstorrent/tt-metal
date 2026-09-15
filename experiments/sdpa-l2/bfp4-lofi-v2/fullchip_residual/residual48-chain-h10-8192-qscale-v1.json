@@ -1,0 +1,1582 @@
+{
+  "label": "residual48-chain-h10-8192-qscale-v1",
+  "variant": "residual48",
+  "q_prescale": 1.0028,
+  "skip_residual_reconfig": false,
+  "length": 8192,
+  "heads": 10,
+  "cores": 110,
+  "seed": 1240,
+  "distribution": "normal",
+  "sample_rows": 128,
+  "check_preprocess": false,
+  "read_barrier_tiles": 2,
+  "max_l2": null,
+  "warmup": 3,
+  "iters": 7,
+  "trace_repeats": 1,
+  "cb_bytes_per_core": 1286144,
+  "blackhole_physical_l1_bytes": 1572864,
+  "raw_l1_minus_cb_bytes": 286720,
+  "allocation_check": "Static CB footprint only; runtime allocator must also fit firmware/kernel/reserved regions",
+  "actual_cores": 110,
+  "chain_length": 11,
+  "q_jobs": 320,
+  "jobs_per_core": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    2
+  ],
+  "assignments": [
+    {
+      "core": [
+        0,
+        0
+      ],
+      "head": 0,
+      "rank": 0,
+      "first_job": 0,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        0
+      ],
+      "head": 0,
+      "rank": 1,
+      "first_job": 3,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        0
+      ],
+      "head": 0,
+      "rank": 2,
+      "first_job": 6,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        0
+      ],
+      "head": 0,
+      "rank": 3,
+      "first_job": 9,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        0
+      ],
+      "head": 0,
+      "rank": 4,
+      "first_job": 12,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        0
+      ],
+      "head": 0,
+      "rank": 5,
+      "first_job": 15,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        0
+      ],
+      "head": 0,
+      "rank": 6,
+      "first_job": 18,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        0
+      ],
+      "head": 0,
+      "rank": 7,
+      "first_job": 21,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        0
+      ],
+      "head": 0,
+      "rank": 8,
+      "first_job": 24,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        0
+      ],
+      "head": 0,
+      "rank": 9,
+      "first_job": 27,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        0
+      ],
+      "head": 0,
+      "rank": 10,
+      "first_job": 30,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        1
+      ],
+      "head": 1,
+      "rank": 0,
+      "first_job": 32,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        1
+      ],
+      "head": 1,
+      "rank": 1,
+      "first_job": 35,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        1
+      ],
+      "head": 1,
+      "rank": 2,
+      "first_job": 38,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        1
+      ],
+      "head": 1,
+      "rank": 3,
+      "first_job": 41,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        1
+      ],
+      "head": 1,
+      "rank": 4,
+      "first_job": 44,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        1
+      ],
+      "head": 1,
+      "rank": 5,
+      "first_job": 47,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        1
+      ],
+      "head": 1,
+      "rank": 6,
+      "first_job": 50,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        1
+      ],
+      "head": 1,
+      "rank": 7,
+      "first_job": 53,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        1
+      ],
+      "head": 1,
+      "rank": 8,
+      "first_job": 56,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        1
+      ],
+      "head": 1,
+      "rank": 9,
+      "first_job": 59,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        1
+      ],
+      "head": 1,
+      "rank": 10,
+      "first_job": 62,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        2
+      ],
+      "head": 2,
+      "rank": 0,
+      "first_job": 64,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        2
+      ],
+      "head": 2,
+      "rank": 1,
+      "first_job": 67,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        2
+      ],
+      "head": 2,
+      "rank": 2,
+      "first_job": 70,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        2
+      ],
+      "head": 2,
+      "rank": 3,
+      "first_job": 73,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        2
+      ],
+      "head": 2,
+      "rank": 4,
+      "first_job": 76,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        2
+      ],
+      "head": 2,
+      "rank": 5,
+      "first_job": 79,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        2
+      ],
+      "head": 2,
+      "rank": 6,
+      "first_job": 82,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        2
+      ],
+      "head": 2,
+      "rank": 7,
+      "first_job": 85,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        2
+      ],
+      "head": 2,
+      "rank": 8,
+      "first_job": 88,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        2
+      ],
+      "head": 2,
+      "rank": 9,
+      "first_job": 91,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        2
+      ],
+      "head": 2,
+      "rank": 10,
+      "first_job": 94,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        3
+      ],
+      "head": 3,
+      "rank": 0,
+      "first_job": 96,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        3
+      ],
+      "head": 3,
+      "rank": 1,
+      "first_job": 99,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        3
+      ],
+      "head": 3,
+      "rank": 2,
+      "first_job": 102,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        3
+      ],
+      "head": 3,
+      "rank": 3,
+      "first_job": 105,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        3
+      ],
+      "head": 3,
+      "rank": 4,
+      "first_job": 108,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        3
+      ],
+      "head": 3,
+      "rank": 5,
+      "first_job": 111,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        3
+      ],
+      "head": 3,
+      "rank": 6,
+      "first_job": 114,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        3
+      ],
+      "head": 3,
+      "rank": 7,
+      "first_job": 117,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        3
+      ],
+      "head": 3,
+      "rank": 8,
+      "first_job": 120,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        3
+      ],
+      "head": 3,
+      "rank": 9,
+      "first_job": 123,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        3
+      ],
+      "head": 3,
+      "rank": 10,
+      "first_job": 126,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        4
+      ],
+      "head": 4,
+      "rank": 0,
+      "first_job": 128,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        4
+      ],
+      "head": 4,
+      "rank": 1,
+      "first_job": 131,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        4
+      ],
+      "head": 4,
+      "rank": 2,
+      "first_job": 134,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        4
+      ],
+      "head": 4,
+      "rank": 3,
+      "first_job": 137,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        4
+      ],
+      "head": 4,
+      "rank": 4,
+      "first_job": 140,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        4
+      ],
+      "head": 4,
+      "rank": 5,
+      "first_job": 143,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        4
+      ],
+      "head": 4,
+      "rank": 6,
+      "first_job": 146,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        4
+      ],
+      "head": 4,
+      "rank": 7,
+      "first_job": 149,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        4
+      ],
+      "head": 4,
+      "rank": 8,
+      "first_job": 152,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        4
+      ],
+      "head": 4,
+      "rank": 9,
+      "first_job": 155,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        4
+      ],
+      "head": 4,
+      "rank": 10,
+      "first_job": 158,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        5
+      ],
+      "head": 5,
+      "rank": 0,
+      "first_job": 160,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        5
+      ],
+      "head": 5,
+      "rank": 1,
+      "first_job": 163,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        5
+      ],
+      "head": 5,
+      "rank": 2,
+      "first_job": 166,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        5
+      ],
+      "head": 5,
+      "rank": 3,
+      "first_job": 169,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        5
+      ],
+      "head": 5,
+      "rank": 4,
+      "first_job": 172,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        5
+      ],
+      "head": 5,
+      "rank": 5,
+      "first_job": 175,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        5
+      ],
+      "head": 5,
+      "rank": 6,
+      "first_job": 178,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        5
+      ],
+      "head": 5,
+      "rank": 7,
+      "first_job": 181,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        5
+      ],
+      "head": 5,
+      "rank": 8,
+      "first_job": 184,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        5
+      ],
+      "head": 5,
+      "rank": 9,
+      "first_job": 187,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        5
+      ],
+      "head": 5,
+      "rank": 10,
+      "first_job": 190,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        6
+      ],
+      "head": 6,
+      "rank": 0,
+      "first_job": 192,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        6
+      ],
+      "head": 6,
+      "rank": 1,
+      "first_job": 195,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        6
+      ],
+      "head": 6,
+      "rank": 2,
+      "first_job": 198,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        6
+      ],
+      "head": 6,
+      "rank": 3,
+      "first_job": 201,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        6
+      ],
+      "head": 6,
+      "rank": 4,
+      "first_job": 204,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        6
+      ],
+      "head": 6,
+      "rank": 5,
+      "first_job": 207,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        6
+      ],
+      "head": 6,
+      "rank": 6,
+      "first_job": 210,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        6
+      ],
+      "head": 6,
+      "rank": 7,
+      "first_job": 213,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        6
+      ],
+      "head": 6,
+      "rank": 8,
+      "first_job": 216,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        6
+      ],
+      "head": 6,
+      "rank": 9,
+      "first_job": 219,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        6
+      ],
+      "head": 6,
+      "rank": 10,
+      "first_job": 222,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        7
+      ],
+      "head": 7,
+      "rank": 0,
+      "first_job": 224,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        7
+      ],
+      "head": 7,
+      "rank": 1,
+      "first_job": 227,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        7
+      ],
+      "head": 7,
+      "rank": 2,
+      "first_job": 230,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        7
+      ],
+      "head": 7,
+      "rank": 3,
+      "first_job": 233,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        7
+      ],
+      "head": 7,
+      "rank": 4,
+      "first_job": 236,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        7
+      ],
+      "head": 7,
+      "rank": 5,
+      "first_job": 239,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        7
+      ],
+      "head": 7,
+      "rank": 6,
+      "first_job": 242,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        7
+      ],
+      "head": 7,
+      "rank": 7,
+      "first_job": 245,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        7
+      ],
+      "head": 7,
+      "rank": 8,
+      "first_job": 248,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        7
+      ],
+      "head": 7,
+      "rank": 9,
+      "first_job": 251,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        7
+      ],
+      "head": 7,
+      "rank": 10,
+      "first_job": 254,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        8
+      ],
+      "head": 8,
+      "rank": 0,
+      "first_job": 256,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        8
+      ],
+      "head": 8,
+      "rank": 1,
+      "first_job": 259,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        8
+      ],
+      "head": 8,
+      "rank": 2,
+      "first_job": 262,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        8
+      ],
+      "head": 8,
+      "rank": 3,
+      "first_job": 265,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        8
+      ],
+      "head": 8,
+      "rank": 4,
+      "first_job": 268,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        8
+      ],
+      "head": 8,
+      "rank": 5,
+      "first_job": 271,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        8
+      ],
+      "head": 8,
+      "rank": 6,
+      "first_job": 274,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        8
+      ],
+      "head": 8,
+      "rank": 7,
+      "first_job": 277,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        8
+      ],
+      "head": 8,
+      "rank": 8,
+      "first_job": 280,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        8
+      ],
+      "head": 8,
+      "rank": 9,
+      "first_job": 283,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        8
+      ],
+      "head": 8,
+      "rank": 10,
+      "first_job": 286,
+      "jobs": 2
+    },
+    {
+      "core": [
+        0,
+        9
+      ],
+      "head": 9,
+      "rank": 0,
+      "first_job": 288,
+      "jobs": 3
+    },
+    {
+      "core": [
+        1,
+        9
+      ],
+      "head": 9,
+      "rank": 1,
+      "first_job": 291,
+      "jobs": 3
+    },
+    {
+      "core": [
+        2,
+        9
+      ],
+      "head": 9,
+      "rank": 2,
+      "first_job": 294,
+      "jobs": 3
+    },
+    {
+      "core": [
+        3,
+        9
+      ],
+      "head": 9,
+      "rank": 3,
+      "first_job": 297,
+      "jobs": 3
+    },
+    {
+      "core": [
+        4,
+        9
+      ],
+      "head": 9,
+      "rank": 4,
+      "first_job": 300,
+      "jobs": 3
+    },
+    {
+      "core": [
+        5,
+        9
+      ],
+      "head": 9,
+      "rank": 5,
+      "first_job": 303,
+      "jobs": 3
+    },
+    {
+      "core": [
+        6,
+        9
+      ],
+      "head": 9,
+      "rank": 6,
+      "first_job": 306,
+      "jobs": 3
+    },
+    {
+      "core": [
+        7,
+        9
+      ],
+      "head": 9,
+      "rank": 7,
+      "first_job": 309,
+      "jobs": 3
+    },
+    {
+      "core": [
+        8,
+        9
+      ],
+      "head": 9,
+      "rank": 8,
+      "first_job": 312,
+      "jobs": 3
+    },
+    {
+      "core": [
+        9,
+        9
+      ],
+      "head": 9,
+      "rank": 9,
+      "first_job": 315,
+      "jobs": 3
+    },
+    {
+      "core": [
+        10,
+        9
+      ],
+      "head": 9,
+      "rank": 10,
+      "first_job": 318,
+      "jobs": 2
+    }
+  ],
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "input_slots": 1,
+  "q_slots": 2,
+  "fp32_dst": true,
+  "fidelity": "LoFi",
+  "exp_quality": "cheap",
+  "p_round": false,
+  "executed_qk_pv_matmul_factor": 2,
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_RESIDUALS": "1",
+    "SDPA_LOFI_DENOM": "1"
+  },
+  "preprocessing_cores": [
+    110,
+    110,
+    110
+  ],
+  "preprocessing_mismatches": null,
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      2,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      17,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      18,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ]
+  ],
+  "resident_dram_tensor_payload_bytes": 138936320,
+  "input_storage": "BF16 Q7; BFP4 K0/V0; RNE5 BFP8 K1/V1",
+  "scheduling_note": "Existing residual header also waits for V1 before QK; no new lookahead optimization",
+  "accuracy": {
+    "l2_pct": 0.5164077295597331,
+    "max_relative_error_pct": 90612.32113695565,
+    "zero_reference_mismatch_count": 0,
+    "max_relative_reference": 1.1196529140062773e-07,
+    "max_relative_actual": 0.00010156631469726562,
+    "reference_rms": 0.018317161555204842,
+    "max_relative_error_above_1pct_rms_pct": 142.6573261494264,
+    "pcc": 0.9999867186439477,
+    "gain": 0.9996463078347152,
+    "gain_corrected_l2_pct": 0.5151950714740976,
+    "max_abs": 0.0005373872133582758,
+    "row_l2_pct_median": 0.5115235206328466,
+    "row_l2_pct_p95": 0.6019183632890842
+  },
+  "sampled_query_rows": [
+    0,
+    64,
+    128,
+    193,
+    257,
+    322,
+    386,
+    451,
+    515,
+    580,
+    644,
+    709,
+    773,
+    838,
+    902,
+    967,
+    1031,
+    1096,
+    1160,
+    1225,
+    1289,
+    1354,
+    1418,
+    1483,
+    1547,
+    1612,
+    1676,
+    1741,
+    1805,
+    1870,
+    1934,
+    1999,
+    2063,
+    2128,
+    2192,
+    2257,
+    2321,
+    2386,
+    2450,
+    2515,
+    2579,
+    2644,
+    2708,
+    2773,
+    2837,
+    2902,
+    2966,
+    3031,
+    3095,
+    3160,
+    3224,
+    3289,
+    3353,
+    3418,
+    3482,
+    3547,
+    3611,
+    3676,
+    3740,
+    3805,
+    3869,
+    3934,
+    3998,
+    4063,
+    4127,
+    4192,
+    4256,
+    4321,
+    4385,
+    4450,
+    4514,
+    4579,
+    4643,
+    4708,
+    4772,
+    4837,
+    4901,
+    4966,
+    5030,
+    5095,
+    5159,
+    5224,
+    5288,
+    5353,
+    5417,
+    5482,
+    5546,
+    5611,
+    5675,
+    5740,
+    5804,
+    5869,
+    5933,
+    5998,
+    6062,
+    6127,
+    6191,
+    6256,
+    6320,
+    6385,
+    6449,
+    6514,
+    6578,
+    6643,
+    6707,
+    6772,
+    6836,
+    6901,
+    6965,
+    7030,
+    7094,
+    7159,
+    7223,
+    7288,
+    7352,
+    7417,
+    7481,
+    7546,
+    7610,
+    7675,
+    7739,
+    7804,
+    7868,
+    7933,
+    7997,
+    8062,
+    8126,
+    8191
+  ],
+  "accuracy_scope": "All heads and KV; explicit sampled Q rows; all output elements checked finite",
+  "useful_flops": 343597383680,
+  "executed_qk_pv_flops": 687194767360,
+  "attention": {
+    "median_ms": 5.1606131019070745,
+    "replay_ms": [
+      5.169081036001444,
+      5.162721965461969,
+      5.160250933840871,
+      5.1606131019070745,
+      5.160100990906358,
+      5.1599720027297735,
+      5.168201983906329
+    ]
+  },
+  "preprocessing": {
+    "median_ms": 0.4094290779903531,
+    "replay_ms": [
+      0.4050299758091569,
+      0.40912895929068327,
+      0.4094290779903531,
+      0.408099964261055,
+      0.4123689141124487,
+      0.41166902519762516,
+      0.41055004112422466
+    ]
+  },
+  "combined": {
+    "median_ms": 5.510800983756781,
+    "replay_ms": [
+      5.508541013114154,
+      5.511900992132723,
+      5.5161709897220135,
+      5.506632034666836,
+      5.516301025636494,
+      5.509510985575616,
+      5.510800983756781
+    ]
+  },
+  "attention_tflops": 66.58072924572191,
+  "combined_tflops": 62.34980807558858,
+  "trace_equal": true,
+  "output_sha256": "3b2c3f2d6b2cb25ebd73a756cef4095e604fd3454d32e0b8ce11844c86583dc3",
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual.py": "8fd248ceae24781bc0737e0bd2bdb217fb3849ab1021b246dc44bcfc60c45991",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "d08c15e304dd088b71161540c433c9a4aebe564619753311a470f41e75a5108b",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/compute.cpp": "8860d5000eecf46e6445511026836cc32b59de624ba8e0c2b55e81340eebefcc",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/reader_chain.cpp": "2d965a6c6d24f3f561a2e4377ac4d1c1838cf6f4c111e74eb3a1b16adf630882",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/writer.cpp": "503d5f40fd0aef7140406ab23183724029855170ae147c58d3622a22b593fc18",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale.py": "6ceaa61f306362801a0540e4043d741462c70a3767182d6144bc11cdea375e43",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/compute.cpp": "9c382f8920902f901e635970b5ad67b86fe20747ae03caedd935c3fc4d87e8dd",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/compute.cpp": "4d51e36904fa75172669f3315a7d7fe327de6415a126b595b151d24327f4de8d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/reader.cpp": "87255a083ca2574372d6348d2b3853e20cdad2246b10620c93ee7d93bbd8bb2a",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/writer.cpp": "93874351690d4feda9f298e342a1e3e5d2fff307e996c0d75779331340bd3dfb"
+  },
+  "timing_source": "Blocking host wall-clock trace replay, divided by trace_repeats",
+  "warning": "Private noncausal square residual streaming; useful FLOPs exclude extra matmuls and preprocessing"
+}

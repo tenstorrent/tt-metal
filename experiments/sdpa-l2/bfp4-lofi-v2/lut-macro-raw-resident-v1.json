@@ -1,0 +1,229 @@
+{
+  "label": "lut-macro-raw-resident-v1",
+  "lut_exp": true,
+  "raw_lut": true,
+  "q_repeats": 16,
+  "k_chunks": 512,
+  "seed": 1240,
+  "distribution": "normal",
+  "skip_preprocess_check": false,
+  "max_l2": 10,
+  "iters": 15,
+  "warmup": 20,
+  "trace_repeats": 1,
+  "clock_mhz": 1350,
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "head_dim": 128,
+  "input_slots": {
+    "q": 2,
+    "k": 1,
+    "v": 1
+  },
+  "cb_bytes_per_core": 1212416,
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      2,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_DENOM": "1",
+    "SDPA_LOFI_NATIVE_EXP": "1",
+    "SDPA_LOFI_LUT_EXP": "1"
+  },
+  "preprocess_mismatches": [
+    0,
+    0,
+    0
+  ],
+  "prepared_input_sha256": [
+    "716a293228baf4c74267722e7ce35f245550c50969b92bd4ebc01c09f9e91d57",
+    "38828a0833b72c24be3cc9d09b2022f427362369f4990b44715ff758be9801c1",
+    "c0670e911a813e4a9cf857b414490bae44dd003f9bf40224d46328cf40755b8c"
+  ],
+  "p_storage": "in-place FP32 CB6",
+  "probability_pack_width": 4,
+  "p_sfpu_prerounding": false,
+  "exp_fit": "Native8-bit grid plus two-segment FP16 LUT refinement",
+  "native_exp": true,
+  "exp_lut_refinement": true,
+  "exp_refiner": "raw10",
+  "exp_coefficients": "slopes=0x2f59aee8 intercepts=0x3a1c3c5f; unchanged exp_lut.hpp",
+  "exp_refiner_issued_instructions_per_two_vectors": 10,
+  "denominator_precision": "LoFi P times ones; same effective stored P as PV",
+  "denominator_matches_pv": true,
+  "raw_l1_headroom_bytes": 360448,
+  "accuracy_warning": "LUT refinement is experimental; compare measured L2 and gain against identical native control",
+  "input_preprocess_bfp8_pack_precise": false,
+  "input_storage": "Q RNE7/BF16; K/V RNE5/native-BFP8",
+  "maxima": "BF16",
+  "recurrence": "FP32",
+  "preprocessing_in_timing": false,
+  "recurring_input_dm": false,
+  "invocation_boundary_bytes": 335872,
+  "accuracy": {
+    "l2_pct": 2.2442781405258434,
+    "max_relative_error_pct": 2270913.901062547,
+    "zero_reference_mismatch_count": 0,
+    "max_relative_reference": -6.316352789648935e-08,
+    "max_relative_actual": 0.001434326171875,
+    "reference_rms": 0.07184712150427482,
+    "max_relative_error_above_1pct_rms_pct": 592.6869887654768,
+    "pcc": 0.9997483881064475,
+    "gain": 0.9986918198172154,
+    "gain_corrected_l2_pct": 2.240462233142042,
+    "max_abs": 0.007838272677000165,
+    "row_l2_pct_median": 2.2037784740181556,
+    "row_l2_pct_p95": 2.703905702695591
+  },
+  "reference_scope": "all256 query rows; exact repeated-KV equivalence; not distinct262K keys",
+  "useful_flops": 549755813888,
+  "median_ms": 478.631561039947,
+  "replay_ms": [
+    478.6443799966946,
+    478.64488197956234,
+    478.63436094485223,
+    478.6250509787351,
+    478.62598195206374,
+    478.63317001610994,
+    478.62466203514487,
+    478.631561039947,
+    478.63726096693426,
+    478.62806101329625,
+    478.6252109333873,
+    478.6311610369012,
+    478.6427620565519,
+    478.62506099045277,
+    478.64421107806265
+  ],
+  "tflops_per_core": 1.1485991702960787,
+  "nominal_lofi_peak_tflops_per_core": 5.5296,
+  "nominal_lofi_utilization_pct": 20.771831060041933,
+  "timing_scope": "resident kernel including one initialization read and final Q output write; no recurring input DM",
+  "trace_equal": true,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_resident.py": "5b64ea58f3ea20aca03d90f9350fa17ca2edbfabb174696f50dc64fca57296f4",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming.py": "551ff73616819c527c95ccb5b95a303b08850d6e9720171b0f4f3f79ed2784eb",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess.py": "398c81573378ab24b0ea54a8a2f9f0c0bf532c35a531f69265c6a7c7f8bbe539",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_native.hpp": "711b86bbef10cee71b69cd8eeeed498fe3ce36c8a0a2400362d4be89ca060940",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut.hpp": "b23bb43eccd2e0002774fdb13f15c9a4993266fe6c0e324be2f3f29db9944fa0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro.hpp": "48f7d8f0c9dbd74564f872a05e1de17b6732f5f0dd3f582b13a1ac8ac7b431c6",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_models.py": "a82025edeaab4385ce965e3ea549824c124e0cb34e63b55fe581502559edb78e",
+    "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py": "8a78370d89e0a11f22e1d835b53b88141cb81b6b7e1a3e963228ea365631ae2d",
+    "experiments/sdpa-l2/bfp4-lofi-v1/probe.py": "ee03beb127c1f14c7c2b419d511392f075e49033e78ef516333cb67e3841b40c",
+    "experiments/sdpa-l2/bfp4-lofi-v1/numerics.py": "4e7539a43260dd660c8fd70728a9e82c1c5157bd84cd71144bd5aa8c54fc0cb7",
+    "experiments/sdpa-l2/frontier-accuracy-v1/run.py": "6b719aa29e5c93b2062979e03b7047bc06ea43dee7553e6702b8f8ca4af60c09",
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h": "563813232a5aaebc83f53425ccbb0d49a0eeb991742cc1e07e9e679b04a0a5b0",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "85dbc4ecfeeb682bfc59c7c24a28446f80bafd00f1604178c201efb232dd3aa8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming/compute_resident.cpp": "91719aaca21dedcadb56903f22c1de5f2df91d070e93a26cb8dca29189991ce5",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming/reader_resident.cpp": "319b6e6dd51f98ca086e6da28f5c80097340e8e62a44788bfcfaccf4163d9bfe",
+    "experiments/sdpa-l2/bfp4-lofi-v2/exp_lut_macro_streaming/writer_resident.cpp": "cf2dc275f712dffb00550a9558860fd44c20e82e9a67dd17af44a80c06a0d16d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/reader.cpp": "76dfed970887295e851aaccfa2d6abf1fd62952bad6a078162de1c0fd0464b27",
+    "experiments/sdpa-l2/bfp4-lofi-v2/resident/writer.cpp": "0cc1609c814bebaee77f661dc9ca10e4a8608bdbd1e3beffd8a1011971775505",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/compute.cpp": "6be059e9ee0dcd18207a3b0beeb2ab395afbbedb4ee42e7994b970c541c04a97",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/preprocess/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c"
+  },
+  "output_sha256": "2b0a2c06011f2bfcf1900d95072e07a178b0fcd715e2b08796da14f69636fa95"
+}

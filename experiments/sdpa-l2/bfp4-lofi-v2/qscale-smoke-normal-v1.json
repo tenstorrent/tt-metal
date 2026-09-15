@@ -1,0 +1,27 @@
+{
+  "label": "qscale-smoke-normal-v1",
+  "length": 4096,
+  "bits": 7,
+  "scale": 1.003,
+  "output_format": "bf16",
+  "cores": 1,
+  "batch": 4,
+  "bf16_dst": false,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "seed": 1240,
+  "distribution": "normal",
+  "actual_cores": 1,
+  "mismatch": 0,
+  "numel": 524288,
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale.py": "6ceaa61f306362801a0540e4043d741462c70a3767182d6144bc11cdea375e43",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/compute.cpp": "9c382f8920902f901e635970b5ad67b86fe20747ae03caedd935c3fc4d87e8dd"
+  }
+}

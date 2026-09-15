@@ -1,0 +1,1582 @@
+{
+  "label": "residual48-chain-h10-262144-qscale-v1",
+  "variant": "residual48",
+  "q_prescale": 1.0028,
+  "skip_residual_reconfig": false,
+  "length": 262144,
+  "heads": 10,
+  "cores": 110,
+  "seed": 1240,
+  "distribution": "normal",
+  "sample_rows": 128,
+  "check_preprocess": false,
+  "read_barrier_tiles": 2,
+  "max_l2": null,
+  "warmup": 3,
+  "iters": 7,
+  "trace_repeats": 1,
+  "cb_bytes_per_core": 1286144,
+  "blackhole_physical_l1_bytes": 1572864,
+  "raw_l1_minus_cb_bytes": 286720,
+  "allocation_check": "Static CB footprint only; runtime allocator must also fit firmware/kernel/reserved regions",
+  "actual_cores": 110,
+  "chain_length": 11,
+  "q_jobs": 10240,
+  "jobs_per_core": [
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    94,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93,
+    93
+  ],
+  "assignments": [
+    {
+      "core": [
+        0,
+        0
+      ],
+      "head": 0,
+      "rank": 0,
+      "first_job": 0,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        0
+      ],
+      "head": 0,
+      "rank": 1,
+      "first_job": 94,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        0
+      ],
+      "head": 0,
+      "rank": 2,
+      "first_job": 187,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        0
+      ],
+      "head": 0,
+      "rank": 3,
+      "first_job": 280,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        0
+      ],
+      "head": 0,
+      "rank": 4,
+      "first_job": 373,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        0
+      ],
+      "head": 0,
+      "rank": 5,
+      "first_job": 466,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        0
+      ],
+      "head": 0,
+      "rank": 6,
+      "first_job": 559,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        0
+      ],
+      "head": 0,
+      "rank": 7,
+      "first_job": 652,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        0
+      ],
+      "head": 0,
+      "rank": 8,
+      "first_job": 745,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        0
+      ],
+      "head": 0,
+      "rank": 9,
+      "first_job": 838,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        0
+      ],
+      "head": 0,
+      "rank": 10,
+      "first_job": 931,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        1
+      ],
+      "head": 1,
+      "rank": 0,
+      "first_job": 1024,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        1
+      ],
+      "head": 1,
+      "rank": 1,
+      "first_job": 1118,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        1
+      ],
+      "head": 1,
+      "rank": 2,
+      "first_job": 1211,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        1
+      ],
+      "head": 1,
+      "rank": 3,
+      "first_job": 1304,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        1
+      ],
+      "head": 1,
+      "rank": 4,
+      "first_job": 1397,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        1
+      ],
+      "head": 1,
+      "rank": 5,
+      "first_job": 1490,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        1
+      ],
+      "head": 1,
+      "rank": 6,
+      "first_job": 1583,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        1
+      ],
+      "head": 1,
+      "rank": 7,
+      "first_job": 1676,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        1
+      ],
+      "head": 1,
+      "rank": 8,
+      "first_job": 1769,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        1
+      ],
+      "head": 1,
+      "rank": 9,
+      "first_job": 1862,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        1
+      ],
+      "head": 1,
+      "rank": 10,
+      "first_job": 1955,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        2
+      ],
+      "head": 2,
+      "rank": 0,
+      "first_job": 2048,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        2
+      ],
+      "head": 2,
+      "rank": 1,
+      "first_job": 2142,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        2
+      ],
+      "head": 2,
+      "rank": 2,
+      "first_job": 2235,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        2
+      ],
+      "head": 2,
+      "rank": 3,
+      "first_job": 2328,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        2
+      ],
+      "head": 2,
+      "rank": 4,
+      "first_job": 2421,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        2
+      ],
+      "head": 2,
+      "rank": 5,
+      "first_job": 2514,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        2
+      ],
+      "head": 2,
+      "rank": 6,
+      "first_job": 2607,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        2
+      ],
+      "head": 2,
+      "rank": 7,
+      "first_job": 2700,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        2
+      ],
+      "head": 2,
+      "rank": 8,
+      "first_job": 2793,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        2
+      ],
+      "head": 2,
+      "rank": 9,
+      "first_job": 2886,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        2
+      ],
+      "head": 2,
+      "rank": 10,
+      "first_job": 2979,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        3
+      ],
+      "head": 3,
+      "rank": 0,
+      "first_job": 3072,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        3
+      ],
+      "head": 3,
+      "rank": 1,
+      "first_job": 3166,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        3
+      ],
+      "head": 3,
+      "rank": 2,
+      "first_job": 3259,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        3
+      ],
+      "head": 3,
+      "rank": 3,
+      "first_job": 3352,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        3
+      ],
+      "head": 3,
+      "rank": 4,
+      "first_job": 3445,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        3
+      ],
+      "head": 3,
+      "rank": 5,
+      "first_job": 3538,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        3
+      ],
+      "head": 3,
+      "rank": 6,
+      "first_job": 3631,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        3
+      ],
+      "head": 3,
+      "rank": 7,
+      "first_job": 3724,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        3
+      ],
+      "head": 3,
+      "rank": 8,
+      "first_job": 3817,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        3
+      ],
+      "head": 3,
+      "rank": 9,
+      "first_job": 3910,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        3
+      ],
+      "head": 3,
+      "rank": 10,
+      "first_job": 4003,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        4
+      ],
+      "head": 4,
+      "rank": 0,
+      "first_job": 4096,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        4
+      ],
+      "head": 4,
+      "rank": 1,
+      "first_job": 4190,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        4
+      ],
+      "head": 4,
+      "rank": 2,
+      "first_job": 4283,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        4
+      ],
+      "head": 4,
+      "rank": 3,
+      "first_job": 4376,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        4
+      ],
+      "head": 4,
+      "rank": 4,
+      "first_job": 4469,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        4
+      ],
+      "head": 4,
+      "rank": 5,
+      "first_job": 4562,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        4
+      ],
+      "head": 4,
+      "rank": 6,
+      "first_job": 4655,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        4
+      ],
+      "head": 4,
+      "rank": 7,
+      "first_job": 4748,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        4
+      ],
+      "head": 4,
+      "rank": 8,
+      "first_job": 4841,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        4
+      ],
+      "head": 4,
+      "rank": 9,
+      "first_job": 4934,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        4
+      ],
+      "head": 4,
+      "rank": 10,
+      "first_job": 5027,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        5
+      ],
+      "head": 5,
+      "rank": 0,
+      "first_job": 5120,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        5
+      ],
+      "head": 5,
+      "rank": 1,
+      "first_job": 5214,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        5
+      ],
+      "head": 5,
+      "rank": 2,
+      "first_job": 5307,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        5
+      ],
+      "head": 5,
+      "rank": 3,
+      "first_job": 5400,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        5
+      ],
+      "head": 5,
+      "rank": 4,
+      "first_job": 5493,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        5
+      ],
+      "head": 5,
+      "rank": 5,
+      "first_job": 5586,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        5
+      ],
+      "head": 5,
+      "rank": 6,
+      "first_job": 5679,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        5
+      ],
+      "head": 5,
+      "rank": 7,
+      "first_job": 5772,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        5
+      ],
+      "head": 5,
+      "rank": 8,
+      "first_job": 5865,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        5
+      ],
+      "head": 5,
+      "rank": 9,
+      "first_job": 5958,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        5
+      ],
+      "head": 5,
+      "rank": 10,
+      "first_job": 6051,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        6
+      ],
+      "head": 6,
+      "rank": 0,
+      "first_job": 6144,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        6
+      ],
+      "head": 6,
+      "rank": 1,
+      "first_job": 6238,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        6
+      ],
+      "head": 6,
+      "rank": 2,
+      "first_job": 6331,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        6
+      ],
+      "head": 6,
+      "rank": 3,
+      "first_job": 6424,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        6
+      ],
+      "head": 6,
+      "rank": 4,
+      "first_job": 6517,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        6
+      ],
+      "head": 6,
+      "rank": 5,
+      "first_job": 6610,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        6
+      ],
+      "head": 6,
+      "rank": 6,
+      "first_job": 6703,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        6
+      ],
+      "head": 6,
+      "rank": 7,
+      "first_job": 6796,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        6
+      ],
+      "head": 6,
+      "rank": 8,
+      "first_job": 6889,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        6
+      ],
+      "head": 6,
+      "rank": 9,
+      "first_job": 6982,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        6
+      ],
+      "head": 6,
+      "rank": 10,
+      "first_job": 7075,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        7
+      ],
+      "head": 7,
+      "rank": 0,
+      "first_job": 7168,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        7
+      ],
+      "head": 7,
+      "rank": 1,
+      "first_job": 7262,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        7
+      ],
+      "head": 7,
+      "rank": 2,
+      "first_job": 7355,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        7
+      ],
+      "head": 7,
+      "rank": 3,
+      "first_job": 7448,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        7
+      ],
+      "head": 7,
+      "rank": 4,
+      "first_job": 7541,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        7
+      ],
+      "head": 7,
+      "rank": 5,
+      "first_job": 7634,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        7
+      ],
+      "head": 7,
+      "rank": 6,
+      "first_job": 7727,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        7
+      ],
+      "head": 7,
+      "rank": 7,
+      "first_job": 7820,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        7
+      ],
+      "head": 7,
+      "rank": 8,
+      "first_job": 7913,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        7
+      ],
+      "head": 7,
+      "rank": 9,
+      "first_job": 8006,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        7
+      ],
+      "head": 7,
+      "rank": 10,
+      "first_job": 8099,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        8
+      ],
+      "head": 8,
+      "rank": 0,
+      "first_job": 8192,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        8
+      ],
+      "head": 8,
+      "rank": 1,
+      "first_job": 8286,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        8
+      ],
+      "head": 8,
+      "rank": 2,
+      "first_job": 8379,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        8
+      ],
+      "head": 8,
+      "rank": 3,
+      "first_job": 8472,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        8
+      ],
+      "head": 8,
+      "rank": 4,
+      "first_job": 8565,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        8
+      ],
+      "head": 8,
+      "rank": 5,
+      "first_job": 8658,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        8
+      ],
+      "head": 8,
+      "rank": 6,
+      "first_job": 8751,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        8
+      ],
+      "head": 8,
+      "rank": 7,
+      "first_job": 8844,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        8
+      ],
+      "head": 8,
+      "rank": 8,
+      "first_job": 8937,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        8
+      ],
+      "head": 8,
+      "rank": 9,
+      "first_job": 9030,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        8
+      ],
+      "head": 8,
+      "rank": 10,
+      "first_job": 9123,
+      "jobs": 93
+    },
+    {
+      "core": [
+        0,
+        9
+      ],
+      "head": 9,
+      "rank": 0,
+      "first_job": 9216,
+      "jobs": 94
+    },
+    {
+      "core": [
+        1,
+        9
+      ],
+      "head": 9,
+      "rank": 1,
+      "first_job": 9310,
+      "jobs": 93
+    },
+    {
+      "core": [
+        2,
+        9
+      ],
+      "head": 9,
+      "rank": 2,
+      "first_job": 9403,
+      "jobs": 93
+    },
+    {
+      "core": [
+        3,
+        9
+      ],
+      "head": 9,
+      "rank": 3,
+      "first_job": 9496,
+      "jobs": 93
+    },
+    {
+      "core": [
+        4,
+        9
+      ],
+      "head": 9,
+      "rank": 4,
+      "first_job": 9589,
+      "jobs": 93
+    },
+    {
+      "core": [
+        5,
+        9
+      ],
+      "head": 9,
+      "rank": 5,
+      "first_job": 9682,
+      "jobs": 93
+    },
+    {
+      "core": [
+        6,
+        9
+      ],
+      "head": 9,
+      "rank": 6,
+      "first_job": 9775,
+      "jobs": 93
+    },
+    {
+      "core": [
+        7,
+        9
+      ],
+      "head": 9,
+      "rank": 7,
+      "first_job": 9868,
+      "jobs": 93
+    },
+    {
+      "core": [
+        8,
+        9
+      ],
+      "head": 9,
+      "rank": 8,
+      "first_job": 9961,
+      "jobs": 93
+    },
+    {
+      "core": [
+        9,
+        9
+      ],
+      "head": 9,
+      "rank": 9,
+      "first_job": 10054,
+      "jobs": 93
+    },
+    {
+      "core": [
+        10,
+        9
+      ],
+      "head": 9,
+      "rank": 10,
+      "first_job": 10147,
+      "jobs": 93
+    }
+  ],
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "input_slots": 1,
+  "q_slots": 2,
+  "fp32_dst": true,
+  "fidelity": "LoFi",
+  "exp_quality": "cheap",
+  "p_round": false,
+  "executed_qk_pv_matmul_factor": 2,
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_LOFI_RESIDUALS": "1",
+    "SDPA_LOFI_DENOM": "1"
+  },
+  "preprocessing_cores": [
+    110,
+    110,
+    110
+  ],
+  "preprocessing_mismatches": null,
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      2,
+      64,
+      576,
+      "DataType.BFLOAT4_B"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      17,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ],
+    [
+      18,
+      64,
+      1088,
+      "DataType.BFLOAT8_B"
+    ]
+  ],
+  "resident_dram_tensor_payload_bytes": 4445962240,
+  "input_storage": "BF16 Q7; BFP4 K0/V0; RNE5 BFP8 K1/V1",
+  "scheduling_note": "Existing residual header also waits for V1 before QK; no new lookahead optimization",
+  "accuracy": {
+    "l2_pct": 0.5153120878944185,
+    "max_relative_error_pct": 19242.05560435271,
+    "zero_reference_mismatch_count": 0,
+    "max_relative_reference": 3.312729238516177e-08,
+    "max_relative_actual": 6.407499313354492e-06,
+    "reference_rms": 0.0032395695916987008,
+    "max_relative_error_above_1pct_rms_pct": 125.57300582966636,
+    "pcc": 0.9999867544047186,
+    "gain": 0.9997214266197236,
+    "gain_corrected_l2_pct": 0.5145585648379755,
+    "max_abs": 8.563184054716493e-05,
+    "row_l2_pct_median": 0.5135576153974376,
+    "row_l2_pct_p95": 0.5937189234639921
+  },
+  "sampled_query_rows": [
+    0,
+    2064,
+    4128,
+    6192,
+    8256,
+    10320,
+    12384,
+    14448,
+    16512,
+    18577,
+    20641,
+    22705,
+    24769,
+    26833,
+    28897,
+    30961,
+    33025,
+    35090,
+    37154,
+    39218,
+    41282,
+    43346,
+    45410,
+    47474,
+    49538,
+    51602,
+    53667,
+    55731,
+    57795,
+    59859,
+    61923,
+    63987,
+    66051,
+    68115,
+    70180,
+    72244,
+    74308,
+    76372,
+    78436,
+    80500,
+    82564,
+    84628,
+    86692,
+    88757,
+    90821,
+    92885,
+    94949,
+    97013,
+    99077,
+    101141,
+    103205,
+    105270,
+    107334,
+    109398,
+    111462,
+    113526,
+    115590,
+    117654,
+    119718,
+    121782,
+    123847,
+    125911,
+    127975,
+    130039,
+    132103,
+    134167,
+    136231,
+    138295,
+    140360,
+    142424,
+    144488,
+    146552,
+    148616,
+    150680,
+    152744,
+    154808,
+    156872,
+    158937,
+    161001,
+    163065,
+    165129,
+    167193,
+    169257,
+    171321,
+    173385,
+    175450,
+    177514,
+    179578,
+    181642,
+    183706,
+    185770,
+    187834,
+    189898,
+    191962,
+    194027,
+    196091,
+    198155,
+    200219,
+    202283,
+    204347,
+    206411,
+    208475,
+    210540,
+    212604,
+    214668,
+    216732,
+    218796,
+    220860,
+    222924,
+    224988,
+    227052,
+    229117,
+    231181,
+    233245,
+    235309,
+    237373,
+    239437,
+    241501,
+    243565,
+    245630,
+    247694,
+    249758,
+    251822,
+    253886,
+    255950,
+    258014,
+    260078,
+    262143
+  ],
+  "accuracy_scope": "All heads and KV; explicit sampled Q rows; all output elements checked finite",
+  "useful_flops": 351843720888320,
+  "executed_qk_pv_flops": 703687441776640,
+  "attention": {
+    "median_ms": 4979.0440259967,
+    "replay_ms": [
+      4979.205896961503,
+      4979.054366005585,
+      4978.655816987157,
+      4978.759757941589,
+      4979.0440259967,
+      4978.879856993444,
+      4979.2133460287005
+    ]
+  },
+  "preprocessing": {
+    "median_ms": 10.751073015853763,
+    "replay_ms": [
+      10.694381897337735,
+      10.768532985821366,
+      10.86803199723363,
+      10.78769308514893,
+      10.623442009091377,
+      10.751073015853763,
+      10.56829304434359
+    ]
+  },
+  "combined": {
+    "median_ms": 4988.9210109831765,
+    "replay_ms": [
+      4988.973491010256,
+      4989.243690040894,
+      4988.8782310299575,
+      4988.756870036013,
+      4988.992361002602,
+      4988.643751014024,
+      4988.9210109831765
+    ]
+  },
+  "attention_tflops": 70.66491460032597,
+  "combined_tflops": 70.52501334732126,
+  "trace_equal": true,
+  "output_sha256": "466735db9c623159d96a28e83df15d01d6d6b0a885deb2ab5bf03c2d639ecfc2",
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual.py": "8fd248ceae24781bc0737e0bd2bdb217fb3849ab1021b246dc44bcfc60c45991",
+    "experiments/sdpa-l2/bfp4-lofi-v2/numerics.py": "d3ce7b2a78ad6fba42b21200d4f0c91063c51a0cbc07697b0315dc79d4fd2098",
+    "experiments/sdpa-l2/bfp4-lofi-v2/streaming/compute_streaming.hpp": "d08c15e304dd088b71161540c433c9a4aebe564619753311a470f41e75a5108b",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/compute.cpp": "8860d5000eecf46e6445511026836cc32b59de624ba8e0c2b55e81340eebefcc",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/reader_chain.cpp": "2d965a6c6d24f3f561a2e4377ac4d1c1838cf6f4c111e74eb3a1b16adf630882",
+    "experiments/sdpa-l2/bfp4-lofi-v2/fullchip_residual/writer.cpp": "503d5f40fd0aef7140406ab23183724029855170ae147c58d3622a22b593fc18",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale.py": "6ceaa61f306362801a0540e4043d741462c70a3767182d6144bc11cdea375e43",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/compute.cpp": "9c382f8920902f901e635970b5ad67b86fe20747ae03caedd935c3fc4d87e8dd",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/reader.cpp": "471f546d3aa41857236685efe05ad19cd339abb26244584ea0901ea1aaaefafa",
+    "experiments/sdpa-l2/bfp4-lofi-v2/q_prescale/writer.cpp": "f62563474e85015cae81f0fb4ae11801936a36a45f24cdec2d0fe98ad80d4a11",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess.py": "40e6840aa1143a7920e5d261ce288a19b919ad9878476f4955fee9262121bde8",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/compute.cpp": "4d51e36904fa75172669f3315a7d7fe327de6415a126b595b151d24327f4de8d",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/reader.cpp": "87255a083ca2574372d6348d2b3853e20cdad2246b10620c93ee7d93bbd8bb2a",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp4_residual_preprocess/writer.cpp": "93874351690d4feda9f298e342a1e3e5d2fff307e996c0d75779331340bd3dfb"
+  },
+  "timing_source": "Blocking host wall-clock trace replay, divided by trace_repeats",
+  "warning": "Private noncausal square residual streaming; useful FLOPs exclude extra matmuls and preprocessing"
+}

@@ -1,0 +1,62 @@
+{
+  "label": "fp32_sfpu-perf256k-v1",
+  "mean_mode": "fp32_sfpu",
+  "quant_mode": "b8_rne5",
+  "length": 262144,
+  "heads": 10,
+  "cores": 110,
+  "distribution": "normal",
+  "seed": 1240,
+  "iters": 7,
+  "warmup": 3,
+  "trace_repeats": 3,
+  "actual_center_cores": 110,
+  "precision": {
+    "input": "original BF16 K (device resident)",
+    "accumulation": "FP32 DST",
+    "reduction": "full FP32 SFPU",
+    "reciprocal": "FP32 post-reduction 1/N",
+    "final_bias": "BF16, explicit repeated column bias",
+    "full_input_fp32_cast_in_timing": true,
+    "reduction_output_columns": 40
+  },
+  "mean_metrics": {
+    "bf16_bias_mismatches_vs_fp64": 0,
+    "mean_l2_pct_vs_fp64": 0.1624551190055625,
+    "mean_max_abs_vs_fp64": 1.480162245570682e-05,
+    "ideal_bf16_rounding_l2_pct": 0.1624551190055625,
+    "reduction_output_l2_pct_before_explicit_narrow": 1.016537738685405e-05,
+    "bf16_truncated_reciprocal_relative_error": 0.0
+  },
+  "centered_quantization_mismatches": 0,
+  "mean_median_ms": 11.07884532151123,
+  "mean_plus_center_median_ms": 13.722534330251316,
+  "mean_times_ms": [
+    11.093338641027609,
+    11.099498680171868,
+    11.07750867959112,
+    11.082655323358873,
+    11.07884532151123,
+    11.071442005534967,
+    11.076012005408606
+  ],
+  "mean_plus_center_times_ms": [
+    13.727137663712105,
+    13.733804342336953,
+    13.736627995967865,
+    13.717044338894388,
+    13.722534330251316,
+    13.71010800357908,
+    13.67452434108903
+  ],
+  "timing": "trace replay wall-time per invocation",
+  "host_precomputed_bias": false,
+  "source_sha256": {
+    "center_mean.py": "21094fe07529b5ac63dbcf3a5456aebf53a2b6cb209911d122aebec5325abd9c",
+    "center_preprocess.py": "065c808f4e063724705798d6899df7686e4ca1bcf7c9a8bc48f77b3164209109",
+    "center_preprocess/compute.cpp": "d73a10b87113190636a1d694f5d489f8c6a490c34a7a028efbd9fff3298c567b",
+    "center_preprocess/reader.cpp": "19cf28da522ecd9a8881ab62be949202771096c9f0602886648510b74bf91b9f",
+    "center_preprocess/writer.cpp": "08d17c3263073a9128b55d49b32840d2bd05a446a912df1d49426c5bac2631c1",
+    "center_preprocess/round.hpp": "b882c76b024d21994fecfa49a5f2bd9e6a098696ef44ef58d4c0615d564c9048"
+  }
+}

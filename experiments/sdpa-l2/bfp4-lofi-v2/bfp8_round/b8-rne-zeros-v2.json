@@ -1,0 +1,30 @@
+{
+  "label": "b8-rne-zeros-v2",
+  "length": 4096,
+  "cores": 1,
+  "batch": 4,
+  "fp32_dst": false,
+  "output_format": "b8",
+  "distribution": "zeros",
+  "seed": 1240,
+  "iters": 0,
+  "warmup": 10,
+  "trace_repeats": 10,
+  "host_only": false,
+  "actual_cores": 1,
+  "mismatch": 0,
+  "oracle_mismatch": 0,
+  "numel": 524288,
+  "median_ms": null,
+  "replay_ms": [],
+  "read_write_GBps": null,
+  "quantization_l2_pct": 0.0,
+  "least_squares_quantized_gain": 1.0,
+  "relative_absolute_magnitude_drift": 0.0,
+  "source_sha256": {
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp8_round.py": "91173fa61837637351955d52b5b9ae5316b0b51a6acb39639f70ac2243495fb2",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp8_round/compute.cpp": "a6a807a06ad24e90f59d4e6ee6731d52e00e2601f274a77178edd8f7af6f6389",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp8_round/reader.cpp": "87255a083ca2574372d6348d2b3853e20cdad2246b10620c93ee7d93bbd8bb2a",
+    "experiments/sdpa-l2/bfp4-lofi-v2/bfp8_round/writer.cpp": "6df1575e84afaad7ef778564ea78a175630e1c4c81cfc96f3ce784bf6881abe7"
+  }
+}
