@@ -14,7 +14,6 @@ def exchange_convolution_carry(
     *,
     sequence_parallel_axis: int,
     topology: OffsetTopology,
-    wrap_indicator: ttnn.Tensor | None = None,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     """Return partition entry carries and the replicated final stream carry.
 
@@ -33,42 +32,51 @@ def exchange_convolution_carry(
     """
     batch, local_sequence, channels = projected_qkv.shape
     history = initial_carry.shape[1]
-    mesh_device = projected_qkv.device()
-    mesh_shape = tuple(mesh_device.shape)
-    sp_size = mesh_shape[sequence_parallel_axis]
+    physical_end = ttnn.slice(
+        projected_qkv,
+        (0, local_sequence - history, 0),
+        (batch, local_sequence, channels),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    padded = ttnn.pad(
+        physical_end, ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)), value=0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tiled_tail = ttnn.to_layout(padded, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    return _exchange_published_carry(
+        tiled_tail, initial_carry, sequence_parallel_axis=sequence_parallel_axis, topology=topology
+    )
 
-    def local_tail(end: int) -> ttnn.Tensor:
-        return ttnn.slice(
-            projected_qkv,
-            (0, end - history, 0),
-            (batch, end, channels),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
 
-    if topology.is_split:
-        if wrap_indicator is None:
-            raise ValueError("a split convolution carry exchange requires a device-local wrap indicator")
+def exchange_split_convolution_carry(
+    projected_qkv: ttnn.Tensor,
+    initial_carry: ttnn.Tensor,
+    *,
+    sequence_parallel_axis: int,
+    topology: OffsetTopology,
+    wrap_indicator: ttnn.Tensor,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Exchange both three-row history planes using the layer's split selector."""
+    tiled_tail = ttnn.experimental.kda.pack_convolution_carry(
+        projected_qkv,
+        wrap_indicator,
+        topology.head_rows,
+        history_rows=initial_carry.shape[1],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return _exchange_published_carry(
+        tiled_tail, initial_carry, sequence_parallel_axis=sequence_parallel_axis, topology=topology
+    )
 
-        # One device program selects the source address locally. Ordinary ranks
-        # read only their physical end; the wrap rank publishes its head end and
-        # retains its physical end in rows [history:2*history] of the same tile.
-        tiled_tail = ttnn.experimental.kda.pack_convolution_carry(
-            projected_qkv,
-            wrap_indicator,
-            topology.head_rows,
-            history_rows=history,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-    else:
-        physical_end = local_tail(local_sequence)
-        padded_tail = ttnn.pad(
-            physical_end,
-            ((0, 0), (0, ttnn.TILE_SIZE - history), (0, 0)),
-            value=0.0,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        tiled_tail = ttnn.to_layout(padded_tail, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+def _exchange_published_carry(
+    tiled_tail: ttnn.Tensor,
+    initial_carry: ttnn.Tensor,
+    *,
+    sequence_parallel_axis: int,
+    topology: OffsetTopology,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    batch, history, channels = initial_carry.shape
+    sp_size = tiled_tail.device().shape[sequence_parallel_axis]
     gathered_tails = ttnn.all_gather(
         tiled_tail,
         dim=1,
