@@ -1334,11 +1334,17 @@
     export LLAMA31_8B_REAL_WEIGHTS=1
     export PREFILL_TRACE_DIR=/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L
 
+    # One pytest per cell, NOT -k "real_checkpoint and galaxy" in a single session. Both cells load
+    # the full 16 GB checkpoint, and two resident copies plus the upload staging tensors exceed host
+    # RAM on this sku. It does not fail as a MemoryError -- it stalls silently in weight upload and
+    # burns the whole timeout, which is how this was found.
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/unit/test_model_vs_ref.py \
-        -k "real_checkpoint and galaxy" -v --tb=short -p no:randomly
+      for cell in real_checkpoint_hidden_states real_checkpoint_kv_pcc_vs_golden; do
+        python3 -m pytest models/demos/llama_3p1_8b_d_p/tests/unit/test_model_vs_ref.py \
+          -k "${cell} and galaxy" -v --tb=short -p no:randomly
+      done
     '
   test_type: llama_3p1_8b_prefill_full_model_kv_pcc
   test_tags: [llama_3p1_8b, transformer, kv_cache]

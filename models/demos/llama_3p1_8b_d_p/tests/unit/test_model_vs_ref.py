@@ -30,6 +30,7 @@ Run (eight-chip loudbox):
 
 from __future__ import annotations
 
+import gc
 import os
 import subprocess
 import sys
@@ -49,6 +50,22 @@ from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 EMB_DIM = Llama31_8BConfig.EMB_SIZE
 N_KV_HEADS = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
 PCC_REQUIRED = 0.99
+
+# The per-layer KV-vs-golden floor (tt-blaze#4150) is deliberately looser than PCC_REQUIRED, and it
+# is a different measurement rather than a weaker one. Everything else here grades a device tensor
+# against a same-process torch reference over one or two layers; this grades a bfloat8_b cache,
+# written by 32 layers of bf16 compute, against an fp32 CPU golden at 2048 tokens. The error is
+# accumulated, not local.
+#
+# Measured on a 4x8 galaxy with the real checkpoint, deterministically: worst K 0.9899, worst V
+# 0.9666 at layer 12, degrading smoothly with depth and recovering after ~layer 15. The same run's
+# final hidden states hit 0.9980 against the reference, so the model is not the thing being limited.
+#
+# 0.99 is unreachable here by any configuration: the SP ring cache-read op requires a bfloat8_b
+# cache -- its gather buffers are bf8 -- so a wider cache is not an option to trade against. A
+# per-layer break from a real wiring bug shows up as one bad layer against clean neighbours, which
+# this floor still catches; gpt-oss gates the same measurement at 0.85 under a measured ~0.92.
+PCC_REQUIRED_KV_GOLDEN = 0.95
 
 # Small enough to build and load in seconds; see the module docstring for why this is not a
 # weakening of the test.
@@ -546,6 +563,12 @@ def test_real_checkpoint_hidden_states(mesh_device, device_params, reset_seeds):
     with torch.no_grad():
         torch_hidden = _reference_hidden_states(reference, token_ids)
 
+    # Drop the 32-layer torch model before building the device one. Two full-size copies of
+    # Llama-3.1-8B plus the staging tensors do not fit in host RAM on these nodes, and the way it
+    # fails is a silent stall in weight upload rather than a MemoryError.
+    del reference
+    gc.collect()
+
     runtime, kv_cache, config = _build(
         mesh_device,
         chunk_size=chunk_size,
@@ -554,6 +577,8 @@ def test_real_checkpoint_hidden_states(mesh_device, device_params, reset_seeds):
         vocab_size=Llama31_8BConfig.VOCAB_SIZE,
         state_dict=hf_state_dict,
     )
+    del hf_state_dict
+    gc.collect()
     tt_hidden = runtime.prefill_prompt(token_ids[0].tolist(), kv_cache, return_hidden_states=True)
 
     got = ttnn.to_torch(
@@ -622,7 +647,15 @@ def test_real_checkpoint_kv_pcc_vs_golden(mesh_device, device_params, reset_seed
     )
     runtime.prefill_prompt(token_ids, kv_cache)
 
-    results = runtime.kv_cache_pcc_check(kv_cache, trace_dir, num_tokens=num_tokens, min_pcc=PCC_REQUIRED)
+    results = runtime.kv_cache_pcc_check(kv_cache, trace_dir, num_tokens=num_tokens, min_pcc=PCC_REQUIRED_KV_GOLDEN)
     assert len(results) == Llama31_8BConfig.NUM_LAYERS, f"graded {len(results)} layers, not all 32"
     worst = min(min(pair) for pair in results.values())
     logger.info(f"#4150 per-layer KV PCC: {len(results)} layers, worst {worst:.6f}")
+
+    # A wiring bug in one layer reads as an outlier against its neighbours, not as a low floor, and
+    # the floor above is too loose to catch that on its own. Depth-accumulated error is smooth, so
+    # require each layer to be within 0.03 of the median rather than only above the floor.
+    per_layer = {layer: min(pair) for layer, pair in results.items()}
+    median = sorted(per_layer.values())[len(per_layer) // 2]
+    outliers = {layer: pcc for layer, pcc in per_layer.items() if median - pcc > 0.03}
+    assert not outliers, f"layer(s) {outliers} sit far below the median {median:.6f}; suspect that layer, not bf8"
