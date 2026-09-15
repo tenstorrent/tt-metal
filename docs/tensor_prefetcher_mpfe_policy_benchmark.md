@@ -16,12 +16,18 @@ Set `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY` to one of:
 | `static-000` | `0/0/0` | `0/0/0` |
 | `static-777` | `H/H/H` | `H/H/H` |
 | `static-007` | `0/0/H` | `0/0/H` |
+| `static-037` | `0/M/H` | `0/M/H` |
 | `static-770` | `H/H/0` | `H/H/0` |
 
 `H` defaults to 7. Override it with
 `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=0..7`. For example,
 `dynamic-000` with `HIGH_WEIGHT=5` uses `0/0/0` while idle and `0/0/5`
 while prefetching.
+
+`M` defaults to 3 and is controlled by
+`TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT=0..7`. In `static-037`,
+the first sender is the free subchannel, the second sender is the NOC1-endpoint
+subchannel, and the final slot is ordinary-operation traffic.
 
 The older `TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT=0..7` sweep
 remains available with `dynamic-007`. Do not combine it with another policy.
@@ -43,7 +49,7 @@ pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_b
 Sweep the most useful comparison matrix:
 
 ```bash
-for policy in static-000 static-777 static-007 dynamic-007 dynamic-000; do
+for policy in static-000 static-777 static-007 static-037 dynamic-007 dynamic-000; do
   for high in 3 5 7; do
     PYTHONPATH=$PWD \
     TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=$policy \
@@ -52,6 +58,18 @@ for policy in static-000 static-777 static-007 dynamic-007 dynamic-000; do
     pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
   done
 done
+```
+
+Run the static middle ground directly with independently configurable medium
+and high weights:
+
+```bash
+PYTHONPATH=$PWD \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY=static-037 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT=3 \
+TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT=7 \
+BENCH_TRACE_REPEATS=50 \
+pytest -sv tests/ttnn/unit_tests/operations/transformers/test_prefetcher_BH_bw_bench.py::test_mpfe_priority_contention
 ```
 
 The test reports the effective idle and active tuples, total elapsed time,

@@ -259,6 +259,9 @@ def _flops_per_matmul(k: int) -> int:
 def _mpfe_policy_label() -> str:
     policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
     high_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7")
+    if policy == "static-037":
+        medium_weight = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT", "3")
+        return f"{policy}[medium={medium_weight},high={high_weight}]"
     return f"{policy}[high={high_weight}]"
 
 

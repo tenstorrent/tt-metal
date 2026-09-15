@@ -206,8 +206,10 @@ def _mpfe_policy_description() -> tuple[str, tuple[int, int, int], tuple[int, in
     """Return policy and effective (sender 0, sender 1, ordinary) weights."""
     policy = os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY", "dynamic-007")
     high_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT", "7"))
+    medium_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT", "3"))
     active_weight = int(os.environ.get("TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT", "0"))
     assert 0 <= high_weight <= 7
+    assert 0 <= medium_weight <= 7
     assert 0 <= active_weight <= 7
 
     policies = {
@@ -216,9 +218,12 @@ def _mpfe_policy_description() -> tuple[str, tuple[int, int, int], tuple[int, in
         "static-000": ((0, 0, 0), (0, 0, 0)),
         "static-777": ((high_weight, high_weight, high_weight), (high_weight, high_weight, high_weight)),
         "static-007": ((0, 0, high_weight), (0, 0, high_weight)),
+        "static-037": ((0, medium_weight, high_weight), (0, medium_weight, high_weight)),
         "static-770": ((high_weight, high_weight, 0), (high_weight, high_weight, 0)),
     }
     assert policy in policies, f"unknown MPFE policy {policy!r}"
+    if policy == "static-037":
+        assert medium_weight <= high_weight, "MEDIUM_WEIGHT must not exceed HIGH_WEIGHT"
     idle, active = policies[policy]
     return policy, idle, active
 

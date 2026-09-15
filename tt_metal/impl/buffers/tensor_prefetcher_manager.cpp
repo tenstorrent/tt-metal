@@ -52,6 +52,7 @@ constexpr uint32_t kProductionActiveMpfeWeight = 0;
 constexpr const char* kBenchmarkActiveWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_ACTIVE_WEIGHT";
 constexpr const char* kBenchmarkPolicyEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_PRIORITY_POLICY";
 constexpr const char* kBenchmarkHighWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_HIGH_WEIGHT";
+constexpr const char* kBenchmarkMediumWeightEnv = "TT_METAL_BENCHMARK_TENSOR_PREFETCHER_MEDIUM_WEIGHT";
 
 constexpr const char* kKernelPath = "tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp";
 
@@ -71,8 +72,10 @@ uint32_t get_benchmark_mpfe_weight(const char* env_name, uint32_t default_weight
 }
 
 struct MpfePolicy {
-    uint32_t own_idle_weight;
-    uint32_t own_active_weight;
+    uint32_t free_sender_idle_weight;
+    uint32_t free_sender_active_weight;
+    uint32_t noc1_sender_idle_weight;
+    uint32_t noc1_sender_active_weight;
     uint32_t ordinary_idle_weight;
     uint32_t ordinary_active_weight;
 };
@@ -83,8 +86,11 @@ MpfePolicy get_mpfe_policy() {
 
     if (policy == nullptr || std::strcmp(policy, "dynamic-007") == 0) {
         return {
-            .own_idle_weight = high_weight,
-            .own_active_weight =
+            .free_sender_idle_weight = high_weight,
+            .free_sender_active_weight =
+                get_benchmark_mpfe_weight(kBenchmarkActiveWeightEnv, kProductionActiveMpfeWeight),
+            .noc1_sender_idle_weight = high_weight,
+            .noc1_sender_active_weight =
                 get_benchmark_mpfe_weight(kBenchmarkActiveWeightEnv, kProductionActiveMpfeWeight),
             .ordinary_idle_weight = high_weight,
             .ordinary_active_weight = high_weight,
@@ -100,27 +106,41 @@ MpfePolicy get_mpfe_policy() {
 
     if (std::strcmp(policy, "dynamic-000") == 0) {
         return {
-            .own_idle_weight = 0,
-            .own_active_weight = 0,
+            .free_sender_idle_weight = 0,
+            .free_sender_active_weight = 0,
+            .noc1_sender_idle_weight = 0,
+            .noc1_sender_active_weight = 0,
             .ordinary_idle_weight = 0,
             .ordinary_active_weight = high_weight,
         };
     }
     if (std::strcmp(policy, "static-000") == 0) {
-        return {0, 0, 0, 0};
+        return {0, 0, 0, 0, 0, 0};
     }
     if (std::strcmp(policy, "static-777") == 0) {
-        return {high_weight, high_weight, high_weight, high_weight};
+        return {high_weight, high_weight, high_weight, high_weight, high_weight, high_weight};
     }
     if (std::strcmp(policy, "static-007") == 0) {
-        return {0, 0, high_weight, high_weight};
+        return {0, 0, 0, 0, high_weight, high_weight};
     }
     if (std::strcmp(policy, "static-770") == 0) {
-        return {high_weight, high_weight, 0, 0};
+        return {high_weight, high_weight, high_weight, high_weight, 0, 0};
+    }
+    if (std::strcmp(policy, "static-037") == 0) {
+        const uint32_t medium_weight = get_benchmark_mpfe_weight(kBenchmarkMediumWeightEnv, 3);
+        TT_FATAL(
+            medium_weight <= high_weight,
+            "{}={} must not exceed {}={}",
+            kBenchmarkMediumWeightEnv,
+            medium_weight,
+            kBenchmarkHighWeightEnv,
+            high_weight);
+        return {0, 0, medium_weight, medium_weight, high_weight, high_weight};
     }
 
     TT_THROW(
-        "{} must be one of dynamic-007, dynamic-000, static-000, static-777, static-007, or static-770; got '{}'",
+        "{} must be one of dynamic-007, dynamic-000, static-000, static-777, static-007, static-037, or static-770; "
+        "got '{}'",
         kBenchmarkPolicyEnv,
         policy);
 }
@@ -660,8 +680,8 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
                 cq_signal_l1_addr_,
                 cq_signal_slot_stride_,
                 shutdown_semaphore_id,
-                mpfe_policy.own_idle_weight,
-                mpfe_policy.own_active_weight,
+                is_coordinator ? mpfe_policy.free_sender_idle_weight : mpfe_policy.noc1_sender_idle_weight,
+                is_coordinator ? mpfe_policy.free_sender_active_weight : mpfe_policy.noc1_sender_active_weight,
                 mpfe_policy.ordinary_idle_weight,
                 mpfe_policy.ordinary_active_weight,
             };
