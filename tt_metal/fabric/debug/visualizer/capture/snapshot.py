@@ -41,6 +41,7 @@ def build_snapshot(manifest, samples, captured_at=None):
         "manifest": {
             "path": str(manifest.path),
             "manifest_version": manifest.data["manifest_version"],
+            "sha256": manifest.sha256,
             "run": run_identity(manifest.run),
         },
         "samples": list(samples),

@@ -1889,11 +1889,11 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     uint16_t fabric_heartbeat_counter = 0;
 #if defined(ARCH_BLACKHOLE)
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x7CC70;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_BLACKHOLE;
 #else
-    constexpr uint32_t FABRIC_KERNEL_HEARTBEAT_ADDR = 0x1F80;
+    constexpr uint32_t fabric_kernel_heartbeat_addr = FABRIC_KERNEL_HEARTBEAT_ADDR_WORMHOLE;
 #endif
-    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(FABRIC_KERNEL_HEARTBEAT_ADDR);
+    volatile uint32_t* fabric_heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(fabric_kernel_heartbeat_addr);
 
     auto execute_main_loop = [&]() {
         ActualSpeedySenderState<super_speedy_mode> local_speedy_sender_state;
@@ -2242,8 +2242,8 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     fabric_telemetry);
             }
 
-            if ((++fabric_heartbeat_counter & 0x3F) == 0) {
-                *fabric_heartbeat_ptr = 0xDCBA0000 | fabric_heartbeat_counter;
+            if ((++fabric_heartbeat_counter & (FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS - 1)) == 0) {
+                *fabric_heartbeat_ptr = FABRIC_KERNEL_HEARTBEAT_MAGIC | fabric_heartbeat_counter;
             }
 
             if constexpr (enable_context_switch) {

@@ -31,7 +31,7 @@ def parse_args(argv=None):
         "--manifest",
         type=Path,
         required=True,
-        help="manifest emitted by ControlPlane",
+        help="fabric instance manifest describing the fabric topology and router targets",
     )
     parser.add_argument(
         "-o",

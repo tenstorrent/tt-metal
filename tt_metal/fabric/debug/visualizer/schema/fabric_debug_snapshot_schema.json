@@ -35,8 +35,8 @@
   "$defs": {
     "manifest_reference": {
       "type": "object",
-      "description": "Identifies the manifest used for target selection. The path is informational only and must not be used to merge files after they have been copied.",
-      "required": ["path", "manifest_version", "run"],
+      "description": "Identifies the manifest used for target selection. sha256 is the file-to-file pairing (hash of the manifest bytes as read). The path is informational only and must not be used to merge files after they have been copied. run.written_at is not copied; the hash already identifies the file.",
+      "required": ["path", "manifest_version", "sha256", "run"],
       "properties": {
         "path": {
           "type": "string"
@@ -44,6 +44,11 @@
         "manifest_version": {
           "type": "integer",
           "const": 1
+        },
+        "sha256": {
+          "description": "Lowercase hex SHA-256 of the manifest file bytes as captured.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
         },
         "run": {
           "$ref": "#/$defs/run_identity"

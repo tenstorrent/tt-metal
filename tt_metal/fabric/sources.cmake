@@ -35,6 +35,7 @@ set(FABRIC_SOURCES
     builder/protected_domain_effect.cpp
     builder/injection_policy.cpp
     builder/fabric_stream_assignment.cpp
+    builder/fabric_router_debug_layout.cpp
     builder/fabric_core_placement.cpp
     builder/fabric_channel_allocator.cpp
     builder/fabric_static_sized_channels_allocator.cpp

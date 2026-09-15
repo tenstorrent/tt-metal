@@ -30,6 +30,10 @@ namespace tt::tt_metal {
 class PhysicalSystemDescriptor;
 }  // namespace tt::tt_metal
 
+namespace tt::llrt {
+class RunTimeOptions;
+}  // namespace tt::llrt
+
 namespace tt::tt_fabric {
 
 class TopologyMapper;
@@ -139,13 +143,15 @@ void serialize_intermesh_port_assignment_to_file(
 // Version of the fabric debug manifest schema emitted below.
 constexpr int FABRIC_DEBUG_MANIFEST_VERSION = 1;
 
+// Standard per-rank path for the fabric debug manifest.
+std::filesystem::path fabric_debug_manifest_path(const tt::llrt::RunTimeOptions& rtoptions);
+
 // Serialize this fabric instance's topology to a JSON file for fabric debug tooling.
 //
 // This captures state that is frozen for the run, including fabric config, meshes, chip coordinates, and the set of
 // ethernet cores actually running fabric routers.
 //
-// This should be called after the router port map is final, i.e. at the end of configure_routing_tables_for_fabric_ethernet_channels(),
-// otherwise the manifest would contain no routers.
+// This should be called only after fabric router synchronization succeeds.
 void serialize_fabric_debug_manifest_to_file(
     const ControlPlane& control_plane, const std::filesystem::path& output_file_path);
 

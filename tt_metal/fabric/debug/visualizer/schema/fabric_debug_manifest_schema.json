@@ -2,9 +2,22 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/tenstorrent/tt-metal/tt_metal/fabric/debug/visualizer/schema/fabric_debug_manifest_schema.json",
   "title": "Fabric debug manifest",
-  "description": "Frozen description of one fabric instance's topology, written by ControlPlane at fabric init. Consumed by the fabric debug capture layer (ttexalens) and the visualizer. This schema is the stability boundary between the tt-metal fabric internals and the debug tooling. Consumers depend on manifest_version and the shapes below, never on ControlPlane signatures.",
+  "description": "Frozen description of one fabric instance, written after fabric routers reach READY_FOR_TRAFFIC. Consumed by the fabric debug capture layer (ttexalens) and the visualizer. This schema is the stability boundary between the tt-metal fabric internals and the debug tooling. Consumers depend on manifest_version and the shapes below, never on ControlPlane signatures.",
   "type": "object",
-  "required": ["manifest_version", "kind", "run", "meshes", "links"],
+  "required": [
+    "manifest_version",
+    "kind",
+    "run",
+    "hal",
+    "heartbeat",
+    "fabric_context",
+    "router_template",
+    "stream_assignment",
+    "enums",
+    "layouts",
+    "meshes",
+    "links"
+  ],
   "properties": {
     "manifest_version": {
       "description": "Incremented on breaking changes.",
@@ -17,6 +30,29 @@
     },
     "run": {
       "$ref": "#/$defs/run"
+    },
+    "hal": {
+      "$ref": "#/$defs/hal"
+    },
+    "heartbeat": {
+      "$ref": "#/$defs/heartbeat"
+    },
+    "fabric_context": {
+      "$ref": "#/$defs/fabric_context"
+    },
+    "router_template": {
+      "$ref": "#/$defs/router_template"
+    },
+    "stream_assignment": {
+      "$ref": "#/$defs/stream_assignment"
+    },
+    "enums": {
+      "$ref": "#/$defs/enums"
+    },
+    "layouts": {
+      "description": "Interned per-router region trees, keyed by deterministic layout id.",
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/layout" }
     },
     "meshes": {
       "description": "Sorted by mesh_id. Output is deterministic so the artifact can serve as a test golden.",
@@ -33,7 +69,7 @@
     "run": {
       "type": "object",
       "description": "Identity of the run, used to match a snapshot to this manifest.",
-      "required": ["arch", "fabric_config", "fabric_type", "host_rank", "mpi_rank", "world_size"],
+      "required": ["arch", "fabric_config", "fabric_type", "host_rank", "mpi_rank", "world_size", "written_at"],
       "properties": {
         "arch": {
           "description": "tt::ARCH as string, e.g. WORMHOLE_B0 / BLACKHOLE. Selects architecture-specific overlay register indices on the capture side.",
@@ -66,6 +102,10 @@
           "description": "Meshes bound to this host. Chips outside these meshes appear with is_local false and cannot be peeked by this rank.",
           "type": "array",
           "items": { "type": "integer" }
+        },
+        "written_at": {
+          "description": "UTC timestamp when this rank wrote the manifest after router sync.",
+          "type": "string"
         }
       }
     },
@@ -96,7 +136,7 @@
     },
     "chip": {
       "type": "object",
-      "required": ["fabric_chip_id", "mesh_coord", "is_local", "routers"],
+      "required": ["fabric_chip_id", "mesh_coord", "is_local", "routers", "master_router_chan"],
       "properties": {
         "fabric_chip_id": {
           "description": "Chip id within the mesh (FabricNodeId.chip_id).",
@@ -119,6 +159,10 @@
           "description": "Whether this chip is owned by this host rank. Capture must skip non-local chips.",
           "type": "boolean"
         },
+        "master_router_chan": {
+          "description": "Ethernet channel of the master fabric router on this chip. Null for chips this rank does not own.",
+          "type": ["integer", "null"]
+        },
         "routers": {
           "description": "Ethernet cores running a fabric router on this chip, sorted by eth_chan. This is the capture layer's peek target list. It is deliberately narrower than every ethernet tile: it contains only channels that are link-up AND assigned EthRouterMode::FABRIC_ROUTER AND survived routing-plane trimming. Do not substitute ttexalens active/idle classification, which misses cross-host links. Empty for non-local chips.",
           "type": "array",
@@ -128,8 +172,8 @@
     },
     "router": {
       "type": "object",
-      "description": "One fabric router (one ERISC ethernet core). Future revisions add 'l1' (static L1 addresses) and 'abi' (stream ids, VC counts, credit transport, compile-time flags from the EDM builder) without changing existing keys.",
-      "required": ["eth_chan", "direction"],
+      "description": "One fabric router (one ERISC ethernet core), bound to an interned builder-produced layout.",
+      "required": ["eth_chan", "direction", "layout_id", "instance"],
       "properties": {
         "eth_chan": {
           "description": "Ethernet channel id. Primary key for a router within a chip, and the index ttexalens uses into its eth block locations.",
@@ -159,8 +203,113 @@
           "items": { "type": "integer" },
           "minItems": 2,
           "maxItems": 2
-        }
+        },
+        "layout_id": {
+          "description": "Key into top-level layouts.",
+          "type": "string",
+          "pattern": "^L[0-9a-f]{16}$"
+        },
+        "instance": { "$ref": "#/$defs/router_instance" }
       }
+    },
+    "router_instance": {
+      "type": "object",
+      "required": [
+        "peer",
+        "is_inter_mesh",
+        "is_dispatch_link",
+        "num_active_eriscs",
+        "sender_channels_per_vc",
+        "receiver_channels_per_vc",
+        "worker_sender_channel",
+        "credit_plan",
+        "first_level_ack_vc0",
+        "downstream_edm_mask_vc0",
+        "downstream_edm_mask_vc1",
+        "has_tensix_extension",
+        "udm_mode"
+      ],
+      "properties": {
+        "peer": {
+          "oneOf": [{ "$ref": "#/$defs/endpoint" }, { "type": "null" }]
+        },
+        "is_inter_mesh": { "type": "boolean" },
+        "is_dispatch_link": { "type": "boolean" },
+        "num_active_eriscs": { "type": "integer", "minimum": 1 },
+        "sender_channels_per_vc": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "receiver_channels_per_vc": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0 }
+        },
+        "worker_sender_channel": { "type": "integer", "minimum": 0 },
+        "credit_plan": {
+          "type": "object",
+          "required": ["vc0_uses_counters", "vc1_uses_counters", "vc2_uses_counters"],
+          "properties": {
+            "vc0_uses_counters": { "type": "boolean" },
+            "vc1_uses_counters": { "type": "boolean" },
+            "vc2_uses_counters": { "type": "boolean" }
+          }
+        },
+        "first_level_ack_vc0": { "type": "boolean" },
+        "downstream_edm_mask_vc0": { "type": "integer", "minimum": 0 },
+        "downstream_edm_mask_vc1": { "type": "integer", "minimum": 0 },
+        "has_tensix_extension": { "type": "boolean" },
+        "udm_mode": { "type": "boolean" }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["regions", "router_count"],
+      "properties": {
+        "regions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/debug_region" }
+        },
+        "router_count": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "debug_region": {
+      "type": "object",
+      "required": ["id", "parent", "backing", "allocated", "enabled", "writer"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "parent": { "type": "string" },
+        "backing": {
+          "type": "string",
+          "enum": ["group", "unreserved_l1", "fixed_l1", "stream_reg"]
+        },
+        "address": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0 },
+        "count": { "type": "integer", "minimum": 0 },
+        "stride": { "type": "integer", "minimum": 0 },
+        "stream_id": { "type": "integer", "minimum": 0, "maximum": 31 },
+        "allocated": { "type": "boolean" },
+        "enabled": { "type": "boolean" },
+        "writer": {
+          "type": "string",
+          "enum": ["none", "erisc0", "erisc1", "any_erisc", "host", "peer", "worker"]
+        },
+        "schema": { "type": "string" },
+        "overlaps": {
+          "type": "array",
+          "items": { "type": "string" },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "backing": { "enum": ["unreserved_l1", "fixed_l1"] }
+            }
+          },
+          "then": { "required": ["address", "size"] }
+        }
+      ]
     },
     "endpoint": {
       "type": "object",
@@ -198,6 +347,129 @@
           "description": "Link crosses a host boundary. These are live fabric hops that ttexalens classifies as idle, which is why the manifest rather than ttexalens defines the router set.",
           "type": "boolean"
         }
+      }
+    },
+    "l1_region": {
+      "type": "object",
+      "required": ["base", "size"],
+      "properties": {
+        "base": { "type": "integer", "minimum": 0 },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hal": {
+      "description": "ACTIVE_ETH HAL-fixed L1 regions for this architecture.",
+      "type": "object",
+      "required": [
+        "unreserved",
+        "go_msg",
+        "launch",
+        "fabric_telemetry",
+        "routing_table",
+        "router_state",
+        "router_command",
+        "eth_fw_mailbox"
+      ],
+      "properties": {
+        "unreserved": { "$ref": "#/$defs/l1_region" },
+        "go_msg": { "$ref": "#/$defs/l1_region" },
+        "launch": { "$ref": "#/$defs/l1_region" },
+        "fabric_telemetry": { "$ref": "#/$defs/l1_region" },
+        "routing_table": { "$ref": "#/$defs/l1_region" },
+        "router_state": { "$ref": "#/$defs/l1_region" },
+        "router_command": { "$ref": "#/$defs/l1_region" },
+        "eth_fw_mailbox": { "$ref": "#/$defs/l1_region" }
+      }
+    },
+    "heartbeat": {
+      "description": "Shared fabric-loop liveness word. One location per ethernet core; both Blackhole fabric ERISCs write it.",
+      "type": "object",
+      "required": ["address", "magic", "magic_mask", "period_iters"],
+      "properties": {
+        "address": { "type": "integer" },
+        "magic": { "type": "integer" },
+        "magic_mask": { "type": "integer" },
+        "period_iters": { "type": "integer" }
+      }
+    },
+    "fabric_context": {
+      "description": "Fabric-wide packet and routing constants from FabricContext.",
+      "type": "object",
+      "required": [
+        "topology",
+        "is_2d_routing",
+        "packet_header_size_bytes",
+        "max_payload_size_bytes",
+        "channel_buffer_size_bytes",
+        "tensix_enabled",
+        "bubble_flow_control"
+      ],
+      "properties": {
+        "topology": { "type": "string" },
+        "is_2d_routing": { "type": "boolean" },
+        "packet_header_size_bytes": { "type": "integer" },
+        "max_payload_size_bytes": { "type": "integer" },
+        "channel_buffer_size_bytes": { "type": "integer" },
+        "routing_2d_route_buffer_size": { "type": "integer" },
+        "routing_1d_extension_words": { "type": "integer" },
+        "tensix_enabled": { "type": "boolean" },
+        "bubble_flow_control": { "type": "boolean" }
+      }
+    },
+    "router_template": {
+      "description": "Builder-derived L1 addresses identical across fabric routers on this rank.",
+      "type": "object",
+      "required": [
+        "edm_status_address",
+        "termination_signal_address",
+        "edm_local_sync_address",
+        "handshake_address",
+        "edm_channel_ack_addr",
+        "unused_config_handshake_address",
+        "diagnostics",
+        "addresses_to_clear",
+        "router_buffer_clear_size_words"
+      ],
+      "properties": {
+        "edm_status_address": { "type": "integer" },
+        "termination_signal_address": { "type": "integer" },
+        "edm_local_sync_address": { "type": "integer" },
+        "handshake_address": { "type": "integer" },
+        "unused_config_handshake_address": { "type": "integer" },
+        "edm_channel_ack_addr": { "type": "integer" },
+        "diagnostics": {
+          "type": "object",
+          "required": ["perf_telemetry", "code_profiling", "trimming"],
+          "properties": {
+            "perf_telemetry": { "$ref": "#/$defs/l1_region" },
+            "code_profiling": { "$ref": "#/$defs/l1_region" },
+            "trimming": { "$ref": "#/$defs/l1_region" }
+          }
+        },
+        "addresses_to_clear": {
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "router_buffer_clear_size_words": { "type": "integer" }
+      }
+    },
+    "stream_assignment": {
+      "description": "Per-mesh named stream-register ids from StreamAssignment::named_args(). Object keys are mesh ids.",
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": { "type": "integer" }
+      }
+    },
+    "enums": {
+      "description": "Name-to-value tables exported from host/device headers so the viewer never guesses nearby names.",
+      "type": "object",
+      "required": ["EDMStatus", "TerminationSignal", "RouterCommand", "RunMsg"],
+      "properties": {
+        "EDMStatus": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "TerminationSignal": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "RouterCommand": { "type": "object", "additionalProperties": { "type": "integer" } },
+        "RunMsg": { "type": "object", "additionalProperties": { "type": "integer" } }
       }
     }
   }

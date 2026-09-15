@@ -117,24 +117,6 @@ bool check_connection_requested(
     return std::string(enchantum::to_string(port_id.first)) + std::to_string(port_id.second);
 }
 
-// Write the fabric debug manifest (topology plus the fabric-router set) to generated/fabric, alongside the
-// other per-rank fabric artifacts. Each rank writes its own file.
-//
-// Failure is handled with a warning, but does not prevent fabric bring-up.
-void export_fabric_debug_manifest(const ControlPlane& control_plane, const ::tt::llrt::RunTimeOptions& rtoptions) {
-    const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
-    const int rank = *distributed_context->rank();
-    const int world_size = *distributed_context->size();
-    const std::filesystem::path manifest_file =
-        std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "fabric" /
-        ("fabric_debug_manifest_rank_" + std::to_string(rank + 1) + "_of_" + std::to_string(world_size) + ".json");
-    try {
-        serialize_fabric_debug_manifest_to_file(control_plane, manifest_file);
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "Failed to export fabric debug manifest: {}", e.what());
-    }
-}
-
 }  // namespace
 
 const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
@@ -1261,10 +1243,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->convert_fabric_routing_table_to_chip_routing_table();
     // After this, router_port_directions_to_physical_eth_chan_map_, intra_mesh_routing_tables_,
     // inter_mesh_routing_tables_ should be populated for all hosts in BigMesh
-
-    // Export the fabric debug manifest. Emitted here rather than beside the other generated/fabric artifacts because this is the first point at
-    // which the router port map is actually populated.
-    export_fabric_debug_manifest(*this, this->rtoptions_.get());
 }
 
 FabricNodeId ControlPlane::get_fabric_node_id_from_physical_chip_id(ChipId physical_chip_id) const {

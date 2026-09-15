@@ -968,6 +968,24 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
         eth_chan == ctx.master_router_chan);
 }
 
+// Collect all the compile-time arguments for each RISC core, and use them to build and return a FabricRouterDebugInstance.
+FabricRouterDebugInstance ComputeMeshRouterBuilder::build_debug_instance() const {
+    std::vector<std::unordered_map<std::string, uint32_t>> named_ct_args_per_risc;
+    named_ct_args_per_risc.reserve(get_configured_risc_count());
+
+    // Get the compile-time arguments for each RISC core.
+    for (uint32_t risc_id = 0; risc_id < get_configured_risc_count(); ++risc_id) {
+        named_ct_args_per_risc.push_back(erisc_builder_->get_compile_time_args(risc_id).named);
+    }
+
+    const auto& builder_context =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_builder_context();
+
+    // Build the debug instance.
+    return build_router_debug_instance(
+        *erisc_builder_, builder_context.get_stream_assignment(local_node_.mesh_id), named_ct_args_per_risc, location_);
+}
+
 FabricDatamoverBuilderBase* ComputeMeshRouterBuilder::get_builder_for_vc_channel(
     uint32_t vc, uint32_t /*channel*/) const {
     // Ownership is decided per VC: the tensix extension takes all of VC0, so the channel index

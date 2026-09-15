@@ -1515,6 +1515,30 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
     return rt_args;
 }
 
+// Returns the number of sender channels for each virtual channel.
+std::array<uint32_t, builder_config::MAX_NUM_VCS>
+FabricEriscDatamoverBuilder::get_actual_sender_channels_per_vc() const {
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> counts{};
+    const auto& source = actual_sender_channels_per_vc_.value_or(config.num_used_sender_channels_per_vc);
+    std::ranges::transform(source, counts.begin(), [](size_t count) { return static_cast<uint32_t>(count); });
+    return counts;
+}
+
+// Returns the number of receiver channels for each virtual channel.
+std::array<uint32_t, builder_config::MAX_NUM_VCS>
+FabricEriscDatamoverBuilder::get_actual_receiver_channels_per_vc() const {
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> counts{};
+    const auto& source = actual_receiver_channels_per_vc_.value_or(config.num_used_receiver_channels_per_vc);
+    std::ranges::transform(source, counts.begin(), [](size_t count) { return static_cast<uint32_t>(count); });
+    return counts;
+}
+
+// Get the mask that represents which downstream EDMs are connected to a particular virtual channel.
+uint32_t FabricEriscDatamoverBuilder::get_downstream_edm_mask_for_vc(uint32_t vc) const {
+    TT_FATAL(receiver_channel_to_downstream_adapter != nullptr, "Downstream adapter is not initialized");
+    return receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(vc);
+}
+
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     tt::tt_metal::IDevice* device,
     tt::tt_metal::Program& program,

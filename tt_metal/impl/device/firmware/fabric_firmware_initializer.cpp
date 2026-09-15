@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string_view>
 
@@ -306,6 +307,20 @@ void FabricFirmwareInitializer::init(
 
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         log_info(tt::LogMetal, "Initializing Fabric");
+
+        // Remove the stale fabric debug manifest, if one exists
+        const auto manifest_path = tt_fabric::fabric_debug_manifest_path(rtoptions_);
+        try {
+            if (std::filesystem::remove(manifest_path)) {
+                log_debug(tt::LogFabric, "Removed stale fabric debug manifest: {}", manifest_path.string());
+            }
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogFabric,
+                "Failed to remove stale fabric debug manifest {}: {}",
+                manifest_path.string(),
+                e.what());
+        }
 #if defined(TT_UMD_BUILD_SIMULATION)
         if (rtoptions_.get_simulator_enabled()) {
             for (auto* dev : devices_) {
@@ -342,6 +357,15 @@ void FabricFirmwareInitializer::configure() {
     }
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
+
+        // Serialize and write the fabric debug manifest to disk
+        const auto manifest_path = tt_fabric::fabric_debug_manifest_path(rtoptions_);
+        try {
+            tt_fabric::serialize_fabric_debug_manifest_to_file(control_plane_, manifest_path);
+        } catch (const std::exception& e) { // don't prevent fabric from running if manifest export fails as its purely a debug tool
+            log_warning(
+                tt::LogFabric, "Failed to export fabric debug manifest {}: {}", manifest_path.string(), e.what());
+        }
     }
     initialized_.test_and_set();
 }

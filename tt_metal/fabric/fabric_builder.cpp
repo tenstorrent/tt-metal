@@ -14,6 +14,7 @@
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/fmt.hpp>
+#include <algorithm>
 #include <set>
 #include <string>
 
@@ -288,6 +289,15 @@ void FabricBuilder::create_kernels() {
     for (auto& [eth_chan, router_builder] : routers_) {
         router_builder->create_kernel(program_, ctx);
     }
+
+    // Build the fabric debug instances for each router.
+    std::vector<FabricRouterDebugInstance> debug_instances;
+    debug_instances.reserve(routers_.size());
+    for (const auto& [eth_chan, router_builder] : routers_) {
+        debug_instances.push_back(router_builder->build_debug_instance());
+    }
+    std::ranges::sort(debug_instances, {}, &FabricRouterDebugInstance::eth_chan);
+    builder_context_.publish_router_debug_instances(device_->id(), std::move(debug_instances));
 }
 
 }  // namespace tt::tt_fabric
