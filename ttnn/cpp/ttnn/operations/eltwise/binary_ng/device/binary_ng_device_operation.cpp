@@ -5,10 +5,12 @@
 #include "binary_ng_device_operation.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_dtype_policy.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
 #include "binary_ng_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
 #include <cmath>
 
 using namespace tt::tt_metal;
@@ -101,40 +103,26 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b, bool fast_and_a
     return false;
 }
 
-ShardSpec generate_shard_spec_all_cores(
-    const Tensor& input_tensor_a, const Shape& padded_out_shape, const TensorMemoryLayout& memory_layout) {
-    // Generate shard spec using all worker cores
-    auto* device = input_tensor_a.device();
-    auto compute_grid_size = device->compute_with_storage_grid_size();
-    auto all_cores = CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}));
-    uint32_t num_cores = all_cores.num_cores();
-
-    // Calculate squeezed tensor height (all dims except last) and width (last dim)
-    uint32_t tensor_height = 1;
-    for (int i = 0; i < static_cast<int>(padded_out_shape.rank()) - 1; ++i) {
-        tensor_height *= padded_out_shape[i];
+ShardSpec generate_shard_spec_specless(
+    const Tensor& input_tensor_a,
+    const Shape& padded_out_shape,
+    const TensorMemoryLayout& memory_layout,
+    Layout output_layout) {
+    // Zero-volume + specless-sharded reaches compute_output_specs before skip_launch fires; return a
+    // 1-core TILE-sized spec (safe for both TILE and RM outputs — skip_launch never reads it).
+    if (padded_out_shape.volume() == 0) {
+        return ShardSpec(
+            CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR);
     }
-    uint32_t tensor_width = padded_out_shape[-1];
-
-    // Calculate shard shape based on memory layout (must be tile-aligned for TILE layout)
-    std::array<uint32_t, 2> shard_shape = {0, 0};
-    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
-        auto height_padded = tt::round_up(tensor_height, num_cores * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, num_cores), tt::constants::TILE_HEIGHT);
-        shard_shape = {shard_height, tensor_width};
-    } else if (memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, num_cores), tt::constants::TILE_WIDTH);
-        shard_shape = {tensor_height, shard_width};
-    } else {
-        // BLOCK_SHARDED
-        CoreCoord grid_size = all_cores.bounding_box().grid_size();
-        auto height_padded = tt::round_up(tensor_height, grid_size.y * tt::constants::TILE_HEIGHT);
-        auto shard_height = tt::round_up(tt::div_up(height_padded, grid_size.y), tt::constants::TILE_HEIGHT);
-        auto shard_width = tt::round_up(tt::div_up(tensor_width, grid_size.x), tt::constants::TILE_WIDTH);
-        shard_shape = {shard_height, shard_width};
-    }
-    log_debug(tt::LogOp, "BinaryNgDeviceOperation: Generated shard spec using all {} worker cores", num_cores);
-    return ShardSpec(all_cores, shard_shape, ShardOrientation::ROW_MAJOR);
+    return ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+        input_tensor_a.device()->compute_with_storage_grid_size(),
+        padded_out_shape,
+        memory_layout,
+        {.is_tile = (output_layout == Layout::TILE),
+         .orientation_hint = ShardOrientation::ROW_MAJOR,
+         .caller_tag = "BinaryNg"});
 }
 }  // namespace utils
 
@@ -541,7 +529,8 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 shard_spec_opt = ttnn::operations::binary_ng::adjust_to_shape(
                     *tensor_b->memory_config().shard_spec(), padded_b_shape, padded_out_shape);
             } else {
-                shard_spec_opt = utils::generate_shard_spec_all_cores(input_tensor_a, padded_out_shape, memory_layout);
+                shard_spec_opt = utils::generate_shard_spec_specless(
+                    input_tensor_a, padded_out_shape, memory_layout, attributes.output_layout);
             }
         }
 
@@ -695,8 +684,8 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
                 mem_config_actual = MemoryConfig(
                     memory_layout,
                     mem_config_actual.buffer_type(),
-                    operations::binary_ng::utils::generate_shard_spec_all_cores(
-                        input_tensor_a, padded_out_shape, memory_layout));
+                    operations::binary_ng::utils::generate_shard_spec_specless(
+                        input_tensor_a, padded_out_shape, memory_layout, output_layout));
             }
         } else {
             log_debug(tt::LogOp, "BinaryNgDeviceOperation: Using provided memory config from function argument");
