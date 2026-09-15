@@ -275,8 +275,16 @@ std::vector<std::optional<Tensor>> pow_bw(
     power_input.deallocate();
     Tensor final_result = ttnn::multiply(result, grad, std::nullopt, output_mem_config);
     result.deallocate();
-    // Handle negative inputs by returning infinity
-    where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    // Handle negative inputs and singular points by returning infinity:
+    // 1) For exponent < 1.0, the derivative at input == 0 diverges to infinity.
+    //    We mask input <= 0 to +inf using lez, which also prevents 0.0 * inf = NaN when grad == 0.
+    // 2) For exponent >= 1.0, the derivative at input == 0 is well-defined and finite (0 for exp > 1, 1 for exp == 1).
+    //    We strictly mask input < 0 using ltz, matching the registered golden without overwriting input == 0.
+    if (exponent < 1.0f) {
+        where(ttnn::lez(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    } else {
+        where(ttnn::ltz(input), std::numeric_limits<float>::infinity(), final_result, output_mem_config, input_grad);
+    }
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
 }
