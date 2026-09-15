@@ -31,6 +31,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <limits>
@@ -378,7 +379,6 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
     make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
-    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // -L remainder, row layout
     make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
     make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
@@ -412,6 +412,15 @@ Gradients run_algorithm2(
         const float a = 1.0F / std::sqrt(static_cast<float>(ref.d));
         if ((std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u) {
             fold_defines["FOLD_SCALE_INTO_KEY"] = "1";
+        } else {
+            // The exponential carries the scale instead, and the writer makes
+            // the score seed -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
+            fold_defines["L_SEED_SCALE_BITS"] = buf;
+            std::snprintf(
+                buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(0.5F * std::log(static_cast<float>(ref.d))));
+            fold_defines["L_SEED_SHIFT_BITS"] = buf;
         }
     }
     std::vector<uint32_t> reader_args = {C, qWt, vWt, release_sem, Bt};
@@ -646,7 +655,6 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
     make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
-    make_cb(tt::CBIndex::c_30, 2U * Bt, tt::DataFormat::Float32);    // -L remainder, row layout
     make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
     make_cb(tt::CBIndex::c_28, 1, tt::DataFormat::Float16_b);        // ones column
@@ -701,8 +709,15 @@ Gradients run_relay(
         const bool exact = (std::bit_cast<uint32_t>(a) & 0x007FFFFFu) == 0u;
         if (exact) {
             compute_defines["FOLD_SCALE_INTO_KEY"] = "1";
-            // The writer makes L's remainder in the form this path takes.
-            sync_defines["FOLD_SCALE_INTO_KEY"] = "1";
+        } else {
+            // The exponential carries the scale instead, and the writer makes
+            // the score seed -(L + ln sqrt(d)) sqrt(d) (see the compute kernel).
+            char buf[16];
+            std::snprintf(buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(std::sqrt(static_cast<float>(ref.d))));
+            sync_defines["L_SEED_SCALE_BITS"] = buf;
+            std::snprintf(
+                buf, sizeof(buf), "0x%08Xu", std::bit_cast<uint32_t>(0.5F * std::log(static_cast<float>(ref.d))));
+            sync_defines["L_SEED_SHIFT_BITS"] = buf;
         }
     }
 
@@ -1220,6 +1235,13 @@ TEST(CyclicSdpaBwOpTest, DISABLED_ReportErrorAcrossBlockHeights) {
             }
         }
     }
+    // The wider head, where the scale cannot fold into K and goes through
+    // the exponential instead.
+    for (const bool dense : {false, true}) {
+        report_op_error(/* C */ 2, /* Bt */ 2, dense, /* d */ 128);
+        report_op_error(/* C */ 2, /* Bt */ 4, dense, /* d */ 128);
+    }
+    report_op_error(/* C */ 2, /* Bt */ 4, /* dense */ false, /* d */ 128, /* slices */ 1, /* positive */ true);
     // The all-positive regime, where the softmax is nearly one-hot. This is
     // what the ring tests draw from, and the block height is the variable
     // under suspicion there.

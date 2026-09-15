@@ -51,8 +51,15 @@ constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Dense;
 constexpr auto kMaskMode = ttml::metal::ops::cyclic_sdpa_bw::MaskMode::Causal;
 #endif
 
-#ifndef FOLD_SCALE_INTO_KEY
-#define FOLD_SCALE_INTO_KEY 0
+// The score seed's transform, from the host: -(L + shift) * scale, with
+// shift = 0 and scale = 1 (a plain -L) where the softmax scale is folded
+// into K, and ln sqrt(d), sqrt(d) where the exponential carries it. See
+// seed_from_lse in the dataflow utils.
+#ifndef L_SEED_SHIFT_BITS
+#define L_SEED_SHIFT_BITS 0u
+#endif
+#ifndef L_SEED_SCALE_BITS
+#define L_SEED_SCALE_BITS 0x3F800000u
 #endif
 
 void kernel_main() {
@@ -106,7 +113,6 @@ void kernel_main() {
     constexpr uint32_t cb_u_scalar = tt::CBIndex::c_5;
     constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;      // -L, row layout
     constexpr uint32_t cb_u_row = tt::CBIndex::c_14;        // -D, row layout
-    constexpr uint32_t cb_lse_rem_row = tt::CBIndex::c_30;  // -L's remainder, Float32 row
     constexpr uint32_t cb_lse_rem = tt::CBIndex::c_9;       // -L's remainder, bfloat16 column
     constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;        // -D's remainder, bfloat16 column
 
@@ -143,7 +149,6 @@ void kernel_main() {
     // column 0 only, by this thread alone: zero them once.
     cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem_row), 2u * Bt * interm_bytes);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * rem_bytes);
     cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * rem_bytes);
 
@@ -200,7 +205,9 @@ void kernel_main() {
                     cyclic_dataflow::gather_statistic_block(
                         base_lse + slot * stride_interm + k * interm_bytes,
                         base_u_scalar + slot * stride_interm + k * interm_bytes,
-                        block + k * cyclic_dataflow::kStatBlockBytes);
+                        block + k * cyclic_dataflow::kStatBlockBytes,
+                        L_SEED_SHIFT_BITS,
+                        L_SEED_SCALE_BITS);
                 }
                 cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
                 cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
@@ -217,22 +224,19 @@ void kernel_main() {
             DeviceZoneScopedN("STAT-EXPAND");
             cb_reserve_back(cb_lse_row, Bt);
             cb_reserve_back(cb_u_row, Bt);
-            cb_reserve_back(cb_lse_rem_row, Bt);
             cb_reserve_back(cb_lse_rem, Bt);
             cb_reserve_back(cb_u_rem, Bt);
             const uint32_t lrow = get_write_ptr(cb_lse_row);
             const uint32_t urow = get_write_ptr(cb_u_row);
-            const uint32_t lrem_row = get_write_ptr(cb_lse_rem_row);
             const uint32_t lrem = get_write_ptr(cb_lse_rem);
             const uint32_t urem = get_write_ptr(cb_u_rem);
             for (uint32_t k = 0; k < Bt; ++k) {
-                cyclic_dataflow::expand_statistic_block<FOLD_SCALE_INTO_KEY != 0>(
+                cyclic_dataflow::expand_statistic_block(
                     block + k * cyclic_dataflow::kStatBlockBytes, lrow + k * interm_bytes, urow + k * interm_bytes,
-                    lrem_row + k * interm_bytes, lrem + k * rem_bytes, urem + k * rem_bytes);
+                    lrem + k * rem_bytes, urem + k * rem_bytes);
             }
             cb_push_back(cb_lse_row, Bt);
             cb_push_back(cb_u_row, Bt);
-            cb_push_back(cb_lse_rem_row, Bt);
             cb_push_back(cb_lse_rem, Bt);
             cb_push_back(cb_u_rem, Bt);
             }
