@@ -33,7 +33,7 @@ from ....utils.test import line_params_req_exact_devices
 @pytest.mark.parametrize(
     "mesh_device, cfg, sp, tp, topology, num_links",
     [
-        [(2, 2), (1, 0), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
+        [(2, 2), (1, 0), (2, 0), (2, 1), ttnn.Topology.Linear, 2],
         [(2, 4), (2, 1), (2, 0), (2, 1), ttnn.Topology.Linear, 1],
         [(2, 4), (2, 0), (1, 0), (4, 1), ttnn.Topology.Linear, 1],
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
