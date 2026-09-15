@@ -11,6 +11,9 @@ from pathlib import Path
 from tools.generic_op_to_factory.export_run import ExportError, _hash_file, _safe_path
 
 PROBE = r"""
+#ifndef TT_DESCRIPTOR_PATCHING_PARITY_CHECK
+#error "Native acceptance requires descriptor cache-hit parity instrumentation in the actual factory build"
+#endif
 #include "@HEADER@"
 #include "ttnn/operation_concepts.hpp"
 #include <concepts>
@@ -86,6 +89,21 @@ def render(specification):
     return PROBE.replace("@HEADER@", specification["operation_header"]).replace(
         "@OPERATION@", specification["operation_type"]
     )
+
+
+def parity_configuration(runtime):
+    """Attest the correctness build configuration, not executed cache-hit coverage."""
+    runtime = Path(runtime).resolve()
+    cache = runtime / "build_Release/CMakeCache.txt"
+    if not cache.is_file() or cache.resolve() != cache:
+        raise ExportError("Descriptor parity requires a regular build_Release/CMakeCache.txt")
+    entries = re.findall(r"^ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=(.*)$", cache.read_text(), re.MULTILINE)
+    if len(entries) != 1 or entries[0].upper() not in ("ON", "TRUE", "YES", "1"):
+        raise ExportError(
+            "Native acceptance requires ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON; "
+            "configure the correctness build before running validation (see PORT_FLOW.md)"
+        )
+    return {str(cache): _hash_file(cache)[0]}
 
 
 def compile_invocation(specification, runtime, probe, *, database=None):

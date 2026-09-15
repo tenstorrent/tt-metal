@@ -32,13 +32,43 @@ Run only diagnostics justified by the operation's source, architecture, failure 
 memory risk. Record omitted applicable diagnostics and why. Do not turn unavailable
 instrumentation into a skip in the shared acceptance suite.
 
-## Checks deferred until native host code exists
+## Required native descriptor cache-hit parity
+
+Once C++ exists, run the acceptance suite with the native correctness build's
+`ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON`. The migration driver's factory
+gate requires that CMake setting and compiles a probe requiring the actual
+factory translation unit's `TT_DESCRIPTOR_PATCHING_PARITY_CHECK` definition.
+See [PORT_FLOW.md](../../../PORT_FLOW.md#descriptor-cache-hit-parity-required-native-configuration)
+for build preparation. Do not try to enable this compile-time option through a
+pytest environment variable.
+
+On a covered cache hit, the adapter first updates the cached program normally,
+then constructs a fresh native reference and compares per-core/common runtime
+argument values and tensor-backed CB addresses. A discrepancy fails execution.
+The shared acceptance tests must independently assert a real miss-to-hit
+sequence, fresh retained buffers, and supported runtime-value/alias transitions.
+Keep their numerical, metadata and protected-memory assertions. A first-call-only
+suite, a no-op or repeated cache misses does not exercise the parity check.
+
+This is native-refresh versus native-reconstruction, **not** Python/C++ numerical
+parity, a complete structural comparison, a hash-collision test, or detection of
+unnecessary misses. The current checker also does not establish full common-arg
+length or kernel/CB-configuration equivalence. Record the cases and effective
+build evidence; the flag alone is not execution coverage. The independent review
+must trace the native binding to the instrumented operation and verify actual
+cache-hit assertions. There is no per-operation successful-parity counter today.
+
+Use the existing native acceptance run on this correctness build; do not add a
+clone or another full golden sweep. Instrumentation reconstructs programs on hits,
+so these timings are not production cache-hit performance. Performance requires
+a separate configuration with the option OFF and a rebuilt, verified runtime;
+do not modify the correctness build beneath a resumable validation receipt.
+No native parity execution is claimed by this pre-port skill.
+
+## Other checks deferred until native host code exists
 
 - Build and test host C++ with ASan/LSan/UBSan when the port introduces memory-risky
   host code; use TSan when it introduces or changes concurrency.
-- Enable descriptor-patching parity checks for descriptor-based native cache-hit
-  bugs. This compares native refresh with native reconstruction; it is not
-  Python/native parity and is too expensive for ordinary performance evidence.
 - Profile only after correctness and safety runs pass. Profiling wrappers and
   instrumentation can alter timing, and a profiler wrapper can mask the underlying
   pytest exit status. Preserve a separate correctness result.

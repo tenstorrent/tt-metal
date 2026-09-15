@@ -217,8 +217,58 @@ template<class F> concept ProgramDescriptorFactoryConcept =
     probe = tmp_path / "probe.cpp"
     probe.write_text(contract.render(specification))
     result = subprocess.run(
-        [compiler, "-std=c++20", "-I", str(runtime), "-fsyntax-only", str(probe)], capture_output=True, text=True
+        [
+            compiler,
+            "-std=c++20",
+            "-DTT_DESCRIPTOR_PATCHING_PARITY_CHECK",
+            "-I",
+            str(runtime),
+            "-fsyntax-only",
+            str(probe),
+        ],
+        capture_output=True,
+        text=True,
     )
     assert (result.returncode == 0) == (kind in ("descriptor", "per_coordinate")), result.stderr
     if result.returncode:
         assert "static assertion failed" in result.stderr
+    else:
+        # A CMake cache switch alone is insufficient: the real TU flags must
+        # actually define the instrumentation macro, including in unity builds.
+        uninstrumented = subprocess.run(
+            [compiler, "-std=c++20", "-I", str(runtime), "-fsyntax-only", str(probe)],
+            capture_output=True,
+            text=True,
+        )
+        assert uninstrumented.returncode != 0
+        assert "requires descriptor cache-hit parity instrumentation" in uninstrumented.stderr
+
+
+@pytest.mark.parametrize("value", ["ON", "TRUE", "YES", "1"])
+def test_parity_configuration_records_enabled_cache(inputs, value):
+    runtime, _ = inputs
+    build = runtime / "build_Release"
+    build.mkdir()
+    cache = build / "CMakeCache.txt"
+    cache.write_text(f"ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL={value}\n")
+    assert str(cache) in contract.parity_configuration(runtime)
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        None,
+        "",
+        "ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=OFF\n",
+        "ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:UNINITIALIZED=ON\n",
+        "ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=ON\n" * 2,
+    ],
+)
+def test_parity_configuration_fails_closed(inputs, content):
+    runtime, _ = inputs
+    build = runtime / "build_Release"
+    build.mkdir()
+    if content is not None:
+        (build / "CMakeCache.txt").write_text(content)
+    with pytest.raises(ExportError):  # allow-pytest.raises: instrumented build gate
+        contract.parity_configuration(runtime)

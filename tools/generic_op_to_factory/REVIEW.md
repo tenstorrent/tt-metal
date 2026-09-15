@@ -28,14 +28,31 @@ Reusable agent task (replace paths, not with production run IDs):
 > validation and language-boundary work. Check both miss and return-to-key hits,
 > fresh retained allocations, distinct↔aliased transitions, and every legal
 > input/output alias class. Identify unsupported cases explicitly. Report
-> severity, exact file/line evidence, concrete remedies and test gaps. Separate
+> the descriptor-parity build evidence and exact acceptance cases proving real
+> non-no-op cache hits; inspect their selected-call cache deltas and fresh-buffer,
+> runtime-value and alias assertions. An enabled build flag or call counter alone
+> is not executed parity coverage. Do not accept timings from the parity-enabled
+> correctness build as normal cache-hit performance.
+> For PR readiness, verify the native hot-versus-cold profile described in
+> NATIVE_CACHE_PERFORMANCE.md: same operation/configuration, caching enabled on
+> both paths, warm compiled kernels, observed misses/hits, raw paired samples,
+> valid host-path boundaries and a statistically supported hot-path improvement.
+> Record missing or inconclusive evidence as performance pending, not a pass.
+> Report severity, exact file/line evidence, concrete remedies and test gaps. Separate
 > measured timings (with method, scope, repetitions and raw evidence) from
 > qualitative cost estimates. Do not edit source or run concurrent device tests.
 
 The author reconciles each finding; a test passing is not evidence that a code
 quality finding is resolved. Fix defects and run proportionate checks. Source
 changes require a new validation workspace; never alter old successful receipts.
-No numerical performance claim is required: `not_measured` is an honest outcome.
+No numerical performance claim is required for a behavior-only receipt:
+`not_measured` is an honest outcome but is not PR-ready performance evidence.
+The required native hot/cold comparison is described in
+[NATIVE_CACHE_PERFORMANCE.md](NATIVE_CACHE_PERFORMANCE.md); inspect it under
+`cache_hit_overhead` and attach its raw artifacts under `performance.measurements`.
+The current driver validates artifact hashes, not the benchmark's statistics or
+cache-state provenance. Review must not confuse that receipt check with a passed
+performance gate.
 Public-call wall time includes binding, allocation, dispatch and possibly device
 backpressure; it is not an isolated measurement of the cache-hit hook.
 
@@ -52,7 +69,8 @@ After `run --through acceptance`, supply `WORKSPACE/review.json`:
     "argument_wiring": "Evidence and conclusion",
     "cache_hit_overhead": "Evidence and conclusion",
     "test_gaps": "Tests examined, remaining limits and disposition",
-    "alias_transitions": "Legal topologies and transitions actually tested"
+    "alias_transitions": "Legal topologies and transitions actually tested",
+    "descriptor_cache_hit_parity": "Enabled CMake/TU evidence, binding trace, exact executed cache-hit cases and limitations"
   },
   "findings": [
     {

@@ -63,6 +63,7 @@ REVIEW_TOPICS = (
     "cache_hit_overhead",
     "test_gaps",
     "alias_transitions",
+    "descriptor_cache_hit_parity",
 )
 
 
@@ -350,6 +351,7 @@ class PortValidation:
             write_json(attempt / "runtime.json", probe)
             return {str(p): file_hash(p) for p in (self.runtime / "build_Release/lib").glob("*.so*") if p.is_file()}
         if stage == "factory_contract":
+            parity_evidence = factory_contract.parity_configuration(self.runtime)
             probe = attempt / "factory_contract.cpp"
             probe.write_text(factory_contract.render(c["factory_contract"]))
             build = self.runtime / "build_Release"
@@ -373,8 +375,17 @@ class PortValidation:
                 c["factory_contract"], self.runtime, probe, database=database
             )
             evidence.update(metadata)
+            evidence.update(parity_evidence)
             self.runner.command(argv, attempt, "factory-contract", cwd=cwd)
-            write_json(attempt / "contract.json", {"kind": "ProgramDescriptor", **c["factory_contract"]})
+            write_json(
+                attempt / "contract.json",
+                {
+                    "kind": "ProgramDescriptor",
+                    "descriptor_patching_parity_enabled": True,
+                    "parity_scope": "Build configuration only; cache-hit execution must be established by acceptance tests and review",
+                    **c["factory_contract"],
+                },
+            )
             return evidence
         if stage in ("source_smoke", "source", "native_smoke", "native", "acceptance"):
             if stage.endswith("smoke") and c["smoke_nodeid"] is None:
@@ -493,6 +504,8 @@ class PortValidation:
                     "baseline_scope": self.planned["target_inputs"]["baseline_scope"],
                     "dependency_substitutions": self.planned["target_inputs"]["dependency_substitutions"],
                     "acceptance_tests": c["acceptance_tests"],
+                    "descriptor_patching_parity_enabled": True,
+                    "performance_build": False,
                     "scope": "Source/native golden outcomes/tolerances and supplied native acceptance tests; no performance or trace claim",
                 },
             )

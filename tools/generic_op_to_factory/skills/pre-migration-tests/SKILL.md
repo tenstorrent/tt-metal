@@ -11,6 +11,8 @@ Writing C++ or changing the operation is outside this skill's scope.
 These Python tests are the executable acceptance gates: API, validation,
 outputs, memory effects and illegal writes, poisoned-memory/initialization
 checks, numerical behavior, supported branch boundaries and cache transitions.
+The later native correctness build must enable descriptor-patching parity:
+cache-hit runtime state is checked against a fresh native reconstruction.
 The migration driver later runs them against C++ only.
 Existing golden-suite Python/C++ parity is a separate check.
 
@@ -143,6 +145,15 @@ as global driver environment overrides; the driver controls this stage's route.
 Every selected file must collect tests, the native call count must be positive,
 and every selected test must pass (no skips/xfails). Record the exact test-file
 list and command. Native execution remains deferred until a real port exists.
+
+Author cache-hit sequences now for the later required native descriptor-parity
+check. Include at least one successful non-no-op miss followed by a proven hit;
+cover fresh live buffers and supported runtime-value/alias transitions. Assert
+the expected selected-operation cache deltas with caching enabled, outside
+setup/readback, and still check outputs independently. Repeated calls alone
+do not prove hits. List the exact cases in the handoff. Native build evidence
+and limits are described in [references/advanced-checks.md](references/advanced-checks.md).
+This native-only instrumentation is not required or claimed during the source run.
 
 Keep source-planner/descriptor inspection tests separate from the shared behavior
 tests. They can freeze the source plan now, but must not run the Python planner as

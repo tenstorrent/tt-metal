@@ -143,9 +143,11 @@ separately with `compare_baseline`; they are not a prerequisite for this mode.
 
 Existing evaluation results are not automatically reused: proving their binding
 to this exact tree, suite and environment is a separate future capability.
-Independent review remains mandatory; descriptor parity and measured host/device
-performance remain the additional protocol in [COMPARISON_GATE.md](COMPARISON_GATE.md),
-not newly implemented gates. No performance claim follows from branch preparation.
+Independent review remains mandatory. Native descriptor cache-hit instrumentation
+is now required by the [factory/acceptance flow](PORT_FLOW.md#descriptor-cache-hit-parity-required-native-configuration).
+Direct Python/native descriptor comparison and measured host/device performance
+remain the additional protocol in [COMPARISON_GATE.md](COMPARISON_GATE.md), not
+automated gates. No performance claim follows from branch preparation.
 
 Old external evidence may be archived under the target's artifact namespace.
 Preserve its bytes and record the old/new paths separately; absolute paths and

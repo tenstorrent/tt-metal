@@ -174,8 +174,11 @@ already has a compile-time `TT_DESCRIPTOR_PATCHING_PARITY_CHECK` branch. For
 the explicit descriptor refresh-hook path it builds a scratch native descriptor
 on a hit and compares patched runtime state using
 [`assert_fastpath_parity`](../../tt_metal/impl/program/program_descriptor_patching.cpp).
-Use a separately identified diagnostic build when this check is needed; verify
-the macro is present in the actual compile commands. It compares native refresh
+This is required in the flow's correctness build; the factory gate verifies the
+CMake option and the macro in the actual factory compilation. Acceptance tests
+must prove real cache hits, not just repeated calls or an enabled flag. Keep
+production-performance measurements on a separate verified configuration with
+the option OFF. It compares native refresh
 against native reconstruction, **not Python against C++**, and checks only the
 state covered by that assertion. It cannot replace G2b or numerical tests.
 
@@ -192,6 +195,13 @@ attribution, but does not represent the full Python-facing migration benefit.
 
 ### Required timing boundaries
 
+Also require a **native-only hot-versus-cold program-cache comparison** using
+[NATIVE_CACHE_PERFORMANCE.md](NATIVE_CACHE_PERFORMANCE.md). Keep the compiled
+kernel cache warm and program caching enabled for both cases; prove the same
+native operation's hit path is faster than its miss path. This is a separate
+performance requirement, not evidence of Python-to-C++ speedup. Noisy or missing
+measurements cannot satisfy it, even when behavioral acceptance passes.
+
 | Metric | Start → stop | Interpretation |
 | --- | --- | --- |
 | Warm public-call latency | Immediately before wrapper/binding call → its return, after prior device work is drained | Python wrapper, binding, validation, output allocation, hash/lookup, refresh, enqueue; can still include blocking |
@@ -200,6 +210,7 @@ attribution, but does not represent the full Python-facing migration benefit.
 | Batched submission/completion | Before N calls → last call returns; separately → final synchronization | Application throughput and queue/backpressure behavior; divided batch time is a per-call average, not individual latency |
 | Device execution span | Profiler kernel start → final kernel completion for the invocation | Device critical span across participating programs/cores, with program count and configuration |
 | First-use latency | Before first call → call return and separately → synchronization | Report in-memory program-cache miss with disk kernel cache warm, and process/kernel-cache cold separately |
+| Native hot versus cold host path | Matched native hash/lookup-through-dispatch boundaries on hits versus misses | Same operation/configuration; compiled kernels warm; demonstrates the benefit of program-cache reuse |
 
 Host and device execution overlap. Do not estimate host time by subtracting
 device duration from synchronized wall time. Do not sum nested host zones or

@@ -12,6 +12,7 @@ details and limitations.
 | Numerical results | Wrong calculations, indexing or copied values. |
 | Boundary cases | Missing tail elements or incorrect work distribution. |
 | Cache transitions | Reusing an incompatible program, unnecessary misses, stale addresses or arguments. |
+| Native descriptor cache-hit parity | Cached runtime arguments or tensor-backed CB addresses differ from a fresh native construction. |
 | Aliases and ownership | Unexpected buffer sharing or broken in-place behavior. |
 | Protected memory | Corrupting inputs, earlier outputs or untouched regions. |
 | Watcher checks | Invalid device transfers and supported buffer overruns. |
@@ -37,8 +38,12 @@ source golden to pass.
   simulator runs do not provide the same NoC-sanitizer coverage.
 - TTNN comparison mode is not used as acceptance evidence. Operation tests carry
   explicit independent references, case parameters, assertions and tolerances.
+- Native descriptor parity is required after C++ exists, on the instrumented
+  correctness build. Tests must prove actual cache hits; an enabled flag alone
+  is not coverage. It does not prove the cache key or numerical results correct,
+  and its timings are not performance evidence.
 - NoC Debug Dump, memory reporting and Emule ASAN are risk-triggered diagnostics;
-  host sanitizer, descriptor-parity and profiling checks normally belong after
-  native C++ exists. See [advanced-checks.md](advanced-checks.md).
+  host sanitizer and profiling checks normally belong after native C++ exists.
+  See [advanced-checks.md](advanced-checks.md).
 - Record actual per-operation coverage and results in the
   [handoff](handoff.md); this list is not execution evidence.

@@ -69,6 +69,12 @@ launcher. Do not add `--export-compile-commands` solely for this gate: it disabl
 TT unity builds at the current revision. A non-Ninja build must provide a full
 database, not a partial UMD-only one.
 
+The correctness build must also enable descriptor-patching parity. The gate
+verifies and fingerprints `ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=ON` in
+the CMake cache; the compiled probe requires `TT_DESCRIPTOR_PATCHING_PARITY_CHECK`
+from the actual factory flags, not a definition added just to the probe.
+See [build preparation and scope](PORT_FLOW.md#descriptor-cache-hit-parity-required-native-configuration).
+
 Static assertions check **every** alternative in `program_factory_t`: the
 framework descriptor concept, exact descriptor return type with a supported
 signature, and the explicit adapter-compatible refresh hook. Legacy factories,
@@ -83,8 +89,11 @@ the hook updates the right argument positions, or that its body avoids expensive
 work. The required independent `descriptor_factory` review must trace dispatch
 and inspect the final implementation. Golden/cache tests and all existing
 review topics remain required. A passing shape check is not a performance
-measurement. Optional framework descriptor-patching parity instrumentation
-reconstructs an oracle on hits; do not time that debug path as normal cache cost.
+measurement. Required framework descriptor-patching parity instrumentation
+reconstructs a native runtime-state reference on hits; do not time that debug
+path as normal cache cost. Acceptance cases must prove actual hits; configuration
+evidence alone cannot do so, nor does this checker establish complete structural
+or cache-key equivalence.
 
 Historical receipts and already authored operations are unchanged. A new port
 must supply this contract in a new validation workspace; there is no option to

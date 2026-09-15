@@ -208,6 +208,7 @@ def branch_port(evaluated):
     subprocess.run(["./create_venv.sh"], cwd=runtime, check=True)
     build = runtime / "build_Release"
     build.mkdir()
+    (build / "CMakeCache.txt").write_text("ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=ON\n")
     factory = "ttnn/cpp/ttnn/operations/sample/device/sample_program_factory.cpp"
     (build / "compile_commands.json").write_text(
         json.dumps(
@@ -218,6 +219,7 @@ def branch_port(evaluated):
                     "arguments": [
                         "python3",
                         str(runtime / "fake_contract_compiler.py"),
+                        "-DTT_DESCRIPTOR_PATCHING_PARITY_CHECK",
                         "-c",
                         str(runtime / factory),
                         "-o",

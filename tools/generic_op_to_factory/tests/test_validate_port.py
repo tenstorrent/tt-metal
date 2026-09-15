@@ -43,6 +43,7 @@ def port(configured, tmp_path):
                     "arguments": [
                         "python3",
                         str(baseline.runtime / "fake_contract_compiler.py"),
+                        "-DTT_DESCRIPTOR_PATCHING_PARITY_CHECK",
                         "-c",
                         str(factory_source),
                         "-o",
@@ -52,6 +53,7 @@ def port(configured, tmp_path):
             ]
         )
     )
+    (baseline.runtime / "build_Release/CMakeCache.txt").write_text("ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=ON\n")
     return {
         "runtime": str(baseline.runtime),
         "target_revision": revision,
@@ -78,6 +80,40 @@ def test_port_plan_read_only(port):
     planned = validate_port.plan(port)
     assert planned["recorded_case_count"] == 1
     assert not Path(port["workspace"]).exists()
+
+
+def test_parity_disabled_blocks_before_device_tests(port):
+    cache = Path(port["runtime"]) / "build_Release/CMakeCache.txt"
+    cache.write_text("ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=OFF\n")
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    with pytest.raises(ExportError, match="PARITY_CHECK=ON"):  # allow-pytest.raises: build instrumentation gate
+        validation.run("acceptance")
+    assert validation.state["stages"]["factory_contract"]["status"] == "blocked"
+    assert validation.state["stages"]["source"]["status"] == "pending"
+    assert not list(validation.workspace.glob("attempts/*/*/junit.xml"))
+
+
+def test_parity_configuration_is_recorded_and_cannot_drift(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    validation.run("acceptance")
+    attempt = validation.workspace / "attempts/factory_contract/001"
+    assert json.loads((attempt / "contract.json").read_text())["descriptor_patching_parity_enabled"]
+    cache = Path(port["runtime"]) / "build_Release/CMakeCache.txt"
+    assert str(cache) in validation.state["stages"]["factory_contract"]["evidence"]
+    cache.write_text("ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK:BOOL=OFF\n")
+    with pytest.raises(ExportError, match="evidence/runtime changed"):  # allow-pytest.raises: instrumentation drift
+        validation.run()
+
+
+def test_review_requires_cache_hit_parity_coverage(port):
+    validate_port.initialize(port)
+    validation = validate_port.PortValidation(port["workspace"])
+    receipt = review_receipt(validation)
+    del receipt["topics"]["descriptor_cache_hit_parity"]
+    with pytest.raises(ExportError, match="all required topics"):  # allow-pytest.raises: coverage review gate
+        validate_port.verify_review(receipt, validation.state["plan_sha256"])
 
 
 @pytest.mark.parametrize("value", [[], "tests/test_contract.py", [None], ["tests/test_cache.py"] * 2])
@@ -245,7 +281,7 @@ def test_ninja_factory_gate_keeps_unity_configuration_and_fingerprints_metadata(
     ninja = build / "build.ninja"
     ninja.write_text(
         "rule compile\n"
-        f"  command = python3 {runtime / 'fake_contract_compiler.py'} -c $in -o $out\n"
+        f"  command = python3 {runtime / 'fake_contract_compiler.py'} -DTT_DESCRIPTOR_PATCHING_PARITY_CHECK -c $in -o $out\n"
         f"build ignored.o: compile {unity}\n"
     )
     # A partial CMake database must not force a rebuild or hide the Ninja entry.

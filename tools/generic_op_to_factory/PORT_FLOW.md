@@ -15,7 +15,7 @@ instead of `preparation`, `export`, `phase` and
 baseline comes from running the unchanged operation and golden suite already
 on that branch; DB retrieval and a historical checkout are not involved.
 
-The validation sequence is **one build → factory contract → source golden →
+The validation sequence is **one parity-enabled correctness build → factory contract → source golden →
 source-baseline check → native golden → source/native comparison → native acceptance tests
 → independent review → scoped receipt**. Smokes and precompile remain optional.
 `source_compare` records the source baseline; it does not require a green source
@@ -78,6 +78,58 @@ The driver has no generic allocation/scratch-poisoning hook. Operation-specific
 safe helpers and physical coverage evidence are required; prior-work sequences
 alone do not establish direct scratch poisoning. No extra full golden stage is
 needed for these parametrized acceptance cases.
+
+### Descriptor cache-hit parity: required native configuration
+
+The native acceptance suite runs with `ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON`.
+This is a build option, not a pytest flag. The existing `factory_contract` gate
+requires an enabled `build_Release/CMakeCache.txt` entry and compiles a probe
+requiring `TT_DESCRIPTOR_PATCHING_PARITY_CHECK` using the actual factory TU flags.
+Both the configuration and compile evidence are fingerprinted; OFF, missing
+configuration, missing compile definition or later drift blocks validation.
+
+Prepare this configuration in the target's normal build environment before
+initializing validation. For a local Release build:
+
+```bash
+./build_metal.sh --enable-ccache --configure-only
+cmake -S . -B build_Release -DENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK=ON
+# validate_port's normal build_argv then compiles/installs this configuration.
+```
+
+Use the same toolchain/build options as the eventual build command. Container
+builds must perform configuration inside their build image as well. The driver
+does not install toolchains or automatically change this CMake option, and
+`build_metal.sh` at this revision does not accept arbitrary `-D` arguments.
+
+On covered native cache hits, the adapter compares the refreshed program's
+runtime arguments and tensor-backed CB addresses with a fresh native construction.
+Keep the existing acceptance assertions and include proven non-no-op cache hits,
+fresh retained buffers, and supported runtime-value/alias transitions. The
+`descriptor_cache_hit_parity` review topic must identify those cases, their
+cache-delta assertions and the binding-to-instrumented-operation trace. A flag
+or positive operation-call count alone does not prove that a hit occurred.
+
+This adds no extra acceptance invocation, clone or full golden sweep. It is a
+correctness configuration, separate from production-performance measurement.
+The checker does not establish numerical correctness, complete structural/key
+equivalence or absence of unnecessary misses. It has no successful-hit counter;
+execution coverage still depends on test assertions and review. Performance
+measurements need the option OFF in a separately verified build; instrumented
+cache-hit timings are not accepted as normal host-performance evidence.
+
+### Required performance evidence before PR readiness
+
+Profile the migrated C++ operation's **cache-hit path versus its cache-miss path**
+using [the native hot/cold protocol](NATIVE_CACHE_PERFORMANCE.md). Use the same
+operation and inputs, keep caching enabled and compiled kernels warm, and require
+a statistically supported hot-path improvement. Truly cold kernel compilation is
+a separate diagnostic, not the baseline used to make hits look faster.
+
+This is an additional focused benchmark, not another full golden run. The driver
+does not yet execute or statistically gate it. Its behavior-only `complete`
+receipt (which permits `not_measured`) must not be presented as PR readiness when
+this performance evidence is missing, failing or inconclusive.
 
 ## Legacy input: reconstructing a historical export
 

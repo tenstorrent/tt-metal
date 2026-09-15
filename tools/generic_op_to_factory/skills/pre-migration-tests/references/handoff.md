@@ -109,6 +109,15 @@ For later driver integration, report the exact files in `acceptance_tests`, e.g.
 ```
 
 List only actual files; one file is sufficient when it covers the operation.
+Identify the exact miss-to-hit, fresh-buffer and supported scalar/alias cases
+that will exercise native descriptor-patching parity. Include their expected
+selected-call cache deltas, cache initialization/enabling and independent output
+assertions. The later native correctness build must enable
+`ENABLE_DESCRIPTOR_PATCHING_PARITY_CHECK`; record its CMake cache, actual factory
+compile flags and driver contract receipt alongside the acceptance JUnit/log.
+Do not claim native parity coverage from a source run or an enabled flag alone.
+See [advanced-checks.md](advanced-checks.md#required-native-descriptor-cache-hit-parity).
+
 The `acceptance` stage supplies native selectors through its route adapter,
 checks collection and native execution, and requires every selected test to
 pass. Do not add selectors to the driver's global `environment`. The driver
