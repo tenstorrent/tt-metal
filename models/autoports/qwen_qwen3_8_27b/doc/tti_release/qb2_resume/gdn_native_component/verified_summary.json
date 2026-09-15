@@ -1,0 +1,101 @@
+{
+  "status": "component_correctness_and_timing_pass",
+  "utc": "2026-09-15T17:04:06.236679+00:00",
+  "scope": "Actual base-checkpoint layer0 B8 complete delta component, TP4. No full64, FP8 serving, CSV or stage acceptance claim. Default-false native flag; production model does not opt in.",
+  "median_us": {
+    "intact": 646.580421875,
+    "region": 637.5754375
+  },
+  "median_paired_saved_us": 9.057429687500019,
+  "pairs": 6,
+  "replays_per_arm_per_pair": 64,
+  "build": "Required Docker wrapper exit1; five frozen generated compile/link commands exit0; both runtime components installed. Native binary identity recorded; binaries remain outside evidence/git.",
+  "build_metadata_incident": "System Ninja1.11 query rejected/removed newer top-level build/.ninja_log. Retained objects/deps audited; no log reconstruction. Matching generated compile/link commands executed directly.",
+  "evidence": [
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate.patch",
+      "sha256": "524efa56fb7c705bec594d567a29e421bf96f0ad3f364ce334fb328122f17c03"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate_sources.json",
+      "sha256": "897615e9295216fd5e54c3cbe9dc25c903b5c28e3986084094a80b56eda9ff16"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/REVIEW_source.md",
+      "sha256": "470d1df96b1bd42298027eee57d3fd2f409de326f77870e43efd0050aefa7cc9"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/build_receipt.json",
+      "sha256": "8d6c0be555a04c9702f0203183b1bd27051f53347023e808b8419572ecf28580"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness.json",
+      "sha256": "5cfe239b3c9c94e121c093a5bced83c0693b2e148f28b92e0a455636e6e1ca65"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness_execution.json",
+      "sha256": "fa778dfbbe3af435bfd0a1e9c318e96a16bc5c7703fe8873936237653608444d"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness_owner_observation.json",
+      "sha256": "4fada7b2606e7eb4b2e63dacf8cca028245c7ef69827cd58d0e9971b6223d29b"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/timing.json",
+      "sha256": "cfbeb2bcf2d4b99098155a7d5bc5a380ce411695a5a837c0e62c4ed3374c42c0"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/timing_execution.json",
+      "sha256": "ecebadc69fbf28f2b6c212361d0d62134a93170eab15a982c276a8e1e9f88e7c"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/timing_owner_observation.json",
+      "sha256": "77da0d7e69176e3ce0b7de7d0a8b7f1005a3d7dafbc5e1aa3a2c37deb6f18ffe"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/build-repair/execution/execution.json",
+      "sha256": "9ae7146b16cbe15a61dd0f2c71973d2d901c1aea672443c440d32424593ad5f6"
+    }
+  ],
+  "commands": {
+    "correctness": [
+      "/home/mvasiljevic/qwen38-full-rerun/tt-metal/python_env/bin/python",
+      "-B",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/check_identity_inverse.py",
+      "--mode",
+      "correctness",
+      "--output",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness.json"
+    ],
+    "timing": [
+      "/home/mvasiljevic/qwen38-full-rerun/tt-metal/python_env/bin/python",
+      "-B",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/check_identity_inverse.py",
+      "--mode",
+      "timing",
+      "--output",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/timing.json",
+      "--reference",
+      "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness.json"
+    ]
+  },
+  "ownership": {
+    "correctness": {
+      "status": "pass_observed_ownership",
+      "samples": 151,
+      "period_seconds": 0.1,
+      "max_sample_gap_seconds": 0.10159117355942726
+    },
+    "timing": {
+      "status": "pass_observed_ownership",
+      "samples": 109,
+      "period_seconds": 0.1,
+      "max_sample_gap_seconds": 0.10127193666994572
+    }
+  },
+  "runtime_review": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/REVIEW_runtime.md",
+    "sha256": "220b2f682a5617b9e40db00fa7ec92ca2c0078ea8ee10e0c151516adc4f36b84",
+    "verdict": "clean-pass for narrow component"
+  }
+}

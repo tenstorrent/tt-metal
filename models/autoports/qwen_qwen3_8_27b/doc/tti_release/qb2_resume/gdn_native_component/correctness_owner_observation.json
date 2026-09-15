@@ -1,0 +1,76 @@
+{
+  "status": "pass_observed_ownership",
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/run_pinned_device_command.py",
+    "--commands",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/commands.json",
+    "--commands-sha256",
+    "00a748929d5537a7348bb6725774dbf7ef29a0b8a984f31951679dbe6dded45b",
+    "--program-sha256",
+    "efd46a7953f921452dc212f58cfc46a54e7fc7c9ee5d0b9edf01f441c618e25c",
+    "--index",
+    "0"
+  ],
+  "wrapper_sha256": "3533695b4d0053fbe29c182e604ffd30ba65a339dbee1999534493ef323d82d2",
+  "started_utc": "2026-09-15T16:48:43.090022+00:00",
+  "period_seconds": 0.1,
+  "execution_record": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness_execution.json",
+  "samples": 151,
+  "changes": [
+    {
+      "utc": "2026-09-15T16:48:43.090439+00:00",
+      "monotonic": 8443124.419473203,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [],
+        "/proc/driver/tenstorrent/1/pids": [],
+        "/proc/driver/tenstorrent/2/pids": [],
+        "/proc/driver/tenstorrent/3/pids": []
+      },
+      "expected_native_pid": null
+    },
+    {
+      "utc": "2026-09-15T16:48:48.008592+00:00",
+      "monotonic": 8443129.337016508,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [
+          1104423,
+          1104423
+        ],
+        "/proc/driver/tenstorrent/1/pids": [
+          1104423,
+          1104423
+        ],
+        "/proc/driver/tenstorrent/2/pids": [
+          1104423,
+          1104423
+        ],
+        "/proc/driver/tenstorrent/3/pids": [
+          1104423,
+          1104423
+        ]
+      },
+      "expected_native_pid": 1104423
+    },
+    {
+      "utc": "2026-09-15T16:48:58.048158+00:00",
+      "monotonic": 8443139.377029777,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [],
+        "/proc/driver/tenstorrent/1/pids": [],
+        "/proc/driver/tenstorrent/2/pids": [],
+        "/proc/driver/tenstorrent/3/pids": []
+      },
+      "expected_native_pid": 1104423
+    }
+  ],
+  "errors": [],
+  "max_sample_gap_seconds": 0.10159117355942726,
+  "wrapper_child_pid": 1104422,
+  "last_observation_utc": "2026-09-15T16:48:58.048419+00:00",
+  "finished_utc": "2026-09-15T16:48:58.149090+00:00",
+  "wrapped_exit_code": 0,
+  "limitation": "100ms sampled ownership, not proof against sub-sample events. Empty owner lists allowed only as native startup/closure observation; original wrapper separately verifies device use and cleanup.",
+  "execution_record_sha256": "fa778dfbbe3af435bfd0a1e9c318e96a16bc5c7703fe8873936237653608444d"
+}

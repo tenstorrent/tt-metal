@@ -1,0 +1,68 @@
+{
+  "status": "pass_observed_ownership",
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/run_timing_actual.py"
+  ],
+  "wrapper_sha256": "3533695b4d0053fbe29c182e604ffd30ba65a339dbee1999534493ef323d82d2",
+  "started_utc": "2026-09-15T16:49:56.631595+00:00",
+  "period_seconds": 0.1,
+  "execution_record": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/timing_execution.json",
+  "samples": 109,
+  "changes": [
+    {
+      "utc": "2026-09-15T16:49:56.631931+00:00",
+      "monotonic": 8443197.960959544,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [],
+        "/proc/driver/tenstorrent/1/pids": [],
+        "/proc/driver/tenstorrent/2/pids": [],
+        "/proc/driver/tenstorrent/3/pids": []
+      },
+      "expected_native_pid": null
+    },
+    {
+      "utc": "2026-09-15T16:50:00.948451+00:00",
+      "monotonic": 8443202.276949603,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [
+          1105020,
+          1105020
+        ],
+        "/proc/driver/tenstorrent/1/pids": [
+          1105020,
+          1105020
+        ],
+        "/proc/driver/tenstorrent/2/pids": [
+          1105020,
+          1105020
+        ],
+        "/proc/driver/tenstorrent/3/pids": [
+          1105020,
+          1105020
+        ]
+      },
+      "expected_native_pid": 1105020
+    },
+    {
+      "utc": "2026-09-15T16:50:07.376469+00:00",
+      "monotonic": 8443208.705328789,
+      "owners": {
+        "/proc/driver/tenstorrent/0/pids": [],
+        "/proc/driver/tenstorrent/1/pids": [],
+        "/proc/driver/tenstorrent/2/pids": [],
+        "/proc/driver/tenstorrent/3/pids": []
+      },
+      "expected_native_pid": 1105020
+    }
+  ],
+  "errors": [],
+  "max_sample_gap_seconds": 0.10127193666994572,
+  "wrapper_child_pid": 1105019,
+  "last_observation_utc": "2026-09-15T16:50:06.573008+00:00",
+  "finished_utc": "2026-09-15T16:50:07.477080+00:00",
+  "wrapped_exit_code": 0,
+  "limitation": "100ms sampled ownership, not proof against sub-sample events. Empty owner lists allowed only as native startup/closure observation; original wrapper separately verifies device use and cleanup.",
+  "execution_record_sha256": "ecebadc69fbf28f2b6c212361d0d62134a93170eab15a982c276a8e1e9f88e7c"
+}

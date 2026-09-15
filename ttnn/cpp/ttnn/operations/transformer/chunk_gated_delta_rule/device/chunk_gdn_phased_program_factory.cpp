@@ -290,6 +290,7 @@ tt::tt_metal::ProgramDescriptor ChunkGdnPrepProgramFactory::create_descriptor(
     compute_ct.push_back(attrs.qk_norm ? 1u : 0u);
     compute_ct.push_back(f32_bits(attrs.scale));
     compute_ct.push_back(f32_bits(1e-6f));
+    compute_ct.push_back(attrs.padded_single_token_inverse ? 1u : 0u);
     compute.compile_time_args = compute_ct;
     compute.config = compute_cfg();
     compute.runtime_args.reserve(n_used);

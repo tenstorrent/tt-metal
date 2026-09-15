@@ -46,6 +46,7 @@ struct ChunkGdnPrepParams {
     // folds `scale` into q's norm. Only valid for chunk_size==32 (Ct==1). scale defaults to no-op.
     bool qk_norm = false;
     float scale = 1.0f;
+    bool padded_single_token_inverse = false;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -101,7 +102,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm = false,
     float scale = 1.0f,
     bool qk_flat = false,
-    uint32_t Hk = 0);
+    uint32_t Hk = 0,
+    bool padded_single_token_inverse = false);
 
 // ---------------------------------------------------------------------------
 // SCAN

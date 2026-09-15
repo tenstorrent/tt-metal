@@ -1,0 +1,31 @@
+{
+  "status": "BUILT_NATIVE_CANDIDATE",
+  "exit_code": 0,
+  "argv": [
+    "/usr/bin/python3",
+    "-B",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/build-repair/run_rebuild.py",
+    "--execute"
+  ],
+  "candidate_sources_sha256": "897615e9295216fd5e54c3cbe9dc25c903b5c28e3986084094a80b56eda9ff16",
+  "outputs": [
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/ttnn/_ttnn.so",
+      "sha256": "8f5b58e74dd5cdbaeb2355ea216b9c9db6316cac40e47e9cc4a9ad97d8f2258c"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/build_Release/lib/_ttnncpp.so",
+      "sha256": "d9d8d553dd3889f0c3e1f31b6b384a2bacd485974b11ef1dc5b36519917839eb"
+    }
+  ],
+  "build_execution": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/build-repair/execution/execution.json",
+    "sha256": "9ae7146b16cbe15a61dd0f2c71973d2d901c1aea672443c440d32424593ad5f6"
+  },
+  "install_execution": {
+    "path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/build-repair/install_execution.json",
+    "sha256": "8e55d1daef923089daf76cf5805189daed7457e6e14e3830c1e3c242079a40ff"
+  },
+  "mandated_Docker_wrapper_exit": 1,
+  "build_scope": "Three actual generated compiler commands and two link commands; affected closure audited; retained outputs unchanged. Historical Ninja command log absent, not reconstructed. Device JIT/correctness unverified."
+}

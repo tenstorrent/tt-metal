@@ -41,6 +41,11 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
                 built eagerly.
             masks (ttnn.Tensor, optional): [1,1,32,96] fp32 TILE quadrant masks; supplied with eye/
                 tril/ones.
+            padded_single_token_inverse (bool): default False. Opt in only for flat single-token
+                inputs padded to T=32, with canonical eye/tril/ones/quadrant constants. The kernel
+                checks zero beta/g rows 1..31 and the actual computed FP32 inverse-input tile.
+                Any nonzero or nonfinite inverse input retains the original inverse. No input
+                arithmetic, scan arithmetic, output format or state-write behavior is changed.
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -69,7 +74,8 @@ void bind_chunk_gated_delta_rule(nb::module_& mod) {
         nb::arg("eye") = nb::none(),
         nb::arg("tril") = nb::none(),
         nb::arg("ones") = nb::none(),
-        nb::arg("masks") = nb::none());
+        nb::arg("masks") = nb::none(),
+        nb::arg("padded_single_token_inverse") = false);
 }
 
 }  // namespace ttnn::operations::transformer

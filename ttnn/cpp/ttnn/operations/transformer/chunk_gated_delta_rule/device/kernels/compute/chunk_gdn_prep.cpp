@@ -18,6 +18,7 @@
 
 #include <cstdint>
 #include "api/compute/common.h"
+#include "api/compute/cb_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -197,6 +198,33 @@ void ewt(uint32_t a, uint32_t ai, uint32_t b, uint32_t bi, uint32_t o, int op) {
     cb_push_back(o, 1);
 }
 
+// Read only after WAIT. This mirrors read_tile_value's UNPACK read and mailbox fan-out:
+// MATH/PACK must receive the same decision before any conditional CB or tile operation.
+// FP32 full tiles use 1024 uint32 words. A column's row r is face-major offset
+// (r / 16) * 512 + (r % 16) * 16. Sign-bit masking admits both signed zeros, but
+// rejects every nonzero finite value, subnormal, Inf and NaN. No arithmetic masks NaNs.
+// column_tail=true checks only logical rows 1..31 of the beta/g column.
+bool fp32_zero_words(uint32_t cb_id, bool column_tail) {
+    uint32_t zero = 1;
+    UNPACK({
+        const uint32_t byte_address = get_tile_l1_byte_address(get_operand_id(cb_id), 0);
+        const auto* words = reinterpret_cast<volatile uint32_t*>(byte_address);
+        const uint32_t end = column_tail ? 32 : 1024;
+        for (uint32_t i = column_tail ? 1 : 0; i < end; ++i) {
+            const uint32_t index = column_tail ? (i / 16) * 512 + (i % 16) * 16 : i;
+            if ((words[index] & 0x7fffffffU) != 0) {
+                zero = 0;
+                break;
+            }
+        }
+        mailbox_write(ckernel::ThreadId::MathThreadId, zero);
+        mailbox_write(ckernel::ThreadId::PackThreadId, zero);
+    })
+    MATH(zero = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    PACK(zero = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
+    return zero != 0;
+}
+
 // (I32 - Nq)^-1 for a strictly-lower 16-block Nq isolated in one 16-quadrant (rest zero),
 // nilpotent at 16. Horner in 15 terms -> out (single tile); the other diagonal quadrant is I.
 // Small block + short chain keeps fp32 bounded where a 32x32/31-term Horner cancels.
@@ -370,6 +398,7 @@ void kernel_main() {
     constexpr uint32_t QK_NORM = get_compile_time_arg_val(3);
     constexpr uint32_t SCALE_BITS = get_compile_time_arg_val(4);
     constexpr uint32_t EPS_BITS = get_compile_time_arg_val(5);
+    constexpr bool PADDED_SINGLE_TOKEN_INVERSE = get_compile_time_arg_val(6) != 0;
     // Chunk-parallel: NC here is this core's local work-item count (chunks assigned to it), NOT the
     // sequence-wide chunk count. Each work-item is an independent (head, chunk) prep — no cross-item
     // state — so the loop just processes `NC` items regardless of which (h, c) they map to.
@@ -398,6 +427,11 @@ void kernel_main() {
         WAIT(cb_v, cv);
         WAIT(cb_g, Ct);
         WAIT(cb_beta, Ct);
+
+        bool single_token_padding = false;
+        if constexpr (PADDED_SINGLE_TOKEN_INVERSE && Ct == 1) {
+            single_token_padding = fp32_zero_words(cb_beta, true) && fp32_zero_words(cb_g, true);
+        }
 
         // ---- OPT-B: in-kernel L2-norm of q,k over K (fold q's scale). Consumes the raw reader q/k
         // and produces normalized q->cb_supd, k->cb_stmp (both free in Ct==1). The rest of the chunk
@@ -501,7 +535,13 @@ void kernel_main() {
 
         if constexpr (Ct == 1) {
             // Single 32x32 block: T_inv is just its inverse.
-            invert_block(cb_scr3, 0, cb_Tinv, cb_scr1, cb_scr2);
+            // Keep the existing negN construction, including nonfinite propagation. Canonical
+            // constants and an actually zero negN imply T_inv=I; all other inputs fall back.
+            if (single_token_padding && fp32_zero_words(cb_scr3, false)) {
+                cpy_t(cb_eye, 0, cb_Tinv);
+            } else {
+                invert_block(cb_scr3, 0, cb_Tinv, cb_scr1, cb_scr2);
+            }
             WAIT(cb_Tinv, cc);
             POP(cb_scr3, cc);
         } else if constexpr (Ct == 2) {

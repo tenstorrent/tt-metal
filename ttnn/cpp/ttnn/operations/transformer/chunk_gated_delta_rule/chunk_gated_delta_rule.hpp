@@ -52,6 +52,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye = std::nullopt,
     const std::optional<ttnn::Tensor>& tril = std::nullopt,
     const std::optional<ttnn::Tensor>& ones = std::nullopt,
-    const std::optional<ttnn::Tensor>& masks = std::nullopt);
+    const std::optional<ttnn::Tensor>& masks = std::nullopt,
+    bool padded_single_token_inverse = false);
 
 }  // namespace ttnn::transformer

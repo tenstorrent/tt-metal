@@ -144,7 +144,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     const std::optional<ttnn::Tensor>& eye,
     const std::optional<ttnn::Tensor>& tril,
     const std::optional<ttnn::Tensor>& ones,
-    const std::optional<ttnn::Tensor>& masks) {
+    const std::optional<ttnn::Tensor>& masks,
+    bool padded_single_token_inverse) {
     TT_FATAL(!use_qk_l2norm, "chunk_gated_delta_rule: use_qk_l2norm not yet supported; pre-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -288,6 +289,9 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
     TT_FATAL(!flat_v || pad == 0, "OPT-A flat v requires T ({}) to be a multiple of chunk_size ({})", T, C);
     TT_FATAL(!flat_qk || (phased && qk_norm), "OPT-A flat q/k needs the phased path + in-kernel norm (Ct==1)");
     TT_FATAL(!flat_qk || pad == 0, "OPT-A flat q/k requires T ({}) to be a multiple of chunk_size ({})", T, C);
+    TT_FATAL(
+        !padded_single_token_inverse || (phased && flat_qk && flat_v && qk_norm && C == 32 && T == 32),
+        "padded_single_token_inverse requires phased flat Q/K/V and exactly one padded 32-row chunk");
     if (phased) {
         auto prep = ttnn::prim::chunk_gdn_prep(
             q_c,
@@ -307,7 +311,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> chunk_gated_delta_rule(
             qk_norm,
             scale,
             flat_qk,
-            H);
+            H,
+            padded_single_token_inverse);
         // prep = {v_beta, kd, q_decay, intra, k_dec_t, dl, t_inv}
         auto scan = ttnn::prim::chunk_gdn_scan(
             prep[0],

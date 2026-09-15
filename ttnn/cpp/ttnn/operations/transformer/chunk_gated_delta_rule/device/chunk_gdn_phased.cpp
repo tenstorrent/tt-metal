@@ -49,6 +49,10 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
+    TT_FATAL(
+        !attrs.padded_single_token_inverse ||
+            (attrs.chunk_size == 32 && attrs.num_chunks == 1 && attrs.qk_flat && attrs.v_flat && attrs.qk_norm),
+        "padded_single_token_inverse requires one flat, normalized 32-row chunk");
     check(in.g, "g", DataType::FLOAT32);
     check(in.beta, "beta", DataType::FLOAT32);
     check(in.eye_c, "eye_c", DataType::FLOAT32);
@@ -108,7 +112,8 @@ std::vector<Tensor> chunk_gdn_prep(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    bool padded_single_token_inverse) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Derive dims. Head-major q gives BH/NC/K directly; flat q [B,T,Hk*K] gives B/T, so BH=B*HV,
@@ -129,6 +134,7 @@ std::vector<Tensor> chunk_gdn_prep(
         .Hk = Hk,
         .qk_norm = qk_norm,
         .scale = scale,
+        .padded_single_token_inverse = padded_single_token_inverse,
         .output_mem_config = output_mem_config,
         .compute_kernel_config = compute_kernel_config,
     };

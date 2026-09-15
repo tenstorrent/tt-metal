@@ -1,0 +1,36 @@
+{
+  "argv": [
+    "/home/mvasiljevic/qwen38-full-rerun/tt-metal/python_env/bin/python",
+    "-B",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/check_identity_inverse.py",
+    "--mode",
+    "correctness",
+    "--output",
+    "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/correctness.json"
+  ],
+  "command_index": 0,
+  "commands_sha256": "00a748929d5537a7348bb6725774dbf7ef29a0b8a984f31951679dbe6dded45b",
+  "program_sha256": "efd46a7953f921452dc212f58cfc46a54e7fc7c9ee5d0b9edf01f441c618e25c",
+  "wrapper_sha256": "9f996fa7e98b7b06282f7c94f88d2e62fe92c00c9abf280424698dc99a90177d",
+  "owners_before": {
+    "/proc/driver/tenstorrent/0/pids": "",
+    "/proc/driver/tenstorrent/1/pids": "",
+    "/proc/driver/tenstorrent/2/pids": "",
+    "/proc/driver/tenstorrent/3/pids": ""
+  },
+  "started_utc": "2026-09-15T16:48:43.110975+00:00",
+  "instrumentation": {
+    "TT_METAL_TRACE_ALLOC_TRACKING": "1",
+    "TT_METAL_TRACE_ALLOC_TRACEBACKS": "1"
+  },
+  "hf_control_paused": false,
+  "child_pid": 1104423,
+  "exit_code": 0,
+  "finished_utc": "2026-09-15T16:48:58.112795+00:00",
+  "owners_after": {
+    "/proc/driver/tenstorrent/0/pids": "",
+    "/proc/driver/tenstorrent/1/pids": "",
+    "/proc/driver/tenstorrent/2/pids": "",
+    "/proc/driver/tenstorrent/3/pids": ""
+  }
+}

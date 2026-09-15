@@ -1,0 +1,54 @@
+{
+  "status": "ISOLATED_UNBUILT_UNEXECUTED",
+  "files": [
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.hpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.hpp",
+      "baseline_sha256": "01e718421f213973d6e738736d181dce5fb1e5c4e3a21ae090219d2aa5e71034",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.hpp",
+      "candidate_sha256": "e6ff9ee9e0db0ae9f1c90a93598b962fcde83e141a102a0f9b1f1123edfb3918"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp",
+      "baseline_sha256": "dc96cce78ecbd3f4f5e0a50c183e669ec32f7c9ff3115278379a741c81db321d",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule.cpp",
+      "candidate_sha256": "93b8857cc4a4a0c9451c4fcef6dc10d59419c23b883e1f446a6de9508224ba9b"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.cpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.cpp",
+      "baseline_sha256": "9c47fbc5845903215771db08d76beea83fc513c3c980abf64b7404cf31a49cca",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/chunk_gated_delta_rule_nanobind.cpp",
+      "candidate_sha256": "f770dca1d6aaaafed8920382553b02d562674ac8cfc790cb5681e130566d06f5"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.hpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.hpp",
+      "baseline_sha256": "65a7aeeb6272a5b5738c7d8821f5cae5f52275dc6a7c2a2802803ab1d9bf954d",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.hpp",
+      "candidate_sha256": "02854ee7d6c41fab683b5b3f201da5b243084c33eaa453dcc18c6731034e312e"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.cpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.cpp",
+      "baseline_sha256": "26958142515b173c8aa970538b2f622a517b2adba5dd9d4273a13ab97f23b982",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased.cpp",
+      "candidate_sha256": "bd71f3eed6fef028487d19d5649c2e41ccc1c8496a998702beebd972a7659e2c"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp",
+      "baseline_sha256": "003dcb9917165af044c688e56a435d5b9b6c24a73001a8b3233e369f7c9a75a0",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/chunk_gdn_phased_program_factory.cpp",
+      "candidate_sha256": "33d89db0ee7d3f2517e74217b7d1eac394c641e8d365e37255190773a851671b"
+    },
+    {
+      "path": "/home/mvasiljevic/qwen38-full-rerun/tt-metal/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp",
+      "baseline_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/baseline/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp",
+      "baseline_sha256": "922d2b203e2d43c369e320cdc5a186da115d808da11dea644e2dce53652eff6d",
+      "candidate_path": "/home/mvasiljevic/qwen38-full-rerun/tti-release-qwen38/qb2-resume/b8-perf/gdn-identity-candidate/candidate/ttnn/cpp/ttnn/operations/transformer/chunk_gated_delta_rule/device/kernels/compute/chunk_gdn_prep.cpp",
+      "candidate_sha256": "ac3417f452f64899ed03507af485599d28aa6b276cf5d76429a76b3cc64e6901"
+    }
+  ]
+}
