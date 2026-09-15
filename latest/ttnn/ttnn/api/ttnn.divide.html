@@ -398,21 +398,24 @@
 <dd>
 <blockquote>
 <div>
-<p>Divides <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> by <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns a tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code></p>
+<p>Divides <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> by <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_b</span></code> and returns a tensor with the same layout as <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, or as the tensor operand when <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code> is a Number</p>
 <div class="math notranslate nohighlight">
 \[\begin{split}\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, &amp; \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}\end{split}\]</div>
 <dl class="simple">
 <dt>Args:</dt>
 <dd>
-<p>input_tensor_a (ttnn.Tensor): the input tensor.
-input_tensor_b (ttnn.Tensor or Number): the input tensor.</p>
+<p>input_tensor_a (ttnn.Tensor or Number): the input tensor, or the numerator when a Number.
+input_tensor_b (ttnn.Tensor or Number): the input tensor. At least one of the two operands must be a tensor; there is no scalar-scalar overload.</p>
 </dd>
 <dt>Keyword args:</dt>
 <dd>
 <p>memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to <cite>None</cite>.
 fast_and_approximate_mode (bool, optional): <cite>true</cite> if input_tensor_b is non-zero for fast approximation, else <cite>false</cite> for accurate division (Only if the input tensor is not ComplexTensor). Defaults to <cite>false</cite>.
 rounding_mode (string, optional): can be <cite>None</cite>, <cite>floor</cite> and <cite>trunc</cite> (only if the input tensor is not ComplexTensor). Defaults to <cite>None</cite>.
-dtype (ttnn.DataType, optional): dtype of the output tensor. Integer division with <cite>rounding_mode=None</cite> only accepts <cite>None</cite> or <cite>ttnn.float32</cite>. Defaults to the dtype of <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor_a</span></code>, or FLOAT32 when an INT32 input is promoted by a floating-point scalar.
+activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to <cite>None</cite>.
+input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a before the operation. A Number in that position takes this list. Defaults to <cite>None</cite>.
+input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b before the operation. Defaults to <cite>None</cite>.
+dtype (ttnn.DataType, optional): dtype of the output tensor. Defaults to the dtype of the tensor operand, or <cite>ttnn.float32</cite> when an INT32 input is promoted by a floating-point scalar. Integer division with <cite>rounding_mode=None</cite> only accepts <cite>None</cite> or <cite>ttnn.float32</cite>, and always yields <cite>ttnn.float32</cite>.
 output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to <cite>None</cite>.</p>
 </dd>
 <dt>Returns:</dt>

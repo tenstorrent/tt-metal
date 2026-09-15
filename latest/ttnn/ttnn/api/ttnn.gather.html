@@ -381,6 +381,7 @@
 <p>The input tensor and the index tensor must have the same number of dimensions.
 For all dimensions except the specified one (<cite>dim</cite>), the size of the index tensor must not exceed the size of the input tensor.
 The output tensor will have the same shape as the index tensor. Note that the input and index tensors do not broadcast against each other.</p>
+<p>Index values must lie in the range [0, input.shape[dim]). The value produced at any output position whose index falls outside that range is unspecified.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
