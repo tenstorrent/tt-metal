@@ -939,19 +939,23 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         writer_compile_time_args.end(), writer_cb_compile_time_args.begin(), writer_cb_compile_time_args.end());
     compute_compile_time_args.insert(
         compute_compile_time_args.end(), compute_cb_compile_time_args.begin(), compute_cb_compile_time_args.end());
-    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
-    // Block mask: appended after the CBIds splice (the last mutation to these vectors before this
-    // point), so it cannot shift any CB id's position. cb_block_mask_row is 0 (a valid but unused CB
-    // index) when !use_block_mask; harmless since the reader/compute only touch it behind
-    // SOL_ATTN_USE_BLOCK_MASK. broadcast flags let the reader compute the DRAM row address; compute
-    // only ever reads the row the reader already resolved, so it needs the CB id alone.
+    // Block mask: appended right after the CBIds splice, BEFORE the output accessor below, so compute
+    // reads it at a fixed offset (cb_arg_offset + 19) instead of having to reconstruct the output
+    // accessor's width to skip past it -- TensorAccessorArgs's skip-ahead pattern is a dataflow-side
+    // idiom (get_ct_arg is a macro expanding its index at the preprocessor level, so a member-function
+    // expression naming a type compute never declared does not parse there). cb_block_mask_row is 0
+    // (a valid but unused CB index) when !use_block_mask; harmless since the reader/compute only touch
+    // it behind SOL_ATTN_USE_BLOCK_MASK. broadcast flags let the reader compute the DRAM row address;
+    // compute only ever reads the row the reader already resolved, so it needs the CB id alone.
     reader_compile_time_args.push_back(cb_block_mask_row);
     reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_batch));
     reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_heads));
     TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.block_mask)).append_to(reader_compile_time_args);
     reader_compile_time_args.push_back(cb_block_mask_raw);
     compute_compile_time_args.push_back(cb_block_mask_row);
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(compute_compile_time_args);
 
     // Semaphores for KV chain forwarding (non-causal only, and only when no mask disabled it above --
     // otherwise sender/receiver/valid semaphore_id all default to 0 and this would push three

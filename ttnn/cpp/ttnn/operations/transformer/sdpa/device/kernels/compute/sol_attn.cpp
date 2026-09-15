@@ -97,12 +97,10 @@ void kernel_main() {
     constexpr uint32_t cb_sum_B = get_compile_time_arg_val(cb_arg_offset + 16);
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 17);
     constexpr uint32_t cb_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 18);
-    // Output accessor args are appended here for the factory's own indexing purposes (compute doesn't
-    // read through them -- the writer does), but their width still has to be skipped correctly to find
-    // block_mask's CB id, appended right after them.
-    constexpr auto output_accessor_args = TensorAccessorArgs<cb_arg_offset + 19>();
-    constexpr uint32_t cb_block_mask_row =
-        get_compile_time_arg_val(output_accessor_args.next_compile_time_args_offset());
+    // Block mask CB id: the factory pushes this immediately after the CBIds block (before the output
+    // accessor args, which compute never reads through -- the writer does), specifically so this is a
+    // fixed offset rather than needing to reconstruct the output accessor's width to skip past it.
+    constexpr uint32_t cb_block_mask_row = get_compile_time_arg_val(cb_arg_offset + 19);
     uint32_t chunked_q_chunk_offset = 0;
     CircularBuffer cb_chunk_start_idx_obj(cb_chunk_start_idx);
     CircularBuffer cb_identity_scale_in_obj(cb_identity_scale_in);
