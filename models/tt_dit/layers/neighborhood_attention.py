@@ -5,8 +5,8 @@
 
 Same contract for all three: ``q``/``k``/``v`` are ``(B, T, H, W, num_heads, head_dim)``, already
 RMS-normed and RoPE'd with Q pre-scaled, and the return is ``(B, T, H, W, num_heads * head_dim)`` in
-ROW_MAJOR. Their plans -- everything that depends on the geometry and nothing on the weights --
-live in ``neighborhood_attention_plan``.
+ROW_MAJOR. Their plans (everything that depends on the geometry and nothing on the weights) live in
+``neighborhood_attention_plan``.
 
 * ``neighborhood_attention_3d_linear_order``: tokens in natural row-major order. Gathers each
   query group's key span with ``ttnn.embedding`` and runs dense masked SDPA over it, optionally
@@ -14,29 +14,17 @@ live in ``neighborhood_attention_plan``.
   the replicated oracle the sharded tests compare against.
 
 * ``neighborhood_attention_3d_bricked``: the ``neighborhood_scaled_dot_product_attention`` device
-  op over the whole volume on every chip. The op consumes tokens BRICKED -- 32 consecutive sites
-  are a compact 3D box rather than a pencil along width -- so one tile row is one brick of video
-  and a query tile's context window is a handful of long reads instead of 121 short ones. See
-  ``neighborhood_permute``.
+  op over the whole volume on every chip. The op consumes tokens BRICKED: 32 consecutive sites are
+  a compact 3D box, so one tile row is one brick of video. See ``neighborhood_permute``.
 
-* ``neighborhood_attention_3d_bricked_w_sharded``: the same op over this chip's W-shard. Queries
-  and keys span DIFFERENT regions: a query needs a widened KEY region -- its window reaches past
-  the shard seam -- but never a widened QUERY region, because the halo's own queries belong to the
-  neighbour, which computes them itself. So K and V are halo-exchanged and Q is not, and the op is
-  told the difference through ``query_extent``/``query_origin``. It addresses two brick grids: the
-  resident one for K, V and the gather, the query one for Q and the output.
+* ``neighborhood_attention_3d_bricked_w_sharded``: the same op over this chip's W-shard. K and V
+  are halo-exchanged because a window reaches past the shard seam; Q is not, because the halo's
+  queries belong to the neighbour, which computes them itself. The op is told the difference
+  through ``query_extent``/``query_origin`` and addresses two brick grids: the resident one for
+  K, V and the gather, the owned one for Q and the output.
 
-  Widening Q too would make the op compute 76 resident columns to keep 60 -- 21% of every query
-  discarded -- and filling Q's halo locally instead of over the fabric is SLOWER still (75.6 ms
-  against the exchange's 34.2): the halo columns are dead, but ANY local fill copies the 60/76 the
-  shard owns while the collective moves only the 16/76 that crosses a seam. Not filling it at all
-  is the only thing that helps.
-
-  It converts in and out PER CALL unless ``already_bricked=True``. That flag is the keep-bricked path: Q/K/V
-  arrive in bricked site order from a conversion at stage entry, so this call only halo-exchanges
-  K/V on the ``W_br`` axis (whole bricks, no 7-D permute) and returns still-bricked. Stage 5
-  converts back once at exit. The per-call spans remain so a per-call run still names the
-  permute it is paying for.
+  With ``already_bricked=True`` (the keep-bricked path) Q/K/V arrive in bricked site order, this
+  call only halo-exchanges K/V on the ``W_br`` axis, and the return stays bricked.
 """
 
 from __future__ import annotations
@@ -57,26 +45,13 @@ from .neighborhood_attention_plan import (
 )
 from .neighborhood_permute import SITES_PER_BRICK, brick_count, brick_grid, to_bricked, to_bricked_grid, to_natural
 
-# Cap on the elements gathered for one attention call's K and V together. Peak device memory is
-# what this bounds, and it is separate from the score budget above, which bounds a *tile's*
-# window: a group can hold tens of thousands of tiles, and running them as one call is what
-# scales with resolution. 2**29 elements is 1 GB in bfloat16 for K and V combined.
-#
-# The bound is per chip, so a sharded plan (see :class:`NA3DShard`) splits a group's tiles
-# before this applies and needs proportionally fewer chunks for the same grid.
+# Cap on the elements gathered for one attention call's K and V together, per chip. Bounds peak
+# device memory independently of the grid.
 DEFAULT_CHUNK_BUDGET = 2**29
 
 
 def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
-    """The numerics the fused SDPA runs with, so the bricked op is compared like for like.
-
-    Until 2026-09-11 the op, left unspecified, fell back to ``DeviceComputeKernelConfig{}``: LoFi
-    matmuls and the approximate exp. The general SDPA op that the replicated reference and the
-    older block-permute executor run defaults to HiFi2 with an exact exp
-    (``SDPAProgramConfig(exp_approx_mode=False)``). Measured 2026-09-10 on the stage-5 decode gate:
-    the LoFi/approx default was a uniform ~5 % RMSE/sigma floor against the replicated reference
-    (PCC 99.89 %, flat across frames and columns -- not a seam, not a shape). The op's binding now
-    defaults to HiFi2/exact as well; this helper keeps the choice explicit and A/B-able.
+    """HiFi2 with an exact exp, matching the general SDPA op the replicated reference runs.
 
     ``DIFFVAE_NA_FIDELITY=lofi|hifi2|hifi4`` and ``DIFFVAE_NA_APPROX_EXP=1`` are A/B knobs only.
     """
@@ -96,8 +71,7 @@ def _compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
 def _gather_stack(local: ttnn.Tensor, device_plan: NA3DDevicePlan) -> ttnn.Tensor:
     """Gather every chip's ``(rows, width)`` contribution into the full stack on every chip.
 
-    Both gathers are along dim 0, one per mesh axis, and they run in the order
-    :func:`_emitted_order` assumes: the tile axis first, then the row axis.
+    One gather per mesh axis, tile axis first, then row axis: the order :func:`_emitted_order` assumes.
     """
     shard = device_plan.shard
     if shard is None:
@@ -122,29 +96,17 @@ def neighborhood_attention_3d_linear_order(
     ccl_manager=None,
     gna_stride: tuple[int, int, int] | None = None,
 ) -> ttnn.Tensor:
-    """3D neighborhood attention with tokens in linear (natural) order: gather, then dense masked SDPA.
+    """3D neighborhood attention with tokens in natural order: gather, then dense masked SDPA.
 
-    ``q``/``k``/``v`` are ``(B, T, H, W, num_heads, head_dim)``, already RMS-normed and
-    RoPE'd. Pass ``scale=1.0`` when the caller has pre-scaled Q, as the DiffVAE blocks do.
-    Returns ``(B, T, H, W, num_heads * head_dim)`` in ROW_MAJOR layout.
+    Pass ``scale=1.0`` when the caller has pre-scaled Q. Either input layout is accepted.
+    ``chunk_budget`` caps the elements gathered per attention call; a group's tiles are
+    independent, so splitting the batch is exact. When ``device_plan`` is sharded each chip
+    evaluates a slice of every group and the results are gathered back, so the return is the
+    same full volume on every chip either way. ``ccl_manager`` is only consulted when this builds
+    its own plan.
 
-    Either input layout is accepted. Callers building q/k/v with matmuls arrive in TILE,
-    callers coming from a gather arrive in ROW_MAJOR, and the gathers below need ROW_MAJOR;
-    normalizing here keeps that off every caller.
-
-    ``chunk_budget`` caps the elements gathered per attention call, bounding peak memory
-    independently of grid size. It changes no arithmetic: a group's tiles are independent, so
-    splitting the batch is exact.
-
-    When ``device_plan`` is sharded (see :class:`NA3DShard`) each chip evaluates a slice of every
-    group and the results are gathered back here, so the return value is the same full volume on
-    every chip either way. ``ccl_manager`` is only consulted when this builds its own plan; a
-    plan passed in carries the manager it was built with.
-
-    ``gna_stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites; the trivial (1,1,1)
-    means the shipped architecture, so callers may pass it. This executor has no stride parameter,
-    so a real stride is REFUSED rather than dropped: silently ignoring it is how a caller ends up
-    measuring standard NA and reporting it as GNA.
+    ``gna_stride`` is refused unless trivial: this executor has no stride parameter, and silently
+    ignoring one is how a caller ends up measuring standard NA and reporting it as GNA.
     """
     assert gna_stride in (None, (1, 1, 1)), (
         f"the linear-order executor has no stride parameter, so gna_stride={gna_stride} would be ignored; "
@@ -153,10 +115,8 @@ def neighborhood_attention_3d_linear_order(
 
     batch, t, h, w, heads, head_dim = tuple(q.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
-    # The gathers below are ttnn.embedding, which validates that its table is bfloat16. Caught
-    # here so the constraint reads as a property of this executor rather than surfacing as a
-    # TT_FATAL from inside the op. Lifting it means replacing the gather, not casting: a quiet
-    # downcast would make an fp32 caller think it had fp32 attention.
+    # ttnn.embedding requires a bfloat16 table. Not cast: a quiet downcast would make an fp32
+    # caller think it had fp32 attention.
     assert (
         q.dtype == ttnn.bfloat16
     ), f"NA3D gathers rows with ttnn.embedding, which requires a bfloat16 table; got {q.dtype}"
@@ -174,27 +134,19 @@ def neighborhood_attention_3d_linear_order(
         q = ttnn.multiply(ttnn.to_layout(q, ttnn.TILE_LAYOUT), scale)
 
     # Fold heads into the row width so each of q/k/v is a (T*H*W, heads*head_dim) table that
-    # ttnn.embedding can gather rows out of. The fold merges the last two dims, which is a
-    # pure stride change in ROW_MAJOR but would need re-tiling in TILE.
+    # ttnn.embedding can gather rows out of; a pure stride change in ROW_MAJOR.
     width = heads * head_dim
     tables = [ttnn.reshape(ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT), (t * h * w, width)) for x in (q, k, v)]
 
     outputs = []
     for group in device_plan.groups:
-        # A group's tiles are independent, so they can run in slices of the batch. Run whole, a
-        # group's gathered K and V scale with the entire grid: 9 GB at 1920x1088 against 31.8 GB
-        # of DRAM, which cannot coexist with the rest of a block. Chunking bounds peak memory by
-        # a budget rather than by resolution. Grids small enough come out as one chunk, so the
-        # shapes under test exercise this same path.
         n_tiles = group.local_tiles
-        per_tile = group.n_keys * width  # elements gathered per tile, for each of K and V
+        per_tile = group.n_keys * width
         tiles_per_chunk = max(1, min(n_tiles, chunk_budget // max(1, 2 * per_tile)))
 
         chunks = []
         for start in range(0, n_tiles, tiles_per_chunk):
             tiles = min(tiles_per_chunk, n_tiles - start)
-            # A chunk slices the leading dim, which is contiguous. When the chunk is the whole
-            # group the slice is skipped: it would copy the plan's index tensor for nothing.
             if tiles == n_tiles:
                 chunk_indices = (group.query_indices, group.key_indices)
             else:
@@ -212,19 +164,14 @@ def neighborhood_attention_3d_linear_order(
                 (tables[1], chunk_indices[1], group.n_keys),
                 (tables[2], chunk_indices[1], group.n_keys),
             ):
-                # (tiles, count) index -> (tiles, count, width), then split width into heads.
-                # Splitting the innermost dim is a pure stride change in ROW_MAJOR.
                 rows = ttnn.embedding(index, table, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=q.dtype)
                 rows = ttnn.reshape(rows, (tiles, count, heads, head_dim))
-                # (tiles, seq, heads, dim) -> (tiles, heads, seq, dim): SDPA wants heads ahead of seq.
                 rows = ttnn.permute(rows, (0, 2, 1, 3))
                 gathered.append(ttnn.to_layout(rows, ttnn.TILE_LAYOUT))
-            # Never deallocated: on the single-chunk path these *are* the cached plan's tensors,
-            # and freeing them would break every later block sharing that geometry.
+            # Never deallocated: on the single-chunk path these ARE the cached plan's tensors.
             del chunk_indices
 
-            # The mask is [1, 1, Nq, Nk] and broadcasts over the tile batch, so a chunk uses the
-            # group's mask unchanged however many tiles it holds.
+            # The mask is [1, 1, Nq, Nk] and broadcasts over the tile batch.
             attended = ttnn.transformer.scaled_dot_product_attention(
                 gathered[0], gathered[1], gathered[2], attn_mask=group.mask, is_causal=False, scale=1.0
             )
@@ -235,17 +182,15 @@ def neighborhood_attention_3d_linear_order(
             attended = ttnn.permute(attended, (0, 2, 1, 3))
             chunks.append(ttnn.reshape(attended, (tiles, group.local_queries, width)))
 
-        # Chunks are joined here rather than gathered individually: the chunking is a local memory
-        # decision and must not reach the fabric, or the reassembled order would depend on it.
+        # Chunks are joined before the gather: chunking is a local memory decision and must not
+        # reach the fabric, or the reassembled order would depend on it.
         local = chunks[0] if len(chunks) == 1 else ttnn.concat(chunks, dim=0)
         for tensor in chunks:
             if tensor is not local:
                 ttnn.deallocate(tensor)
         outputs.append(ttnn.reshape(local, (group.local_tiles * group.local_queries, width)))
 
-    # One stack per chip, then one gather per mesh axis for the whole attention call. Gathering
-    # per group instead needs two CCL programs per group, and compiling ~100 of those costs more
-    # than the attention they parallelize.
+    # One stack per chip, then one gather per mesh axis for the whole call.
     local_stack = ttnn.concat(outputs, dim=0) if len(outputs) > 1 else outputs[0]
     for tensor in outputs:
         if tensor is not local_stack:
@@ -269,17 +214,12 @@ def neighborhood_attention_3d_bricked(
     batch, time_extent, height_extent, width_extent, head_count, head_dim = tuple(query.shape)
     assert batch == 1, f"batched NA3D is not implemented; got batch={batch}"
 
-    # PHYSICAL (t, h, w), NOT the op's axis order: it is passed to the op unpermuted below.
-    # (1,1,1) is the shipped architecture: every query centred on
-    # its own window. Larger shares one window across each group, which is what removes the
-    # per-query mask -- see the module docstring. Callers own the knob; this module reads no env.
+    # PHYSICAL (t, h, w), passed to the op unpermuted. (1,1,1) is the shipped architecture.
     if stride is None:
         stride = (1, 1, 1)
 
-    # DIFFVAE_NA_WINDOW overrides the architectural window. Enlarging it to a whole number of
-    # bricks is what lets every gathered brick be classified wholly in or wholly out, so the
-    # interior mask becomes memsets instead of per-site window evaluation. It changes what the
-    # model sees, so it is an experiment knob, not a default.
+    # DIFFVAE_NA_WINDOW overrides the architectural window. It changes what the model sees, so it
+    # is an experiment knob, not a default.
     window_env = os.environ.get("DIFFVAE_NA_WINDOW")
     if window_env:
         kernel_size = tuple(int(part) for part in window_env.split(","))
@@ -287,9 +227,6 @@ def neighborhood_attention_3d_bricked(
     volume = (time_extent, height_extent, width_extent)
     # An axis shorter than the window is attended to in full, matching the op's own clamping.
     context_window = tuple(min(window, extent) for window, extent in zip(kernel_size, volume))
-    # DIFFVAE_NA_BRICK overrides the derived brick. A brick 1 deep in time never needs time
-    # padding, and output_frames = 8*latent_T - 7 is ALWAYS odd, so a 2-deep brick pads (and
-    # therefore full-tensor copies q, k and v) on every single block.
     brick = brick_override(volume) or tuple(ttnn.transformer.neighborhood_choose_brick(context_window))
     if scale is None:
         scale = head_dim**-0.5
@@ -302,14 +239,11 @@ def neighborhood_attention_3d_bricked(
     def to_op_layout(tensor: ttnn.Tensor) -> ttnn.Tensor:
         """(B,T,H,W,heads,head_dim) -> (B, 1, bricked_sites, heads*head_dim) in TILE.
 
-        The op reads site-major, so heads never move: the 3D brick reorder is the only data
-        movement here. Transposing heads against sites to satisfy a heads-major op cost 24.6 ms a
-        block at stage-5 size -- a third of all layout time -- and bought no arithmetic.
+        The op reads site-major, so heads never move: the 3D brick reorder is the only data movement.
         """
         rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
         volume_form = ttnn.reshape(rows, (batch, time_extent, height_extent, width_extent, channels))
         bricked = to_bricked(volume_form, volume=volume, brick=brick)
-        # Sites are the TILE ROW axis and heads are columns, so one tile row is one brick.
         site_major = ttnn.reshape(bricked, (batch, 1, bricked_sites, channels))
         return ttnn.to_layout(site_major, ttnn.TILE_LAYOUT)
 
@@ -342,7 +276,6 @@ def neighborhood_attention_3d_bricked(
         )
 
     with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
-        # Site-major on the way out too, so this is a reshape rather than a transpose.
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         merged = ttnn.reshape(rows, (batch, bricked_sites, channels))
         natural = to_natural(merged, volume=volume, brick=brick)
@@ -351,12 +284,8 @@ def neighborhood_attention_3d_bricked(
 
 
 def _tp_trace(device, message: str) -> None:
-    """Synchronise and log, so a hang inside the TP block names the op it hung ON.
-
-    The decode-tree spans only print at teardown, which a hang never reaches; the watcher
-    segfaults on this 32-chip fabric. Gated on DIFFVAE_TP_TRACE because each call is a full
-    mesh sync. Temporary bring-up scaffolding.
-    """
+    """Under ``DIFFVAE_TP_TRACE=1``, synchronise and log, so a hang names the op it hung on. Each
+    call is a full mesh sync."""
     if os.environ.get("DIFFVAE_TP_TRACE") != "1":
         return
     from loguru import logger
@@ -365,24 +294,17 @@ def _tp_trace(device, message: str) -> None:
     logger.info(f"[tp-trace] {message}")
 
 
-# The widest stick ``neighbor_pad_async`` actually moves, in bytes. MEASURED, not documented by
-# the op: at a 16 KB stick the first 4352 bytes of each halo column arrive and the rest is zeros
-# and uninitialised DRAM, silently -- no error, no hang, right shape. 4 KB passes, 8 KB does not
-# (models/tt_dit/tests/unit/test_halo_exchange_geometry.py::test_halo_exchange_moves_whole_sticks
-# is the sweep). The end symptom off this is catastrophically low PCC ( ~%)
+# The widest stick ``neighbor_pad_async`` moves intact, in bytes. Measured, not documented by the
+# op: above this the tail of every halo column is left unwritten, silently, with the right shape
+# (models/tt_dit/tests/unit/test_halo_exchange_geometry.py::test_halo_exchange_moves_whole_sticks).
 MAX_HALO_STICK_BYTES = 4096
 
 
 def _halo_split(stick_elements: int, element_bytes: int) -> int:
     """How many sub-columns to cut one halo stick into so the exchange stays inside the bound.
 
-    Splits without moving a byte: a ``[.., w_br, s]`` brick grid is contiguous, so
-    ``[.., w_br * parts, s / parts]`` is the SAME memory, and padding ``parts``-scaled columns
-    pads exactly the same halo. Halving keeps ``parts`` a divisor.
-
-    Returns 1 whenever the stick already fits, so a configuration that was inside the bound keeps
-    the exact call it had. Production under TP4 is one such: 32 sites x 64 channels x 2 B is 4 KB
-    on the nose, which is why only the non-TP paths -- every stage-5 gate -- ever saw this.
+    A ``[.., w_br, s]`` brick grid is contiguous, so ``[.., w_br * parts, s / parts]`` is the SAME
+    memory and padding ``parts``-scaled columns pads the same halo. Returns 1 when the stick fits.
     """
     parts = 1
     while stick_elements // parts * element_bytes > MAX_HALO_STICK_BYTES and (stick_elements // parts) % 2 == 0:
@@ -391,20 +313,11 @@ def _halo_split(stick_elements: int, element_bytes: int) -> int:
 
 
 def _halo_exchange(ccl_manager, tensor, *, dims, pad_left, pad_right, axes, neighbor_sems, num_links):
-    """neighbor_pad with the TOPOLOGY PINNED, independent of the manager's setting.
+    """neighbor_pad with the topology pinned to Linear, independent of the manager's setting.
 
-    ``neighbor_pad_async`` deadlocks on ``Topology.Ring``. Measured: the same call completes on
-    Linear and hangs on Ring, and it is not the channel width (128 B vs 512 B stick), the link
-    count (1 vs 2), or the persistent output buffer -- each was ruled out on its own. The reference
-    executor never meets this because it gathers K/V with ``all_gather``; this op is the only
-    caller of neighbor_pad, so Ring here had never run.
-
-    Every OTHER collective in the decode is an all_gather, which is ring-safe and where ring is
-    actually worth its -1710.9 ms (kv-allgather 2162.8 -> 840.1, head-allgather 409.3 -> 129.9).
-    So ring stays on for all of them and only this one call drops to Linear.
-
-    DIFFVAE_NA_HALO_TOPOLOGY=ring hands it back the manager's topology, to retest in one run once
-    neighbor_pad is fixed.
+    ``neighbor_pad_async`` deadlocks on ``Topology.Ring``. Every other collective in the decode is
+    a ring-safe all_gather, so ring stays on for them and only this call drops to Linear.
+    ``DIFFVAE_NA_HALO_TOPOLOGY=ring`` hands it back the manager's topology, to retest.
     """
     stick_bytes = int(tensor.shape[-1]) * tensor.element_size()
     assert stick_bytes <= MAX_HALO_STICK_BYTES, (
@@ -452,40 +365,28 @@ def neighborhood_attention_3d_bricked_w_sharded(
 ) -> ttnn.Tensor:
     """Spatial-W sharded NA3D. ``q``/``k``/``v`` are this chip's W-shard; ``dims`` is the FULL grid.
 
-    Each chip widens its shard by a halo on both sides, runs the op over the widened region with
-    window placement kept GLOBAL, and keeps only the columns it owns. Clamping therefore happens
-    at the true volume boundary rather than at a shard seam -- the failure mode that would
-    otherwise truncate the receptive field of every query within half a window of an internal
-    edge and still return plausible video.
+    Each chip widens its K/V shard by a halo on both sides, runs the op with window placement kept
+    GLOBAL, and computes only the queries it owns. Clamping therefore happens at the true volume
+    boundary rather than at a shard seam. The halo is symmetric because every device runs one
+    program and must hold the same resident extent; the device at the low edge then sits at a
+    negative origin, which the op's signed shard origin handles.
 
-    The halo is symmetric because a mesh runs one program and every device must therefore hold
-    the same resident extent. That puts the device at the low edge of the volume at a negative
-    origin, which the op's signed shard origin handles.
+    ``tp_axis`` adds tensor parallelism over heads on an orthogonal mesh axis: each chip keeps
+    ``heads/tp`` and they are all-gathered back after the attention. Q/K/V may arrive as the 6-D
+    volume or as the flat HEAD-major ``(batch, heads, sites, head_dim)`` that
+    ``nlp_create_qkv_heads`` emits (``heads_presharded``); the op is SITE-major, so the flat form
+    is transposed in ``as_volume``.
 
-    ``tp_axis`` adds TENSOR PARALLELISM OVER HEADS on a second, orthogonal mesh axis. Attention is
-    independent per head, so each chip keeps ``heads/tp`` of them and they are all-gathered back
-    right after the flash. Under the column-parallel qkv the projections already emit only this
-    chip's heads (``heads_presharded``), and the caller may hand us the flat HEAD-major
-    ``(batch, heads, sites, head_dim)`` that ``nlp_create_qkv_heads`` emits rather than the 6-D
-    volume -- both shapes are accepted, because refusing the flat one refuses the whole fast path.
-    The op is SITE-major, so at more than one head per chip the flat form is transposed here
-    (see ``as_volume``); at one head the two layouts are the same bytes.
-
-    ``already_bricked``: sites are already in bricked order (the caller's keep-bricked path). Q/K/V are
-    site-major buffers labelled ``(batch, heads, bricked_sites, head_dim)`` -- read as
-    ``(batch, 1, sites, heads * head_dim)`` -- the W halo is ``neighbor_pad`` on ``W_br``, and
-    the return stays bricked. ``brick`` is then required so the caller and the op cannot disagree.
+    ``already_bricked``: sites are already in bricked order (the keep-bricked path). Q/K/V are
+    site-major buffers labelled ``(batch, heads, bricked_sites, head_dim)``, the W halo is
+    ``neighbor_pad`` on ``W_br``, and the return stays bricked. ``brick`` is then required.
 
     K and V are halo-exchanged in BRICKED order on both paths: brick the owned columns first, then
-    pad ``W_br`` by whole bricks. That is the same tensor as bricking the widened natural volume
-    (the planner requires ``brick_w | width_local``, so no brick straddles a shard seam), and the
-    stick is ``32 * channels`` wide, clear of the 128 B width that hangs ``neighbor_pad``. The
-    natural-order exchange with its W-fold that this replaced is what kept odd brick widths out.
+    pad ``W_br`` by whole bricks. The planner requires ``brick_w | width_local`` so no brick
+    straddles a seam, and the stick is ``32 * channels`` wide at any brick width.
 
-    ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1) --
-    the shipped architecture, every query centred on its own window. It is the caller's knob: this
-    module reads no environment for it, and a caller that also derives its own brick must pass the
-    same stride here or the two brick choices can disagree.
+    ``stride`` is the GNA query-group stride in PHYSICAL (t, h, w) sites, defaulting to (1,1,1).
+    A caller that derives its own brick must pass the same stride here.
     """
     shard_count = int(list(query.device().shape)[sp_axis])
     time_extent, height_extent = dims[0], dims[1]
@@ -494,9 +395,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         batch, head_count, _, head_dim = tuple(query.shape)
         assert brick is not None, "already_bricked needs the brick the stage converted with"
     elif len(query.shape) == 4:
-        # Flat HEAD-major (batch, heads, sites, head_dim); sites run (t, h, w_local). Turned into
-        # the site-major volume by ``as_volume`` below, not by a reshape: that was a view only at
-        # one head per chip and interleaved heads with sites at any other count.
+        # Flat HEAD-major (batch, heads, sites, head_dim); sites run (t, h, w_local).
         batch, head_count, _, head_dim = tuple(query.shape)
     else:
         batch, time_extent, height_extent, width_local, head_count, head_dim = tuple(query.shape)
@@ -529,8 +428,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         volume, context_window, stride, brick, device, resident=resident, shard_count=shard_count, sp_axis=sp_axis
     )
     channels = head_count * head_dim
-    # K and V span the resident region (owned + halo); Q and the output span only what this shard
-    # OWNS. Two brick counts because the op now addresses two grids -- see the module note.
+    # K and V span the resident region (owned + halo); Q and the output span only the owned columns.
     owned_volume = (time_extent, height_extent, width_local)
     bricked_sites = brick_count(resident, brick) * SITES_PER_BRICK
     query_bricked_sites = brick_count(owned_volume, brick) * SITES_PER_BRICK
@@ -543,10 +441,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
             f"already-bricked Q has {query.shape[-2]} sites but the owned brick grid is "
             f"{query_bricked_sites}; the stage converted with a different brick or T-pad"
         )
-    # DIFFVAE_NA_HALO_LINKS overrides the link count for THIS halo exchange only, leaving every
-    # other collective on the ccl_manager's setting. The halo hangs at channels=64 (one head per
-    # chip under TP) where it runs fine at 256, and a two-link split of a narrow transfer is the
-    # first thing to rule out -- one link per side with nothing to carry never signals its peer.
+    # DIFFVAE_NA_HALO_LINKS overrides the link count for this halo exchange only.
     num_links = int(os.environ.get("DIFFVAE_NA_HALO_LINKS", 0)) or max(1, ccl_manager.num_links)
     semaphore = ccl_manager.get_np_ping_pong_semaphore(sp_axis)
 
@@ -555,11 +450,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
     def as_volume(tensor: ttnn.Tensor, lane: str) -> ttnn.Tensor:
         """``(b, heads, sites, hd)`` TILE or ``(b, t, h, w, heads, hd)`` -> ``(b, t, h, w_local, C)`` ROW_MAJOR.
 
-        The flat form is HEAD-major (what ``nlp_create_qkv_heads`` emits); the op is SITE-major, a
-        site's heads being its channels. With more than one head per chip the two differ by a real
-        transpose, paid here once per lane. With one head they are the same bytes and it is a view.
-        Until 2026-09-11 the flat form was reshaped straight into the volume, which is right only
-        at one head per chip (stage 5 under TP4) and silently interleaves heads and sites otherwise.
+        The flat form is HEAD-major and the op is SITE-major, so with more than one head per chip
+        the two differ by a real transpose. A reshape is right only at one head per chip and
+        silently interleaves heads and sites otherwise.
         """
         with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -574,11 +467,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
     def exchange(grid5: ttnn.Tensor, lane: str) -> ttnn.Tensor:
         """Halo-exchange a ``(b, T_br, H_br, W_br, 32*C)`` ROW_MAJOR brick grid on ``W_br`` -> op layout.
 
-        One brick of sites is folded into the stick, so the stick is ``32 * channels`` wide -- never
-        near the 128 B width that hangs neighbor_pad in natural order -- and the halo is whole
-        bricks, the unit the planner addresses. The stick has an UPPER bound too, and it is low:
-        above 4 KB it is cut into sub-columns of the same memory (``_halo_split``) and the pad
-        scales with the cut.
+        The stick is one brick of sites (``32 * channels``), and the halo is whole bricks. Above
+        the stick bound it is cut into sub-columns of the same memory (``_halo_split``).
         """
         halo_br = halo // brick[2]
         parts = _halo_split(SITES_PER_BRICK * channels, grid5.element_size())
@@ -607,8 +497,7 @@ def neighborhood_attention_3d_bricked_w_sharded(
         return out
 
     def widened_bricked(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-        """K/V halo for the keep-bricked path: the sites are already bricked, so this is a reshape into
-        the brick grid and the exchange -- no 7-D permute."""
+        """K/V halo for the keep-bricked path: a reshape into the brick grid and the exchange."""
         _tp_trace(device, f"{lane}: untilize in (already_bricked, channels={channels})")
         with timing_tree.span(device, f"{lane}: untilize", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(tensor, ttnn.ROW_MAJOR_LAYOUT)
@@ -616,20 +505,11 @@ def neighborhood_attention_3d_bricked_w_sharded(
         return exchange(grid5, lane)
 
     def widened(tensor: ttnn.Tensor, lane: str = "?") -> ttnn.Tensor:
-        """This chip's shard plus a halo of each neighbour's edge, in op layout. K and V only:
-        Q is bricked over the owned region alone and never comes through here.
+        """This chip's K or V shard plus a halo of each neighbour's edge, in op layout.
 
-        Brick FIRST, exchange SECOND. Bricking the owned columns and then padding ``W_br`` by
-        whole bricks gives the same tensor as bricking the widened natural volume: the planner
-        requires ``brick_w | width_local`` so no brick straddles a seam, ``W_br`` is the fastest
-        brick axis so the neighbours' slabs concatenate into the resident grid, and the T/H ghost
-        padding is the same on every shard. Doing it in this order is what lets the exchange run
-        on a ``32 * channels`` stick at ANY brick width. A natural-order exchange would have to fold
-        W columns into the stick to clear 128 B, and an odd halo cannot fold -- which would exclude
-        odd brick widths, the only legal ones at W_local = 15.
-
-        Spans stay split (untilize / brick-permute / halo-exchange / tilize) so the collective and
-        the reorder can be read apart; they have different fixes.
+        Brick FIRST, exchange SECOND: bricking the owned columns and then padding ``W_br`` by
+        whole bricks gives the same tensor as bricking the widened natural volume, because no
+        brick straddles a seam and ``W_br`` is the fastest brick axis.
         """
         volume_form = as_volume(tensor, lane)
         with timing_tree.span(device, f"{lane}: brick-permute", category=timing_tree.RESHAPE, deep=True):
@@ -642,10 +522,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
         key_op = widen(key, "k")
         value_op = widen(value, "v")
 
-    # Q is NOT widened: the halo's queries belong to the neighbour, which computes them itself,
-    # and the op is told so via query_extent/query_origin below. So this is the brick permute
-    # alone -- no exchange, and over 60 columns rather than 76. Already-bricked Q skips the
-    # permute: it is a layout/reshape into the op's (B, 1, sites, C) TILE.
+    # Q is NOT widened: the halo's queries belong to the neighbour, and the op is told so via
+    # query_extent/query_origin below.
     with timing_tree.span(device, "q-to-seq", category=timing_tree.RESHAPE, deep=True):
         if already_bricked:
             rows = ttnn.to_layout(query, ttnn.ROW_MAJOR_LAYOUT)
@@ -672,12 +550,9 @@ def neighborhood_attention_3d_bricked_w_sharded(
             brick=brick,
             query_chunk_bricks=plan["query_chunk_bricks"],
             shard_extent=resident,
-            # Representative only: the plan's SHAPES are uniform across shards, and each device
-            # reads its own origin out of the sharded table above.
+            # Representative only: each device reads its own origin out of the sharded table.
             shard_origin=(0, 0, -halo),
-            # The queries this shard owns, as a sub-box of the resident region. Uniform across
-            # the mesh -- every shard owns the same-shaped box at the same offset -- so unlike
-            # shard_origin these are compile-time and one program still serves the whole mesh.
+            # Uniform across the mesh, so compile-time; one program serves every shard.
             query_extent=plan["query_extent"],
             query_origin=plan["query_origin"],
             head_count=head_count,
@@ -690,41 +565,27 @@ def neighborhood_attention_3d_bricked_w_sharded(
     with timing_tree.span(device, "unbrick-permute", category=timing_tree.RESHAPE, deep=True):
         rows = ttnn.to_layout(attended, ttnn.ROW_MAJOR_LAYOUT)
         merged = ttnn.reshape(rows, (batch, query_bricked_sites, channels))
-        # Already the owned region: the op wrote only the queries this shard owns, so there is no
-        # halo left to slice off -- that slice, and the queries behind it, are what this bought.
-        # The keep-bricked path stays bricked; natural order is restored once at stage exit.
+        # The op wrote only the owned queries, so there is no halo to slice off. The keep-bricked
+        # path stays bricked; natural order is restored once at stage exit.
         owned = merged if already_bricked else to_natural(merged, volume=owned_volume, brick=brick)
 
     if tp_axis is not None:
-        # Rebuild the full head width from the tp shards. Device order along tp_axis IS head
-        # order, and heads are the channel axis here, so gathering the channels concatenates
-        # [head0 | head1 | ...] -- the layout the replicated out-proj already expects.
+        # Device order along tp_axis IS head order, so gathering head-major on dim=1 concatenates
+        # [chip0 heads | chip1 heads | ...] = global head order.
         with timing_tree.span(device, "head-allgather", category=timing_tree.ALLGATHER, deep=True):
             sites_local = query_bricked_sites if already_bricked else time_extent * height_extent * width_local
             _tp_trace(device, f"entering TP block (heads per chip={head_count})")
-            # The buffer is site-major with this chip's heads inside each site: (sites, heads, hd).
-            # The gather wants head-major (heads, sites, hd) so that dim=1 concatenates whole heads
-            # in device order, [chip0 heads | chip1 heads | ...] = global head order. With one head
-            # per chip (stage 5 under TP4) the two layouts are the same bytes and the reshape is a
-            # view; with more heads per chip (the deterministic stages: 4/2/2 at TP4) it is a real
-            # transpose -- reshaping instead would silently interleave heads and sites, which is what
-            # the assert this replaced was guarding against.
+            # The buffer is site-major (sites, heads, hd). With one head per chip the head-major
+            # form is the same bytes; with more it is a real transpose, and a reshape would
+            # silently interleave heads and sites.
             if head_count == 1:
                 flat = ttnn.reshape(owned, (batch, head_count, sites_local, head_dim))
             else:
-                by_site = ttnn.reshape(owned, (batch, sites_local, head_count, head_dim))  # a view
-                flat = ttnn.permute(by_site, (0, 2, 1, 3))  # (b, heads, sites, hd), new buffer
+                by_site = ttnn.reshape(owned, (batch, sites_local, head_count, head_dim))
+                flat = ttnn.permute(by_site, (0, 2, 1, 3))
             _tp_trace(device, f"head-major -> {tuple(flat.shape)}")
-            # Two things this block has to be careful about, both of which show up as a HANG
-            # rather than an error:
-            #
-            # ttnn.reshape can hand back a VIEW over the same buffer, so freeing ``owned`` before
-            # the gather can release the very DRAM the collective is about to read. Everything
-            # else in this file frees through the ``is not`` guard for that reason; so does this.
-            #
-            # And the gather runs on TILES. ``owned`` arrives row-major straight out of
-            # ttnn.slice, whereas the reference executor gathers a tiled rank-4 tensor at this
-            # point. The caller retiles for the out-proj anyway, so tiling here is free.
+            # ttnn.reshape can hand back a VIEW over the same buffer, so ``owned`` is freed only
+            # after the gather. The gather runs on TILES.
             tiled = ttnn.to_layout(flat, ttnn.TILE_LAYOUT)
             _tp_trace(device, "tilized, about to all_gather dim=1")
             gathered = ccl_manager.all_gather(tiled, dim=1, mesh_axis=tp_axis, use_hyperparams=False)
@@ -735,11 +596,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
                 ttnn.deallocate(flat)
             ttnn.deallocate(owned)
 
-        # (b, heads, sites, head_dim) -> (b, 1, sites, heads * head_dim). The out-proj wants the
-        # heads folded into the channels OF A SITE, which is a transpose of the head and site axes
-        # rather than a reshape -- gathering on dim=1 is what buys the cheap collective, and this
-        # is the move that pays for it. The reference executor does the same thing right after its
-        # own head-allgather, under the name "attn-unflatten".
+        # (b, heads, sites, head_dim) -> (b, 1, sites, heads * head_dim): the out-proj wants the
+        # heads folded into the channels of a site, a transpose of the head and site axes.
         with timing_tree.span(device, "head-unflatten", category=timing_tree.RESHAPE, deep=True):
             rows = ttnn.to_layout(gathered, ttnn.ROW_MAJOR_LAYOUT)
             _tp_trace(device, "untilized for permute")
@@ -753,11 +611,8 @@ def neighborhood_attention_3d_bricked_w_sharded(
             owned = ttnn.reshape(moved, (batch, 1, sites_local, heads_total * head_dim))
             if moved is not owned:
                 ttnn.deallocate(moved)
-            # Tiled on the way out, because this branch returns the shape the caller was going to
-            # reshape TO: _reshape_retiled short-circuits on an exact shape match and hands the
-            # tensor straight to the out-proj, so a row-major return reaches minimal_matmul as-is
-            # and trips "requires TILE layout". The no-TP path returns the 5-D volume, whose shape
-            # never matches, which is why only this branch has to care.
+            # Tiled on the way out: this branch returns the exact shape the caller's
+            # _reshape_retiled short-circuits on, so it reaches the out-proj matmul as-is.
             owned = ttnn.to_layout(owned, ttnn.TILE_LAYOUT)
             _tp_trace(device, f"retilized -> {tuple(owned.shape)}; TP block done")
 
