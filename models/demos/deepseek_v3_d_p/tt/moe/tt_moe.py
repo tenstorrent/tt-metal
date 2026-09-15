@@ -214,6 +214,8 @@ class TtMoe(LightweightModule):
         shared_expert_activation: str = ACTIVATION_SILU,
         shared_expert_situ_beta: float | None = None,
         shared_expert_situ_linear_beta: float | None = None,
+        shared_expert_clamped_limit: float | None = None,
+        hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
@@ -262,6 +264,9 @@ class TtMoe(LightweightModule):
                 sites run different ops (Python-composed vs fused kernel) at different widths.
             shared_expert_situ_beta / shared_expert_situ_linear_beta: SiTU softcap betas, required
                 when shared_expert_activation == "situ".
+            shared_expert_clamped_limit: clamp bound, required when shared_expert_activation ==
+                "clamped_silu_glu". The routed expert needs no counterpart: its fused kernel bakes
+                the limit compile-time (ClampedSiluGluConfigDsV4).
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_fallback_mode: Fallback mode for gate (default: HOST_ALL)
             overlap_shared_expert_with_dispatch: If True, run the shared expert and dispatch
@@ -390,6 +395,7 @@ class TtMoe(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
             is_balanced=is_balanced,
+            hash_table=hash_table,
         )
 
         self.routing_setup = TtMoERoutingSetup(
@@ -533,6 +539,7 @@ class TtMoe(LightweightModule):
             activation=shared_expert_activation,
             situ_beta=shared_expert_situ_beta,
             situ_linear_beta=shared_expert_situ_linear_beta,
+            clamped_limit=shared_expert_clamped_limit,
         )
 
         self.latent_projections = (
@@ -592,6 +599,7 @@ class TtMoe(LightweightModule):
         padding_side: str = "right",
         actual_start: Optional[int] = None,
         metadata: Optional[tuple] = None,
+        input_ids: Optional[torch.Tensor] = None,
     ) -> tuple[ttnn.Tensor, Optional[TtMoEIntermediates]]:
         """
         Forward pass through the full MoE pipeline.
@@ -686,6 +694,7 @@ class TtMoe(LightweightModule):
             padding_side=padding_side,
             padding_config=padding_config,
             actual_start=actual_start or 0,
+            input_ids=input_ids,
         )
 
         tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(

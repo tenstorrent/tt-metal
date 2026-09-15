@@ -67,6 +67,13 @@ class DeepSeekV4ProConfig:
     HC_MULT = 4
     HC_SINKHORN_ITERS = 20
     HC_EPS = 1.0e-6
+    # Expert activation: V4 clamps before the SiLU and before the down projection, asymmetrically
+    # (gate from above only, up from both ends). Both the routed and the shared expert use it.
+    ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"
+    # No dense FFN layers: every V4 layer is hash_moe or moe.
+    NUM_DENSE_LAYERS = 0
+
     # Other
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5

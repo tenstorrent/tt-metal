@@ -28,7 +28,10 @@ from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 # without translation -- unlike the routed expert, whose fused kernel needs an enum.
 ACTIVATION_SILU = "silu"
 ACTIVATION_SITU = "situ"
-SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU)
+# DeepSeek-V4: silu(min(gate, L)) * clamp(up, -L, L). One ttnn.multiply with per-operand activation
+# spans, so it allocates no intermediate -- the fused routed-expert kernel cannot serve this path.
+ACTIVATION_CLAMPED_SILU_GLU = "clamped_silu_glu"
+SUPPORTED_ACTIVATIONS = (ACTIVATION_SILU, ACTIVATION_SITU, ACTIVATION_CLAMPED_SILU_GLU)
 
 
 def situ_glu(
@@ -299,6 +302,7 @@ class TtSharedExpert(LightweightModule):
         activation: str = ACTIVATION_SILU,
         situ_beta: Optional[float] = None,
         situ_linear_beta: Optional[float] = None,
+        clamped_limit: Optional[float] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -348,9 +352,16 @@ class TtSharedExpert(LightweightModule):
                     f"activation {activation!r} requires non-zero situ_beta / situ_linear_beta, "
                     f"got {situ_beta} / {situ_linear_beta}"
                 )
+        if activation == ACTIVATION_CLAMPED_SILU_GLU and not (clamped_limit and clamped_limit > 0):
+            # The op rejects limit <= 0; catching it here names the config key that is missing.
+            raise ValueError(
+                f"activation {activation!r} requires a positive clamped_limit (the config's "
+                f"SWIGLU_LIMIT), got {clamped_limit}"
+            )
         self.activation = activation
         self.situ_beta = situ_beta
         self.situ_linear_beta = situ_linear_beta
+        self.clamped_limit = clamped_limit
 
         # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
         # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
@@ -546,6 +557,17 @@ class TtSharedExpert(LightweightModule):
                 self.situ_linear_beta,
                 sub_core_grids=self.subdevice_cores,
             )
+        elif self.activation == ACTIVATION_CLAMPED_SILU_GLU:
+            # sub_core_grids only: the op rejects it together with sub_device_id, and the SiLU and
+            # SiTU paths beside it pass the cores the same way.
+            activated = ttnn.clamped_silu_glu(
+                gate_out,
+                up_out,
+                self.clamped_limit,
+                sub_core_grids=self.subdevice_cores,
+            )
+            ttnn.deallocate(gate_out)
+            ttnn.deallocate(up_out)
         else:
             # gate_out already carries the matmul-fused SiLU.
             ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
