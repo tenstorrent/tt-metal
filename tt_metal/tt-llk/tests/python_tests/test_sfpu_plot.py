@@ -339,6 +339,39 @@ _ULP_THRESHOLDS = (
 )
 
 
+# Above this many points, only the drawn markers are thinned; all statistics
+# still use the full sweep.
+_MAX_PLOT_POINTS = 100_000
+# When thinning, always keep this many worst-error points so the extremes stay visible.
+_PLOT_KEEP_WORST = 2000
+
+
+def _draw_indices(
+    abs_error: np.ndarray,
+    budget: int = _MAX_PLOT_POINTS,
+    keep_worst: int = _PLOT_KEEP_WORST,
+) -> np.ndarray:
+    """Sorted indices of the points to draw: an even sample plus the worst errors.
+
+    Returns every index when the data fits the budget. Otherwise evenly samples
+    the bulk (so the curve shape is preserved) and force-includes the largest
+    |error| points (so the offenders and the max always appear on the picture).
+    """
+    n = abs_error.size
+    if n <= budget:
+        return np.arange(n)
+    base = np.linspace(0, n - 1, max(1, budget - keep_worst)).astype(np.int64)
+    worst = np.argsort(abs_error)[-keep_worst:]
+    return np.unique(np.concatenate([base, worst]))  # sorted -> stays x-ordered
+
+
+def _thin_evenly(n: int, budget: int = _MAX_PLOT_POINTS) -> np.ndarray:
+    """Sorted indices of an even sample of `n` items (all of them if within budget)."""
+    if n <= budget:
+        return np.arange(n)
+    return np.unique(np.linspace(0, n - 1, budget).astype(np.int64))
+
+
 def _visible_ulp_thresholds(max_val: float) -> List[Tuple[int, str]]:
     """(threshold, color) entries to draw given the data's max |ULP| = max_val.
 
@@ -369,6 +402,10 @@ def plot_and_print(
     `param_line`, when given, is rendered as a second, smaller title line under
     the suptitle — the place for the run's parameters (in/out format, Dest
     route, dest_acc, approx mode, point count) so a saved PNG is self-describing.
+
+    Pass the FULL sweep. Every statistic is computed on all points; only the
+    markers drawn on the point-level panels are thinned above _MAX_PLOT_POINTS
+    (see _draw_indices), and the subtitle says so when that happens.
     """
     # Keep the raw inputs/outputs around so we can still surface non-finite
     # points on the top plot — even though they're masked out of error stats.
@@ -441,6 +478,19 @@ def plot_and_print(
         return
 
     error = y_hw - y_golden
+
+    # Which finite points get DRAWN on the point-level panels. Statistics below
+    # never use this — they run on the full arrays.
+    draw = _draw_indices(np.abs(error))
+    n_drawn = int(draw.size)
+    x_d, y_golden_d, y_hw_d = x[draw], y_golden[draw], y_hw[draw]
+    if n_drawn < x.size:
+        logger.info(
+            "plot draws {} of {} points (even sample + worst cases); statistics use all",
+            n_drawn,
+            x.size,
+        )
+
     # nonzero_mask guards only against division by zero in the relative error
     # calculation — do not use a large threshold like bfloat16.eps, which would
     # incorrectly exclude small-magnitude outputs (e.g. reciprocal of large inputs).
@@ -535,19 +585,19 @@ def plot_and_print(
     HW_COLOR = "#ff7f0e"  # orange
 
     # Plot lines per allowed-interval segment so they don't bridge across the
-    # shaded undefined / excluded regions. Scatter still draws every sampled
-    # point regardless of intervals.
+    # shaded undefined / excluded regions. Scatter still draws every drawn
+    # point regardless of intervals. (Drawing only — uses the thinned arrays.)
     line_segments = (
         sorted(allowed_intervals) if allowed_intervals else [(x.min(), x.max())]
     )
     first_g = first_h = True
     for lo, hi in line_segments:
-        seg_mask = (x >= lo) & (x <= hi)
+        seg_mask = (x_d >= lo) & (x_d <= hi)
         if not seg_mask.any():
             continue
         axes[0].plot(
-            x[seg_mask],
-            y_golden[seg_mask],
+            x_d[seg_mask],
+            y_golden_d[seg_mask],
             label="Golden (torch)" if first_g else "_nolegend_",
             linewidth=1.0,
             color=GOLDEN_COLOR,
@@ -556,8 +606,8 @@ def plot_and_print(
         )
         first_g = False
         axes[0].plot(
-            x[seg_mask],
-            y_hw[seg_mask],
+            x_d[seg_mask],
+            y_hw_d[seg_mask],
             label="Hardware" if first_h else "_nolegend_",
             linewidth=1.0,
             color=HW_COLOR,
@@ -566,10 +616,10 @@ def plot_and_print(
             zorder=3,
         )
         first_h = False
-    axes[0].scatter(x, y_golden, s=8, alpha=0.7, color=GOLDEN_COLOR, zorder=4)
+    axes[0].scatter(x_d, y_golden_d, s=8, alpha=0.7, color=GOLDEN_COLOR, zorder=4)
     axes[0].scatter(
-        x,
-        y_hw,
+        x_d,
+        y_hw_d,
         s=18,
         alpha=0.7,
         facecolors="none",
@@ -655,6 +705,7 @@ def plot_and_print(
             (gold_only_nf, "C0", 0.10, "inf/nan (golden only)", 35),
         ):
             xs = x_raw[mask]
+            xs = xs[_thin_evenly(xs.size)]  # drawing only; counts below use all
             if len(xs):
                 ys = np.full_like(xs, y_max - offset_frac * y_span)
                 axes[0].scatter(
@@ -719,6 +770,8 @@ def plot_and_print(
     subtitle = f"x ∈ [{x.min():.2g}, {x.max():.2g}]"
     if n_nonfinite:
         subtitle += f"  ({n_nonfinite} inf/nan excluded)"
+    if n_drawn < x.size:
+        subtitle += f"  (drawing {n_drawn:,} of {x.size:,} points; stats use all)"
     axes[0].set_title(subtitle, fontsize=9, color="#666666")
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
@@ -740,8 +793,8 @@ def plot_and_print(
     # Stem plot makes the sign and magnitude of each point obvious — kept thin
     # and semi-transparent so dense data doesn't turn it into a solid block.
     markerline, stemlines, baseline = axes[1].stem(
-        x,
-        err_for_panel,
+        x_d,
+        err_for_panel[draw],
         linefmt="-",
         markerfmt="o",
         basefmt=" ",
@@ -812,9 +865,14 @@ def plot_and_print(
     # (points where hw == golden exactly are silently dropped by matplotlib).
     plot_mask = nonzero_mask & (rel_error > 0)
     n_exact = int(nonzero_mask.sum()) - int(plot_mask.sum())
-    if plot_mask.any():
+    plot_mask_d = plot_mask[draw]  # drawing only
+    if plot_mask_d.any():
         axes[2].scatter(
-            x[plot_mask], rel_error[plot_mask], s=1, alpha=0.5, color="blue"
+            x_d[plot_mask_d],
+            rel_error[draw][plot_mask_d],
+            s=1,
+            alpha=0.5,
+            color="blue",
         )
     if ulp_rel is not None:
         max_ulp_rel2 = (
@@ -847,7 +905,11 @@ def plot_and_print(
             sorted_ulp = np.sort(ulp_err_mag)
             n = len(sorted_ulp)
             cdf = np.arange(1, n + 1) / n
-            axes[3].plot(sorted_ulp, cdf, color="#0d47a1", linewidth=1.5)
+            # The CDF is computed on all points; only the drawn line is thinned.
+            cdf_draw = _thin_evenly(n)
+            axes[3].plot(
+                sorted_ulp[cdf_draw], cdf[cdf_draw], color="#0d47a1", linewidth=1.5
+            )
             axes[3].set_xscale("log")
             max_ulp = float(sorted_ulp.max())
             visible_thresholds = _visible_ulp_thresholds(max_ulp)
@@ -1414,38 +1476,7 @@ CASES = [
 _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 _MAX_SWEEP_TILES = 64
 
-# Above this many points, downsample the arrays sent to the plot (it gets slow).
-# Stats and passed_test still use the full result.
-_MAX_PLOT_POINTS = 100_000
-# When downsampling, always keep this many worst-error points so the plot still shows the extremes.
-_PLOT_KEEP_WORST = 2000
-
 _MAX_SWEEP_BATCHES = 512
-
-
-def downsample_for_plot(
-    x: np.ndarray,
-    y_golden: np.ndarray,
-    y_hw: np.ndarray,
-    budget: int = _MAX_PLOT_POINTS,
-    keep_worst: int = _PLOT_KEEP_WORST,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
-    """Reduce point count for plotting without dropping the interesting points.
-
-    Evenly samples the bulk (so the curve shape and the error *distribution* are
-    preserved) and force-includes the worst-|error| points (so the offenders and
-    max always appear). NaN/inf sort last, so they count as worst and are kept.
-    Returns (x, y_golden, y_hw, was_downsampled). Stats/passed_test upstream still
-    use the full arrays.
-    """
-    n = x.size
-    if n <= budget:
-        return x, y_golden, y_hw, False
-    err = np.abs(y_hw - y_golden)
-    base = np.linspace(0, n - 1, max(1, budget - keep_worst)).astype(np.int64)
-    worst = np.argsort(err)[-keep_worst:]
-    keep = np.unique(np.concatenate([base, worst]))  # sorted -> stays x-ordered
-    return x[keep], y_golden[keep], y_hw[keep], True
 
 
 def _ulp_sweep_dims(
@@ -1679,16 +1710,6 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
-    # Downsample the arrays for the plot only (too many points to draw);
-    # passed_test and the max ULP below still use the full result.
-    x_plot, golden_plot, hw_plot, downsampled = downsample_for_plot(x, y_golden, y_hw)
-    if downsampled:
-        logger.info(
-            "plot downsampled {} -> {} points (even sample + worst cases)",
-            x.size,
-            x_plot.size,
-        )
-
     # ULP/eps spacing in plot_and_print is taken from this format, so it must
     # match the format the compared values live in: golden and hw are produced
     # in output_format, so pass output_format (not input_format). Identical for
@@ -1704,9 +1725,9 @@ def run_case(case: Case) -> bool:
     plot_and_print(
         mathop,
         formats.output_format,
-        x_plot,
-        golden_plot,
-        hw_plot,
+        x,
+        y_golden,
+        y_hw,
         plot_path,
         title_suffix=arch_title_suffix(),
         allowed_intervals=allowed_intervals,
