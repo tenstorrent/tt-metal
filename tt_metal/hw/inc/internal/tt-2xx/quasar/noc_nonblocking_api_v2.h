@@ -731,11 +731,20 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_any_len_with_state(
  * | set_val (template parameter) | Whether to set the value for the write here            | bool     | true or false                    | False    |
  */
 // clang-format on
+// The value a set_state<set_val> call latches for with_state<update_val =
+// false> issues. The RoCC inline write takes its data from the issue
+// instruction, not from a sticky register, so the reuse contract of the
+// stateful pair is kept in software.
+inline uint32_t noc_inline_write_state_val = 0;
+
 template <bool posted = false, bool set_val = false>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     uint32_t noc, uint32_t cmd_buf, uint64_t dest_addr, uint32_t be, uint32_t static_vc, uint32_t val = 0) {
     // Same register recipe as noc_fast_write_dw_inline (see there).
     ASSERT(be == 0xF);
+    if constexpr (set_val) {
+        noc_inline_write_state_val = val;
+    }
     uint64_t misc = CMD_BUF_MISC_WRITE_TRANS | (posted ? CMD_BUF_MISC_POSTED : 0);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
@@ -798,7 +807,8 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, dest_addr);
     }
-    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
+    // update_val == false reuses the value set_state<set_val> latched.
+    __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(update_val ? val : noc_inline_write_state_val);
 
     if constexpr (update_counter) {
         if constexpr (posted) {
@@ -939,6 +949,10 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_init_state(uint32
     }
 }
 
+// The value the last CQ_NOC_INLINE_FLAG_VAL call latched per command buffer;
+// a send without that flag issues it again (see noc_inline_write_state_val).
+inline uint32_t noc_cq_inline_write_state_val[3] = {};
+
 // Wormhole API compatibility wrapper for stateful inline direct writes.
 template <
     uint32_t cmd_buf,
@@ -951,13 +965,9 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
     (void)noc;
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        if constexpr (cmd_buf == 2) {
-            __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        } else {
-            static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
-            __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-                cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_INLINE_DATA_REG_OFFSET / 8, val);
-        }
+        // The data travels with the inline-issue instruction (below), not
+        // through the INLINE_DATA register; hold it for value-less sends.
+        noc_cq_inline_write_state_val[cmd_buf] = val;
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
         if constexpr (cmd_buf == 2) {
@@ -997,14 +1007,14 @@ inline __attribute__((always_inline)) void noc_inline_dw_write_with_state(
         }
     }
     if constexpr (send) {
+        // Always the inline-issue instruction: with the plain WRITE_TRANS
+        // recipe a non-inline issue would copy from the stale SRC_ADDR instead.
+        const uint32_t data = (flags & CQ_NOC_INLINE_FLAG_VAL) ? val : noc_cq_inline_write_state_val[cmd_buf];
         if constexpr (cmd_buf == 2) {
-            if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-                __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(val);
-            } else {
-                __builtin_riscv_ttrocc_scmdbuf_issue_trans();
-            }
+            __builtin_riscv_ttrocc_scmdbuf_issue_inline_trans(data);
         } else {
-            __builtin_riscv_ttrocc_cmdbuf_issue_trans(cmd_buf);
+            static_assert(cmd_buf <= 1, "normal cmdbuf operations are only valid for cmd_buf 0 or 1");
+            __builtin_riscv_ttrocc_cmdbuf_issue_inline_trans(cmd_buf, data);
         }
     }
 }
