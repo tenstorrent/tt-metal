@@ -51,12 +51,6 @@ class _AffineTransform:
 
 
 @dataclass(frozen=True)
-class _GroupSummaries:
-    head: _AffineTransform
-    tail: _AffineTransform | None
-
-
-@dataclass(frozen=True)
 class _RecurrenceGeometry:
     batch: int
     sequence: int
@@ -188,28 +182,45 @@ def _reshape_chunks_for_groups(
 def _summarize_chunk_groups(
     grouped: _PreparedChunks,
     *,
+    groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
-    groups_per_head: int = 1,
-    wrap_indicator: ttnn.Tensor | None = None,
-    wrap_chunk: int = 0,
-    emit_tail_summaries: bool = False,
-) -> _GroupSummaries:
-    """Summarize every chunk of each folded group in the operation's FP32."""
+) -> _AffineTransform:
+    """Summarize whole groups, transported at the affine-prefix BF16 boundary."""
+    a, b = ttnn.experimental.kda.summarize_chunk_recurrence(
+        *grouped.as_kernel_args(),
+        groups_per_head=groups_per_head,
+        memory_config=summary_memory_config,
+        compute_kernel_config=compute_config.preparation,
+    )
+    return _AffineTransform(
+        *(ttnn.typecast(t, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config) for t in (a, b))
+    )
+
+
+def _summarize_split_chunk_groups(
+    grouped: _PreparedChunks,
+    *,
+    groups_per_head: int,
+    wrap_indicator: ttnn.Tensor,
+    wrap_chunk: int,
+    summary_memory_config: ttnn.MemoryConfig,
+    compute_config: _RecurrenceComputeConfig,
+) -> tuple[_AffineTransform, _AffineTransform]:
+    """Return head and tail transforms; only the wrap rank publishes a split."""
     summaries = ttnn.experimental.kda.summarize_chunk_recurrence(
         *grouped.as_kernel_args(),
         groups_per_head=groups_per_head,
         wrap_indicator=wrap_indicator,
         wrap_chunk=wrap_chunk,
-        emit_tail_summaries=emit_tail_summaries,
+        emit_tail_summaries=True,
         memory_config=summary_memory_config,
-        # Summary generation is part of chunk preparation; the affine-prefix
-        # fidelity knob applies only to composition of the emitted summaries.
         compute_kernel_config=compute_config.preparation,
     )
-    head = _AffineTransform(a=summaries[0], b=summaries[1])
-    tail = _AffineTransform(a=summaries[2], b=summaries[3]) if emit_tail_summaries else None
-    return _GroupSummaries(head=head, tail=tail)
+    head_a, head_b, tail_a, tail_b = (
+        ttnn.typecast(t, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config) for t in summaries
+    )
+    return _AffineTransform(head_a, head_b), _AffineTransform(tail_a, tail_b)
 
 
 def _effective_summary_group_chunks(
@@ -244,18 +255,12 @@ def _scan_chunks(
     initial_states: ttnn.Tensor,
     *,
     compute_config: ttnn.DeviceComputeKernelConfig,
-    tail_state: ttnn.Tensor | None = None,
     groups_per_head: int = 1,
-    wrap_chunk: int = 0,
-    wrap_indicator: ttnn.Tensor | None = None,
 ) -> _ScanResult:
     output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
         *prepared.as_kernel_args(),
         initial_states,
-        tail_state=tail_state,
         groups_per_head=groups_per_head,
-        wrap_chunk=wrap_chunk,
-        wrap_indicator=wrap_indicator,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config,
     )
@@ -385,6 +390,26 @@ def _prepare_grouped_chunks(
     return grouped, groups_per_head, summary_memory_config
 
 
+def _ordinary_group_scan(
+    grouped: _PreparedChunks,
+    summary: _AffineTransform,
+    initial_state: ttnn.Tensor,
+    *,
+    groups_per_head: int,
+    prefix_memory_config: ttnn.MemoryConfig,
+    compute_config: _RecurrenceComputeConfig,
+) -> _ScanResult:
+    entries = ttnn.experimental.kda.affine_exclusive_scan(
+        summary.a,
+        summary.b,
+        initial_state,
+        groups_per_head,
+        memory_config=prefix_memory_config,
+        compute_kernel_config=compute_config.affine_prefix,
+    )
+    return _scan_chunks(grouped, entries, groups_per_head=groups_per_head, compute_config=compute_config.scan)
+
+
 def _scan_local_grouped_chunks(
     prepared: _PreparedChunks,
     initial_state: ttnn.Tensor,
@@ -393,31 +418,47 @@ def _scan_local_grouped_chunks(
     summary_group_chunks: int,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
-    grouped, groups, memory = _prepare_grouped_chunks(
-        prepared,
-        geometry,
-        summary_group_chunks=summary_group_chunks,
-    )
+    grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
     summary = _summarize_chunk_groups(
-        grouped,
-        groups_per_head=groups,
-        summary_memory_config=memory,
-        compute_config=compute_config,
-    ).head
-    a, b = (ttnn.typecast(t, KDA_AFFINE_SUMMARY_DTYPE, memory_config=memory) for t in (summary.a, summary.b))
-    entries = ttnn.experimental.kda.affine_exclusive_scan(
-        a,
-        b,
-        initial_state,
-        groups,
-        memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.affine_prefix,
+        grouped, groups_per_head=groups, summary_memory_config=memory, compute_config=compute_config
     )
-    scan = _scan_chunks(grouped, entries, groups_per_head=groups, compute_config=compute_config.scan)
+    scan = _ordinary_group_scan(
+        grouped,
+        summary,
+        initial_state,
+        groups_per_head=groups,
+        prefix_memory_config=KDA_LOCAL_PREFIX_MEMORY_CONFIG,
+        compute_config=compute_config,
+    )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
     return _ScanResult(output, _last_group_state(scan.final_state, geometry, groups))
+
+
+def _partition_prefix(
+    summary: _AffineTransform,
+    initial_state: ttnn.Tensor,
+    *,
+    groups_per_head: int,
+    sequence_parallel_axis: int,
+    topology: OffsetTopology,
+    compute_config: _RecurrenceComputeConfig,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    a, b = ttnn.experimental.kda.reduce_affine_transforms(
+        summary.a,
+        summary.b,
+        groups_per_head,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        compute_kernel_config=compute_config.affine_prefix,
+    )
+    return _distributed_prefix(
+        _AffineTransform(a, b),
+        initial_state,
+        sequence_parallel_axis=sequence_parallel_axis,
+        order=topology.chip_order,
+        compute_config=compute_config.affine_prefix,
+    )
 
 
 def _scan_sp_grouped_chunks(
@@ -428,120 +469,106 @@ def _scan_sp_grouped_chunks(
     summary_group_chunks: int,
     sequence_parallel_axis: int,
     topology: OffsetTopology,
-    wrap_indicator: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
-    """Scan the local partition in one pass, wrap or no wrap.
-
-    A wrapped chip carries two causally non-adjacent fragments. It needs no extra
-    summary slot for them: its head seed is its own entry state, and its tail seed
-    is the affine prefix's final carry, which every chip already derives
-    identically from the gathered summaries. The prefix chain consumes only the
-    head transform, because nothing in the sequence follows the tail.
-
-    So the wrap is one runtime chunk count, and the two asymmetries left -- which
-    transform this chip publishes, and what it reloads at the wrap -- are values,
-    selected per device, not branches.
-    """
-    split = topology.is_split
-    grouped, groups_per_head, summary_memory_config = _prepare_grouped_chunks(
-        prepared,
-        geometry,
-        summary_group_chunks=summary_group_chunks,
-    )
-    group_chunks = grouped.v_beta.shape[1]
-    wrap_chunk = topology.head_rows // geometry.chunk_size if split else 0
+    grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
     summary = _summarize_chunk_groups(
-        grouped,
-        summary_memory_config=summary_memory_config,
-        compute_config=compute_config,
-        groups_per_head=groups_per_head,
-        wrap_indicator=wrap_indicator,
-        wrap_chunk=wrap_chunk,
-        emit_tail_summaries=split,
+        grouped, groups_per_head=groups, summary_memory_config=memory, compute_config=compute_config
     )
-    # The kernel publishes the head transform on the wrap rank and the whole
-    # partition transform everywhere else. No host-side repair graph is needed.
-    summary_a, summary_b = (
-        ttnn.typecast(component, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
-        for component in (summary.head.a, summary.head.b)
-    )
-    tail_a = tail_b = None
-    if summary.tail is not None:
-        tail_a, tail_b = (
-            ttnn.typecast(component, KDA_AFFINE_SUMMARY_DTYPE, memory_config=summary_memory_config)
-            for component in (summary.tail.a, summary.tail.b)
-        )
-
-    tail_state = None
-    partition_a, partition_b = ttnn.experimental.kda.reduce_affine_transforms(
-        summary_a,
-        summary_b,
-        groups_per_head,
-        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        compute_kernel_config=compute_config.affine_prefix,
-    )
-    # One transform per chip, composed in chronological chip order.
-    prefix_initial_state, distributed_final_state = _distributed_prefix(
-        _AffineTransform(partition_a, partition_b),
+    entry, final_state = _partition_prefix(
+        summary,
         initial_state,
+        groups_per_head=groups,
         sequence_parallel_axis=sequence_parallel_axis,
-        order=topology.chip_order,
-        compute_config=compute_config.affine_prefix,
+        topology=topology,
+        compute_config=compute_config,
     )
-    prefix_memory_config = KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG
-    if split:
-        # The prefix stops after the wrap head and every ordinary partition,
-        # so its final carry is exactly the wrap tail's entry state. Only the
-        # wrap rank consumes it; ordinary ranks never reset.
-        tail_state = distributed_final_state
-    group_initial_states = ttnn.experimental.kda.affine_exclusive_scan(
-        summary_a,
-        summary_b,
-        prefix_initial_state,
-        groups_per_head,
-        tail_a=tail_a,
-        tail_b=tail_b,
-        tail_state=tail_state,
-        wrap_indicator=wrap_indicator,
-        wrap_group=wrap_chunk // group_chunks if split else 0,
-        split_in_group=(wrap_chunk % group_chunks != 0) if split else False,
-        memory_config=prefix_memory_config,
-        compute_kernel_config=compute_config.affine_prefix,
-    )
-    scan = _scan_chunks(
+    scan = _ordinary_group_scan(
         grouped,
-        group_initial_states,
-        compute_config=compute_config.scan,
-        tail_state=tail_state,
-        groups_per_head=groups_per_head,
-        wrap_chunk=wrap_chunk,
-        wrap_indicator=wrap_indicator,
+        summary,
+        entry,
+        groups_per_head=groups,
+        prefix_memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
+        compute_config=compute_config,
     )
     output = ttnn.reshape(
-        scan.output,
-        (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim),
+        scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
     )
+    return _ScanResult(output, final_state)
 
-    if split:
-        # Only the wrap rank closes the interval. all_gather runs independently
-        # on every TP line of a 2-D mesh; a single-source broadcast does not and
-        # leaves TP lines without the named sender waiting forever.
-        gathered_states = ttnn.all_gather(
-            _last_group_state(scan.final_state, geometry, groups_per_head),
-            dim=0,
-            cluster_axis=sequence_parallel_axis,
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        )
-        rows = geometry.batch_heads
-        final_state = ttnn.slice(
-            gathered_states,
-            (topology.boundary_chip * rows, 0, 0),
-            ((topology.boundary_chip + 1) * rows, geometry.key_dim, geometry.value_dim),
-            memory_config=KDA_OUTPUT_MEMORY_CONFIG,
-        )
-        return _ScanResult(output=output, final_state=final_state)
-    return _ScanResult(output=output, final_state=distributed_final_state)
+
+def _scan_split_sp_grouped_chunks(
+    prepared: _PreparedChunks,
+    initial_state: ttnn.Tensor,
+    geometry: _RecurrenceGeometry,
+    *,
+    summary_group_chunks: int,
+    sequence_parallel_axis: int,
+    topology: OffsetTopology,
+    wrap_indicator: ttnn.Tensor,
+    compute_config: _RecurrenceComputeConfig,
+) -> _ScanResult:
+    """Run one full local scan with a device-selected head/tail reset."""
+    grouped, groups, memory = _prepare_grouped_chunks(prepared, geometry, summary_group_chunks=summary_group_chunks)
+    wrap_chunk = topology.head_rows // geometry.chunk_size
+    group_chunks = grouped.v_beta.shape[1]
+    head, tail = _summarize_split_chunk_groups(
+        grouped,
+        groups_per_head=groups,
+        wrap_indicator=wrap_indicator,
+        wrap_chunk=wrap_chunk,
+        summary_memory_config=memory,
+        compute_config=compute_config,
+    )
+    # The head prefix ends at the wrap tail's entry. Ordinary ranks never reset.
+    entry, tail_state = _partition_prefix(
+        head,
+        initial_state,
+        groups_per_head=groups,
+        sequence_parallel_axis=sequence_parallel_axis,
+        topology=topology,
+        compute_config=compute_config,
+    )
+    entries = ttnn.experimental.kda.affine_exclusive_scan(
+        head.a,
+        head.b,
+        entry,
+        groups,
+        tail_a=tail.a,
+        tail_b=tail.b,
+        tail_state=tail_state,
+        wrap_indicator=wrap_indicator,
+        wrap_group=wrap_chunk // group_chunks,
+        split_in_group=wrap_chunk % group_chunks != 0,
+        memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
+        compute_kernel_config=compute_config.affine_prefix,
+    )
+    output, final_states = ttnn.experimental.kda.recurrent_chunk_scan(
+        *grouped.as_kernel_args(),
+        entries,
+        groups_per_head=groups,
+        tail_state=tail_state,
+        wrap_chunk=wrap_chunk,
+        wrap_indicator=wrap_indicator,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+        compute_kernel_config=compute_config.scan,
+    )
+    output = ttnn.reshape(output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim))
+    # Gather independently on every TP line; only the wrap rank closes the stream.
+    gathered = ttnn.all_gather(
+        _last_group_state(final_states, geometry, groups),
+        dim=0,
+        cluster_axis=sequence_parallel_axis,
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+    )
+    rows = geometry.batch_heads
+    final_state = ttnn.slice(
+        gathered,
+        (topology.boundary_chip * rows, 0, 0),
+        ((topology.boundary_chip + 1) * rows, geometry.key_dim, geometry.value_dim),
+        memory_config=KDA_OUTPUT_MEMORY_CONFIG,
+    )
+    return _ScanResult(output, final_state)
 
 
 class KDARecurrence:
@@ -652,11 +679,35 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
         topology: OffsetTopology,
-        wrap_indicator: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Run SP recurrence from the layer's normalized chronological topology."""
         prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
         scan = _scan_sp_grouped_chunks(
+            prepared,
+            state,
+            geometry,
+            summary_group_chunks=self._summary_group_chunks,
+            sequence_parallel_axis=cast(int, self._sequence_parallel_axis),
+            topology=topology,
+            compute_config=self._compute_config,
+        )
+        return self._finish(scan, geometry)
+
+    def split_sequence_parallel(
+        self,
+        *,
+        q: ttnn.Tensor,
+        k: ttnn.Tensor,
+        v: ttnn.Tensor,
+        gate: ttnn.Tensor,
+        beta: ttnn.Tensor,
+        initial_state: ttnn.Tensor,
+        topology: OffsetTopology,
+        wrap_indicator: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """Run SP recurrence from the layer's normalized chronological topology."""
+        prepared, state, geometry = self._prepare(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
+        scan = _scan_split_sp_grouped_chunks(
             prepared,
             state,
             geometry,

@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.offset import offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
@@ -100,12 +100,19 @@ def test_exchange_convolution_carry_preserves_causal_carries(
         )
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        if topology.is_split:
+            return exchange_split_convolution_carry(
+                qkv_tt,
+                state_tt,
+                sequence_parallel_axis=sp_axis,
+                topology=topology,
+                wrap_indicator=indicator,
+            )
         return exchange_convolution_carry(
             qkv_tt,
             state_tt,
             sequence_parallel_axis=sp_axis,
             topology=topology,
-            wrap_indicator=indicator,
         )
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)

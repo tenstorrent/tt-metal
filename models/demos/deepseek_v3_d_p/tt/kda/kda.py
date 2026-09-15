@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
 from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, offset_topology
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
@@ -262,55 +262,60 @@ class ttKDA:
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
         topology: OffsetTopology,
-        wrap_indicator: ttnn.Tensor | None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
         channels = self._convolution_width
         sequence = qkv.shape[1]
-        qkv_row_major = ttnn.to_layout(
-            qkv,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        state_row_major = ttnn.to_layout(
-            convolution_state,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         if self.sequence_parallel_size > 1:
-            state_row_major, new_state = exchange_convolution_carry(
-                qkv_row_major,
-                state_row_major,
+            convolution_state, new_state = exchange_convolution_carry(
+                qkv,
+                convolution_state,
                 sequence_parallel_axis=self.sequence_parallel_axis,
                 topology=topology,
-                wrap_indicator=wrap_indicator,
             )
         else:
             new_state = ttnn.slice(
-                qkv_row_major,
+                qkv,
                 (0, sequence - (config.conv_kernel_size - 1), 0),
-                (qkv_row_major.shape[0], sequence, channels),
+                (qkv.shape[0], sequence, channels),
             )
-        # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
-        # channel-sharded across TP and replicated across SP.
-        #
-        # A split partition must not convolve across its wrap: the boundary chip's
-        # head and tail are causally non-adjacent, so a tap window reaching back
-        # over that row would give the tail the head's rows as predecessors. The op
-        # takes the wrap row and reads the tail's history from the second plane of
-        # the carry, which exchange_convolution_carry already stacks for us -- so
-        # this stays one call over the whole local buffer, with no row slicing and
-        # no output concatenation.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv_row_major,
-            state_row_major,
+            qkv,
+            convolution_state,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
-            wrap_row=topology.head_rows if topology.is_split else 0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return q, k, v, new_state
+
+    def _convolve_split_qkv(
+        self,
+        qkv: ttnn.Tensor,
+        convolution_state: ttnn.Tensor,
+        topology: OffsetTopology,
+        wrap_indicator: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Convolve the full partition once with both required history planes."""
+        history, new_state = exchange_split_convolution_carry(
+            qkv,
+            convolution_state,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            topology=topology,
+            wrap_indicator=wrap_indicator,
+        )
+        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            qkv,
+            history,
+            *self.weights.convolution_taps,
+            self.config.q_dim,
+            self.config.k_dim,
+            self.config.v_dim,
+            program_config=self.qkv_convolution_program_config,
+            wrap_row=topology.head_rows,
             wrap_indicator=wrap_indicator,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -459,15 +464,22 @@ class ttKDA:
         """
         self._validate_forward(hidden_states, state, actual_start)
         topology = offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
-        wrap_indicator = self._wrap_indicators[topology.boundary_chip] if topology.is_split else None
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, topology, wrap_indicator)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        convolution_state = ttnn.to_layout(
+            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        if topology.is_split:
+            wrap_indicator = self._wrap_indicators[topology.boundary_chip]
+            q, k, v, new_convolution = self._convolve_split_qkv(qkv, convolution_state, topology, wrap_indicator)
+        else:
+            q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, topology)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        if self.sequence_parallel_size > 1:
-            new_recurrent, output = self.recurrence.sequence_parallel(
+        if topology.is_split:
+            new_recurrent, output = self.recurrence.split_sequence_parallel(
                 q=q,
                 k=k,
                 v=v,
@@ -476,6 +488,16 @@ class ttKDA:
                 initial_state=state.recurrent,
                 topology=topology,
                 wrap_indicator=wrap_indicator,
+            )
+        elif self.sequence_parallel_size > 1:
+            new_recurrent, output = self.recurrence.sequence_parallel(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+                topology=topology,
             )
         else:
             new_recurrent, output = self.recurrence(
