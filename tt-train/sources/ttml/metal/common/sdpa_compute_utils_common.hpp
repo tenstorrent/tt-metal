@@ -166,15 +166,17 @@ inline void sdpa_exp_tile_init() {
 }
 
 // Arch-dispatched scaled exp: exp(scale * x) over 8 face groups.
-//   WH: pre-multiplies by scale via sfpi then calls accurate exp directly.
-//   BH: folds scale into LREG12 at init time — one SFPU op fewer per element.
-template <uint32_t scaler_fp32>
+//   WH: pre-multiplies by the BF16 scale via sfpi then calls accurate exp directly.
+//       `scaler_bf16` carries the host-side RNE conversion of `scaler_fp32` (low 16 bits).
+//   BH: folds the full FP32 scale into LREG12 at init time — one SFPU op fewer per element.
+template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
 #ifdef TRISC_MATH
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, scaler_bf16>, idst, VectorMode::RC);
+        _sdpa_detail::mul_then_sfpi_exp</*ITERATIONS*/ 8, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16)>,
+        idst,
+        VectorMode::RC);
 #endif
 #elif defined(ARCH_BLACKHOLE)
     sdpa_exp_tile_init</*approx*/ false, /*SCALE_EN*/ true, scaler_fp32>();
@@ -183,15 +185,15 @@ inline void sdpa_exp_tile_scaled(uint32_t idst) {
 }
 
 // Arch-dispatched scaled first-column exp: exp(scale * x) over column 0 only (4 iterations).
-template <uint32_t scaler_fp32>
+template <uint32_t scaler_fp32, uint32_t scaler_bf16>
 inline void sdpa_exp_tile_first_column_scaled(uint32_t idst) {
 #ifdef ARCH_WORMHOLE
-    constexpr uint16_t scaler_bf16 = static_cast<uint16_t>(scaler_fp32 >> 16);
 #ifdef TRISC_MATH
     constexpr int ITERATIONS_HALF_FACE = 4;
     constexpr int DST_STRIDE = 2;
     _llk_math_eltwise_unary_sfpu_params_(
-        _sdpa_detail::mul_then_sfpi_exp<ITERATIONS_HALF_FACE, DST_ACCUM_MODE, scaler_bf16, DST_STRIDE>,
+        _sdpa_detail::
+            mul_then_sfpi_exp<ITERATIONS_HALF_FACE, DST_ACCUM_MODE, static_cast<uint16_t>(scaler_bf16), DST_STRIDE>,
         idst,
         VectorMode::C);
 #endif

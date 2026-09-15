@@ -124,7 +124,7 @@ INSTANTIATE_TEST_SUITE_P(
             .pgm_ids = std::make_pair(0, 4000),
             .pgm_sizes = std::make_pair(100, 200)}));
 
-TEST_P(RingbufferCacheRandomizedTestsFixture, RandomizedQueries) {
+TEST_P(RingbufferCacheRandomizedTestsFixture, CPU_RandomizedQueries) {
     CacheTestParams params = GetParam();
     setup(params);
     auto pgm_ids = params.pgm_ids;

@@ -74,6 +74,7 @@
       timeout: 150
   owner_id: U08T3JQEB36 # stevendae
   team: ttnn
+  budget_type: sweep
   category: sweep
 
 - name: ttnn sweeps model traced
@@ -111,4 +112,5 @@
       timeout: 720   # 20 batches, computed 681
   owner_id: U08T3JQEB36 # stevendae
   team: ttnn
+  budget_type: sweep
   category: sweep

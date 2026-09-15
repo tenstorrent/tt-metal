@@ -70,24 +70,35 @@ class Golden:
         use_srcb: bool = False,
     ) -> torch.Tensor:
         operand = node.src_b if use_srcb else node.src_a
+        dimensions = (
+            operand.dimensions
+            if operand is not None
+            else operation.max_output_dimensions
+        )
+        tile_count = (
+            operand.tile_count
+            if operand is not None
+            else (dimensions[0] // operation.tile_shape.total_row_dim())
+            * (dimensions[1] // operation.tile_shape.total_col_dim())
+        )
         t_matrix = get_golden_generator(TransposeGolden)
         if node.transpose_faces == Transpose.Yes:
             tensor = t_matrix.transpose_faces_multi_tile(
                 tensor,
                 config.sentinel.golden_math_format,
-                operand.tile_count,
+                tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operand.dimensions,
+                input_dimensions=dimensions,
             )
         if node.transpose_within_face == Transpose.Yes:
             tensor = t_matrix.transpose_within_faces_multi_tile(
                 tensor,
                 config.sentinel.golden_math_format,
-                operand.tile_count,
+                tile_count,
                 tilize=True,
                 untilize=True,
-                input_dimensions=operand.dimensions,
+                input_dimensions=dimensions,
             )
         return tensor
 
@@ -130,6 +141,9 @@ class Golden:
             for bx in range(0, operand.tile_count_x, operation.block_tiles_x):
                 block = tiles[:, bx : bx + operation.block_tiles_x]
                 block[:] = block[:, :1]
+        elif node.broadcast_tile is not None:
+            tiles = broadcast.view(operand.tile_count, -1)
+            tiles[:] = tiles[node.broadcast_tile].clone()
 
         return untilize_block(
             broadcast,
@@ -301,7 +315,8 @@ class Golden:
 
         if pool_type == ReducePool.Average:
             span = tile_dims[1] if reduce_dim == ReduceDimension.Row else tile_dims[0]
-            golden_tensor = (src_reduced * span + dest_reduced) / span
+            scaler = tensor_b.flatten()[0].item()
+            golden_tensor = (src_reduced * span + dest_reduced) * scaler
         else:
             golden_tensor = pool(torch.stack((src_reduced, dest_reduced)), dim=0)
 

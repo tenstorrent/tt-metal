@@ -68,7 +68,7 @@ sfpi_inline sfpi::vFloat _sfpu_atan2_(sfpi::vFloat y, sfpi::vFloat x) {
         v_if(sfpi::as<sfpi::vInt>(min) >= sfpi::as<sfpi::vInt>(max)) {
             // if |x| = |y| (including both infinite), then r = π/4
             r = sfpi::addexp(half_pi, -1);
-            v_if(min == 0.0f) {
+            v_if(max == 0.0f) {
                 // if both zero, then r = ±0
                 // SFPI note: the later v_if(x < 0.0f) behaves like a signbit check, so r=-0
                 // is handled by that path.

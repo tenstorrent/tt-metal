@@ -70,6 +70,7 @@ def run_test_linear_impl(
     torch_addcmul_b=None,
     addcmul_scalar=1.0,
     chunks=1,
+    chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
 ):
@@ -160,7 +161,11 @@ def run_test_linear_impl(
         if activation == "gelu":
             torch_output = torch.nn.functional.gelu(torch_output)
 
-        torch_output = torch.chunk(torch_output, chunks, dim=-1)
+        # Variable-width chunks split at the given per-device widths
+        if chunk_sizes:
+            torch_output = torch.split(torch_output, list(chunk_sizes), dim=-1)
+        else:
+            torch_output = torch.chunk(torch_output, chunks, dim=-1)
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -253,6 +258,7 @@ def run_test_linear_impl(
                 addcmul_input_tensor1=tt_addcmul_a,
                 addcmul_input_tensor2=tt_addcmul_b,
                 chunks=chunks,
+                chunk_sizes=list(chunk_sizes) if chunk_sizes else [],
                 fuse_swiglu=fuse_swiglu,
             )
 
@@ -318,7 +324,9 @@ def run_test_linear_impl(
             for i in range(device.shape[sp_axis]):
                 for j in range(device.shape[tp_axis]):
                     m_slice = slice(i * per_device_M, (i + 1) * per_device_M)
-                    n_slice = slice(j * (N // chunks), (j + 1) * (N // chunks))
+                    # For chunk c the concatenated tensor is [M_global, width_c * TP]
+                    chunk_width = chunk_sizes[c] if chunk_sizes else (N // chunks)
+                    n_slice = slice(j * chunk_width, (j + 1) * chunk_width)
 
                     if use_non_fused:
                         idx = (slice(None), slice(None), m_slice, n_slice)
@@ -383,6 +391,7 @@ def run_test_linear(
     fuse_addcmul=False,
     addcmul_scalar=1.0,
     chunks=1,
+    chunk_sizes=None,
     broadcast_gate=True,
     fuse_swiglu=False,
 ):
@@ -492,6 +501,7 @@ def run_test_linear(
         torch_addcmul_b=torch_addcmul_b,
         addcmul_scalar=addcmul_scalar,
         chunks=chunks,
+        chunk_sizes=chunk_sizes,
         broadcast_gate=broadcast_gate,
         fuse_swiglu=fuse_swiglu,
     )

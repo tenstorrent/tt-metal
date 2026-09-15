@@ -51,6 +51,34 @@ bool is_sharded_on_axis(const ttnn::Tensor& value, uint32_t axis) {
     return std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[axis]);
 }
 
+// Enforce all_reduce's contract that the reduced mesh axis is Replicate on output.
+// ttnn::all_reduce_async::compute_output_topologies drops this relabel for the collapsed 1-D
+// distribution TTML produces on a multi-D mesh, so redo it here (idx 0 when collapsed, else axis).
+ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector<uint32_t>& reduced_mesh_axes) {
+    const auto& topology = t.tensor_topology();
+    auto placements = topology.placements();
+    bool changed = false;
+    for (uint32_t axis : reduced_mesh_axes) {
+        const size_t idx = (placements.size() == 1) ? 0 : axis;
+        TT_FATAL(
+            idx < placements.size(),
+            "force_replicate_axes: reduced axis {} out of range for placements (size={})",
+            axis,
+            placements.size());
+        if (!std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Replicate>(placements[idx])) {
+            placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+            changed = true;
+        }
+    }
+    if (!changed) {
+        return t;
+    }
+    auto out = t;
+    out.update_tensor_topology(
+        tt::tt_metal::TensorTopology(topology.distribution_shape(), std::move(placements), topology.mesh_coords()));
+    return out;
+}
+
 }  // namespace
 
 void synchronize_gradients(const serialization::NamedParameters& parameters) {
@@ -81,7 +109,7 @@ void synchronize_gradients(const serialization::NamedParameters& parameters) {
         if (axes_for_param.empty()) {
             continue;
         }
-        tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes_for_param));
+        tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param), axes_for_param));
     }
 }
 
@@ -90,7 +118,7 @@ void synchronize_gradients(
     ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), axes));
+            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes), axes));
         }
     }
 }

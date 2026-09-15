@@ -96,7 +96,8 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
 void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {
     const auto physical_core = device->virtual_core_from_logical_core(core, CoreType::WORKER);
     std::unordered_set<CoreCoord> not_done{physical_core};
-    tt::llrt::internal_::wait_until_cores_done(device->id(), dev_msgs::RUN_MSG_GO, not_done);
+    auto& context = MetalContext::instance(extract_context_id(device));
+    tt::llrt::internal_::wait_until_cores_done(context, device->id(), dev_msgs::RUN_MSG_GO, not_done);
 }
 
 std::unordered_set<CoreCoord> ServiceCoreManagerImpl::claimed_cores(ChipId device_id) const {

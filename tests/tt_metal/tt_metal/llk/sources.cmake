@@ -15,7 +15,8 @@ set(UNIT_TESTS_LLK_SRC
     test_mxfp8_typecast.cpp
     test_mxint_typecast.cpp
     test_pack_rows.cpp
-    test_quasar_cb_l1_read_api.cpp
+    test_quasar_mailboxes.cpp
+    test_quasar_bfd_datacopy.cpp
     test_reconfig.cpp
     test_reduce.cpp
     test_sfpu_binary_bcast.cpp
