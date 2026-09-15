@@ -28,6 +28,9 @@ struct ReaderRtArg {
         kOutPayloadAddr,
         kOutMetaAddr,
         kFwdAddr,
+        // Bound unconditionally so host and kernel never disagree about the arg layout; in non-fanout
+        // mode it points at a stand-in the kernel does not read.
+        kFanoutReachAddr,
         kCount,
     };
 };
@@ -264,6 +267,7 @@ struct ReaderCtArgs {
     static constexpr auto out_payload_args = TensorAccessorArgs<region_args.next_compile_time_args_offset()>();
     static constexpr auto out_meta_args = TensorAccessorArgs<out_payload_args.next_compile_time_args_offset()>();
     static constexpr auto fwd_args = TensorAccessorArgs<out_meta_args.next_compile_time_args_offset()>();
+    static constexpr auto reach_args = TensorAccessorArgs<fwd_args.next_compile_time_args_offset()>();
 #endif
 };
 

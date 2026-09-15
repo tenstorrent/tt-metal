@@ -60,6 +60,21 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
     // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
     // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
     // the first is misaligned unless the row is a whole number of 64-byte lines.
+    if (args.fanout) {
+        TT_FATAL(
+            tensor_args.fanout_reach.has_value(),
+            "dispatch_fabric2d: fanout needs the reach table; per-expert counts are marginals and cannot "
+            "size a multicast chunk");
+        const auto& shape = tensor_args.fanout_reach->logical_shape();
+        const uint32_t extent = axis_extent(args);
+        TT_FATAL(
+            shape[-1] >= static_cast<int32_t>(extent / 2 + 2) && shape[-2] == 2 &&
+                shape[-3] == static_cast<int32_t>(extent),
+            "dispatch_fabric2d: fanout_reach must be [.., {}, 2, >= {}] (origin, direction, hop), got {}",
+            extent,
+            extent / 2 + 2,
+            shape);
+    }
     TT_FATAL(
         !args.fanout,
         "dispatch_fabric2d: fanout is not implemented yet. It needs a per-(source, destination) token "
@@ -217,6 +232,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     const ttnn::Tensor& expert_dispatch_table_tensor,
     const ttnn::Tensor& expert_token_counts,
     const ttnn::Tensor& expert_region_offsets,
+    const std::optional<ttnn::Tensor>& fanout_reach,
     uint32_t experts_per_chip,
     uint32_t num_routed_experts,
     uint32_t num_experts_per_tok,
@@ -250,7 +266,8 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .expert_offsets_tensor = expert_offsets_tensor,
             .expert_dispatch_table_tensor = expert_dispatch_table_tensor,
             .expert_token_counts = expert_token_counts,
-            .expert_region_offsets = expert_region_offsets});
+            .expert_region_offsets = expert_region_offsets,
+            .fanout_reach = fanout_reach});
 }
 
 }  // namespace ttnn::prim
