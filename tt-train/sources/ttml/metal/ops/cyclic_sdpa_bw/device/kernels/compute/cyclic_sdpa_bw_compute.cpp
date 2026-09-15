@@ -370,6 +370,49 @@ void pack_score_outputs_rounded() {
           PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(1)));
 }
 
+// Math fidelity per matmul: the number of multiply phases, 2..4. The
+// library's matmul_init/matmul_tiles take the kernel-wide MATH_FIDELITY
+// (HiFi4); these take it as a template, because HiFi4 is not the most
+// accurate choice everywhere. Measured per product with the accuracy
+// report (Src operands here are bf16, or Float32 rounded to 19 bits):
+// S = K Q^T (bf16 x bf16) is neutral at HiFi3; dK = dS^T Q, with the
+// signed 19-bit operand in SrcB, is 45% *more* accurate at HiFi3 -- the
+// fourth phase carries a +2e-4 inflation there; dV = P^T dO, the positive
+// 19-bit operand in SrcB, is 30% worse at HiFi3; dP = V dO^T and dQ =
+// K^T dS^T cost dQ 25% at HiFi3. HiFi2 anywhere is 30x worse. So S and dK
+// run at HiFi3 (a quarter of their FPU time saved, -1% to -6% overall) and
+// the rest at HiFi4.
+#ifndef FID_S
+#define FID_S 3
+#endif
+#ifndef FID_DP
+#define FID_DP 4
+#endif
+#ifndef FID_DV
+#define FID_DV 4
+#endif
+#ifndef FID_DK
+#define FID_DK 3
+#endif
+#ifndef FID_DQ
+#define FID_DQ 4
+#endif
+constexpr MathFidelity fid(int phases) {
+    return phases == 2 ? MathFidelity::HiFi2 : phases == 3 ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+}
+constexpr MathFidelity kFidS = fid(FID_S), kFidDP = fid(FID_DP), kFidDV = fid(FID_DV), kFidDK = fid(FID_DK),
+                        kFidDQ = fid(FID_DQ);
+template <MathFidelity MF>
+void mm_init(uint32_t in0, uint32_t in1, uint32_t transpose) {
+    MATH((llk_math_matmul_init<MF, MM_THROTTLE>(in0, in1, transpose)));
+    UNPACK((llk_unpack_AB_matmul_init(in0, in1, transpose)));
+}
+template <MathFidelity MF>
+void mm_tiles(uint32_t in0, uint32_t in1, uint32_t t0, uint32_t t1, uint32_t idst) {
+    UNPACK((llk_unpack_AB_matmul(in0, in1, t0, t1)));
+    MATH((llk_math_matmul<MF, MM_THROTTLE>(idst)));
+}
+
 // The unpacker waits here for everything the pack thread has packed so far:
 // a push the pack thread makes after its packs, waited on before the next
 // unpack. Two uses. A dest-register transpose must not overlap the unpack of
@@ -812,15 +855,15 @@ void kernel_main() {
                 broadcast_statistic_rows_to_dst(score_reg(i), cb_neg_lse_row, a);
             }
             reconfig_data_format(cb_query, cb_key_operand);
-            matmul_init(cb_key_operand, cb_query, /* transpose */ 1);
+            mm_init<kFidS>(cb_key_operand, cb_query, /* transpose */ 1);
             for (uint32_t i = 0; i < kGroup; ++i) {
                 if (i >= n_live) {
                     break;  // constant trip count keeps the loop unrolled
                 }
                 const uint32_t b = b0 + i;
-                matmul_tiles(cb_ones_column, cb_neg_lse_rem, 0, a, score_reg(i));
+                mm_tiles<kFidS>(cb_ones_column, cb_neg_lse_rem, 0, a, score_reg(i));
                 for (uint32_t k = 0; k < qWt; ++k) {
-                    matmul_tiles(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(i));
+                    mm_tiles<kFidS>(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(i));
                 }
             }
             if (diagonal && b0 + n_live > a) {
@@ -846,18 +889,18 @@ void kernel_main() {
                 broadcast_statistic_rows_to_dst(grad_score_reg(i), cb_neg_u_row, a);
             }
             reconfig_data_format(cb_grad_output, cb_value);
-            matmul_init(cb_value, cb_grad_output, /* transpose */ 1);
+            mm_init<kFidDP>(cb_value, cb_grad_output, /* transpose */ 1);
             for (uint32_t i = 0; i < kGroup; ++i) {
                 if (i >= n_live) {
                     break;  // constant trip count keeps the loop unrolled
                 }
                 const uint32_t b = b0 + i;
                 for (uint32_t k = 0; k < vWt; ++k) {
-                    matmul_tiles(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(i));
+                    mm_tiles<kFidDP>(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(i));
                 }
                 // The remainder of -D, along every row: ones-column x (its
                 // column-0 tile)^T. Same formats as V and dO, so the same init.
-                matmul_tiles(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(i));
+                mm_tiles<kFidDP>(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(i));
             }
 
             // Pack thread: the exponentials as soon as S^T is posted, then --
@@ -922,7 +965,7 @@ void kernel_main() {
             // SrcA). The previous SrcA operand was dO (bf16) or, after the
             // transposes, the seed (Float32, unpack-to-dest).
             reconfig_data_format(/* SrcA */ cb_grad_scores, /* SrcB */ cb_key_operand_t);
-            matmul_init(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
+            mm_init<kFidDQ>(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
             pack_reconfig_l1_acc(true);
             for (uint32_t a = 0; a < Bt; ++a) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
@@ -934,7 +977,7 @@ void kernel_main() {
                             if (skip_masked && b > a) {
                                 break;
                             }
-                            matmul_tiles(cb_key_operand_t, cb_grad_scores, (k0 + bi) * Bt + b, b * Bt + a, bi);
+                            mm_tiles<kFidDQ>(cb_key_operand_t, cb_grad_scores, (k0 + bi) * Bt + b, b * Bt + a, bi);
                         }
                     }
                     tile_regs_commit();
@@ -978,7 +1021,7 @@ void kernel_main() {
                     tile_regs_acquire();
                     // SrcA takes the second operand (dO, bf16), SrcB the first (P^T, Float32).
                     reconfig_data_format(cb_grad_output, cb_attention_weights);
-                    matmul_init(cb_attention_weights, cb_grad_output, /* transpose */ 0);
+                    mm_init<kFidDV>(cb_attention_weights, cb_grad_output, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         // Query tiles below the key tile hold no P^T on a
                         // diagonal pair (see the score pass).
@@ -986,7 +1029,7 @@ void kernel_main() {
                             if (skip_masked && a < b) {
                                 continue;
                             }
-                            matmul_tiles(cb_attention_weights, cb_grad_output, b * Bt + a, a * vWt + k0 + bi, bi);
+                            mm_tiles<kFidDV>(cb_attention_weights, cb_grad_output, b * Bt + a, a * vWt + k0 + bi, bi);
                         }
                     }
                     tile_regs_commit();
@@ -1031,13 +1074,13 @@ void kernel_main() {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
                     reconfig_data_format_srca(cb_prev_srca, cb_query);
-                    matmul_init(cb_grad_scores, cb_query, /* transpose */ 0);
+                    mm_init<kFidDK>(cb_grad_scores, cb_query, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t a = 0; a < Bt; ++a) {
                             if (skip_masked && a < b) {
                                 continue;
                             }
-                            matmul_tiles(cb_grad_scores, cb_query, b * Bt + a, a * qWt + k0 + bi, bi);
+                            mm_tiles<kFidDK>(cb_grad_scores, cb_query, b * Bt + a, a * qWt + k0 + bi, bi);
                         }
                     }
                     tile_regs_commit();
