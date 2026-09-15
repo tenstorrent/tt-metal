@@ -666,7 +666,7 @@ def test_binary_implicit_broadcast(device, shapes, ttnn_op):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if ttnn_op == ttnn.div:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(output_tensor, torch_output_tensor)
 
@@ -778,7 +778,7 @@ def test_binary_div_int32_full_range(input_shapes, device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_div_int32_optional_output(device):
@@ -795,7 +795,7 @@ def test_div_int32_optional_output(device):
     ttnn.div(input_tensor_a, input_tensor_b, output_tensor=preallocated_tensor)
     output_tensor = ttnn.to_torch(preallocated_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize(
@@ -869,7 +869,7 @@ def test_div_int32_rounding_modes(input_shapes, low_a, high_a, low_b, high_b, ro
     if rounding_mode is not None:
         assert_equal(torch_output_tensor, output_tensor)
     else:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
@@ -923,7 +923,7 @@ def test_div_edge_cases(rounding_mode, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     if rounding_mode is None:
-        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+        assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
     else:
         assert torch.equal(torch_output_tensor, output_tensor)
 
@@ -1061,7 +1061,9 @@ def test_div_inf_nan_cases(device):
     output_tensor = ttnn.div(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0, allow_nonfinite=True
+    )
 
 
 def test_div_exact_quotient_cases(device):
@@ -1214,7 +1216,7 @@ def test_binary_divide_int32_full_range(input_shapes, device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_edge_cases(device):
@@ -1258,7 +1260,7 @@ def test_divide_edge_cases(device):
 
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0)
 
 
 def test_divide_inf_nan_cases(device):
@@ -1286,7 +1288,9 @@ def test_divide_inf_nan_cases(device):
     output_tensor = ttnn.divide(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(
+        expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=1.0, allow_nonfinite=True
+    )
 
 
 def test_binary_scalar_div_int32(device):
@@ -1309,7 +1313,7 @@ def test_binary_scalar_div_int32(device):
     tt_out_trunc = ttnn.to_torch(z_tt_trunc)
     z_torch_trunc = torch.divide(x_torch, y_torch, rounding_mode="trunc")
 
-    assert_with_ulp(tt_out, z_torch, ulp_threshold=1.0, allow_nonfinite=True)
+    assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=1.0, allow_nonfinite=True)
     assert torch.equal(z_torch_floor, tt_out_floor)
     assert torch.equal(z_torch_trunc, tt_out_trunc)
 

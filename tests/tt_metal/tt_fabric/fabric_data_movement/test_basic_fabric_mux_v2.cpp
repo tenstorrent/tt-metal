@@ -788,10 +788,7 @@ void run_test_case(BaseFabricFixture& fixture, const TestCaseConfig& test_case) 
             receiver_device_context.receiver_mux_deployment.device,
             std::move(*receiver_device_context.receiver_mux_deployment.program));
     }
-    tt_metal::LaunchProgram(
-        *sender_mux_deployment->device,
-        std::move(*sender_mux_deployment->program),
-        /*wait_until_cores_done=*/true);
+    tt_metal::LaunchProgram(*sender_mux_deployment->device, std::move(*sender_mux_deployment->program));
     for (const auto& receiver_device_context_entry : receiver_device_contexts.value()) {
         const auto& receiver_device_context = receiver_device_context_entry.second;
         fixture.WaitForSingleProgramDone(receiver_device_context.receiver_mux_deployment.device);

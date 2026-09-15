@@ -46,7 +46,7 @@ def test_mac_all_tensors(device, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -71,7 +71,7 @@ def test_mac_tensor_with_2_scalaras(device, h, w, scalar1, scalar2):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_ulp(torch_output_tensor, output_tensor, ulp_threshold=2)
+    assert_with_ulp(expected_result=torch_output_tensor, actual_result=output_tensor, ulp_threshold=2)
 
 
 def assert_where_exact(torch_input_tensor, torch_input1, torch_input2, device):
@@ -280,7 +280,7 @@ def test_addcmul(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
     golden_fn = ttnn.get_golden_function(ttnn.addcmul)
     golden_tensor = golden_fn(in_data1, in_data2, in_data3, value=value)
 
-    assert_with_ulp(output_tensor, golden_tensor)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -387,7 +387,7 @@ def test_addcdiv(device, torch_dtype, ttnn_dtype, value, in_data1_shape, in_data
             output_tensor,
         )
 
-    assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1, allow_nonfinite=True)
+    assert_with_ulp(expected_result=golden_tensor, actual_result=output_tensor, ulp_threshold=1, allow_nonfinite=True)
 
 
 def test_ternary_scalar_distinguishes_cache_entries(device):

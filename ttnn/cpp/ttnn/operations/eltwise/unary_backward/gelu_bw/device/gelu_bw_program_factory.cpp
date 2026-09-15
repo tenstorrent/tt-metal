@@ -114,7 +114,7 @@ tt::tt_metal::ProgramDescriptor GeluBwProgramFactory::create_descriptor(
         (input.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     std::string compute_kernel_path;
-    if (args.approximate) {
+    if (args.variant == operations::unary::GeluVariant::TANH) {
         // For bfloat16, we have 8 DST tiles available in DstSync::SyncHalf.
         // For float32, we have 4 DST tiles available in DstSync::SyncHalf.
         compute_kernel_path = fp32_dest_acc_en ? "ttnn/cpp/ttnn/operations/eltwise/unary_backward/gelu_bw/device/"

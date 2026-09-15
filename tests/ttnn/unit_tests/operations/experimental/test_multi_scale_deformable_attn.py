@@ -79,3 +79,234 @@ def test_msda_rejects_non_multiple_of_16(device, expect_error, D):
 
     with expect_error(RuntimeError, "multiple of 16"):
         ttnn.experimental.multi_scale_deformable_attn(value_t, grid_t, attn_t)
+
+
+def _reference_msda_from_bf16(value, grid, attn, align_corners=False):
+    """Reference computed from the bf16 values the op actually receives.
+
+    Comparing a bf16-fed op against an fp32-input reference measures the input
+    quantisation, not the op. That is harmless on the small maps above, but a
+    bf16 grid coordinate resolves to ~0.0020, which is a third of a pixel across
+    a 334-wide feature map -- enough to move the sample to different neighbours
+    and drag PCC to ~0.97 against random values. Round first, then compare.
+    """
+    return _reference_msda(
+        value.to(torch.bfloat16).to(torch.float32),
+        grid.to(torch.bfloat16).to(torch.float32),
+        attn.to(torch.bfloat16).to(torch.float32),
+        align_corners=align_corners,
+    )
+
+
+def _run_msda(device, value, grid, attn, align_corners=False):
+    """Run the op on bf16 copies of float32 inputs and return a float32 result."""
+    to_dev = lambda t: ttnn.from_torch(t.to(torch.bfloat16), device=device, layout=ttnn.ROW_MAJOR_LAYOUT)  # noqa: E731
+    out = ttnn.experimental.multi_scale_deformable_attn(
+        to_dev(value), to_dev(grid), to_dev(attn), align_corners=align_corners
+    )
+    return ttnn.to_torch(out).to(torch.float32)
+
+
+@pytest.mark.parametrize("align_corners", [False, True])
+# 0.999 and 1.001 both round to exactly 1.0 in bf16, so they would not exercise
+# anything the +-1.0 case does not. These are the actual bf16 neighbours of the
+# border: 1 - 2^-8 just inside, 1 + 2^-7 just outside.
+@pytest.mark.parametrize("coord", [-1.0, 1.0, -0.99609375, 0.99609375, -1.0078125, 1.0078125])
+def test_msda_grid_at_the_border(device, coord, align_corners):
+    """Sampling exactly on, just inside and just outside the [-1, 1] border.
+
+    The reader derives the pixel coordinate and its interpolation fraction with
+    integer arithmetic, so the border is where an off-by-one in the floor or in
+    the in-bounds test would show up.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 2, 32, 4, 32, 10, 10
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.full((N, Q * P, 1, 2), coord, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda(value, grid, attn, align_corners=align_corners)
+    out = _run_msda(device, value, grid, attn, align_corners=align_corners)
+
+    assert torch.isfinite(out).all(), "border sampling produced non-finite values"
+    # A constant grid makes every query sample the same pixel, so PCC -- which is
+    # scale-invariant -- would pass even if the interpolation weight were wrong.
+    # Check the magnitude too, which is the half this rewrite actually touches.
+    scale = ref.abs().max().clamp(min=1e-6)
+    rel = (out - ref).abs().max() / scale
+    assert rel < 0.05, f"border weight magnitude is off by {rel:.4f} relative"
+    assert_with_pcc(ref, out, pcc=0.99)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_msda_non_finite_grid_samples_as_out_of_bounds(device, bad):
+    """A non-finite sampling location contributes zero and poisons nothing.
+
+    This is a deliberate divergence from torch's grid_sample, which propagates
+    NaN out of such a coordinate. Callers do hand this op non-finite locations
+    (see #47512), and a single bad point must not take the whole query -- or its
+    neighbours in the same output tile -- with it. The reference below replaces
+    the non-finite coordinate with a finite far-out-of-range one, which is
+    exactly the behaviour being asserted.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 2, 64, 4, 32, 10, 10
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 2.0 - 1.0
+    # Poison every other query outright, so the test also covers a bad query
+    # sitting next to good ones inside one 32-query output tile.
+    poisoned = torch.zeros(Q, dtype=torch.bool)
+    poisoned[::2] = True
+    rows = poisoned.repeat_interleave(P)
+    grid_bad = grid.clone()
+    grid_bad[:, rows] = bad
+    grid_ref = grid.clone()
+    grid_ref[:, rows] = 8.0  # finite, and far outside [-1, 1]
+
+    ref = _reference_msda(value, grid_ref, attn, align_corners=False)
+    out = _run_msda(device, value, grid_bad, attn)
+
+    assert torch.isfinite(out).all(), f"grid {bad} propagated a non-finite value"
+    assert (out[:, poisoned] == 0).all(), f"queries sampled at {bad} should contribute nothing"
+    assert_with_pcc(ref, out, pcc=0.99)
+
+
+@pytest.mark.parametrize("P", [1, 2])
+def test_msda_few_points(device, P):
+    """P below the 4 that the multi-scale callers use."""
+    torch.manual_seed(0)
+    N, Q, D, h_in, w_in = 2, 64, 32, 16, 16
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 2.0 - 1.0
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda(value, grid, attn, align_corners=False)
+    assert_with_pcc(ref, _run_msda(device, value, grid, attn), pcc=0.99)
+
+
+@pytest.mark.parametrize("Q", [1, 31, 33, 100])
+def test_msda_query_count_not_tile_aligned(device, Q):
+    """Q that does not divide 32, so the last output tile per batch is partial.
+
+    The writer only emits the rows a partial tile actually carries, and the
+    reader leaves the rest of that tile holding whatever the previous iteration
+    wrote -- the zeroed scalar lane is what keeps the stale data out of the sum.
+    """
+    torch.manual_seed(0)
+    N, P, D, h_in, w_in = 2, 4, 32, 16, 16
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 2.0 - 1.0
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda(value, grid, attn, align_corners=False)
+    assert_with_pcc(ref, _run_msda(device, value, grid, attn), pcc=0.99)
+
+
+def test_msda_at_encoder_scale(device):
+    """A feature map and query count of the size a real caller uses.
+
+    The existing shape sweep tops out at 32x32 with 64 queries, which fits in a
+    handful of output tiles on a couple of cores. DINO-5scale's first level is
+    200x334 with tens of thousands of queries, so this covers the work-split
+    across the whole core grid and the DRAM-resident value tensor.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 8, 2048, 4, 32, 200, 334
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.rand(N, Q * P, 1, 2, dtype=torch.float32) * 1.8 - 0.9
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda_from_bf16(value, grid, attn)
+    assert_with_pcc(ref, _run_msda(device, value, grid, attn), pcc=0.999)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan")])
+def test_msda_non_finite_attention_weight(device, bad):
+    """A non-finite attention weight saturates with its sign, not to +max.
+
+    The reader turns (attn, corner weight) into a bf16 scalar with integer
+    arithmetic. Only a non-finite attn can drive that product past bf16's range,
+    and an early return there once dropped the sign, turning -inf into +max and
+    flipping the corner's contribution.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 1, 32, 4, 32, 16, 16
+    value = torch.ones(N, h_in, w_in, D, dtype=torch.float32)
+    # g = -0.0625 is -2^-4, exact in bf16, and puts the pixel coordinate on an
+    # integer for a 16-wide map, so one corner weight is exactly 1.0. That is
+    # what pushes a non-finite attn past bf16's range and into the saturation
+    # branch; a fractional weight stops one exponent short of it.
+    grid = torch.full((N, Q * P, 1, 2), -0.0625, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+    attn[:, ::2, :] = bad
+
+    out = _run_msda(device, value, grid, attn)
+
+    finite_rows = out[:, 1::2]
+    assert torch.isfinite(finite_rows).all(), "a non-finite attn leaked into other queries"
+    if bad == float("inf"):
+        assert (out[:, ::2] > 0).all(), "+inf attn should saturate positive"
+    elif bad == float("-inf"):
+        assert (out[:, ::2] < 0).all(), "-inf attn should saturate negative, not to +max"
+
+
+@pytest.mark.parametrize("size", [2, 3])
+@pytest.mark.parametrize("align_corners", [False, True])
+def test_msda_tiny_feature_map_out_of_range(device, size, align_corners):
+    """An out-of-range coordinate contributes nothing even on a tiny map.
+
+    align_corners maps the grid onto [0, size - 1] rather than [0, size], so a
+    coordinate saturated at the wrong magnitude lands back inside a 2-wide map.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D = 1, 32, 4, 32
+    value = torch.ones(N, size, size, D, dtype=torch.float32)
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+    grid = torch.full((N, Q * P, 1, 2), -3.0, dtype=torch.float32)
+
+    out = _run_msda(device, value, grid, attn, align_corners=align_corners)
+    assert (out == 0).all(), f"out-of-range coord sampled a {size}x{size} map in bounds"
+
+
+@pytest.mark.parametrize("size", [16385, 20000])
+def test_msda_rejects_oversized_feature_map(device, expect_error, size):
+    """Sizes past the reader's Q16.16 range are rejected, not silently wrong."""
+    N, Q, P, D = 1, 32, 4, 16
+    value = ttnn.zeros((N, 1, size, D), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    grid = ttnn.zeros((N, Q * P, 1, 2), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    attn = ttnn.zeros((N, Q, P), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    with expect_error(RuntimeError, "must each be <="):
+        ttnn.experimental.multi_scale_deformable_attn(value, grid, attn)
+
+
+def test_msda_small_coordinate_precision(device):
+    """Coordinates near zero on a wide feature map.
+
+    The mapping scales the coordinate by the feature-map size, so any rounding
+    done before that scale gets multiplied by it. Near the border bf16's own
+    quantisation swamps such an error; near zero bf16 resolves finely and the
+    error surfaces, and a wide map magnifies it.
+
+    Rounding the coordinate before the scale -- which keeps the product in
+    int32 without a 64-bit intermediate -- takes the measured error here from
+    0.021 to 0.074, so the bound below separates the two.
+    """
+    torch.manual_seed(0)
+    N, Q, P, D, h_in, w_in = 2, 64, 4, 32, 16, 4096
+    value = torch.randn(N, h_in, w_in, D, dtype=torch.float32)
+    grid = torch.zeros(N, Q * P, 1, 2, dtype=torch.float32)
+    # Spread over the bf16 exponents near zero that the mapping magnifies most.
+    small = torch.tensor([2.0**-e for e in range(4, 18)], dtype=torch.float32)
+    picks = small[torch.randint(0, small.numel(), (N, Q * P))]
+    signs = torch.where(torch.rand(N, Q * P) < 0.5, -1.0, 1.0)
+    grid[..., 0, 0] = picks * signs
+    attn = torch.softmax(torch.randn(N, Q, P, dtype=torch.float32), dim=-1)
+
+    ref = _reference_msda_from_bf16(value, grid, attn)
+    out = _run_msda(device, value, grid, attn)
+
+    err = (out - ref).abs().max().item()
+    assert err < 0.04, f"coordinate path lost precision: max abs error {err:.4f}"
+    assert_with_pcc(ref, out, pcc=0.999)
