@@ -28,7 +28,7 @@ Options:
     --triage-summary-path=<path>          Write a triage summary file to the given path (used by CI for hang reports).
     --llm-output                          Replace Rich tables on the console with a machine-readable report (CSV-formatted tables). Easier and cheaper for LLMs (and grep/CI) to consume. Implies --disable-colors.
     --llm-output-path=<path>              Additionally write the machine-readable report to <path>. Can be combined with --llm-output; without it, Rich output still goes to the console.
-    --sqlite-output-path=<path>           Additionally write a SQLite database to <path>, with one table per script that returns non-empty tabular data; check-only output is stored in the diagnostics table.
+    --sqlite-output-path=<path>           Additionally write a SQLite database to <path>, with one table per script that returns non-empty tabular data; reported errors and warnings go to the diagnostics table.
     --additional-scripts-directory=<dir>  Discover triage scripts in <dir> too. Repeat for several directories. Scripts are imported by module name, so file names there must not repeat a file name used in tools/triage.
 
 Description:
@@ -666,58 +666,102 @@ def parse_arguments(
     raise DocoptExit()
 
 
-FAILURE_CHECKS_LOCK = threading.Lock()
-FAILURE_CHECKS: list[str] = []
+class CheckType(Enum):
+    ERROR = "error"
+    WARNING = "warning"
+
+
+@dataclass
+class CheckEntry:
+    message: str
+    type: CheckType
+    device: Device | None = None
+    location: OnChipCoordinate | None = None
+    risc_name: str | None = None
+
+    @property
+    def device_id(self) -> int | None:
+        return self.device.id if self.device is not None else None
+
+    @property
+    def location_str(self) -> str | None:
+        return self.location.to_user_str() if self.location is not None else None
+
+    @property
+    def block_type(self) -> str | None:
+        return self.location.noc_block.block_type if self.location is not None else None
+
+    @property
+    def formatted_message(self) -> str:
+        prefix = ""
+        if self.device is not None:
+            prefix += f"Device {self.device.id}: "
+        if self.location is not None:
+            prefix += f"{self.block_type} [{self.location_str}]: "
+        if self.risc_name is not None:
+            prefix += f"{self.risc_name}: "
+        return f"{prefix}{self.message}"
+
+
+CHECKS_LOCK = threading.Lock()
+CHECKS: list[CheckEntry] = []
+
+
+def log_entry(entry: CheckEntry) -> None:
+    with CHECKS_LOCK:
+        CHECKS.append(entry)
 
 
 def log_check(success: bool, message: str) -> None:
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK
     if not success:
-        with FAILURE_CHECKS_LOCK:
-            FAILURE_CHECKS.append(message)
+        log_entry(CheckEntry(message=message, type=CheckType.ERROR))
 
 
 def log_check_device(device: Device, success: bool, message: str) -> None:
-    formatted_message = f"Device {device.id}: {message}"
-    log_check(success, formatted_message)
+    if not success:
+        log_entry(CheckEntry(message=message, type=CheckType.ERROR, device=device))
 
 
 def log_check_location(location: OnChipCoordinate, success: bool, message: str) -> None:
-    device = location.device
-    block_type = location.noc_block.block_type
-    location_str = location.to_user_str()
-    formatted_message = f"{block_type} [{location_str}]: {message}"
-    log_check_device(device, success, formatted_message)
+    if not success:
+        log_entry(CheckEntry(message=message, type=CheckType.ERROR, device=location.device, location=location))
 
 
 def log_check_risc(risc_name: str, location: OnChipCoordinate, success: bool, message: str) -> None:
-    formatted_message = f"{risc_name}: {message}"
-    log_check_location(location, success, formatted_message)
-
-
-WARNING_CHECKS_LOCK = threading.Lock()
-WARNING_CHECKS: list[str] = []
+    if not success:
+        log_entry(
+            CheckEntry(
+                message=message,
+                type=CheckType.ERROR,
+                device=location.device,
+                location=location,
+                risc_name=risc_name,
+            )
+        )
 
 
 def log_warning(message: str) -> None:
-    global WARNING_CHECKS, WARNING_CHECKS_LOCK
-    with WARNING_CHECKS_LOCK:
-        WARNING_CHECKS.append(message)
+    log_entry(CheckEntry(message=message, type=CheckType.WARNING))
 
 
 def log_warning_device(device: Device, message: str) -> None:
-    log_warning(f"Device {device.id}: {message}")
+    log_entry(CheckEntry(message=message, type=CheckType.WARNING, device=device))
 
 
 def log_warning_location(location: OnChipCoordinate, message: str) -> None:
-    device = location.device
-    block_type = location.noc_block.block_type
-    location_str = location.to_user_str()
-    log_warning_device(device, f"{block_type} [{location_str}]: {message}")
+    log_entry(CheckEntry(message=message, type=CheckType.WARNING, device=location.device, location=location))
 
 
 def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -> None:
-    log_warning_location(location, f"{risc_name}: {message}")
+    log_entry(
+        CheckEntry(
+            message=message,
+            type=CheckType.WARNING,
+            device=location.device,
+            location=location,
+            risc_name=risc_name,
+        )
+    )
 
 
 _output_serializer: Any = None
@@ -789,20 +833,15 @@ def init_output_serializer(args: ScriptArguments) -> None:
 
 
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
-    global FAILURE_CHECKS, FAILURE_CHECKS_LOCK, WARNING_CHECKS, WARNING_CHECKS_LOCK
-    with FAILURE_CHECKS_LOCK:
-        failures = FAILURE_CHECKS
-        FAILURE_CHECKS = []
-    with WARNING_CHECKS_LOCK:
-        warnings = WARNING_CHECKS
-        WARNING_CHECKS = []
-
+    global CHECKS
+    with CHECKS_LOCK:
+        checks = CHECKS
+        CHECKS = []
     get_output_serializer().emit(
         script_name=script.name if script is not None else None,
         execution_time=execution_time,
         result=result,
-        failures=failures,
-        warnings=warnings,
+        checks=checks,
         script_failed=script.failed if script is not None else False,
         failure_message=script.failure_message if script is not None else None,
         documentation=script.documentation if script is not None else None,
@@ -810,18 +849,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
 
 
 def record_diagnostics(script: TriageScript) -> None:
-    global FAILURE_CHECKS, WARNING_CHECKS
-    with FAILURE_CHECKS_LOCK:
-        failures = FAILURE_CHECKS
-        FAILURE_CHECKS = []
-    with WARNING_CHECKS_LOCK:
-        warnings = WARNING_CHECKS
-        WARNING_CHECKS = []
-
+    global CHECKS
+    with CHECKS_LOCK:
+        checks = CHECKS
+        CHECKS = []
     get_output_serializer().record_diagnostics(
         script_name=script.name,
-        failures=failures,
-        warnings=warnings,
+        checks=checks,
         script_failed=script.failed,
         failure_message=script.failure_message,
     )
