@@ -467,7 +467,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param ct_dim: Number of column tiles in the block, used to size the column stride.
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpB_face_r_dim: Rows per face for operand B.
- * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to restore the modified stride/datum-count state.
+ * @note Call @ref _llk_unpack_tilizeA_B_uninit_ to revert the config it writes, including the SrcA Y stride.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>

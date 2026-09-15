@@ -379,7 +379,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const std::uint32_t num_faces = 4)
  * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
  * @param unpA_face_r_dim: Rows per face for operand A.
  * @param unpB_face_r_dim: Rows per face for operand B.
- * @note Call @ref _llk_unpack_tilizeA_B_uninit_ after this function to restore the modified stride/datum-count state.
+ * @note Call @ref _llk_unpack_tilizeA_B_uninit_ after this function to revert the config it writes.
  * @ref _llk_unpack_tilizeA_B_ is the matching execute call.
  */
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
