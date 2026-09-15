@@ -38,6 +38,8 @@ struct TopkLargeIndicesDeviceOperation {
         uint32_t k,
         std::optional<uint32_t> valid_length,
         const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+        // Caps the derived search length at ceil32(valid_end); requires valid_length_tensor.
+        const std::optional<Tensor>& valid_end_tensor = std::nullopt,
         uint32_t valid_length_offset = 0);
 };
 
@@ -52,6 +54,9 @@ Tensor topk_large_indices(
     uint32_t k,
     std::optional<uint32_t> valid_length = std::nullopt,
     const std::optional<Tensor>& valid_length_tensor = std::nullopt,
+    // Real-token end; caps the search length at ceil32(valid_end) so a partial chunk ranks only the
+    // columns the request wrote. Must match the score op's bound. Requires valid_length_tensor.
+    const std::optional<Tensor>& valid_end_tensor = std::nullopt,
     uint32_t valid_length_offset = 0);
 
 }  // namespace ttnn::experimental

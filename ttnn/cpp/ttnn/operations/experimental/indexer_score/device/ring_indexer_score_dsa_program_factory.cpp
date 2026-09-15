@@ -77,8 +77,13 @@ constexpr uint32_t reader_k_local_batch_offset = reader_k_local_addr + 1;       
 constexpr uint32_t reader_metadata_base = reader_k_local_batch_offset + 1;                                   // 38
 // Cache-slot select block (slot_id address, index_cache_num_layers, index_cache_layer_idx). Fixed width,
 // always present (zeroed when unused), so the kernel consumes it unconditionally and band_perm stays const.
-constexpr uint32_t reader_slot_base = reader_metadata_base + 3;   // 41
-constexpr uint32_t reader_band_perm_base = reader_slot_base + 3;  // 44
+constexpr uint32_t reader_slot_base = reader_metadata_base + 3;  // 41
+// Real-token-end address: ONE more fixed slot, always pushed (0 when unused). It has to be a fixed index
+// rather than appended at the end because the kv_len derivation runs BEFORE FusedRingGate walks the args,
+// so it reads this slot by the compile-time index; and it has to sit before the perm because the perm is
+// variable-length (per-column band count).
+constexpr uint32_t reader_valid_end_base = reader_slot_base + 3;       // 44
+constexpr uint32_t reader_band_perm_base = reader_valid_end_base + 1;  // 45
 // Compute RT: schedule(6), kv_len_tiles, chunk_start_tiles, straddle_q_tile, straddle_jump_tiles, then perm.
 constexpr uint32_t compute_kv_len_tiles = 6;
 constexpr uint32_t compute_chunk_start_tiles = compute_kv_len_tiles + 1;
@@ -96,8 +101,8 @@ constexpr uint32_t writer_band_perm_base = writer_straddle_jump_tiles + 1;  // 1
 static_assert(
     reader_k_batch_offset == 25 && reader_kv_len_tiles == 26 && reader_fused_rt_base == 27 &&
         reader_k_local_addr == 36 && reader_k_local_batch_offset == 37 && reader_metadata_base == 38 &&
-        reader_slot_base == 41 && reader_band_perm_base == 44 && compute_band_perm_base == 10 &&
-        writer_band_perm_base == 11,
+        reader_slot_base == 41 && reader_valid_end_base == 44 && reader_band_perm_base == 45 &&
+        compute_band_perm_base == 10 && writer_band_perm_base == 11,
     "indexer_score fused rt_arg slot layout drifted from the kernel-side expectations");
 }  // namespace rt_arg
 
@@ -469,6 +474,13 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_ct.push_back(has_slot_meta ? static_cast<uint32_t>(k_local.logical_shape()[0]) : 0u);
     tt::tt_metal::TensorAccessorArgs(has_slot_meta ? *tensors.cache_batch_idx_tensor->buffer() : *q.buffer())
         .append_to(reader_ct);
+    // Real-token end, appended LAST so the blocks above keep their offsets. Same fixed-width discipline:
+    // flag, rt base, accessor (a placeholder when absent, since one binary serves both forms).
+    const bool has_valid_end = tensors.has_valid_end_metadata();
+    reader_ct.push_back(has_valid_end ? 1u : 0u);
+    reader_ct.push_back(has_valid_end ? static_cast<uint32_t>(rt_arg::reader_valid_end_base) : 0u);
+    tt::tt_metal::TensorAccessorArgs(has_valid_end ? *tensors.valid_end_tensor->buffer() : *q.buffer())
+        .append_to(reader_ct);
 
     std::vector<uint32_t> writer_ct = common_ct;
     writer_ct.push_back(1u);  // fused_ring on
@@ -635,7 +647,10 @@ ProgramDescriptor build_ring_program_descriptor(
                 reader_rt.push_back(0u);
                 reader_rt.push_back(0u);
             }
-            reader_rt.append(physical_starts);  // rt_arg::reader_band_perm_base (38..): physical K starts
+            // Real-token end address, one fixed slot (0 when absent) so reader_band_perm_base stays a
+            // compile-time constant on every path, exactly like the two blocks above.
+            reader_rt.push_back(tensors.has_valid_end_metadata() ? tensors.valid_end_tensor->buffer() : nullptr);
+            reader_rt.append(physical_starts);  // rt_arg::reader_band_perm_base (45..): physical K starts
             reader_kernel.emplace_runtime_args(core, reader_rt);
 
             KernelDescriptor::RTArgList compute_rt;

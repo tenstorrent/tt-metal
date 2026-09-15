@@ -81,7 +81,9 @@ void set_runtime_args(
     std::optional<uint32_t> valid_length,
     // 0 when the scalar path is in use. Re-applied on every dispatch (including cache hits), which is what
     // keeps a moved metadata buffer addressable.
-    uint32_t meta_addr) {
+    uint32_t meta_addr,
+    // 0 when uncapped. Re-applied every dispatch for the same reason as meta_addr.
+    uint32_t valid_end_addr) {
     const auto runtime_args = get_runtime_shape_args(input, valid_length);
     const auto work_split = tt::tt_metal::split_work_to_cores(
         input.device()->compute_with_storage_grid_size(), runtime_args.num_rows, true);
@@ -111,7 +113,8 @@ void set_runtime_args(
              rows,
              runtime_args.search_len,
              runtime_args.input_row_bytes,
-             meta_addr});
+             meta_addr,
+             valid_end_addr});
         tt::tt_metal::SetRuntimeArgs(program, shared.compute_kernel_id, core, {rows, runtime_args.search_len});
         tt::tt_metal::SetRuntimeArgs(
             program, shared.writer_kernel_id, core, {indices.buffer()->address(), start_row, rows});
@@ -214,6 +217,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     reader_compile_args.push_back(has_meta ? cb_meta : 0u);
     reader_compile_args.push_back(has_meta ? operation_attributes.valid_length_offset : 0u);
     interleaved_accessor_args(has_meta ? *tensor_args.valid_length_tensor : input).append_to(reader_compile_args);
+    // Real-token-end block, same fixed-width discipline: flag then accessor (placeholder when absent).
+    const bool has_vend = tensor_args.has_valid_end_metadata();
+    reader_compile_args.push_back(has_vend ? 1u : 0u);
+    interleaved_accessor_args(has_vend ? *tensor_args.valid_end_tensor : input).append_to(reader_compile_args);
 
     auto reader_kernel = tt::tt_metal::CreateKernel(
         program,
@@ -258,7 +265,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         .cores = cores};
     const uint32_t meta_addr =
         tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u;
-    set_runtime_args(program, shared, input, indices, operation_attributes.valid_length, meta_addr);
+    const uint32_t valid_end_addr =
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u;
+    set_runtime_args(program, shared, input, indices, operation_attributes.valid_length, meta_addr, valid_end_addr);
 
     return cached_program_t{std::move(program), std::move(shared)};
 }
@@ -274,7 +283,8 @@ void TopkLargeIndicesProgramFactory::override_runtime_arguments(
         tensor_args.input_tensor,
         tensor_return_value,
         operation_attributes.valid_length,
-        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u);
+        tensor_args.has_valid_length_metadata() ? tensor_args.valid_length_tensor->buffer()->address() : 0u,
+        tensor_args.has_valid_end_metadata() ? tensor_args.valid_end_tensor->buffer()->address() : 0u);
 }
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

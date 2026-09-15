@@ -54,6 +54,11 @@ void bind_topk_large_indices(nb::module_& mod) {
             valid_length_tensor: optional 1-element UINT32 row-major DRAM tensor read on-device. Use for
                 dynamic valid lengths during trace replay. Mutually exclusive with valid_length.
             valid_length_offset: constant added to valid_length_tensor[0] (default 0).
+            valid_end_tensor: optional 1-element UINT32 row-major DRAM tensor holding the REAL token end;
+                caps the derived search length at ceil32(valid_end). Requires valid_length_tensor. Without
+                it a padded chunk ranks columns that were never written. Pass the SAME bound to
+                ring_indexer_score_dsa's valid_end_tensor -- a looser score with a tighter top-k drops real
+                keys, the reverse ranks a stale tail.
         )doc",
         &ttnn::experimental::topk_large_indices,
         nb::arg("input_tensor"),
@@ -61,6 +66,7 @@ void bind_topk_large_indices(nb::module_& mod) {
         nb::arg("k"),
         nb::arg("valid_length") = std::nullopt,
         nb::arg("valid_length_tensor") = nb::none(),
+        nb::arg("valid_end_tensor") = nb::none(),
         nb::arg("valid_length_offset") = 0);
 }
 
