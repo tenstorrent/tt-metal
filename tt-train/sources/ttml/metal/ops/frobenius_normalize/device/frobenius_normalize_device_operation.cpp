@@ -4,8 +4,6 @@
 
 #include "frobenius_normalize_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
 #include "frobenius_normalize_program_factory.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "ttnn/device_operation.hpp"
