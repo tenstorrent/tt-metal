@@ -619,7 +619,10 @@ template <
     bool lightweight_mask_enabled = false,
     bool use_windowed_narrowing = false,
     uint32_t cb_windowed_k_range = 0,
-    uint32_t chunk_keep_every = 0>
+    uint32_t chunk_keep_every = 0,
+    // Accepted for call-site uniformity with sol_attn_standard_v2; the legacy path doesn't act on it
+    // (use_streaming_compute routes every tested block_mask shape to v2 -- see sol_attn.cpp).
+    uint32_t cb_block_mask_row = 0>
 void sol_attn_standard(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -775,7 +778,11 @@ template <
     bool use_windowed_narrowing = false,
     uint32_t cb_windowed_k_range = INVALID_CB,
     // Keep every Nth KV chunk, skip the rest. 0 or 1 = dense, and every branch below compiles out.
-    uint32_t chunk_keep_every = 0>
+    uint32_t chunk_keep_every = 0,
+    // Per-Q-chunk keep/skip row, one uint32_t (0 or nonzero) per k_chunk, written by the reader into
+    // this CB before the K-chunk loop below. INVALID_CB when block_mask is absent, matching the
+    // windowed ctrl CB's convention above.
+    uint32_t cb_block_mask_row = INVALID_CB>
 void sol_attn_standard_v2(
     const uint32_t q_chunks_per_core,
     const uint32_t k_num_chunks,
@@ -883,6 +890,16 @@ void sol_attn_standard_v2(
             cb_k_range_obj.pop_front(1);
         }
 
+        // Block mask: the reader wrote this Q chunk's keep/skip row (one uint32_t per k_chunk) before
+        // pushing any K/V, so it is always available by the time compute would wait on it. Held for
+        // the whole k_chunk loop (many reads, not a fixed pair like the windowed range above) and
+        // popped once after the loop -- see the matching pop_front below.
+        constexpr bool use_block_mask = (cb_block_mask_row != INVALID_CB);
+        CircularBuffer cb_block_mask_row_obj(cb_block_mask_row);
+        if constexpr (use_block_mask) {
+            cb_block_mask_row_obj.wait_front(1);
+        }
+
         auto call_step = [&](auto profiling_tag,
                              bool is_last,
                              bool is_first,
@@ -962,12 +979,21 @@ void sol_attn_standard_v2(
             }
             return true;
         };
+        // block_mask is mutually exclusive with chunk_keep_every (validated at the op level), so at
+        // most one of these two predicates is ever the real one; the other compiles out to `true`.
+        auto mask_keeps = [&](uint32_t k) {
+            if constexpr (use_block_mask) {
+                return k == 0 || ckernel::read_tile_value(cb_block_mask_row, 0, k) != 0;
+            }
+            return true;
+        };
+        auto chunk_kept = [&](uint32_t k) { return stride_keeps(k) && mask_keeps(k); };
         uint32_t first_kept = k_loop_start;
         uint32_t last_kept = k_loop_end - 1;
-        if constexpr (chunk_keep_every > 1) {
+        if constexpr (chunk_keep_every > 1 || use_block_mask) {
             bool seen = false;
             for (uint32_t k = k_loop_start; k < k_loop_end; k++) {
-                if (stride_keeps(k)) {
+                if (chunk_kept(k)) {
                     if (!seen) {
                         first_kept = k;
                         seen = true;
@@ -978,10 +1004,10 @@ void sol_attn_standard_v2(
         }
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
-            if constexpr (chunk_keep_every > 1) {
-                // The reader applies the same stride and never pushes a skipped chunk, so there is
+            if constexpr (chunk_keep_every > 1 || use_block_mask) {
+                // The reader applies the same predicate and never pushes a skipped chunk, so there is
                 // nothing to drain -- a drain here would deadlock waiting on tiles that never come.
-                if (!stride_keeps(k_chunk)) {
+                if (!chunk_kept(k_chunk)) {
                     continue;
                 }
             }
@@ -1071,6 +1097,9 @@ void sol_attn_standard_v2(
             } else {
                 std::swap(prev, cur);
             }
+        }
+        if constexpr (use_block_mask) {
+            cb_block_mask_row_obj.pop_front(1);
         }
         // Q already popped inside sdpa_inner_loop_step after Phase 1 of the last K chunk.
     }

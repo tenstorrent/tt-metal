@@ -882,10 +882,15 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     // packed uint8 row. Not part of CBIds -- that struct is shared with the parent sdpa/ring factories,
     // and extending it would shift compile-time-arg positions for ops this feature has no business
     // touching. 2 pages, matching cb_windowed_k_range's double buffering across q iterations.
+    // cb_block_mask_raw is the reader's own scratch for the packed DRAM row before it is expanded into
+    // cb_block_mask_row; compute never touches it.
     uint32_t cb_block_mask_row = 0;
+    uint32_t cb_block_mask_raw = 0;
     if (use_block_mask) {
         const uint32_t block_mask_row_page_size = ((k_num_chunks * sizeof(uint32_t) + 15) / 16) * 16;
         cb_block_mask_row = allocate_cb(block_mask_row_page_size, 2, tt::DataFormat::UInt32);
+        const uint32_t block_mask_raw_page_size = ((k_num_chunks + 15) / 16) * 16;
+        cb_block_mask_raw = allocate_cb(block_mask_raw_page_size, 2, tt::DataFormat::UInt8);
     }
 
     cb_ids.identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
@@ -945,6 +950,7 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
     reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_batch));
     reader_compile_time_args.push_back(static_cast<uint32_t>(broadcast_block_mask_heads));
     TensorAccessorArgs(sol_attn_buffer_or_null(tensor_args.block_mask)).append_to(reader_compile_time_args);
+    reader_compile_time_args.push_back(cb_block_mask_raw);
     compute_compile_time_args.push_back(cb_block_mask_row);
 
     // Semaphores for KV chain forwarding (non-causal only, and only when no mask disabled it above --

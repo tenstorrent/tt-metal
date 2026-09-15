@@ -195,7 +195,13 @@ void kernel_main() {
         cu_window_seqlens_eles = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset = get_arg_val<uint32_t>(argidx++);
         windowed_q_tok_offset_addr = get_arg_val<uint32_t>(argidx++);
+    } else {
+        // The factory always pushes these 4 windowed placeholder values (0 when not windowed), even
+        // though this compile-time branch never reads them -- skip past them so the next read (block
+        // mask's address, added after this) lands on the right array slot.
+        argidx += 4;
     }
+    const uint32_t block_mask_addr = get_arg_val<uint32_t>(argidx++);
 
     // When chunked: only process K/V up to (chunk_start_idx + Q_chunk_length) tokens.
     // valid_Skt_bound = min(offset_tiles + valid_Sqt, valid_Skt); cap at valid_Skt for callers that pass
@@ -218,6 +224,17 @@ void kernel_main() {
     // by compute. Valid fallback ids (q_in) when not windowed; only touched behind the constexpr flag.
     constexpr uint32_t cb_id_windowed_cu_reader = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_id_windowed_k_range = get_compile_time_arg_val(cb_arg_offset + 9);
+    // Block mask (sol_attn only, not part of the shared CBIds block above -- see the comment in
+    // sol_attn_program_factory.cpp on why it lives as a trailing append instead). Row CB id, then the
+    // two broadcast flags, then the block_mask tensor's own accessor args.
+    constexpr uint32_t cb_id_block_mask_row = get_compile_time_arg_val(cb_arg_offset + 10);
+    constexpr uint32_t broadcast_block_mask_batch = get_compile_time_arg_val(cb_arg_offset + 11) == 1;
+    constexpr uint32_t broadcast_block_mask_heads = get_compile_time_arg_val(cb_arg_offset + 12) == 1;
+    constexpr auto block_mask_args = TensorAccessorArgs<cb_arg_offset + 13>();
+    // Reader-only scratch for the packed DRAM row before it is expanded into cb_block_mask_row;
+    // compute never touches it. Trails everything else since its width isn't known until block_mask's
+    // own (variable-width) accessor args have been consumed.
+    constexpr uint32_t cb_id_block_mask_raw = get_compile_time_arg_val(block_mask_args.next_compile_time_args_offset());
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -238,6 +255,7 @@ void kernel_main() {
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
     const auto attention_sink_reader = TensorAccessor(attention_sink_args, attention_sink_addr);
     const auto chunk_start_idx_reader = TensorAccessor(chunk_start_idx_args, chunk_start_idx_addr);
+    const auto block_mask_reader = TensorAccessor(block_mask_args, block_mask_addr);
 
     constexpr uint32_t skip_src_cols = (use_mla && mla_kv_overlap) ? DHt - vDHt : 0;
 
@@ -464,6 +482,41 @@ void kernel_main() {
                 q_high_idx = windowed_k_hi * Sk_chunk_t;
             }
 
+#if SOL_ATTN_USE_BLOCK_MASK
+            // Block mask row for this (nb, nq, q_chunk): one byte per k_chunk, 0 = skip. A ROW_MAJOR
+            // tensor's row is one page here, so this is a single async_read, not a byte loop. Read
+            // once into reader-local scratch (used directly for this reader's own skip decision
+            // below), then expanded into cb_block_mask_row for compute to independently scan with the
+            // same first_kept/last_kept logic already written for chunk_keep_every.
+            CircularBuffer cb_block_mask_raw_buf(cb_id_block_mask_raw);
+            cb_block_mask_raw_buf.reserve_back(1);
+            volatile tt_l1_ptr uint8_t* block_mask_raw_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(cb_block_mask_raw_buf.get_write_ptr());
+            {
+                const uint32_t bm_b = broadcast_block_mask_batch ? 0 : nb;
+                const uint32_t bm_h = broadcast_block_mask_heads ? 0 : nq;
+                constexpr uint32_t bm_nqh = broadcast_block_mask_heads ? 1 : NQH;
+                const uint32_t bm_page = (bm_b * bm_nqh + bm_h) * q_num_chunks + q_chunk;
+                noc.async_read(
+                    block_mask_reader,
+                    CoreLocalMem<uint32_t>(cb_block_mask_raw_buf.get_write_ptr()),
+                    k_num_chunks,
+                    {.page_id = bm_page},
+                    {});
+                noc.async_read_barrier();
+            }
+            cb_block_mask_raw_buf.push_back(1);
+            CircularBuffer cb_block_mask_row_buf(cb_id_block_mask_row);
+            cb_block_mask_row_buf.reserve_back(1);
+            volatile tt_l1_ptr uint32_t* block_mask_row_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_block_mask_row_buf.get_write_ptr());
+            for (uint32_t kc = 0; kc < k_num_chunks; ++kc) {
+                block_mask_row_ptr[kc] = (block_mask_raw_ptr[kc] != 0) ? 1u : 0u;
+            }
+            cb_block_mask_raw_buf.pop_front(1);
+            cb_block_mask_row_buf.push_back(1);
+#endif
+
             const uint32_t k_head = nq / q_heads_per_k;
             const uint32_t v_head = nq / q_heads_per_v;
 
@@ -484,6 +537,15 @@ void kernel_main() {
                 // the compute no longer drains it. The stride is global, so every core in the
                 // K-forwarding chain skips the same chunks and the semaphore protocol stays in step.
                 if (k_chunk != 0 && (k_chunk % SOL_ATTN_CHUNK_KEEP_EVERY) != 0) {
+                    continue;
+                }
+#endif
+#if SOL_ATTN_USE_BLOCK_MASK
+                // Same "chunk 0 always kept" floor as the stride above, for the same reason: a q_chunk
+                // that selects nothing has no finite softmax. Matched with compute's identical scan of
+                // cb_block_mask_row -- a skipped chunk here is never pushed, so compute must never wait
+                // on it.
+                if (k_chunk != 0 && block_mask_row_ptr[k_chunk] == 0) {
                     continue;
                 }
 #endif
