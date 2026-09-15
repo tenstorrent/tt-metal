@@ -1756,3 +1756,430 @@ The integrity text's categorical bullet forbids reading any pre-existing impleme
 - Root fixes outside this flow: either maintain the design doc through refinements or stop
   handing it downstream as "the design"; and make the pipeline notice when a mandated artifact
   was never written
+
+---
+
+## 4k. Reconciled from the port session — what to change in the AGENTS (2026-09-15)
+
+Reconciles `/localdev/dnijemcevic/2026_09_10_port/CHECKPOINT.md` into this journal. That
+file is the port's own record (what was copied, which suites reproduced, the CI runs); only
+the parts that tell us how to make the *next* generation smoother are lifted here. Where the
+two disagree this journal wins. **Everything below is op-agnostic unless marked otherwise.**
+
+### 4k.0 What #185 already carries — these findings, landed
+
+tt_ops_code_gen#185 ("Use real-time profiler for eval performance metrics", MERGED) is
+**downstream of this line of work, not prior art**: the measurement findings below were
+raised here, conveyed to Marko, and incorporated there. Recorded so nobody reads the overlap
+as duplicated effort, and so the remaining gap in 4k.1 is read as what it is — the one part
+not yet carried. What #185 now lands:
+
+* **`metrics_plugin.op_window()`** brackets exactly the op dispatch, so input prep before it
+  and the `to_torch` readback after it are both outside the measurement. Its own description
+  names the old failure: *"Previously the window stayed open until the pytest call phase
+  ended, so the readback program leaked into `device_kernel_ns` and could win the
+  dominant-program core count."*
+* **`device_num_programs`** — the program-count-per-window invariant, threaded to the DB and
+  rendered on the dashboard. That is exactly the "assert what is in the window" check this
+  session arrived at independently.
+* Windows accumulate; a window that saw no dispatch is dropped; the reducer emits nothing if
+  records were dropped or an interval is incomplete.
+* The real-time profiler replaces Tracy: **0.74% overhead against 441.8%**.
+
+**Why this session still SAW the old behaviour, which is a separate lesson:** the submodule
+pin in the port tree is `4650fba`, which has **zero** occurrences of `op_window` or
+`device_num_programs` — it predates the landing. So the port measured on a harness without
+the fix, and the asymmetry in 4k.1 was found on that harness rather than on the tip. A pin
+taken for reproducibility silently also pins away every subsequent framework fix. Two
+consequences worth acting on: a run's report should state the harness revision *and* its
+distance from the submodule tip; and before filing a harness finding as a bug, check whether
+the tip already carries the fix — the behaviour may be the pin, not the framework.
+
+### 4k.1 Measurement — the one thing #185 does NOT fix: ASYMMETRY
+
+`op_window()` lives in `golden_tests/<op>/axes.py::observed`. A comparison in which only one
+side goes through `observed` still gets the permissive whole-call fallback on the other side.
+That is precisely the error that produced **a reported 2.68x median where the truth is
+1.418x** — native was charged for input prep plus *every* op call (two, where a helper calls
+the op twice) while the generated side was timed as one dispatch.
+
+Requirements for any op-vs-op comparison, for the perf agents and for `/perf-measure`:
+
+1. **Both sides must be measured through the same window.** Wrap whichever side is selected,
+   identically; only the callable inside changes. A harness that can express "side A wrapped,
+   side B not" will eventually be used that way.
+2. **Selection belongs in exactly one place.** Two layers both rebinding `ttnn.<op>` raced:
+   plugin fixtures run before directory-scoped ones, so a conftest silently won and a request
+   for `PERF_SIDE=native` measured the *replacement* — 0 sampled cases and a plausible number
+   for the wrong op, with the binding record claiming otherwise.
+3. **Prove which side ran; never infer.** Record the resolved callable and refuse to run when
+   both sides resolve to the same object. A binding record written at configure time is not
+   proof of what executed.
+4. **Two zero-cost asymmetry detectors, both of which were sitting in the data unnoticed:**
+   * a ratio landing on an **exact small integer** is a double count — 12 of 15
+     `test_llama_4D_rms_norm` cases came out at exactly 2.00x ±3%;
+   * **core-count disagreement between the two sides on the same case** — 42 of 390. Needs
+     no timings at all, and `device_num_cores` is already recorded.
+
+### 4k.2 Repeats are not merely unnecessary — they are unsafe
+
+`DEVICE KERNEL DURATION` has no warm-up transient (measured 3-rep spread: 1.17% median), so
+repeats re-measure the same number. Worse: **3 dispatches per case corrupted 120 of 162**
+cases in the nightly layernorm suite, because several tests pass a residual and re-dispatching
+accumulates it into the output the assertion checks. Default must be one dispatch; 3-and-median
+only when adjudicating someone else's number, and never on an op that mutates its input.
+
+Corollary for any instrumented run: **the suite's own pass count is a check on the
+instrumentation.** If it moves, the measurement is interfering. That is how the 3-dispatch
+mistake caught itself.
+
+### 4k.3 Golden coverage — `buffer_type` is missing, and it hid a 1.69x native win
+
+The op's registry axes carry `memory_layout` but **no `buffer_type`**. `feature_spec.py` has
+**zero** occurrences of `buffer_type`/`BufferType`, and none of its 9 perf cases name L1. So
+no golden cell and no perf case could ever distinguish a DRAM-resident input from an
+L1-resident one.
+
+Consequence, measured: a case where native is **1.69x faster** survived 416 upstream
+reference cases and ~23,500 golden cases undetected. It surfaced only because one upstream
+nightly file happens to parametrize `in0_DRAM` / `in0_L1`.
+
+**Action for `/golden-tests` and the feature-spec template:** `buffer_type` is an input axis
+in its own right — DRAM-interleaved, L1-interleaved, and sharded are three different dataflow
+regimes, not two. Every op that reads an activation over the NoC needs at least one
+L1-interleaved cell in INPUTS and at least one L1-interleaved perf case. Sharded L1 does not
+cover it: with a shard each core reads its own slice, so the fan-out that causes the problem
+never occurs — which is why all 250 sharded cases were clean.
+
+**A naming trap found while checking this:** `in0_L1` in a test id matches 24 cases, of which
+**18 are a misnomer** — both configs that id labels in nightly `test_layernorm.py:206-219` are
+INTERLEAVED on `BufferType.DRAM`. Select on the resolved memory config, never on the id.
+
+### 4k.4 Design finding for the planner/implementer: read cadence is placement-dependent
+
+Mechanism, generalisable beyond norms: **a deep outstanding-read queue hides DRAM latency and
+creates contention against worker L1.** The generated reader left all 32 tiles of a row in
+flight before one barrier — 3,456 concurrent reads at 108 cores — and the reader's barrier
+wait went **3,736 → 16,783 ns** when the same tensor moved from DRAM to L1, while the *issue*
+loop got cheaper. Native barriers every 8 (`layernorm_op_multi_core.cpp:239`:
+`block_size = fp32_dest_acc_en ? 4 : 8`) and its reader time *halves* on L1 input.
+
+Rules worth adding to the Blocking Model / `/perf-ceiling-dm`:
+
+* Barrier cadence is a **knob**, and its optimum is placement-dependent and **not monotonic**
+  (sweep: 32 → 33,089 ns, 16 → 21,873, **8 → 20,819**, 4 → 21,360).
+* Cap **transactions, not bytes** — what saturates a worker's L1 read path is how many
+  requests are outstanding against it, and each `noc_async_read_tile` is one request whatever
+  its page size. A byte cap would track dtype instead.
+* Make it conditional: the same cap costs ~7% on a DRAM input, and 392 of 416 cases are DRAM.
+* **Read placement from the accessor's own `ArgConfig::IsDram` bit rather than adding a
+  compile-time argument.** A new CT arg must move both `READER_CT_SCALARS` and the kernel's
+  hardcoded `TensorAccessorArgs<33>()`, and the count assertion does not catch the mismatch —
+  it only counts. I hung a board that way. The literal duplicating a named constant is a trap
+  the implementer prompt should warn about generally.
+
+Outcome, re-measured over all 416: tail **0.591x → 0.760x**, median unmoved (1.4183 → 1.4179),
+**zero of the other 410 cases slowed by more than 5%**. Two L1 cases remain behind native, and
+the 5-case bench that motivated the fix **overstated it** (claimed ~0.94x tail). A fix's own
+bench is not the set.
+
+### 4k.5 The before/after switch — how to make a generated op swappable
+
+Cheapest mechanism that works, and the reasons each part is load-bearing:
+
+* **A constant in the packaged Python tree, not an environment variable.** `env:` on a
+  `run-with-log` step is *silently dropped* (`.github/actions/run-with-log/README.md:56-58`,
+  a documented composite-action limitation), which yields a green CI run against the wrong op.
+  The constant ships in the wheel, which CI builds from the branch.
+* **It must live inside the packaged tree.** CI checks the branch out to `/work` and puts it
+  on `PYTHONPATH`, but `import ttnn` resolves to the *installed wheel* — there is no
+  `ttnn/__init__.py` at the repo root. A conftest or sitecustomize at the root is ignored.
+* **The bind must be idempotent.** `ttnn/ttnn/operations/normalization.py` executes **twice**
+  (as `ttnn.operations.normalization` and under the bare name `normalization`), so an
+  unguarded `_native = ttnn.<op>` captures *its own wrapper* — which would make both A/B sides
+  the same op while reporting perfect agreement.
+* **Import lazily.** That module runs from `ttnn/__init__.py` while ttnn is half-built, and a
+  generated op reads `ttnn.float32` / `ttnn.NOC.*` / `ttnn.TensorMemoryLayout.*` at its own
+  module scope; an eager import takes the whole ttnn import down.
+* **Carry the golden onto the wrapper.** `get_golden_function` raises without it, and
+  upstream's `sharded_test_utils.rms_norm_golden` goes through it — so a naive rebind makes
+  every sharded upstream test error instead of run.
+* **Keep a handle to the pre-swap op** (`ttnn._native_<op>`). Once the symbol is rebound, any
+  suite that selects "native" by reading `ttnn.<op>` silently compares the replacement against
+  itself. This broke the traced-corpus harness the moment the switch landed.
+
+### 4k.6 Port-back is trivial — which supports generating on the `llk_helper_library` fork
+
+Evidence from doing it the other way round: the op package copied **verbatim** (`diff -rq`
+empty, kernels included), the 416 reference cases reproduced **416/416** and per-case device
+times matched the source clone to **0.2% median**, and package registration was *nothing* —
+no `__init__.py` edit, no CMake, because the op is a self-contained Python package and native
+is C++ behind nanobind. The four differing `kernel_lib` files had no reach on Blackhole.
+
+So the plan (generate on a branch forked from `llk_helper_library` minus the nuked ops, port
+back afterwards) is supported: the port is a directory copy plus a submodule pin.
+
+**And it retires machinery.** On a pre-nuke fork the reference suite's restore direction
+becomes a no-op — `RESTORED_HELPERS` came out **byte-identical** to the tree's own copy, and
+the `ALIASED_TYPES` shim is measured redundant (416/416 with it emptied, with 147 cases
+constructing native's config object directly). Both exist only because the generation tree had
+the target nuked. That is the journal's TODO-9 inversion, now measured rather than argued.
+
+### 4k.7 What a branch can and cannot prove in CI
+
+* **The post-commit sanity gate is unusable on the `llk_helper_library` lineage.** 34 of 34
+  sampled `main` runs pass at a median 14.6 min against a 40-min budget, and other people's
+  main-descended branches run it in 14.3–15.1 min — but this lineage needs **2,507 kernel
+  compiles against main's 322** (344 commits behind; `kernel_lib` differs by 102 files), and
+  branch jobs are pinned to a **read-only** cache replica
+  (`ttnn-sanity-tests-impl.yaml:177`), so nothing is saved for a re-run. Rebasing onto main is
+  the fix. **The native ancestor times out identically**, so this is not the op.
+* **L2 nightly (`fused`, Blackhole) is the usable gate** — it completed and passed, and the
+  logs prove the generated op ran (wheel stamped with the switch commit, the op's kernels in
+  the include path, freshly JIT-compiled `rms_norm_ttnn_*` objects).
+* **A green run can mean nothing ran.** An empty job matrix is skipped, the model filter only
+  *warns* when nothing matches, and a SKU with no live runner yields no jobs — all three
+  conclude successfully. Read the matrix step's output, not the run conclusion.
+* **Dispatch ≠ schedule.** L2 nightly hardcodes its categories only for `schedule`; pass none
+  on a dispatch and no ops tests run at all.
+
+### 4k.8 Model-level coverage — how to find it, since grep undercounts
+
+**43 of 91 tiered entries reach `ttnn.rms_norm`, and 30 of them never say "rms"** in the entry.
+Searching test-list entries by op name found 13 and missed every high-value candidate. The
+productive pattern is a **per-model norm module that resolves `is_distributed` to false by
+construction** — then the distributed branch is unreachable and the entry is a clean test.
+
+* **Single-card Blackhole entries exist** (`bh_p150`), contrary to the first read that model CI
+  is all Wormhole. Those are the ones comparable to a Blackhole-validated op.
+* **Unit vs whole-model is the distinction that matters.** A unit entry builds the norm module
+  and compares against torch; an e2e entry runs the model with real weights under program-cache
+  reuse and trace capture and ends in a **generated-token comparison** — where a numerical error
+  too small for PCC to catch would surface. Llama 3.1-8B e2e `token-matching` **passed** on the
+  generated op, single-card Blackhole: the first end-to-end evidence the swap survives a real model.
+* **Say which entries are pointless, in writing.** Several reach a distributed norm, a different
+  fused device op, or a hand-rolled chain — a green run there is not evidence, and someone will
+  otherwise read it as such.
+
+### 4k.9 One retraction to carry forward
+
+`eval/profiling.py:98-101` states that `to_torch` on a sharded output dispatches a
+`sharded_to_interleaved` program, and uses that to justify the dominant-program core-count
+choice. **It dispatches no program at all** — a bare `to_torch` issues a buffer read through
+the hardware command queue (per shard core, dispatch commands the resident `cq_prefetch`
+firmware executes by NOC-reading that core's L1 and relaying over PCIe), with the unshard
+inside the read and the untilize later on the host CPU. The core-count choice is still right;
+the stated reason is false, and it was being cited as authority.
+
+Two corollaries: **`device_kernel_ns` does not under-count an op read back with a bare
+`to_torch`** — the *explicit-conversion* route over-counts by charging the op a piece of test
+scaffolding. And the cost is moved, not removed: bare `to_torch` is **1.07–1.43x slower in
+host wall-clock** than convert-then-read, because the sharded read is one command sequence per
+shard core and cannot use the pinned direct-to-host path. Which names a gaming vector — an op
+can score better on a device-program metric by choosing an output format that is cheap on
+device and expensive to read back.
+
+### 4k.10 Filed, and still open
+
+* **tt_ops_code_gen#195** — agent instructions for measuring op performance, with the
+  before/after of each failure. Carries the `PERF_WINDOW=at_op|end_of_test` repro.
+* **`eval/perf_shim.py`** (`10ca301`) — op-agnostic A/B plugin: wraps whichever side is
+  selected, refuses to run when both resolve to the same callable, records the per-program
+  breakdown so a contaminated window is assertable.
+* **`eval/test_traced_corpus.py` + `eval/traced_corpus/rms_norm.json`** (`aada63b`) — the
+  traced corpus as data, replay harness with no side-switch.
+* Both on `dnijemcevic/rms_norm_ttnn_run1_refsuite_0908`. **They predate #185 and should be
+  reconciled against `op_window()` before landing anywhere permanent** — the plugin's window
+  and `op_window()` solve the same problem twice.
+* Still open: write the document #195 asks for; add `buffer_type` to the golden axes; correct
+  the `profiling.py` docstring; rebase the lineage onto main if the sanity gate is wanted.
+* ~~**UNRESOLVED and load-bearing:** a reproducible hang on the 32-sample Llama e2e eval~~
+  **RESOLVED 2026-09-15 — see 4k.11.** It is the op, not fabric; the ethernet evidence was a
+  false positive (4k.13). Fixed by an exit fence in the writer (`fa73ecbd7d5`) and the reader
+  (`31b0b1cbc98`). Port CHECKPOINT §18 carries the detail.
+* **New and open:** a tt-metal issue on the end-of-kernel `sent`-vs-`acked` check (4k.11) —
+  the highest-leverage item on this list, because it converts a class that today needs a
+  whole model into one a 20-line probe catches.
+
+### 4k.11 §15 is settled: it is the op, the defect class is op-agnostic, and the check that should have caught it tests the wrong counter
+
+Attributed, reproduced, fixed and closure-proved 2026-09-15. Four A/B pairs, one word apart:
+
+| | switch on (generated) | switch off (native) |
+|---|---|---|
+| CI, commit `1064e917066` | hang ×2 | **pass** (run `34984386609`) |
+| local, same tree, same command | hang | **pass**, 46.7 s |
+| local + the fix | **pass ×3** (44.8 / 42.1 / 41.5 s) | — |
+
+**The mechanism, which has nothing to do with norms.** Each RISC keeps a software count of
+the write ACKs it expects; `noc_async_write_barrier()` spins until the hardware ACK register
+**equals** that count; and `noc_local_state_init()` seeds the count by *snapshotting* the
+register when the kernel starts. So a kernel that exits with non-posted writes still
+unacknowledged desynchronises the **next kernel on that core permanently** — the late ACKs
+push the register past the snapshot, and an equality test cannot recover. Both triage
+reports show exactly that: hardware ahead of software by 42 (CI) and 28 (local), on core
+(0,0) / brisc / NOC0, with the stuck kernel being the *following* op's matmul reader.
+
+**How the op got there, and why it was reasonable.** The cross-core combine fences on
+DEPARTED, not ACKED — `async_writes_flushed()` at the gather ships, and `mcast_pipe`'s own
+`send_data_` after the broadcast. Sound between rounds, measured worth ~3%. It relies on the
+trailing `write_block()` for a real acked barrier, and on the L1-sharded-in-**and**-out plan
+the output is zero-copy, so `write_block()` is a **no-op**. Nothing acks and the kernel exits.
+The same exposure exists in the **reader**, whose per-channel multicast can also be its last
+NoC act; both got the fence.
+
+**Which NoC the writer is on is decided by the same predicate**, which is why the signature is
+brisc/NOC0 and not the writer's usual NOC_1: a resident L1 shard sets `native_in`, which puts
+the combine on NOC_0, which swaps both kernels' NoCs.
+
+**The framework names this exact failure and then tests the wrong counter.** `brisck.cc`'s
+end-of-kernel check has five members; reads and non-posted atomics are checked **acked**, but
+non-posted **writes** are checked `ncrisc_noc_nonposted_writes_sent` — *sent*. Its own
+diagnostic string is *"detected an inter-kernel data race due to kernel completing with
+pending NOC transactions"*, which is precisely what happened.
+
+**Measured, not argued.** Changing that one call to `ncrisc_noc_nonposted_writes_flushed` (the
+acked form) and running a **20-line probe** — eight iterations of `rms_norm` → `matmul` on a
+32-core width-sharded L1 tensor, no model, no trace — makes it fire immediately:
+
+```
+dump_lightweight_asserts.py:
+0,"1-2 (0,0)",brisc,rms_norm_ttnn_writer,  #1 _start () at brisck.cc 92:13
+```
+
+Same core, same RISC, same kernel as the production hang. With the `sent` form the identical
+probe passes silently. With both exit fences in **and** the acked check active on BRISC and
+NCRISC, it passes again — which is the closure proof, not just an absence of hangs.
+
+**So the single highest-value change here is not in any agent.** The runtime check for this
+defect already exists, runs on every `--dev` kernel exit, and is one counter away from working.
+A tt-metal issue is warranted; if it lands, this class is caught by the op's own unit tests
+instead of by a model.
+
+**The fix** is one `noc_async_write_barrier()` at the end of each data-movement kernel
+(`fa73ecbd7d5` + the reader's). Free wherever an acked barrier already happened. Cost over the
+canonical 416-case A/B: median 1.4179x → 1.4157x, geomean 1.8935x → 1.8795x, tail 0.7600x →
+0.7595x, 399 → 400 faster, 10 → 10 more than 5% slower; 416/416 pass on both sides.
+
+Rules to add:
+
+* **implementer / perf-part-optimizer:** a departed-only fence is legitimate inside a loop and
+  **never sufficient at kernel exit**. Any data-movement kernel that can end on one takes an
+  acked barrier before returning — writer *and* reader.
+* **perf-part-optimizer specifically:** it optimises one part *in isolation*, by design.
+  Deleting a fence is only correct in the context of what runs on that core **next**, which
+  isolation hides by construction. A fence deletion is not a local decision and must be
+  escalated with the whole-kernel exit path in view.
+
+  The agent's report format already asks for *"the domain — anything that stops the pattern
+  becoming the op's implementation everywhere, listing only exceptions that are incorrect,
+  inexpressible, or measurably slower."* The exception here **was** "incorrect", in the
+  existing category; nobody looked. So the prompt fix is one concrete question, not a new
+  concept: *after this change, what is the last NoC operation this kernel can execute on any
+  compiled path, and is it acked?* Note the op's own safety argument was rigorous and
+  correct as far as it went — same VC, same path, no reordering, so departure orders the
+  semaphore behind the data. It reasoned about the *receiver* and never about the *successor*.
+* **helper docs (`/tune-dm-helper`, `/apply-dm-helper`):** `mcast_pipe.hpp:63` states
+  `send()`'s postcondition as *"source L1 may be reused when send() returns"* — about the
+  caller's buffer, silent on NoC accounting. A helper whose completion is weaker than acked
+  must say so **in the same breath** as its source-reuse guarantee and name the caller's
+  residual obligation. This op is currently `mcast_pipe`'s only production caller, so the next
+  one inherits the trap.
+
+### 4k.12 The coverage gap is SEQUENCING — but the cheap behavioural fix does not work, and an existing runtime check does
+
+416 upstream reference cases, 390 post-commit and nightly, 140 traced production configs and
+~23,500 golden cells all pass with this defect live. They cannot see it for a structural
+reason: **every one of them dispatches the op and then reads back.** The failure needs a
+*different kernel on the same core, starting while the ACKs are still in flight.*
+
+That is 4k.3's lesson at a different altitude — there the missing axis was a *tensor* property
+(`buffer_type`), here it is a property of the **call sequence**, which the registry model
+cannot express at all because the model describes one call.
+
+**But do not conclude "add a back-to-back regime".** Three synthetic probes, fence removed,
+all **PASS**: (1) `rms_norm` → `matmul` ×8 with no readback; (2) the same captured as a trace
+and replayed 6×; (3) a 16-op body — `rms_norm` → `add` → `sharded_to_interleaved` →
+`interleaved_to_sharded` on the same 32 cores — traced and replayed 20×. Only the real model
+reproduces the *hang*: it needs the model's specific neighbour (a DRAM-sharded matmul whose
+in1 sender barriers on a shared core) and its dispatch density.
+
+**The regime that works is a check, not a workload.** The same 20-line probe catches it
+outright once the end-of-kernel check tests ACKED (4k.11). That is the recommendation: chase
+the assertion, not the schedule. A behavioural regime here is expensive, fragile and was
+measured not to reproduce; an invariant check is cheap, deterministic and already written.
+
+Two consequences for the pipeline:
+
+* **Run the op's sharded cases under `--dev` at least once per generation.** Today the eval
+  runner does not, so the lightweight end-of-kernel asserts never run on the op's own suite.
+* **`--dev` does not reach model scale.** The watcher build of this model dies before it
+  starts: `Program size (74496) too large for kernel config buffer (70656)`. So the safety net
+  is only available at unit scale, which is another reason to make the unit-scale check the
+  one that catches this class.
+* A whole-model e2e entry stays a **required gate** for an op replacing a production symbol —
+  it was the only instrument that found this — but it should be the backstop, not the detector.
+
+### 4k.13 Read a triage report differentially, never absolutely
+
+§15 read the CI triage as pointing at fabric: eight ethernet cores holding reads with zero
+responses, on a board reporting `ETH Live: 0x0000 (0 live)`. **That was noise.** The local
+reproduction — identical hang, identical core, identical counter mismatch — shows *no*
+ethernet finding at all, on a box whose links are up (`8 live`) and whose `check_eth_status`
+passes clean.
+
+Structural explanation: `check_noc_status` compares each core's NIU registers against software
+counters held in that core's L1, and on an idle ethernet core those counters are zero because
+no kernel is running there to maintain them. A false positive by construction.
+
+Cost: "op versus fabric is genuinely open" was held for days on it, and CI experiments were
+dispatched to settle what one local control settled in two minutes.
+
+**Rule: triage output is only interpretable against a matched control.** Run the control,
+triage it too, and diff. A finding present in both is the machine; a finding present only in
+the failing run is the bug. tt-triage prints everything it can see and most of it is normal.
+
+### 4k.14 Run the cheapest experiment first, and do not ask CI a one-word question
+
+What settled a multi-day question was flipping one word and waiting 45 seconds. That
+experiment was available throughout; CI was reached for instead, and CI is the wrong
+instrument for it:
+
+* the queue is hours — the baseline run sat `queued` behind a `bh_p150` runner;
+* the job log carries no per-core callstacks, only the triage artifact if it ran;
+* **a run can be cancelled and take its evidence with it.** `34967030089`, the original §15
+  flip experiment, was cancelled mid-flight: its job reports `steps: []` and its log is gone.
+  A `cancelled` conclusion is not a `failure` and is not a verdict.
+
+Rule: when a failure is isolated to a one-word switch, flip the switch **before** reading the
+triage in depth. Prefer a local `--dev` reproduction whenever the inputs can be made local —
+§16 shows the weights were fetchable from an internal cache the whole time.
+
+**Environment, for reproducing a single-card CI SKU on a multi-card box:** `MESH_DEVICE=P150`
+opens the **whole** cluster and dies in fabric router sync against uncabled links. Pin it with
+**`TT_VISIBLE_DEVICES=0`** — UMD's variable. Note `TT_METAL_VISIBLE_DEVICES` also exists, is
+parsed into `rtoptions`, and **nothing reads it**: setting it looks right and does nothing.
+
+### 4k.15 A correction to 4k.1's two "zero-cost asymmetry detectors", and the calibration neither had
+
+Both were re-run on the post-fence canonical set (416 paired cases, windows audited to hold
+exactly one program each). Neither survives as stated:
+
+* **Core-count disagreement between the two sides** fires on **60 of 416** here, in a
+  comparison that is sound. It is an asymmetry signal only when the two sides are *supposed*
+  to run the same program; between two independent implementations choosing their own work
+  split, a disagreement is a real difference. Keep it as a *same-side, before-vs-after* window
+  check — 0 of 416 here, which is the useful reading — not as a native-vs-generated check.
+* **The exact-2.00x double-count detector** fires on 2 of 416 at ±3%, about what chance gives.
+  It was diagnostic at 12-of-15 concentrated in one file; as a global count it is not.
+
+**And the instrument's own repeatability was never characterised, which matters more than
+either.** Between the two canonical runs the **native** side — which the fence cannot touch —
+moved by p5 −2.02% / median −0.02% / p95 +1.38%, with **8 cases more than 5% slower and a
+worst of +22.79%**. So per-case swings of ~20% on the sharded mix-precision cases are this
+harness's noise, and the generated side's worst +9.30% sits inside it. §14's "worst +3.68%,
+largest absolute cost +1,048 ns" was read as signal against an uncalibrated instrument.
+
+**Rule: before attributing a per-case perf delta to a change, measure the harness against
+itself** — re-run an untouched side and publish its spread next to the claim. It is free: it is
+the run you are already doing.
