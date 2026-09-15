@@ -466,16 +466,26 @@ class ttKDA:
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        new_recurrent, output = self.recurrence(
-            q=q,
-            k=k,
-            v=v,
-            gate=gate,
-            beta=beta,
-            initial_state=state.recurrent,
-            topology=topology if self.sequence_parallel_size > 1 else None,
-            wrap_indicator=wrap_indicator,
-        )
+        if self.sequence_parallel_size > 1:
+            new_recurrent, output = self.recurrence.sequence_parallel(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+                topology=topology,
+                wrap_indicator=wrap_indicator,
+            )
+        else:
+            new_recurrent, output = self.recurrence(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+            )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)

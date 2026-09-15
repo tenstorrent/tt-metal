@@ -58,7 +58,7 @@ def _run_recurrence(
         ),
         sequence_parallel_axis=None,
     )
-    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state, topology=None)
+    return executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=state)
 
 
 @pytest.mark.parametrize(
@@ -295,7 +295,7 @@ def _run_distributed_recurrence(
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        new_state, output = executor(
+        new_state, output = executor.sequence_parallel(
             q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state, topology=topology
         )
     return output, new_state
@@ -413,3 +413,18 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         rank, tp = divmod(index, 4)
         assert_accurate(entries[rank][tp].unsqueeze(0), ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
         assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+
+
+def test_private_recurrence_routes_have_required_sp_metadata() -> None:
+    import inspect
+    from typing import get_type_hints
+
+    assert "topology" not in inspect.signature(recurrence.KDARecurrence.__call__).parameters
+    assert "topology" not in inspect.signature(recurrence._scan_local_grouped_chunks).parameters
+    for function, parameter, expected_type in (
+        (recurrence.KDARecurrence.sequence_parallel, "topology", OffsetTopology),
+        (recurrence._scan_sp_grouped_chunks, "topology", OffsetTopology),
+        (recurrence._scan_sp_grouped_chunks, "sequence_parallel_axis", int),
+    ):
+        assert inspect.signature(function).parameters[parameter].default is inspect.Parameter.empty
+        assert get_type_hints(function)[parameter] == expected_type
