@@ -49,56 +49,79 @@ _CEILING_ONLY = 1.0
 _LOW_ISL_MARGIN = 0.08
 _KNEE_TOKENS = 512
 
-# Keyed kimi_k26 until the name was found to match no entry in SINGLE_EXPERT_MODELS; the shape is
-# unchanged (7168 x 2048 on both configs), so these numbers carried over as measured.
-# Device duration in ns per (model, active), x_rm layout, 11x8 grid: median of 3 dispatches on a
-# BH p150b (2026-08-28). Recalibrate on the perf runner (DDR-speed dependent): each case logs an
-# "RT-CAL" line in this dict's format, so one run regenerates the table.
+# Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
+# each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
+# each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 2_815,
-    ("kimi_k2_7", 128): 94_981,
-    ("kimi_k2_7", 256): 117_485,
-    ("kimi_k2_7", 512): 199_692,
-    ("kimi_k2_7", 1024): 344_132,
-    ("kimi_k2_7", 2048): 641_895,
-    ("kimi_k2_7", 4096): 1_227_771,
-    ("kimi_k2_7", 5120): 1_522_123,
-    ("glm_51", 0): 2_742,
-    ("glm_51", 128): 85_149,
-    ("glm_51", 256): 107_656,
-    ("glm_51", 512): 182_002,
-    ("glm_51", 1024): 318_281,
-    ("glm_51", 2048): 593_197,
-    ("glm_51", 4096): 1_144_483,
-    ("glm_51", 5120): 1_420_707,
+    ("kimi_k2_7", 0): 2_814,
+    ("kimi_k2_7", 128): 94_720,
+    ("kimi_k2_7", 256): 116_365,
+    ("kimi_k2_7", 512): 197_452,
+    ("kimi_k2_7", 1024): 344_344,
+    ("kimi_k2_7", 2048): 637_420,
+    ("kimi_k2_7", 4096): 1_229_421,
+    ("kimi_k2_7", 5120): 1_522_083,
+    ("glm_51", 0): 2_781,
+    ("glm_51", 128): 86_753,
+    ("glm_51", 256): 106_704,
+    ("glm_51", 512): 181_892,
+    ("glm_51", 1024): 318_833,
+    ("glm_51", 2048): 595_414,
+    ("glm_51", 4096): 1_146_764,
+    ("glm_51", 5120): 1_420_823,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
-# whole K-row weight slice in one NoC request instead of one per tile. The two placements cannot
-# share a table -- the gain lands where this op is weight-read bound, so an interleaved baseline
-# would fail those cases low.
+# whole K-row weight slice in ONE NoC request instead of one per tile. Its own table because the gain
+# lands where this op is weight-read bound -- 1.13-1.17x at 128, 1.10-1.12x at 256, and still 1.003-1.009x at 5120 -- so the interleaved
+# bands reject the low-ISL cases outright.
 #
-# Empty until measured on the perf runner. A case with no entry skips rather than asserting, so a
-# placement nobody has calibrated never reports green. To fill a slot, put any rough value in and
-# run the case: assert_op_duration_merged logs the measured RT-CAL line before it asserts, in this
-# dict's format.
-_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {}
+# ONE sweep on a BH p150b (2026-09-15), each case a median of _ITERS dispatches. The interleaved
+# table above is the midpoint of THREE sweeps; these carry no cross-sweep spread, so the low-ISL
+# entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
+_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
+    ("kimi_k2_7", 0): 2_804,
+    ("kimi_k2_7", 128): 83_568,
+    ("kimi_k2_7", 256): 105_725,
+    ("kimi_k2_7", 512): 187_207,
+    ("kimi_k2_7", 1024): 336_756,
+    ("kimi_k2_7", 2048): 633_483,
+    ("kimi_k2_7", 4096): 1_223_453,
+    ("kimi_k2_7", 5120): 1_517_023,
+    ("glm_51", 0): 2_788,
+    ("glm_51", 128): 74_208,
+    ("glm_51", 256): 95_352,
+    ("glm_51", 512): 168_893,
+    ("glm_51", 1024): 309_367,
+    ("glm_51", 2048): 584_487,
+    ("glm_51", 4096): 1_133_505,
+    ("glm_51", 5120): 1_407_487,
+}
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
 # it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 2_751,
-    128: 85_021,
-    256: 124_976,
-    512: 219_777,
-    1024: 398_779,
-    2048: 752_027,
-    4096: 1_466_435,
-    5120: 1_820_459,
+    0: 2_779,
+    128: 86_120,
+    256: 120_776,
+    512: 219_165,
+    1024: 399_470,
+    2048: 755_772,
+    4096: 1_467_782,
+    5120: 1_826_516,
 }
 
-# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS, keyed on active count alone. Same rules.
-_K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {}
+# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.08x at 128 and 256, 1.07x at 512.
+_K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
+    0: 2_844,
+    128: 79_762,
+    256: 111_407,
+    512: 204_457,
+    1024: 382_922,
+    2048: 738_619,
+    4096: 1_454_733,
+    5120: 1_810_441,
+}
 
 
 def _baseline_or_skip(table, key, label: str):

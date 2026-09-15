@@ -41,60 +41,85 @@ _CEILING_ONLY = 1.0
 # median still has a long right tail (glm-256 spans 192-208us over 15 runs); >=512 holds inside 1.5%.
 _LOW_ISL_MARGIN = 0.08
 
-# Device duration in ns per (model, active), x_rm layout: midpoint of min/max over 3 sweeps on a
-# BH p150b (2026-09-07), each sweep itself a median of _ITERS dispatches. Cross-sweep spread was
-# <=0.8% on every case except active=0, where it reaches 1.4% on ~40 ns inside a ceiling-only band.
-# Recalibrate on the perf runner (DDR-speed dependent): each case logs an "RT-CAL" line in this
-# dict's format, so one run regenerates the table.
+# Device duration in ns per (model, active), x_rm layout: ONE sweep on a BH p150b (2026-09-15),
+# each case a median of _ITERS dispatches. Recalibrate on the perf runner (DDR-speed dependent):
+# each case logs an "RT-CAL" line in this dict's format, so one run regenerates the table.
 _EXPECTED_NS: dict[tuple[str, int], int] = {
-    ("kimi_k2_7", 0): 3_070,
-    ("kimi_k2_7", 128): 124_138,
-    ("kimi_k2_7", 256): 127_468,
-    ("kimi_k2_7", 512): 163_392,
-    ("kimi_k2_7", 1024): 294_276,
-    ("kimi_k2_7", 2048): 582_623,
-    ("kimi_k2_7", 4096): 1_156_686,
-    ("kimi_k2_7", 5120): 1_442_257,
-    ("glm_51", 0): 3_080,
-    ("glm_51", 128): 110_011,
-    ("glm_51", 256): 113_106,
-    ("glm_51", 512): 145_205,
-    ("glm_51", 1024): 257_948,
-    ("glm_51", 2048): 508_353,
-    ("glm_51", 4096): 1_011_275,
-    ("glm_51", 5120): 1_266_670,
+    ("kimi_k2_7", 0): 3_128,
+    ("kimi_k2_7", 128): 119_261,
+    ("kimi_k2_7", 256): 123_408,
+    ("kimi_k2_7", 512): 161_361,
+    ("kimi_k2_7", 1024): 294_258,
+    ("kimi_k2_7", 2048): 579_644,
+    ("kimi_k2_7", 4096): 1_151_677,
+    ("kimi_k2_7", 5120): 1_435_744,
+    ("glm_51", 0): 3_093,
+    ("glm_51", 128): 105_461,
+    ("glm_51", 256): 108_710,
+    ("glm_51", 512): 143_111,
+    ("glm_51", 1024): 258_010,
+    ("glm_51", 2048): 507_291,
+    ("glm_51", 4096): 1_010_650,
+    ("glm_51", 5120): 1_257_824,
 }
 
 # Same measurement and key as _EXPECTED_NS, with the weights DRAM ND-sharded: a core fetches its
-# whole K-row weight slice in one NoC request instead of one per tile. The two placements cannot
-# share a table -- the gain lands where this op is weight-read bound, which is exactly the low-ISL
-# end, so an interleaved baseline would fail those cases low.
+# whole K-row weight slice in ONE NoC request instead of one per tile. Its own table because the gain
+# lands where this op is weight-read bound -- 1.15x at 128 active tokens, 1.10x at 256, 1.03x at 512, flat from 1024 up -- so the interleaved
+# bands reject the low-ISL cases outright.
 #
-# Empty until measured on the perf runner. A case with no entry skips rather than asserting, so a
-# placement nobody has calibrated never reports green. To fill a slot, put any rough value in and
-# run the case: assert_op_duration_merged logs the measured RT-CAL line before it asserts, in this
-# dict's format.
-_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {}
+# ONE sweep on a BH p150b (2026-09-15), each case a median of _ITERS dispatches. The interleaved
+# table above is the midpoint of THREE sweeps; these carry no cross-sweep spread, so the low-ISL
+# entries are the thin ones -- which is what _LOW_ISL_MARGIN is there to absorb.
+_NDSHARD_EXPECTED_NS: dict[tuple[str, int], int] = {
+    ("kimi_k2_7", 0): 3_028,
+    ("kimi_k2_7", 128): 103_905,
+    ("kimi_k2_7", 256): 111_867,
+    ("kimi_k2_7", 512): 156_073,
+    ("kimi_k2_7", 1024): 294_217,
+    ("kimi_k2_7", 2048): 579_130,
+    ("kimi_k2_7", 4096): 1_148_860,
+    ("kimi_k2_7", 5120): 1_437_110,
+    ("glm_51", 0): 3_076,
+    ("glm_51", 128): 91_694,
+    ("glm_51", 256): 98_510,
+    ("glm_51", 512): 138_469,
+    ("glm_51", 1024): 258_023,
+    ("glm_51", 2048): 506_622,
+    ("glm_51", 4096): 1_003_975,
+    ("glm_51", 5120): 1_257_886,
+}
 
 
 # Kimi K3 runs SiTU-GLU at the post-projection dims, so its K axis is ROUTED_EXPERT_HIDDEN_SIZE and
-# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). Same measurement as
-# _EXPECTED_NS: midpoint of min/max over 3 sweeps, each a median of _ITERS dispatches, x_rm layout,
-# on a BH p150b (2026-09-07). Flat to ~256 tokens (the op sits on its DRAM weight-read floor),
-# linear in tokens past that.
+# it cannot be driven from SINGLE_EXPERT_MODELS (which reads config.EMB_SIZE). x_rm layout on a BH
+# p150b (2026-09-15), each case a median of _ITERS dispatches.
+#
+# K3's per_core_N_d is 11 -- PRIME, so the down matmul has no divisor reaching a 3-tile subblock and
+# rests on the ragged-tail path to avoid running 1x1, which costs 1.20-1.24x from 512 up. One sweep,
+# not the midpoint of three.
 _K3_SITU_EXPECTED_NS: dict[int, int] = {
-    0: 3_051,
-    128: 117_284,
-    256: 118_939,
-    512: 179_359,
-    1024: 342_776,
-    2048: 670_700,
-    4096: 1_324_076,
-    5120: 1_658_242,
+    0: 3_099,
+    128: 108_502,
+    256: 109_698,
+    512: 153_084,
+    1024: 277_401,
+    2048: 547_310,
+    4096: 1_100_281,
+    5120: 1_368_318,
 }
 
-# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS, keyed on active count alone. Same rules.
-_K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {}
+# Kimi K3 SiTU-GLU counterpart of _NDSHARD_EXPECTED_NS: 1.16x at 128, 1.14x at 256, flat from 1024.
+_K3_SITU_NDSHARD_EXPECTED_NS: dict[int, int] = {
+    0: 3_106,
+    128: 93_428,
+    256: 96_435,
+    512: 147_440,
+    1024: 277_589,
+    2048: 547_691,
+    4096: 1_084_730,
+    5120: 1_360_024,
+}
 
 # K3's DRAM weight read is 18.58 MB against a ~117 us floor, so its knee sits a token count later
 # than kimi_k2_7's or glm_51's: 512 is the first case where compute starts to cover the read, and it
