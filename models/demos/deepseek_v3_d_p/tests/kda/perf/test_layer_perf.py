@@ -181,6 +181,8 @@ def _deallocate_state(state: KdaState) -> None:
 
 
 def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
+    if any("pack_convolution_carry" in Path(source).stem for source in kernel_sources):
+        return "experimental.kda.pack_convolution_carry"
     names = set()
     for source in kernel_sources:
         parts = source.replace("\\", "/").split("/")
@@ -202,6 +204,12 @@ def _device_program_label(kernel_sources: tuple[str, ...]) -> str:
 
 
 def test_device_program_label_preserves_material_operation_identity() -> None:
+    assert (
+        _device_program_label(
+            ("src/operations/experimental/kda/qkv_causal_conv1d_silu/" "reader_pack_convolution_carry.cpp",)
+        )
+        == "experimental.kda.pack_convolution_carry"
+    )
     assert (
         _device_program_label(("src/operations/experimental/kda/recurrent_chunk_scan/kernel.cpp",))
         == "experimental.kda.recurrent_chunk_scan"
@@ -245,7 +253,14 @@ def test_synthetic_performance_uses_two_sided_margin(layout, monkeypatch, expect
         _assert_synthetic_performance(layout, reference_ms * 1.04)
 
 
-def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden: ttnn.Tensor, layout: str) -> None:
+def _log_device_program_times(
+    mesh_device: ttnn.MeshDevice,
+    layer: ttKDA,
+    hidden: ttnn.Tensor,
+    layout: str,
+    *,
+    actual_start: int = 0,
+) -> list[dict[str, Any]]:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         raise RuntimeError(f"real-time profiler is inactive for the {layout} KDA e2e device-time breakdown")
     state = _allocate_state(layer)
@@ -254,7 +269,7 @@ def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden
     profiled_results: list[tuple[ttnn.Tensor, KdaState]] = []
 
     def run_profiled_forward() -> tuple[ttnn.Tensor, KdaState]:
-        result = layer.forward(hidden, state)
+        result = layer.forward(hidden, state, actual_start)
         profiled_results.append(result)
         return result
 
@@ -296,6 +311,15 @@ def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden
             }
             for sequence, info in enumerate(per_program.values())
         ]
+        # Summary and scan intentionally share one device-operation factory and
+        # therefore the same kernel source paths.  In a KDA layer they are the
+        # first and second occurrence, respectively; name the first explicitly
+        # so topology and timings remain attributable to the two distinct calls.
+        recurrent_programs = [
+            program for program in programs if program["name"] == "experimental.kda.recurrent_chunk_scan"
+        ]
+        if len(recurrent_programs) == 2:
+            recurrent_programs[0]["name"] = "experimental.kda.summarize_chunk_recurrence"
         incomplete_program_sequences = [program["sequence"] for program in programs if not program["complete"]]
         durations_by_name: dict[str, list[float]] = {}
         for program in programs:
@@ -314,6 +338,7 @@ def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden
             + json.dumps(
                 {
                     "layout": layout,
+                    "actual_start": actual_start,
                     "measurement": "one warm eager forward outside gated trace samples",
                     "duration_semantics": (
                         "per-program max across reported chip records; programs may overlap and durations must not be summed"
@@ -328,6 +353,7 @@ def _log_device_program_times(mesh_device: ttnn.MeshDevice, layer: ttKDA, hidden
                 sort_keys=True,
             )
         )
+        return programs
     finally:
         if profiled_results and output is None:
             output, next_state = profiled_results[-1]
@@ -344,6 +370,7 @@ def _trace_wall_samples_ms(
     hidden: ttnn.Tensor,
     repetitions: int,
     validate_first_replay: Callable[[KdaState, ttnn.Tensor], dict[str, float]] | None = None,
+    actual_start: int = 0,
 ) -> tuple[list[float], dict[str, float] | None]:
     state = None
     warm_output = None
@@ -353,7 +380,7 @@ def _trace_wall_samples_ms(
     next_state = None
     try:
         state = _allocate_state(layer)
-        warm_output, warm_state = layer.forward(hidden, state)
+        warm_output, warm_state = layer.forward(hidden, state, actual_start)
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(warm_output)
         warm_output = None
@@ -361,7 +388,7 @@ def _trace_wall_samples_ms(
         warm_state = None
 
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        output, next_state = layer.forward(hidden, state)
+        output, next_state = layer.forward(hidden, state, actual_start)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)

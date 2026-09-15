@@ -19,7 +19,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_RECURRENT_STATE_DTYPE,
     KDAProgramConfig,
 )
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, _offset_topology
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -45,6 +46,37 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     return ttnn.TILE_SIZE * _largest_divisor_at_most(
         channels // ttnn.TILE_SIZE, configured_chunk_size // ttnn.TILE_SIZE
     )
+
+
+def _wrap_indicators(
+    device: ttnn.MeshDevice,
+    *,
+    sequence_parallel_axis: int,
+    sp_size: int,
+) -> tuple[ttnn.Tensor, ...]:
+    """One selector per candidate boundary chip, indexed by SP rank.
+
+    The candidates are just the SP ranks, so the content is fixed at
+    construction; only which selector a forward picks depends on the offset.
+    """
+    mesh_dims: list[int | None] = [None, None]
+    mesh_dims[sequence_parallel_axis] = 0
+    mesh_shape = tuple(device.shape)
+    selectors = []
+    for chip in range(sp_size):
+        indicator = torch.zeros(sp_size, 1, 1)
+        indicator[chip] = 1.0
+        selectors.append(
+            ttnn.from_torch(
+                indicator,
+                dtype=KDA_RECURRENT_STATE_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
+            )
+        )
+    return tuple(selectors)
 
 
 @dataclass(frozen=True)
@@ -160,6 +192,13 @@ class ttKDA:
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._wrap_indicators = (
+            _wrap_indicators(
+                self.device, sequence_parallel_axis=self.sequence_parallel_axis, sp_size=self.sequence_parallel_size
+            )
+            if self.sequence_parallel_size > 1
+            else ()
+        )
 
     @property
     def _convolution_width(self) -> int:
@@ -190,8 +229,11 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: int,
     ) -> None:
         """Validate shape/type plus the documented SP state-distribution contract."""
+        if actual_start < 0 or actual_start % KDA_CHUNK_SIZE:
+            raise ValueError(f"actual_start must be a non-negative multiple of {KDA_CHUNK_SIZE}, got {actual_start}")
         if len(hidden_states.shape) != 3 or hidden_states.shape[-1] != self.config.hidden_size:
             raise ValueError(
                 f"hidden_states shape {tuple(hidden_states.shape)} must be [B,T,{self.config.hidden_size}]"
@@ -219,43 +261,62 @@ class ttKDA:
         self,
         qkv: ttnn.Tensor,
         convolution_state: ttnn.Tensor,
+        topology: OffsetTopology,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """Run depthwise convolution and emit Q/K/V without post-convolution slices."""
         config = self.config
         channels = self._convolution_width
         sequence = qkv.shape[1]
-        qkv_row_major = ttnn.to_layout(
-            qkv,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        state_row_major = ttnn.to_layout(
-            convolution_state,
-            ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
         if self.sequence_parallel_size > 1:
-            state_row_major, new_state = exchange_convolution_carry(
-                qkv_row_major,
-                state_row_major,
+            convolution_state, new_state = exchange_convolution_carry(
+                qkv,
+                convolution_state,
                 sequence_parallel_axis=self.sequence_parallel_axis,
+                topology=topology,
             )
         else:
             new_state = ttnn.slice(
-                qkv_row_major,
+                qkv,
                 (0, sequence - (config.conv_kernel_size - 1), 0),
-                (qkv_row_major.shape[0], sequence, channels),
+                (qkv.shape[0], sequence, channels),
             )
-        # The replacement state is BF16 row-major DRAM [B, K - 1, Q_local + K_local + V_local],
-        # channel-sharded across TP and replicated across SP.
         q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
-            qkv_row_major,
-            state_row_major,
+            qkv,
+            convolution_state,
             *self.weights.convolution_taps,
             config.q_dim,
             config.k_dim,
             config.v_dim,
             program_config=self.qkv_convolution_program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        return q, k, v, new_state
+
+    def _convolve_split_qkv(
+        self,
+        qkv: ttnn.Tensor,
+        convolution_state: ttnn.Tensor,
+        topology: OffsetTopology,
+        wrap_indicator: ttnn.Tensor,
+    ) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """Convolve the full partition once with both required history planes."""
+        history, new_state = exchange_split_convolution_carry(
+            qkv,
+            convolution_state,
+            sequence_parallel_axis=self.sequence_parallel_axis,
+            topology=topology,
+            wrap_indicator=wrap_indicator,
+        )
+        q, k, v = ttnn.experimental.kda.qkv_causal_conv1d_silu(
+            qkv,
+            history,
+            *self.weights.convolution_taps,
+            self.config.q_dim,
+            self.config.k_dim,
+            self.config.v_dim,
+            program_config=self.qkv_convolution_program_config,
+            wrap_row=topology.head_rows,
+            wrap_indicator=wrap_indicator,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         return q, k, v, new_state
@@ -386,29 +447,67 @@ class ttKDA:
         self,
         hidden_states: ttnn.Tensor,
         state: KdaState,
+        actual_start: int = 0,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """Run prefill KDA and return replacement logical carries.
+
+        ``actual_start`` is the absolute global position of this chunk's first
+        token. It selects the chronological SP segment order for MLA's
+        block-cyclic layout; the default of zero is the natural order and is
+        numerically identical to the pre-offset path. Every SP rank must observe
+        the same value.
 
         The input state is only read. No tensor reachable from it is used as a
         ``ttnn.copy`` destination or retained on this layer. The returned output
         is sequence-partitioned along SP and, when TP > 1, reduce-scattered on
         the hidden dimension; TP == 1 returns the full hidden dimension.
         """
-        self._validate_forward(hidden_states, state)
+        self._validate_forward(hidden_states, state, actual_start)
+        topology = _offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
         projected = self._project_inputs(hidden_states)
-        q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution)
+        qkv = ttnn.to_layout(projected.qkv, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        convolution_state = ttnn.to_layout(
+            state.convolution, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        if topology.is_split:
+            wrap_indicator = self._wrap_indicators[topology.boundary_chip]
+            q, k, v, new_convolution = self._convolve_split_qkv(qkv, convolution_state, topology, wrap_indicator)
+        else:
+            q, k, v, new_convolution = self._convolve_qkv(qkv, convolution_state, topology)
         gate, beta = self._compute_gates(
             beta=projected.beta,
             decay_rank=projected.decay_rank,
         )
-        new_recurrent, output = self.recurrence(
-            q=q,
-            k=k,
-            v=v,
-            gate=gate,
-            beta=beta,
-            initial_state=state.recurrent,
-        )
+        if topology.is_split:
+            new_recurrent, output = self.recurrence.split_sequence_parallel(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+                topology=topology,
+                wrap_indicator=wrap_indicator,
+            )
+        elif self.sequence_parallel_size > 1:
+            new_recurrent, output = self.recurrence.sequence_parallel(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+                topology=topology,
+            )
+        else:
+            new_recurrent, output = self.recurrence(
+                q=q,
+                k=k,
+                v=v,
+                gate=gate,
+                beta=beta,
+                initial_state=state.recurrent,
+            )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)
         return output, KdaState(recurrent=new_recurrent, convolution=new_convolution)

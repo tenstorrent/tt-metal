@@ -168,7 +168,7 @@ FORCE_INLINE void copy(DataflowBuffer& in, DataflowBuffer& out, uint32_t tiles) 
     out.push_back(tiles);
 }
 
-template <uint32_t Kt, uint32_t Vt, uint32_t G>
+template <uint32_t Kt, uint32_t Vt, uint32_t G, uint32_t segmented, uint32_t reset_group>
 TT_KERNEL void compute(uint32_t group) {
     constexpr uint32_t affine_a_tiles = Kt * Kt;
     constexpr uint32_t affine_b_tiles = Kt * Vt;
@@ -181,12 +181,32 @@ TT_KERNEL void compute(uint32_t group) {
     DataflowBuffer from_remote_affine(dfb::from_remote_affine);
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
+    DataflowBuffer tail_affine(dfb::tail_affine);
+    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer reset_b(dfb::reset_b);
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::initial_a, dfb::initial_b, dfb::to_remote_a);
     initial_a.wait_front(affine_a_tiles);
     initial_b.wait_front(affine_b_tiles);
-    copy(initial_a, to_remote_a, affine_a_tiles);
-    copy(initial_b, to_remote_b, affine_b_tiles);
+    if constexpr (segmented) {
+        if (group == reset_group) {
+            tail_affine.wait_front(affine_a_tiles + affine_b_tiles);
+            tail_state.wait_front(affine_b_tiles);
+            matmul_add_affine_b<Kt, Kt, Vt>(tail_affine, tail_state, reset_b);
+            reset_b.wait_front(affine_b_tiles);
+            copy(initial_a, to_remote_a, affine_a_tiles);
+            copy(reset_b, to_remote_b, affine_b_tiles);
+            reset_b.pop_front(affine_b_tiles);
+            tail_affine.pop_front(affine_a_tiles + affine_b_tiles);
+            tail_state.pop_front(affine_b_tiles);
+        } else {
+            copy(initial_a, to_remote_a, affine_a_tiles);
+            copy(initial_b, to_remote_b, affine_b_tiles);
+        }
+    } else {
+        copy(initial_a, to_remote_a, affine_a_tiles);
+        copy(initial_b, to_remote_b, affine_b_tiles);
+    }
     initial_a.pop_front(affine_a_tiles);
     initial_b.pop_front(affine_b_tiles);
 

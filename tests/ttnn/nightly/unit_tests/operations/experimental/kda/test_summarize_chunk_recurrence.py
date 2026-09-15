@@ -181,6 +181,212 @@ def test_summarize_chunk_recurrence_contract_trace_and_semantics(
     assert_summary_reconstructs_state(host_inputs, ttnn.to_torch(first[0]), ttnn.to_torch(first[1]))
 
 
+@pytest.mark.parametrize(
+    "indicator_value,wrap_chunk,emit_tail",
+    [
+        (0, 0, False),
+        (1, 0, False),
+        (0, 2, False),
+        (1, 2, False),
+        (None, 2, False),
+        (None, 2, True),
+        (1, 0, True),
+        (1, 4, True),
+    ],
+)
+def test_summarize_chunk_recurrence_rejects_unsupported_wrap_modes(
+    device: ttnn.Device,
+    indicator_value: int | None,
+    wrap_chunk: int,
+    emit_tail: bool,
+    expect_error,
+) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32, seed=821), device)
+    indicator = None if indicator_value is None else to_device(torch.tensor([[[float(indicator_value)]]]), device)
+    with expect_error(RuntimeError, "wrap|tail summaries"):
+        run_summary(inputs, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=emit_tail)
+
+
+@pytest.mark.parametrize("keyword", ["chunk_start", "chunk_count"])
+def test_summarize_chunk_recurrence_has_no_range_controls(device: ttnn.Device, keyword: str, expect_error) -> None:
+    inputs = device_protocol(host_protocol(2, 4, 32, 32), device)
+    with expect_error(TypeError, "incompatible function arguments"):
+        ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{keyword: 1})
+
+
+def _segmented_summary_oracle(
+    host_inputs: tuple[torch.Tensor, ...], groups_per_head: int, chunks_per_group: int, wrap_chunk: int
+) -> tuple[torch.Tensor, ...]:
+    folded_heads = host_inputs[0].shape[0]
+    dim = host_inputs[1].shape[-1]
+    expected_parts: list[list[torch.Tensor]] = [[], [], [], []]
+    identity_a = torch.eye(dim, dtype=torch.float32).unsqueeze(0)
+    identity_b = torch.zeros((1, dim, dim), dtype=torch.float32)
+    for folded_head in range(folded_heads):
+        group = folded_head % groups_per_head
+        group_start = group * chunks_per_group
+        group_end = group_start + chunks_per_group
+        head_count = max(min(wrap_chunk, group_end) - group_start, 0)
+        tail_start = min(max(wrap_chunk - group_start, 0), chunks_per_group)
+        for segment_start, segment_end, destination in (
+            (0, head_count, 0),
+            (tail_start, chunks_per_group, 2),
+        ):
+            if segment_start == segment_end:
+                affine_a, affine_b = identity_a, identity_b
+            else:
+                segment = tuple(
+                    tensor[folded_head : folded_head + 1, segment_start:segment_end] for tensor in host_inputs
+                )
+                affine_a, affine_b = summary_oracle(segment)
+            expected_parts[destination].append(affine_a)
+            expected_parts[destination + 1].append(affine_b)
+    return tuple(torch.cat(parts, dim=0) for parts in expected_parts)
+
+
+@pytest.mark.parametrize(
+    ("groups_per_head", "chunks_per_group", "wrap_chunk"),
+    [
+        pytest.param(1, 4, 1, id="g1-first"),
+        pytest.param(1, 4, 3, id="g1-last"),
+        pytest.param(2, 4, 4, id="g2-boundary"),
+        pytest.param(2, 4, 5, id="g2-straddle"),
+        pytest.param(4, 4, 7, id="g4-before-boundary"),
+        pytest.param(4, 4, 8, id="g4-boundary"),
+        pytest.param(4, 4, 9, id="g4-after-boundary"),
+        pytest.param(4, 4, 15, id="g4-final"),
+    ],
+)
+def test_summarize_chunk_recurrence_emits_grouped_head_and_tail_segments(
+    device: ttnn.Device,
+    groups_per_head: int,
+    chunks_per_group: int,
+    wrap_chunk: int,
+) -> None:
+    batch_heads = 2
+    dim = 32
+    folded_heads = batch_heads * groups_per_head
+    host_inputs = host_protocol(folded_heads, chunks_per_group, dim, dim, seed=831 + wrap_chunk)
+    inputs = device_protocol(host_inputs, device)
+    indicator = to_device(torch.ones(1, 1, 1), device)
+
+    expected = _segmented_summary_oracle(host_inputs, groups_per_head, chunks_per_group, wrap_chunk)
+
+    actual = run_summary(
+        inputs,
+        wrap_indicator=indicator,
+        wrap_chunk=wrap_chunk,
+        groups_per_head=groups_per_head,
+        emit_tail_summaries=True,
+    )
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("head_a", "head_b", "tail_a", "tail_b"),
+        context=f"G={groups_per_head} g={chunks_per_group} wrap={wrap_chunk}",
+        pcc_threshold=0.999,
+    )
+    head_a, head_b, tail_a, tail_b = (ttnn.to_torch(t).float() for t in actual)
+    full_a, full_b = summary_oracle(host_inputs)
+    assert_accurate(full_a, tail_a @ head_a, name="tail-after-head A", pcc_threshold=0.999)
+    assert_accurate(full_b, tail_a @ head_b + tail_b, name="tail-after-head B", pcc_threshold=0.999)
+
+
+def test_summarize_chunk_recurrence_segmented_cache_trace_and_ordinary_equivalence(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    batch_heads, groups_per_head, chunks_per_group, dim, wrap_chunk = 2, 4, 4, 32, 9
+
+    def make(seed: int, boundary: bool) -> tuple[tuple[torch.Tensor, ...], tuple[ttnn.Tensor, ...], ttnn.Tensor]:
+        host = host_protocol(batch_heads * groups_per_head, chunks_per_group, dim, dim, seed=seed)
+        inputs = device_protocol(host, device)
+        indicator = to_device(torch.tensor([[[float(boundary)]]]), device)
+        return host, inputs, indicator
+
+    host_a, inputs_a, indicator_a = make(1931, True)
+    host_b, inputs_b, indicator_b = make(1932, True)
+    outputs_a = run_summary(
+        inputs_a,
+        wrap_indicator=indicator_a,
+        wrap_chunk=wrap_chunk,
+        groups_per_head=groups_per_head,
+        emit_tail_summaries=True,
+    )
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    outputs_b = run_summary(
+        inputs_b,
+        wrap_indicator=indicator_b,
+        wrap_chunk=wrap_chunk,
+        groups_per_head=groups_per_head,
+        emit_tail_summaries=True,
+    )
+    ttnn.synchronize_device(device)
+    assert device.num_program_cache_entries() == entries
+    assert all(
+        a.buffer_address() != b.buffer_address()
+        for a, b in zip((*inputs_a, indicator_a), (*inputs_b, indicator_b), strict=True)
+    )
+    assert_outputs_accurate(
+        _segmented_summary_oracle(host_a, groups_per_head, chunks_per_group, wrap_chunk),
+        outputs_a,
+        names=("head_a", "head_b", "tail_a", "tail_b"),
+        context="segmented summary cache miss",
+    )
+    assert_outputs_accurate(
+        _segmented_summary_oracle(host_b, groups_per_head, chunks_per_group, wrap_chunk),
+        outputs_b,
+        names=("head_a", "head_b", "tail_a", "tail_b"),
+        context="segmented summary cache hit",
+    )
+
+    trace_id = None
+    capturing = False
+    traced = None
+    try:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        capturing = True
+        traced = run_summary(
+            inputs_b,
+            wrap_indicator=indicator_b,
+            wrap_chunk=wrap_chunk,
+            groups_per_head=groups_per_head,
+            emit_tail_summaries=True,
+        )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        capturing = False
+        for replay in range(3):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            for name, cached, replayed in zip(("head_a", "head_b", "tail_a", "tail_b"), outputs_b, traced, strict=True):
+                assert_bit_identical(
+                    ttnn.to_torch(cached), ttnn.to_torch(replayed), name=f"segmented {name} trace replay"
+                )
+    finally:
+        try:
+            if capturing:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(device, trace_id)
+            if traced is not None:
+                for tensor in traced:
+                    ttnn.deallocate(tensor)
+
+    host_o, inputs_o, ordinary_indicator = make(1933, False)
+    baseline = run_summary(inputs_o)
+    ordinary = run_summary(
+        inputs_o,
+        wrap_indicator=ordinary_indicator,
+        wrap_chunk=wrap_chunk,
+        groups_per_head=groups_per_head,
+        emit_tail_summaries=True,
+    )
+    for name, baseline_output, ordinary_output in zip(("affine_a", "affine_b"), baseline, ordinary[:2], strict=True):
+        assert_bit_identical(
+            ttnn.to_torch(baseline_output), ttnn.to_torch(ordinary_output), name=f"ordinary segmented {name}"
+        )
+
+
 def _regression_protocol(
     device: ttnn.Device,
     *,
@@ -505,3 +711,63 @@ def test_summarize_chunk_recurrence_does_not_expose_prototype_modes(
     inputs = device_protocol(host_protocol(2, 2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.summarize_chunk_recurrence(*inputs, **{removed_keyword: True})
+
+
+def test_segmented_k128_sharded_summary_rebinds_indicator(device: ttnn.Device, isolated_program_cache: None) -> None:
+    from tests.ttnn.nightly.unit_tests.operations.experimental.kda.test_affine_exclusive_scan import (
+        _height_sharded_memory_config,
+    )
+
+    groups, chunks, dim = 4, 4, 128
+    memory = _height_sharded_memory_config(device, 2 * groups, dim, dim)
+    retained = []
+    entries = None
+    for seed, boundary in ((971, True), (972, False), (973, True)):
+        host = host_protocol(2 * groups, chunks, dim, dim, bf16_names=BF16_ALLOWED, seed=seed)
+        inputs = device_protocol(host, device)
+        indicator = to_device(torch.tensor([[[float(boundary)]]]), device)
+        before = tuple(ttnn.to_torch(t).clone() for t in (*inputs, indicator))
+        outputs = run_summary(
+            inputs,
+            groups_per_head=groups,
+            wrap_indicator=indicator,
+            wrap_chunk=9,
+            emit_tail_summaries=True,
+            memory_config=memory,
+        )
+        expected = (
+            _segmented_summary_oracle(host, groups, chunks, 9)
+            if boundary
+            else (
+                *summary_oracle(host),
+                torch.eye(dim).expand(2 * groups, dim, dim),
+                torch.zeros(2 * groups, dim, dim),
+            )
+        )
+        assert len(outputs) == 4
+        assert_outputs_accurate(
+            expected,
+            outputs,
+            names=("head_a", "head_b", "tail_a", "tail_b"),
+            context=f"K128 sharded segmented boundary={boundary}",
+        )
+        addresses = {t.buffer_address() for t in (*inputs, indicator)}
+        for output in outputs:
+            assert tuple(output.shape) == (2 * groups, dim, dim)
+            assert output.dtype == ttnn.float32 and output.layout == ttnn.TILE_LAYOUT
+            assert output.memory_config() == memory
+            assert output.buffer_address() not in addresses
+            addresses.add(output.buffer_address())
+        for old, tensor in zip(before, (*inputs, indicator), strict=True):
+            assert_bit_identical(old, ttnn.to_torch(tensor), name="summary input immutability")
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+            assert indicator.buffer_address() != retained[-1][len(inputs)].buffer_address()
+        retained.append((*inputs, indicator))
+        for output in outputs:
+            ttnn.deallocate(output)
+    for invocation in retained:
+        for tensor in invocation:
+            ttnn.deallocate(tensor)

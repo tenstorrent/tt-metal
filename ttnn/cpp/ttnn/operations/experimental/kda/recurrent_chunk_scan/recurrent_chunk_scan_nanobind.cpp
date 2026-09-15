@@ -21,21 +21,32 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
             S_{n+1} = final_decay_n * S_n + k_dec_t_n @ U_n
 
         Args:
-            v_beta (ttnn.Tensor): Prepared values ``[B*H, N, 32, V]``.
-            kd (ttnn.Tensor): Prepared decayed keys ``[B*H, N, 32, K]``.
-            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H, N, 32, K]``.
+            v_beta (ttnn.Tensor): Prepared values ``[B*H*G, N, 32, V]``.
+            kd (ttnn.Tensor): Prepared decayed keys ``[B*H*G, N, 32, K]``.
+            q_decay (ttnn.Tensor): Prepared decayed queries ``[B*H*G, N, 32, K]``.
             intra (ttnn.Tensor): Causal within-chunk interactions
-                ``[B*H, N, 32, 32]`` in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
             k_dec_t (ttnn.Tensor): Prepared transposed key term
-                ``[B*H, N, K, 32]``.
+                ``[B*H*G, N, K, 32]``.
             final_decay (ttnn.Tensor): End-of-chunk state decay
-                ``[B*H, N, K, 1]``.
+                ``[B*H*G, N, K, 1]``.
             t_inv (ttnn.Tensor): Triangular correction inverse
-                ``[B*H, N, 32, 32]`` in FLOAT32.
-            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H, K, V]``
-                in FLOAT32.
+                ``[B*H*G, N, 32, 32]`` in FLOAT32.
+            initial_state (ttnn.Tensor): Initial recurrent state ``[B*H*G, K, V]``
+                in FLOAT32, with group folded into the leading dimension.
+                Tail state is unfolded: one ``[K,V]`` matrix per ``B*H``.
 
         Keyword Args:
+            tail_state (ttnn.Tensor, optional): Carry to reload at ``wrap_chunk``,
+                ``[B*H, K, V]`` in FLOAT32. Required when ``wrap_chunk`` is nonzero
+                and ignored otherwise.
+            wrap_indicator (ttnn.Tensor, optional): Per-device scalar tensor;
+                only a device whose local value is nonzero reloads at
+                ``wrap_chunk``. When absent, a nonzero wrap applies to the device.
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
+            wrap_chunk (int, optional): Local chunk at which the causal stream
+                restarts from ``tail_state``, 0 meaning it never does. Defaults to 0.
             memory_config (ttnn.MemoryConfig, optional): Interleaved output memory
                 configuration. Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
@@ -43,7 +54,7 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor]: New tensors containing BFLOAT16 token
-                outputs ``Y[B*H,N,32,V]`` and FLOAT32 final state ``S[B*H,K,V]``.
+                outputs ``Y[B*H*G,N,32,V]`` and FLOAT32 final state ``S[B*H*G,K,V]``.
 
         Note:
             ``v_beta``, ``kd``, ``q_decay``, ``k_dec_t``, and ``final_decay`` may be
@@ -62,6 +73,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("t_inv").noconvert(),
         nb::arg("initial_state").noconvert(),
         nb::kw_only(),
+        nb::arg("tail_state") = nb::none(),
+        nb::arg("wrap_indicator") = nb::none(),
+        nb::arg("groups_per_head") = 1,
+        nb::arg("wrap_chunk") = 0,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 
@@ -98,14 +113,23 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 ``[B*H*G, N, 32, 32]`` in FLOAT32.
 
         Keyword Args:
+            groups_per_head (int, optional): Groups folded into the leading
+                dimension. Defaults to 1.
+            wrap_indicator (ttnn.Tensor, optional): Required device-local scalar
+                in segmented mode. Ordinary summaries reject wrap controls.
+            wrap_chunk (int, optional): Strictly interior boundary in the local
+                ``G*N`` chunks. Required and nonzero in segmented mode.
+            emit_tail_summaries (bool, optional): Return an additional ``(A,B)``
+                pair for the post-wrap part of every folded group. Defaults to false.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional):
                 Compute-kernel configuration.
 
         Returns:
-            tuple[ttnn.Tensor, ttnn.Tensor]: New FLOAT32 TILE-layout tensors
-                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``.
+            tuple[ttnn.Tensor, ...]: New FLOAT32 TILE-layout tensors
+                ``A[B*H*G,K,K]`` and ``B[B*H*G,K,V]``. Segmented mode additionally
+                returns ``tail_A`` and ``tail_B`` with the same shapes.
 
         Note:
             The current summary path requires ``K=V``. ``q_decay`` and ``intra`` are
@@ -122,6 +146,10 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("final_decay").noconvert(),
         nb::arg("t_inv").noconvert(),
         nb::kw_only(),
+        nb::arg("wrap_indicator") = nb::none(),
+        nb::arg("wrap_chunk") = 0,
+        nb::arg("groups_per_head") = 1,
+        nb::arg("emit_tail_summaries") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none());
 }

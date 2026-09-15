@@ -11,17 +11,11 @@
 
 namespace ttnn::experimental::kda {
 
-ttnn::Tensor affine_exclusive_scan(
-    const ttnn::Tensor& a,
-    const ttnn::Tensor& b,
-    const ttnn::Tensor& initial_state,
-    uint32_t groups_per_head,
-    const std::optional<ttnn::Tensor>& tail_a = std::nullopt,
-    const std::optional<ttnn::Tensor>& tail_b = std::nullopt,
-    const std::optional<ttnn::Tensor>& tail_state = std::nullopt,
-    const std::optional<ttnn::Tensor>& wrap_indicator = std::nullopt,
-    uint32_t wrap_group = 0,
-    bool split_in_group = false,
+ttnn::Tensor pack_convolution_carry(
+    const ttnn::Tensor& input,
+    const ttnn::Tensor& wrap_indicator,
+    uint32_t wrap_row,
+    uint32_t history_rows = 3,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 

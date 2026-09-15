@@ -70,6 +70,7 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     const tt::tt_metal::experimental::TensorParamName q_tensor_name{"q"};
     const tt::tt_metal::experimental::TensorParamName k_tensor_name{"k"};
     const tt::tt_metal::experimental::TensorParamName v_tensor_name{"v"};
+    const tt::tt_metal::experimental::TensorParamName wrap_indicator_tensor_name{"wrap_indicator"};
 
     const auto input_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     const uint32_t tile_size = tt::tile_size(input_data_format);
@@ -112,10 +113,22 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
                 tt::tt_metal::experimental::TensorBinding{tap2_tensor_name, "tap2"},
                 tt::tt_metal::experimental::TensorBinding{tap3_tensor_name, "tap3"},
             },
-        .compile_time_args = {{"block_ct", block_ct}, {"num_blocks", num_blocks}},
-        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count"}},
+        .compile_time_args =
+            {{"block_ct", block_ct},
+             {"num_blocks", num_blocks},
+             {"has_wrap_indicator", static_cast<uint32_t>(in.wrap_indicator.has_value())}},
+        .runtime_arg_schema = {.runtime_arg_names = {"wi_start", "wi_count", "wrap_row"}},
         .hw_config = ttnn::create_reader_datamovement_config(arch),
     };
+    if (in.wrap_indicator.has_value()) {
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{wrap_indicator_tensor_name, "wrap_indicator"});
+    } else {
+        // if constexpr discards the read, but the kernel argument name is still
+        // parsed while generating bindings.
+        reader.tensor_bindings.push_back(
+            tt::tt_metal::experimental::TensorBinding{input_tensor_name, "wrap_indicator"});
+    }
 
     tt::tt_metal::experimental::KernelSpec writer{
         .unique_id = writer_kernel_name,
@@ -169,31 +182,36 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
     for (uint32_t i = 0; i < dist.cores.size(); ++i) {
         const auto& core = dist.cores[i];
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
+            reader_run_args.runtime_arg_values,
+            core,
+            {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}, {"wrap_row", attrs.wrap_row}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             writer_run_args.runtime_arg_values, core, {{"wi_start", dist.wi_start[i]}, {"wi_count", dist.wi_count[i]}});
         tt::tt_metal::experimental::AddRuntimeArgsForNode(
             compute_run_args.runtime_arg_values, core, {{"wi_count", dist.wi_count[i]}});
     }
 
+    tt::tt_metal::experimental::Group<tt::tt_metal::experimental::TensorParameter> tensor_parameters = {
+        tt::tt_metal::experimental::TensorParameter{.unique_id = input_tensor_name, .spec = input.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = history_tensor_name, .spec = history.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
+        tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
+    };
+    if (in.wrap_indicator.has_value()) {
+        tensor_parameters.push_back(tt::tt_metal::experimental::TensorParameter{
+            .unique_id = wrap_indicator_tensor_name, .spec = in.wrap_indicator->mesh_tensor().tensor_spec()});
+    }
+
     tt::tt_metal::experimental::ProgramSpec spec{
         .name = "qkv_causal_conv1d_silu",
         .kernels = {std::move(reader), std::move(writer), std::move(compute)},
         .dataflow_buffers = std::move(dfbs),
-        .tensor_parameters =
-            {
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = input_tensor_name, .spec = input.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{
-                    .unique_id = history_tensor_name, .spec = history.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap0_tensor_name, .spec = tap0.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap1_tensor_name, .spec = tap1.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap2_tensor_name, .spec = tap2.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = tap3_tensor_name, .spec = tap3.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = q_tensor_name, .spec = q.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = k_tensor_name, .spec = k.tensor_spec()},
-                tt::tt_metal::experimental::TensorParameter{.unique_id = v_tensor_name, .spec = v.tensor_spec()},
-            },
+        .tensor_parameters = std::move(tensor_parameters),
         .work_units =
             {
                 tt::tt_metal::experimental::WorkUnitSpec{
@@ -220,6 +238,9 @@ ttnn::device_operation::ProgramArtifacts QkvCausalConv1dSiluProgramFactory::crea
         {k_tensor_name, k},
         {v_tensor_name, v},
     };
+    if (in.wrap_indicator.has_value()) {
+        run_args.tensor_args.emplace(wrap_indicator_tensor_name, in.wrap_indicator->mesh_tensor());
+    }
 
     return ttnn::device_operation::ProgramArtifacts{
         .spec = std::move(spec),

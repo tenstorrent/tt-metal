@@ -170,6 +170,34 @@ def _oracle(
     return torch.stack(entries)
 
 
+def _segmented_oracle(
+    head_a: torch.Tensor,
+    head_b: torch.Tensor,
+    head_state: torch.Tensor,
+    tail_a: torch.Tensor,
+    tail_b: torch.Tensor,
+    tail_state: torch.Tensor,
+    batch_heads: int,
+    groups_per_head: int,
+    wrap_group: int,
+    split_in_group: bool,
+    is_boundary: bool,
+) -> torch.Tensor:
+    effective_a = head_a.clone()
+    effective_b = head_b.clone()
+    if is_boundary:
+        reset_group = wrap_group + int(split_in_group) - 1
+        for head in range(batch_heads):
+            base = head * groups_per_head
+            reset = base + reset_group
+            effective_a[reset] = 0
+            effective_b[reset] = tail_a[reset] @ tail_state[head] + tail_b[reset]
+            for group in range(reset_group + 1, groups_per_head):
+                effective_a[base + group] = tail_a[base + group]
+                effective_b[base + group] = tail_b[base + group]
+    return _oracle(effective_a, effective_b, head_state, batch_heads, groups_per_head)
+
+
 def _to_device(
     tensor: torch.Tensor,
     device: ttnn.Device,
@@ -200,6 +228,12 @@ def _run(
     initial_state: ttnn.Tensor,
     groups_per_head: int,
     *,
+    tail_a: ttnn.Tensor | None = None,
+    tail_b: ttnn.Tensor | None = None,
+    tail_state: ttnn.Tensor | None = None,
+    wrap_indicator: ttnn.Tensor | None = None,
+    wrap_group: int = 0,
+    split_in_group: bool = False,
     memory_config: ttnn.MemoryConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
 ) -> ttnn.Tensor:
@@ -209,9 +243,148 @@ def _run(
             b,
             initial_state,
             groups_per_head,
+            tail_a=tail_a,
+            tail_b=tail_b,
+            tail_state=tail_state,
+            wrap_indicator=wrap_indicator,
+            wrap_group=wrap_group,
+            split_in_group=split_in_group,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
         )
+
+
+@pytest.mark.parametrize(
+    ("groups_per_head", "wrap_group", "split_in_group"),
+    [
+        pytest.param(1, 0, True, id="g1-straddle"),
+        pytest.param(2, 1, False, id="g2-boundary"),
+        pytest.param(2, 0, True, id="g2-straddle"),
+        pytest.param(4, 2, False, id="g4-boundary"),
+        pytest.param(4, 1, True, id="g4-straddle"),
+    ],
+)
+@pytest.mark.parametrize("is_boundary", [False, True], ids=["ordinary", "boundary"])
+def test_affine_exclusive_scan_switches_to_tail_seed_in_one_scan(
+    device: ttnn.Device,
+    groups_per_head: int,
+    wrap_group: int,
+    split_in_group: bool,
+    is_boundary: bool,
+) -> None:
+    batch_heads, key_dim, value_dim = 2, 32, 64
+    head_a, head_b, head_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=911)
+    tail_a, tail_b, tail_state = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=977)
+    head_state.mul_(1e-3)
+    tail_state.mul_(1e2)
+    expected = _segmented_oracle(
+        head_a,
+        head_b,
+        head_state,
+        tail_a,
+        tail_b,
+        tail_state,
+        batch_heads,
+        groups_per_head,
+        wrap_group,
+        split_in_group,
+        is_boundary,
+    )
+
+    actual = _run(
+        _to_device(head_a, device),
+        _to_device(head_b, device),
+        _to_device(head_state, device),
+        groups_per_head,
+        tail_a=_to_device(tail_a, device),
+        tail_b=_to_device(tail_b, device),
+        tail_state=_to_device(tail_state, device),
+        wrap_indicator=_to_device(torch.tensor([[[float(is_boundary)]]]), device),
+        wrap_group=wrap_group,
+        split_in_group=split_in_group,
+    )
+    actual_torch = ttnn.to_torch(actual)
+    for group in range(groups_per_head):
+        group_slice = slice(group, batch_heads * groups_per_head, groups_per_head)
+        assert_accurate(
+            expected[group_slice],
+            actual_torch[group_slice],
+            name=f"segmented affine exclusive scan group {group}",
+        )
+
+
+def test_affine_exclusive_scan_segmented_cache_hit_and_trace_rebind_all_inputs(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    batch_heads, groups_per_head, key_dim, value_dim = 2, 4, 32, 32
+    wrap_group, split_in_group = 1, True
+
+    def make_host(seed: int) -> tuple[torch.Tensor, ...]:
+        head = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=seed)
+        tail = _host_inputs(batch_heads, groups_per_head, key_dim, value_dim, seed=seed + 1)
+        head[2].mul_(1e-3)
+        tail[2].mul_(1e2)
+        return (*head, *tail, torch.ones(1, 1, 1))
+
+    def run_host(host: tuple[torch.Tensor, ...]) -> tuple[ttnn.Tensor, tuple[ttnn.Tensor, ...]]:
+        tensors = tuple(_to_device(tensor, device) for tensor in host)
+        output = _run(
+            *tensors[:3],
+            groups_per_head,
+            tail_a=tensors[3],
+            tail_b=tensors[4],
+            tail_state=tensors[5],
+            wrap_indicator=tensors[6],
+            wrap_group=wrap_group,
+            split_in_group=split_in_group,
+        )
+        return output, tensors
+
+    host_a = make_host(1913)
+    host_b = make_host(1915)
+    output_a, tensors_a = run_host(host_a)
+    ttnn.synchronize_device(device)
+    entries = device.num_program_cache_entries()
+    output_b, tensors_b = run_host(host_b)
+    ttnn.synchronize_device(device)
+
+    assert device.num_program_cache_entries() == entries
+    assert all(a.buffer_address() != b.buffer_address() for a, b in zip(tensors_a, tensors_b, strict=True))
+    expected_a = _segmented_oracle(*host_a[:6], batch_heads, groups_per_head, wrap_group, split_in_group, True)
+    expected_b = _segmented_oracle(*host_b[:6], batch_heads, groups_per_head, wrap_group, split_in_group, True)
+    assert_accurate(expected_a, ttnn.to_torch(output_a), name="segmented cache miss", pcc_threshold=0.999)
+    assert_accurate(expected_b, ttnn.to_torch(output_b), name="segmented cache hit", pcc_threshold=0.999)
+
+    trace_id = None
+    capturing = False
+    traced = None
+    try:
+        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        capturing = True
+        traced = _run(
+            *tensors_b[:3],
+            groups_per_head,
+            tail_a=tensors_b[3],
+            tail_b=tensors_b[4],
+            tail_state=tensors_b[5],
+            wrap_indicator=tensors_b[6],
+            wrap_group=wrap_group,
+            split_in_group=split_in_group,
+        )
+        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        capturing = False
+        for replay in range(3):
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            assert_bit_identical(ttnn.to_torch(output_b), ttnn.to_torch(traced), name="segmented trace replay")
+    finally:
+        try:
+            if capturing:
+                ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        finally:
+            if trace_id is not None:
+                ttnn.release_trace(device, trace_id)
+            if traced is not None:
+                ttnn.deallocate(traced)
 
 
 def _composed_ttnn_baseline(
@@ -660,3 +833,55 @@ def test_affine_exclusive_scan_rejects_invalid_configuration(
     sharded = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
     with expect_error(RuntimeError, "output memory layout must be INTERLEAVED"):
         _run(a_tt, b_tt, state_tt, 4, memory_config=sharded)
+
+
+def test_segmented_bf16_height_sharded_k128_rebinds_indicator(
+    device: ttnn.Device, isolated_program_cache: None
+) -> None:
+    batch_heads, groups, dim = 2, 4, 128
+    memory = _height_sharded_memory_config(device, batch_heads * groups, dim, dim)
+    retained = []
+    entries = None
+    for seed, boundary in ((991, True), (992, False), (993, True)):
+        head = _host_inputs(batch_heads, groups, dim, dim, seed=seed)
+        tail = _host_inputs(batch_heads, groups, dim, dim, seed=seed + 100)
+        host = tuple(t.to(torch.bfloat16).float() for t in (*head, *tail))
+        tensors = tuple(
+            _to_device(
+                t,
+                device,
+                ttnn.bfloat16 if i in (0, 1, 3, 4) else ttnn.float32,
+                memory_config=memory if i in (0, 1, 3, 4) else ttnn.DRAM_MEMORY_CONFIG,
+            )
+            for i, t in enumerate(host)
+        )
+        indicator = _to_device(torch.tensor([[[float(boundary)]]]), device)
+        before = tuple(ttnn.to_torch(t).clone() for t in (*tensors, indicator))
+        output = _run(
+            *tensors[:3],
+            groups,
+            tail_a=tensors[3],
+            tail_b=tensors[4],
+            tail_state=tensors[5],
+            wrap_indicator=indicator,
+            wrap_group=1,
+            split_in_group=True,
+        )
+        actual = ttnn.to_torch(output)
+        expected = _segmented_oracle(*host, batch_heads, groups, 1, True, boundary)
+        assert_accurate(expected, actual, name=f"BF16 sharded segmented boundary={boundary}", pcc_threshold=0.999)
+        assert tuple(output.shape) == (batch_heads * groups, dim, dim)
+        assert output.dtype == ttnn.float32 and output.layout == ttnn.TILE_LAYOUT
+        assert output.memory_config() == ttnn.DRAM_MEMORY_CONFIG
+        assert output.buffer_address() not in {t.buffer_address() for t in (*tensors, indicator)}
+        for old, tensor in zip(before, (*tensors, indicator), strict=True):
+            assert_bit_identical(old, ttnn.to_torch(tensor), name="segmented input immutability")
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries
+            assert indicator.buffer_address() != retained[-1][-2].buffer_address()
+        retained.append((*tensors, indicator, output))
+    for invocation in retained:
+        for tensor in invocation:
+            ttnn.deallocate(tensor)

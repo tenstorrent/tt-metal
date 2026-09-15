@@ -11,6 +11,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
@@ -84,6 +85,94 @@ FORCE_INLINE void elementwise(DataflowBuffer& a, DataflowBuffer& b, DataflowBuff
     output.push_back(Count);
 }
 
+FORCE_INLINE void copy(DataflowBuffer& input, DataflowBuffer& output, uint32_t tiles) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t input_id = input.get_id();
+    const uint32_t output_id = output.get_id();
+    output.reserve_back(tiles);
+    reconfig_data_format_srca(input_id);
+    copy_init(input_id);
+    for (uint32_t first = 0; first < tiles; first += dst_tiles) {
+        const uint32_t count = first + dst_tiles <= tiles ? dst_tiles : tiles - first;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            copy_tile(input_id, first + tile, tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < count; ++tile) {
+            pack_tile(tile, output_id, first + tile);
+        }
+        tile_regs_release();
+    }
+    output.push_back(tiles);
+}
+
+template <ElementwiseOperation Operation, uint32_t Rows, uint32_t Columns>
+FORCE_INLINE void elementwise_streamed(DataflowBuffer& a, DataflowBuffer& b, DataflowBuffer& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t output_id = output.get_id();
+
+    reconfig_data_format(a_id, b_id);
+    if constexpr (Operation == ElementwiseOperation::ADD) {
+        add_init(a_id, b_id);
+    } else {
+        sub_init(a_id, b_id);
+    }
+    for (uint32_t row = 0; row < Rows; ++row) {
+        output.reserve_back(Columns);
+        for (uint32_t first = 0; first < Columns; first += dst_tiles) {
+            const uint32_t count = first + dst_tiles <= Columns ? dst_tiles : Columns - first;
+            const uint32_t input_start = row * Columns + first;
+            tile_regs_acquire();
+            if constexpr (Operation == ElementwiseOperation::ADD) {
+                add_block(a_id, b_id, input_start, input_start, 0, count);
+            } else {
+                sub_block(a_id, b_id, input_start, input_start, 0, count);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                pack_tile(tile, output_id, first + tile);
+            }
+            tile_regs_release();
+        }
+        output.push_back(Columns);
+    }
+}
+
+template <uint32_t Rows, uint32_t Columns>
+FORCE_INLINE void copy_streamed(DataflowBuffer& input, DataflowBuffer& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t input_id = input.get_id();
+    const uint32_t output_id = output.get_id();
+
+    reconfig_data_format_srca(input_id);
+    copy_init(input_id);
+    for (uint32_t row = 0; row < Rows; ++row) {
+        output.reserve_back(Columns);
+        for (uint32_t first = 0; first < Columns; first += dst_tiles) {
+            const uint32_t count = first + dst_tiles <= Columns ? dst_tiles : Columns - first;
+            tile_regs_acquire();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                copy_tile(input_id, row * Columns + first + tile, tile);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                pack_tile(tile, output_id, first + tile);
+            }
+            tile_regs_release();
+        }
+        output.push_back(Columns);
+    }
+}
+
 FORCE_INLINE void multiply_by_decay(
     DataflowBuffer& state, DataflowBuffer& decay, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
     constexpr uint32_t dst_tiles =
@@ -105,6 +194,35 @@ FORCE_INLINE void multiply_by_decay(
             const uint32_t index = block_start + tile;
             const uint32_t key = index / value_tiles;
             mul_tiles_bcast_cols(state_id, decay_id, index, key, tile);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            pack_tile(tile, output_id, block_start + tile);
+        }
+        tile_regs_release();
+    }
+    output.push_back(count);
+}
+
+FORCE_INLINE void multiply_by_mask(
+    DataflowBuffer& state, DataflowBuffer& mask, DataflowBuffer& output, uint32_t key_tiles, uint32_t value_tiles) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t count = key_tiles * value_tiles;
+    const uint32_t state_id = state.get_id();
+    const uint32_t mask_id = mask.get_id();
+    const uint32_t output_id = output.get_id();
+
+    output.reserve_back(count);
+    reconfig_data_format(state_id, mask_id);
+    mul_init(state_id, mask_id);
+    for (uint32_t block_start = 0; block_start < count; block_start += dst_tiles) {
+        const uint32_t remaining = count - block_start;
+        const uint32_t block_tiles = remaining < dst_tiles ? remaining : dst_tiles;
+        tile_regs_acquire();
+        for (uint32_t tile = 0; tile < block_tiles; ++tile) {
+            mul_tiles(state_id, mask_id, block_start + tile, 0, tile);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -222,8 +340,8 @@ FORCE_INLINE void update_state(
     state_update.pop_front(key_value_tiles);
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_summary(uint32_t num_chunks) {
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t emit_tail_summaries>
+FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -240,6 +358,10 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     DataflowBuffer summary_raw(dfb::summary_raw);
     DataflowBuffer summary_seed(dfb::summary_seed);
     DataflowBuffer summary_ring(dfb::summary_ring);
+    DataflowBuffer summary_head_output(dfb::summary_head_output);
+    DataflowBuffer summary_head_state(dfb::summary_head_state);
+    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer wrap_mask(dfb::wrap_mask);
 
     constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
     constexpr uint32_t chunk_key_tiles = Ct * Kt;
@@ -247,7 +369,6 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
     constexpr uint32_t key_value_tiles = Kt * Vt;
     constexpr uint32_t key_chunk_tiles = Kt * Ct;
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
         DataflowBuffer& current_b = chunk == 0 ? state : state_ring;
         DataflowBuffer& current_ab = chunk == 0 ? summary_seed : summary_ring;
@@ -278,6 +399,31 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
             final_decay,
             state_update,
             state_temporary);
+        if constexpr (emit_tail_summaries) {
+            const uint32_t snapshot_chunk = split_chunk;
+            if (snapshot_chunk != 0 && chunk + 1 == snapshot_chunk) {
+                state_ring.wait_front(key_value_tiles);
+                summary_ring.wait_front(key_value_tiles);
+                elementwise_streamed<ElementwiseOperation::SUBTRACT, Kt, Vt>(
+                    summary_ring, state_ring, summary_head_output);
+                copy_streamed<Kt, Vt>(state_ring, summary_head_state);
+                tail_state.wait_front(key_value_tiles);
+                wrap_mask.wait_front(1);
+                multiply_by_mask(state_ring, wrap_mask, scratch, Kt, Vt);
+                scratch.wait_front(key_value_tiles);
+                copy(scratch, state_ring, key_value_tiles);
+                state_ring.pop_front(key_value_tiles);
+                scratch.pop_front(key_value_tiles);
+
+                multiply_by_mask(summary_ring, wrap_mask, scratch, Kt, Vt);
+                scratch.wait_front(key_value_tiles);
+                elementwise<ElementwiseOperation::ADD, key_value_tiles>(tail_state, scratch, summary_ring);
+                summary_ring.pop_front(key_value_tiles);
+                scratch.pop_front(key_value_tiles);
+                tail_state.pop_front(key_value_tiles);
+                wrap_mask.pop_front(1);
+            }
+        }
         kd.pop_front(chunk_key_tiles);
         v_beta.pop_front(chunk_value_tiles);
         t_inv.pop_front(chunk_chunk_tiles);
@@ -291,7 +437,7 @@ FORCE_INLINE void compute_summary(uint32_t num_chunks) {
 }
 
 template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
-FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
+FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
     DataflowBuffer state(dfb::state);
     DataflowBuffer t_inv(dfb::t_inv);
     DataflowBuffer v_beta(dfb::v_beta);
@@ -308,29 +454,53 @@ FORCE_INLINE void compute_recurrent(uint32_t num_chunks) {
     DataflowBuffer state_temporary(dfb::state_temporary);
     DataflowBuffer final_state(dfb::final_state);
     DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer tail_state(dfb::tail_state);
+    DataflowBuffer wrap_mask(dfb::wrap_mask);
 
-    compute_kernel_hw_startup<SrcOrder::Reverse>(kd.get_id(), v_beta.get_id(), output.get_id());
+    constexpr uint32_t key_value_tiles = Kt * Vt;
+
     pack_reconfig_data_format(dfb::scratch);
     for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
-        DataflowBuffer& current_state = chunk == 0 ? state : state_ring;
+        // A wrap restarts the causal stream mid-group. The recurrence is affine in
+        // the state, so no per-chunk term changes -- only where the carry comes
+        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
+        // r == 0 means no group straddles, and chunk 0 always seeds from `state`.
+        DataflowBuffer* current_state = chunk == 0 ? &state : &state_ring;
+        if (reset_chunk != 0 && chunk == reset_chunk) {
+            state_ring.wait_front(key_value_tiles);
+            tail_state.wait_front(key_value_tiles);
+            wrap_mask.wait_front(1);
+            elementwise<ElementwiseOperation::SUBTRACT, key_value_tiles>(tail_state, state_ring, scratch);
+            scratch.wait_front(key_value_tiles);
+            multiply_by_mask(scratch, wrap_mask, state_update, Kt, Vt);
+            state_update.wait_front(key_value_tiles);
+            elementwise<ElementwiseOperation::ADD, key_value_tiles>(state_ring, state_update, state_ring);
+            state_ring.pop_front(key_value_tiles);
+            tail_state.pop_front(key_value_tiles);
+            wrap_mask.pop_front(1);
+            scratch.pop_front(key_value_tiles);
+            state_update.pop_front(key_value_tiles);
+            current_state = &state_ring;
+        }
         DataflowBuffer& destination = chunk == num_chunks - 1 ? final_state : state_ring;
 
         compute_value_new<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
+            *current_state, kd, v_beta, t_inv, scratch, output_intermediate, value_new);
         compute_chunk_output<Ct, Kt, Vt>(
-            current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
+            *current_state, value_new, q_decay, intra, output_intermediate, scratch, output);
 
         pack_reconfig_data_format(dfb::state_update);
         update_state<ChunkInputPolicy::CONSUME, Ct, Kt, Vt>(
-            current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
+            *current_state, destination, value_new, k_decay_transposed, final_decay, state_update, state_temporary);
     }
 }
 
-template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair>
-TT_KERNEL void compute(uint32_t num_chunks) {
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary_pair, uint32_t emit_tail_summaries>
+TT_KERNEL void compute(uint32_t num_chunks, uint32_t reset_chunk) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
     if constexpr (summary_pair) {
-        compute_summary<Ct, Kt, Vt>(num_chunks);
+        compute_summary<Ct, Kt, Vt, emit_tail_summaries>(num_chunks, reset_chunk);
     } else {
-        compute_recurrent<Ct, Kt, Vt>(num_chunks);
+        compute_recurrent<Ct, Kt, Vt>(num_chunks, reset_chunk);
     }
 }

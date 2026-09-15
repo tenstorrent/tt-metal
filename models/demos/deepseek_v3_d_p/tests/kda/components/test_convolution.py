@@ -10,7 +10,9 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.kda.utils import collect_mesh_accuracy_and_determinism_results
-from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.config import KDA_CHUNK_SIZE
+from models.demos.deepseek_v3_d_p.tt.kda.convolution import exchange_convolution_carry, exchange_split_convolution_carry
+from models.demos.deepseek_v3_d_p.tt.kda.offset import _offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_equal
 
 pytestmark = [
@@ -54,14 +56,16 @@ def _sp_carries(tensor: ttnn.Tensor, device: ttnn.MeshDevice, sp_axis: int, tp_a
 
 
 @pytest.mark.parametrize("tensor_parallel_axis", [0, 1])
+@pytest.mark.parametrize("split", [False, True])
 def test_exchange_convolution_carry_preserves_causal_carries(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
+    split: bool,
 ) -> None:
     sp_axis = 1 - tensor_parallel_axis
     sp_size = tuple(mesh_device.shape)[sp_axis]
     tp_size = tuple(mesh_device.shape)[tensor_parallel_axis]
-    batch, local_sequence, history = 1, 8, 3
+    batch, local_sequence, history = 1, 2 * KDA_CHUNK_SIZE, 3
     channels = tp_size * 32
     sequence = sp_size * local_sequence
 
@@ -76,26 +80,70 @@ def test_exchange_convolution_carry_preserves_causal_carries(
     state_dims[tensor_parallel_axis] = 2
     qkv_tt = _to_device(qkv, mesh_device, tuple(qkv_dims))
     state_tt = _to_device(external, mesh_device, tuple(state_dims))
+    actual_start = KDA_CHUNK_SIZE if split else 0
+    topology = _offset_topology(actual_start, sp_size, local_sequence)
+    indicator = None
+    if split:
+        indicator_host = torch.zeros(sp_size, 1, 1)
+        indicator_host[topology.boundary_chip] = 1.0
+        indicator_dims = [None, None]
+        indicator_dims[sp_axis] = 0
+        indicator = ttnn.from_torch(
+            indicator_host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device, dims=tuple(indicator_dims), mesh_shape=tuple(mesh_device.shape)
+            ),
+        )
 
     def run() -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        return exchange_convolution_carry(qkv_tt, state_tt, sequence_parallel_axis=sp_axis)
+        if topology.is_split:
+            return exchange_split_convolution_carry(
+                qkv_tt,
+                state_tt,
+                sequence_parallel_axis=sp_axis,
+                topology=topology,
+                wrap_indicator=indicator,
+            )
+        return exchange_convolution_carry(
+            qkv_tt,
+            state_tt,
+            sequence_parallel_axis=sp_axis,
+            topology=topology,
+        )
 
     (entry_tt, final_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(run)
     actual_entries = _sp_carries(entry_tt, mesh_device, sp_axis, tensor_parallel_axis)
     actual_finals = _sp_carries(final_tt, mesh_device, sp_axis, tensor_parallel_axis)
 
-    expected_entries = [external]
-    for sp_rank in range(1, sp_size):
-        predecessor_end = sp_rank * local_sequence
-        expected_entries.append(qkv[:, predecessor_end - history : predecessor_end])
+    published = []
+    for sp_rank in range(sp_size):
+        end = (
+            sp_rank * local_sequence + topology.head_rows
+            if split and sp_rank == topology.boundary_chip
+            else (sp_rank + 1) * local_sequence
+        )
+        published.append(qkv[:, end - history : end])
+    expected_entries = []
+    for sp_rank in range(sp_size):
+        entry = external if sp_rank == topology.boundary_chip else published[topology.predecessor_chip(sp_rank)]
+        if split:
+            tail_entry = published[topology.predecessor_chip(sp_rank)] if sp_rank == topology.boundary_chip else entry
+            entry = torch.cat([entry, tail_entry], dim=1)
+        expected_entries.append(entry)
     expected_entries_tensor = torch.stack(expected_entries)
-    expected_final = qkv[:, -history:]
+    final_chip = topology.boundary_chip if split else topology.chip_order[-1]
+    final_end = (final_chip + 1) * local_sequence
+    expected_final = qkv[:, final_end - history : final_end]
 
     assert_equal(expected_entries_tensor, actual_entries, name="halo entries")
     for sp_rank in range(sp_size):
         assert_equal(expected_final, actual_finals[sp_rank], name=f"halo final rank {sp_rank}")
     assert all(marker.item() == 0 for marker in mismatch_markers), "halo output is not bit-identical across runs"
     print(
-        f"tp_axis={tensor_parallel_axis}: rank0 external carry, {sp_size - 1} neighbor carries, "
+        f"tp_axis={tensor_parallel_axis} split={split}: boundary external carry, neighbor carries, "
         "and all replicated final carries are exact"
     )

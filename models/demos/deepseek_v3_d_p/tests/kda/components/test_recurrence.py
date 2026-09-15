@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda import recurrence
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDARecurrenceProgramConfig
+from models.demos.deepseek_v3_d_p.tt.kda.offset import OffsetTopology, _offset_topology
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -250,6 +251,7 @@ def _distributed_recurrence_case(
     torch.Tensor,
     torch.Tensor,
     int,
+    OffsetTopology,
 ]:
     sp_axis = 1 - tensor_parallel_axis
     sequence, heads, dim = 128, 8, 32
@@ -281,16 +283,21 @@ def _distributed_recurrence_case(
         KDARecurrenceProgramConfig(summary_group_chunks=8),
         sequence_parallel_axis=sp_axis,
     )
-    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis
+    sp_size = tuple(mesh_device.shape)[sp_axis]
+    topology = _offset_topology(0, sp_size, sequence // sp_size)
+    return executor, inputs, expected_output.to(torch.bfloat16), expected_state, sp_axis, topology
 
 
 def _run_distributed_recurrence(
     executor: recurrence.KDARecurrence,
     inputs: tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor],
+    topology: OffsetTopology,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
     q, k, v, gate, beta, initial_state = inputs
     with ttnn.manage_config("throw_exception_on_fallback", True):
-        new_state, output = executor(q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state)
+        new_state, output = executor.sequence_parallel(
+            q=q, k=k, v=v, gate=gate, beta=beta, initial_state=initial_state, topology=topology
+        )
     return output, new_state
 
 
@@ -305,16 +312,16 @@ def test_distributed_recurrence_matches_serial_and_is_deterministic(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, expected_output, expected_state, sp_axis = _distributed_recurrence_case(
+    executor, inputs, expected_output, expected_state, sp_axis, topology = _distributed_recurrence_case(
         mesh_device, tensor_parallel_axis
     )
 
     (output_tt, state_tt), mismatch_markers = collect_mesh_accuracy_and_determinism_results(
-        lambda: _run_distributed_recurrence(executor, inputs)
+        lambda: _run_distributed_recurrence(executor, inputs, topology)
     )
     ttnn.synchronize_device(mesh_device)
     cache_entries = mesh_device.num_program_cache_entries()
-    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs)
+    repeated_output, repeated_state = _run_distributed_recurrence(executor, inputs, topology)
     ttnn.synchronize_device(mesh_device)
     assert mesh_device.num_program_cache_entries() == cache_entries
     ttnn.deallocate(repeated_output)
@@ -341,11 +348,11 @@ def test_distributed_recurrence_trace_replay_matches_eager(
     mesh_device: ttnn.MeshDevice,
     tensor_parallel_axis: int,
 ) -> None:
-    executor, inputs, _, _, sp_axis = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
-    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs)
+    executor, inputs, _, _, sp_axis, topology = _distributed_recurrence_case(mesh_device, tensor_parallel_axis)
+    eager_output_tt, eager_state_tt = _run_distributed_recurrence(executor, inputs, topology)
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs)
+    traced_output_tt, traced_state_tt = _run_distributed_recurrence(executor, inputs, topology)
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     for _ in range(3):
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
@@ -359,3 +366,65 @@ def test_distributed_recurrence_trace_replay_matches_eager(
 
     assert_bit_identical(eager_output, traced_output, name=f"tp_axis={tensor_parallel_axis} traced output")
     assert_bit_identical(eager_state, traced_state, name=f"tp_axis={tensor_parallel_axis} traced state")
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
+    mesh_device: ttnn.MeshDevice, order: tuple[int, ...]
+) -> None:
+    a = torch.eye(32).repeat(2, 4, 1, 1)
+    a[0, :, 0, 1] = 0.5
+    a[1, :, 1, 0] = 0.25
+    b = torch.stack([torch.full((4, 32, 32), 0.125 * (rank + 1)) for rank in range(2)])
+    initial = torch.stack([torch.eye(32) * (tp + 1) for tp in range(4)]).unsqueeze(0)
+    assert not torch.equal(a[0] @ a[1], a[1] @ a[0])
+
+    def to_mesh(host: torch.Tensor, dims: tuple[int | None, int | None]) -> ttnn.Tensor:
+        tensor = ttnn.from_torch(
+            host,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=dims, mesh_shape=(2, 4)),
+        )
+        return ttnn.reshape(tensor, (1, 32, 32))
+
+    entry, final = recurrence._distributed_prefix(
+        recurrence._AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1))),
+        to_mesh(initial, (None, 1)),
+        sequence_parallel_axis=0,
+        order=order,
+        compute_config=ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            fp32_dest_acc_en=True,
+        ),
+    )
+    carry = initial[0]
+    entries = {}
+    for rank in order:
+        entries[rank] = carry
+        carry = a[rank] @ carry + b[rank]
+    for index, (local_entry, local_final) in enumerate(
+        zip(ttnn.get_device_tensors(entry), ttnn.get_device_tensors(final), strict=True)
+    ):
+        rank, tp = divmod(index, 4)
+        assert_accurate(entries[rank][tp].unsqueeze(0), ttnn.to_torch(local_entry), name=f"entry rank={rank} tp={tp}")
+        assert_accurate(carry[tp].unsqueeze(0), ttnn.to_torch(local_final), name=f"final rank={rank} tp={tp}")
+
+
+def test_private_recurrence_routes_have_required_sp_metadata() -> None:
+    import inspect
+    from typing import get_type_hints
+
+    assert "topology" not in inspect.signature(recurrence.KDARecurrence.__call__).parameters
+    assert "topology" not in inspect.signature(recurrence._scan_local_grouped_chunks).parameters
+    for function, parameter, expected_type in (
+        (recurrence.KDARecurrence.sequence_parallel, "topology", OffsetTopology),
+        (recurrence._scan_sp_grouped_chunks, "topology", OffsetTopology),
+        (recurrence._scan_sp_grouped_chunks, "sequence_parallel_axis", int),
+    ):
+        assert inspect.signature(function).parameters[parameter].default is inspect.Parameter.empty
+        assert get_type_hints(function)[parameter] == expected_type

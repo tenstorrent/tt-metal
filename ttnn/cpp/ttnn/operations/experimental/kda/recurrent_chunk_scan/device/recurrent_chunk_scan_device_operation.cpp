@@ -53,6 +53,14 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_protocol_tensor(in.k_dec_t, "k_dec_t", true, operation_name);
     check_protocol_tensor(in.final_decay, "final_decay", true, operation_name);
     check_protocol_tensor(in.t_inv, "t_inv", false, operation_name);
+    if (in.wrap_indicator.has_value()) {
+        check_protocol_tensor(*in.wrap_indicator, "wrap_indicator", false, operation_name);
+        check_same_device(in.v_beta, *in.wrap_indicator, operation_name, "wrap_indicator");
+        TT_FATAL(
+            in.wrap_indicator->logical_volume() >= 1,
+            "{}: wrap_indicator must contain at least one scalar",
+            operation_name);
+    }
 
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.kd, "kd"},
@@ -69,6 +77,19 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     check_compute_config(attrs.compute_kernel_config, operation_name);
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
+    TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
+    TT_FATAL(
+        attrs.batch_heads % attrs.groups_per_head == 0,
+        "{}: groups_per_head {} must divide the folded leading dimension {}",
+        operation_name,
+        attrs.groups_per_head,
+        attrs.batch_heads);
+    TT_FATAL(
+        attrs.wrap_chunk < attrs.groups_per_head * attrs.num_chunks,
+        "{}: wrap_chunk {} must be inside the local chunk count {}",
+        operation_name,
+        attrs.wrap_chunk,
+        attrs.groups_per_head * attrs.num_chunks);
     TT_FATAL(
         attrs.key_dim > 0 && attrs.value_dim > 0 && attrs.key_dim % tt::constants::TILE_WIDTH == 0 &&
             attrs.value_dim % tt::constants::TILE_WIDTH == 0,
@@ -93,10 +114,35 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_protocol_tensor(*in.initial_state, "initial_state", false, operation_name);
         check_same_device(in.v_beta, *in.initial_state, operation_name, "initial_state");
         check_shape(*in.initial_state, Shape({BH, K, V}), "initial_state", operation_name);
+        // The wrap needs no extra entry slot. The head seed is this chip's own entry
+        // state; the tail seed is the prefix's final carry, which every chip already
+        // derives identically from the gathered summaries.
+        if (in.tail_state.has_value()) {
+            check_protocol_tensor(*in.tail_state, "tail_state", false, operation_name);
+            check_same_device(in.v_beta, *in.tail_state, operation_name, "tail_state");
+            check_shape(*in.tail_state, Shape({BH / attrs.groups_per_head, K, V}), "tail_state", operation_name);
+        }
+        TT_FATAL(attrs.wrap_chunk == 0 || in.tail_state.has_value(), "{}: a wrap requires tail_state", operation_name);
     } else {
         TT_FATAL(!in.initial_state.has_value(), "{}: initial_state is not accepted", operation_name);
         TT_FATAL(K == V, "{}: K must equal V", operation_name);
+        TT_FATAL(
+            attrs.emit_tail_summaries || (!in.wrap_indicator.has_value() && attrs.wrap_chunk == 0),
+            "{}: ordinary summaries do not accept wrap controls; use emit_tail_summaries",
+            operation_name);
+        TT_FATAL(
+            !attrs.emit_tail_summaries || in.wrap_indicator.has_value(),
+            "{}: tail summaries require a device-local wrap_indicator",
+            operation_name);
+        TT_FATAL(
+            !attrs.emit_tail_summaries || attrs.wrap_chunk > 0,
+            "{}: tail summaries require a nonzero wrap_chunk",
+            operation_name);
     }
+    TT_FATAL(
+        attrs.mode == RecurrentChunkScanMode::SUMMARY || !attrs.emit_tail_summaries,
+        "{}: emit_tail_summaries is valid only in SUMMARY mode",
+        operation_name);
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -105,12 +151,19 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = summary ? DataType::FLOAT32 : DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+    // No output shape depends on the runtime wrap location. Segmented summary
+    // mode adds fixed-shape tail outputs; ordinary summary mode remains two-output.
     const auto first_shape =
         summary ? Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim})
                 : Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim});
-    return {
+    spec_return_value_t specs = {
         TensorSpec(first_shape, output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
+    if (summary && attrs.emit_tail_summaries) {
+        specs.push_back(TensorSpec(first_shape, output_layout));
+        specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout));
+    }
+    return specs;
 }
 
 RecurrentChunkScanOperation::tensor_return_value_t RecurrentChunkScanOperation::create_output_tensors(
@@ -140,17 +193,24 @@ RecurrentChunkScanOperation::create_op_performance_model(
             .fpu_add_ops = instances * (2.0 * chunk * value_dim + key_dim * value_dim),
         };
     } else {
+        const double segmented_heads = attrs.emit_tail_summaries ? batch_heads / attrs.groups_per_head : 0.0;
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
-            .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
-            .fpu_add_ops =
-                instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) + batch_heads * key_dim * value_dim,
+            .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim + segmented_heads * 2.0 * key_dim * value_dim,
+            .fpu_add_ops = instances * (2.0 * chunk * value_dim + 2.0 * key_dim * value_dim) +
+                           batch_heads * key_dim * value_dim + segmented_heads * 4.0 * key_dim * value_dim,
         };
     }
     std::vector<const Tensor*> inputs = {
         &in.v_beta, &in.kd, &in.q_decay, &in.intra, &in.k_dec_t, &in.final_decay, &in.t_inv};
     if (in.initial_state) {
         inputs.push_back(&*in.initial_state);
+    }
+    if (in.tail_state) {
+        inputs.push_back(&*in.tail_state);
+    }
+    if (in.wrap_indicator) {
+        inputs.push_back(&*in.wrap_indicator);
     }
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
@@ -164,7 +224,12 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& final_decay,
     const Tensor& t_inv,
     const std::optional<Tensor>& initial_state,
+    const std::optional<Tensor>& tail_state,
+    const std::optional<Tensor>& wrap_indicator,
     RecurrentChunkScanMode mode,
+    uint32_t groups_per_head,
+    uint32_t wrap_chunk,
+    bool emit_tail_summaries,
     const MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& value_shape = v_beta.logical_shape();
@@ -178,6 +243,9 @@ std::vector<Tensor> recurrent_chunk_scan(
             .num_chunks = value_shape[1],
             .key_dim = key_shape[3],
             .value_dim = value_shape[3],
+            .groups_per_head = groups_per_head,
+            .wrap_chunk = wrap_chunk,
+            .emit_tail_summaries = emit_tail_summaries,
             .mode = mode,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
@@ -189,7 +257,9 @@ std::vector<Tensor> recurrent_chunk_scan(
             .k_dec_t = k_dec_t,
             .final_decay = final_decay,
             .t_inv = t_inv,
-            .initial_state = initial_state});
+            .initial_state = initial_state,
+            .tail_state = tail_state,
+            .wrap_indicator = wrap_indicator});
 }
 
 }  // namespace ttnn::experimental::prim

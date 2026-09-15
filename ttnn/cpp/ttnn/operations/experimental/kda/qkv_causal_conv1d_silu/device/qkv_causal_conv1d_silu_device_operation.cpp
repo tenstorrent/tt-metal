@@ -53,6 +53,16 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     check_same_device(in.input, in.tap1, operation_name, "tap1");
     check_same_device(in.input, in.tap2, operation_name, "tap2");
     check_same_device(in.input, in.tap3, operation_name, "tap3");
+    if (in.wrap_indicator.has_value()) {
+        check_allocated_device_tensor(*in.wrap_indicator, operation_name, "wrap_indicator");
+        check_layout(*in.wrap_indicator, Layout::TILE, operation_name, "wrap_indicator");
+        check_dtype(*in.wrap_indicator, DataType::FLOAT32, operation_name, "wrap_indicator");
+        check_interleaved(*in.wrap_indicator, operation_name, "wrap_indicator");
+        check_same_device(in.input, *in.wrap_indicator, operation_name, "wrap_indicator");
+        TT_FATAL(
+            in.wrap_indicator->logical_volume() >= 1,
+            "qkv_causal_conv1d_silu: wrap_indicator must contain at least one scalar");
+    }
 
     TT_FATAL(
         attrs.q_width > 0 && attrs.k_width > 0 && attrs.v_width > 0,
@@ -79,12 +89,28 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         input_shape.rank() == 3 && input_shape[0] == 1 && input_shape[1] == attrs.sequence &&
             input_shape[2] == channels,
         "qkv_causal_conv1d_silu: input must be [1,T,Q+K+V]");
+    // A wrap needs a second history plane: the tail fragment's tap window reaches
+    // back to its own predecessor, not to the rows physically above it.
+    const uint32_t history_planes = attrs.wrap_row == 0 ? 1 : 2;
+    const uint32_t history_rows = history_planes * 3;
     TT_FATAL(
-        history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == 3 && history_shape[2] == channels,
-        "qkv_causal_conv1d_silu: history must be [1,3,Q+K+V]");
+        history_shape.rank() == 3 && history_shape[0] == 1 && history_shape[1] == history_rows &&
+            history_shape[2] == channels,
+        "qkv_causal_conv1d_silu: history must be [1,{},Q+K+V] for wrap_row {}",
+        history_rows,
+        attrs.wrap_row);
     TT_FATAL(
         attrs.sequence > 0 && attrs.sequence % tt::constants::TILE_HEIGHT == 0,
         "qkv_causal_conv1d_silu: sequence must be positive and tile aligned");
+    TT_FATAL(
+        attrs.wrap_row % tt::constants::TILE_HEIGHT == 0,
+        "qkv_causal_conv1d_silu: wrap_row {} must be tile aligned",
+        attrs.wrap_row);
+    TT_FATAL(
+        attrs.wrap_row < attrs.sequence,
+        "qkv_causal_conv1d_silu: wrap_row {} must be inside the local sequence {}",
+        attrs.wrap_row,
+        attrs.sequence);
 
     for (const auto& [tensor, name] : std::array{
              std::pair{&in.tap0, "tap0"},
@@ -150,6 +176,8 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
     uint32_t k_width,
     uint32_t v_width,
     uint32_t channel_chunk_size,
+    uint32_t wrap_row,
+    const std::optional<Tensor>& wrap_indicator,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     const auto& input_shape = input.logical_shape();
@@ -161,10 +189,17 @@ std::vector<Tensor> qkv_causal_conv1d_silu(
             .k_width = k_width,
             .v_width = v_width,
             .channel_chunk_size = channel_chunk_size,
+            .wrap_row = wrap_row,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},
         QkvCausalConv1dSiluInputs{
-            .input = input, .history = history, .tap0 = tap0, .tap1 = tap1, .tap2 = tap2, .tap3 = tap3});
+            .input = input,
+            .history = history,
+            .tap0 = tap0,
+            .tap1 = tap1,
+            .tap2 = tap2,
+            .tap3 = tap3,
+            .wrap_indicator = wrap_indicator});
 }
 
 }  // namespace ttnn::experimental::prim

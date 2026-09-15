@@ -26,7 +26,9 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.kda.recurrent_chunk_s
     initial_state,
     one_core_height_sharded,
     recurrent_oracle,
+    summary_oracle,
     run_recurrent,
+    run_summary,
     to_device,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
@@ -212,6 +214,34 @@ def test_recurrent_chunk_scan_contract_and_trace(
         dtypes=(ttnn.bfloat16, ttnn.float32),
         shapes=((batch_heads, num_chunks, CHUNK_SIZE, value_dim), (batch_heads, key_dim, value_dim)),
         expected_memory_config=output_memory,
+    )
+
+
+def test_recurrent_chunk_scan_reseeds_only_at_wrap(device: ttnn.Device) -> None:
+    host_inputs = host_protocol(2, 4, 32, 32, seed=1741)
+    host_state = initial_state(2, 32, 32, seed=1742)
+    host_tail = initial_state(2, 32, 32, seed=1743)
+    head_output, _ = recurrent_oracle(tuple(tensor[:, :2] for tensor in host_inputs), host_state)
+    tail_output, expected_state = recurrent_oracle(tuple(tensor[:, 2:] for tensor in host_inputs), host_tail)
+    expected = (torch.cat((head_output, tail_output), dim=1), expected_state)
+
+    inputs = device_protocol(host_inputs, device)
+    state = to_device(host_state, device)
+    tail_state = to_device(host_tail, device)
+    indicator = to_device(torch.ones(1, 1, 1), device)
+    actual = run_recurrent(
+        inputs,
+        state,
+        tail_state=tail_state,
+        wrap_indicator=indicator,
+        wrap_chunk=2,
+    )
+
+    assert_outputs_accurate(
+        expected,
+        actual,
+        names=("token_output", "final_state"),
+        context="wrap reseed",
     )
 
 
@@ -564,3 +594,84 @@ def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
     state = to_device(initial_state(2, 32, 32), device)
     with expect_error(TypeError, "incompatible function arguments"):
         ttnn.experimental.kda.recurrent_chunk_scan(*inputs, state, **{removed_keyword: True})
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "num_chunks,wrap_chunk,key_dim,value_dim",
+    [
+        pytest.param(20, 1, 32, 32, id="c20-w1"),
+        pytest.param(20, 7, 32, 32, id="c20-w7"),
+        pytest.param(20, 13, 32, 32, id="c20-w13"),
+        pytest.param(20, 19, 32, 32, id="c20-w19"),
+        pytest.param(8, 3, 32, 32, id="c8-w3"),
+        pytest.param(4, 2, 64, 32, id="c4-w2-k64-v32"),
+    ],
+)
+def test_wrap_reloads_the_carry_from_tail_state(
+    device: ttnn.Device, num_chunks: int, wrap_chunk: int, key_dim: int, value_dim: int
+) -> None:
+    """A wrap reloads the carry from tail_state, with no extra output slot.
+
+    Seeds are five orders of magnitude apart so a leaked pre-wrap carry cannot
+    hide inside a tolerance. Shapes are identical to the unwrapped case.
+    """
+    batch_heads = 2
+    protocol = host_protocol(batch_heads, num_chunks, key_dim, value_dim)
+    head_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e-3
+    tail_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e2
+
+    outputs = run_recurrent(
+        device_protocol(protocol, device),
+        to_device(head_seed.contiguous(), device),
+        tail_state=to_device(tail_seed.contiguous(), device),
+        wrap_chunk=wrap_chunk,
+    )
+    assert tuple(outputs[0].shape) == (batch_heads, num_chunks, CHUNK_SIZE, value_dim)
+
+    head_part = tuple(t[:, :wrap_chunk] for t in protocol)
+    tail_part = tuple(t[:, wrap_chunk:] for t in protocol)
+    head_out, _ = recurrent_oracle(head_part, head_seed)
+    tail_out, tail_final = recurrent_oracle(tail_part, tail_seed)
+    expected = torch.cat((head_out, tail_out), dim=1)
+
+    assert_outputs_accurate(
+        [expected, tail_final],
+        [outputs[0], outputs[1]],
+        names=["output", "final_state"],
+        context=f"wrap {wrap_chunk}/{num_chunks}",
+    )
+
+
+@run_for_blackhole()
+def test_no_wrap_is_untouched_by_the_tail_state_input(device):
+    """wrap_chunk 0 must ignore tail_state entirely and stay bit-identical."""
+    batch_heads, num_chunks, key_dim, value_dim = 2, 8, 32, 32
+    protocol = device_protocol(host_protocol(batch_heads, num_chunks, key_dim, value_dim), device)
+    seed = to_device(initial_state(batch_heads, key_dim, value_dim), device)
+    junk = to_device(1e3 * initial_state(batch_heads, key_dim, value_dim, seed=99), device)
+
+    plain = ttnn.to_torch(run_recurrent(protocol, seed)[0])
+    with_tail = ttnn.to_torch(run_recurrent(protocol, seed, tail_state=junk, wrap_chunk=0)[0])
+    assert torch.equal(plain, with_tail), "wrap_chunk 0 must ignore tail_state"
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("wrap_chunk", [3, 8, 13])
+def test_segmented_parts_compose_to_the_whole_partition(device, wrap_chunk):
+    """The device-produced head and tail compose to the ordinary summary."""
+    batch_heads, num_chunks, dim = 2, 16, 32
+    device_terms = device_protocol(host_protocol(batch_heads, num_chunks, dim, dim), device)
+
+    indicator = to_device(torch.ones(1, 1, 1), device)
+    head_a, head_b, tail_a, tail_b = (
+        ttnn.to_torch(t).float()
+        for t in run_summary(device_terms, wrap_indicator=indicator, wrap_chunk=wrap_chunk, emit_tail_summaries=True)
+    )
+
+    assert_outputs_accurate(
+        [tail_a @ head_a, tail_a @ head_b + tail_b],
+        run_summary(device_terms),
+        names=["A", "B"],
+        context=f"composition w{wrap_chunk}/{num_chunks}",
+    )

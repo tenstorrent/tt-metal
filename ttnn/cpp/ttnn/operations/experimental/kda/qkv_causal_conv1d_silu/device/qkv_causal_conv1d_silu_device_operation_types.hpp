@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -17,6 +18,11 @@ struct QkvCausalConv1dSiluParams {
     uint32_t k_width;
     uint32_t v_width;
     uint32_t channel_chunk_size;
+    // Local row at which the causal stream restarts, or 0 for none. Under an MLA
+    // offset one chip holds two causally non-adjacent fragments, so a tap window
+    // must never reach across this row -- it reaches into the second history
+    // plane instead. Tile aligned, so no 32-row output tile ever straddles it.
+    uint32_t wrap_row;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
@@ -28,6 +34,7 @@ struct QkvCausalConv1dSiluInputs {
     Tensor tap1;
     Tensor tap2;
     Tensor tap3;
+    std::optional<Tensor> wrap_indicator;
 };
 
 }  // namespace ttnn::experimental::prim

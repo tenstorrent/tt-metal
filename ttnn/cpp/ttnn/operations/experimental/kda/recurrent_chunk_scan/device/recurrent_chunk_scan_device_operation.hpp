@@ -34,8 +34,13 @@ std::vector<Tensor> recurrent_chunk_scan(
     const Tensor& k_dec_t,
     const Tensor& final_decay,
     const Tensor& t_inv,
-    const std::optional<Tensor>& initial_state,
-    RecurrentChunkScanMode mode,
+    const std::optional<Tensor>&,
+    const std::optional<Tensor>&,
+    const std::optional<Tensor>&,
+    RecurrentChunkScanMode,
+    uint32_t groups_per_head,
+    uint32_t wrap_chunk,
+    bool emit_tail_summaries,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const DeviceComputeKernelConfig& compute_kernel_config);
 

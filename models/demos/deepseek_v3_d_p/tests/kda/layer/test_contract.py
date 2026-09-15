@@ -183,6 +183,7 @@ def test_layer_rejects_invalid_construction(case: str, device: ttnn.Device, expe
     "case",
     [
         pytest.param("sequence", id="sequence-must-be-positive-tile-multiple"),
+        pytest.param("split_sequence", id="split-sequence-must-be-tile-multiple"),
         pytest.param("batch", id="forward-requires-batch-one"),
         pytest.param("hidden_width", id="hidden-width-must-match-config"),
         pytest.param("recurrent_shape", id="recurrent-state-shape"),
@@ -199,6 +200,8 @@ def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_er
 
     if case == "sequence":
         hidden_shape, error = (1, 4, config.hidden_size), r"requires local T .* divisible by 32"
+    elif case == "split_sequence":
+        hidden_shape, error = (1, 48, config.hidden_size), r"requires local T .* divisible by 32"
     elif case == "batch":
         hidden_shape, error = (2, 32, config.hidden_size), "requires batch size 1"
     elif case == "hidden_width":
@@ -254,4 +257,13 @@ def test_layer_rejects_invalid_forward(case: str, device: ttnn.Device, expect_er
 
     hidden = torch.randn(*hidden_shape, generator=torch.Generator().manual_seed(45), dtype=torch.bfloat16)
     with expect_error(ValueError, error):
-        _forward(layer, hidden, state)
+        layer.forward(_hidden_to_device(hidden, device), state, actual_start=32 if case == "split_sequence" else 0)
+
+
+@pytest.mark.parametrize("actual_start", [-32, 16, 1000])
+def test_layer_rejects_invalid_actual_start(device: ttnn.Device, actual_start: int, expect_error) -> None:
+    config = make_small_kda_test_config()
+    layer = ttKDA(device, config, random_weights(config))
+    hidden = _hidden_to_device(torch.zeros(1, 32, config.hidden_size, dtype=torch.bfloat16), device)
+    with expect_error(ValueError, "actual_start must be a non-negative multiple of 32"):
+        layer.forward(hidden, layer.allocate_state(), actual_start=actual_start)

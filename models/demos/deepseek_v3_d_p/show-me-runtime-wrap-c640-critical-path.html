@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Why runtime-wrap costs 8% at C=640</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg:#080e15; --panel:#101a25; --panel2:#152230; --line:#2a3a49;
+      --text:#edf4f8; --muted:#9caeba; --cyan:#51d2dc; --green:#70d69a;
+      --amber:#ffbd59; --red:#ff746f; --violet:#b6a0ff;
+    }
+    * { box-sizing:border-box; }
+    body { margin:0; background:radial-gradient(circle at 75% 0,rgba(81,210,220,.10),transparent 34rem),var(--bg); color:var(--text); font:15px/1.45 Inter,ui-sans-serif,system-ui,sans-serif; }
+    main { max-width:1180px; margin:auto; padding:34px 22px 46px; }
+    h1 { margin:3px 0 9px; font-size:clamp(29px,5vw,48px); line-height:1.04; letter-spacing:-.035em; }
+    h2 { margin:0 0 15px; font-size:20px; }
+    p { margin:8px 0; }
+    code { color:#c2eef1; font:13px ui-monospace,SFMono-Regular,Menlo,monospace; }
+    .kicker { color:var(--cyan); font:750 12px ui-monospace,monospace; letter-spacing:.09em; text-transform:uppercase; }
+    .lead { max-width:930px; margin:0 0 22px; color:var(--muted); font-size:18px; }
+    .correction { display:grid; grid-template-columns:auto 1fr; gap:17px; align-items:center; margin:0 0 20px; padding:16px 18px; background:rgba(255,189,89,.08); border:1px solid rgba(255,189,89,.42); border-radius:14px; }
+    .correction b:first-child { color:var(--amber); font-size:23px; white-space:nowrap; }
+    .grid { display:grid; grid-template-columns:1.12fr .88fr; gap:18px; }
+    .card { padding:21px; background:linear-gradient(155deg,var(--panel),#0d1620); border:1px solid var(--line); border-radius:16px; }
+    .wide { grid-column:1/-1; }
+    .paths { display:grid; grid-template-columns:1fr 1fr; gap:13px; }
+    .path { padding:14px; background:rgba(255,255,255,.018); border:1px solid var(--line); border-radius:12px; }
+    .path-title { display:flex; justify-content:space-between; align-items:center; margin-bottom:11px; font-weight:750; }
+    .pill { padding:4px 8px; border-radius:99px; font:750 11px ui-monospace,monospace; color:var(--green); background:rgba(112,214,154,.10); border:1px solid rgba(112,214,154,.36); }
+    .pill.hot { color:var(--amber); background:rgba(255,189,89,.09); border-color:rgba(255,189,89,.4); }
+    .node { position:relative; padding:9px 10px; margin:0 0 17px; border-radius:8px; background:var(--panel2); border:1px solid var(--line); font:650 12px/1.3 ui-monospace,monospace; }
+    .node:last-child { margin-bottom:0; }
+    .node:not(:last-child)::after { content:"↓"; position:absolute; left:50%; bottom:-18px; color:var(--muted); font:15px sans-serif; }
+    .same { border-color:rgba(112,214,154,.45); background:rgba(112,214,154,.08); }
+    .new { border-color:rgba(255,189,89,.48); background:rgba(255,189,89,.08); }
+    .collective { border-color:rgba(182,160,255,.5); background:rgba(182,160,255,.08); }
+    .small { color:var(--muted); font:500 11px/1.3 system-ui,sans-serif; }
+    .equation { margin:0 0 18px; padding:15px; text-align:center; border-radius:11px; background:#071018; border:1px solid var(--line); font:750 clamp(17px,3vw,25px)/1.25 ui-monospace,monospace; }
+    .equation .hot { color:var(--amber); }
+    .waterfall { display:grid; gap:9px; }
+    .row { display:grid; grid-template-columns:118px 1fr 63px; gap:9px; align-items:center; }
+    .label { color:var(--muted); font-size:12px; }
+    .track { height:21px; background:#070d13; border:1px solid #243543; border-radius:6px; overflow:hidden; }
+    .fill { height:100%; min-width:2px; border-radius:5px; background:var(--cyan); }
+    .matmul { background:var(--red); } .dm { background:var(--amber); } .elt { background:var(--violet); } .ag { background:#67b2ff; } .other { background:var(--green); }
+    .num { text-align:right; font:750 12px ui-monospace,monospace; }
+    .sum { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); color:var(--muted); font-size:13px; }
+    .sum strong { color:var(--text); }
+    .facts { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px; }
+    .fact { padding:13px; background:var(--panel2); border:1px solid var(--line); border-radius:10px; }
+    .fact b { display:block; color:var(--amber); font:800 19px ui-monospace,monospace; }
+    .fact span { color:var(--muted); font-size:12px; }
+    .bottom { display:grid; grid-template-columns:1fr 1fr; gap:20px; align-items:start; }
+    .takeaway { font-size:17px; }
+    .takeaway strong { color:var(--amber); }
+    .note { color:var(--muted); font-size:12px; }
+    @media(max-width:800px){ .grid,.paths,.bottom{grid-template-columns:1fr}.wide{grid-column:auto}.facts{grid-template-columns:1fr}.correction{grid-template-columns:1fr}.row{grid-template-columns:100px 1fr 58px} }
+  </style>
+</head>
+<body>
+<main>
+  <div class="kicker">C=640 · same G=1 recurrence geometry · measured</div>
+  <h1>“Same recurrence” does not mean “same device graph”</h1>
+  <p class="lead">The recurrent scan barely changes. The 8% comes from building the two causal fragments around it: summarize both halves, compose and select their affine state, exchange an extra convolution carry, and recover the final state from the boundary chip.</p>
+
+  <div class="correction">
+    <b>“Plumbing” ≠ bookkeeping</b>
+    <span>It means <strong>26 additional TT device programs</strong> on a short 3.493 ms layer. Several are matmuls and fabric collectives, and most feed the next stage, so they sit on the critical path.</span>
+  </div>
+
+  <div class="grid">
+    <section class="card">
+      <h2>What actually changes</h2>
+      <div class="paths">
+        <div class="path">
+          <div class="path-title">No offset <span class="pill">G=1</span></div>
+          <div class="node">publish 1 convolution end</div>
+          <div class="node">summarize whole partition ×1</div>
+          <div class="node">distributed affine prefix</div>
+          <div class="node same">recurrent scan: 20 chunks</div>
+          <div class="node">use prefix final state</div>
+        </div>
+        <div class="path">
+          <div class="path-title">Split offset <span class="pill hot">G=1 + 26 programs</span></div>
+          <div class="node new">publish 2 convolution ends <span class="small">extra slice / pad / concat / layout / unpack</span></div>
+          <div class="node new">summarize head ×1 + tail ×1</div>
+          <div class="node new">compose whole transform <span class="small">2 matmuls + add; select publish value: 2 where</span></div>
+          <div class="node">distributed affine prefix</div>
+          <div class="node new">derive + select tail seed <span class="small">1 matmul + add + where</span></div>
+          <div class="node same">same recurrent scan: 20 chunks <span class="small">reload tail seed at wrap; only ~+1.8 µs</span></div>
+          <div class="node collective">all-gather every chip's final state + slice boundary chip</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Why “only 0.29 ms” becomes 8%</h2>
+      <div class="equation"><span class="hot">~0.29 ms</span> ÷ 3.493 ms ≈ 8%</div>
+      <div class="waterfall">
+        <div class="row"><span class="label">3 matmuls</span><div class="track"><div class="fill matmul" style="width:100%"></div></div><span class="num">+66.1 µs</span></div>
+        <div class="row"><span class="label">12 data moves</span><div class="track"><div class="fill dm" style="width:96%"></div></div><span class="num">+63.7 µs</span></div>
+        <div class="row"><span class="label">5 elementwise</span><div class="track"><div class="fill elt" style="width:85%"></div></div><span class="num">+56.3 µs</span></div>
+        <div class="row"><span class="label">1 all-gather</span><div class="track"><div class="fill ag" style="width:82%"></div></div><span class="num">+54.4 µs</span></div>
+        <div class="row"><span class="label">scan wrap</span><div class="track"><div class="fill other" style="width:24%"></div></div><span class="num">+16.0 µs</span></div>
+        <div class="row"><span class="label">4 copy/move</span><div class="track"><div class="fill other" style="width:21%"></div></div><span class="num">+14.1 µs</span></div>
+        <div class="row"><span class="label">mixed / offsets</span><div class="track"><div class="fill other" style="width:2%"></div></div><span class="num">+0.1 µs</span></div>
+      </div>
+      <p class="sum"><strong>Profiled program-max delta: +270.8 µs.</strong> Same run's wall delta: +262.0 µs. Sustained drift-balanced runs measured roughly +0.28–0.30 ms.</p>
+      <div class="facts">
+        <div class="fact"><b>~+1.8 µs</b><span>main scan change in callsite profile</span></div>
+        <div class="fact"><b>~+288 µs</b><span>other split-path device work</span></div>
+        <div class="fact"><b>7.92–7.94%</b><span>paired sustained overhead</span></div>
+      </div>
+    </section>
+
+    <section class="card wide bottom">
+      <div>
+        <div class="kicker">The causal serialization</div>
+        <p class="takeaway">The extra work is not freely hidden: <strong>head/tail summaries → affine composition/selection → distributed prefix → tail-seed construction → scan → final-state gather</strong>. Each result enables the next step.</p>
+      </div>
+      <div>
+        <div class="kicker">The honest conclusion</div>
+        <p class="takeaway">There is no mysterious slow matmul and no recurrence regression. We pay ~8% because a short baseline is being extended by an <strong>unfused, launch-heavy distributed state-routing graph</strong>.</p>
+        <p class="note">The category bars are attribution from the real-time device profile. They are not claimed as an independently additive wall-clock model; the measured wall delta is shown separately.</p>
+      </div>
+    </section>
+  </div>
+</main>
+</body>
+</html>
