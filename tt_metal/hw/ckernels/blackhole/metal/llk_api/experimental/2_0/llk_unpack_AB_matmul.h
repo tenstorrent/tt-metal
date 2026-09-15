@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "llk_unpack_AB_matmul_api.h"  // legacy CB-id API + unified llk_unpack_AB_matmul_{init_,}impl
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK AB MATMUL -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -39,6 +40,7 @@ inline void llk_unpack_AB_matmul_init(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+    SAN_HOOK(unsupported());
     // unpA(SrcA) <- IN1, unpB(SrcB) <- IN0.
     llk_unpack_AB_matmul_init_impl(
         transpose,
@@ -62,6 +64,7 @@ inline void llk_unpack_AB_matmul(
     const std::uint32_t ct_dim = 1,
     const std::uint32_t rt_dim = 1,
     const std::uint32_t kt_dim = 1) {
+    SAN_HOOK(unsupported());
     // Legacy execute wiring: base_a/tile_size_a <- IN0, base_b/tile_size_b <- IN1; partial_face_a <- IN1,
     // partial_face_b <- IN0 (preserved verbatim, including the "TODO: Review RT" quirk).
     llk_unpack_AB_matmul_impl(

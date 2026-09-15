@@ -61,7 +61,9 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
     DeviceAddr l1_total_size = l1_max_size - l1_unreserved_base;
     mesh_device->load_sub_device_manager(sub_device_manager_1);
-    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 2);
+    // Program-local CBs are DRAM-aligned from persistent high-water. Leave three
+    // local-L1 slots so a 1x CB fits and a 4x CB overlaps the top-down global buffer.
+    uint32_t global_buffer_size = l1_total_size - (k_local_l1_size * 3);
     ShardSpecBuffer global_shard_spec_buffer =
         ShardSpecBuffer(sharded_cores_1, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sharded_cores_1.num_cores(), 1});
 
@@ -85,7 +87,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
 
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
-    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 3);
+    UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
@@ -104,6 +106,8 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
+    mesh_device->clear_loaded_sub_device_manager();
+    mesh_device->remove_sub_device_manager(sub_device_manager_1);
 }
 
 void test_sub_device_synchronization(distributed::MeshDevice* device) {

@@ -220,7 +220,7 @@ void kernel_main() {
             /*kt_dim=*/1);
     }
 
-    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
+    add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2_id);
 
     // Wait for the partial to come, add it
     cb_w2c_in2.wait_front(1);
@@ -357,6 +357,8 @@ void kernel_main() {
         transpose_init(cb_s2c_out_id);
         transpose_tile(cb_s2c_out_id, 0, 0);
         cb_s2c_out.pop_front(1);
+
+        cb_w2c_in5.wait_front(1);
 
         copy_init(cb_w2c_in5_id);
         copy_tile(cb_w2c_in5_id, 0, 2);

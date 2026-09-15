@@ -27,7 +27,6 @@ global_env:
   PREFILL_TRACE_DIR: "/data/philei/models/minimax-m3-prefill-cache/golden/longbook_10240"
 
   PREFILL_ENABLE_MIGRATION: "1"
-  PREFILL_ENABLE_LAYER_ACK: "1"
   PREFILL_USE_TRACE: "1"
   PREFILL_MIGRATION_WAIT_READY_MS: "300000"
   # Table on shared storage — num_ranks>1 rejects per-host paths like /tmp. Device map stays host-local.

@@ -37,6 +37,7 @@ from ttnn.operations.ccl import Topology
 import ttnn
 from models.common.utility_functions import skip_with_llk_assert, skip_with_watcher
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import is_high_power
+from models.demos.gpt_oss_d_p.tt.attention.kv_cache import bounded_blockcyclic_positions, sliding_capacity_tokens
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
@@ -590,6 +591,7 @@ def open_ring_joint_sdpa_runtime(
     topology: Topology = None,
     reserve_llk_kernel_config: bool = True,
     full_mesh: bool = False,
+    num_global_semaphores: int = 3,
 ):
     if full_mesh:
         fabric_config = ttnn.FabricConfig.FABRIC_2D_TORUS_XY
@@ -644,7 +646,9 @@ def open_ring_joint_sdpa_runtime(
             sdpa_compute_grid=(mesh_config.sdpa_cols, mesh_config.grid_rows),
             ccl_column=mesh_config.ccl_column,
             worker_sub_device_id=worker_sub_device_id,
-            ccl_semaphore_handles=create_global_semaphores(mesh_device, ccl_sub_device_crs, 0),
+            ccl_semaphore_handles=create_global_semaphores(
+                mesh_device, ccl_sub_device_crs, 0, count=num_global_semaphores
+            ),
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 mesh_device.arch(),
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -761,9 +765,9 @@ def generate_test_configs(mesh_config: MeshConfig, model_configs: Dict[str, Mode
     return configs, config_ids
 
 
-def create_global_semaphores(mesh_device, cores, initial_value):
+def create_global_semaphores(mesh_device, cores, initial_value, *, count=2):
     """Create global semaphore handles for CCL coordination."""
-    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(2)]
+    return [ttnn.create_global_semaphore(mesh_device, cores, initial_value) for _ in range(count)]
 
 
 def profile_ring_joint_runtime_duration_ns(mesh_device, run_fn):
@@ -803,6 +807,20 @@ def to_balanced_growing_cache_layout(src_full, sp_size, chunk_size, last_uploade
     return perm
 
 
+def to_circular_cache_layout(src_full, sp_size, chunk_size, chunk_idx, total_seq, sliding_window_size):
+    """Pack the resident chunks into the circular per-device K/V cache exactly as the model lays it out:
+    capacity from ``sliding_capacity_tokens`` (whole chunk slabs, chunk group g in slab g mod n_slabs) and
+    each shard row's global position from ``bounded_blockcyclic_positions``, after chunks 0..chunk_idx were
+    written. Rows never written stay zero. Device-major like to_balanced_growing_cache_layout."""
+    capacity = sliding_capacity_tokens(total_seq, (chunk_size,), sliding_window=sliding_window_size)
+    pos = bounded_blockcyclic_positions(sp_size, chunk_size, capacity, (chunk_idx + 1) * chunk_size)
+    b, nh, _, d = src_full.shape
+    perm = torch.zeros(b, nh, pos.numel(), d, dtype=src_full.dtype, device=src_full.device)
+    valid = pos >= 0
+    perm[:, :, valid, :] = src_full[:, :, pos[valid], :]
+    return perm
+
+
 def call_sdpa(
     tt_q,
     tt_k,
@@ -828,6 +846,11 @@ def call_sdpa(
     is_cross=False,
     attention_sink=None,
     sliding_window_size=None,
+    slot_id=None,
+    kv_actual_isl_tensor=None,
+    kv_cache_num_layers=None,
+    kv_cache_layer_idx=None,
+    circular_kv_cache=False,
 ):
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
         tt_q,
@@ -859,6 +882,11 @@ def call_sdpa(
         kv_actual_isl=kv_actual_isl,
         attention_sink=attention_sink,
         sliding_window_size=sliding_window_size,
+        slot_id=slot_id,
+        kv_actual_isl_tensor=kv_actual_isl_tensor,
+        kv_cache_num_layers=kv_cache_num_layers,
+        kv_cache_layer_idx=kv_cache_layer_idx,
+        circular_kv_cache=circular_kv_cache,
     )
     return tt_out
 
@@ -1669,6 +1697,7 @@ def run_ring_joint_sdpa_chunked(
     use_attention_sink: bool = False,
     runtime: RingJointSDPARuntime = None,
     reserve_llk_kernel_config: bool = True,
+    circular_kv_cache: bool = False,
 ):
     """
     Validate ring joint SDPA chunked-prefill, or verify deterministic replay.
@@ -1705,6 +1734,14 @@ def run_ring_joint_sdpa_chunked(
         assert model.d_v <= model.d_k, f"latent V (d_v={model.d_v}) must fit within the K/V latent (d_k={model.d_k})"
     if use_attention_sink:
         assert not use_ring_mla, "attention sink coverage requires separate K/V ring joint SDPA"
+    # circular_kv_cache: the per-device K/V input is the 2-slab circular cache of the bounded
+    # sliding-window layout (current chunk + predecessor at slab g % 2) instead of the full growing
+    # prefix; logical_n / kv_actual_isl stay absolute and the op derives the wrap on-device.
+    if circular_kv_cache:
+        assert sliding_window_size is not None, "circular_kv_cache is a sliding-window layout"
+        assert not use_ring_mla and not reuse_kv_buffer and not indexed_nd_sharded_kv_cache
+        assert persistent_buffer_mode == "exact_per_chunk", "circular_kv_cache builds a fresh 2-slab cache per chunk"
+        assert chunk_size >= sliding_window_size, "the predecessor slab must hold the whole window"
 
     # reuse_kv_buffer: reuse one fixed, oversized KV cache across all chunks (logical_n / kv_actual_isl
     # grow per chunk) instead of a fresh right-sized input each chunk. Perf-only (pad-rotation permutes
@@ -2026,7 +2063,14 @@ def run_ring_joint_sdpa_chunked(
                 )
 
             Q_chunk = Q_full[:, :, s:e, :].contiguous()
-            K_balanced = to_balanced_growing_cache_layout(K_full, sp_size, chunk_size, i)
+            if circular_kv_cache:
+                assert i >= 1, "circular_kv_cache runs need a predecessor chunk (select chunk >= 1)"
+                cache_layout = lambda full: to_circular_cache_layout(
+                    full, sp_size, chunk_size, i, total_seq, sliding_window_size
+                )
+            else:
+                cache_layout = lambda full: to_balanced_growing_cache_layout(full, sp_size, chunk_size, i)
+            K_balanced = cache_layout(K_full)
             kv_buffer_batch = b
             kv_cache_batch_idx_arg = None
 
@@ -2041,7 +2085,7 @@ def run_ring_joint_sdpa_chunked(
                     None,
                 )
 
-            V_balanced = to_balanced_growing_cache_layout(V_full, sp_size, chunk_size, i)
+            V_balanced = cache_layout(V_full)
             if indexed_nd_sharded_kv_cache:
                 kv_buffer_batch = cache_batch
                 kv_cache_batch_idx_arg = kv_cache_batch_idx
@@ -2125,9 +2169,10 @@ def run_ring_joint_sdpa_chunked(
                     worker_sub_device_id=worker_sub_device_id,
                     ccl_column=ccl_column,
                     kv_cache_batch_idx=kv_cache_batch_idx_arg,
-                    kv_actual_isl=s if reuse_kv_buffer else None,
+                    kv_actual_isl=s if (reuse_kv_buffer or circular_kv_cache) else None,
                     sliding_window_size=sliding_window_size,
                     attention_sink=tt_attention_sink,
+                    circular_kv_cache=circular_kv_cache,
                 )
             except Exception as exc:
                 op_name = "ring_mla" if use_ring_mla else "SDPA"
@@ -4512,6 +4557,248 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
         close_ring_joint_sdpa_runtime(runtime)
 
 
+RING_JOINT_TRACE_REGION_SIZE = 32 * 1024 * 1024
+
+
+def test_ring_joint_metadata_trace_replay_mixed_sliding_dense_three_semaphores():
+    """Replay changing prefixes and cache slots through mixed sliding/dense CCL."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size = mesh_config.sp_size
+    chunk_local = 256
+    chunk_global = chunk_local * sp_size
+    prefix_groups = (0, 1, 2)
+    stable_groups = max(prefix_groups) + 2
+    stable_kv_seq = sp_size * stable_groups * chunk_local
+
+    local_q_heads, local_kv_heads, head_dim = 8, 1, 64
+    nhq = local_q_heads * mesh_config.tp_size
+    nhk = local_kv_heads * mesh_config.tp_size
+    cache_user_slots = (1, 0, 2)
+    num_layers, layer_idx = 2, 1
+    cache_batch = max(cache_user_slots) * num_layers + layer_idx + 1
+
+    torch.manual_seed(CHUNKED_PREFILL_SEED + 701)
+    total_seq = (max(prefix_groups) + 1) * chunk_global
+    q_full = fa_rand(1, nhq, total_seq, head_dim)
+    k_full = fa_rand(1, nhk, total_seq, head_dim)
+    v_full = fa_rand(1, nhk, total_seq, head_dim)
+    chunks = []
+    for prefix_group, cache_user_slot in zip(prefix_groups, cache_user_slots, strict=True):
+        cache_batch_idx = cache_user_slot * num_layers + layer_idx
+        kv_actual_isl = prefix_group * chunk_global
+        logical_n = kv_actual_isl + chunk_global
+        q_host, k_host, v_host, valid_rows, _ = build_kv_pad_rotation_inputs(
+            k_full[:, :, :kv_actual_isl, :],
+            v_full[:, :, :kv_actual_isl, :],
+            q_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            k_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            v_full[:, :, kv_actual_isl:logical_n, :].contiguous(),
+            kv_actual_isl,
+            sp_size,
+            chunk_local,
+        )
+        # Pad each device slab independently. Padding the already-flattened sequence would move later
+        # devices into an earlier device's stable-capacity tail and invalidate the physical cache layout.
+        stable_seq_per_dev = stable_kv_seq // sp_size
+        active_seq_per_dev = k_host.shape[2] // sp_size
+        k_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        v_cache_per_dev = torch.randn(cache_batch, nhk, sp_size, stable_seq_per_dev, head_dim) * 100
+        k_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            k_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        v_cache_per_dev[cache_batch_idx, :, :, :active_seq_per_dev, :].copy_(
+            v_host[0].reshape(nhk, sp_size, active_seq_per_dev, head_dim)
+        )
+        k_cache = k_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        v_cache = v_cache_per_dev.reshape(cache_batch, nhk, stable_kv_seq, head_dim)
+        chunks.append(
+            (kv_actual_isl, logical_n, q_host, k_cache, v_cache, valid_rows, cache_user_slot, cache_batch_idx)
+        )
+
+    runtime = open_ring_joint_sdpa_runtime(
+        mesh_config, trace_region_size=RING_JOINT_TRACE_REGION_SIZE, num_global_semaphores=3
+    )
+    mesh_device = runtime.mesh_device
+    trace_id = None
+    try:
+        mesh_device.enable_program_cache()
+        input_dims = [None, None]
+        input_dims[runtime.sp_axis] = 2
+        if mesh_config.tp_size > 1:
+            input_dims[runtime.tp_axis] = 1
+        persistent_dims = [None, None]
+        if mesh_config.tp_size > 1:
+            persistent_dims[runtime.tp_axis] = 1
+
+        def make_tensor(host, dtype, dims, *, device=None):
+            return ttnn.from_torch(
+                host,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
+            )
+
+        def upload(host, dtype, dims):
+            return make_tensor(host, dtype, dims, device=mesh_device)
+
+        tt_q = upload(chunks[0][2], ttnn.bfloat16, input_dims)
+        tt_k = upload(chunks[0][3], ttnn.bfloat8_b, input_dims)
+        tt_v = upload(chunks[0][4], ttnn.bfloat8_b, input_dims)
+        sliding_shape = (1, nhk, 128, head_dim)
+        dense_shape = (1, nhk, stable_kv_seq, head_dim)
+        sliding_k = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        sliding_v = upload(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_k = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        dense_v = upload(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims)
+        zero_buffers = (
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(sliding_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+            make_tensor(torch.zeros(dense_shape), ttnn.bfloat8_b, persistent_dims),
+        )
+        device_buffers = (sliding_k, sliding_v, dense_k, dense_v)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, chunks[0][6], chunks[0][0])
+
+        def stage(chunk_index):
+            kv_actual_isl, _, q_host, k_host, v_host, _, cache_user_slot, _ = chunks[chunk_index]
+            ttnn.copy_host_to_device_tensor(make_tensor(q_host, ttnn.bfloat16, input_dims), tt_q)
+            ttnn.copy_host_to_device_tensor(make_tensor(k_host, ttnn.bfloat8_b, input_dims), tt_k)
+            ttnn.copy_host_to_device_tensor(make_tensor(v_host, ttnn.bfloat8_b, input_dims), tt_v)
+            for zero, buffer in zip(zero_buffers, device_buffers):
+                ttnn.copy_host_to_device_tensor(zero, buffer)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, cache_user_slot), tt_slot_id)
+            ttnn.copy_host_to_device_tensor(_ring_mla_host_scalar_tensor(mesh_device, kv_actual_isl), tt_kv_actual_isl)
+
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=64,
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
+        composer = ttnn.create_mesh_composer(
+            mesh_device,
+            ttnn.MeshComposerConfig(
+                input_dims[0] if input_dims[0] is not None else -1,
+                input_dims[1] if input_dims[1] is not None else -1,
+            ),
+        )
+
+        def invoke(*, use_metadata, logical_n, kv_actual_isl, cache_batch_idx=None):
+            common = dict(
+                logical_n=logical_n,
+                is_causal=True,
+                is_balanced=False,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                kv_cache_batch_idx=None if use_metadata else cache_batch_idx,
+                kv_actual_isl=None if use_metadata else kv_actual_isl,
+                slot_id=tt_slot_id if use_metadata else None,
+                kv_actual_isl_tensor=tt_kv_actual_isl if use_metadata else None,
+                kv_cache_num_layers=num_layers if use_metadata else None,
+                kv_cache_layer_idx=layer_idx if use_metadata else None,
+            )
+            sliding = call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                p_buf_k=sliding_k,
+                p_buf_v=sliding_v,
+                sliding_window_size=128,
+                **common,
+            )
+            dense = call_sdpa(tt_q, tt_k, tt_v, p_buf_k=dense_k, p_buf_v=dense_v, **common)
+            return sliding, dense
+
+        def read_outputs(outputs, chunk_index):
+            rows = chunks[chunk_index][5]
+            return tuple(ttnn.to_torch(out, mesh_composer=composer)[:, :, rows, :] for out in outputs)
+
+        references = []
+        for chunk_index, (kv_actual_isl, logical_n, *_, cache_batch_idx) in enumerate(chunks):
+            stage(chunk_index)
+            outputs = invoke(
+                use_metadata=False,
+                logical_n=logical_n,
+                kv_actual_isl=kv_actual_isl,
+                cache_batch_idx=cache_batch_idx,
+            )
+            ttnn.synchronize_device(mesh_device)
+            references.append(read_outputs(outputs, chunk_index))
+            for output in outputs:
+                ttnn.deallocate(output)
+
+        gqa_ratio = local_q_heads // local_kv_heads
+        torch_sliding_ref = torch_chunked_causal_sdpa_reference(
+            q_full[:, :, :chunk_global, :],
+            k_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            v_full[:, :, :chunk_global, :].repeat_interleave(gqa_ratio, dim=1),
+            0,
+            sliding_window_size=128,
+        )
+        scalar_rmse = torch.sqrt(((torch_sliding_ref - references[0][0]) ** 2).mean()).item()
+        assert scalar_rmse < DEFAULT_RMSE_THRESHOLD, f"scalar sliding reference RMSE={scalar_rmse}"
+
+        # The host value remains fixed at the stable cache capacity. Cache-slot selection, prefix growth,
+        # and halo relocation must therefore come exclusively from the two metadata tensors refreshed by stage().
+        capture_logical_n = stable_kv_seq
+        stage(0)
+        warm = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(warm, 0), references[0]):
+            mismatch = got != expected
+            assert not mismatch.any(), (
+                f"eager {mode} metadata differs from scalar path: mismatches={mismatch.sum().item()}, "
+                f"first={mismatch.nonzero()[0].tolist()}, "
+                f"heads={mismatch.any(dim=(0, 2, 3)).nonzero().flatten().tolist()}, "
+                f"rows={mismatch.any(dim=(0, 1, 3)).nonzero().flatten().tolist()}, "
+                f"max abs diff={(got - expected).abs().max().item()}"
+            )
+        for output in warm:
+            ttnn.deallocate(output)
+
+        stage(0)
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        traced_outputs = invoke(use_metadata=True, logical_n=capture_logical_n, kv_actual_isl=None)
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+
+        for chunk_index in (0, 1, 2, 1, 0):
+            stage(chunk_index)
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            for mode, got, expected in zip(
+                ("sliding", "dense"), read_outputs(traced_outputs, chunk_index), references[chunk_index]
+            ):
+                assert torch.equal(got, expected), (
+                    f"{mode} metadata replay differs from scalar path at prefix group {chunk_index}; "
+                    f"max abs diff={(got - expected).abs().max().item()}"
+                )
+
+        # Avoid intermediate readbacks here: they used to add enough settling to hide the CCL race.
+        for replay in range(32):
+            stage(replay % len(chunks))
+            ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+
+        stage(2)
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh_device)
+        for mode, got, expected in zip(("sliding", "dense"), read_outputs(traced_outputs, 2), references[2]):
+            assert torch.equal(got, expected), f"{mode} output changed after the readback-free stress loop"
+    finally:
+        if trace_id is not None:
+            ttnn.release_trace(mesh_device, trace_id)
+        close_ring_joint_sdpa_runtime(runtime, clear_program_cache=True)
+
+
 # Generate perf test parameters dynamically based on detected hardware for different models (WAN, MLA, VideGen...)
 TEST_CONFIGS, TEST_CONFIG_IDS = generate_test_configs(MESH_CONFIG, RING_JOINT_PERF_MODEL_CONFIGS)
 TEST_CONFIG_MODELS = list(MODEL_CONFIGS.keys())
@@ -5477,6 +5764,108 @@ def test_ring_joint_attention_gpt_oss_chunked_sliding_production_accuracy():
             sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
             use_attention_sink=True,
         )
+
+
+def test_ring_joint_attention_gpt_oss_chunked_sliding_circular_cache_accuracy():
+    """Production sliding+sink config read from the 2-slab CIRCULAR K/V cache of the bounded
+    sliding-window layout: the chunk and its predecessor sit at slab g % 2 (after several wraps),
+    logical_n / kv_actual_isl stay absolute, circular_kv_cache=True. Both slab parities run through
+    ONE runtime: the first call creates the program, the second is a program-cache hit whose scalar
+    runtime args must relocate the circular halo for a new logical_n and parity. Same reference as
+    the unbounded production test."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    n_chunks = GPT_OSS_CHUNKED_TOTAL_SEQ // GPT_OSS_CHUNKED_CHUNK_SIZE
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        cache_entries = None
+        for chunk in (n_chunks - 2, n_chunks - 1):  # slab parity g % 2 = 1, then 0
+            with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: str(chunk)}):
+                run_ring_joint_sdpa_chunked(
+                    mesh_config,
+                    GPT_OSS_CHUNKED_MODEL,
+                    chunk_size=GPT_OSS_CHUNKED_CHUNK_SIZE,
+                    total_seq=GPT_OSS_CHUNKED_TOTAL_SEQ,
+                    qk_configs=[(GPT_OSS_Q_CHUNK_SIZE, GPT_OSS_K_CHUNK_SIZE)],
+                    persistent_buffer_mode="exact_per_chunk",
+                    sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
+                    use_attention_sink=True,
+                    circular_kv_cache=True,
+                    runtime=runtime,
+                )
+            if cache_entries is None:
+                cache_entries = runtime.mesh_device.num_program_cache_entries()
+                assert cache_entries > 0, "circular-cache dispatch did not populate the program cache"
+            else:
+                assert runtime.mesh_device.num_program_cache_entries() == cache_entries, (
+                    "second circular-cache chunk (other slab parity) must hit the cached program, not "
+                    "create a new one"
+                )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_circular_kv_cache_rejects_metadata_path(expect_error):
+    """circular_kv_cache is rejected on the trace-safe metadata path (its halo derivation has no slab
+    wrap and kv_actual_isl is clamped to the physical capacity). The check fires on the host before any
+    value is read, so zero tensors of the right shapes (Q one chunk, K/V two chunk slabs) suffice."""
+    mesh_config = gpt_oss_chunked_mesh_config()
+    sp_size, tp_size = mesh_config.sp_size, mesh_config.tp_size
+    chunk_global, head_dim = 256 * sp_size, 64
+    nhq, nhk = 8 * tp_size, 1 * tp_size
+    runtime = open_ring_joint_sdpa_runtime(mesh_config, num_global_semaphores=3)
+    mesh_device = runtime.mesh_device
+    try:
+
+        def zeros_on_mesh(shape, dtype, seq_sharded):
+            dims = [None, None]
+            if seq_sharded:
+                dims[runtime.sp_axis] = 2
+            if tp_size > 1:
+                dims[runtime.tp_axis] = 1
+            mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims)
+            return ttnn.from_torch(
+                torch.zeros(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+            )
+
+        tt_q = zeros_on_mesh((1, nhq, chunk_global, head_dim), ttnn.bfloat16, True)
+        tt_k = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
+        tt_v = zeros_on_mesh((1, nhk, 2 * chunk_global, head_dim), ttnn.bfloat8_b, True)
+        p_buf_k = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
+        p_buf_v = zeros_on_mesh((1, nhk, 128, head_dim), ttnn.bfloat8_b, False)
+        tt_slot_id, tt_kv_actual_isl = _make_ring_mla_metadata(mesh_device, 0, chunk_global)
+        with expect_error(RuntimeError, "does not support the trace-safe metadata path"):
+            call_sdpa(
+                tt_q,
+                tt_k,
+                tt_v,
+                slot_id=tt_slot_id,
+                kv_actual_isl_tensor=tt_kv_actual_isl,
+                kv_cache_num_layers=1,
+                kv_cache_layer_idx=0,
+                logical_n=2 * chunk_global,
+                is_causal=True,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=p_buf_v,
+                program_config=ttnn.SDPAProgramConfig(
+                    compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+                    q_chunk_size=64,
+                    k_chunk_size=128,
+                    exp_approx_mode=False,
+                ),
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                sliding_window_size=128,
+                circular_kv_cache=True,
+            )
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
 
 
 def test_ring_joint_attention_gpt_oss_chunked_full_causal_attention_sink_accuracy():

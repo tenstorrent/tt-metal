@@ -88,6 +88,10 @@ ALWI void copy_init(
  * Each architecture supplies its own llk_unpack_dummy(); this helper dispatches to it through
  * UNPACK(...). This call is only available on the compute engine.
  *
+ * This is a temporary workaround, only needed because these kernels drive wait/pop loops directly over
+ * hand-written L1. It goes away once those loops are replaced by the real fix -- LocalTensorAccessors, which
+ * bypass the wait/pop and reserve/push loops entirely.
+ *
  * Return value: None
  *
  * | Argument | Description                                             | Data type | Valid range | required |
