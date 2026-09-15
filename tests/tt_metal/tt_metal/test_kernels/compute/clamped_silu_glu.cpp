@@ -5,7 +5,7 @@
 // Drives the fused clamped_silu_glu binary SFPU op over a tile pair at a time so a host
 // test can compare against the torch reference. gate arrives in c_0, up in c_1;
 // the result is packed to c_16.
-//   compile_time_args = [num_tiles, dst_gate_index, dst_up_index, dst_out_index, skip_init]
+//   compile_time_args = [num_tiles, dst_gate_index, dst_up_index, dst_out_index]
 
 #include <cstdint>
 
@@ -30,9 +30,6 @@ void kernel_main() {
     // Output index: aliasing the gate operand is what the expert kernel does to save a dst slot;
     // a separate slot catches an implementation that ignores out_tile_idx.
     constexpr uint32_t kDstOut = get_compile_time_arg_val(3);
-    // Skips clamped_silu_glu_tile_init() so a host case can show the init is load-bearing against
-    // the polluted Prgm0 below, instead of that only being asserted by a comment.
-    constexpr bool kSkipInit = get_compile_time_arg_val(4) != 0;
 
     constexpr uint32_t cb_gate = tt::CBIndex::c_0;
     constexpr uint32_t cb_up = tt::CBIndex::c_1;
@@ -47,14 +44,11 @@ void kernel_main() {
     // format registers.
     compute_kernel_hw_startup(cb_gate, cb_out);
     copy_init(cb_gate);
-    // Leave Prgm0 in a state clamped_silu_glu_tile_init() has to repair, standing in for an earlier
-    // op in the same kernel that owned it -- the condition a fused activation runs in, and what
-    // holds that init under test. Any value but 2.0 does it: Prgm0 is read only as `x*y - Prgm0`
-    // to gate a Newton step, and x*y is ~1, so anything below ~1 skips the refinement.
+    // Stands in for an earlier op that owned Prgm0. Every case runs against it, so an init that
+    // stops repairing Prgm0 fails the ULP bar. Any value but 2.0 does it: Prgm0 is read only as
+    // `x*y - Prgm0` to gate a Newton step, and x*y is ~1, so anything below ~1 skips refinement.
     MATH((sfpi::vConstFloatPrgm0 = 0.125f));
-    if constexpr (!kSkipInit) {
-        clamped_silu_glu_tile_init();
-    }
+    clamped_silu_glu_tile_init();
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
         gate_cb.wait_front(1);

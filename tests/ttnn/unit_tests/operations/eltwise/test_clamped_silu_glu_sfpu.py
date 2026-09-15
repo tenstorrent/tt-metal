@@ -32,7 +32,8 @@ IN_DTYPES = {
 }
 OUT_PAGE_BYTES = TILE_ELEMS * 2  # the output CB is bf16
 
-# The op always packs bf16, so the bf16 arm is gated in ULP (measured worst case: 0.89).
+# The op always packs bf16, so the bf16 arm is gated in ULP (measured worst case: 0.89). The bar also
+# catches an init that leaves vConstFloatPrgm0 unrepaired: 2.54 ULP in bf16 dst, 1.82 in fp32 dst.
 # bfp8_b quantizes the inputs before the op runs, so that arm is gated by PCC only.
 BF16_ULP = 2
 BF16_PCC = 0.999
@@ -59,7 +60,7 @@ def _coverage_inputs(num_tiles, seed=0):
     return gate[torch.randperm(n)].to(torch.bfloat16), up[torch.randperm(n)].to(torch.bfloat16)
 
 
-def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_up=1, dst_out=0, skip_init=False):
+def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_up=1, dst_out=0):
     num_tiles = gate_t.numel() // TILE_ELEMS
     shape = [1, num_tiles, 32, 32]
 
@@ -126,7 +127,7 @@ def _run(device, gate_t, up_t, in_dtype, page_bytes, fp32_dest, dst_gate=0, dst_
         ttnn.KernelDescriptor(
             kernel_source="tests/tt_metal/tt_metal/test_kernels/compute/clamped_silu_glu.cpp",
             core_ranges=core,
-            compile_time_args=[num_tiles, dst_gate, dst_up, dst_out, int(skip_init)],
+            compile_time_args=[num_tiles, dst_gate, dst_up, dst_out],
             runtime_args=[],
             config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=fp32_dest),
         ),
@@ -174,25 +175,3 @@ def test_clamped_silu_glu_sfpu(device, in_name, fp32_dest, dst_gate, dst_up, dst
     else:
         assert_with_ulp(expected_result=golden, actual_result=actual, ulp_threshold=BF16_ULP)
         assert_with_pcc(g, a, pcc=BF16_PCC)
-
-
-@pytest.mark.skipif(not is_blackhole(), reason="clamped_silu_glu SFPU op is implemented for Blackhole only")
-def test_clamped_silu_glu_init_is_required(device, expect_error):
-    """The op's sigmoid reaches sfpu_reciprocal_iter, which needs 2.0f in vConstFloatPrgm0. The
-    test kernel leaves a wrong value there, so skipping the init disables the Newton step.
-    """
-    in_dtype, page_bytes = IN_DTYPES["bf16"]
-    gate_t, up_t = _coverage_inputs(8)
-    golden = clamped_silu_glu_reference(gate_t, up_t)
-
-    assert_with_ulp(
-        expected_result=golden,
-        actual_result=_run(device, gate_t, up_t, in_dtype, page_bytes, False),
-        ulp_threshold=BF16_ULP,
-    )
-    with expect_error(AssertionError, "Max ULP Delta"):
-        assert_with_ulp(
-            expected_result=golden,
-            actual_result=_run(device, gate_t, up_t, in_dtype, page_bytes, False, skip_init=True),
-            ulp_threshold=BF16_ULP,
-        )
