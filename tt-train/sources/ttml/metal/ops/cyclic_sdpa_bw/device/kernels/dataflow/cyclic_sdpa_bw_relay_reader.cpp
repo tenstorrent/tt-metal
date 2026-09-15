@@ -229,7 +229,7 @@ void kernel_main() {
     const auto neighbors = snake_neighbors(kCores, my_core);
 
     const uint32_t tile_bytes = get_tile_size(cb_query);
-    const uint32_t interm_bytes = get_tile_size(cb_lse);
+    const uint32_t interm_bytes = get_tile_size(cb_u_scalar);  // the L buffer holds the statistic block now
     const uint32_t grad_bytes = get_tile_size(cb_grad_query_seed);
 
     const auto query = TensorAccessor(query_args, query_addr, tile_bytes);
@@ -247,30 +247,18 @@ void kernel_main() {
     // receiver's.
     const uint32_t base_query = get_write_ptr(cb_query);
     const uint32_t base_grad_output = get_write_ptr(cb_grad_output);
-    const uint32_t base_lse = get_write_ptr(cb_lse);  // load scratch, not a packet field
-    const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
+    // L and D as loaded from DRAM at a streak start are scratch here (the D
+    // buffer, two slots each; its pages double as the writer's "block made"
+    // signal), and the packet carries the statistic block instead (the L
+    // buffer, 512 bytes a row tile; see cyclic_dataflow_utils.hpp).
+    const uint32_t base_lse = get_write_ptr(cb_u_scalar);
+    const uint32_t base_u_scalar = base_lse + 2u * Bt * interm_bytes;
+    // The block is memory only, no buffer protocol: its slot is reused two
+    // timesteps later, after the release that follows the compute kernel's
+    // pop, and the writer has expanded it before the compute kernel starts.
+    const uint32_t base_block = get_write_ptr(cb_lse);
+    const uint32_t stride_block = Bt * cyclic_dataflow::kStatBlockBytes;
     const uint32_t base_grad_query = get_write_ptr(cb_grad_query_seed);
-    // The prepared statistic tiles (see cyclic_dataflow_utils.hpp): made once
-    // where a row's packet is loaded from DRAM, then carried by the packet.
-    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
-    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
-    constexpr uint32_t cb_lse_rem_row = tt::CBIndex::c_30;
-    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_9;
-    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
-    const uint32_t base_lse_row = get_write_ptr(cb_lse_row);
-    const uint32_t base_u_row = get_write_ptr(cb_u_row);
-    const uint32_t base_lse_rem_row = get_write_ptr(cb_lse_rem_row);
-    const uint32_t base_lse_rem = get_write_ptr(cb_lse_rem);
-    const uint32_t base_u_rem = get_write_ptr(cb_u_rem);
-    const uint32_t rem_bytes = get_tile_size(cb_u_rem);
-    const uint32_t stride_rem = Bt * rem_bytes;
-    const auto reserve_stat_slots = [&]() {
-        cb_reserve_back(cb_lse_row, Bt);
-        cb_reserve_back(cb_u_row, Bt);
-        cb_reserve_back(cb_lse_rem_row, Bt);
-        cb_reserve_back(cb_lse_rem, Bt);
-        cb_reserve_back(cb_u_rem, Bt);
-    };
     const uint32_t stride_query = row_tiles * tile_bytes;
     const uint32_t stride_grad_output = val_tiles * tile_bytes;
     const uint32_t stride_interm = Bt * interm_bytes;
@@ -474,7 +462,6 @@ void kernel_main() {
             if (!prefetched) {
                 cb_reserve_back(cb_query, row_tiles);
                 cb_reserve_back(cb_grad_output, val_tiles);
-                reserve_stat_slots();
             }
             cb_reserve_back(cb_grad_query_seed, row_tiles);
         }
@@ -543,8 +530,8 @@ void kernel_main() {
                 }
             }
             noc_async_read_barrier();
-            // The writer makes the statistic tiles from L and D, into this
-            // slot; they then travel with the packet, so this happens only
+            // The writer makes the statistic block from L and D, into this
+            // slot; it then travels with the packet, so this happens only
             // here, where the row entered from DRAM. A prefetched packet was
             // signalled when its reads completed, a timestep ago.
             if (!prefetched) {
@@ -560,11 +547,6 @@ void kernel_main() {
         // arrive.
         cb_push_back(cb_query, row_tiles);
         cb_push_back(cb_grad_output, val_tiles);
-        cb_push_back(cb_lse_row, Bt);
-        cb_push_back(cb_u_row, Bt);
-        cb_push_back(cb_lse_rem_row, Bt);
-        cb_push_back(cb_lse_rem, Bt);
-        cb_push_back(cb_u_rem, Bt);
 
         // Forward the immutable fields straight away, before this core has
         // computed anything: the packet carries them unchanged, so they never
@@ -574,16 +556,8 @@ void kernel_main() {
         const uint32_t dst = u % 2u;
         const uint32_t dst_query = base_query + dst * stride_query;
         const uint32_t dst_grad_output = base_grad_output + dst * stride_grad_output;
-        const uint32_t dst_lse_row = base_lse_row + dst * stride_interm;
-        const uint32_t dst_u_row = base_u_row + dst * stride_interm;
-        const uint32_t dst_lse_rem_row = base_lse_rem_row + dst * stride_interm;
-        const uint32_t dst_lse_rem = base_lse_rem + dst * stride_rem;
-        const uint32_t dst_u_rem = base_u_rem + dst * stride_rem;
-        const uint32_t src_lse_row = base_lse_row + slot * stride_interm;
-        const uint32_t src_u_row = base_u_row + slot * stride_interm;
-        const uint32_t src_lse_rem_row = base_lse_rem_row + slot * stride_interm;
-        const uint32_t src_lse_rem = base_lse_rem + slot * stride_rem;
-        const uint32_t src_u_rem = base_u_rem + slot * stride_rem;
+        const uint32_t dst_block = base_block + dst * stride_block;
+        const uint32_t src_block = base_block + slot * stride_block;
         const uint32_t dst_grad_query = base_grad_query + dst * stride_grad_query;
         uint32_t receiver_x = 0;
         uint32_t receiver_y = 0;
@@ -598,15 +572,10 @@ void kernel_main() {
             // credit, and the copies are local.
             cb_reserve_back(cb_query, row_tiles);
             cb_reserve_back(cb_grad_output, val_tiles);
-            reserve_stat_slots();
             cb_reserve_back(cb_grad_query_seed, row_tiles);
             noc_async_write(qs, get_noc_addr(dst_query), stride_query);
             noc_async_write(os, get_noc_addr(dst_grad_output), stride_grad_output);
-            noc_async_write(src_lse_row, get_noc_addr(dst_lse_row), stride_interm);
-            noc_async_write(src_u_row, get_noc_addr(dst_u_row), stride_interm);
-            noc_async_write(src_lse_rem_row, get_noc_addr(dst_lse_rem_row), stride_interm);
-            noc_async_write(src_lse_rem, get_noc_addr(dst_lse_rem), stride_rem);
-            noc_async_write(src_u_rem, get_noc_addr(dst_u_rem), stride_rem);
+            noc_async_write(src_block, get_noc_addr(dst_block), stride_block);
             noc_async_write_barrier();
             noc_semaphore_set(ready_imm_sem[dst], u + 1u);
         } else if (receiver != kNoCore) {
@@ -614,12 +583,7 @@ void kernel_main() {
             noc_async_write(qs, get_noc_addr(receiver_x, receiver_y, dst_query), stride_query);
             noc_async_write(
                 os, get_noc_addr(receiver_x, receiver_y, dst_grad_output), stride_grad_output);
-            noc_async_write(src_lse_row, get_noc_addr(receiver_x, receiver_y, dst_lse_row), stride_interm);
-            noc_async_write(src_u_row, get_noc_addr(receiver_x, receiver_y, dst_u_row), stride_interm);
-            noc_async_write(
-                src_lse_rem_row, get_noc_addr(receiver_x, receiver_y, dst_lse_rem_row), stride_interm);
-            noc_async_write(src_lse_rem, get_noc_addr(receiver_x, receiver_y, dst_lse_rem), stride_rem);
-            noc_async_write(src_u_rem, get_noc_addr(receiver_x, receiver_y, dst_u_rem), stride_rem);
+            noc_async_write(src_block, get_noc_addr(receiver_x, receiver_y, dst_block), stride_block);
             // Payload complete before readiness, as the contract requires.
             noc_async_write_barrier();
             // An inline write carries the value in the command itself, so
@@ -644,7 +608,6 @@ void kernel_main() {
             const uint32_t nslot = (g + 1u) % 2u;
             cb_reserve_back(cb_query, row_tiles);
             cb_reserve_back(cb_grad_output, val_tiles);
-            reserve_stat_slots();
             const uint32_t nqs = base_query + nslot * stride_query;
             const uint32_t nos = base_grad_output + nslot * stride_grad_output;
             const uint32_t nls = base_lse + nslot * stride_interm;

@@ -191,8 +191,13 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // Two packet slots for the row-side fields, one resident column.
     make_cb(tt::CBIndex::c_0, 2U * rowT, tt::DataFormat::Float16_b);   // Q_i
     make_cb(tt::CBIndex::c_3, 2U * valT, tt::DataFormat::Float16_b);   // dO_i
-    make_cb(tt::CBIndex::c_4, 2U * Bt, tt::DataFormat::Float32);       // L_i
-    make_cb(tt::CBIndex::c_5, 2U * Bt, tt::DataFormat::Float32);       // D_i
+    // The packet's statistic block (512 bytes a row tile, two slots), and the
+    // L / D scratch a streak start loads into (two slots of each).
+    CreateCircularBuffer(
+        program, region,
+        CircularBufferConfig(2U * Bt * 512U, {{tt::CBIndex::c_4, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_4, 512U));
+    make_cb(tt::CBIndex::c_5, 4U * Bt, tt::DataFormat::Float32);       // L_i, D_i scratch
     make_cb(tt::CBIndex::c_15, 2U * rowT, tt::DataFormat::Float32);    // dQ_i, travels along
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);        // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);        // V_j
