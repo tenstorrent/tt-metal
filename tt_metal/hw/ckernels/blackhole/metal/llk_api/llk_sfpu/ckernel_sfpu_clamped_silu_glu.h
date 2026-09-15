@@ -28,6 +28,9 @@ namespace ckernel::sfpu {
 // SiLU, which is what the name says and what a Config of that op could not express -- its `up +
 // 1.0f` is hardcoded outside the Config.
 //
+// calculate_clamped_silu_gate / calculate_clamped in experimental/llk_sfpu/ckernel_sfpu_clamped_silu.h
+// are these two halves as unary ops over dst_reg[0]; reusing them costs three passes over dst, not one.
+//
 // The limit is compile-time so the kernel never loads it from an LReg. V4 Pro and V4 Flash share
 // one value (swiglu_limit = 10.0 in the DeepSeek-V4 HF config -- not the gpt-oss swiglu_limit,
 // which is 7.0), so one config covers both; other models add a config beside this one.
