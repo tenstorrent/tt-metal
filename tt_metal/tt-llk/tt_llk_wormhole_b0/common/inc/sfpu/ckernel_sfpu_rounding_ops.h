@@ -25,6 +25,9 @@ namespace sfpu
 // compute truncate to zero
 sfpi_inline sfpi::vFloat _trunc_body_(sfpi::vFloat val)
 {
+    // Preserve NaN and +/-inf payloads in trunc, floor, and ceil (#56414)
+    sfpi::vInt exp_check = sfpi::exexp(val);
+    v_if (exp_check >= 128) { return val; } v_endif;
     sfpi::l_reg[sfpi::LRegs::LReg0] = val;
     // set L3=23.  TODO: this could be stored in a constant register, but use by rdiv prevents this for now.
     TTI_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_SHORT, 23);
