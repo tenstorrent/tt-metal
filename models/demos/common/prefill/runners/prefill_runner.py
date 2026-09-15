@@ -579,6 +579,11 @@ def _serve_request(runtime, kv_caches, mesh_device, hf_config, rank: int, num_ra
     # worker attaches to it during its pipeline bring-up and only then issues the KV-manager connect
     # that the migration layer needs before it can report WORKER_READY to wait_ready() below.
     use_d2h = os.environ.get("PREFILL_LAYER_ACK_D2H", "0") == "1"
+    if use_d2h and not ADAPTER.supports_d2h_layer_ack:
+        raise RuntimeError(
+            f"PREFILL_LAYER_ACK_D2H=1 but {ADAPTER.name} reports layer completion through the host "
+            "on_layer_complete callback only; run with PREFILL_LAYER_ACK_D2H=0."
+        )
 
     from ttnn._experimental.layer_completion import LayerCompletionQueue, LayerCompletionRouter
 

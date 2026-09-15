@@ -53,6 +53,7 @@ class GptOssPrefillAdapter(PrefillModelAdapter):
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
     prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
     default_gate_mode = "DEVICE_FP32"
+    supports_d2h_layer_ack = False  # layer completion comes through the host on_layer_complete callback
 
     # --- test metadata ---
     hf_repo_id = "openai/gpt-oss-120b"
