@@ -1091,16 +1091,12 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
                 continue;
             }
             const uint32_t C = static_cast<uint32_t>(rows) / (2u * Bt * 32u);
-            // The op runs one schedule per (batch, head) slice on its own
-            // C-core rectangle and does not loop slices, so heads x C must
-            // fit the grid. Where it does not, say so rather than abort the
-            // sweep: that limit is itself one of the findings.
+            // The op deals slices round-robin to as many C-core groups as
+            // fit and runs the rest in turn, so heads x C beyond the grid is
+            // no longer a refusal; it shows up as time instead. Print the
+            // groups so the loop's depth is visible next to the number.
             const auto grid = device->compute_with_storage_grid_size();
-            if (heads * C > static_cast<size_t>(grid.x) * grid.y) {
-                std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") needs " << heads * C << " cores, grid has "
-                          << grid.x * grid.y;
-                continue;
-            }
+            const size_t groups = std::min<size_t>(heads, static_cast<size_t>(grid.x) * grid.y / C);
             double cyclic = 0.0;
             try {
                 cyclic = median_us([&]() {
@@ -1113,7 +1109,8 @@ TEST_F(LoudboxRingSDPATest, DISABLED_SweepTheStepOps) {
                 std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") no rectangle of area " << C << " fits";
                 continue;
             }
-            std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ") " << cyclic;
+            std::cout << " | cyclic Bt=" << Bt << " (C=" << C << ", " << groups << " groups x "
+                      << (heads + groups - 1) / groups << " slices) " << cyclic;
         }
         std::cout << "\n";
     }
