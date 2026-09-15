@@ -1176,6 +1176,9 @@ def test_kimi_k3_moe(
         # fmt: off
         pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
         pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
+        # run_pcc_check=False: the device-perf wrapper in tests/perf/test_moe_perf.py selects this row
+        # so the timed region is the device forward alone, with no host reference pass inside it.
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-perf"),
         # fmt: on
     ],
 )
@@ -1195,6 +1198,16 @@ def test_kimi_k3_moe(
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
+        ),
+        # SP=8 proxy on a LoudBox -- the stage shape PP=4 actually runs (SP=8 x TP=1), where the
+        # 8x4 row above is the single-rank shape. torus_y matches the PP=4 rank binding's fabric.
+        # An (8,1) row cannot run on a Galaxy at all, so this slot is LoudBox-only.
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
