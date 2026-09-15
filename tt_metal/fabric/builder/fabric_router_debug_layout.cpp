@@ -175,7 +175,7 @@ void add_padding(std::vector<FabricRouterDebugRegion>& regions, uint32_t unreser
             DebugRegionWriter::NONE,
             "raw"));
     };
-    for (const auto [begin, end] : intervals) {
+    for (const auto& [begin, end] : intervals) {
         if (begin > cursor) {
             add_gap(cursor, begin);
         }
@@ -451,7 +451,7 @@ FabricRouterDebugInstance build_router_debug_instance(
                 DebugRegionWriter::WORKER));
 
             const bool counters = vc_uses_counters(streams.plan(), vc);
-            for (const auto [suffix, arg_pattern, base, declared_extent] :
+            for (const auto& [suffix, arg_pattern, base, declared_extent] :
                  {std::tuple{
                       "acked",
                       "TO_SENDER_{}_PKTS_ACKED_ID",
@@ -619,7 +619,7 @@ FabricRouterDebugInstance build_router_debug_instance(
         "raw"));
 
     regions.push_back(group("hal"));
-    for (const auto [id, type, schema] :
+    for (const auto& [id, type, schema] :
          {std::tuple{"hal.telemetry", tt::tt_metal::HalL1MemAddrType::FABRIC_TELEMETRY, "fabric_telemetry"},
           std::tuple{"hal.routing_table", tt::tt_metal::HalL1MemAddrType::ROUTING_TABLE, "routing_l1_info_t"}}) {
         regions.push_back(l1_region(
