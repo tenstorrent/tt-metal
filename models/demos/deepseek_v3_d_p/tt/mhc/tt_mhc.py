@@ -116,6 +116,20 @@ def build_consts(cfg, scale, base) -> torch.Tensor:
     return torch.stack([sel_pre, sel_post, sel_comb, base_pre, base_post, base_comb, RB, CB], dim=0)
 
 
+def build_bcast_consts(n) -> torch.Tensor:
+    """Column-broadcast tiles for the fused post-mix kernel.
+
+    -> [n*n, 32, 32] fp32. Tile k has row k all ones and is zero elsewhere, so
+    `A @ E_k` fills every element with A's column k -- a per-token coefficient expanded across
+    a whole tile. The tile hardware's sub-tile broadcast can only take column 0, and this form
+    is exact: the terms it drops are products with a true zero.
+    """
+    E = torch.zeros(n * n, W, W, dtype=torch.float32)
+    for k in range(n * n):
+        E[k, k, :] = 1.0
+    return E
+
+
 def _upload(device, t, shape, dtype):
     return ttnn.from_torch(t.contiguous().reshape(shape), layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
 
@@ -183,6 +197,7 @@ class TtMHCWrap(LightweightModule):
         # transposed so mixes = xnorm @ fn_T, matching the reference F.linear(xf, fn)
         self.fn_T = _upload(device, fn.t(), (1, 1, fn.shape[1], fn.shape[0]), dtype)
         self.consts = _upload(device, build_consts(cfg, scale, base), (8, W, W), dtype)
+        self.bcast_consts = _upload(device, build_bcast_consts(self.n), (self.n * self.n, W, W), dtype)
 
     def project(self, x):
         """[1,1,T,n*C] -> mixes [1,1,T,mix_hc], the fused kernel's input."""
@@ -217,12 +232,20 @@ class TtMHCWrap(LightweightModule):
                 out[j] = ttnn.addcmul(out[j], res[i], cmb[i * n + j])
         return ttnn.concat(out, dim=-1)
 
+    def hc_post_fused(self, x, residual, post, comb):
+        """Same contract as hc_post, in one kernel pass.
+
+        The composite form slices, addcmuls and concats n*n full [1,1,T,C] accumulators through
+        DRAM; the kernel reads each (token-tile, column-tile) block once and writes it once.
+        """
+        return ttnn.experimental.deepseek_prefill.mhc_post(x, residual, post, comb, self.bcast_consts, self.n)
+
     def forward(self, x, sublayer):
         """x: [1,1,T,n*C]; sublayer: [1,1,T,C] -> [1,1,T,C]. Returns [1,1,T,n*C]."""
         residual = x
         h, post, comb = self.hc_pre(x)
         h = sublayer(h)
-        return self.hc_post(h, residual, post, comb)
+        return self.hc_post_fused(h, residual, post, comb)
 
 
 class TtMHCHead(LightweightModule):

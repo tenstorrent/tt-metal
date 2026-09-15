@@ -17,8 +17,10 @@ One test per question:
   - kernel_grid_scaling: cost of the fused parametrization at prefill token counts, and whether
     it scales with the core grid (MHC_MAX_CORES=1 pins the single-core arm).
   - kernel_sharded: whether the zero-copy L1-sharded path beats DRAM-interleaved at equal work.
-  - block: how the kernel compares to the composite ttnn half it sits in, at V4-Pro C=7168.
-  - wrap_e2e: what one whole mHC-wrapped sublayer costs, the number a model estimate uses.
+  - block: how the kernel compares to the composite ttnn half it sits in, at V4-Pro C=7168,
+    and what fusing the post half into one kernel is worth (mhc-hc-post vs mhc-hc-post-fused).
+  - wrap_e2e: what one whole mHC-wrapped sublayer costs, the number a model estimate uses,
+    with the fused and composite post halves as the two arms.
 """
 
 import os
@@ -34,6 +36,22 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import TtMHCWrap, build_consts
 # measured dispatches per region, after a warmup that compiles and fills the cache. Tracy's
 # per-core marker buffer holds ~12k events; lower this when a run reports dropped markers.
 ITERS = int(os.environ.get("MHC_PERF_ITERS", 10))
+
+
+def _measure(device, regions):
+    """Run each (name, fn) ITERS times inside its own signposted region.
+
+    The closing "mhc-idle" matters: a region runs until the next signpost, so without it the
+    last region of a test absorbs the following test's tensor uploads and warmup dispatch.
+    """
+    for header, fn_ in regions:
+        fn_()  # compile + program cache
+        ttnn.synchronize_device(device)
+        signpost(header)
+        for _ in range(ITERS):
+            fn_()
+        ttnn.synchronize_device(device)
+        signpost("mhc-idle")
 
 
 def _consts(device, cfg, scale, base):
@@ -74,12 +92,7 @@ def test_mhc_kernel_grid_scaling(device, T):
             mixes_tt, consts, cfg.n, int(cfg.sinkhorn_iters), float(cfg.eps)
         )
 
-    run()  # compile + program cache
-    ttnn.synchronize_device(device)
-    signpost("mhc-kernel-grid")
-    for _ in range(ITERS):
-        run()
-    ttnn.synchronize_device(device)
+    _measure(device, (("mhc-kernel-grid", run),))
 
     if T > 8192:
         return  # the serial arm scales linearly; two token counts are enough to fix the ratio
@@ -89,12 +102,7 @@ def test_mhc_kernel_grid_scaling(device, T):
     prev = os.environ.get("MHC_MAX_CORES")
     os.environ["MHC_MAX_CORES"] = "1"
     try:
-        run()
-        ttnn.synchronize_device(device)
-        signpost("mhc-kernel-1core")
-        for _ in range(ITERS):
-            run()
-        ttnn.synchronize_device(device)
+        _measure(device, (("mhc-kernel-1core", run),))
     finally:
         if prev is None:
             os.environ.pop("MHC_MAX_CORES", None)
@@ -134,18 +142,12 @@ def test_mhc_kernel_sharded(device, tiles_per_core):
             t, consts, cfg.n, int(cfg.sinkhorn_iters), float(cfg.eps)
         )
 
-    for arm, header in ((inter, "mhc-kernel-interleaved"), (shard, "mhc-kernel-sharded")):
-        run(arm)
-        ttnn.synchronize_device(device)
-        signpost(header)
-        for _ in range(ITERS):
-            run(arm)
-        ttnn.synchronize_device(device)
+    _measure(device, (("mhc-kernel-interleaved", lambda: run(inter)), ("mhc-kernel-sharded", lambda: run(shard))))
 
 
 @pytest.mark.parametrize("T", [640, 2048], ids=["T640", "T2048"])
 def test_mhc_block_perf(device, T):
-    """The four stages of an mHC-wrapped sublayer at V4-Pro C, each in its own region.
+    """The stages of an mHC-wrapped sublayer at V4-Pro C, each in its own region.
 
     project, hc_pre and hc_post all stream the full [1,1,T,n*C] and are bandwidth-bound; the
     fused kernel touches only [T,32]. Splitting them is what shows whether the parametrization
@@ -180,14 +182,9 @@ def test_mhc_block_perf(device, T):
         ),
         ("mhc-hc-pre", lambda: wrap.hc_pre(x)),
         ("mhc-hc-post", lambda: wrap.hc_post(f_out, x, post, comb)),
+        ("mhc-hc-post-fused", lambda: wrap.hc_post_fused(f_out, x, post, comb)),
     )
-    for header, fn_ in stages:
-        fn_()  # compile + program cache
-        ttnn.synchronize_device(device)
-        signpost(header)
-        for _ in range(ITERS):
-            fn_()
-        ttnn.synchronize_device(device)
+    _measure(device, stages)
 
 
 @pytest.mark.parametrize("T", [640], ids=["T640"])
@@ -197,7 +194,8 @@ def test_mhc_wrap_e2e(device, T):
     F is the identity, so the region is mHC and nothing else -- a decoder layer holds two of
     these (attn_hc, ffn_hc), so the per-layer mHC cost is twice what this reports. The kernel
     is signposted a second time on its own to keep its share of the whole visible in the same
-    trace; test_mhc_block_perf attributes the rest.
+    trace; test_mhc_block_perf attributes the rest. The two arms differ only in the post half,
+    so their difference is exactly what the fused kernel buys.
     """
     torch.manual_seed(0)
     cfg = MHCConfig(dim=7168, n=4)
@@ -211,8 +209,18 @@ def test_mhc_wrap_e2e(device, T):
     )
     mixes = wrap.project(x)
 
+    def e2e(post_fn):
+        """wrap.forward with the post half swapped out, so the two arms differ in nothing else."""
+
+        def run():
+            h, post, comb = wrap.hc_pre(x)
+            return post_fn(h, x, post, comb)
+
+        return run
+
     regions = (
-        ("mhc-e2e", lambda: wrap.forward(x, lambda h: h)),
+        ("mhc-e2e", e2e(wrap.hc_post_fused)),
+        ("mhc-e2e-composite", e2e(wrap.hc_post)),
         (
             "mhc-e2e-kernel",
             lambda: ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn(
@@ -220,10 +228,4 @@ def test_mhc_wrap_e2e(device, T):
             ),
         ),
     )
-    for header, fn_ in regions:
-        fn_()  # compile + program cache
-        ttnn.synchronize_device(device)
-        signpost(header)
-        for _ in range(ITERS):
-            fn_()
-        ttnn.synchronize_device(device)
+    _measure(device, regions)
