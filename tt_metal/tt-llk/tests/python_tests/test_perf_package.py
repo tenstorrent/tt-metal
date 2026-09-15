@@ -88,7 +88,9 @@ def test_arch_aliases_and_quasar():
     assert headers.bank_tables("wormhole_b0") == headers.bank_tables("wormhole")
     assert headers.bank_tables("BLACKHOLE") == headers.bank_tables("blackhole")
     assert headers.bank_tables("quasar") == {}
-    with pytest.raises(ValueError):
+    # allow-pytest.raises: the tt-llk suite does not load the metal root conftest, so the expect_error
+    # fixture is not in scope, and a header parser has no device error for the CI triager to match.
+    with pytest.raises(ValueError):  # allow-pytest.raises
         headers.bank_tables("grayskull")
 
 
