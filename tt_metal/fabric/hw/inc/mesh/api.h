@@ -1196,7 +1196,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
 }
 
 #if defined(FABRIC_2D)
-namespace detail {
+namespace mcast_detail {
 
 struct PreparedMulticastBranchFanout {
     volatile PACKET_HEADER_TYPE* packet_header;
@@ -1289,7 +1289,7 @@ FORCE_INLINE void submit_multicast_branch_fanout_header_only(
     submit_multicast_branch_fanout_impl<false>(connection_manager, fanout);
 }
 
-}  // namespace detail
+}  // namespace mcast_detail
 
 // clang-format off
 /**
@@ -1323,9 +1323,9 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_write(
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
-    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
+    const auto fanout = mcast_detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
-    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    mcast_detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 
 // clang-format off
@@ -1356,9 +1356,9 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_unicast_atomic_inc(
     uint8_t route_id,
     const MeshMcastRange& branch,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
-    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
+    const auto fanout = mcast_detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_unicast_atomic_inc(noc_unicast_atomic_inc_command_header);
-    detail::submit_multicast_branch_fanout_header_only(connection_manager, fanout);
+    mcast_detail::submit_multicast_branch_fanout_header_only(connection_manager, fanout);
 }
 
 // clang-format off
@@ -1393,9 +1393,9 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_unicast_with_atomic_i
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header) {
-    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
+    const auto fanout = mcast_detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_fused_unicast_write_atomic_inc(noc_fused_unicast_atomic_inc_command_header, size);
-    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    mcast_detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 
 // clang-format off
@@ -1430,10 +1430,10 @@ FORCE_INLINE void fabric_multicast_source_inject_noc_fused_scatter_write_atomic_
     uint32_t src_addr,
     uint32_t size,
     tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header) {
-    const auto fanout = detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
+    const auto fanout = mcast_detail::prepare_multicast_branch_fanout(route_id, connection_manager, branch);
     fanout.packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
         noc_unicast_scatter_atomic_inc_fused_command_header, size);
-    detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
+    mcast_detail::submit_multicast_branch_fanout_with_payload(connection_manager, fanout, src_addr, size);
 }
 #endif
 

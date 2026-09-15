@@ -141,7 +141,7 @@ struct RoutingFieldsConstants {
 // with route_buffer_y[Y] immediately followed by route_buffer_x[X]. The control plane generates the
 // 2-bit tables, workers widen them into packets at setup, and the router decodes an action byte using
 // its own coordinate.
-namespace detail {
+namespace routing_2d_detail {
 
 struct Routing2DRouteTableCapacity {
     uint32_t action_vectors;
@@ -161,7 +161,7 @@ constexpr Routing2DRouteTableCapacity derive_2d_route_table_capacity(
     return {vector_bytes, tree_bytes, vector_bytes + tree_bytes};
 }
 
-}  // namespace detail
+}  // namespace routing_2d_detail
 
 struct Routing2DCodec {
     // ---- Packet action byte -------------------------------------------------
@@ -234,8 +234,8 @@ struct Routing2DCodec {
     static constexpr uint32_t MCAST_TREE_EDGE_BYTES = 2;
     static_assert(MAX_MESH_SIZE % MAX_AXIS_SIZE == 0);
     static constexpr uint32_t MAX_ORTHOGONAL_AXIS_SIZE = MAX_MESH_SIZE / MAX_AXIS_SIZE;
-    static constexpr auto ROUTE_TABLE_CAPACITY =
-        detail::derive_2d_route_table_capacity(MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
+    static constexpr auto ROUTE_TABLE_CAPACITY = routing_2d_detail::derive_2d_route_table_capacity(
+        MAX_AXIS_SIZE, MAX_MESH_SIZE, ACTIONS_PER_BYTE, MCAST_TREE_EDGE_BYTES);
     static constexpr uint32_t ACTION_VECTOR_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.action_vectors;
     static constexpr uint32_t MCAST_TREE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.mcast_trees;
     static constexpr uint32_t ROUTE_TABLE_CAPACITY_BYTES = ROUTE_TABLE_CAPACITY.total;
