@@ -32,6 +32,10 @@ struct SolAttnParams {
     // Chunked/paged geometry overrides (shared with paged decode). See
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
+
+    // Experiment knob, not a serving feature: keep every Nth KV chunk and skip the rest, so the skip
+    // machinery can be proven and its payoff measured before a real per-dispatch mask exists.
+    uint32_t chunk_keep_every = 0;
 };
 
 struct SolAttnInputs {

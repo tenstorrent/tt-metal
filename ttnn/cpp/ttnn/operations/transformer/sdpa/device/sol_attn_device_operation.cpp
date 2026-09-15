@@ -643,7 +643,8 @@ Tensor sol_attn(
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
-    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry) {
+    std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
+    uint32_t chunk_keep_every) {
     using OperationType = ttnn::prim::SolAttnOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -661,6 +662,7 @@ Tensor sol_attn(
             .windowed_q_token_offset = windowed_q_token_offset,
             .paged_cache_geometry =
                 paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
+            .chunk_keep_every = chunk_keep_every,
         },
         OperationType::tensor_args_t{
             .q = input_tensor_q,

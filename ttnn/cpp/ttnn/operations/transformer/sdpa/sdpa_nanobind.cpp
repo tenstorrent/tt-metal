@@ -988,7 +988,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("attention_sink") = nb::none(),
         nb::arg("cu_window_seqlens") = nb::none(),
         nb::arg("windowed_q_token_offset") = 0,
-        nb::arg("windowed_q_token_offset_tensor") = nb::none());
+        nb::arg("windowed_q_token_offset_tensor") = nb::none(),
+        nb::arg("chunk_keep_every") = 0);
 
     const auto* const sol_ring_doc =
         R"doc(

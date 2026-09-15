@@ -35,6 +35,8 @@ ttnn::Tensor sol_attn(
     const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
     const std::optional<ttnn::Tensor>& cu_window_seqlens = std::nullopt,
     uint32_t windowed_q_token_offset = 0,
-    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& windowed_q_token_offset_tensor = std::nullopt,
+    // experiment knob: keep every Nth KV chunk, skip the rest. 0 or 1 = dense.
+    uint32_t chunk_keep_every = 0);
 
 }  // namespace ttnn::transformer
