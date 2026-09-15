@@ -38,6 +38,7 @@ from helpers.sfpu_dispatch_constants import (
     RELU_MAX_THRESHOLD,
     RELU_MIN_THRESHOLD,
 )
+from helpers.sfpu_domains import op_edge_points
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import (
     StimuliSpec,
@@ -112,8 +113,8 @@ RELU_CC_OPS = [
     MathOperation.ReluMax,
 ]
 
-# Float rounding family. Domain [-10, 10] (sfpu_domains) spans both signs so floor/ceil
-# differ from trunc, and includes half-integers for round-half-to-even.
+# Float rounding family. Domain [-10, 10] spans both signs so floor/ceil differ from trunc.
+# Exact knees (round-half-to-even ties, integer boundaries) come from op_edge_points().
 ROUNDING_OPS = [
     MathOperation.Floor,
     MathOperation.Ceil,
@@ -421,11 +422,17 @@ def prepare_inputs_for_operation(
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
         src_A = src_A.to(torch_format)
     elif mathop in ROUNDING_OPS:
-        # [-10, 10] spans both signs so floor/ceil differ from trunc, and includes half-integers
-        # for round-half-to-even (mirrors sfpu_domains' Floor/Ceil/Trunc/Frac/Round spec).
+        # [-10, 10] spans both signs so floor/ceil differ from trunc. Overlay op_edge_points()
+        # so ties and integer knees are exact; a uniform draw does not hit them.
         min_val = -10.0
         max_val = 10.0
         src_A = min_val + src_A.to(torch.float32) * (max_val - min_val)
+        edges = op_edge_points(mathop)
+        if edges:
+            flat = src_A.flatten()
+            n = min(len(edges), flat.numel())
+            flat[:n] = torch.tensor(edges[:n], dtype=flat.dtype)
+            src_A = flat.view(src_A.shape)
         src_A = src_A.to(torch_format)
     # else: keep src_A as-is
 
