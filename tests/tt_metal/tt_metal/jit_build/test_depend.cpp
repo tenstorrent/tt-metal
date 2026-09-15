@@ -114,7 +114,7 @@ TEST_F(JitBuildDependencyTests, OutOfDateAfterDeletion) {
 
 TEST_F(JitBuildDependencyTests, MissingPchUmbrellaFailsBuild) {
     const auto umbrella = out_dir_ / "missing_pch.h";
-    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", "", umbrella, out_dir_ / "pch"), std::runtime_error);
+    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", umbrella, out_dir_ / "pch"), std::runtime_error);
     EXPECT_FALSE(std::filesystem::exists(out_dir_ / "pch"));
 }
 
@@ -125,7 +125,7 @@ TEST_F(JitBuildDependencyTests, UnreadablePchUmbrellaFailsBuild) {
     const auto umbrella = out_dir_ / "pch.h";
     std::ofstream{umbrella} << "#include <array>\n";
     std::filesystem::permissions(umbrella, std::filesystem::perms::none);
-    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", "", umbrella, out_dir_ / "pch"), std::runtime_error);
+    EXPECT_THROW(tt::jit_build::ensure_pch("", "Os", "", umbrella, out_dir_ / "pch"), std::runtime_error);
     EXPECT_FALSE(std::filesystem::exists(out_dir_ / "pch"));
 }
 

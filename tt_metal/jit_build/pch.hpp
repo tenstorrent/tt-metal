@@ -14,12 +14,12 @@ namespace tt::jit_build {
 inline constexpr std::string_view PCH_UMBRELLA = "tt_metal/hw/inc/internal/pch.h";
 
 // Throw if the umbrella cannot be read; return the cached header path or empty if PCH setup fails.
+// The STL-only umbrella uses the compiler's default include paths.
 // Match the consuming compile's flags and optimization level for GCC PCH compatibility.
 std::string ensure_pch(
     const std::string& gpp,
     const std::string& opt_level,
     const std::string& cflags,
-    const std::string& includes,
     const std::filesystem::path& umbrella,
     const std::filesystem::path& pch_root);
 

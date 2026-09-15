@@ -27,7 +27,6 @@ std::string ensure_pch(
     const std::string& gpp,
     const std::string& opt_level,
     const std::string& cflags,
-    const std::string& includes,
     const fs::path& umbrella,
     const fs::path& pch_root) {
     // The umbrella's own text is part of the key, so editing it produces a new artifact
@@ -39,7 +38,6 @@ std::string ensure_pch(
     hasher.update(gpp);
     hasher.update(opt_level);
     hasher.update(cflags);
-    hasher.update(includes);
     hasher.update(umbrella_bytes.data(), umbrella_bytes.size());
     const std::string key = fmt::format("{:016x}", hasher.digest());
     const fs::path dir = fs::absolute(pch_root / key);
@@ -97,9 +95,6 @@ std::string ensure_pch(
     args.emplace_back("c++-header");
     args.push_back("-" + opt_level);
     for (std::string& tok : utils::tokenize_flags(cflags)) {
-        args.push_back(std::move(tok));
-    }
-    for (std::string& tok : utils::tokenize_flags(includes)) {
         args.push_back(std::move(tok));
     }
     // -MMD would drop a stray depfile beside the artifact. The umbrella's only dependencies are

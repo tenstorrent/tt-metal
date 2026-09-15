@@ -672,12 +672,11 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     }
 
     // Add the machine-local PCH here so exported recipes remain portable.
-    // Exclude per-kernel include paths and build-map dump flags from the PCH profile.
+    // Exclude build-map dump flags from the PCH profile.
     const std::string pch = tt::jit_build::ensure_pch(
         env_.gpp_,
         recipe.compiler_opt_level,
         recipe.cflags,
-        this->includes_,
         recipe.pch_umbrella,
         fs::path(env_.out_root_) / std::to_string(env_.build_key_) / "pch");
 

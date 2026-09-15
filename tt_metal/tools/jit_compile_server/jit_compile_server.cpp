@@ -200,9 +200,8 @@ void compile_one(
     // Preprocess-and-ship sends self-contained .ii files whose standard headers
     // are already expanded, so they cannot benefit from this shared prelude.
     if (fs::path(target.srcs[src_index]).extension() != ".ii" && !target.pch_umbrella.empty()) {
-        // Only toolchain headers: kernel-specific -I paths must not create PCH variants.
         const std::string pch =
-            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, "", target.pch_umbrella, pch_root);
+            tt::jit_build::ensure_pch(gpp, target.compiler_opt_level, target.cflags, target.pch_umbrella, pch_root);
         if (!pch.empty()) {
             defines.insert(defines.begin(), {"-include", pch});
             cflags += " -Winvalid-pch -Wno-error=invalid-pch";
