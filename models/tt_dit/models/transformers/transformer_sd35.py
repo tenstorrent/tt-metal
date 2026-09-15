@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import torch
 from diffusers.models.transformers.transformer_sd3 import SD3Transformer2DModel as TorchSD3Transformer2DModel
+from loguru import logger
 
 import ttnn
 
@@ -21,6 +22,7 @@ from ...utils import cache
 from ...utils.padding import PaddingConfig
 from ...utils.substate import rename_substate
 from .attention_sd35 import SD35JointAttention
+from .sd35_quant_config import SD35QuantProfile
 
 if TYPE_CHECKING:
     from ...parallel.config import DiTParallelConfig
@@ -40,6 +42,7 @@ class SD35TransformerBlock(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        quant_config=None,
     ):
         super().__init__()
 
@@ -53,6 +56,13 @@ class SD35TransformerBlock(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+        self.quant_config = quant_config
+        # LoFi (or profile) matmul compute config, forwarded to the FFN matmuls (the attention linears
+        # take theirs at construction). None => the FFN keeps its per-dtype default compute config.
+        self._ff_compute_config = (
+            quant_config.mm_compute_config(mesh_device.arch()) if quant_config is not None else None
+        )
+        _ffn_q = quant_config.ffn_kwargs() if quant_config is not None else {}
 
         # TODO: Shuffle norm linear weights to match tensor parallelism
         self.norm1_linear = ColParallelLinear(
@@ -103,6 +113,7 @@ class SD35TransformerBlock(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            quant_config=quant_config,
         )
 
         self.norm2 = DistributedLayerNorm(
@@ -122,6 +133,7 @@ class SD35TransformerBlock(Module):
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
+            **_ffn_q,
         )
 
         self.norm2_context = None
@@ -144,6 +156,7 @@ class SD35TransformerBlock(Module):
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
+                **_ffn_q,
             )
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -272,7 +285,7 @@ class SD35TransformerBlock(Module):
                 **self.ccl_manager.get_ag_hyperparams(spatial_normed_1BND.shape),
             )
 
-        spatial_ff_1BND = self.ff(spatial_normed_1BND)
+        spatial_ff_1BND = self.ff(spatial_normed_1BND, compute_kernel_config=self._ff_compute_config)
         spatial_ff_1BND = spatial_ff_1BND * spatial_gate_ff
 
         spatial_1BND += spatial_ff_1BND
@@ -302,7 +315,7 @@ class SD35TransformerBlock(Module):
                 **self.ccl_manager.get_ag_hyperparams(prompt_normed_1BLD.shape),
             )
 
-        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD)
+        prompt_ff_1BLD = self.ff_context(prompt_normed_1BLD, compute_kernel_config=self._ff_compute_config)
         prompt_ff_1BLD = prompt_ff_1BLD * prompt_gate_ff
 
         prompt_1BLD += prompt_ff_1BLD
@@ -334,9 +347,11 @@ class SD35Transformer2DModel(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        quant_config=None,
     ):
         super().__init__()
 
+        self.quant_config = quant_config
         self.sample_size = sample_size
         self.patch_size = patch_size
         self.in_channels = in_channels
@@ -396,6 +411,7 @@ class SD35Transformer2DModel(Module):
                 ccl_manager=ccl_manager,
                 parallel_config=parallel_config,
                 padding_config=padding_config,
+                quant_config=quant_config,
             )
             self.transformer_blocks.append(block)
 
@@ -546,6 +562,10 @@ class SD35Checkpoint:
         else:
             padding_config = None
 
+        quant_config = SD35QuantProfile.from_env()
+        if quant_config is not None:
+            logger.info(f"SD3.5 DiT quantization enabled: {quant_config}")
+
         model = SD35Transformer2DModel(
             sample_size=c.sample_size,
             patch_size=c.patch_size,
@@ -563,6 +583,7 @@ class SD35Checkpoint:
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             padding_config=padding_config,
+            quant_config=quant_config,
         )
         cache.load_model(
             tt_model=model,

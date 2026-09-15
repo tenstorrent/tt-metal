@@ -39,6 +39,7 @@ class SD35JointAttention(Module):
         ccl_manager=None,
         parallel_config=None,
         padding_config=None,
+        quant_config=None,
     ):
         super().__init__()
 
@@ -55,6 +56,18 @@ class SD35JointAttention(Module):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+
+        self.quant_config = quant_config
+        # Quantized projections (to_qkv / add_qkv_proj) and the bf16-carved output projections
+        # (to_out / to_add_out) get their dtype/activation/compute-fidelity from the quant profile;
+        # a None profile leaves every kwarg dict empty => the unquantized bf16 model.
+        _mm_cc = quant_config.mm_compute_config(mesh_device.arch()) if quant_config is not None else None
+        _qkv_q = dict(quant_config.qkv_linear_kwargs()) if quant_config is not None else {}
+        _out_q = dict(quant_config.out_linear_kwargs()) if quant_config is not None else {}
+        if _mm_cc is not None:
+            _qkv_q["compute_kernel_config"] = _mm_cc
+            _out_q["compute_kernel_config"] = _mm_cc
+        self._sdpa_input_dtype = quant_config.sdpa_input_dtype if quant_config is not None else None
 
         self.n_local_heads = self.padded_heads // self.parallel_config.tensor_parallel.factor
 
@@ -78,6 +91,7 @@ class SD35JointAttention(Module):
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            **_qkv_q,
         )
 
         # Implementing joint attention
@@ -87,6 +101,7 @@ class SD35JointAttention(Module):
             bias=bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            **_qkv_q,
         )
 
         self.to_out = ColParallelLinear(
@@ -95,6 +110,7 @@ class SD35JointAttention(Module):
             bias=out_bias,
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            **_out_q,
         )
 
         if self.context_pre_only is not None and not self.context_pre_only:
@@ -105,6 +121,7 @@ class SD35JointAttention(Module):
                 bias=out_bias,
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+                **_out_q,
             )
 
         self.norm_added_q = RMSNorm(**rms_kwargs)
