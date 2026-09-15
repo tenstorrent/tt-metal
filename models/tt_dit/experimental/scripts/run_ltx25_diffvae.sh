@@ -37,7 +37,7 @@
 #                      2048->2048 GEMMs and the matmul-based apply_rope. Fusing gives it the same
 #                      path stages 1-3 already run -- rope 335.9 -> 18.1, proj 214.8 -> 40.2, against
 #                      +77.1 on qkv-to-volume for the permute nlp_create_qkv_heads' layout forces.
-#                      Gated: test_det_nablock_arms.py stage1 arms -- bit-exact (100.0000%) for the
+#                      Gated: test_diffvae_ltx.py stage1 arms -- bit-exact (100.0000%) for the
 #                      projection fusion, 99.9985% once the fused rope comes with it.
 #
 # PCC, both changes together, vs the 8 committed diffvae_gate baselines (run_diffvae_gates.sh with
@@ -73,7 +73,7 @@ export HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
 # and skip silently when it is missing.
 export DIFFVAE_CHECKPOINT="${DIFFVAE_CHECKPOINT:-$LTX25_ROOT/vae/ltx-2.5-video-vae-bf16.safetensors}"
 
-# Only read by test_decode_timing.py. Ring + 2 links, matching the pipeline runs: the fabric is
+# Only read by test_diffvae_ltx.py's timing tests. Ring + 2 links, matching the pipeline runs: the fabric is
 # built as FABRIC_1D_RING either way, so Linear left the wraparound link enabled and unused, and
 # num_links=1 used one of the two eth channels that reach across the size-8 axis.
 export DIFFVAE_TOPOLOGY=${DIFFVAE_TOPOLOGY:-ring}
@@ -101,7 +101,7 @@ export DIFFVAE_DEVICE_UNPATCHIFY=${DIFFVAE_DEVICE_UNPATCHIFY:-1}
 export DIFFVAE_TRIM_PAD_CHANNELS=${DIFFVAE_TRIM_PAD_CHANNELS:-1}
 export DIFFVAE_DET_COLPAR_QKV=${DIFFVAE_DET_COLPAR_QKV:-1}
 # Reaches ONLY det stage 0: stages 1+ get the fused qkv via COLPAR_QKV already, so this is a no-op
-# for them (asserted in test_det_nablock_arms.py). See "HOW IT GOT HERE" above.
+# for them (asserted in test_diffvae_ltx.py's arms tests). See "HOW IT GOT HERE" above.
 export DIFFVAE_DET_FUSED_QKV=${DIFFVAE_DET_FUSED_QKV:-1}
 export DIFFVAE_DET_FUSED_ROPE=${DIFFVAE_DET_FUSED_ROPE:-1}
 export DIFFVAE_DET_FUSED_SWIGLU=${DIFFVAE_DET_FUSED_SWIGLU:-1}
@@ -124,4 +124,4 @@ export DIFFVAE_TP_HEADS=${DIFFVAE_TP_HEADS:-1}
   echo "DiffVAE weights missing: DIFFVAE_CHECKPOINT=$DIFFVAE_CHECKPOINT" >&2; exit 1; }
 
 exec python_env/bin/python -u -m pytest \
-	models/tt_dit/tests/models/vae/test_decode_timing.py::test_decode_wsp_timing -k s34x60 -x -q -s "$@"
+	models/tt_dit/tests/models/vae/test_diffvae_ltx.py::test_decode_wsp_timing -k s34x60 -x -q -s "$@"

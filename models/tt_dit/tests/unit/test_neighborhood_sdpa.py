@@ -576,7 +576,7 @@ def _run_interior_table_case(mesh_device, owned_width, brick, volume):
         ((21, 68, 120), (3, 7, 7), 15, 8, (8, 4, 1), 63),
         ((41, 68, 120), (3, 5, 5), 15, 8, (16, 2, 1), 45),
         ((81, 136, 240), (3, 5, 5), 30, 8, (8, 2, 2), 27),
-        # The same stages at test_det_nablock_arms.py's shorter T, where the deep-in-time bricks
+        # The same stages at test_diffvae_ltx.py's arms tests' shorter T, where the deep-in-time bricks
         # exceed the volume and the chooser has to settle for shallower ones.
         ((6, 68, 120), (3, 7, 7), 15, 8, (4, 8, 1), 42),
         ((11, 68, 120), (3, 5, 5), 15, 8, (8, 4, 1), 30),

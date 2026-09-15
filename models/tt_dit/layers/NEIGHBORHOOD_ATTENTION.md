@@ -263,6 +263,8 @@ Small named helpers shared by reader and writer, so the two cannot decode a chun
 | `models/tt_dit/tests/unit/test_neighborhood_sdpa.py`      | the op vs torch — 26 cases       |
 | `models/tt_dit/tests/unit/test_neighborhood_sdpa_perf.py` | scale timing, no correctness     |
 | `models/tt_dit/tests/models/vae/test_diffvae_rope.py`     | the three RoPE encodings vs one torch oracle and each other, lane level, float32 |
+| `models/tt_dit/tests/models/vae/test_diffvae_ltx.py`      | NABlock, its DIFFVAE_DET_* arms, DeterministicStages and DiffVAEDecoder: gates vs upstream captures, bricked vs replicated, timing instruments |
+| `models/tt_dit/tests/models/vae/test_diffvae_ltx_stage5.py` | stage 5 vs ltx_core: RoPE, parity replicated / sharded / bricked, production-width, band geometry |
 
 
 The op test's parametrisation is where the coverage lives:

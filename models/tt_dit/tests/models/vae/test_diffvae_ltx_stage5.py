@@ -23,11 +23,13 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_dit.layers.neighborhood_attention_plan import window_bounds
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
     NUM_ADALN_CHUNKS,
     DiffVAEStage5,
     DiffVAEStage5Config,
     Grid,
+    _bands,
     _slice_last,
     default_rope_dim_split,
     patchify,
@@ -639,7 +641,7 @@ def test_stage5_parity_w_sharded_bricked(*, mesh_device, device_params, sp_axis,
     """Stage 5 on the BRICKED W-sharded backend against the ltx_core reference.
 
     Until this existed, no committed gate covered ``bricked_sp_w_sharded`` at all: every gate here
-    and in test_diffvae_decoder.py ran the since-deleted strided executor, so the bricked op's only oracle was
+    and in test_diffvae_ltx.py ran the since-deleted strided executor, so the bricked op's only oracle was
     models/tt_dit/tests/unit/test_neighborhood_sdpa.py on a 16x24x24 volume. That leaves the shipped
     stage-5 executor -- halo exchange, bricked layout, in-kernel gather, the uploaded relative mask
     table -- with no upstream reference and no PCC ledger entry.
@@ -800,3 +802,33 @@ def test_stage5_bricked_matches_upstream_at_production_width(
     tt_pixels = model.forward(tt_context, x_t, tt_t, grid)
 
     assert_quality(ref_pixels, tt_pixels, pcc=pcc)
+
+
+@pytest.mark.parametrize("t", [12, 25, 145])
+@pytest.mark.parametrize("frames", [1, 3, 8, 16, 64])
+@pytest.mark.diffvae_gate
+def test_band_halo_covers_every_window(t: int, frames: int):
+    """A band's local windows must be the volume's own, shifted by the band's halo.
+
+    Stage 5 runs long videos as frame bands and attends each one as a standalone volume, so a
+    query whose window reaches outside its band would quietly attend to the wrong frames: wrong
+    pixels, no error. The inward window shift makes the bound easy to get wrong, since a query
+    near either end reaches ``kernel - 1`` frames the other way rather than ``kernel // 2``.
+
+    Needs no device or capture: it is arithmetic against the same ``window_bounds`` the attention
+    plan is built from.
+    """
+    kernel = 11
+    starts, ends = window_bounds(t, kernel)
+    bands = _bands(t, frames=frames, kernel=kernel)
+
+    assert bands[0].lo == 0 and bands[-1].hi == t, f"bands do not cover {t} frames: {bands}"
+    for before, after in zip(bands, bands[1:], strict=False):
+        assert before.hi == after.lo, f"bands are not contiguous: {before} then {after}"
+
+    for band in bands:
+        local_starts, local_ends = window_bounds(band.pad_frames, kernel)
+        for q in range(band.lo, band.hi):
+            local = q - band.pad_lo
+            assert local_starts[local] + band.pad_lo == starts[q], f"frame {q} of {band}: start moved"
+            assert local_ends[local] + band.pad_lo == ends[q], f"frame {q} of {band}: end moved"
