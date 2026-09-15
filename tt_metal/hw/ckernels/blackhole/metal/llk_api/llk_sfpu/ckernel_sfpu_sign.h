@@ -9,7 +9,6 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "cmath_common.h"
-#include "sfpu/ckernel_sfpu_is_fp16_zero.h"
 #include "sfpi.h"
 
 using namespace sfpi;

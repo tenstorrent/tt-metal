@@ -429,8 +429,8 @@ _EDGE_SWEEP_OPS = sorted(
 # are neither negative zero nor NaN, so they were outside the documented contract rather than
 # hardware faults, and they diverged on exactly the two unpack_to_dest combinations, the only
 # ones where a real -0.0 reaches the LREG. Both kernels now take their zero arm on
-# sfpi::abs(v), which is inside that contract, so the entries are gone rather than
-# reclassified. See _assert_signed_zero_partition_valid below.
+# sfpi::abs(v), which brings -0.0 inside that contract (NaN stays outside it), so the entries
+# are gone rather than reclassified. See _assert_signed_zero_partition_valid below.
 _EDGE_KNOWN_DIVERGENCES = {}
 
 
@@ -496,7 +496,7 @@ def _assert_signed_zero_partition_valid():
     fixed_or_not_delivered = {
         MathOperation.Sign: (
             "sign(-0.0) returns 0 now. calculate_sign takes its zero arm on sfpi::abs(v), "
-            "inside the documented SFPSETCC contract, so this was fixed rather than "
+            "which puts -0.0 inside the documented SFPSETCC contract, so this was fixed rather than "
             "reclassified -- an entry here means the kernel regressed."
         ),
         MathOperation.Heaviside: (
