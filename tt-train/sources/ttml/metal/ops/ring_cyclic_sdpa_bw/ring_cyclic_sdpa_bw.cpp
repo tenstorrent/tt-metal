@@ -24,7 +24,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
     const std::optional<ttnn::Tensor>& preallocated_grad_query,
     const std::optional<ttnn::Tensor>& preallocated_grad_key,
     const std::optional<ttnn::Tensor>& preallocated_grad_value,
-    ttml::metal::ops::RingLayout layout) {
+    ttml::metal::ops::RingLayout layout,
+    uint32_t zigzag_pair) {
     auto result = ttnn::prim::ttml_ring_cyclic_sdpa_bw(
         query,
         key,
@@ -43,7 +44,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_cyclic_sdpa_bw(
         preallocated_grad_query,
         preallocated_grad_key,
         preallocated_grad_value,
-        layout);
+        layout,
+        zigzag_pair);
     return {result[0], result[1], result[2]};
 }
 
