@@ -86,12 +86,11 @@ INPUT_TAGGERS = {
 # the canonical no-weight sentinel and is always legal. bfloat8_b + ROW_MAJOR (activation or
 # weight) is structurally impossible and lives in feature_spec.INVALID, never here.
 #
-# Alignment: a TILE-layout input carries zero-padded rows/lanes, so the column sums over padded
-# rows contribute 0 and the membership matrix's zero columns (`ch >= C`) drop padded lanes —
-# `hw_non_aligned` and `c_non_aligned` need no extra kernel path for TILE input. RM input is
-# tilized in-kernel from sticks: `c_non_aligned` works (the stick's alignment padding is finite and
-# masked by E_T), but `hw_non_aligned` does not yet — the stick reader walks past the image's last
-# row (see EXCLUSIONS).
+# Alignment (Refinement 2 — padding-independent): `hw_non_aligned` reduces the chunk holding the
+# image's last tile-row with a partial REDUCE_COL scaler, so rows >= HW never enter the statistics
+# whatever a TILE producer left there; `c_non_aligned` lanes >= C are dropped by the membership
+# matrix's zero columns. RM input is tilized in-kernel from sticks: a ragged last tile-row / last
+# channel tile is zero-filled over the NoC before only the valid sticks / lanes are read into it.
 
 SUPPORTED = {
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
@@ -108,13 +107,7 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = [
-    # RM input whose HW is not a multiple of 32: `read_sticks_for_tilize` reads 32 * chunk_rows sticks per
-    # tile-row block, so the last block of an image reads rows past HW (the next image / past the buffer)
-    # into the statistics. Lifting this = zero-filling the sticks beyond HW in cb_x_rm before the tilize
-    # (refinement candidate; see op_requirements.md).
-    {"layout": ttnn.ROW_MAJOR_LAYOUT, "alignment": "hw_non_aligned"},
-]
+EXCLUSIONS = []  # Refinement 2 lifted {layout: ROW_MAJOR, alignment: hw_non_aligned} (in-kernel ragged stick reader)
 
 
 # ---------------------------------------------------------------------------

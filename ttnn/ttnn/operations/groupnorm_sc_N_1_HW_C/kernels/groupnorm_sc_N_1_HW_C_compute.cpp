@@ -115,6 +115,7 @@ void kernel_main() {
     constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(29);
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(30);
     constexpr uint32_t out_block = get_compile_time_arg_val(31);  // writer store block (divides chunk)
+    constexpr uint32_t hw_tail = get_compile_time_arg_val(32);  // valid rows of the image's last tile-row (0 = aligned)
 
     // ---------------- runtime args ----------------
     const uint32_t image_count = get_arg_val<uint32_t>(0);
@@ -123,6 +124,7 @@ void kernel_main() {
     const uint32_t eps_bits = get_arg_val<uint32_t>(3);
     const uint32_t Ht_core = get_arg_val<uint32_t>(4);
     const uint32_t Ct_core = get_arg_val<uint32_t>(5);
+    const uint32_t owns_last_row = get_arg_val<uint32_t>(6);  // this core's rows end at the image's last tile-row
 
     constexpr uint32_t chunk = chunk_rows * cols;
     constexpr uint32_t num_stats = 2 * Kg;
@@ -184,6 +186,12 @@ void kernel_main() {
     // ---- pass-1 row-chunk work: ops 2..5 of the block schedule for one (valid_rows x valid_cols) block ----
     auto colsum_chunk = [&](uint32_t valid_rows, uint32_t valid_cols, uint32_t rc) {
         const uint32_t valid = valid_rows * valid_cols;
+        // hw_non_aligned: the chunk holding the image's last tile-row reduces its last row tile (dense block ->
+        // row valid_rows - 1 of every column) with the reader's partial scaler (tile 1 of cb_scaler), so the
+        // padded rows >= HW contribute nothing whatever the input tensor carries there.
+        const bool partial_last_row = (hw_tail != 0) && (owns_last_row != 0) && (rc + 1 == num_row_chunks);
+        const auto partial_scaler =
+            partial_last_row ? ckl::ReducePartialScaler::with_partial() : ckl::ReducePartialScaler::none();
         if constexpr (is_rm) {
             tilize_ragged_block<cols, cb_x_rm, cb_x_pass1>(valid_rows, valid_cols);
             groupnorm_ragged::pad_push(cb_x_pass1, chunk - valid, chunk);  // nominal chunk quantum
@@ -208,7 +216,9 @@ void kernel_main() {
             ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
             ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_colsum, rc));
+            ckl::Accumulate::at(cb_colsum, rc),
+            ckl::NoOp{},
+            partial_scaler);
         pad_colsum_statistic(rc, valid_cols);
         cb_pop_front(cb_x_pass1, chunk);
         ckl::reduce<
@@ -220,7 +230,9 @@ void kernel_main() {
             ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
             ckl::ReduceInputBlockShape::of(valid_rows, valid_cols),
             ckl::ReduceInputMemoryLayout::contiguous(),
-            ckl::Accumulate::at(cb_colsum, rc));
+            ckl::Accumulate::at(cb_colsum, rc),
+            ckl::NoOp{},
+            partial_scaler);
         pad_colsum_statistic(rc, valid_cols);
         cb_pop_front(cb_xsq, chunk);
     };

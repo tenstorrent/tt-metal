@@ -295,6 +295,12 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     Ht = math.ceil(HW / TILE)
     Ct = math.ceil(C / TILE)
     Kg = math.ceil(G / TILE)
+    # hw_non_aligned: rows >= HW of the image's last tile-row are padding. The statistics must not depend on
+    # what those rows hold (TILE input: whatever the producer left there; RM input: the reader zero-fills the
+    # stick slots), so the reader emits a [full, partial] REDUCE_COL scaler pair and compute applies the partial
+    # scaler to the row chunk that holds the image's last tile-row (reduce_helpers: ReducePartialScaler).
+    hw_tail = HW % TILE
+    scaler_tiles = 2 if hw_tail else 1
 
     is_rm = input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     has_gamma = gamma is not None
@@ -364,7 +370,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     if is_rm:
         add(CB_X_RM, X_RM_DEPTH * cols, x_tile_bytes, input_tensor.dtype)
     add(CB_XSQ, chunk, f32_tile_bytes, ttnn.float32)
-    add(CB_SCALER, 1, scaler_tile_bytes, ttnn.bfloat16)
+    add(CB_SCALER, scaler_tiles, scaler_tile_bytes, ttnn.bfloat16)
     add(CB_COLSUM, 2 * cols, f32_tile_bytes, ttnn.float32)
     add(CB_MEMBERSHIP, MEMBERSHIP_DEPTH * cols * Kg, f32_tile_bytes, ttnn.float32)
     add(CB_AGG_INTERM, 2 * Kg, f32_tile_bytes, ttnn.float32)
@@ -518,6 +524,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         in1_num_subblocks,
         out_subblock_w,
         out_block,
+        hw_tail,
     ]
 
     reader_rt = ttnn.RuntimeArgs()
@@ -573,7 +580,8 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
             ]
             assert len(writer_rt[x][y]) == writer_rt_scalars
             writer_rt[x][y] = list(writer_rt[x][y]) + list(helper.runtime_args(core))
-            compute_rt[x][y] = [image_count, role, inv_n_bits, eps_bits, Ht_core, Ct_core]
+            owns_last_row = int(active and row_begin + Ht_core == Ht)  # holds the image's ragged last tile-row
+            compute_rt[x][y] = [image_count, role, inv_n_bits, eps_bits, Ht_core, Ct_core, owns_last_row]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "groupnorm_sc_N_1_HW_C_reader.cpp"),

@@ -10,8 +10,13 @@
 //   pass 2: for each column group cg: generate E for cg -> cb_membership, gamma/beta row-0 tiles for cg,
 //           then (streaming regime only) re-stream the x chunks of cg into cb_x_pass2 / cb_x_rm.
 //
-// Constant tiles: the reduce scaler (once per kernel). Membership / affine-row pages are zeroed over the NoC
-// (DM engine) before the few real lanes are written by the RISC.
+// Constant tiles: the reduce scaler (once per kernel; a [full, partial] REDUCE_COL pair when HW % 32 != 0, so
+// the image's padded last tile-row never enters the statistics). Membership / affine-row pages are zeroed over
+// the NoC (DM engine) before the few real lanes are written by the RISC.
+//
+// Padding independence (RM input): a stick block whose last tile-row is short (HW % 32 != 0) or whose last
+// channel tile is short (C % 32 != 0) is zero-filled over the NoC before only the valid sticks / lanes are read
+// into it, so the tilized pad rows / lanes are exact zeros (never stale L1, never the next image's rows).
 //
 // Ragged blocks (op_design.md -> Work Distribution): this core's `Ht_core x Ct_core` extents are RT args; the
 // last row chunk / column group may be short. Every CB quantum stays nominal (`chunk`, `cols`, `cols*Kg`); the
@@ -103,8 +108,20 @@ void kernel_main() {
     CircularBuffer membership_cb(cb_membership);
 
     // ---------------- constants ----------------
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    constexpr uint32_t hw_tail = HW % 32;  // valid rows of the image's last tile-row (0 = tile-aligned)
+    constexpr uint32_t c_tail = C % 32;    // valid lanes of the last channel tile (0 = tile-aligned)
+    if constexpr (hw_tail != 0) {
+        // [full, partial] pair: compute selects tile 1 for the last row tile of the chunk holding row Ht - 1
+        dataflow_kernel_lib::calculate_and_prepare_partial_reduce_scalers<
+            cb_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_COL,
+            hw_tail>();
+    } else {
+        dataflow_kernel_lib::
+            calculate_and_prepare_reduce_scaler<cb_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
+    }
+    const bool owns_last_row = (row_begin + Ht_core == Ht);  // this core's rows end at the image's last tile-row
 
     const auto x_acc = TensorAccessor(x_args, x_addr, x_page_bytes);
 
@@ -163,33 +180,53 @@ void kernel_main() {
         }
     };
 
-    // RM input: 32*valid_rows sticks, valid_cols*32 elements wide, into cb_x_rm (valid_cols tile pages per
-    // tile-row). A ragged column group keeps the tile-row quantum at `cols` pages: each tile-row's valid_cols
-    // data pages are followed by a data-less pad push, and compute tilizes that group one tile-row at a time,
-    // popping the pad after each (keeps the 2*cols ring aligned to tile-row starts).
-    auto load_x_chunk_sticks = [&](uint32_t n, uint32_t cg, uint32_t rc) {
+    // RM input: the sticks of block (cg, rc) into cb_x_rm (valid_cols tile pages per tile-row). A ragged column
+    // group keeps the tile-row quantum at `cols` pages: each tile-row's valid_cols data pages are followed by a
+    // data-less pad push, and compute tilizes that group one tile-row at a time, popping the pad after each
+    // (keeps the 2*cols ring aligned to tile-row starts).
+    //
+    // Padding independence: a tile-row is `lane_ragged` when this group holds the last channel tile of a
+    // c_non_aligned tensor (only C - 32*T_first lanes exist in the stick) and `row_ragged` when it is the image's
+    // last tile-row of an hw_non_aligned tensor (only hw_tail sticks exist; rows beyond belong to the next image or
+    // lie past the buffer). Either way the block is zero-filled over the NoC first and only the valid sticks x
+    // valid bytes are read over it, so the tilized pad rows / lanes are exact zeros. Pass 2 only feeds the apply,
+    // whose pad rows / lanes are sliced off the output, so it skips the zero-fill but never reads past the image.
+    CircularBuffer x_rm_cb(cb_x_rm);
+    auto load_x_chunk_sticks = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
         if constexpr (is_rm) {
             const uint32_t valid_rows = row_axis.valid(rc, chunk_rows);
             const uint32_t valid_cols = col_axis.valid(cg, cols);
-            const uint32_t stick0 = n * HW + 32 * (row_begin + rc * chunk_rows);
-            const uint32_t col_off = (col_begin + cg * cols) * 32 * x_elem_size;
-            const uint32_t row_bytes = valid_cols * 32 * x_elem_size;
-            if (valid_cols == cols) {
+            const uint32_t T_first = col_begin + cg * cols;
+            const uint32_t tile_row0 = row_begin + rc * chunk_rows;
+            const uint32_t col_off = T_first * 32 * x_elem_size;
+            const uint32_t lane_end = (T_first + valid_cols) * 32;
+            const bool lane_ragged = (c_tail != 0) && (lane_end > C);
+            const uint32_t row_bytes = ((lane_ragged ? C : lane_end) - T_first * 32) * x_elem_size;
+            const bool row_ragged = (hw_tail != 0) && owns_last_row && (rc + 1 == num_row_chunks);
+            if (valid_cols == cols && !lane_ragged && !row_ragged) {
                 dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
-                    x_acc, 32 * valid_rows, row_bytes, stick0, col_off);
-            } else {
-                for (uint32_t i = 0; i < valid_rows; ++i) {
-                    dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
-                        x_acc, 32, row_bytes, stick0 + 32 * i, col_off);
-                    groupnorm_ragged::pad_push(cb_x_rm, cols - valid_cols, cols - valid_cols);
+                    x_acc, 32 * valid_rows, row_bytes, n * HW + 32 * tile_row0, col_off);
+                return;
+            }
+            for (uint32_t i = 0; i < valid_rows; ++i) {
+                const bool last_tile_row = row_ragged && (i + 1 == valid_rows);
+                const uint32_t sticks = last_tile_row ? hw_tail : 32u;
+                if ((lane_ragged || last_tile_row) && !pass2) {
+                    // reserve is idempotent: the helper below reserves the same pages, then reads over the zeros
+                    cb_reserve_back(cb_x_rm, valid_cols);
+                    noc.async_write_zeros(x_rm_cb, valid_cols * x_tile_bytes);
+                    noc.write_zeros_l1_barrier();
                 }
+                dataflow_kernel_lib::read_sticks_for_tilize<cb_x_rm>(
+                    x_acc, sticks, row_bytes, n * HW + 32 * (tile_row0 + i), col_off);
+                groupnorm_ragged::pad_push(cb_x_rm, cols - valid_cols, cols - valid_cols);
             }
         }
     };
 
     auto load_x_chunk = [&](uint32_t n, uint32_t cg, uint32_t rc, bool pass2) {
         if constexpr (is_rm) {
-            load_x_chunk_sticks(n, cg, rc);
+            load_x_chunk_sticks(n, cg, rc, pass2);
         } else {
             load_x_chunk_tiles(n, cg, rc, pass2);
         }
