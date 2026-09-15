@@ -581,23 +581,30 @@ void kernel_main() {
         }
 
 
-        // ---- dQ_i = (dQ_i from DRAM) + dS K_j. The sum runs over the
-        // block's column tiles as well as the head dimension, and it
-        // accumulates in DST, so the extra depth costs no extra packs. The
-        // loops replace update_grad_query, which cannot express the inner
-        // sum, but keep its reconfig arguments and its L1-accumulate dance.
-        {
-            DeviceZoneScopedN("SEED-DQ");
-            pack_tiles_to_output(cb_grad_query_seed, cb_grad_query_accum, Bt * qWt);
-        }
+        // ---- dQ_i = (dQ_i from the packet) + dS K_j, straight from the seed
+        // to the outgoing packet. The seed tiles are copied into the DST
+        // registers first -- the seed buffer unpacks in Float32 mode, so
+        // nothing is lost on the way -- and the matmul accumulates on top of
+        // them, since the FPU adds into whatever DST holds. One pack per tile
+        // lands the sum in the relay's buffer. This replaces two L1 copies
+        // (seed into an accumulator, accumulator out again) and the
+        // packer's L1-accumulate dance that positioned them.
         {
             DeviceZoneScopedN("UPDATE-DQ");
-            pack_reconfig_data_format(cb_grad_scores, cb_grad_query_accum);
-            pack_reconfig_l1_acc(true);
+            cb_wait_front(cb_grad_query_seed, Bt * qWt);
+            cb_reserve_back(cb_grad_query_out, Bt * qWt);
+            pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_query_out);
             for (uint32_t a = 0; a < Bt; ++a) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
-                    reconfig_data_format_srca(cb_grad_query_accum, cb_key_operand);
+                    // Seed: the previous SrcA operand was P (Float32), the
+                    // seed is Float32 in a different unpack mode.
+                    reconfig_data_format_srca(cb_attention_weights, cb_grad_query_seed);
+                    copy_init(cb_grad_query_seed);
+                    for (uint32_t bi = 0; bi < block_size; ++bi) {
+                        copy_tile(cb_grad_query_seed, a * qWt + k0 + bi, bi);
+                    }
+                    reconfig_data_format_srca(cb_grad_query_seed, cb_key_operand);
                     matmul_init(cb_grad_scores, cb_key_operand, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         for (uint32_t b = 0; b < Bt; ++b) {
@@ -612,20 +619,13 @@ void kernel_main() {
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
-                        pack_tile(bi, cb_grad_query_accum);
+                        pack_tile(bi, cb_grad_query_out);
                     }
                     tile_regs_release();
                 }
             }
-            pack_reconfig_l1_acc(false);
-            cb_pop_front(cb_grad_query_accum, Bt * qWt);
-            cb_reserve_back(cb_grad_query_accum, Bt * qWt);
-            cb_push_back(cb_grad_query_accum, Bt * qWt);
-            cb_wait_front(cb_grad_query_accum, Bt * qWt);
-        }
-        {
-            DeviceZoneScopedN("EMIT-DQ");
-            pack_tiles_to_output(cb_grad_query_accum, cb_grad_query_out, Bt * qWt);
+            cb_push_back(cb_grad_query_out, Bt * qWt);
+            cb_pop_front(cb_grad_query_seed, Bt * qWt);
         }
 
         // ---- dV_j += P^T dO_i, summed over the block's row tiles
@@ -637,7 +637,8 @@ void kernel_main() {
             pack_tiles_to_output(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt);
             const bool dv_accumulate = true;
 #endif
-            pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_value_accum);
+            // The previous pack was dQ into the relay's buffer.
+            pack_reconfig_data_format(cb_grad_query_out, cb_grad_value_accum);
             if (!dv_accumulate) {
                 cb_reserve_back(cb_grad_value_accum, Bt * vWt);
             } else {
