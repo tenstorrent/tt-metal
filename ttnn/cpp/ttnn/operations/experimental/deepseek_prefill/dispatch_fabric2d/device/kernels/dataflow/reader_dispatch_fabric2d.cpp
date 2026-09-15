@@ -39,7 +39,6 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
-    volatile tt_l1_ptr uint32_t* mc_meta;       // fanout: 4 words per destination of one page
     volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries emitted per direction
     // fanout: one reach row per (origin, direction), each padded to 64 bytes. An address rather than a
     // pointer because the pad makes the stride wider than the row.
@@ -84,7 +83,6 @@ Control carve_control() {
     c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketLen));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbBucketStart));
     c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbEntries));
-    c.mc_meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcMeta));
     c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbMcCount));
     c.reach = take(dspf2d::kCbReach);
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(take(dspf2d::kCbInStart));
@@ -532,6 +530,35 @@ volatile tt_l1_ptr dspf2d::FwdMetadata* slot_tail(uint32_t slot) {
     return reinterpret_cast<volatile tt_l1_ptr dspf2d::FwdMetadata*>(slot_addr(slot) + ct.token_size_bytes);
 }
 
+// Stage one local delivery for the sender to issue out of `slot`: the two page addresses on this chip
+// and the metadata words it sends alongside the token. Staged here because only the reader holds the
+// output accessors; issued by the sender because its NoC port has the headroom this one lacks.
+template <typename OutAcc, typename MetaAcc>
+void stage_delivery(
+    uint32_t slot,
+    uint32_t at,
+    uint32_t packed,
+    uint32_t src_chip,
+    uint32_t token,
+    const OutAcc& out_acc,
+    const MetaAcc& meta_acc) {
+    const uint32_t page = packed & dspf2d::FO_PAGE_MASK;
+    volatile tt_l1_ptr uint32_t* meta = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        ct.mc_meta_addr + (slot * dspf2d::FO_MAX_DESTS + at) * dspf2d::MC_META_SLOT_BYTES);
+    meta[0] = src_chip;
+    meta[1] = token;
+    meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
+    meta[3] = 0;
+    volatile tt_l1_ptr dspf2d::FanoutDelivery* d =
+        reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutDelivery*>(
+            ct.mc_delivery_addr + slot * dspf2d::FO_MAX_DESTS * sizeof(dspf2d::FanoutDelivery)) +
+        at;
+    d->payload_addr = out_acc.get_noc_addr(page);
+    d->meta_addr = meta_acc.get_noc_addr(page);
+    d->meta_src = (uint32_t)meta;
+    d->pad = 0;
+}
+
 // The fan-out tail of the same slot. A different view of the same 64 bytes: only one mode runs, and
 // the two layouts agree on where `cmd` and `this_addr` sit so the sender need not know which.
 volatile tt_l1_ptr dspf2d::FanoutMetadata* slot_mc_tail(uint32_t slot) {
@@ -781,6 +808,7 @@ void mc_own_phase(
             uni->pad = 0;
             uni->cmd = dspf2d::CMD_FINAL_WRITE;
             uni->this_addr = uni->final_payload_addr;
+            slot_mc_tail(slot)->deliver_count = 0;  // past FwdMetadata's end; the sender skips it anyway
             ring.mark_ready();
         }
         if (far < 2u) {
@@ -807,6 +835,8 @@ void mc_own_phase(
         for (uint32_t d = kept; d < dspf2d::FO_MAX_DESTS; d++) {
             tail->dests[d] = 0u;
         }
+        tail->deliver_count = 0;  // the origin's own deliveries went out as final writes above
+        tail->pad = 0;
         // The last page of a chunk forces the downstream bump, which is the boundary that reader
         // switches on: leave it uncounted and the whole axis waits.
         tail->cmd = (q + 1 == len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
@@ -892,24 +922,14 @@ void mc_relay_phase(
                     if (hop != j) {
                         continue;
                     }
-                    // A token can hold several of this chip's experts, and several pages of the batch
-                    // are in flight at once, so every destination needs its own metadata words.
-                    volatile tt_l1_ptr uint32_t* meta =
-                        c.mc_meta + (i * dspf2d::FO_MAX_DESTS + kept) * (dspf2d::MC_META_SLOT_BYTES / 4u);
-                    meta[0] = src_chip;
-                    meta[1] = token;
-                    meta[2] = packed >> dspf2d::FO_SLOT_SHIFT;
-                    meta[3] = 0;
-                    noc_async_write(
-                        slot_addr(slots[i]), out_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK), ct.token_size_bytes);
-                    noc_async_write(
-                        (uint32_t)meta,
-                        meta_acc.get_noc_addr(packed & dspf2d::FO_PAGE_MASK),
-                        dspf2d::METADATA_WIRE_BYTES);
+                    // Staged for the sender rather than written here: every destination needs its own
+                    // record and metadata words because several are in flight from one slot at once.
+                    stage_delivery(slots[i], kept, packed, src_chip, token, out_acc, meta_acc);
                     kept++;
                 }
                 // Every page in chunk j has a destination at hop j or beyond, or it would not be here.
                 ASSERT(kept > 0 || travels_on);
+                tail->deliver_count = kept;
                 if (travels_on) {
                     tail->cmd = (q + 1 == fwd_len) ? dspf2d::CMD_FORWARD_END : dspf2d::CMD_FORWARD;
                     tail->this_addr = fwd_acc.get_noc_addr(my_region + out_base + q);
@@ -920,10 +940,8 @@ void mc_relay_phase(
                     tail->cmd = dspf2d::CMD_SKIP;
                 }
             }
-            // The slots are the source of this batch's local writes and must not be refilled until
-            // those have read them OUT of L1. One flush per batch covers every page in it, and no slot
-            // can be re-claimed before the next batch's claims below.
-            noc_async_writes_flushed();
+            // No writes leave these slots from this RISC any more; the sender issues the deliveries and
+            // its own batch flush covers them before it frees a slot.
             for (uint32_t i = 0; i < n; i++) {
                 ring.mark_ready();
             }

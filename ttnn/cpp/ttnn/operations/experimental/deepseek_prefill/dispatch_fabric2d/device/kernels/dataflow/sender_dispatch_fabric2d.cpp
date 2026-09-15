@@ -46,6 +46,31 @@ volatile tt_l1_ptr dspf2d::FwdMetadata* slot_metadata(uint32_t slot) {
         ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes);
 }
 
+// fanout: the same tail viewed as FanoutMetadata (the two layouts pin cmd/this_addr to the same
+// offsets), and the deliveries the reader staged for this slot.
+volatile tt_l1_ptr dspf2d::FanoutMetadata* slot_mc_metadata(uint32_t slot) {
+    return reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutMetadata*>(
+        ct.ring_addr + slot * ct.slot_stride() + ct.token_size_bytes);
+}
+
+volatile tt_l1_ptr dspf2d::FanoutDelivery* slot_delivery(uint32_t slot) {
+    return reinterpret_cast<volatile tt_l1_ptr dspf2d::FanoutDelivery*>(
+        ct.mc_delivery_addr + slot * dspf2d::FO_MAX_DESTS * sizeof(dspf2d::FanoutDelivery));
+}
+
+// Write this slot's local deliveries out of it: the token to each destination page on THIS chip and
+// its metadata words alongside. Plain NoC writes on this RISC's NoC, not fabric sends -- the point is
+// to take them off the reader's port, which was the saturated one, onto this one, which was not.
+// The batch flush that frees these slots is on this NoC too, so it already covers these.
+void deliver_locally(uint32_t slot, uint32_t slot_base) {
+    const uint32_t n = slot_mc_metadata(slot)->deliver_count;
+    volatile tt_l1_ptr dspf2d::FanoutDelivery* dl = slot_delivery(slot);
+    for (uint32_t i = 0; i < n; i++) {
+        noc_async_write(slot_base, dl[i].payload_addr, ct.token_size_bytes);
+        noc_async_write(dl[i].meta_src, dl[i].meta_addr, dspf2d::METADATA_WIRE_BYTES);
+    }
+}
+
 void prebuild_routes() {
     for (uint32_t slot = 0; slot < ct.num_l1_slots; slot++) {
         for (uint32_t which = 0; which < 2; which++) {
@@ -95,11 +120,16 @@ uint64_t send_slot(FabricSender& fabric, uint32_t slot, uint32_t& fwd_since_bump
     if (cmd == dspf2d::CMD_END) {
         return cmd;
     }
-    if (cmd == dspf2d::CMD_SKIP) {
-        return cmd;  // consumed where it landed; the slot is freed with the rest of the batch
-    }
     const bool forwarding = (cmd == dspf2d::CMD_FORWARD) || (cmd == dspf2d::CMD_FORWARD_END);
     const uint32_t slot_base = ct.ring_addr + slot * ct.slot_stride();
+    // Only fan-out page slots carry a delivery count; a unicast-style final write uses the other tail
+    // layout, whose bytes at that offset are not a count.
+    if (ct.fanout && cmd != dspf2d::CMD_FINAL_WRITE) {
+        deliver_locally(slot, slot_base);
+    }
+    if (cmd == dspf2d::CMD_SKIP) {
+        return cmd;  // every destination it had is written above; nothing goes on the cable
+    }
 
     volatile PACKET_HEADER_TYPE* hdr = slot_hdr(slot, 0);
     if (forwarding) {

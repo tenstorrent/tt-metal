@@ -73,7 +73,8 @@ dspf2d::ControlGeometry control_geometry(const DispatchFabric2dParams& args, uin
         .num_relay = relay_chunks_per_stream(extent)};
 }
 
-L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t token_bytes, uint32_t control_bytes, uint32_t sem_floor) {
+L1Layout compute_l1_layout(
+    ttnn::MeshDevice* mesh, uint32_t token_bytes, uint32_t control_bytes, uint32_t sem_floor, bool fanout) {
     const uint32_t base =
         static_cast<uint32_t>(mesh->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1));
     L1Layout l;
@@ -83,9 +84,17 @@ L1Layout compute_l1_layout(ttnn::MeshDevice* mesh, uint32_t token_bytes, uint32_
     l.pkt_hdr_ring = l.ring + dspf2d::NUM_L1_SLOTS * (token_bytes + dspf2d::FORWARDING_METADATA_SIZE);
     const uint32_t hdr_ring_bytes =
         2 * dspf2d::NUM_L1_SLOTS * static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    // Both RISCs address these, so they cannot live in the reader's control carve. Sized to nothing
+    // under unicast so its layout is untouched.
+    l.mc_delivery = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
+    const uint32_t delivery_bytes =
+        fanout ? dspf2d::NUM_L1_SLOTS * dspf2d::FO_MAX_DESTS * static_cast<uint32_t>(sizeof(dspf2d::FanoutDelivery))
+               : 0u;
+    l.mc_meta = (l.mc_delivery + delivery_bytes + 63u) & ~63u;
+    const uint32_t meta_bytes = fanout ? dspf2d::NUM_L1_SLOTS * dspf2d::FO_MAX_DESTS * dspf2d::MC_META_SLOT_BYTES : 0u;
     // 64-byte aligned: a DRAM read needs a 64-byte-aligned L1 destination on Blackhole, and the control
     // region is read straight out of DRAM.
-    l.control = (l.pkt_hdr_ring + hdr_ring_bytes + 63u) & ~63u;
+    l.control = (l.mc_meta + meta_bytes + 63u) & ~63u;
     const uint32_t end = l.control + control_bytes;
     TT_FATAL(
         end <= sem_floor,
@@ -189,7 +198,11 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
     const auto sems = allocate_ring_semaphores(mesh);
     const auto fwd = allocate_forwarding_buffer(mesh, args, token_bytes, extent);
     const L1Layout l1 = compute_l1_layout(
-        mesh, token_bytes, dspf2d::control_region_bytes(control_geometry(args, extent)), sems.lowest_address());
+        mesh,
+        token_bytes,
+        dspf2d::control_region_bytes(control_geometry(args, extent)),
+        sems.lowest_address(),
+        args.fanout);
 
     tt::tt_metal::Buffer* dram[dspf2d::ReaderRtArg::kCount] = {};
     dram[dspf2d::ReaderRtArg::kInputAddr] = tensor_args.input_tensor.buffer();
@@ -243,7 +256,7 @@ tt::tt_metal::WorkloadDescriptor DispatchFabric2dProgramFactory::create_workload
             snd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
             snd.core_ranges = CoreRangeSet(CoreRange(self.worker_logical));
             snd.compile_time_args =
-                dspf2d::SenderCtArgs(token_bytes, meta_bytes, self, downstream, l1, plan).to_ct_word_arr();
+                dspf2d::SenderCtArgs(token_bytes, meta_bytes, self, downstream, l1, plan, args.fanout).to_ct_word_arr();
             snd.config = tt::tt_metal::DataMovementConfigDescriptor{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 // NOC_1 routes -Y first, so a worker one row from its eth core reaches it in a single hop.
