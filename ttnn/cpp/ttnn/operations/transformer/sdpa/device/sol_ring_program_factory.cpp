@@ -670,6 +670,10 @@ tt::tt_metal::ProgramDescriptor build_sol_ring_program_descriptor(
         // max write) when several head-passes share a core. The 1-pass shapes are gated by
         // utilization-band perf tests calibrated on the scratch path.
         (num_passes > 1) ? 1u : 0u,  // use_l1_state_fifo
+        // Block-sparse chunk skipping. Compile-time for now: it gates the skip logic so the loop can
+        // be proven against dense before a per-dispatch mask delivery path exists. A production mask
+        // changes every step and cannot live in compile-time args.
+        args.chunk_keep_every,  // block-sparse stride; 0 = dense
     };
 
     std::map<std::string, std::string> defines;

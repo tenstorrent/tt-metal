@@ -2296,6 +2296,8 @@ template <
     // instructions for the FIFO branches — the utilization-band perf gates resolve even
     // fraction-of-a-percent overhead on this path.
     bool use_l1_state_fifo = false,
+    // Keep every Nth KV chunk and skip the rest. 0 = dense, and every branch below compiles out.
+    uint32_t chunk_keep_every = 0,
     bool kv_pad_rotation_enabled = false,
     uint32_t v_cb_physical_width_t = vDHt,
     bool v_shares_k_buffer = false,
@@ -2450,6 +2452,30 @@ void sdpa_ring_v2(
             q_local_padded_Nt>(source_ring_id, k_chunk * Sk_chunk_t, logical_nt);
     };
 
+    // Block-sparse skip: chunks this Q row does not select — drain K/V from CBs and skip. Must agree
+    // exactly with the pre-scan below, which decides which chunk is last and therefore normalizes.
+    auto block_sparse_skips = [](uint32_t k_chunk) -> bool {
+        if constexpr (chunk_keep_every > 1) {
+            return (k_chunk % chunk_keep_every) != 0;
+        }
+        return false;
+    };
+    auto try_skip_block_sparse = [&](uint32_t k_chunk) -> bool {
+        if constexpr (chunk_keep_every > 1) {
+            if (block_sparse_skips(k_chunk)) {
+                CircularBuffer(cb_kt_in).wait_front(DHt * Sk_chunk_t);
+                sdpa_cb_pop_front_out_of_line(cb_kt_in, DHt * Sk_chunk_t);
+                if constexpr (!kt_inplace_v) {
+                    CircularBuffer(cb_v_in).wait_front(Sk_chunk_t * v_cb_physical_width_t);
+                    sdpa_cb_pop_front_out_of_line(cb_v_in, Sk_chunk_t * v_cb_physical_width_t);
+                }
+                KV_chunks_processed_in_iter++;
+                return true;
+            }
+        }
+        return false;
+    };
+
     // Causal skip: K chunks fully above the diagonal — drain K/V from CBs and skip.
     auto try_skip_causal_above_diag = [&](uint32_t k_chunk, uint32_t causal_k_limit) -> bool {
         if constexpr (is_causal_sdpa) {
@@ -2532,6 +2558,9 @@ void sdpa_ring_v2(
                     continue;
                 }
             }
+            if (block_sparse_skips(k)) {
+                continue;
+            }
             per_q_valid_kv++;
         }
         // Use persistent accumulator state from caller (single Q-chunk),
@@ -2569,6 +2598,9 @@ void sdpa_ring_v2(
                 continue;
             }
             if (try_skip_causal_above_diag(source_k_chunk, causal_k_limit)) {
+                continue;
+            }
+            if (try_skip_block_sparse(source_k_chunk)) {
                 continue;
             }
             KV_chunks_processed++;

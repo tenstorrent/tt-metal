@@ -49,6 +49,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sol_ring(
     uint32_t num_workers_per_link,
     uint32_t num_buffers_per_channel,
     // packed-bit [H, n_q_chunks, n_kv_chunks] chunk-skip mask; absent = attend every chunk
-    std::optional<ttnn::Tensor> chunk_mask = std::nullopt);
+    std::optional<ttnn::Tensor> chunk_mask = std::nullopt,
+    // experiment knob: keep every Nth KV chunk, skip the rest. 0 = dense.
+    uint32_t chunk_keep_every = 0);
 
 }  // namespace ttnn::transformer

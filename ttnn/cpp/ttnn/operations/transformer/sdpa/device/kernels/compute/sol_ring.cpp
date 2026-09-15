@@ -43,6 +43,8 @@ void kernel_main() {
     // Multi-pass programs keep per-pass accumulator state in the L1 FIFO; single-pass programs
     // use the original persist-in-scratch path (no FIFO entry/exit cost per ring iteration).
     constexpr bool use_state_fifo = get_compile_time_arg_val(21) == 1;
+    // Block-sparse chunk stride; see the factory for why this is compile-time for now.
+    constexpr uint32_t chunk_keep_every = get_compile_time_arg_val(22);
 
     // Lightweight mask: all mask tiles live in cb_mask_in (c_3).
     // Layout: [neginf(0)] [global_n_partial?(1)] [joint_l_partial?(1 or 2)]
@@ -232,8 +234,9 @@ void kernel_main() {
                 global_n_has_padding,
                 local_n_has_padding,
                 joint_has_padding,
-                false,            // straddle_mask_enabled
-                use_state_fifo>(  // use_l1_state_fifo — single-pass programs keep the scratch path
+                false,           // straddle_mask_enabled
+                use_state_fifo,  // use_l1_state_fifo — single-pass programs keep the scratch path
+                chunk_keep_every>(
                 global_q_chunk,
                 global_q_chunk + 1,
                 num_kv_chunks,

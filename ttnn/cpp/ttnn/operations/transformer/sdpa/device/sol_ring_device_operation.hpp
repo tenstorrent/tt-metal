@@ -52,6 +52,7 @@ SolRingResult sol_ring(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 8,
-    std::optional<Tensor> chunk_mask = std::nullopt);
+    std::optional<Tensor> chunk_mask = std::nullopt,
+    uint32_t chunk_keep_every = 0);
 
 }  // namespace ttnn::prim

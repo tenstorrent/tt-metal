@@ -479,7 +479,8 @@ SolRingResult sol_ring(
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
-    std::optional<Tensor> chunk_mask) {
+    std::optional<Tensor> chunk_mask,
+    uint32_t chunk_keep_every) {
     using OperationType = ttnn::prim::SolRingDeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -516,7 +517,8 @@ SolRingResult sol_ring(
         cluster_axis,
         num_workers_per_link,
         num_buffers_per_channel,
-        chunk_mask.has_value());
+        chunk_mask.has_value(),
+        chunk_keep_every);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
