@@ -326,11 +326,10 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
         program, kComputePath, region,
         ComputeConfig{
             .fp32_dest_acc_en = true,
-            // Half-sync DST holds four Float32 registers, and Bt = 2 needs
-            // exactly four: Bt score tiles plus two shared scratch. Taller
-            // blocks want the whole file, at the cost of the math-against-pack
-            // pipelining that half sync buys.
-            .dst_full_sync_en = Bt > 2U,
+            // Half-sync: the pass works in groups of at most two key tiles,
+            // four Float32 registers, so the math and pack threads alternate
+            // halves of the file and overlap. Nothing needs more than four.
+            .dst_full_sync_en = false,
             .unpack_to_dest_mode = unpack_mode,
             .compile_args = {C, qWt, vWt, scaler, minus_one, custom_inf, block_size, Bt, inv_scaler},
             .defines = compute_defines});

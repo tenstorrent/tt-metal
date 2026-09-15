@@ -215,18 +215,23 @@ constexpr uint32_t score_tiles = Bt * Bt;
 // over a on the outside and packs the column out of order into its row-major
 // place.
 
-// DST for one column of the score grid: P^T in registers 0..Bt-1 and dS^T in
-// Bt..2Bt-1, where the column's broadcast statistic and the causal mask lived
-// while the scores were being formed -- both are dead by the time dP^T is
-// started, so the two halves of the pass share the file. 2 Bt registers,
-// which is the whole Float32 file at Bt = 4.
-constexpr uint32_t score_reg(uint32_t b) {
-    return b;
+// DST for one group of the score grid: a query tile a against kGroup key
+// tiles b, with P^T in registers 0..kGroup-1 and dS^T in kGroup..2kGroup-1.
+// A group is at most two key tiles, so a group is at most four Float32
+// registers -- half the file -- and the math and pack threads can work on
+// alternate halves: the math thread's matmuls for one group run while the
+// pack thread's exponentials, multiplies and packs finish the previous one.
+constexpr uint32_t kGroup = (Bt > 2u) ? 2u : Bt;
+constexpr uint32_t kGroups = Bt / kGroup;  // per query tile
+constexpr uint32_t score_reg(uint32_t i) {
+    return i;
 }
-constexpr uint32_t grad_score_reg(uint32_t b) {
-    return Bt + b;
+constexpr uint32_t grad_score_reg(uint32_t i) {
+    return kGroup + i;
 }
-constexpr uint32_t stat_reg = Bt;
+// The statistic register of the single-thread path, live only between its
+// broadcast and its add, before the dS^T registers are in use.
+constexpr uint32_t stat_reg = kGroup;
 
 // Operands, all per timestep.
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -650,6 +655,8 @@ void kernel_main() {
         // K^T. Once per timestep is enough.
         pack_reconfig_data_format(cb_attention_weights);
         for (uint32_t a = 0; a < Bt; ++a) {
+        for (uint32_t h = 0; h < kGroups; ++h) {
+            const uint32_t b0 = h * kGroup;  // first key tile of the group
             // reconfig_data_format takes (SrcA, SrcB); the matmul's first operand
             // goes to SrcB and its second to SrcA.
             tile_regs_acquire();
@@ -659,29 +666,33 @@ void kernel_main() {
             // then K Q^T accumulated on top. No SFPU subtract at all. (Only
             // where S needs no scale; with the scale in the exponential the
             // statistic has to be divided by it first, which is SFPU work.)
-            for (uint32_t b = 0; b < Bt; ++b) {
-                broadcast_statistic_rows_to_dst(score_reg(b), cb_neg_lse_row, a);
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                broadcast_statistic_rows_to_dst(score_reg(i), cb_neg_lse_row, a);
             }
 #endif
             reconfig_data_format(cb_query, cb_key_operand);
             matmul_init(cb_key_operand, cb_query, /* transpose */ 1);
-            for (uint32_t b = 0; b < Bt; ++b) {
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                const uint32_t b = b0 + i;
 #if FOLD_SCALE_INTO_KEY
-                matmul_tiles(cb_ones_column, cb_neg_lse_rem, 0, a, score_reg(b));
+                matmul_tiles(cb_ones_column, cb_neg_lse_rem, 0, a, score_reg(i));
 #endif
                 for (uint32_t k = 0; k < qWt; ++k) {
-                    matmul_tiles(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(b));
+                    matmul_tiles(cb_key_operand, cb_query, b * qWt + k, a * qWt + k, score_reg(i));
                 }
             }
-            if (diagonal) {
+            if (diagonal && b0 + kGroup > a) {
                 // The mask, added: -inf where the key index exceeds the query
                 // index on the diagonal tile (b = a), everywhere on the tiles
                 // above it (b > a). The exponential then makes exact zeros
                 // there, and every later sum runs over the whole block.
                 reconfig_data_format(cb_attn_mask, cb_zero_tile);
                 add_tiles_init(cb_attn_mask, cb_zero_tile, /* acc_to_dest */ true);
-                for (uint32_t b = a; b < Bt; ++b) {
-                    add_tiles(cb_attn_mask, cb_zero_tile, (b == a) ? kMaskTriangle : kMaskAll, 0, score_reg(b));
+                for (uint32_t i = 0; i < kGroup; ++i) {
+                    const uint32_t b = b0 + i;
+                    if (b >= a) {
+                        add_tiles(cb_attn_mask, cb_zero_tile, (b == a) ? kMaskTriangle : kMaskAll, 0, score_reg(i));
+                    }
                 }
             }
 
@@ -693,27 +704,28 @@ void kernel_main() {
             // The exponential carries the scale, so -L and its remainder are
             // divided by it in the broadcast register and added on the SFPU.
             broadcast_statistic_rows_to_dst(stat_reg, cb_neg_lse_row, a);
-            add_statistic_column(score_reg(0), Bt, stat_reg);
+            add_statistic_column(score_reg(0), kGroup, stat_reg);
             broadcast_statistic_rows_to_dst(stat_reg, cb_neg_lse_rem_row, a);
-            add_statistic_column(score_reg(0), Bt, stat_reg);
-            exp_column(score_reg(0), Bt);
+            add_statistic_column(score_reg(0), kGroup, stat_reg);
+            exp_column(score_reg(0), kGroup);
 #endif
 
-            // dP^T - D^T for the column: -D broadcast into every register of
-            // the second half (the statistic register is free by now), then
-            // V dO^T accumulated onto it. The FPU adds into DST.
-            for (uint32_t b = 0; b < Bt; ++b) {
-                broadcast_statistic_rows_to_dst(grad_score_reg(b), cb_neg_u_row, a);
+            // dP^T - D^T for the group: -D broadcast into every register of
+            // the second half, then V dO^T accumulated onto it. The FPU adds
+            // into DST.
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                broadcast_statistic_rows_to_dst(grad_score_reg(i), cb_neg_u_row, a);
             }
             reconfig_data_format(cb_grad_output, cb_value);
             matmul_init(cb_value, cb_grad_output, /* transpose */ 1);
-            for (uint32_t b = 0; b < Bt; ++b) {
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                const uint32_t b = b0 + i;
                 for (uint32_t k = 0; k < vWt; ++k) {
-                    matmul_tiles(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(b));
+                    matmul_tiles(cb_value, cb_grad_output, b * vWt + k, a * vWt + k, grad_score_reg(i));
                 }
                 // The remainder of -D, along every row: ones-column x (its
                 // column-0 tile)^T. Same formats as V and dO, so the same init.
-                matmul_tiles(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(b));
+                matmul_tiles(cb_ones_column, cb_neg_u_rem, 0, a, grad_score_reg(i));
             }
 
 #if SPLIT_SFPU
@@ -721,35 +733,37 @@ void kernel_main() {
             // after the math thread's commit, which says dP^T - D^T is in --
             // the multiplies, and the packs once the SFPU has written them.
             PACK((t6_semaphore_wait_on_zero<p_stall::STALL_SFPU>(semaphore::FPU_SFPU)));
-            for (uint32_t b = 0; b < Bt; ++b) {
-                PACK((pack_sfpu::exp_tile(score_reg(b))));
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                PACK((pack_sfpu::exp_tile(score_reg(i))));
             }
             PACK((t6_semaphore_get<p_stall::WAIT_SFPU>(semaphore::FPU_SFPU)));
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t b = 0; b < Bt; ++b) {
-                PACK((pack_sfpu::mul_tiles(grad_score_reg(b), score_reg(b), grad_score_reg(b))));
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                PACK((pack_sfpu::mul_tiles(grad_score_reg(i), score_reg(i), grad_score_reg(i))));
             }
             PACK((pack_sfpu::wait_before_pack()));
 #else
             // dS^T = P^T (dP^T - D^T), and the softmax scale where K does not
             // carry it.
             mul_binary_tile_init();
-            for (uint32_t b = 0; b < Bt; ++b) {
-                mul_binary_tile(grad_score_reg(b), score_reg(b), grad_score_reg(b));
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                mul_binary_tile(grad_score_reg(i), score_reg(i), grad_score_reg(i));
             }
             binop_with_scalar_tile_init();
-            for (uint32_t b = 0; b < Bt; ++b) {
-                mul_unary_tile(grad_score_reg(b), scaler_bits);
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                mul_unary_tile(grad_score_reg(i), scaler_bits);
             }
             tile_regs_commit();
             tile_regs_wait();
 #endif
-            for (uint32_t b = 0; b < Bt; ++b) {
-                pack_tile</* out_of_order */ true>(score_reg(b), cb_attention_weights, b * Bt + a);
-                pack_tile</* out_of_order */ true>(grad_score_reg(b), cb_grad_scores, b * Bt + a);
+            for (uint32_t i = 0; i < kGroup; ++i) {
+                const uint32_t b = b0 + i;
+                pack_tile</* out_of_order */ true>(score_reg(i), cb_attention_weights, b * Bt + a);
+                pack_tile</* out_of_order */ true>(grad_score_reg(i), cb_grad_scores, b * Bt + a);
             }
             tile_regs_release();
+        }
         }
         cb_push_back(cb_attention_weights, score_tiles);
         cb_push_back(cb_grad_scores, score_tiles);
