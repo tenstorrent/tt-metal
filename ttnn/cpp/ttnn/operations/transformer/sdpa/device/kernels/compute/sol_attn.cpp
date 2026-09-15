@@ -23,9 +23,9 @@ void kernel_main() {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
     constexpr uint32_t q_num_chunks = get_compile_time_arg_val(7);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
-    // Block-sparse chunk stride. Compile-time for now: it proves the loop and gives a density sweep
-    // before a per-dispatch mask delivery path exists.
-    constexpr uint32_t chunk_keep_every = get_compile_time_arg_val(35);
+    // Block-sparse chunk stride. A define, not a compile-time arg: the CB ids occupy the arg
+    // vector's tail, so growing it positionally shifts them (see the factory).
+    constexpr uint32_t chunk_keep_every = SOL_ATTN_CHUNK_KEEP_EVERY;
     constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
 
     constexpr uint32_t qk_in0_block_w = get_compile_time_arg_val(10);
@@ -225,7 +225,7 @@ void kernel_main() {
             // Global Q scheduling: sdpa_standard walks the per-core flat range over
             // B*NQH*q_num_chunks chunks; the modulo inside its inner loop extracts the per-head
             // q_chunk from each flat index.
-            sdpa_standard<
+            sol_attn_standard<
                 cb_qk_im,
                 cb_identity_scale_in,
                 cb_attention_sink,
@@ -242,7 +242,8 @@ void kernel_main() {
                 sliding_window_size,
                 use_lightweight_causal_mask,
                 use_windowed_narrowing,
-                cb_windowed_k_range>(
+                cb_windowed_k_range,
+                chunk_keep_every>(
                 Skt,
                 qk_in0_block_w,
                 qk_subblock_w,

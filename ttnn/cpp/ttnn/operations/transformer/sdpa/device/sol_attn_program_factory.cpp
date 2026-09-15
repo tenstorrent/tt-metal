@@ -750,11 +750,15 @@ ProgramDescriptor SolAttnOperation::SolAttnProgramFactory::create_descriptor(
         k_partial_col,                                // arg 32: K partial-tile col (0 = no partial)
         static_cast<uint32_t>(use_zigzag_balancing),  // arg 33: unified zigzag remap
         static_cast<uint32_t>(is_windowed),           // arg 34: K-range narrowing (bounds from the ctrl CB)
-        operation_attributes.chunk_keep_every,        // arg 35: block-sparse chunk stride; 0 = dense
     };
 
     std::map<std::string, std::string> defines_map;
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+    // A define rather than a compile-time arg: cb_ids.compute_compile_time_args() is appended after
+    // the base vector, so the kernel's CB ids live at the tail indices and inserting an arg there
+    // shifts every one of them -- a CB field then reads the `inactive` sentinel and kernel compile
+    // dies at unpack_src_format[-1]. Positional growth of this vector is not safe.
+    defines_map["SOL_ATTN_CHUNK_KEEP_EVERY"] = std::to_string(operation_attributes.chunk_keep_every);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);
