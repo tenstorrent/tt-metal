@@ -695,9 +695,14 @@ def run_model(
         # The device has no norm / LM-head tail, so the token is derived on the CPU from the last layer's
         # hidden state, then cross-checked against the reference exactly as before: full model only, a
         # mismatch is a failure, a reference without a recorded token is N/A.
+        # Random ids are skipped: uniform random ids are not language, the next-token distribution is
+        # near-flat, so token equality carries no signal either way. The PCC stages still cover this
+        # input.
         trace_full_model = trace is not None and not trace_sliced and num_layers == trace.metadata.get("n_layers")
         host_full_model = trace is None and ref_snapshots is not None and num_layers == config.num_hidden_layers
-        if use_pretrained and (trace_full_model or host_full_model):
+        if input_source == "random":
+            logger.info("Skipping first-token equality for random token ids")
+        elif use_pretrained and (trace_full_model or host_full_model):
             tail_weights = load_host_tail_weights(model_path, config)
             if tail_weights is not None:
                 norm_weight, lm_head_weight = tail_weights
