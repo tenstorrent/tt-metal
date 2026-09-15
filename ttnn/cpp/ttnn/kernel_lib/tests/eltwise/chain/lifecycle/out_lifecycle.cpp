@@ -15,6 +15,7 @@
 //   2     ReserveAllPushPerTile  reserve n upfront, push 1 / iter      nothing
 //   3     CallerManaged          pack only (no reserve / no push)      reserve n before, push n after
 //   4     ReserveNonePushEnd      push n at end                         reserve n before
+//   5     PerOuter                reserve/push Wt once per grid row     nothing
 
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/api/chain.hpp"
@@ -54,11 +55,17 @@ void kernel_main() {
             in,
             PackTile<output(cb_out, ReservePolicy::None, PushPolicy::None, DataFormatReconfig::Disabled)>{});
         cb_out_obj.push_back(n);
-    } else {
+    } else if constexpr (life == 4) {
         cb_out_obj.reserve_back(n);
         eltwise_chain(
             IterationShape::tiles(n),
             in,
             PackTile<output(cb_out, ReservePolicy::None, PushPolicy::AtEnd, DataFormatReconfig::Disabled)>{});
+    } else {
+        static_assert(n % 2 == 0);
+        eltwise_chain(
+            IterationShape::grid(2, n / 2),
+            in,
+            PackTile<output(cb_out, ReservePolicy::PerOuter, PushPolicy::PerOuter, DataFormatReconfig::Disabled)>{});
     }
 }
