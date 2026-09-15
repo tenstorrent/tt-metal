@@ -710,8 +710,7 @@ def _golden_function_bitwise_right_shift(input_tensor, shift_amt, *args, **kwarg
     import torch
 
     if integer_golden.is_unsigned_dtype(input_tensor.dtype):
-        # Unary right shift has SFPU-specific count and sign behavior, unlike the
-        # shared zero-on-invalid helper used by left and binary shift operations.
+        # Unsigned unary right shift clamps the count to 31.
         return integer_golden.right_shift(input_tensor, shift_amt)
     return torch.bitwise_right_shift(input_tensor, shift_amt)
 
