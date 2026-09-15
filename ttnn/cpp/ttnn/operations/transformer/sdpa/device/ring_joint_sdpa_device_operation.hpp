@@ -70,6 +70,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     uint32_t kv_cache_num_layers = 1,
     uint32_t kv_cache_layer_idx = 0,
     std::optional<uint32_t> sliding_window_size = std::nullopt,
+    bool circular_kv_cache = false,
     std::optional<uint32_t> tokens_per_frame = std::nullopt,
     std::optional<uint32_t> num_frames_padded = std::nullopt,
     std::vector<uint32_t> sparse_frame_mask = {});

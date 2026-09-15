@@ -8,6 +8,7 @@
 #include "llk_unpack_A_api.h"  // legacy CB-id API + the unified llk_unpack_A_init_impl / llk_unpack_A_impl
 #include "data_format_derive.h"
 #include "api/compute/experimental/2_0/internal/llk_descriptor.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK UNPACK A -- LLKOperand (id-free, compile-time NTTP) overloads
@@ -41,6 +42,7 @@ template <
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     bool unpack_to_dest = false>
 inline void llk_unpack_A(std::uint32_t base_ptr) {
+    SAN_HOOK(unsupported());
     constexpr std::uint8_t RegFmt = ckernel::infer_unpack_reg_fmt(DESC.format, is_fp32_dest_acc_en);
     llk_unpack_A_impl<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(
         base_ptr, static_cast<std::uint32_t>(DESC.format), RegFmt);

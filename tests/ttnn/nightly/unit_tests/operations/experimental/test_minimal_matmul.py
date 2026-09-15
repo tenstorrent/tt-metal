@@ -571,6 +571,236 @@ def test_linear_swiglu(device, gate_is_first, use_bias):
     assert result["pcc"] > 0.9999, f"PCC {result['pcc']:.7f}"
 
 
+def _cache_hit_config(device, block_size=1, subblock=1, core_grid=None):
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=block_size,
+        K_block_size=block_size,
+        N_block_size=block_size,
+        subblock_h=subblock,
+        subblock_w=subblock,
+        compute_with_storage_grid_size=core_grid or device.compute_with_storage_grid_size(),
+    )
+    return compute_config, matmul_config
+
+
+def _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, label):
+    """Run `dispatch` twice on freshly allocated buffers of one hashed configuration.
+
+    `make_inputs()` yields one (tt_args, torch_args) set; `dispatch` returns torch outputs, `golden` the expected.
+    Set A stays alive while B is allocated, so B gets fresh addresses: a slot the override forgets still reads A.
+
+    A third dispatch back on set A catches the mirror-image bug, where a slot is patched once and
+    then frozen at the second dispatch's address.
+    """
+    device.enable_program_cache()
+    device.clear_program_cache()
+
+    tt_a, torch_a = make_inputs()
+    out_a = dispatch(tt_a)
+    entries = device.num_program_cache_entries()
+    assert entries == 1, f"{label}: expected 1 cache entry after the first dispatch, got {entries}"
+    for i, (got, want) in enumerate(zip(out_a, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, f"{label}: cache-miss output[{i}] PCC {result['pcc']:.7f}"
+
+    # tt_a stays referenced, so set B cannot be handed set A's addresses.
+    tt_b, torch_b = make_inputs()
+    out_b = dispatch(tt_b)
+    assert device.num_program_cache_entries() == 1, (
+        f"{label}: the second dispatch has the same hashed configuration and must reuse the cached "
+        "program. A new entry means something address- or allocation-dependent leaked into "
+        "compute_program_hash."
+    )
+    for i, (got, want) in enumerate(zip(out_b, golden(torch_b))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: cache-hit output[{i}] PCC {result['pcc']:.7f} -- the cache hit did not "
+            "re-patch every buffer address, so a kernel read or wrote the first dispatch's buffers."
+        )
+
+    out_a_again = dispatch(tt_a)
+    assert device.num_program_cache_entries() == 1, f"{label}: third dispatch must also be a cache hit"
+    for i, (got, want) in enumerate(zip(out_a_again, golden(torch_a))):
+        result = assert_quality(want, got)
+        assert result["pcc"] > 0.999, (
+            f"{label}: re-dispatch on the first input set gave PCC {result['pcc']:.7f} -- addresses "
+            "are patched once and then frozen instead of on every dispatch."
+        )
+
+    device.disable_and_clear_program_cache()
+
+
+def test_program_cache_hit_bias(device):
+    """in0 / in1 / bias / output addresses must all be re-patched on a cache hit."""
+    M, K, N = 256, 256, 256
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        bias_input = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(bias_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, bias_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_bias = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    tt_input,
+                    tt_weight,
+                    bias_tensor=tt_bias,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, bias_input = torch_args
+        with torch.no_grad():
+            return [torch_input @ weight_input + bias_input]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "bias")
+
+
+def test_program_cache_hit_fused_concat(device):
+    """The two-source in0 path additionally carries the optional input's address (kIn0SecondSourceIdx)."""
+    # Same shape/blocking as the seam_in_block case of test_linear_fused_concat.
+    M, Ka, Kb, N = 256, 96, 160, 128
+    compute_config, matmul_config = _cache_hit_config(device, block_size=4, subblock=2)
+
+    def make_inputs():
+        x_a = torch.randn((M, Ka), dtype=torch.float32)
+        x_b = torch.randn((M, Kb), dtype=torch.float32)
+        weight = torch.randn((Ka + Kb, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (x_a, x_b, weight),
+        )
+
+    def dispatch(tt_args):
+        tt_x_a, tt_x_b, tt_weight = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.minimal_matmul(
+                    [tt_x_a, tt_x_b],
+                    tt_weight,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        x_a, x_b, weight = torch_args
+        with torch.no_grad():
+            return [torch.cat([x_a, x_b], dim=-1) @ weight]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_concat")
+
+
+@pytest.mark.parametrize("chunks", [2, 4])
+def test_program_cache_hit_split_outputs(device, chunks):
+    """Split outputs put N output addresses at the tail of every in0/in1 arg list."""
+    M, K, N = 256, 256, 512
+    compute_config, matmul_config = _cache_hit_config(device)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight = tt_args
+        tt_chunks = ttnn.experimental.minimal_matmul_split(
+            tt_input,
+            tt_weight,
+            chunks=chunks,
+            dim=-1,
+            compute_kernel_config=compute_config,
+            config=matmul_config,
+        )
+        assert len(tt_chunks) == chunks
+        return [ttnn.to_torch(c) for c in tt_chunks]
+
+    def golden(torch_args):
+        torch_input, weight_input = torch_args
+        with torch.no_grad():
+            return list(torch.chunk(torch_input @ weight_input, chunks, dim=-1))
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, f"split_{chunks}")
+
+
+def test_program_cache_hit_fused_ternary(device):
+    """The fused-addcmul path adds ternary_a / ternary_b addresses ahead of the output tail."""
+    # Same shape/blocking as test_dit_minimal_matmul_addcmul_fused_basic.
+    M, K, N = 256, 512, 1024
+    scalar = 1.0
+    compute_config, matmul_config = _cache_hit_config(device, block_size=8, subblock=2)
+
+    def make_inputs():
+        torch_input = torch.randn((M, K), dtype=torch.float32)
+        weight_input = torch.randn((K, N), dtype=torch.float32)
+        addcmul_a = torch.randn((M, N), dtype=torch.float32)
+        addcmul_b = torch.randn((1, N), dtype=torch.float32)
+        return (
+            (
+                ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+                ttnn.from_torch(addcmul_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT),
+            ),
+            (torch_input, weight_input, addcmul_a, addcmul_b),
+        )
+
+    def dispatch(tt_args):
+        tt_input, tt_weight, tt_addcmul_a, tt_addcmul_b = tt_args
+        return [
+            ttnn.to_torch(
+                ttnn.experimental.dit_minimal_matmul_addcmul_fused(
+                    tt_input,
+                    tt_weight,
+                    scalar,
+                    tt_addcmul_a,
+                    tt_addcmul_b,
+                    compute_kernel_config=compute_config,
+                    config=matmul_config,
+                )
+            )
+        ]
+
+    def golden(torch_args):
+        torch_input, weight_input, addcmul_a, addcmul_b = torch_args
+        with torch.no_grad():
+            return [torch.addcmul(addcmul_a, torch_input @ weight_input, addcmul_b, value=scalar)]
+
+    _assert_cache_hit_repatches(device, dispatch, make_inputs, golden, "fused_ternary")
+
+
 def test_run_performance(device):
     core_grid = ttnn.CoreCoord(8, 8)
     M, K, N = 4096, 4096, 4096

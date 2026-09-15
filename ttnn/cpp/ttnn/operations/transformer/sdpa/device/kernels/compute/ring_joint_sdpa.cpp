@@ -94,12 +94,15 @@ void kernel_main() {
     constexpr auto snake_orientation = static_cast<ttnn::ccl::snake_ring::Orientation>(get_compile_time_arg_val(55));
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(56);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(57);
+    // Slot 58: circular sliding KV slab count (0 = unbounded). Wraps the sliding work plan's
+    // local slab addressing (sliding_window_work_plan.hpp) — must match the reader and host layout.
+    constexpr uint32_t circular_kv_slab_count = get_compile_time_arg_val(58);
     constexpr uint32_t v_cb_physical_width_t = v_shares_k_buffer ? DHt : vDHt;
-    // CB block base: the fixed scalar slots above end at 57, so the CB args start at 58. Declared
-    // here, ahead of the CB reads further down, because the host appends the sparse scalars after
-    // the CB block — indexing them by absolute slot silently aliases them onto CB args as soon as a
-    // fixed slot is added ahead of the block.
-    constexpr uint32_t cb_arg_offset = 58;
+    // CB block base: the fixed scalar slots above end at 58 (circular_kv_slab_count), so the CB args
+    // start at 59. Declared here, ahead of the CB reads further down, because the host appends the
+    // sparse scalars after the CB block — indexing them by absolute slot silently aliases them onto
+    // CB args as soon as a fixed slot is added ahead of the block.
+    constexpr uint32_t cb_arg_offset = 59;
     constexpr uint32_t num_cb_args = 25;
     // Sparse computation. All three set together at the host or all zero (feature disabled).
     constexpr bool sparse_frames_enabled = get_compile_time_arg_val(cb_arg_offset + num_cb_args + 0) == 1;
@@ -191,8 +194,9 @@ void kernel_main() {
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
     // Compute fixed slot 51: trace-safe KV-pad derivation flag. Slots 52/53 are the sharded-joint
-    // scalars (joint_is_sharded, logical_lt) and rank mapping are declared above, so the CB block
-    // starts at 58 (cb_arg_offset, declared with the sparse scalars above).
+    // scalars (joint_is_sharded, logical_lt); the rank mapping (54-57) and the bounded sliding KV
+    // slab count (58) are declared above, so the CB block starts at 59 (cb_arg_offset, declared with
+    // the sparse scalars above).
     constexpr bool kv_pad_from_metadata = get_compile_time_arg_val(51) == 1;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
@@ -473,6 +477,7 @@ void kernel_main() {
                 v_shares_k_buffer,
                 kt_inplace_v,
                 sliding_window_size,
+                circular_kv_slab_count,
                 ring_size,
                 use_attention_sink,
                 cb_attention_sink,

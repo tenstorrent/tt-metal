@@ -237,6 +237,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_actual_isl,
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<uint32_t> sliding_window_size,
+    bool circular_kv_cache,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k,
     const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v,
     const std::optional<ttnn::Tensor>& slot_id,
@@ -292,6 +293,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers.value_or(1),
         kv_cache_layer_idx.value_or(0),
         sliding_window_size,
+        circular_kv_cache,
         tokens_per_frame,
         num_frames_padded,
         std::move(sparse_frame_mask));

@@ -289,6 +289,7 @@ Pointwise Binary
    ttnn.bitwise_and
    ttnn.bitwise_or
    ttnn.bitwise_xor
+   ttnn.clamped_silu_glu
    ttnn.div
    ttnn.div_no_nan
    ttnn.divide
@@ -680,7 +681,6 @@ Backward operations
    ttnn.erfinv_bw
    ttnn.exp2_bw
    ttnn.exp_bw
-   ttnn.experimental.gelu_bw
    ttnn.expm1_bw
    ttnn.fill_bw
    ttnn.fill_zero_bw
