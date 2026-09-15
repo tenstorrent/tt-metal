@@ -32,6 +32,7 @@ from ...layers.neighborhood_attention_plan import NA3DDevicePlan, build_device_p
 from ...layers.normalization import RMSNorm
 from ...utils import timing_tree
 from .diffvae_ltx_stage5 import TILE, log_dram
+from .diffvae_rope import ROPE_BASE, axis_angles, default_rope_dim_split, rope_permutation
 
 #: The executors that take this chip's W-band and reassemble the window across the shard seam:
 #: the bricked executor stage 5 runs (halo exchange, 32-site bricks, the dedicated neighborhood op).
@@ -50,9 +51,6 @@ def stages_backend_from_env(default: str = "bricked_sp_w_sharded") -> str:
     288/205/746 ms, at 99.997-99.998 % PCC per block and 99.992 % on the full-decode gate.
     """
     return os.environ.get("DIFFVAE_STAGES_BACKEND") or default
-
-
-ROPE_BASE = 10000.0
 
 
 def decoder_config(path) -> dict:
@@ -86,38 +84,6 @@ def _tuplify(value):
     return tuple(_tuplify(v) if isinstance(v, list) else v for v in value)
 
 
-def default_rope_dim_split(head_dim: int) -> tuple[int, int, int]:
-    """Split of ``head_dim`` across the T, H and W RoPE chunks (64 -> (16, 24, 24))."""
-    assert head_dim % 8 == 0, f"head_dim={head_dim} must be a multiple of 8"
-    d_t = (head_dim // 4) // 2 * 2
-    d_hw = (head_dim - d_t) // 2
-    if d_hw % 2 != 0:
-        d_t -= 2
-        d_hw = (head_dim - d_t) // 2
-    return (d_t, d_hw, d_hw)
-
-
-def rope_permutation(rope_dim_split: tuple[int, int, int]) -> torch.Tensor:
-    """``head_dim`` reordering that turns upstream's interleaved pairs into two halves.
-
-    Upstream rotates adjacent dim pairs ``(d0,d1), (d2,d3), ...`` within each axis chunk,
-    which on device would need a stride-2 gather per rotation. Attention only sees ``q·k``, so
-    permuting ``head_dim`` identically in q and k is invisible in the output — and reordering
-    to ``[all first-of-pair, all second-of-pair]`` makes RoPE the contiguous
-    ``(x1*cos - x2*sin, x1*sin + x2*cos)``. Verified bit-identical to upstream.
-
-    Folded into the q/k projection rows and the q_norm/k_norm weights at load time, so it is
-    free at runtime. RMSNorm tolerates it because its scale is over all dims, hence
-    permutation-invariant, provided its learned weight is permuted the same way.
-    """
-    evens, odds, offset = [], [], 0
-    for width in rope_dim_split:
-        evens.extend(range(offset, offset + width, 2))
-        odds.extend(range(offset + 1, offset + width, 2))
-        offset += width
-    return torch.tensor(evens + odds)
-
-
 def rope_tables(
     dims: tuple[int, int, int],
     rope_dim_split: tuple[int, int, int],
@@ -135,9 +101,7 @@ def rope_tables(
     t, h, w = dims
     cos_columns, sin_columns = [], []
     for axis, (length, width) in enumerate(zip(dims, rope_dim_split)):
-        exponents = torch.arange(0, width, 2, dtype=torch.float64) / width
-        inv_freq = (1.0 / torch.pow(torch.tensor(ROPE_BASE, dtype=torch.float64), exponents)).to(torch.float32)
-        angle = torch.arange(length, dtype=torch.float32)[:, None] * inv_freq[None, :]
+        angle = axis_angles(torch.arange(length), width, ROPE_BASE)
         shape = [1, 1, 1, angle.shape[-1]]
         shape[axis] = length
         cos_columns.append(angle.cos().reshape(shape).expand(t, h, w, angle.shape[-1]))

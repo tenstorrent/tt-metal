@@ -22,15 +22,15 @@ import pytest
 import torch
 
 import ttnn
-from models.tt_dit.models.vae.diffvae_ltx import apply_rope, default_rope_dim_split, rope_permutation, rope_tables
+from models.tt_dit.models.vae.diffvae_ltx import apply_rope, rope_tables
 from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
     Grid,
     _apply_rope,
     _build_bricked_rope_tables,
     _build_rope_tables,
     _reshape_retiled,
-    _rope_pair_swap_matrix,
 )
+from models.tt_dit.models.vae.diffvae_rope import default_rope_dim_split, pair_swap_matrix, rope_permutation
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.tensor import from_torch as sharded_from_torch
 from models.tt_dit.utils.tensor import to_torch as gathered_to_torch
@@ -85,9 +85,7 @@ def _bricked_torch(x: torch.Tensor, volume: tuple[int, int, int], brick: tuple[i
 
 
 def _pair_swap(mesh_device):
-    return ttnn.from_torch(
-        _rope_pair_swap_matrix(HEAD_DIM), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
-    )
+    return ttnn.from_torch(pair_swap_matrix(HEAD_DIM), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
 
 
 def _fp32_compute(mesh_device):

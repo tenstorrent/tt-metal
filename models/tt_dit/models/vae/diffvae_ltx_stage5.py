@@ -47,6 +47,7 @@ from ...utils.tensor import from_torch as sharded_from_torch
 from ...utils.tensor import local_device_to_torch
 from ...utils.tensor import to_torch as gathered_to_torch
 from ...utils.yuv_d2h import fast_device_to_host_yuv
+from .diffvae_rope import ROPE_BASE, default_rope_dim_split, interleaved_lanes, pair_swap_matrix
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -100,7 +101,7 @@ class DiffVAEStage5Config:
     out_channels: int = 3
     norm_eps: float = 1e-6
     timestep_scale_multiplier: float = 1000.0
-    rope_base: float = 10000.0
+    rope_base: float = ROPE_BASE
     rope_dim_split: tuple[int, int, int] | None = None
 
     def __post_init__(self) -> None:
@@ -275,26 +276,6 @@ def unpatchify(x: torch.Tensor, patch_size: int) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
-def default_rope_dim_split(head_dim: int) -> tuple[int, int, int]:
-    """Split ``head_dim`` across the (T, H, W) RoPE chunks (upstream's default)."""
-    if head_dim % 8 != 0:
-        msg = f"head_dim={head_dim} must be a multiple of 8 for the default split"
-        raise ValueError(msg)
-    d_t = (head_dim // 4) // 2 * 2
-    d_hw = (head_dim - d_t) // 2
-    if d_hw % 2 != 0:
-        d_t -= 2
-        d_hw = (head_dim - d_t) // 2
-    return (d_t, d_hw, d_hw)
-
-
-def _rope_inv_freqs(dim: int, base: float) -> torch.Tensor:
-    # float64 exponentiation before the float32 cast: upstream computes these in numpy
-    # float64, and a float32 pow crosses bf16 rounding boundaries on the high frequencies.
-    exponents = torch.arange(0, dim, 2, dtype=torch.float64) / dim
-    return (1.0 / base**exponents).to(torch.float32)
-
-
 class _RopeParts(NamedTuple):
     cos: ttnn.Tensor
     sin: ttnn.Tensor
@@ -345,20 +326,6 @@ class _RopeTables:
         )
 
 
-def _rope_pair_swap_matrix(head_dim: int) -> torch.Tensor:
-    """``x @ P`` maps adjacent pairs ``(x0, x1)`` to ``(-x1, x0)``.
-
-    A matmul rather than slice-and-concat because the per-axis RoPE chunks start at
-    lanes 0/16/40 for head_dim 64 -- none of the odd/even sub-slices land on a tile
-    boundary, so every alternative needs a row-major detour per chunk.
-    """
-    p = torch.zeros(head_dim, head_dim, dtype=torch.float32)
-    for j in range(head_dim // 2):
-        p[2 * j + 1, 2 * j] = -1.0
-        p[2 * j, 2 * j + 1] = 1.0
-    return p
-
-
 def _build_rope_tables(
     grid: Grid,
     *,
@@ -367,9 +334,9 @@ def _build_rope_tables(
     num_heads: int,
     mesh_device: ttnn.MeshDevice,
     dtype: ttnn.DataType,
-    w_shard: tuple[int, int] | None = None,
 ) -> _RopeTables:
-    """Fused (T, H, W) absolute RoPE, factored into one frame and one row per frame.
+    """Fused (T, H, W) absolute RoPE, factored into one frame and one row per frame. Replicated only:
+    the W-sharded kernel keeps bricked, so a W-shard always takes :func:`_build_bricked_rope_tables`.
 
     Upstream rotates in W-slabs of ``rope_num_tiles`` with running absolute offsets, which
     is arithmetically one full-volume rotation over positions ``0..W-1``; the slabbing is
@@ -383,33 +350,15 @@ def _build_rope_tables(
     ``cos == frame.cos + time.cos`` exactly, and :func:`_apply_rope` distributes the multiply over
     the two instead of reassembling the row.
     """
-    d_t, d_h, d_w = dim_split
-    head_dim = d_t + d_h + d_w
-    offsets = (0, d_t, d_t + d_h)
+    head_dim = sum(dim_split)
 
     def lanes(fn, axis: int, positions: torch.Tensor) -> torch.Tensor:
-        """``fn`` of this axis's angles, written into this axis's lanes and zero elsewhere.
-
-        Pairs are ``repeat_interleave``d, so pair ``j`` lands on lanes ``(2j, 2j+1)`` of the axis
-        chunk with no reordering.
-        """
-        width = dim_split[axis]
-        angles = positions.reshape(-1, 1) * _rope_inv_freqs(width, base).reshape(1, -1)
-        rows = torch.zeros(positions.numel(), head_dim, dtype=torch.float32)
-        rows[:, offsets[axis] : offsets[axis] + width] = fn(angles).repeat_interleave(2, dim=-1)
-        return rows
+        return interleaved_lanes(fn, axis, positions, dim_split, base)
 
     within = torch.arange(grid.h * grid.w)
-    rows_h = torch.div(within, grid.w, rounding_mode="floor").to(torch.float32)
-    rows_w = (within % grid.w).to(torch.float32)
-    # Under spatial-W SP the frame piece is split over W (the H/W lanes it carries), so each chip's
-    # rows-per-frame is only H*(W/sp)*num_heads; the T-lane ``time`` piece is unaffected by a W-shard.
-    if w_shard is not None:
-        sp, _ = w_shard
-        assert grid.w % sp == 0, f"W={grid.w} must split evenly over sp={sp}"
-        rows_per_frame = grid.h * (grid.w // sp) * num_heads
-    else:
-        rows_per_frame = grid.h * grid.w * num_heads
+    rows_h = torch.div(within, grid.w, rounding_mode="floor")
+    rows_w = within % grid.w
+    rows_per_frame = grid.h * grid.w * num_heads
 
     def upload(rows: torch.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
         return ttnn.from_torch(
@@ -421,27 +370,10 @@ def _build_rope_tables(
         # repeats once per head.
         rows = (lanes(fn, 1, rows_h) + lanes(fn, 2, rows_w)).reshape(grid.h * grid.w, 1, head_dim)
         full = rows.repeat(1, num_heads, 1)  # (H*W, num_heads, head_dim), rows ordered (h, w)
-        if w_shard is None:
-            return upload(full, (1, 1, grid.h * grid.w * num_heads, head_dim))
-        # W-shard: reorder rows to (device, h, w_local, head) so device p gets its W-band, matching the
-        # activation's own W-shard (from_torch shards the site dim across sp_axis in device order).
-        sp, sp_axis = w_shard
-        w_local = grid.w // sp
-        reordered = (
-            full.reshape(grid.h, sp, w_local, num_heads, head_dim)
-            .permute(1, 0, 2, 3, 4)
-            .reshape(1, 1, sp * grid.h * w_local * num_heads, head_dim)
-        )
-        return sharded_from_torch(
-            reordered.contiguous(),
-            device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-            dtype=dtype,
-            mesh_axes=[None, None, sp_axis, None],
-        )
+        return upload(full, (1, 1, grid.h * grid.w * num_heads, head_dim))
 
     def time_piece(fn) -> ttnn.Tensor:
-        return upload(lanes(fn, 0, torch.arange(grid.t, dtype=torch.float32)), (1, grid.t, 1, head_dim))
+        return upload(lanes(fn, 0, torch.arange(grid.t)), (1, grid.t, 1, head_dim))
 
     return _RopeTables(
         frame=_RopeParts(cos=frame_piece(torch.cos), sin=frame_piece(torch.sin)),
@@ -466,9 +398,7 @@ def _build_bricked_rope_tables(
     The factored frame/time form does not survive bricking: T, H and W are interleaved inside
     each 32-site brick. Built once per stage, sliced per band on ``T_br``.
     """
-    d_t, d_h, d_w = dim_split
-    head_dim = d_t + d_h + d_w
-    offsets = (0, d_t, d_t + d_h)
+    head_dim = sum(dim_split)
     brick_time, brick_height, brick_width = brick
 
     def table_for_shard(volume: tuple[int, int, int], w_offset: int) -> tuple[torch.Tensor, torch.Tensor]:
@@ -486,12 +416,7 @@ def _build_bricked_rope_tables(
         t, h, w, ghost = t.reshape(-1), h.reshape(-1), w.reshape(-1), ghost.reshape(-1)
 
         def lanes(fn, axis: int, positions: torch.Tensor) -> torch.Tensor:
-            width = dim_split[axis]
-            angles = positions.reshape(-1, 1).to(torch.float32) * _rope_inv_freqs(width, base).reshape(1, -1)
-            out = torch.zeros(positions.numel(), head_dim, dtype=torch.float32)
-            out[:, offsets[axis] : offsets[axis] + width] = fn(angles).repeat_interleave(2, dim=-1)
-            out[ghost] = 0
-            return out
+            return interleaved_lanes(fn, axis, positions, dim_split, base, ghost=ghost)
 
         cos = lanes(torch.cos, 0, t) + lanes(torch.cos, 1, h) + lanes(torch.cos, 2, w)
         sin = lanes(torch.sin, 0, t) + lanes(torch.sin, 1, h) + lanes(torch.sin, 2, w)
@@ -882,7 +807,7 @@ class _NeighborhoodAttention3D(Module):
         self.k_norm = RMSNorm(config.head_dim, **norm)
 
         self.pair_swap = ttnn.from_torch(
-            _rope_pair_swap_matrix(config.head_dim),
+            pair_swap_matrix(config.head_dim),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=dtype,
@@ -1534,6 +1459,7 @@ class DiffVAEStage5(Module):
                     w_shard=w_shard,
                 )
             else:
+                assert w_shard is None, "a W-sharded stage 5 keeps bricked; the factored table is replicated only"
                 tables = _build_rope_tables(
                     grid,
                     dim_split=self.config.resolved_rope_dim_split,
@@ -1541,7 +1467,6 @@ class DiffVAEStage5(Module):
                     num_heads=self._rope_num_heads,
                     mesh_device=self.mesh_device,
                     dtype=self.dtype,
-                    w_shard=w_shard,
                 )
             self._rope_cache[key] = tables
         return tables

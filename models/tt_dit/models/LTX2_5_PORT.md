@@ -248,6 +248,12 @@ is free at runtime, and it is **bit-identical** to upstream (verified, not appro
 RMSNorm tolerates it because its scale is over all dims, hence permutation-invariant, provided
 its learned weight is permuted the same way.
 
+This is the deterministic stages' encoding. Stage 5 keeps upstream's interleaved pairs and rotates
+with a pair-swap matmul in TILE, because its axis chunks start at lanes 0/16/40 and no half-slice
+lands on a tile boundary. The angles, the dim split, the permutation and the swap matrix live in
+`models/vae/diffvae_rope.py`; `tests/models/vae/test_diffvae_rope.py` pins both encodings to one
+torch oracle at the lane level.
+
 `rope_num_tiles=4` is arithmetically a **no-op** (exactly 0 difference): upstream slabs W only
 to keep Dynamo from specializing on shape, and carries absolute offsets across slabs.
 

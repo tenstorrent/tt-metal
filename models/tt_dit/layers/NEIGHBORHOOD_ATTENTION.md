@@ -495,4 +495,6 @@ their per-block `to_bricked` / `to_natural` is the open item in section 3.
 3. `neighborhood_reference.py` — the same rules in torch, executable.
 4. `test_neighborhood_sdpa.py` — what correct means, and which shapes break it.
 5. `neighborhood_reader.cpp` — where geometry becomes memory traffic.
-6. `diffvae_ltx_stage5.py::_build_rope_tables` — the constraint that shapes everything else.
+6. `diffvae_ltx_stage5.py::_build_rope_tables` — the constraint that shapes everything else. The
+   angles under it, and under the deterministic stages' half-width tables, come from one place:
+   `models/vae/diffvae_rope.py` (dim split, inverse frequencies, lane writer, the two lane-order matrices).

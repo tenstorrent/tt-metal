@@ -251,13 +251,8 @@ def test_rope_dim_split_matches_upstream():
 def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
     """The RoPE prelude in isolation: pair-swap matmul + fused cos/sin table against
     upstream's per-axis W-slabbed rotation."""
-    from models.tt_dit.models.vae.diffvae_ltx_stage5 import (
-        _apply_rope,
-        _build_rope_tables,
-        _reshape_retiled,
-        _rope_inv_freqs,
-        _rope_pair_swap_matrix,
-    )
+    from models.tt_dit.models.vae.diffvae_ltx_stage5 import _apply_rope, _build_rope_tables, _reshape_retiled
+    from models.tt_dit.models.vae.diffvae_rope import inv_freqs, pair_swap_matrix
 
     config = DiffVAEStage5Config()
     grid = GRID
@@ -268,7 +263,7 @@ def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
     expected = ltx_rope.apply_abs_rope(
         x,
         split,
-        tuple(_rope_inv_freqs(d, config.rope_base) for d in split),
+        tuple(inv_freqs(d, config.rope_base) for d in split),
         num_tiles=4,
         compute_dtype=torch.float32,
     )
@@ -282,7 +277,7 @@ def test_rope_matches_upstream(mesh_device: ttnn.MeshDevice):
         dtype=ttnn.float32,
     )
     swap = ttnn.from_torch(
-        _rope_pair_swap_matrix(config.head_dim),
+        pair_swap_matrix(config.head_dim),
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         dtype=ttnn.float32,
