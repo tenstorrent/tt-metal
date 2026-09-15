@@ -87,7 +87,7 @@ operations:
         block_size: [48, 32]
         operation: "Exp"
         approximation_mode: false
-        iterations: 16
+        iterations: 8
     pack:
       - output: "datacopy_out"
         block_size: [48, 32]

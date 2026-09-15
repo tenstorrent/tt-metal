@@ -21,5 +21,6 @@ def unary_golden(call, state, node, operation, config):
         call.dest,
         node.sfpu.fill_const_value,
         skip_tilize=True,
+        tile_dimensions=tile_dims,
     )
     state.dest.update_from_tilized(result, data_format)

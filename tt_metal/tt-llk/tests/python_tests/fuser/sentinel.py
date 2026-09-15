@@ -289,21 +289,23 @@ class FuserSentinel:
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
             self._infer_node_formats(config, compute_node, output_format, operation)
         )
+        unpack_A_src, unpack_B_src = compute_node.unpacker.physical_order(
+            unpack_A_src, unpack_B_src
+        )
+        unpack_A_dst, unpack_B_dst = compute_node.unpacker.physical_order(
+            unpack_A_dst, unpack_B_dst
+        )
 
         self._unpack_A_src = unpack_A_src
         self._unpack_A_dst = unpack_A_dst
         self._unpack_B_src = unpack_B_src
         self._unpack_B_dst = unpack_B_dst
 
-        self._unpack_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-        self._unpack_num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
-
-        if compute_node.src_b is not None:
-            self._unpack_face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-            self._unpack_num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
-        else:
-            self._unpack_face_r_dim_b = self._unpack_face_r_dim_a
-            self._unpack_num_faces_b = self._unpack_num_faces_a
+        operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
+        self._unpack_face_r_dim_a = operand_a.tile_shape.face_r_dim
+        self._unpack_num_faces_a = operand_a.tile_shape.total_num_faces()
+        self._unpack_face_r_dim_b = operand_b.tile_shape.face_r_dim
+        self._unpack_num_faces_b = operand_b.tile_shape.total_num_faces()
 
         return unpack_common.hw_configure_unpack(
             compute_node,
@@ -334,16 +336,18 @@ class FuserSentinel:
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
             config, compute_node, output_format, operation
         )
+        new_A_src, new_B_src = compute_node.unpacker.physical_order(
+            new_A_src, new_B_src
+        )
+        new_A_dst, new_B_dst = compute_node.unpacker.physical_order(
+            new_A_dst, new_B_dst
+        )
 
-        new_face_r_dim_a = compute_node.src_a.tile_shape.face_r_dim
-        new_num_faces_a = compute_node.src_a.tile_shape.total_num_faces()
-
-        if compute_node.src_b is not None:
-            new_face_r_dim_b = compute_node.src_b.tile_shape.face_r_dim
-            new_num_faces_b = compute_node.src_b.tile_shape.total_num_faces()
-        else:
-            new_face_r_dim_b = new_face_r_dim_a
-            new_num_faces_b = new_num_faces_a
+        operand_a, operand_b = compute_node.unpacker.physical_operands(compute_node)
+        new_face_r_dim_a = operand_a.tile_shape.face_r_dim
+        new_num_faces_a = operand_a.tile_shape.total_num_faces()
+        new_face_r_dim_b = operand_b.tile_shape.face_r_dim
+        new_num_faces_b = operand_b.tile_shape.total_num_faces()
 
         srca_fmt_changed = (
             self._unpack_A_src != new_A_src or self._unpack_A_dst != new_A_dst
