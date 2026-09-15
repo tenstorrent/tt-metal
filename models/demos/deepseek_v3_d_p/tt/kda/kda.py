@@ -48,6 +48,37 @@ def _effective_qkv_channel_chunk_size(channels: int, configured_chunk_size: int)
     )
 
 
+def _wrap_indicators(
+    device: ttnn.MeshDevice,
+    *,
+    sequence_parallel_axis: int,
+    sp_size: int,
+) -> tuple[ttnn.Tensor, ...]:
+    """One selector per candidate boundary chip, indexed by SP rank.
+
+    The candidates are just the SP ranks, so the content is fixed at
+    construction; only which selector a forward picks depends on the offset.
+    """
+    mesh_dims: list[int | None] = [None, None]
+    mesh_dims[sequence_parallel_axis] = 0
+    mesh_shape = tuple(device.shape)
+    selectors = []
+    for chip in range(sp_size):
+        indicator = torch.zeros(sp_size, 1, 1)
+        indicator[chip] = 1.0
+        selectors.append(
+            ttnn.from_torch(
+                indicator,
+                dtype=KDA_RECURRENT_STATE_DTYPE,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
+            )
+        )
+    return tuple(selectors)
+
+
 @dataclass(frozen=True)
 class _ProjectedInputs:
     qkv: ttnn.Tensor
@@ -160,6 +191,13 @@ class ttKDA:
             math_fidelity=program_config.output_projection_math_fidelity,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
+        )
+        self._wrap_indicators = (
+            _wrap_indicators(
+                self.device, sequence_parallel_axis=self.sequence_parallel_axis, sp_size=self.sequence_parallel_size
+            )
+            if self.sequence_parallel_size > 1
+            else ()
         )
 
     @property
@@ -421,7 +459,7 @@ class ttKDA:
         """
         self._validate_forward(hidden_states, state, actual_start)
         topology = offset_topology(actual_start, self.sequence_parallel_size, hidden_states.shape[1])
-        wrap_indicator = self.recurrence.wrap_indicator(topology)
+        wrap_indicator = self._wrap_indicators[topology.boundary_chip] if topology.is_split else None
         projected = self._project_inputs(hidden_states)
         q, k, v, new_convolution = self._convolve_qkv(projected.qkv, state.convolution, topology, wrap_indicator)
         gate, beta = self._compute_gates(
@@ -436,6 +474,7 @@ class ttKDA:
             beta=beta,
             initial_state=state.recurrent,
             topology=topology if self.sequence_parallel_size > 1 else None,
+            wrap_indicator=wrap_indicator,
         )
         output = self._kda_rms_norm(output, projected.output_gate)
         output = self._project_output(output)

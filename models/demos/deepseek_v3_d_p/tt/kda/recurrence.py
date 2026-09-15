@@ -10,12 +10,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import torch
-
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.config import (
     KDA_AFFINE_SUMMARY_DTYPE,
-    KDA_AFFINE_WORKING_MEMORY_CONFIG,
     KDA_CHUNK_SIZE,
     KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
     KDA_DISTRIBUTED_WORKING_MEMORY_CONFIG,
@@ -56,46 +53,6 @@ class _AffineTransform:
 class _GroupSummaries:
     head: _AffineTransform
     tail: _AffineTransform | None
-
-
-@dataclass(frozen=True)
-class _WrapIndicator:
-    """Device-resident predicate consumed by kernels for a device-local wrap."""
-
-    is_boundary: ttnn.Tensor
-
-
-def _wrap_indicators(
-    device: ttnn.MeshDevice,
-    *,
-    sequence_parallel_axis: int,
-    sp_size: int,
-) -> tuple[_WrapIndicator, ...]:
-    """One selector per candidate boundary chip, indexed by SP rank.
-
-    The candidates are just the SP ranks, so the content is fixed at
-    construction; only which selector a forward picks depends on the offset.
-    """
-    mesh_dims: list[int | None] = [None, None]
-    mesh_dims[sequence_parallel_axis] = 0
-    mesh_shape = tuple(device.shape)
-    selectors = []
-    for chip in range(sp_size):
-        indicator = torch.zeros(sp_size, 1, 1)
-        indicator[chip] = 1.0
-        selectors.append(
-            _WrapIndicator(
-                is_boundary=ttnn.from_torch(
-                    indicator,
-                    dtype=KDA_RECURRENT_STATE_DTYPE,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=device,
-                    memory_config=KDA_AFFINE_WORKING_MEMORY_CONFIG,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(device, dims=tuple(mesh_dims), mesh_shape=mesh_shape),
-                )
-            )
-        )
-    return tuple(selectors)
 
 
 @dataclass(frozen=True)
@@ -416,7 +373,7 @@ def _scan_grouped_chunks(
     summary_group_chunks: int,
     sequence_parallel_axis: int | None,
     topology: OffsetTopology | None,
-    wrap_indicators: tuple[_WrapIndicator, ...],
+    wrap_indicator: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
 ) -> _ScanResult:
     """Scan the local partition in one pass, wrap or no wrap.
@@ -434,11 +391,6 @@ def _scan_grouped_chunks(
     split = topology is not None and topology.is_split
     if split and sequence_parallel_axis is None:
         raise ValueError("a split topology only arises under sequence parallelism")
-    if split and topology.boundary_chip >= len(wrap_indicators):
-        raise ValueError(
-            f"boundary chip {topology.boundary_chip} has no wrap indicator; "
-            f"the executor was built for {len(wrap_indicators)} SP ranks"
-        )
     grid = prepared.v_beta.device().compute_with_storage_grid_size()
     group_chunks = _effective_summary_group_chunks(
         geometry.num_chunks,
@@ -458,7 +410,6 @@ def _scan_grouped_chunks(
         prepared.v_beta.device(), geometry.batch_heads * groups_per_head, geometry.key_dim
     )
 
-    wrap_indicator = wrap_indicators[topology.boundary_chip].is_boundary if split else None
     summary = _summarize_chunk_groups(
         grouped,
         summary_memory_config=summary_memory_config,
@@ -597,23 +548,7 @@ class KDARecurrence:
         )
         self._summary_group_chunks = program_config.summary_group_chunks
         self._sequence_parallel_axis = sequence_parallel_axis
-        sp_size = (
-            tuple(device.shape)[sequence_parallel_axis]
-            if sequence_parallel_axis is not None and isinstance(device, ttnn.MeshDevice)
-            else 1
-        )
-        self._wrap_indicators = (
-            _wrap_indicators(device, sequence_parallel_axis=sequence_parallel_axis, sp_size=sp_size)
-            if sp_size > 1
-            else ()
-        )
         self._use_grouped_scan = sequence_parallel_axis is not None or program_config.local_scan_strategy == "grouped"
-
-    def wrap_indicator(self, topology: OffsetTopology) -> ttnn.Tensor | None:
-        """Return the device-local control tensor for a split topology."""
-        if not topology.is_split:
-            return None
-        return self._wrap_indicators[topology.boundary_chip].is_boundary
 
     def __call__(
         self,
@@ -625,6 +560,7 @@ class KDARecurrence:
         beta: ttnn.Tensor,
         initial_state: ttnn.Tensor,
         topology: OffsetTopology | None,
+        wrap_indicator: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Return ``(new_state, output)`` for directly named recurrence tensors.
 
@@ -654,7 +590,7 @@ class KDARecurrence:
                 summary_group_chunks=self._summary_group_chunks,
                 sequence_parallel_axis=self._sequence_parallel_axis,
                 topology=topology,
-                wrap_indicators=self._wrap_indicators,
+                wrap_indicator=wrap_indicator,
                 compute_config=self._compute_config,
             )
         else:
