@@ -1525,4 +1525,14 @@ void kernel_main() {
             }
         }
     }
+
+    // EXIT FENCE -- same obligation as the writer's, for the per-channel multicast.
+    // `pc_sender.send()` fences on DEPARTED (mcast_pipe's send_data_), and a
+    // stage_per_channel() can be the last thing this kernel does, so the ACKs can still
+    // be outstanding at exit.  A kernel that exits that way desynchronises the NEXT
+    // kernel on this core: noc_local_state_init snapshots NIU_MST_WR_ACK_RECEIVED, the
+    // late ACKs push the register past the snapshot, and noc_async_write_barrier compares
+    // for EQUALITY.  brisck/ncrisck's end-of-kernel ASSERT tests writes SENT, not ACKED,
+    // so it does not cover this.  Free when nothing is outstanding.
+    noc_async_write_barrier();
 }
