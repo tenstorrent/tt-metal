@@ -62,7 +62,7 @@ struct VsaSdpaInputs {
     // raw-selection mode: [1,1,1,words] uint32 ROW_MAJOR, bit q_tile set -> that q-tile row attends every
     // real block (words*4 bytes must be a multiple of 32); per device, so a tensor rather than an attribute
     std::optional<Tensor> dense_row_mask;
-    // Optional preallocated softmax-state output (streaming only): [1,H,S,64] fp32 TILE. Per query
+    // Optional preallocated softmax-state output (streaming only): [1,H,S,64] bf16 TILE. Per query
     // row-tile it carries two tiles, column 0 meaningful in each: the row sum the kernel divided by,
     // and the threshold its exponentials were taken relative to. A caller merging this result with a
     // second attention branch needs both -- the op normalizes and discards the denominator, and the

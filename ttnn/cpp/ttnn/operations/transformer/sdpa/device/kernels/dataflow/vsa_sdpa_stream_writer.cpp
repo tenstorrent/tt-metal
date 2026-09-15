@@ -48,9 +48,8 @@ void kernel_main() {
     constexpr uint32_t Sqt = get_compile_time_arg_val(22);
     constexpr uint32_t cb_lse = get_compile_time_arg_val(23);
     constexpr bool has_lse = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t lse_tile_bytes = get_compile_time_arg_val(25);
 
-    constexpr auto out_args = TensorAccessorArgs<26, 0>();
+    constexpr auto out_args = TensorAccessorArgs<25, 0>();
     constexpr auto k_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
     constexpr auto q_args =
@@ -200,7 +199,7 @@ void kernel_main() {
                     const uint32_t lse0 = (head * n_q_tiles + q_tile) * 2 * Sqt;
                     for (uint32_t i = 0; i < 2 * Sqt; ++i) {
                         noc.async_write(
-                            lse_cb, lse, lse_tile_bytes, {.offset_bytes = i * lse_tile_bytes}, {.page_id = lse0 + i});
+                            lse_cb, lse, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = lse0 + i});
                     }
                 }
                 noc.async_write_barrier();
@@ -324,7 +323,7 @@ void kernel_main() {
                 const uint32_t lse0 = (head * n_q_tiles + q_tile) * 2 * Sqt;
                 for (uint32_t i = 0; i < 2 * Sqt; ++i) {
                     noc.async_write(
-                        lse_cb, lse, lse_tile_bytes, {.offset_bytes = i * lse_tile_bytes}, {.page_id = lse0 + i});
+                        lse_cb, lse, out_tile_bytes, {.offset_bytes = i * out_tile_bytes}, {.page_id = lse0 + i});
                 }
             }
             noc.async_write_barrier();

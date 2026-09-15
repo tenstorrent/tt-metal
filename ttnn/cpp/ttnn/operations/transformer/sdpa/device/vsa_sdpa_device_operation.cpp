@@ -147,7 +147,7 @@ void VsaSdpaOperation::validate_on_program_cache_miss(const VsaSdpaParams& attrs
     if (t.lse_out.has_value()) {
         const auto& lse = *t.lse_out;
         TT_FATAL(attrs.streaming, "vsa_sdpa lse_out needs streaming=True");
-        TT_FATAL(lse.dtype() == DataType::FLOAT32, "vsa_sdpa: lse_out must be fp32");
+        TT_FATAL(lse.dtype() == DataType::BFLOAT16, "vsa_sdpa: lse_out must be bf16");
         TT_FATAL(lse.layout() == Layout::TILE, "vsa_sdpa: lse_out must be TILE");
         TT_FATAL(lse.memory_config().buffer_type() == BufferType::DRAM, "vsa_sdpa: lse_out must be in DRAM");
         TT_FATAL(!lse.memory_config().is_sharded(), "vsa_sdpa: lse_out must be interleaved");

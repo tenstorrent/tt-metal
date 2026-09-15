@@ -14,6 +14,7 @@ import pytest
 import torch
 
 import ttnn
+from loguru import logger
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
 
 BLOCK = 64
@@ -391,9 +392,7 @@ def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
     tt_counts = ttnn.from_torch(
         counts.view(torch.int32).reshape(1, 1, 1, w), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
     )
-    tt_lse = ttnn.from_torch(
-        torch.zeros(1, heads, seq_len, 64), device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32
-    )
+    tt_lse = dev(torch.zeros(1, heads, seq_len, 64))
 
     baseline = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True))
     out = ttnn.to_torch(ttnn.transformer.vsa_sdpa(tt_q, tt_k, tt_v, tt_idx, tt_counts, streaming=True, lse_out=tt_lse))
@@ -412,5 +411,13 @@ def test_vsa_sdpa_lse_out(device, heads, seq_len, kv_len, pattern, ragged):
     key_ok = key_ok.repeat_interleave(BLOCK, dim=1)  # q tile -> q row
     want = torch.logsumexp(logits[0].masked_fill(~key_ok, float("-inf")), dim=-1)
 
+    # Characterise the gap rather than asserting a guessed floor: the kernel's logits are bf16 at
+    # HiFi2 while this reference is fp32, and a logsumexp is a raw magnitude with none of the
+    # error cancellation a normalised output gets.
+    err = (got - want).abs()
+    logger.info(
+        f"lse: PCC {comp_pcc(want, got, 0.0)[1]} | max|err| {err.max():.4f} | mean|err| {err.mean():.4f} "
+        f"| want std {want.std():.4f} | mean offset {(got - want).mean():.4f}"
+    )
     ok, pcc = comp_pcc(want, got, 0.999)
     assert ok, f"row logsumexp PCC {pcc}"
