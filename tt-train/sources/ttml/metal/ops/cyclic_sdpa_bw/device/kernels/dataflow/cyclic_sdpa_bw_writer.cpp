@@ -90,12 +90,9 @@ void kernel_main() {
     // The compute kernel forms S^T, so its diagonal tile takes the transposed
     // causal mask, in additive form (0 or -inf): live where the key index is
     // at most the query index.
-    cyclic_dataflow::generate_causal_mask_tiles(cb_attn_mask);
     // The compute kernel adds the mask with an accumulating FPU add whose
     // second operand is this zero tile: the fence buffer's page, never
     // written by anyone else (only its push and pop counters are used).
-    cyclic_dataflow::zero_tile(get_write_ptr(tt::CBIndex::c_8), get_tile_size(tt::CBIndex::c_8));
-    cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);  // for the D remainder
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_query);
     const auto grad_query = TensorAccessor(grad_query_args, grad_query_addr, grad_bytes);
@@ -109,10 +106,23 @@ void kernel_main() {
     const uint32_t interm_bytes = get_tile_size(cb_lse);
     const uint32_t base_lse = get_write_ptr(cb_lse);  // one slot: always here
     const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * get_tile_size(cb_lse_rem));
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
+    {
+        // The zero tile by RISC stores, the statistic tiles zeroed from it
+        // through the NOC while the RISC makes the mask and ones tiles (see
+        // the relay writer).
+        const uint32_t zero_l1 = get_write_ptr(tt::CBIndex::c_8);
+        const uint32_t zero_bytes = get_tile_size(tt::CBIndex::c_8);
+        cyclic_dataflow::zero_tile(zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes, zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes, zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(
+            get_write_ptr(cb_lse_rem), 2u * Bt * get_tile_size(cb_lse_rem), zero_l1, zero_bytes);
+        cyclic_dataflow::zero_region_via_noc(
+            get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem), zero_l1, zero_bytes);
+        cyclic_dataflow::generate_causal_mask_tiles(cb_attn_mask);
+        cyclic_dataflow::generate_ones_column_tile(tt::CBIndex::c_28);
+        noc_async_write_barrier();
+    }
     const uint64_t arrive_noc_addr = get_noc_addr(coord_noc_x, coord_noc_y, get_semaphore(arrive_sem_id));
     const uint64_t release_mcast_addr = get_noc_multicast_addr(
         mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, get_semaphore(release_sem_id));
