@@ -22,6 +22,8 @@ from tracy import signpost
 import ttnn
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.op_unit_tests.test_prefill_dispatch_fabric2d import (
+    ROUTING_PROFILES,
+    _draw_indices,
     _expert_dispatch_table,
     _mc_reach,
 )
@@ -39,57 +41,6 @@ NUM_EXPERTS_PER_TOK = 8
 # Enough launches that per-op mean is not dominated by the first, which pays program build.
 ITERATIONS = 10
 
-# Routing profiles, as (share of picks landing in this dispatch group, weight on the hot half of its
-# chips). Both knobs matter and both were wrong before:
-#
-# - Drawing every pick from the group's own experts makes ~4x too many picks land in-group, which
-#   makes collisions on one destination chip far more likely than production and OVERSTATES fan-out
-#   by roughly 3x. Production spreads picks over all 256 experts across 4 groups.
-# - Drawing uniformly across chips is fan-out's worst case: one copy per direction saves nothing when
-#   no two of a token's destinations share a direction. It reports ~1.2x, which reads as noise.
-#
-# The interesting configurations are the hot ones, because that is where the layers the perf harness
-# selects actually sit. Calibrate the exact shares on a perf-qualified machine; this host cannot
-# measure and the profiles are only meant to span the range.
-ROUTING_PROFILES = {
-    "uniform": (0.250, 1.0),
-    "hot": (0.372, 2.0),
-    "hottest": (0.473, 3.0),
-}
-
-
-def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weight):
-    """topk distinct experts per token, drawn from ALL experts with a controllable in-group skew.
-
-    How many of a token's picks land in its own dispatch group is drawn FIRST, then that many distinct
-    in-group experts and the rest from the other groups. Weighting the whole expert list and drawing
-    topk distinct picks from it does not work: sampling without replacement pulls the share well above
-    the weight it was solved for (47.3% asked, 63.3% delivered), and a share that drifts up is the
-    measurement trap this generator exists to avoid.
-
-    Within the group, the chips in its hot half are weighted `hot_weight`, which is what concentrates
-    traffic onto one directed link -- the thing multicast is measured on.
-    """
-    experts_per_group = num_routed_experts // G
-    experts_per_chip = experts_per_group // H
-    in_weights = torch.ones(experts_per_group, dtype=torch.float64)
-    in_weights[experts_per_chip * (H // 2) :] = hot_weight
-
-    indices = torch.zeros(G, H, seq, topk, dtype=torch.int64)
-    for g in range(G):
-        base = g * experts_per_group
-        elsewhere = torch.cat([torch.arange(0, base), torch.arange(base + experts_per_group, num_routed_experts)])
-        for h in range(H):
-            for t in range(seq):
-                n_in = int((torch.rand(topk) < in_group_share).sum())
-                picks = torch.empty(0, dtype=torch.int64)
-                if n_in > 0:
-                    picks = base + torch.multinomial(in_weights, n_in, replacement=False)
-                if n_in < topk:
-                    picks = torch.cat([picks, elsewhere[torch.randperm(elsewhere.numel())[: topk - n_in]]])
-                indices[g, h, t] = picks
-    return indices
-
 
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links",
@@ -106,7 +57,9 @@ def _draw_indices(G, H, seq, topk, num_routed_experts, in_group_share, hot_weigh
 )
 @pytest.mark.parametrize("seq_len_per_chip", [CHUNK // DISPATCH_GROUP_SIZE, 64], ids=lambda s: f"seq{s}")
 @pytest.mark.parametrize("routing", list(ROUTING_PROFILES), ids=lambda r: r)
-@pytest.mark.timeout(0)
+# Finite on purpose. A hang here does not fail the run, it wedges the board: the eth links do not
+# retrain afterwards and recovering them needs privileges this account does not have.
+@pytest.mark.timeout(900)
 def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, seq_len_per_chip, routing):
     cfg = extract_mesh_config(mesh_device)
     sp_axis, H, G = cfg.sp_axis, cfg.dispatch_group_size, cfg.num_dispatch_groups
@@ -228,7 +181,14 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
         )
 
     # One untimed launch of each so the capture is not dominated by program build.
+    #
+    # The sync between the two ops is load-bearing, not hygiene. Program completion says nothing about
+    # whether a fabric packet has reached its destination chip, and `dispatch` does not drain the
+    # fabric before it retires; starting dispatch_fabric2d underneath that traffic hangs a relay
+    # waiting on pages that never arrive. It takes a heavy routing draw to show up -- uniform and hot
+    # pass, hottest deadlocks -- which is exactly the shape of a bug that survives a perf harness.
     production.forward(tt_x, tt_weights, tt_idx_u16, tt_offs_own, tt_table)
+    ttnn.synchronize_device(mesh_device)
     fabric2d(False)
     fabric2d(True)
     ttnn.synchronize_device(mesh_device)
@@ -240,13 +200,19 @@ def test_dispatch_fabric2d_perf_worker(mesh_device, device_params, num_links, se
 
     # Two transports, one routing draw, one board state. Store-and-forward moves the same bytes the
     # production op does, so it is expected at parity; multicast is where the link bytes come out.
+    # Synchronising every iteration is not measurement hygiene, it is what keeps the op from
+    # deadlocking. Back-to-back launches let a chip that finishes early start sending into a
+    # neighbour that is still retiring the previous launch, and the arrival counters do not survive
+    # that. Per-op device duration is unaffected by host pacing, so the numbers stay comparable.
     signpost("dispatch_fabric2d")
     for _ in range(ITERATIONS):
         fabric2d(False)
+        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
 
     signpost("dispatch_fabric2d_multicast")
     for _ in range(ITERATIONS):
         fabric2d(True)
+        ttnn.synchronize_device(mesh_device)
     ttnn.synchronize_device(mesh_device)
     signpost("done")
