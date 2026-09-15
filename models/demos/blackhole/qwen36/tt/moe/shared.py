@@ -12,6 +12,7 @@ replicated (from the replicated input x) and broadcasts across the fractured hid
 import torch
 
 import ttnn
+from models.demos.blackhole.qwen36.tt import tp_common as tpc
 from models.demos.blackhole.qwen36.tt.mlp import Qwen36MLP
 from models.demos.blackhole.qwen36.utils.substate import substate
 
@@ -48,8 +49,23 @@ class Qwen36SharedExpert:
             cache_file_name=(str(tensor_cache_path / "moe.shared_expert_gate.weight") if tensor_cache_path else None),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+        self.gate_progcfg = tpc.create_matmul_1d_decode_progcfg(
+            ttnn.TILE_SIZE, gate_w.shape[-2], gate_w.shape[-1], num_cores=1
+        )
 
-    def forward(self, x):
-        gate = ttnn.sigmoid(ttnn.linear(x, self.gate_weight))  # [1,1,S,1] replicated
-        shared_out = self.mlp.forward(x)  # fractured hidden on TP, full on single device
+    def forward(self, x, reduce=True):
+        # Same ttnn-auto problem as the router matmul (see router.py): this [S,H] x [H,1] gate
+        # measured 21 us on the auto program and 8 on the explicit single-core 1D config.
+        decode = x.shape[-2] <= ttnn.TILE_SIZE
+        gate_logits = ttnn.linear(
+            x,
+            self.gate_weight,
+            program_config=self.gate_progcfg if decode else None,
+            memory_config=ttnn.L1_MEMORY_CONFIG if decode else ttnn.DRAM_MEMORY_CONFIG,
+        )
+        gate = ttnn.sigmoid(gate_logits)  # [1,1,S,1] replicated
+        gate_logits.deallocate(True)
+        # reduce=False hands back the un-reduced full-hidden partial; the sigmoid gate is a
+        # per-token scalar so it broadcasts over either layout.
+        shared_out = self.mlp.forward(x, reduce=reduce)
         return ttnn.mul(shared_out, gate)
