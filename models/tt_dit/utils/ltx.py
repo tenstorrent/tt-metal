@@ -84,9 +84,11 @@ LTX_BUCKET_ALIGN = 32 * LTX_BUCKET_SP_FACTOR
 
 LTX_FPS_VALUES = (24, 25, 48, 50)
 LTX_DURATION_VALUES = (6, 8, 10, 12, 14, 16, 18, 20)
+# Internal model/VAE canvases are 64-aligned. Nominal output dimensions are cropped from these
+# canvases after decode (for example, 1280x768 -> 1280x720).
 LTX_CANVASES = {
-    "720p-landscape": (704, 1280),
-    "720p-portrait": (1280, 704),
+    "720p-landscape": (768, 1280),
+    "720p-portrait": (1280, 768),
     "1080p-landscape": (1088, 1920),
     "1080p-portrait": (1920, 1088),
     "1440p-landscape": (1440, 2560),
@@ -94,18 +96,35 @@ LTX_CANVASES = {
     "4k-landscape": (2176, 3840),
     "4k-portrait": (3840, 2176),
 }
+LTX_OUTPUT_CANVASES = {
+    "720p-landscape": (720, 1280),
+    "720p-portrait": (1280, 720),
+    "1080p-landscape": (1080, 1920),
+    "1080p-portrait": (1920, 1080),
+    "1440p-landscape": (1440, 2560),
+    "1440p-portrait": (2560, 1440),
+    "4k-landscape": (2160, 3840),
+    "4k-portrait": (3840, 2160),
+}
 # The canvases a single Galaxy commits to serving from resident traces. 1440p/4k stay in the table
 # (their token counts are still computable) but are rejected by ``route_ltx_request``.
 LTX_SERVED_CANVASES = ("720p-landscape", "720p-portrait", "1080p-landscape", "1080p-portrait")
 
-# ~1.4x geometric spacing, 256-aligned. Stage-2 real N over the served grid spans 16,720 (720p 24fps
+# ~1.4x geometric spacing, 256-aligned. Stage-2 real N over the served grid spans 18,240 (720p 24fps
 # 6s) to 257,040 (1080p 50fps 20s); stage-1 is ~1/4 of that (4,180 to 64,260). Eleven rungs cover
 # all 64 served configs at ~19% mean pad waste. Drop rungs from the top to shrink the envelope;
 # never insert a rung that is not a multiple of LTX_BUCKET_ALIGN.
-LTX_BUCKET_LADDER = (8704, 12288, 17408, 24576, 34560, 48384, 67840, 94976, 133120, 186368, 261120)
+# Six resident traces cover the full 30x served token range. These are every other rung of the
+# original ~1.4x ladder, retaining its already-exercised program shapes while trading at most ~2x
+# padded FFN work for a 45% reduction in trace count and about 41% less per-rung persistent state.
+LTX_BUCKET_LADDER = (8704, 17408, 34560, 67840, 133120, 261120)
+# Latency-focused profile with exact physical rungs for 1080p/25fps/6s.
+LTX_FAST_1080P_25FPS_6S_LADDER = (8704, 10240, 17408, 34560, 40960, 67840)
 
 # Audio real N over the served grid spans 151..505 latent frames; one bucket covers all of them.
 LTX_AUDIO_N_BUCKET = 512
+# The latency-focused 6-second profile only needs the smallest SP/tile-aligned audio arena.
+LTX_FAST_AUDIO_N_BUCKET = 256
 
 
 def validate_bucket_ladder(ladder: tuple[int, ...], align: int = LTX_BUCKET_ALIGN) -> None:
@@ -223,6 +242,8 @@ def route_ltx_request(
     """
     if sp_factor != LTX_BUCKET_SP_FACTOR:
         raise ValueError(f"LTX trace buckets are laid out for SP={LTX_BUCKET_SP_FACTOR}, got SP={sp_factor}")
+    if audio_n_bucket <= 0 or audio_n_bucket % (32 * sp_factor) != 0:
+        raise ValueError(f"audio bucket {audio_n_bucket} must be a positive multiple of {32 * sp_factor}")
     if mode != "av":
         raise ValueError(f"LTX trace buckets support AV mode only, got mode={mode!r}")
     if image_conditioned:
