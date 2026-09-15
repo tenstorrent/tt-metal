@@ -97,7 +97,7 @@ CB_STATS_G_FULL = 12
 CB_GAMMA_ROW = 13
 CB_BETA_ROW = 14
 CB_STATS_T = 15
-CB_BETA_FULL = 16
+CB_BETA_FULL = 16  # transient beta_T broadcast to all rows (beta path)
 CB_A_FULL = 17
 CB_B_FULL = 18
 CB_OUT = 19
@@ -358,7 +358,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_READY, core_ranges=all_cores, initial_value=0),
         ttnn.SemaphoreDescriptor(id=SEM_MCAST_CONSUMED, core_ranges=all_cores, initial_value=0),
     ]
-    mcast_cfg = ttnn.McastConfig(handshake=True, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
+    mcast_cfg = ttnn.McastConfig(handshake=False, sem_ids=[SEM_MCAST_READY, SEM_MCAST_CONSUMED])
     helpers = [ttnn.Mcast2D(device, g.core_range_set, g.root, mcast_cfg) for g in groups]
     mcast_ct = list(helpers[0].compile_time_args())
     assert all(list(h.compile_time_args()) == mcast_ct for h in helpers), "uniform mcast CT args"
@@ -428,7 +428,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
     writer_mc_ct_base = len(writer_ct)
     writer_ct.extend(mcast_ct)
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
-    writer_rt_scalars = 11  # McastArgs RT base (MC_RT in the writer)
+    writer_rt_scalars = 12  # McastArgs RT base (MC_RT in the writer)
     assert writer_mc_ct_base == 14
 
     compute_ct = [
@@ -511,6 +511,7 @@ def create_program_descriptor(input_tensor, output_tensor, *, num_groups, gamma,
                 group.p_used,
                 root_virtual.x,
                 root_virtual.y,
+                len(group.cores),  # num_participants: every rectangle core increments the gather semaphore
             ]
             assert len(writer_rt[x][y]) == writer_rt_scalars
             writer_rt[x][y] = list(writer_rt[x][y]) + list(helper.runtime_args(core))

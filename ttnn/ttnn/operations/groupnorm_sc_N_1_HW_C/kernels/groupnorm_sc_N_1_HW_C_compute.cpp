@@ -9,7 +9,8 @@
 // combine: root reduces the gathered records (REDUCE_COL over gather tiles) -> cb_totals_src;
 //          every core: mean/rstd lane form -> broadcast to full tiles (cb_stats_g_full)
 // pass 2 (per column group): per channel tile T: [mean; rstd]_full x E_T -> a_T = rstd_T*gamma_T,
-//          b_T = beta_T - mean_T*a_T; then y = x*a_T + b_T over every row chunk -> cb_out.
+//          b_T = beta_T - mean_T*a_T; then
+//          y = x*a_T + b_T over every row chunk -> cb_out.
 //
 // Helper policy notes (caller-owned lifecycles the headers hand out):
 //  * REDUCE_COL uses ReduceInputPolicy::WaitUpfrontNoPop + caller pop: the BulkWaitBulkPop path asserts the
@@ -58,7 +59,7 @@ void kernel_main() {
     constexpr uint32_t cb_gamma_row = get_compile_time_arg_val(13);
     constexpr uint32_t cb_beta_row = get_compile_time_arg_val(14);
     constexpr uint32_t cb_stats_T = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_beta_full = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_beta_full = get_compile_time_arg_val(16);  // transient beta_T broadcast to all rows
     constexpr uint32_t cb_a_full = get_compile_time_arg_val(17);
     constexpr uint32_t cb_b_full = get_compile_time_arg_val(18);
     constexpr uint32_t cb_out = get_compile_time_arg_val(19);
@@ -280,7 +281,11 @@ void kernel_main() {
                         ckl::PackTile<output(cb_a_full), Dst::D0>{});
                 }
 
-                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta)
+                // b_T = beta_T - mean_T * a_T  (or -mean_T * a_T without beta): beta row 0 broadcast to a full
+                // tile, then DEST = mean_T_full * a_T and b_T = beta_full - DEST (dest-reuse Sub, DEST_TO_SRCB).
+                // Precision note: b and x*a are both ~|mean|*rstd*gamma and cancel in y = x*a + b; the FPU
+                // evaluates them at tf32-class precision, so a |mean| >> std input loses ~ulp_tf32(|mean|*a)
+                // absolute accuracy (the design's deferred shifted_two_pass_variance row would remove this).
                 if constexpr (has_beta) {
                     ckl::unary_bcast<BroadcastDim::Row, input(cb_beta_row), output(cb_beta_full)>(
                         IterationShape::one_tile());

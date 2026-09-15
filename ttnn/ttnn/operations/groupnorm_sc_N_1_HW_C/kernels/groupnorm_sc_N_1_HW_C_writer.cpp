@@ -4,14 +4,22 @@
 // groupnorm_sc_N_1_HW_C — writer (data movement): the cross-core combine + output store.
 //
 // Roles inside an image rectangle (RT arg):
-//   ROOT   (p == 0)      zero-fills the gather tiles, signals gather-ready, writes its own record, waits for
-//                        P_used records, hands the gather to compute, multicasts the reduced totals.
-//   MEMBER (0 < p < P_used) waits gather-ready, writes its partial record into row p of the root's gather
-//                        tiles, waits for the totals multicast.
-//   IDLE   (p >= P_used) participates in the two multicast handshakes only.
+//   ROOT   (p == 0)      zero-fills the PAD rows (p >= P_used) of the gather tiles once, writes its own record,
+//                        waits for every rectangle core's semaphore increment, hands the gather to compute,
+//                        multicasts the reduced totals (no pre-handshake).
+//   MEMBER (0 < p < P_used) writes its partial record into row p of the root's gather tiles, increments the
+//                        root's gather semaphore, waits for the totals multicast.
+//   IDLE   (p >= P_used) increments the gather semaphore (so the root knows its ReceiverPipe exists) and
+//                        receives the totals multicast.
 // Then every non-idle core streams cb_out tiles of its own block to DRAM.
 //
-// Raw dataflow (per op_design.md → helpers considered and rejected): the record gather is P_used concurrent
+// Why no gather-ready signal / pre-handshake: records only ever touch rows p < P_used and the root only
+// ever zeroes rows >= P_used, so the two never overlap and need no ordering. The totals flag cannot be
+// clobbered by a late ReceiverPipe constructor (which resets the flag) because every rectangle core
+// increments the gather semaphore AFTER constructing its receiver, and the root broadcasts only after all
+// increments arrived. Saves two multicast round trips per image versus handshake=True.
+//
+// Raw dataflow (per op_design.md -> helpers considered and rejected): the record gather is P_used concurrent
 // unicasts of 2*Kg non-contiguous 64 B face-row chunks landing at per-sender offsets — SenderPipe::send
 // multicasts ONE contiguous block from ONE sender, so it does not fit; the totals broadcast does use it.
 
@@ -51,7 +59,7 @@ void kernel_main() {
     constexpr uint32_t gather_tiles_per_stat = get_compile_time_arg_val(12);
     constexpr uint32_t sem_gather_id = get_compile_time_arg_val(13);
     constexpr uint32_t MC_CT = 14;
-    constexpr uint32_t MC_RT = 11;
+    constexpr uint32_t MC_RT = 12;
     constexpr auto mc = McastArgs<MC_CT, MC_RT>();
     constexpr auto out_args = TensorAccessorArgs<mc.next_compile_time_args_offset()>();
 
@@ -67,6 +75,7 @@ void kernel_main() {
     const uint32_t p_used = get_arg_val<uint32_t>(8);
     const uint32_t root_x = get_arg_val<uint32_t>(9);
     const uint32_t root_y = get_arg_val<uint32_t>(10);
+    const uint32_t num_participants = get_arg_val<uint32_t>(11);  // every core of the rectangle (incl. idle)
 
     constexpr uint32_t num_stats = 2 * Kg;
     constexpr uint32_t f32_tile_bytes = get_tile_size(cb_partial);
@@ -128,15 +137,40 @@ void kernel_main() {
 
     if (role == ROLE_ROOT) {
         auto sender = mc.sender(noc);
+        // Zero the pad rows (cores p >= P_used) of every gather tile ONCE. Record rows are never zeroed, so
+        // a record that lands before this completes is not disturbed; pad rows are never written afterwards.
+        {
+            uint32_t issued = 0;
+            for (uint32_t gt = 0; gt < gather_tiles_per_stat; ++gt) {
+                const uint32_t first_pad_row = (p_used > gt * 32) ? (p_used - gt * 32) : 0u;  // within tile
+                if (first_pad_row >= 32) {
+                    continue;
+                }
+                for (uint32_t s = 0; s < num_stats; ++s) {
+                    const uint32_t tile_off = (gt * num_stats + s) * f32_tile_bytes;
+                    for (uint32_t face = 0; face < 4; ++face) {
+                        const uint32_t face_row0 = (face >> 1) * 16;
+                        const uint32_t r0 = (first_pad_row > face_row0) ? (first_pad_row - face_row0) : 0u;
+                        if (r0 >= 16) {
+                            continue;
+                        }
+                        noc.async_write_zeros(
+                            gather,
+                            (16 - r0) * face_row_bytes,
+                            {.offset_bytes = tile_off + face * face_bytes + r0 * face_row_bytes});
+                        ++issued;
+                    }
+                }
+            }
+            if (issued > 0) {
+                noc.write_zeros_l1_barrier();
+            }
+        }
         for (uint32_t img = 0; img < image_count; ++img) {
             const uint32_t n = image_begin + img * image_stride;
-            // gather tiles: rows >= P_used must be zero before any record can land
-            gather.reserve_back(gather_tiles);
-            noc.async_write_zeros(gather, gather_tiles * f32_tile_bytes);
-            noc.write_zeros_l1_barrier();
-            sender.send_signal(VALID);
+            gather.reserve_back(gather_tiles);  // blocks until root compute consumed the previous image
             send_partial_record();
-            sem_gather.wait_min((img + 1) * p_used);
+            sem_gather.wait_min((img + 1) * num_participants);
             gather.push_back(gather_tiles);
             // totals: root compute reduced the gather; multicast to the rectangle (self copy when P_n == 1)
             cb_wait_front(cb_totals_src, num_stats);
@@ -150,8 +184,7 @@ void kernel_main() {
         auto receiver = mc.receiver(noc);
         for (uint32_t img = 0; img < image_count; ++img) {
             const uint32_t n = image_begin + img * image_stride;
-            receiver.receive_signal();
-            send_partial_record();
+            send_partial_record();  // ends with the gather semaphore increment (after the receiver exists)
             cb_reserve_back(cb_totals_recv, num_stats);
             receiver.receive();
             cb_push_back(cb_totals_recv, num_stats);
@@ -160,7 +193,7 @@ void kernel_main() {
     } else {
         auto receiver = mc.receiver(noc);
         for (uint32_t img = 0; img < image_count; ++img) {
-            receiver.receive_signal();
+            sem_gather.up(noc, root_x, root_y, 1);  // "my receiver exists"; no record
             receiver.receive();
         }
     }
