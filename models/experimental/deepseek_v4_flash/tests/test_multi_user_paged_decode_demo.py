@@ -13,12 +13,14 @@ The users are served on two levels, which is the point of the demo:
   * **Within a step** -- ``DEEPSEEK_V4_DECODE_BATCH`` users are decoded *together*.
     The traces are captured at that batch, so one replay carries B tokens through the
     stack and returns B rows of logits. The batch slots index the shared pool
-    independently, so B unrelated conversations ride a single trace.
+    independently, so B unrelated conversations ride a single trace. Default ``B = 1``
+    (same as the single-user decode demo) so a step is one packed row; raise it to pack
+    several users onto that row.
   * **Across steps** -- the users are split into ``NUM_USERS / DECODE_BATCH`` batches
     that take turns, one batched step each per round. Switching batch repoints the
     page tables and swaps that batch's compressor window rows into the slots; the
-    caches themselves never move, so no re-capture is needed. The default 8 users per
-    step over 8 batches serves 64 conversations on one set of traces.
+    caches themselves never move, so no re-capture is needed. The default 1 user per
+    step over 64 batches serves 64 conversations on one set of traces.
 
 The users of a *batch* advance in lockstep on a shared position, which a trace requires
 (it bakes in one compressor-pooling schedule and one SDPA mode -- see
@@ -32,19 +34,30 @@ Every batch keeps a step in flight, with the logits read back on a thread of the
 (see ``_OutputReader``, which is what makes running them all at once safe). Reported
 throughput: steps/s, and the B tokens per step that implies.
 
-The assertion that matters is the interleaving one: neither the other users of a batch
-nor the batch being swapped out and back in every round may change what user 0 says. So
-one batch is re-run on its own, with user 0's prompt unchanged and *different* prompts
-in the other slots, and user 0's tokens must come out identical -- if the sessions
-shared a block, or the compressor window rows leaked across slots or failed to survive
-a swap, the two runs diverge. (That the paged reads themselves match a dense cache is
-covered at the op level by ``test_paged_kv_equivalence.py``, and that attention is
-batch-invariant by ``test_attention_batching.py``.)
+The deployment is the decode demo's, parametrized the same way (``tp1_8chip``,
+``tp4_8chip``, ``tp4_32chip``): the mesh picks the machine profile, and TP4 pins the
+latency layout -- two 1x4 stages over 8 chips, with the rest of a larger mesh idle.
+Dispatch is ahead of time in the same sense as ``test_full_model_decode_demo``: a
+round's traces are all queued (each behind its own seat swap) before any of that
+round's packets, so the device is parked on in-trace recv while the host writes PCIe.
+DSpark is off (``DEEPSEEK_V4_DSPARK=0``): this test never drafts, so it does not pay for
+tapping layers 40-42 into the idle-row MTP link on every step.
+
+The assertion that matters at ``B > 1`` is the interleaving one: neither the other
+users of a batch nor the batch being swapped out and back in every round may change
+what user 0 says. So one batch is re-run on its own, with user 0's prompt unchanged
+and *different* prompts in the other slots, and user 0's tokens must come out
+identical -- if the sessions shared a block, or the compressor window rows leaked
+across slots or failed to survive a swap, the two runs diverge. At the default
+``B == 1`` there are no neighbour slots, so the re-run only checks that user 0
+survives being swapped out and back in. (That the paged reads themselves match a
+dense cache is covered at the op level by ``test_paged_kv_equivalence.py``, and that
+attention is batch-invariant by ``test_attention_batching.py``.)
 
 Run (ttnn venv)::
 
     DEEPSEEK_V4_DECODE_LAYERS=4 DEEPSEEK_V4_CACHE_DIR=/path/to/cache \\
-    DEEPSEEK_V4_NUM_USERS=64 DEEPSEEK_V4_DECODE_BATCH=8 \\
+    DEEPSEEK_V4_NUM_USERS=64 DEEPSEEK_V4_DECODE_BATCH=1 \\
     DEEPSEEK_V4_MAX_NEW_TOKENS=64 \\
     pytest -s models/experimental/deepseek_v4_flash/tests/test_multi_user_paged_decode_demo.py
 """
@@ -57,37 +70,40 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
-from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
-from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
 from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
-from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
-from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
-from models.experimental.deepseek_v4_flash.tt.weight_loader import (
-    DeepseekV4WeightLoader,
-    resolve_snapshot_dir,
+from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
+
+# Construction, encoding and RoPE tables come from the single-user decode demo so the
+# two tests cannot drift (the CLI does the same). ``system_config=None`` below then
+# resolves to the same machine profile on the same mesh.
+from models.experimental.deepseek_v4_flash.tests.test_full_model_decode_demo import (
+    _DEFAULT_MODEL_DIR,
+    _assert_decode_parallelism,
+    _build_rope,
+    _checkpoint_available,
+    _construct_model,
+    _tokenize_chat,
+    _traced_max_seq,
 )
 
-_DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731"
 _TOPICS = ["movies", "tv shows", "books", "video games", "songs", "cartoons", "podcasts", "board games"]
 _ALT_TOPICS = ["bicycles", "sandwiches", "planets", "card tricks", "mountains", "typefaces", "bridges", "teas"]
 _PROMPT_TEMPLATE = (
     "Tell me the name of the top {count} {topic} of all time. Also list out the top {count} worst {topic} of "
     "all time. Give me details of why you choose those {topic}. Try to make your response as humours as possible."
 )
-_WEIGHT_DTYPE = ttnn.bfloat4_b
-_CACHE_DIR = os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache")
 # Users decoded in one traced step, and users in total. The latter must be a whole
 # number of the former: every step decodes a full batch (a trace runs all of its slots
 # unconditionally), so a partly filled batch has nowhere safe to write its KV.
-_DECODE_BATCH = int(os.environ.get("DEEPSEEK_V4_DECODE_BATCH", "8"))
+# Default 1 matches the single-user decode demo (one packed row, M == 1).
+_DECODE_BATCH = int(os.environ.get("DEEPSEEK_V4_DECODE_BATCH", "1"))
 _NUM_USERS = int(os.environ.get("DEEPSEEK_V4_NUM_USERS", "64"))
 _MAX_NEW_TOKENS = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "64"))
 # Steps allowed in flight at once across the batches; 0 means one per batch, which is as
@@ -108,36 +124,6 @@ _PREFETCHER = os.environ.get("DEEPSEEK_V4_PREFETCHER")
 # repeats user 0's own batch, a control that tells a genuine cross-user leak apart from
 # a session-state bug when the assertion fires.
 _ISOLATION_TOPICS = os.environ.get("DEEPSEEK_V4_ISOLATION_TOPICS", "alt")
-
-
-def _checkpoint_available() -> bool:
-    try:
-        resolve_snapshot_dir(Path(_DEFAULT_MODEL_DIR))
-    except FileNotFoundError:
-        return False
-    return True
-
-
-def _w(loader: DeepseekV4WeightLoader, name: str):
-    return lambda: dequantize_weight(loader.get_tensor(name), loader.get_scale(name))
-
-
-def _build_rope(config, max_seq: int) -> dict:
-    from transformers.models.deepseek_v4 import modeling_deepseek_v4 as M
-
-    dummy = torch.zeros(1, max_seq, 1, dtype=torch.float32)
-    rotary = M.DeepseekV4RotaryEmbedding(config).to(torch.float32)
-
-    def half(layer_type: str, position_ids: torch.Tensor):
-        cos, sin = rotary(dummy, position_ids=position_ids, layer_type=layer_type)
-        return cos[0].contiguous(), sin[0].contiguous()
-
-    positions = torch.arange(max_seq).unsqueeze(0)
-    rope = {"main": half("main", positions), "compress": half("compress", positions), "win": {}}
-    for cr in sorted({int(v) for v in config.compress_rates.values()}):
-        win_pos = (torch.arange(max_seq // cr) * cr).unsqueeze(0)
-        rope["win"][cr] = half("compress", win_pos)
-    return rope
 
 
 @dataclass
@@ -200,10 +186,26 @@ class Batch:
     def can_dispatch(self, max_seq: int) -> bool:
         return not self.done and self.pos < max_seq
 
-    def dispatch(self, model) -> None:
-        """Seat this batch and enqueue its next step without waiting for the logits."""
+    def post(self, model) -> None:
+        """Seat this batch and queue its next step's trace -- but not yet its packet.
+
+        This is the multi-user half of the decode demo's ahead-of-time dispatch: the whole
+        round's traces go out, each behind its own ``activate_sessions`` (so the page
+        tables and compressor window rows are swapped in before the trace that reads
+        them), before any of the round's packets. The device is then already parked on
+        in-trace recv while the host writes PCIe; :meth:`feed` writes the packets in the
+        same order, because each trace consumes the next packet on the H2D socket.
+        """
         model.activate_sessions(self.sids)
-        model.decode_traced_async([s.feed(self.pos) for s in self.sessions], self.pos)
+        # Capacity has to be ensured here, on this thread, rather than left to the replay
+        # thread: by the time that thread runs this entry, the host may already have
+        # seated the next batch, and its ensure would see that batch instead of this one.
+        model.ensure_session_capacity(self.pos)
+        model.replay_traced(self.pos)
+
+    def feed(self, model) -> None:
+        """Push the packet for the step :meth:`post` queued, without waiting for logits."""
+        model.write_step_packet([s.feed(self.pos) for s in self.sessions], self.pos)
         self.pending_pos = self.pos
         self.pos += 1
 
@@ -225,11 +227,6 @@ class Batch:
                 session.done = True
 
 
-def _tokenize_prompt(tokenizer, text: str) -> list[int]:
-    prompt = render_message(0, [{"role": "user", "content": text}], "chat")
-    return list(tokenizer(prompt)["input_ids"])
-
-
 def _prompts(topics: list[str], num_users: int) -> list[str]:
     """One prompt per user: the topics cycle, and the count grows each time round, so
     no two users are handed the same text (and their prompts differ in length, which is
@@ -240,41 +237,37 @@ def _prompts(topics: list[str], num_users: int) -> list[str]:
 
 
 def _build(
-    mesh_device, num_users: int, batch: int, prefetcher: contextlib.ExitStack, max_seq: int, config, loader
+    mesh_device,
+    num_users: int,
+    batch: int,
+    prefetcher: contextlib.ExitStack,
+    max_seq: int,
+    config,
+    loader,
+    tp_size: int = 1,
+    system_config=None,
 ) -> DeepSeekV4Model:
     """Build the model and set it up to decode ``batch`` users per traced step.
 
     ``prefetcher`` is the caller's stack, which owns the DRISC prefetcher session so it
     spans every step of the run. No session is opened here -- :func:`_open_batch` does
     that, so the caller decides how many batches share the pool.
+
+    ``tp_size`` / ``system_config`` are passed through exactly as
+    ``test_full_model_decode_demo._build_and_prefill`` passes them: the mesh picks the
+    machine profile (``system_config=None`` resolves it), and TP4 pins the latency layout
+    -- two 1x4 stages over 8 chips, with the rest of a larger mesh left idle.
     """
     rope = _build_rope(config, max_seq)
-    max_layers = min(
-        int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
-    )
-    top_cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
-
-    model = DeepSeekV4Model(
-        config,
-        loader,
+    model, lm_head, _, _ = _construct_model(
         mesh_device,
-        cache=top_cache,
-        weight_dtype=_WEIGHT_DTYPE,
-        max_layers=max_layers,
-        use_submeshes=True,
+        prefetcher,
+        tp_size=tp_size,
+        system_config=system_config,
         use_prefetcher=None if _PREFETCHER is None else _PREFETCHER == "1",
+        loader=loader,
+        config=config,
     )
-    lm_head = Linear(
-        _w(loader, "lm_head.weight"),
-        model.last_device,
-        top_cache.file("lm_head") if top_cache else None,
-        dtype=_WEIGHT_DTYPE,
-    )
-    # One session for the whole run, not one per step: starting the DRISC senders is not
-    # free and each GCB's ring state carries across steps. A no-op when the model was
-    # built without the prefetcher.
-    prefetcher.enter_context(model.prefetcher_session())
-    logger.info(f"tensor prefetcher: {'on' if model.use_prefetcher else 'off'}")
 
     # Every user needs a session of its own, plus one spare batch for the isolation
     # re-run at the end (which gets untouched blocks rather than recycling the first
@@ -406,6 +399,12 @@ def _generate(
 
     A batch is only made to wait for its *own* step. Results arrive in dispatch order, so
     waiting for one batch collects every earlier batch's on the way.
+
+    A round is dispatched ahead of time, the way ``test_full_model_decode_demo`` dispatches
+    a whole generation: :meth:`Batch.post` seats each batch and queues its trace, and only
+    then does :meth:`Batch.feed` write the round's packets, in the same order. The traces
+    are therefore already on the command queue (the device parked on in-trace recv) while
+    the host writes PCIe, instead of each trace being posted just before its own packet.
     """
     batch_size = len(batches[0].sessions)
     steps = 0
@@ -432,18 +431,35 @@ def _generate(
 
         while outstanding or any(b.can_dispatch(max_seq) for b in batches):
             t0 = time.perf_counter()
+            # First settle which batches step this round. Draining here is what makes the
+            # round safe to post as a batch: each batch's previous output has been
+            # collected, so its continuation (EOS, the token cap, the context) is already
+            # decided and no posted trace can be left without a packet.
+            ready: list[Batch] = []
             for batch in batches:
+                # The cap bounds the whole round, not just the fill below: a batch left
+                # out of ``ready`` has no trace posted, so nothing is left unfed.
+                if depth and len(ready) >= depth:
+                    break
                 while outstanding and (batch.pending_pos is not None or (depth and outstanding >= depth)):
                     drain()
                 if batch.can_dispatch(max_seq):
-                    t1 = time.perf_counter()
-                    # Announced before dispatch so the reader is already parked on the
-                    # socket when the step's first page lands.
-                    reader.expect(batch)
-                    batch.dispatch(model)
-                    dispatching += time.perf_counter() - t1
-                    outstanding += 1
-                    steps += 1
+                    ready.append(batch)
+            t1 = time.perf_counter()
+            # Ahead-of-time dispatch, as test_full_model_decode_demo does it: every trace
+            # this round (behind its own seat swap) is on the command queue before any of
+            # the round's packets. ``ready`` cannot change between the two passes.
+            for batch in ready:
+                batch.post(model)
+            # Packets go out in trace order -- the H2D socket is a FIFO -- and each is
+            # announced before it is written so the reader is already parked on the output
+            # socket when the step's first page lands.
+            for batch in ready:
+                reader.expect(batch)
+                batch.feed(model)
+                outstanding += 1
+                steps += 1
+            dispatching += time.perf_counter() - t1
             elapsed += time.perf_counter() - t0
             rounds += 1
             if rounds % 10 == 0 and elapsed > 0:
@@ -462,13 +478,29 @@ def _generate(
 @torch.no_grad()
 @pytest.mark.parametrize(
     "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2}],
     indirect=["device_params"],
     ids=["fabric_2d"],
 )
-def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
+@pytest.mark.parametrize(
+    "mesh_device,tp_size",
+    [
+        pytest.param((8, 1), 1, id="tp1_8chip"),
+        # TP4 opens the mesh directly in the 1x4-stage shape so no ``mesh.reshape``
+        # runs -- same variants, same ids, as the decode demo above.
+        pytest.param((2, 4), 4, id="tp4_8chip"),
+        pytest.param((8, 4), 4, id="tp4_32chip"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_multi_user_paged_decode_demo(mesh_device, reset_seeds, tp_size: int, monkeypatch) -> None:
     """Decode ``DECODE_BATCH`` users per traced step, round-robin over enough batches
     to serve ``NUM_USERS`` conversations off one shared pool and one set of traces."""
+    # Nothing here drafts, so keep the idle-row DSpark MTP link out of the run: on TP4 the
+    # mesh leaves chips idle, and the link otherwise taps layers 40-42 over a D2D socket
+    # and replays an extra recv submesh on the idle row every step. ``monkeypatch`` reverts
+    # this at teardown, so the DSpark tests still build their link.
+    monkeypatch.setenv("DEEPSEEK_V4_DSPARK", "0")
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -485,12 +517,18 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     prompts = _prompts(_TOPICS, _NUM_USERS)
     others = prompts if _ISOLATION_TOPICS == "same" else _prompts(_ALT_TOPICS, _DECODE_BATCH)
     alt_prompts = [prompts[0]] + others[1:_DECODE_BATCH]
-    prompt_ids = [_tokenize_prompt(tokenizer, p) for p in prompts]
-    alt_prompt_ids = [_tokenize_prompt(tokenizer, p) for p in alt_prompts]
+    prompt_ids = [_tokenize_chat(tokenizer, p) for p in prompts]
+    alt_prompt_ids = [_tokenize_chat(tokenizer, p) for p in alt_prompts]
     # One context length for every session the run opens, so the isolation batch needs
-    # no re-capture: the traces are sized to ``max_seq``.
+    # no re-capture: the traces are sized to ``max_seq``. Start from the same tile/LCM
+    # rounding as the single-user demo (including ``DEEPSEEK_V4_MAX_SEQ``), then lift to
+    # a page-aligned span so every compressor group's entry count tiles into blocks.
     longest = max(len(ids) for ids in prompt_ids + alt_prompt_ids)
-    max_seq = round_context(longest + _MAX_NEW_TOKENS + 1, set(config.compress_rates.values()), _PAGE_BLOCK_SIZE)
+    max_seq = round_context(
+        _traced_max_seq(config, longest + _MAX_NEW_TOKENS + 1),
+        set(config.compress_rates.values()),
+        _PAGE_BLOCK_SIZE,
+    )
 
     # Said before the slow parts rather than after: building the stack, allocating the
     # pool and capturing the traces take minutes on the full model and print little, so
@@ -508,7 +546,8 @@ def test_multi_user_paged_decode_demo(mesh_device, reset_seeds) -> None:
     # ``_build`` (once the model exists) against this stack.
     with contextlib.ExitStack() as prefetcher:
         t0 = time.perf_counter()
-        model = _build(mesh_device, _NUM_USERS, _DECODE_BATCH, prefetcher, max_seq, config, loader)
+        model = _build(mesh_device, _NUM_USERS, _DECODE_BATCH, prefetcher, max_seq, config, loader, tp_size=tp_size)
+        _assert_decode_parallelism(model, tp_size)
         eos_id = config.eos_token_id
         logger.info(f"model built and pool allocated in {time.perf_counter() - t0:.1f}s; capturing traces")
 

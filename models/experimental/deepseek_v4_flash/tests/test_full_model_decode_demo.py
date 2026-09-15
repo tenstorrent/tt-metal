@@ -7,7 +7,9 @@ Builds the whole model once via :class:`DeepSeekV4Model`. There is no dedicated
 prefill: a chat prompt is "prefilled" by replaying the decode step once per
 prompt token (at ascending absolute positions), seeding every layer's sliding
 K=V + compressor cache in place, then generation continues one token per step
-(``S = 1``) against that cache. The RoPE tables are produced once for the
+(``S = 1``) against that cache. Traced decode uses a paged KV cache (one
+session, 32-row blocks) so this demo shares the cache layout with the
+multi-user and serving paths. The RoPE tables are produced once for the
 maximum length; each decode step slices the single position row(s) it needs.
 
 The test has three deployment variants:
@@ -52,8 +54,9 @@ from models.experimental.deepseek_v4_flash.encoding_dsv4 import encode_messages
 from models.experimental.deepseek_v4_flash.tt.common import _region
 from models.experimental.deepseek_v4_flash.tt.layers import Linear
 from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
-from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
+from models.experimental.deepseek_v4_flash.tt.paged_cache import round_context
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
+from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     DeepseekV4WeightLoader,
     resolve_snapshot_dir,
@@ -61,10 +64,11 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
 
 _DEFAULT_MODEL_DIR = os.path.expanduser("~/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash-0731")
 _DEFAULT_TEXT = "Tell me the name of the top 10 movies of all time. Also list out the top 10 worst movies of all time. Give me details of why you choose those movies. Try to make your response as humours as possible."
-if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024")) < 10:
+if int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "4096")) < 10:
     _DEFAULT_TEXT = "I"
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 _CACHE_DIR = os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache")
+_PAGE_BLOCK_SIZE = 32
 
 
 def _pad_to_tile(n: int) -> int:
@@ -117,6 +121,110 @@ def _first_mesh_copy(tensor: ttnn.Tensor, device: ttnn.MeshDevice) -> torch.Tens
     return copies[: tensor.shape[0]]
 
 
+def _construct_model(
+    mesh_device,
+    prefetcher: contextlib.ExitStack,
+    *,
+    tp_size: int = 1,
+    system_config=None,
+    use_prefetcher=None,
+    loader=None,
+    config=None,
+):
+    """Build ``DeepSeekV4Model`` + ``lm_head`` and attach the prefetcher session.
+
+    Shared by the single-user decode demo and the multi-user paged demo so the two
+    tests cannot drift on construction (mesh profile, TP layout, weight cache, DRISC
+    session). ``loader`` / ``config`` are reused when the caller already opened them
+    to tokenize; otherwise they are created here.
+    """
+    from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
+
+    if loader is None:
+        loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
+    if config is None:
+        config = DeepseekV4Config.from_pretrained(loader.snapshot_dir)
+        config._attn_implementation = "eager"
+
+    max_layers = min(
+        int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
+    )
+    top_cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
+    model = DeepSeekV4Model(
+        config,
+        loader,
+        mesh_device,
+        cache=top_cache,
+        weight_dtype=_WEIGHT_DTYPE,
+        max_layers=max_layers,
+        use_submeshes=True,
+        system_config=system_config,
+        use_prefetcher=use_prefetcher,
+        tp_size=tp_size,
+    )
+    lm_head = Linear(
+        _w(loader, "lm_head.weight"),
+        model.last_device,
+        top_cache.file("lm_head") if top_cache else None,
+        dtype=_WEIGHT_DTYPE,
+    )
+    logger.info(f"built DeepSeekV4Model with {model.num_layers}/{config.num_hidden_layers} layers")
+    # One prefetcher session for the whole run rather than one per step: starting the DRISC
+    # senders is not free, and each GCB's ring state carries from one step to the next. The
+    # caller owns the stack so the session also covers the generation loop. A no-op when the
+    # model was built without the prefetcher.
+    prefetcher.enter_context(model.prefetcher_session())
+    # Registered after the session so it unwinds first (LIFO): stopping the traced-decode
+    # replay thread releases the model before the DRISC senders stop. Without it the
+    # thread's closure keeps the model -- and every ttnn tensor in it -- alive until
+    # interpreter shutdown, where nanobind reports the whole graph as leaked.
+    prefetcher.callback(model.shutdown)
+    logger.info(f"tensor prefetcher: {'on' if model.use_prefetcher else 'off'}")
+    return model, lm_head, loader, config
+
+
+def _assert_decode_parallelism(model: DeepSeekV4Model, tp_size: int) -> None:
+    """The TP / pipeline layout both decode demos pin."""
+    assert model.tp_size == tp_size
+    assert model.num_submeshes == (2 if tp_size == 4 else 8)
+    assert model.pipeline_devices == model.num_submeshes * tp_size
+    assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
+    assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
+    assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
+    if tp_size > 1:
+        attn = model.layers[0].self_attn
+        assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
+        assert not attn.q_a_proj.keep_weights_in_l1
+        assert not attn.kv_proj.keep_weights_in_l1
+        assert not attn.q_a_proj.partial_width_sharded
+        assert not attn.kv_proj.partial_width_sharded
+        assert attn.kv_proj.num_inputB_cores == 16
+        assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
+    logger.info(
+        f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
+    )
+
+
+def _tokenize_chat(tokenizer, text: str) -> list[int]:
+    """Chat-template a single user turn the way both decode demos do."""
+    prompt = encode_messages([{"role": "user", "content": text}], "chat")
+    # ``encode_messages`` includes DeepSeek's required BOS token explicitly.
+    return list(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+
+
+def _traced_max_seq(config, needed: int) -> int:
+    """Round ``needed`` the way the single-user demo does, honoring ``DEEPSEEK_V4_MAX_SEQ``.
+
+    The fixed compressor buffers tile cleanly into windows only if the capacity is a
+    multiple of every compress-rate.
+    """
+    max_seq = _pad_to_tile(needed)
+    max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
+    crs = {int(v) for v in config.compress_rates.values()}
+    step = math.lcm(32, *crs) if crs else 32
+    return ((max_seq + step - 1) // step) * step
+
+
 def _build_and_prefill(
     mesh_device,
     text: str,
@@ -139,7 +247,7 @@ def _build_and_prefill(
     config._attn_implementation = "eager"
     tokenizer = AutoTokenizer.from_pretrained(loader.snapshot_dir)
 
-    max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024"))
+    max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "2560"))
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else config.eos_token_id
     start_pos = int(os.environ.get("DEEPSEEK_V4_START_POS", "0"))
     if start_pos < 0:
@@ -151,64 +259,51 @@ def _build_and_prefill(
     # step (fixed-size in-place caches) instead of the host-bound eager decode.
     traced = os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "1") not in ("0", "", "false", "False")
 
-    prompt = encode_messages([{"role": "user", "content": text}], "chat")
-    # ``encode_messages`` includes DeepSeek's required BOS token explicitly.
-    prompt_ids: list[int] = list(tokenizer(prompt, add_special_tokens=False)["input_ids"])
+    prompt_ids: list[int] = _tokenize_chat(tokenizer, text)
     real_len = len(prompt_ids)
-    max_seq = _pad_to_tile(start_pos + real_len + max_new_tokens)
-    # ``DEEPSEEK_V4_MAX_SEQ`` widens the fixed buffers beyond what this run needs, so a
-    # max_seq sweep can hold the amount of decode work constant.
-    max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
+    needed = start_pos + real_len + max_new_tokens
     if traced:
-        # The fixed compressor buffers tile cleanly into windows only if the
-        # capacity is a multiple of every compress-rate, so round the span up.
-        crs = {int(v) for v in config.compress_rates.values()}
-        step = math.lcm(32, *crs) if crs else 32
-        max_seq = ((max_seq + step - 1) // step) * step
+        max_seq = round_context(
+            _traced_max_seq(config, needed),
+            set(config.compress_rates.values()),
+            _PAGE_BLOCK_SIZE,
+        )
+    else:
+        max_seq = _pad_to_tile(needed)
+        max_seq = max(int(os.environ.get("DEEPSEEK_V4_MAX_SEQ", max_seq)), max_seq)
     rope = _build_rope(config, max_seq)
 
-    max_layers = min(
-        int(os.environ.get("DEEPSEEK_V4_DECODE_LAYERS", config.num_hidden_layers)), config.num_hidden_layers
-    )
-    top_cache = WeightCache(os.path.join(_CACHE_DIR, os.path.basename(_DEFAULT_MODEL_DIR))) if _CACHE_DIR else None
-
-    # --- build the full model + lm_head once -------------------------------- #
-    model = DeepSeekV4Model(
-        config,
-        loader,
+    model, lm_head, loader, config = _construct_model(
         mesh_device,
-        cache=top_cache,
-        weight_dtype=_WEIGHT_DTYPE,
-        max_layers=max_layers,
-        use_submeshes=True,
+        prefetcher,
+        tp_size=tp_size,
         system_config=system_config,
         use_prefetcher=None,
-        tp_size=tp_size,
+        loader=loader,
+        config=config,
     )
-    lm_head = Linear(
-        _w(loader, "lm_head.weight"),
-        model.last_device,
-        top_cache.file("lm_head") if top_cache else None,
-        dtype=_WEIGHT_DTYPE,
-    )
-    logger.info(f"built DeepSeekV4Model with {model.num_layers}/{config.num_hidden_layers} layers")
-
-    # One prefetcher session for the whole run rather than one per step: starting the DRISC
-    # senders is not free, and each GCB's ring state carries from one step to the next. The
-    # caller owns the stack so the session also covers the generation loop. A no-op when the
-    # model was built without the prefetcher.
-    prefetcher.enter_context(model.prefetcher_session())
-    logger.info(f"tensor prefetcher: {'on' if model.use_prefetcher else 'off'}")
 
     # --- prefill the prompt by replaying decode one token at a time --------- #
     # There is no dedicated prefill: each prompt token is fed at its absolute
     # position through the (eager or traced) decode path, filling the in-place
     # caches exactly as a full-sequence prefill would. The logits after the final
-    # prompt token give the first generated token. The fixed-size traced caches
-    # are allocated empty here (lm_head folded into the last submesh's trace).
+    # prompt token give the first generated token. Traced decode allocates a
+    # one-session paged KV pool here (lm_head folded into the last submesh's
+    # trace); the first prefill step captures the traces.
     if traced:
-        model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
-        logger.info("traced decode: prepared empty static buffers; trace captured on first prefill step")
+        model.prepare_static_decode(
+            rope,
+            max_seq,
+            lm_head=lm_head,
+            num_sessions=1,
+            total_tokens=max_seq,
+            block_size=_PAGE_BLOCK_SIZE,
+        )
+        model.activate_session(model.open_session())
+        logger.info(
+            f"traced decode: paged KV (1 session, {_PAGE_BLOCK_SIZE}-row blocks); "
+            "trace captured on first prefill step"
+        )
     else:
         model.reset_caches(max_seq)
 
@@ -224,6 +319,8 @@ def _build_and_prefill(
                 logits = _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
     logger.info(f"prefill ({real_len} tokens at pos {start_pos}) -> token id {next_id} {tokenizer.decode([next_id])!r}")
+    if traced:
+        logger.info(f"pool usage after prefill: {model.session_usage()}")
 
     return {
         "model": model,
@@ -279,65 +376,66 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
         max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
         traced, next_id = state["traced"], state["next_id"]
         generated: list[int] = [next_id]
-        assert model.tp_size == tp_size
-        assert model.num_submeshes == (2 if tp_size == 4 else 8)
-        assert model.pipeline_devices == model.num_submeshes * tp_size
-        assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
-        assert all(layer.mlp.tp_size == tp_size for layer in model.layers)
-        assert all(layer.mlp.experts.tp_size == tp_size for layer in model.layers)
-        if tp_size > 1:
-            attn = model.layers[0].self_attn
-            assert attn.qkv_tp_strategy == "replicated", "TP4 keeps q_a and kv replicated"
-            # assert attn.q_a_proj.use_prefetcher
-            # assert attn.kv_proj.use_prefetcher
-            assert not attn.q_a_proj.keep_weights_in_l1
-            assert not attn.kv_proj.keep_weights_in_l1
-            assert not attn.q_a_proj.partial_width_sharded
-            assert not attn.kv_proj.partial_width_sharded
-            assert attn.kv_proj.num_inputB_cores == 16
-            assert attn.q_b_proj.N == attn.num_heads * attn.head_dim // tp_size
-        logger.info(
-            f"parallelism: {model.num_submeshes} pipeline stages x TP{tp_size} " f"({model.pipeline_devices} chips)"
-        )
+        _assert_decode_parallelism(model, tp_size)
+        if traced:
+            assert model.paged, "traced decode must use the paged KV layout"
 
         # Each step feeds the previously generated token at its absolute position and
         # reads back the single-token logits (no recompute over the prior context).
         decode_tokens = 0
         decode_time = 0.0
-        n_ahead = min(1024, max_new_tokens, max(0, max_seq - (start_pos + real_len)))
+        logger.info(f"max_new_tokens: {max_new_tokens}")
+        n_ahead = min(max_new_tokens, max(0, max_seq - (start_pos + real_len)))
         gen_positions = [start_pos + real_len + step - 1 for step in range(1, n_ahead + 1)]
         if traced and gen_positions:
+            # Grow the paged pool for the whole generation before any replay: page
+            # tables are device tensors the traces read, so rewriting them from the
+            # replay thread while earlier steps are in flight would race.
+            model.ensure_session_capacity(gen_positions[-1])
             # Issue every generation execute_trace on the replay thread before any H2D
             # packet, so the device is already waiting on recv when we start feeding.
             model.replay_traced_ahead(gen_positions)
-        for step, pos in enumerate(gen_positions, start=1):
-            if not traced and next_id == eos_id:
-                logger.info("hit EOS; stopping")
-                break
-            t0 = time.perf_counter()
-            if traced:
-                model.write_step_packet(next_id, pos)
-                logits = model.read_decoded_output().reshape(1, -1).float()
-            else:
-                hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
-                with _region("LM_HEAD"):
-                    logits = (
-                        _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
-                    )  # forces device sync
-            next_id = int(logits[0].argmax().item())
-            decode_time += time.perf_counter() - t0
-            decode_tokens += 1
-            generated.append(next_id)
-            logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
+        consumed = 0
+        try:
+            for step, pos in enumerate(gen_positions, start=1):
+                if next_id == eos_id:
+                    logger.info("hit EOS; stopping")
+                    break
+                t0 = time.perf_counter()
+                if traced:
+                    model.write_step_packet(next_id, pos)
+                    logits = model.read_decoded_output().reshape(1, -1).float()
+                else:
+                    hidden = model.decode(next_id, pos, rope)  # [1, 1, D]
+                    with _region("LM_HEAD"):
+                        logits = (
+                            _first_mesh_copy(lm_head(hidden), model.last_device).reshape(1, -1).float()
+                        )  # forces device sync
+                next_id = int(logits[0].argmax().item())
+                decode_time += time.perf_counter() - t0
+                decode_tokens += 1
+                consumed += 1
+                generated.append(next_id)
+                logger.info(f"step {step:3d} (pos {pos:4d}): token id {next_id} {tokenizer.decode([next_id])!r}")
 
-            # Running decode throughput, reported every 10 generated tokens.
-            if decode_tokens % 64 == 0:
-                logger.info(
-                    f"decode throughput: {decode_tokens / decode_time:.2f} tok/s "
-                    f"({decode_tokens} tokens in {decode_time:.2f}s)"
-                )
-                decode_tokens = 0
-                decode_time = 0.0
+                # Running decode throughput, reported every 10 generated tokens.
+                if decode_tokens % 64 == 0:
+                    logger.info(
+                        f"decode throughput: {decode_tokens / decode_time:.2f} tok/s "
+                        f"({decode_tokens} tokens in {decode_time:.2f}s)"
+                    )
+                    decode_tokens = 0
+                    decode_time = 0.0
+        finally:
+            # Traced generation queued every position up front. An early EOS (or an
+            # error) leaves execute_trace parked on in-trace recv; dummy-feed the
+            # leftovers so the socket FIFO and replay thread can unwind. Discard the
+            # logits -- they are not part of the reply.
+            if traced:
+                dummy = next_id if next_id is not None else 0
+                for drain_pos in gen_positions[consumed:]:
+                    model.write_step_packet(dummy, drain_pos)
+                    model.read_decoded_output()
 
     if decode_tokens:
         logger.info(
@@ -348,3 +446,5 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str, tp_size: in
     assert generated, "no tokens were generated"
     logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
     logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
+    if traced:
+        logger.info(f"pool usage after generation: {model.session_usage()}")

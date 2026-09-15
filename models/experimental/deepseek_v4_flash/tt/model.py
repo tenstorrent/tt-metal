@@ -185,6 +185,20 @@ def _d2h_page_plan(numel: int, elem_bytes: int, page_cap_bytes: int, pcie_alignm
     )
 
 
+def _dspark_enabled() -> bool:
+    """Whether to build the idle-row DSpark MTP link (see :class:`DeepSeekV4Model`).
+
+    ``DEEPSEEK_V4_DSPARK=0`` turns it off. Every step of a pipeline that leaves chips
+    idle otherwise taps layers 40-42 into a packed tensor, sends it over a D2D socket and
+    replays an extra recv submesh on the idle row -- which only the DSpark drafting tests
+    use (``test_dspark_flash_accept_rate.py`` reads it back with
+    :meth:`DeepSeekV4Model.read_mtp_hiddens`). Note this is *not*
+    ``DEEPSEEK_V4_LOAD_MTP``: that one only gates the ttnn MTP *stack* built on top of
+    this link, which the reference-drafter accept-rate test deliberately leaves off.
+    """
+    return os.environ.get("DEEPSEEK_V4_DSPARK", "1") not in ("0", "", "false", "False")
+
+
 class DeepSeekV4Model(DeepSeekV4Module):
     """ttnn port of ``DeepseekV4Model`` (prefill).
 
@@ -403,7 +417,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         self._mtp_logit_heads: Optional[dict] = None
         self._dspark_tap_ids = tuple(i for i in (40, 41, 42) if i < self.num_layers)
         if (
-            use_submeshes
+            _dspark_enabled()
+            and use_submeshes
             and self.mesh_devices > self.pipeline_devices
             and len(self._dspark_tap_ids) == 3
             and len({self.layer_submesh_ids[i] for i in self._dspark_tap_ids}) == 1
@@ -1031,8 +1046,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
     # Once the sliding ring is full, a CSA/HCA layer's valid KV set is a contiguous
     # prefix (see :func:`sdpa_causal_ok`), so SDPA-decode can be bounded by a single
     # ``cur_pos`` in causal mode instead of an additive mask. The mask is *data*, not
-    # control flow, so the masked kernel always walks the whole ``max_seq``-sized KV
-    # axis; the causal kernel derives its chunk range from the position and skips the
+    # control flow, so the masked kernel always walks the KV axis it was captured
+    # against. Those traces only run for ``pos < sliding_window``, so they are
+    # captured at ``max_seqlen == sliding_window`` (the ring plus the compressor
+    # entries that exist in that prefix) rather than the full ``--max-context``.
+    # The causal kernel derives its chunk range from the position and skips the
     # rest. That makes attention cost track the actual position rather than
     # ``max_seq``, and drops the per-step per-layer head-broadcast of the mask row.
     # The sub-window steps (whose valid set has a hole) keep the mask.
@@ -1043,6 +1061,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
     @property
     def _SDPA_CAUSAL(self) -> bool:
         return self.system_config.attention.sdpa_causal
+
+    @property
+    def _masked_decode_max_seq(self) -> int:
+        """Context length baked into the masked SDPA traces.
+
+        With causal SDPA those traces only run below ``sliding_window``, so that
+        window is enough (CSA walks ``W + W/cr`` rows instead of ``W + max_seq/cr``).
+        With it disabled the mask is used at every position and the axis stays the
+        full ``max_seq``.
+        """
+        if self._SDPA_CAUSAL:
+            return self.sliding_window
+        assert self._decode_max_seq is not None
+        return self._decode_max_seq
 
     def _compressor_pool_due(self, layer_type: str, pos: int) -> bool:
         """Does the step at absolute ``pos`` close a window for ``layer_type``?"""
@@ -1326,13 +1358,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
         return self._require_paged().tokens_left()
 
     # -- paged device state ----------------------------------------------------- #
-    def _paged_view(self, sm: dict, li: int) -> Optional[PagedLayerView]:
+    def _paged_view(self, sm: dict, li: int, causal: bool = True) -> Optional[PagedLayerView]:
         """The pool + page table layer ``li`` reads its KV through, or ``None`` when
-        this model runs the dense caches."""
+        this model runs the dense caches.
+
+        Masked traces bake in the short page-table prefix sized for
+        ``sliding_window``; causal traces use the full ``max_seq`` table. Both
+        views share the same pool, and :meth:`_write_page_tables` keeps the prefix
+        in sync with the full row.
+        """
         if self._paged is None:
             return None
         group = self._paged_groups[self.config.layer_types[li]]
-        return PagedLayerView(sm["pools"][li], sm["page_tables"][group.layer_type], group.position_modulo)
+        tables = sm["page_tables"] if causal else sm["page_tables_masked"]
+        return PagedLayerView(sm["pools"][li], tables[group.layer_type], group.position_modulo)
 
     def _write_page_tables(self, groups) -> None:
         """Copy the resident sessions' page-table rows into the persistent device
@@ -1350,10 +1389,20 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for group in groups:
             rows = torch.cat([paged.page_row(sid, group) for sid in self._resident])
             table_row = ttnn.from_torch(rows, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+            g = self._paged_groups[group]
+            n_masked = g.logical_blocks_for(self._masked_decode_max_seq)
+            short_row = (
+                ttnn.from_torch(rows[:, :n_masked], dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                if n_masked < g.logical_blocks
+                else None
+            )
             for sm in self.submeshes_io:
                 table = sm["page_tables"].get(group)
                 if table is not None:
                     ttnn.copy_host_to_device_tensor(table_row, table)
+                short = sm.get("page_tables_masked", {}).get(group)
+                if short is not None and short is not table and short_row is not None:
+                    ttnn.copy_host_to_device_tensor(short_row, short)
 
     def _compressor_slots(self):
         """``(submesh, layer, buffer name)`` for every per-session compressor buffer."""
@@ -1372,13 +1421,38 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """
         return _MASK_NEG if name == "prev_gate" else 0.0
 
+    def _window_host_tensor(self, buf: ttnn.Tensor, shape, fill, device) -> ttnn.Tensor:
+        """DRAM INTERLEAVED clone of a compressor window, used for held-aside group
+        state and the per-slot blanking source.
+
+        CSA resident windows are ROW_MAJOR L1 WIDTH_SHARDED so ``csa_pool_window`` can
+        consume them in place. Cloning that spec once per seat group (``num_sessions //
+        batch`` extra copies of every CSA layer's four windows) exhausts L1 -- the
+        single-user path never allocates those copies. DRAM keeps the same shape and
+        layout; :meth:`_copy_window` moves them with ``to_memory_config(...,
+        output_tensor=)`` so the swap never allocates.
+        """
+        return ttnn.from_torch(
+            torch.full(list(shape), fill),
+            dtype=buf.dtype,
+            layout=buf.layout,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if self.tp_size > 1 else None,
+        )
+
+    def _copy_window(self, src: ttnn.Tensor, dest: ttnn.Tensor) -> None:
+        """Write ``src`` into preallocated ``dest``, including L1-sharded CSA <-> DRAM."""
+        ttnn.to_memory_config(src, dest.memory_config(), output_tensor=dest)
+
     def _build_group_state(self) -> dict:
         """One seat group's held-aside compressor window buffers, at their empty values.
 
         Shaped like the resident buffers, batch and all: a group is seated and unseated as
         a unit (see :meth:`activate_sessions`), so its state moves as a unit, and one
         whole-buffer copy per direction replaces a copy per slot. The memory is the same
-        either way -- ``num_sessions // batch`` groups of ``batch`` rows.
+        either way -- ``num_sessions // batch`` groups of ``batch`` rows -- but the copies
+        live in DRAM so they do not compete with the resident L1 windows.
 
         Allocating runs only from :meth:`prepare_static_decode`; a group claimed later is
         blanked in place by :meth:`_empty_group_state`, which allocates nothing and so
@@ -1394,13 +1468,9 @@ class DeepSeekV4Model(DeepSeekV4Module):
         state = {}
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
-            held = ttnn.from_torch(
-                torch.full(list(buf.shape), self._empty_compressor_fill(name)),
-                dtype=buf.dtype,
-                layout=buf.layout,
-                device=sm["device"],
+            state[(sm["index"], li, name)] = self._window_host_tensor(
+                buf, buf.shape, self._empty_compressor_fill(name), sm["device"]
             )
-            state[(sm["index"], li, name)] = ttnn.to_memory_config(held, buf.memory_config())
         return state
 
     def _build_empty_rows(self) -> dict:
@@ -1415,12 +1485,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         for sm, li, name in self._compressor_slots():
             buf = getattr(sm["scaches"][li], name)
             slot_rows = buf.shape[0] // self._decode_batch if buf.is_sharded() else 1
-            rows[(sm["index"], li, name)] = ttnn.from_torch(
-                torch.full([slot_rows, *list(buf.shape)[1:]], self._empty_compressor_fill(name)),
-                dtype=buf.dtype,
-                layout=buf.layout,
-                device=sm["device"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            rows[(sm["index"], li, name)] = self._window_host_tensor(
+                buf, [slot_rows, *list(buf.shape)[1:]], self._empty_compressor_fill(name), sm["device"]
             )
         return rows
 
@@ -1480,7 +1546,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Blank a group's held-aside buffers in place, for a group of fresh sessions."""
         for sm, li, name in self._compressor_slots():
             key = (sm["index"], li, name)
-            if state[key].is_sharded():
+            if state[key].layout == ttnn.ROW_MAJOR_LAYOUT:
                 self._blank_window_slots(state[key], key, range(self._decode_batch), sm["device"])
             else:
                 ttnn.fill(state[key], self._empty_compressor_fill(name), output_tensor=state[key])
@@ -1489,12 +1555,13 @@ class DeepSeekV4Model(DeepSeekV4Module):
         """Reset one batch slot's compressor window rows to their empty values.
 
         Writes the resident buffers when ``state`` is ``None``, else that slot's row of a
-        group's held-aside copy.
+        group's held-aside copy. Packed CSA windows (ROW_MAJOR ``[B*cr, 1, 1, F]``, L1
+        or DRAM) blank by scatter; TILE HCA windows blank with ``fill_cache``.
         """
         for sm, li, name in self._compressor_slots():
             key = (sm["index"], li, name)
             target = getattr(sm["scaches"][li], name) if state is None else state[key]
-            if target.is_sharded():
+            if target.layout == ttnn.ROW_MAJOR_LAYOUT:
                 self._blank_window_slots(target, key, (slot,), sm["device"])
             else:
                 ttnn.fill_cache(target, self._empty_row[key], slot)
@@ -1502,12 +1569,12 @@ class DeepSeekV4Model(DeepSeekV4Module):
     def _save_group_state(self, state: dict) -> None:
         """Hold the resident batch's window buffers aside as ``state``."""
         for sm, li, name in self._compressor_slots():
-            ttnn.copy(getattr(sm["scaches"][li], name), state[(sm["index"], li, name)])
+            self._copy_window(getattr(sm["scaches"][li], name), state[(sm["index"], li, name)])
 
     def _load_group_state(self, state: dict) -> None:
         """Put a group's held-aside window buffers back into the resident ones."""
         for sm, li, name in self._compressor_slots():
-            ttnn.copy(state[(sm["index"], li, name)], getattr(sm["scaches"][li], name))
+            self._copy_window(state[(sm["index"], li, name)], getattr(sm["scaches"][li], name))
 
     # -- per-layer RoPE tables / masks ------------------------------------------ #
     def _to_tt(self, t: torch.Tensor, device: ttnn.MeshDevice) -> ttnn.Tensor:
@@ -1779,20 +1846,33 @@ class DeepSeekV4Model(DeepSeekV4Module):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _build_page_tables(self, layer_types, device: ttnn.MeshDevice) -> dict:
+    def _alloc_page_table(self, n_blocks: int, device: ttnn.MeshDevice) -> ttnn.Tensor:
+        """Persistent ``[batch, n_blocks]`` INT32 page table (zeros)."""
+        return ttnn.from_torch(
+            torch.zeros(self._decode_batch, n_blocks, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+        )
+
+    def _build_page_tables(self, layer_types, device: ttnn.MeshDevice) -> tuple[dict, dict]:
         """Persistent ``[batch, logical_blocks]`` INT32 page tables, one per layer type
         on this submesh: row ``u`` is the mapping the paged ops read for slot ``u``. The
         traces bake in these addresses; :meth:`activate_sessions` rewrites their
-        contents."""
-        return {
-            lt: ttnn.from_torch(
-                torch.zeros(self._decode_batch, self._paged_groups[lt].logical_blocks, dtype=torch.int32),
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=device,
-            )
-            for lt in layer_types
-        }
+        contents.
+
+        Returns ``(full, masked)``. Causal captures address the full ``max_seq``
+        tables; masked captures address a prefix sized for ``sliding_window`` (the
+        only context those traces ever see). Sliding groups already fit in that
+        prefix, so the two dicts alias the same tensor there.
+        """
+        full, masked = {}, {}
+        for lt in layer_types:
+            g = self._paged_groups[lt]
+            full[lt] = self._alloc_page_table(g.logical_blocks, device)
+            n_masked = g.logical_blocks_for(self._masked_decode_max_seq)
+            masked[lt] = full[lt] if n_masked >= g.logical_blocks else self._alloc_page_table(n_masked, device)
+        return full, masked
 
     def reset_static_caches(self) -> None:
         """Zero every traced-decode cache so a fresh sequence can start at position 0.
@@ -1900,13 +1980,18 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     for name, g in self._paged_groups.items()
                 )
             )
+            if self._SDPA_CAUSAL:
+                logger.info(
+                    f"masked SDPA capture max_seqlen={self.sliding_window}: "
+                    + ", ".join(
+                        f"{name} {g.kv_len_for(self.sliding_window)}-row axis "
+                        f"({g.logical_blocks_for(self.sliding_window)} blocks)"
+                        for name, g in self._paged_groups.items()
+                    )
+                )
         self._traced_rope = rope
         self._lm_head_traced = lm_head
         self._decode_max_seq = max_seq
-        self._cr_caps = {
-            cr: (max_seq, max_seq // cr)
-            for cr in {cfg.compress_rates[t] for t in cfg.layer_types[: self.num_layers] if t != "sliding_attention"}
-        }
         self._pool_crs = self._compress_rates_for(cfg.layer_types[: self.num_layers])
         self._pool_period = math.lcm(*self._pool_crs) if self._pool_crs else 1
         self._pool_phases, self._pool_phase_of = self._build_pool_phases(self._pool_crs)
@@ -1980,12 +2065,15 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 # Paged mode: one block pool per layer, and one page table per layer
                 # type (every layer of a type shares the mapping, not the data).
                 "pools": {li: self._build_block_pool(li, device) for li in layers_k} if self._paged else {},
-                "page_tables": self._build_page_tables(types, device) if self._paged else {},
+                "page_tables": {},
+                "page_tables_masked": {},
                 "pool_crs": self._compress_rates_for(types),
                 "traces": {},  # local variant key -> (trace id, persistent output)
                 "tids": {},  # global variant key -> trace id
                 "outputs": {},  # global variant key -> persistent output
             }
+            if self._paged:
+                sm["page_tables"], sm["page_tables_masked"] = self._build_page_tables(types, device)
             # Per-family inv_freq constants for the rope families this submesh uses.
             for rt in ({"main"} if "sliding_attention" in types else set()) | ({"compress"} if crs else set()):
                 inv_freq_full, scaling = self._rope_gen[rt]
@@ -2000,6 +2088,11 @@ class DeepSeekV4Model(DeepSeekV4Module):
             # fillers in the *other* region (``-1`` is never ``> pos`` nor ``>= thr``),
             # so a single compare per table covers each region without a tile-boundary
             # ``concat``.
+            # Mask tables are sized for the masked capture only (causal variants
+            # never read them). Those traces run exclusively at ``pos < W``, so
+            # ``max_seqlen = sliding_window`` is enough: the ring plus the
+            # compressor entries that close inside that prefix.
+            masked_max_seq = self._masked_decode_max_seq
             for lt in types:
                 if lt == "sliding_attention":
                     a = torch.arange(w, dtype=torch.float32)  # slot index 0..W-1
@@ -2007,16 +2100,19 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     cr = None
                 else:
                     cr = cfg.compress_rates[lt]
-                    n_win_cap = self._cr_caps[cr][1]
+                    n_win_cap = masked_max_seq // cr
                     a = torch.cat([torch.arange(w), torch.full((n_win_cap,), -1)]).float()
                     b = torch.cat([torch.full((w,), -1), torch.arange(n_win_cap)]).float()
                 # A block wider than the axis leaves a tail of unmapped rows, which SDPA
                 # still reads (it covers whole blocks). Filling A past the axis with a
                 # position no step can reach makes ``A > pos`` true there, so the tail
                 # is masked out however the compressor compare falls.
-                pad = (self._paged_groups[lt].kv_len - a.numel()) if self._paged else 0
+                if self._paged:
+                    pad = self._paged_groups[lt].kv_len_for(masked_max_seq) - a.numel()
+                else:
+                    pad = 0
                 if pad:
-                    a = torch.cat([a, torch.full((pad,), float(max_seq))])
+                    a = torch.cat([a, torch.full((pad,), float(masked_max_seq))])
                     b = torch.cat([b, torch.full((pad,), -1.0)]) if b is not None else None
                 a_tt = ttnn.from_torch(
                     a.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
@@ -2072,6 +2168,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                     "scaches": {},
                     "pools": {},
                     "page_tables": {},
+                    "page_tables_masked": {},
                     "pool_crs": [],
                     "traces": {},
                     "tids": {},
@@ -2101,7 +2198,8 @@ class DeepSeekV4Model(DeepSeekV4Module):
         # of these pre-built sets. One set per *seat group* rather than per session (see
         # :meth:`activate_sessions`), each the full width of the resident buffers -- so
         # the total is the same ``num_sessions`` rows either way, but a switch moves each
-        # buffer in one copy instead of one per slot.
+        # buffer in one copy instead of one per slot. Copies live in DRAM: the resident
+        # CSA windows are L1 WIDTH_SHARDED, and cloning that spec per group does not fit.
         self._max_sessions = num_sessions
         self._free_group_state = [self._build_group_state() for _ in range(num_sessions // batch)]
         # A single empty row per buffer, to blank one slot without disturbing the rest of
@@ -2377,7 +2475,7 @@ class DeepSeekV4Model(DeepSeekV4Module):
                 sm["scaches"][li],
                 sliding_pos,
                 compress_pos,
-                paged=self._paged_view(sm, li),
+                paged=self._paged_view(sm, li, causal),
                 hash_token=token if layer.mlp.is_hash else None,
                 pool_compressor=(lt != "sliding_attention" and pool_flags[cfg.compress_rates[lt]]),
                 sdpa_cur_pos=sdpa_cur_pos,
@@ -2690,6 +2788,28 @@ class DeepSeekV4Model(DeepSeekV4Module):
         variant = self._variant_key(pos)
         for sm in self.submeshes_io:
             ttnn.execute_trace(sm["device"], sm["tids"][variant], cq_id=0, blocking=False)
+
+    def shutdown(self) -> None:
+        """Stop the traced-decode replay thread started by :meth:`_ensure_replay_thread`.
+
+        That thread is a daemon whose target closes over ``self``, and nothing ever tells
+        it to stop. CPython does not unwind a daemon thread's frame at shutdown, so the
+        closure keeps the whole model -- every weight tensor, cache and trace buffer --
+        alive until the process exits, where nanobind's ``Py_AtExit`` leak check reports
+        the entire graph (``nanobind: leaked N instances!``). Stopping the thread releases
+        that reference so the model can be collected normally.
+
+        Idempotent, and safe whether or not a traced decode ever ran. Not safe to call
+        concurrently with :meth:`decode_traced`/:meth:`replay_traced`, where the sentinel
+        could overtake a step queued after it.
+        """
+        thread, self._replay_thread = self._replay_thread, None
+        if thread is None:
+            return
+        # Drain what is already queued, then end the loop. The thread's only work is
+        # non-blocking ``execute_trace`` dispatch, so joining cannot park on the device.
+        self._replay_queue.put(None)
+        thread.join()
 
     def write_step_packet(self, token_id, pos: int) -> None:
         """Stage 1 of a step: push its input packet to the device.

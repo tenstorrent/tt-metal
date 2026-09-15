@@ -103,6 +103,14 @@ class PipelineSettings:
     """Layer placement across chips and the sockets that carry activations."""
 
     group_size: int = 1
+    # Chips per ``1 x tp_size`` tensor-parallel stage. Raising it shards the stage's
+    # projections across ``tp_size`` chips; TP4 deliberately runs only two stages (8
+    # chips) and leaves the rest of a larger mesh idle, because each extra chip is one
+    # more socket hop on the token's critical path (see
+    # ``DeepSeekV4Model.__init__``). It is a deployment knob like the rest of this
+    # section, so the demo, the CLI and the server agree on a machine by profile.
+    # env: DEEPSEEK_V4_TP_SIZE
+    tp_size: int = 1
     depth: int = 0
     max_devices: int = 0
     socket_l1_bytes: int = 16384
@@ -464,6 +472,7 @@ _ENV_OVERRIDES: tuple[tuple[str, str, str, Callable[[str], Any]], ...] = (
     ("device", "mesh_shape", "DEEPSEEK_V4_MESH_SHAPE", _env_mesh_shape),
     ("device", "worker_l1_size", "DEEPSEEK_V4_WORKER_L1_SIZE", int),
     ("pipeline", "group_size", "DEEPSEEK_V4_PIPELINE_GROUP_SIZE", int),
+    ("pipeline", "tp_size", "DEEPSEEK_V4_TP_SIZE", int),
     ("pipeline", "depth", "DEEPSEEK_V4_PIPELINE_DEPTH", int),
     ("pipeline", "max_devices", "DEEPSEEK_V4_PIPELINE_MAX_DEVICES", int),
     ("pipeline", "socket_l1_bytes", "DEEPSEEK_V4_SOCKET_L1_BYTES", int),
