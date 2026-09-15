@@ -360,6 +360,10 @@ enum class BinaryOp : std::uint8_t
     REMAINDER_INT32  = 40,
     REMAINDER_UINT32 = 41,
     FMOD_INT32       = 42,
+    // LOGADDEXP and LOGADDEXP2 are the exception to the 1:1 mapping above: neither has
+    // an SfpuType counterpart, and their inits pass the `unused` sentinel instead.
+    LOGADDEXP        = 43,
+    LOGADDEXP2       = 44,
 };
 
 enum class PackMode : std::uint8_t

@@ -106,8 +106,10 @@ on:
           - eltwise.binary.ldexp.ldexp_sharded
           - eltwise.binary.le.le_tensor_pytorch2
           - eltwise.binary.logaddexp.logaddexp
+          - eltwise.binary.logaddexp.logaddexp_overflow
           - eltwise.binary.logaddexp.logaddexp_sharded
           - eltwise.binary.logaddexp2.logaddexp2
+          - eltwise.binary.logaddexp2.logaddexp2_overflow
           - eltwise.binary.logaddexp2.logaddexp2_sharded
           - eltwise.binary.logical_and.logical_and
           - eltwise.binary.logical_and.logical_and_
