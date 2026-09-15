@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for ``ttml.testing``: the bf16 ULP metric."""
+"""Tests for ``bf16_ulp``: the bf16 ULP metric."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import ml_dtypes
 import numpy as np
 import pytest
 
-from ttml.testing import assert_within_ulp, bf16_spacing, ulp_error
+from bf16_ulp import assert_within_ulp, bf16_spacing, ulp_error
 
 BF16_MAX = float((2.0 - 2.0**-7) * 2.0**127)
 BF16_MIN_SUBNORMAL = 2.0**-133
