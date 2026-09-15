@@ -25,6 +25,10 @@ enum class ReduceFp32Mode : uint8_t { Fast, Accurate };
  * Int32 HW reduce into a W-then-H two-step (see reduce_op.cpp use_two_step_hw_sfpu_reduce).
  * Int32 MIN drives the LLK MIN reduce directly, instead of the -MAX(-x) reduce_{h,w}_neg path that FPU MIN uses.
  *
+ * Float16_b MIN likewise drives the LLK MIN reduce directly, on every arch that has one. It is not
+ * gated on fp32_mode: bf16 reaches SrcA without truncation, so there is no accuracy trade to opt
+ * into. bf16 SUM/MAX tie on either engine and stay on the FPU.
+ *
  * Float32 additionally opts into the SFPU path when the caller passes ReduceFp32Mode::Accurate;
  * the host threads that mode in from the kernel's compile-time args. Accurate Float32 MIN drives
  * the LLK MIN reduce directly, like Int32 MIN, so the host skips the -MAX(-x) lowering.
@@ -56,9 +60,15 @@ constexpr bool is_sfpu_reduce_path() {
         return false;
     }
     if constexpr (data_format != DataFormat::Int32) {
-        // pool_type is already narrowed to MAX/SUM/MIN above and all three have an SFPU fold, so
-        // Float32 only has to opt in via Accurate mode. Everything else non-Int32 stays on the FPU.
-        if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
+        // pool_type is already narrowed to MAX/SUM/MIN above and all three have an SFPU fold.
+        if constexpr (data_format == DataFormat::Float16_b) {
+            // The FPU has no bf16 MIN pool, so bf16 MIN always takes the SFPU. bf16 SUM/MAX tie on
+            // either engine, so they stay on the FPU.
+            if constexpr (pool_type != ckernel::PoolType::MIN) {
+                return false;
+            }
+        } else if constexpr (fp32_mode != ReduceFp32Mode::Accurate || data_format != DataFormat::Float32) {
+            // Float32 opts in via Accurate mode. Everything else non-Int32 stays on the FPU.
             return false;
         }
     }
