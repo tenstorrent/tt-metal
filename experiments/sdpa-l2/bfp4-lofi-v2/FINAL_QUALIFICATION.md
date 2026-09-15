@@ -38,6 +38,8 @@ The final device reruns provide the numerical verification for their selected ke
 
 A final read-only formatting check also passes for all 102 current Python files and 129 C++/header files, including the six late-window CPU/audit/test additions. Those additions do not change the earlier numerical producers or the scope of the original 96-file Python AST comparison.
 
+The numerical/evidence checkpoint is committed as `dc36cfb33082c6d2023ab1753feb6b35cae73920`. A [committed-blob audit](committed-blob-audit-v1.json) reads Git objects rather than worktree bytes and verifies all 179 unique recorded source/formula/evidence pins collected from 333 current qualification files. Its expected path/SHA mapping is saved for independent comparison with `git show <commit>:<path>`. This proves those recorded dependencies are present in the committed checkpoint, not a full compiler/firmware closure. The later audit-record/documentation commit changes no numerical producer.
+
 ## Test and evidence checks
 
 **86 distinct tests passed**, counted once each:
