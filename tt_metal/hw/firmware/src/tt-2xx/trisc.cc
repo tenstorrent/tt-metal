@@ -71,6 +71,14 @@ namespace llk_tdma_guard {
 thread_local std::uint32_t tdma_guard_armed_mask __attribute__((used)) = 0;
 }  // namespace llk_tdma_guard
 
+namespace llk_reinit_guard {
+// #44071 re-init guard (Quasar). thread_local per TRISC (tt-llk#1678); declared extern in
+// llk_reinit_guard.h. Defined unconditionally (like tdma_guard_armed_mask) -- zero-init .tbss
+// when the guard is compiled out.
+thread_local std::uint8_t reinit_guard_slots[static_cast<std::uint8_t>(ckernel::trisc::BfdResource::Count)]
+    __attribute__((used)) = {};
+}  // namespace llk_reinit_guard
+
 namespace ckernel {
 
 // Transition shim
