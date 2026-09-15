@@ -110,6 +110,10 @@ constexpr uint32_t FWD_USED_BYTES = 4 * sizeof(uint32_t) + 3 * sizeof(uint64_t);
 // One multicast destination, packed into a word: the page it lands on, how many hops away that chip
 // is, and which top-k slot it came from. Under fan-out a token reaches several pages on several chips
 // and each needs its own slot, so the single meta[2] of the unicast path cannot carry it.
+//
+// A destination on the origin's own chip never enters this list -- the local phase owns those -- so a
+// live entry always has hop >= 1, and an all-zero word is an empty slot. That is what lets the tail
+// drop a separate count and still fit the layout FwdMetadata pins (see FanoutMetadata).
 constexpr uint32_t FO_PAGE_BITS = 20;
 constexpr uint32_t FO_HOP_BITS = 5;
 constexpr uint32_t FO_SLOT_BITS = 4;
@@ -139,19 +143,21 @@ constexpr uint32_t FO_MAX_DESTS = 8;
 // The fan-out tail, occupying the same 64 bytes as FwdMetadata. Hops are measured from the ORIGIN and
 // never rewritten, so a page is immutable in flight: a chip `j` hops from the origin consumes the
 // destinations with hop == j out of its own forwarding region -- a local write, not a fabric one --
-// and forwards the page untouched if any hop > j remains. `cmd` and `this_addr` sit last for the same
-// reason as in FwdMetadata: they are this hop's business and the next hop overwrites them.
+// and forwards the page untouched if any hop > j remains.
+//
+// `cmd` and `this_addr` sit at the SAME offsets FwdMetadata puts them at, and the asserts below are
+// what hold them there. The sender reads the command word out of a slot without knowing which mode
+// built it, so a tail that moved `cmd` would have it dispatching on dests[6]. Pinning them costs the
+// count field: with 8 destinations at top-k 8 there is no room for one, so a zero word is the empty
+// slot instead -- a live destination is on another chip and so always has hop >= 1.
 struct FanoutMetadata {
     uint32_t src_chip;             // linearized coord of the origin, metadata field 0
     uint32_t token;                // metadata field 1
-    uint32_t n_dests;              // how many of `dests` are live
-    uint32_t pad;                  // keeps dests 16-byte aligned
-    uint32_t dests[FO_MAX_DESTS];  // packed page | hop | top-k slot
+    uint32_t dests[FO_MAX_DESTS];  // packed page | hop | top-k slot, zero where unused
     uint64_t cmd;
     uint64_t this_addr;
 };
 static_assert(sizeof(FanoutMetadata) <= FORWARDING_METADATA_SIZE);
-static_assert(offsetof(FanoutMetadata, dests) % 16 == 0);
 
 // Bytes the last hop writes to the metadata page: the three words rounded up to a NoC-friendly size.
 constexpr uint32_t METADATA_WIRE_BYTES = 16;
@@ -165,6 +171,12 @@ static_assert(offsetof(FwdMetadata, cmd) == FWD_USED_BYTES);
 static_assert(FWD_USED_BYTES == 40);
 static_assert(FWD_EXTRA_BYTES % 64 == 0);
 static_assert(METADATA_WIRE_BYTES <= FORWARDING_METADATA_SIZE);
+
+// The sender reads one command word per slot and neither knows nor cares which mode filled the tail, so
+// the two layouts have to agree on where it is. Move either field in either struct and the sender
+// dispatches on whatever else happens to sit there -- under fan-out, a packed destination.
+static_assert(offsetof(FanoutMetadata, cmd) == offsetof(FwdMetadata, cmd));
+static_assert(offsetof(FanoutMetadata, this_addr) == offsetof(FwdMetadata, this_addr));
 
 constexpr uint64_t CMD_END = 0;          // end of stream; the slot carries no token
 constexpr uint64_t CMD_FINAL_WRITE = 1;  // this hop is the last: write payload and metadata to their pages
@@ -186,5 +198,120 @@ struct ChunkDescriptor {
     uint32_t split_idx = 0;
     uint32_t split_count = 1;
 };
+
+// --- Multicast geometry -------------------------------------------------------------------------
+//
+// Under fan-out a chunk is (origin, hop) rather than (origin, destination, expert): one page per token
+// per DIRECTION, travelling to the farthest destination that way while every chip en route keeps what
+// it wants and passes the rest on. A stream therefore carries exactly extent/2 chunks -- its own, plus
+// one per upstream origin -- instead of relay_chunks_per_stream(extent) * experts_per_chip.
+constexpr uint32_t mc_chunks_per_stream(uint32_t ring_extent) { return ring_extent / 2u; }
+
+// Hops the reach table is indexed by: 1..m are real distances, m + 1 is a terminating zero so that the
+// tokens whose farthest destination is exactly m come out of reach[m] - reach[m + 1] like any other
+// class. Index 0 is unused and kept only so `hop` indexes directly.
+constexpr uint32_t mc_reach_hops(uint32_t ring_extent) { return ring_extent / 2u + 2u; }
+
+// Bound on those hops, so the origin can keep one per-class counter on the stack. A hop is packed into
+// FO_HOP_BITS, so nothing beyond this is expressible on the wire either.
+constexpr uint32_t MC_MAX_HOPS = (1u << FO_HOP_BITS);
+
+// One reach row per (origin, direction), padded to 64 bytes in L1: a DRAM read needs a 64-byte-aligned
+// L1 destination on Blackhole, and a row is mc_reach_hops * 4 bytes, which is not a multiple of 64 at
+// any extent this op runs on.
+constexpr uint32_t mc_reach_row_bytes(uint32_t ring_extent) { return (mc_reach_hops(ring_extent) * 4u + 63u) & ~63u; }
+
+// --- The reader's L1 control region -------------------------------------------------------------
+//
+// One ordered list of blocks, sized here and nowhere else. The host reserves the sum and the kernel
+// carves the offsets, and a mismatch between those two overruns into the global semaphores with no
+// guard but an ASSERT that is compiled out on this hardware -- which has already happened twice, both
+// times with a green build. Adding a block here is the only way to add one to either side.
+enum ControlBlock : uint32_t {
+    kCbIndices,
+    kCbOffsets,
+    kCbCounts,
+    kCbRegion,
+    kCbTable,
+    kCbAlloc,
+    kCbChipExperts,
+    kCbBucketLen,
+    kCbBucketStart,
+    kCbEntries,
+    kCbMcMeta,
+    kCbMcCount,
+    kCbReach,
+    kCbInStart,
+    kCbOutStart,
+    kCbCount
+};
+
+struct ControlGeometry {
+    uint32_t seq_len = 0;
+    uint32_t indices_pad_stride = 0;
+    uint32_t extent = 0;
+    uint32_t num_routed_experts = 0;
+    uint32_t experts_per_chip = 0;
+    uint32_t topk = 0;
+    uint32_t num_relay = 0;  // relay_chunks_per_stream(extent), the same for every stream
+};
+
+// Chunk-start slots. The two modes carve one region: unicast needs one per (relay chunk, expert),
+// multicast one per hop, and which is larger flips with experts_per_chip -- so both sides take the max
+// rather than assuming either.
+constexpr uint32_t control_chunk_start_slots(const ControlGeometry& g) {
+    const uint32_t uni = g.num_relay * g.experts_per_chip;
+    const uint32_t mc = mc_chunks_per_stream(g.extent);
+    return uni > mc ? uni : mc;
+}
+
+// One destination's metadata words, padded so the next one starts aligned as well. A NoC write needs
+// its L1 source to agree with its destination modulo the transfer's alignment, and the metadata page
+// it lands on is 16-byte aligned: at four bare words the source sits wherever the blocks above happen
+// to leave it, and a write from an odd offset arrives rotated -- (src, token, slot) reads back as
+// (junk, src, token).
+constexpr uint32_t MC_META_SLOT_BYTES = 64;
+
+constexpr uint32_t control_block_raw_bytes(const ControlGeometry& g, uint32_t block) {
+    switch (block) {
+        case kCbIndices: return g.seq_len * g.indices_pad_stride;
+        case kCbOffsets: return 4u * g.extent * g.num_routed_experts;
+        case kCbCounts: return 4u * g.num_routed_experts;
+        case kCbRegion: return 4u * g.num_routed_experts;
+        // The dispatch table carries a trailing sentinel column, so a padded token's unguarded lookup
+        // lands on it and resolves to "not in this group".
+        case kCbTable: return 4u * (g.num_routed_experts + 1u);
+        case kCbAlloc: return 4u * g.num_routed_experts;
+        case kCbChipExperts: return 4u * g.extent * g.experts_per_chip;
+        case kCbBucketLen: return 4u * g.extent * g.experts_per_chip;
+        case kCbBucketStart: return 4u * g.extent * g.experts_per_chip;
+        case kCbEntries: return 4u * g.seq_len * routing_index_words_per_token(g.topk);
+        // Four words per destination, not four in total: a token can hold several experts on one chip
+        // and each gets its own page, so several metadata writes are in flight out of this scratch at
+        // once and they cannot share a buffer.
+        case kCbMcMeta: return MC_META_SLOT_BYTES * FO_MAX_DESTS;
+        case kCbMcCount: return 4u * 2u;
+        case kCbReach: return g.extent * 2u * mc_reach_row_bytes(g.extent);
+        case kCbInStart: return 4u * control_chunk_start_slots(g);
+        case kCbOutStart: return 4u * control_chunk_start_slots(g);
+        default: return 0u;
+    }
+}
+
+// Every block starts 64-byte aligned. Two of them are read straight out of DRAM, which needs that on
+// Blackhole, and one is the source of a NoC write, which needs to agree with its destination modulo
+// the transfer size. Aligning all of them costs under a kilobyte and makes the property hold for
+// whatever block is added next, rather than for the ones someone remembered to check.
+constexpr uint32_t control_block_bytes(const ControlGeometry& g, uint32_t block) {
+    return (control_block_raw_bytes(g, block) + 63u) & ~63u;
+}
+
+constexpr uint32_t control_region_bytes(const ControlGeometry& g) {
+    uint32_t total = 0;
+    for (uint32_t b = 0; b < kCbCount; b++) {
+        total += control_block_bytes(g, b);
+    }
+    return total;
+}
 
 }  // namespace dspf2d

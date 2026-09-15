@@ -91,4 +91,14 @@ uint32_t fwd_pages_per_stream(
     uint32_t num_experts_per_tok,
     uint32_t experts_per_chip);
 
+// The same bound under fan-out, where a stream's region holds mc_chunks_per_stream(extent) chunks and a
+// chunk is tokens rather than (token, expert) pairs.
+//
+// A chunk is one origin's tokens still travelling this way, so it cannot exceed the origin's whole
+// sequence; a link takes a share of each farthest-hop class, which costs at most one spare page per
+// class. Much smaller than the unicast bound -- one page per token per direction is the entire point of
+// fan-out -- so the two must not be conflated, or the region is sized at roughly a hundred times what
+// the run needs.
+uint32_t mc_fwd_pages_per_stream(uint32_t ring_extent, uint32_t num_links, uint32_t seq_len_per_chip);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

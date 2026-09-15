@@ -57,9 +57,6 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: axis {} is out of range for a {} mesh",
         args.axis,
         args.device->shape());
-    // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
-    // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
-    // the first is misaligned unless the row is a whole number of 64-byte lines.
     if (args.fanout) {
         TT_FATAL(
             tensor_args.fanout_reach.has_value(),
@@ -74,11 +71,29 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
             extent,
             extent / 2 + 2,
             shape);
+        // Everything a multicast page carries about one destination is packed into a word, so the
+        // three fields have to fit. Overflowing any of them corrupts a destination silently.
+        TT_FATAL(
+            args.num_experts_per_tok <= dspf2d::FO_MAX_DESTS,
+            "dispatch_fabric2d: fanout carries at most {} destinations per page but num_experts_per_tok "
+            "is {}; a token would lose destinations on the wire",
+            dspf2d::FO_MAX_DESTS,
+            args.num_experts_per_tok);
+        TT_FATAL(
+            args.max_dispatch_buffer_token_size <= dspf2d::FO_PAGE_MASK,
+            "dispatch_fabric2d: fanout packs a destination page index into {} bits, so capacity {} does "
+            "not fit",
+            dspf2d::FO_PAGE_BITS,
+            args.max_dispatch_buffer_token_size);
+        TT_FATAL(
+            extent / 2 <= dspf2d::FO_HOP_MASK && extent / 2 + 1 <= dspf2d::MC_MAX_HOPS,
+            "dispatch_fabric2d: fanout packs a hop into {} bits, so an axis of {} chips does not fit",
+            dspf2d::FO_HOP_BITS,
+            extent);
     }
-    TT_FATAL(
-        !args.fanout,
-        "dispatch_fabric2d: fanout is not implemented yet. The reach table is plumbed and the chunk "
-        "arithmetic is proved on host, but the reader does not yet stage or consume multicast pages.");
+    // read_control_tables lands row r of the offsets table at `control + r * num_routed_experts`
+    // words, and a DRAM read needs a 64-byte-aligned L1 destination on Blackhole. Every row after
+    // the first is misaligned unless the row is a whole number of 64-byte lines.
     TT_FATAL(
         args.num_routed_experts % 16 == 0,
         "dispatch_fabric2d: num_routed_experts must be a multiple of 16 (got {}); a row of the offsets "

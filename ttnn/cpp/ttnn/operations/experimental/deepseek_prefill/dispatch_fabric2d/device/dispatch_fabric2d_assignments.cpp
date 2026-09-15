@@ -129,6 +129,12 @@ uint32_t fwd_pages_per_stream(
     return pages + relay_chunks_per_stream(ring_extent) * experts_per_chip;
 }
 
+uint32_t mc_fwd_pages_per_stream(uint32_t ring_extent, uint32_t num_links, uint32_t seq_len_per_chip) {
+    const uint32_t m = ring_extent / 2;
+    const uint32_t per_chunk = (seq_len_per_chip + num_links - 1) / num_links + m;
+    return m * per_chunk;
+}
+
 std::vector<dspf2d::ChunkDescriptor> outgoing_chunks(
     StreamId stream, uint32_t my_row, uint32_t ring_extent, uint32_t num_links) {
     const bool is_cw = (stream % 2) == 0;
