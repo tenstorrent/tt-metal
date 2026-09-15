@@ -23,6 +23,7 @@ from ...parallel.manager import CCLManager
 from ...utils import cache as cache_module
 from ...utils.conv3d import ConvDims, conv3d_blocking_hash, conv_pad_height, conv_pad_width
 from ...utils.tensor import fast_device_to_host, typed_tensor_2dshard
+from ...utils.tracing import traced_function
 from ..vae.vae_ltx import LTXCausalConv3d
 
 
@@ -207,8 +208,10 @@ class LTXLatentUpsampler(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.use_trace = False
 
         H_in, W_in = input_hw
+        self.input_hw = (H_in, W_in)
         H_out, W_out = H_in * 2, W_in * 2
 
         # DRAM GroupNorm grid is pinned from T*H*W at construction.
@@ -266,9 +269,18 @@ class LTXLatentUpsampler(Module):
             mid_channels, in_channels, kernel_size=3, stride=1, conv_dims=post_dims, **block_kwargs
         )
 
+        # TTNN may specialize/mutate a Conv3dConfig while compiling the first invocation. Weight
+        # preparation, however, used the construction-time C_in_block values. Freeze that
+        # fingerprint now so a warmed shell continues to select its original resident bank.
+        self._prepared_weight_layout_key = conv3d_blocking_hash(self)
+
         # Set by ``from_checkpoint`` for ``reload_weights`` (the disk-cache path).
         self._checkpoint_path: str | None = None
         self._dit_parallel_config: DiTParallelConfig | None = None
+        # A shape-specific shell can borrow the large Conv3D parameters from another
+        # shell with the same preparation fingerprint. GroupNorm parameters remain
+        # private because their device representation is tied to the shell's DRAM grid.
+        self._conv_weight_bank: LTXLatentUpsampler | None = None
 
     @classmethod
     def from_checkpoint(
@@ -308,18 +320,80 @@ class LTXLatentUpsampler(Module):
         ups._dit_parallel_config = dit_parallel_config
         return ups
 
-    def reload_weights(self) -> None:
+    def weight_layout_key(self) -> str:
+        """Fingerprint the prepared Conv3D representation used by this shell."""
+        return self._prepared_weight_layout_key
+
+    def _weight_cache_dir(self):
+        assert self._checkpoint_path is not None
+        blocking_key = self.weight_layout_key()
+        subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
+        return cache_module.model_cache_dir(
+            model_name=os.path.basename(self._checkpoint_path).removesuffix(".safetensors"),
+            subfolder=subfolder,
+            parallel_config=self._dit_parallel_config,
+            mesh_shape=tuple(self.mesh_device.shape),
+            mesh_device=self.mesh_device,
+        )
+
+    @staticmethod
+    def _module_tree(module: Module, prefix: str = ""):
+        yield prefix, module
+        for name, child in module.named_children():
+            yield from LTXLatentUpsampler._module_tree(child, f"{prefix}{name}.")
+
+    def _bind_conv_weight_bank(self, bank: "LTXLatentUpsampler") -> None:
+        if bank.weight_layout_key() != self.weight_layout_key():
+            raise ValueError(
+                f"cannot share upsampler Conv3D weights across layouts "
+                f"{bank.weight_layout_key()} and {self.weight_layout_key()}"
+            )
+        if not bank.is_loaded():
+            raise RuntimeError("upsampler Conv3D weight bank must be loaded before it can be shared")
+
+        bank_convs = {
+            prefix: module for prefix, module in self._module_tree(bank) if isinstance(module, LTXCausalConv3d)
+        }
+        shell_convs = {
+            prefix: module for prefix, module in self._module_tree(self) if isinstance(module, LTXCausalConv3d)
+        }
+        if shell_convs.keys() != bank_convs.keys():
+            raise ValueError("upsampler shell and Conv3D weight bank have different module structures")
+        for prefix, shell_conv in shell_convs.items():
+            bank_conv = bank_convs[prefix]
+            shell_conv.weight.data = bank_conv.weight.data
+            shell_conv.bias.data = bank_conv.bias.data
+
+        # Only shape-specific non-conv parameters are loaded for a borrowing shell.
+        # The representative bank has already populated and validated this cache.
+        cache_dir = self._weight_cache_dir()
+        for prefix, module in self._module_tree(self):
+            if isinstance(module, LTXCausalConv3d):
+                continue
+            for name, parameter in module.named_parameters():
+                parameter.load(cache_dir / f"{prefix}{name}.tensorbin")
+        self._conv_weight_bank = bank
+        self._mark_loaded()
+        ttnn.distributed_context_barrier()
+
+    def reload_weights(self, *, conv_weight_bank: "LTXLatentUpsampler | None" = None) -> None:
         """Push upsampler weights onto the mesh via the disk cache. Blocking-hash subfolder
-        invalidates the cache when conv3d ``C_in_block`` changes. Idempotent (no-op if loaded)."""
+        invalidates the cache when conv3d ``C_in_block`` changes. Shape-specific shells may borrow
+        the large Conv3D parameters from a resident shell with the same layout while loading only
+        their small GroupNorm state. Idempotent (no-op if loaded)."""
         if self.is_loaded():
             return
         assert self._checkpoint_path is not None, "reload_weights requires construction via from_checkpoint"
+        if conv_weight_bank is not None:
+            self._bind_conv_weight_bank(conv_weight_bank)
+            logger.info(f"Loaded TTNN latent upsampler shell from resident Conv3D bank {self.weight_layout_key()}")
+            return
 
         def _state_provider() -> dict[str, torch.Tensor]:
             logger.info(f"Upsampler cache miss — loading safetensors: {self._checkpoint_path}")
             return load_file(self._checkpoint_path)
 
-        blocking_key = conv3d_blocking_hash(self)
+        blocking_key = self.weight_layout_key()
         subfolder = f"upsampler_{blocking_key}" if blocking_key else "upsampler"
         cache_module.load_model(
             self,
@@ -331,6 +405,22 @@ class LTXLatentUpsampler(Module):
             get_torch_state_dict=_state_provider,
         )
         logger.info("Loaded TTNN latent upsampler")
+
+    def deallocate_weights(self) -> None:
+        """Release a shell without freeing Conv3D tensors owned by its resident bank."""
+        if self._conv_weight_bank is None:
+            super().deallocate_weights()
+            return
+        for _, module in self._module_tree(self):
+            if isinstance(module, LTXCausalConv3d):
+                # Detach borrowed handles; the bank remains their sole owner.
+                for _, parameter in module.named_parameters():
+                    parameter._data = None
+            else:
+                for _, parameter in module.named_parameters():
+                    parameter.deallocate()
+            module._is_loaded = False
+        self._conv_weight_bank = None
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         """Reference upsampler is ``Sequential[Conv2d, PixelShuffleND]``; flatten to Conv3d."""
@@ -367,8 +457,13 @@ class LTXLatentUpsampler(Module):
         result = result[:, :, :logical_h, :logical_w, :]
         return result.permute(0, 4, 1, 2, 3).contiguous()
 
-    def forward(self, latent_BCFHW: torch.Tensor) -> torch.Tensor:
-        x, logical_h, logical_w = self._encode_input(latent_BCFHW)
+    def prepare_input(self, latent_BCFHW: torch.Tensor) -> tuple[ttnn.Tensor, int, int]:
+        """Upload a host latent into the exact sharded layout consumed by ``forward_device``."""
+        return self._encode_input(latent_BCFHW)
+
+    @traced_function(device=lambda self: self.mesh_device, prep_run=True, clone_prep_inputs=True)
+    def forward_device(self, x: ttnn.Tensor, logical_h: int, logical_w: int) -> ttnn.Tensor:
+        """Device-only upsampler graph, traceable once per exact shape-specific shell."""
         pc, ccl = self.parallel_config, self.ccl_manager
 
         x = self.initial_conv(x, causal=False, logical_h=logical_h, logical_w=logical_w)
@@ -386,5 +481,19 @@ class LTXLatentUpsampler(Module):
             x = ttnn.to_layout(block(x, logical_h, logical_w), ttnn.ROW_MAJOR_LAYOUT)
 
         x = self.final_conv(x, causal=False, logical_h=logical_h, logical_w=logical_w)
+        return x
 
-        return self._decode_output(x, logical_h, logical_w)
+    def release_trace(self) -> None:
+        for tracer in type(self).forward_device._tracers_keyed.get(self, {}).values():
+            tracer.release_trace()
+
+    def forward(self, latent_BCFHW: torch.Tensor) -> torch.Tensor:
+        x, logical_h, logical_w = self.prepare_input(latent_BCFHW)
+        x = self.forward_device(
+            x,
+            logical_h,
+            logical_w,
+            traced=self.use_trace,
+            tracer_trace_key=(tuple(x.shape), logical_h, logical_w),
+        )
+        return self._decode_output(x, logical_h * 2, logical_w * 2)

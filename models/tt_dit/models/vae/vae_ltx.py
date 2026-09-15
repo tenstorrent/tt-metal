@@ -209,6 +209,10 @@ class LTXCausalConv3d(Module):
         self._pad_offset_cache: dict[tuple, ttnn.Tensor] = {}
         # Persistent-padded path (default on): neighbor_pad_halo -> compact -> halo_scatter into a padded buffer ->
         self._persist_pad = os.environ.get("TT_LTX_NO_PERSIST_PAD") is None
+        # The original neighbor-pad path remains persistent by default. Long bucketed decodes can
+        # disable this so each padded activation is released after its consuming conv instead of
+        # retaining a per-shape ping-pong pair for the decoder lifetime.
+        self._np_use_persistent_buffer = True
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         # LTX-2 stores weights under "conv.weight" and "conv.bias"
@@ -393,7 +397,7 @@ class LTXCausalConv3d(Module):
                 )
                 conv_padding = (self.internal_padding[0], self.external_padding[1], self.external_padding[2])
             else:
-                x_BTHWC = self.ccl_manager.neighbor_pad_persistent_buffer(
+                x_BTHWC = self.ccl_manager.neighbor_pad(
                     x_BTHWC,
                     dims=dims,
                     pad_left=pad_left,
@@ -402,6 +406,9 @@ class LTXCausalConv3d(Module):
                     axes=axes,
                     neighbor_sems=neighbor_sems,
                     num_links=links,
+                    # The non-persistent operation still uses CCLManager's internal startup barrier;
+                    # it simply does not retain output buffers in the persistent ping-pong cache.
+                    use_persistent_buffer=self._np_use_persistent_buffer,
                     logical_h=(logical_h if h_pad_needed else 0),
                     t_front_pad=0,
                 )
@@ -953,11 +960,8 @@ class LTXVideoDecoder(Module):
         for tracer in type(self).decode_device._tracers_keyed.get(self, {}).values():
             tracer.release_trace()
 
-    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
-        """Decode latent (B, 128, F', H', W') → video.
-
-        output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
-        """
+    def prepare_input(self, sample_BCTHW: torch.Tensor) -> tuple[ttnn.Tensor, int, int]:
+        """Upload one latent into the exact sharded layout consumed by ``decode_device``."""
         # Pad H/W to mesh factors; track pre-pad dims as logical_h/logical_w for conv pad masking.
         sample = sample_BCTHW.permute(0, 2, 3, 4, 1)  # (B, T, H, W, C)
         sample, logical_h = conv_pad_height(sample, self.parallel_config.height_parallel.factor)
@@ -973,6 +977,14 @@ class LTXVideoDecoder(Module):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
         )
+        return sample_tt, int(logical_h), int(logical_w)
+
+    def forward(self, sample_BCTHW: torch.Tensor, *, output_type: str = "float") -> torch.Tensor:
+        """Decode latent (B, 128, F', H', W') → video.
+
+        output_type: "float" → (B, 3, F, H, W) float32 [-1, 1]; "rgb" → (B, 3, F, H, W) uint8 RGB planar.
+        """
+        sample_tt, logical_h, logical_w = self.prepare_input(sample_BCTHW)
 
         _time = os.environ.get("LTX_VAE_TIME")
         if _time:
