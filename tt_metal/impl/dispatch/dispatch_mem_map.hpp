@@ -73,6 +73,9 @@ public:
 
     uint32_t dispatch_s_buffer_size() const;
 
+    // First byte after the dispatch_s circular buffer for cq_id.
+    uint32_t dispatch_s_buffer_end(uint8_t cq_id) const;
+
     uint32_t dispatch_s_buffer_pages() const;
 
     // L1 layout for the DEVICE_PRINT dispatch region (placed immediately after the dispatch_s CB):

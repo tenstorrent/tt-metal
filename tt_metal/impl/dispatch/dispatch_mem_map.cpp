@@ -253,6 +253,10 @@ uint32_t DispatchMemMap::prefetch_d_buffer_pages() const { return settings.prefe
 
 uint32_t DispatchMemMap::dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
+uint32_t DispatchMemMap::dispatch_s_buffer_end(uint8_t cq_id) const {
+    return dispatch_s_buffer_end_ + cq_id * cq_zone_stride_;
+}
+
 uint32_t DispatchMemMap::dispatch_s_buffer_pages() const {
     return settings.dispatch_s_buffer_size_ / (1 << tt::tt_metal::DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
 }

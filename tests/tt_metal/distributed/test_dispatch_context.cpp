@@ -7,12 +7,16 @@
 #include <cstdint>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <set>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
@@ -23,6 +27,7 @@
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
@@ -34,6 +39,262 @@ class DispatchContextFixture : public ::testing::Test {
 protected:
     void TearDown() override { experimental::DispatchContext::get().reset(); }
 };
+
+namespace {
+
+std::optional<std::string> fd_preflight_skip_reason() {
+    const auto& context = MetalContext::instance();
+    if (context.rtoptions().get_fast_dispatch()) {
+        return "This test can only be run with Slow Dispatch mode.";
+    }
+    const auto& cluster = context.get_cluster();
+    if (cluster.is_mock_or_emulated()) {
+        return "This test requires real hardware.";
+    }
+    if (!cluster.is_ubb_galaxy() && cluster.arch() != tt::ARCH::BLACKHOLE) {
+        return "Manual Fast Dispatch setup is supported only on Galaxy and Blackhole clusters.";
+    }
+    return std::nullopt;
+}
+
+bool has_expected_dispatch_column(const MeshDevice& mesh) {
+    // DispatchCoreConfig's axis is resolved only when MeshDevice::create
+    // initializes the MetalContext, so this validation must happen afterwards.
+    const auto& context = MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    const auto& dispatch_config = context.get_dispatch_core_config();
+    if (cluster.arch() != tt::ARCH::BLACKHOLE || dispatch_config.get_dispatch_core_type() != DispatchCoreType::WORKER ||
+        dispatch_config.get_dispatch_core_axis() != DispatchCoreAxis::COL) {
+        return false;
+    }
+    for (ChipId chip : cluster.all_chip_ids()) {
+        if (cluster.get_associated_mmio_device(chip) != chip) {
+            return false;
+        }
+    }
+    const CoreCoord grid = mesh.compute_with_storage_grid_size();
+    return grid.x > 12 && grid.y > 1;
+}
+
+std::string capture_default_fd_refusal(MeshDevice* mesh) {
+    try {
+        experimental::DispatchContext::get().initialize_fast_dispatch(mesh);
+    } catch (const std::runtime_error& error) {
+        return error.what();
+    }
+
+    // Keep the process usable if a regression makes the expected refusal
+    // unexpectedly succeed.
+    experimental::DispatchContext::get().terminate_fast_dispatch(mesh);
+    return {};
+}
+
+BufferShardingArgs two_dispatch_core_sharding_args(uint32_t page_size) {
+    CoreRangeSet shard_grid(CoreRange({12, 0}, {12, 1}));
+    ShardSpecBuffer shard_spec(
+        shard_grid,
+        /*shard_shape=*/{page_size, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{page_size, 1},
+        /*tensor2d_shape_in_pages=*/{2, 1});
+    return BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+}
+
+}  // namespace
+
+TEST_F(DispatchContextFixture, RefusesWhenResidentL1InsideDispatchFootprint) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{.page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "Expected resident L1 to block Fast Dispatch setup.";
+    EXPECT_NE(error.find("tt-blaze #2019"), std::string::npos);
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+    for (IDevice* device : mesh->get_devices()) {
+        EXPECT_NE(error.find("chip " + std::to_string(device->id()) + " "), std::string::npos)
+            << "Missing conflict for chip " << device->id();
+    }
+
+    // A refusal must leave the original Slow Dispatch queue usable.
+    DeviceLocalBufferConfig dram{.page_size = page_size, .buffer_type = BufferType::DRAM, .bottom_up = true};
+    ReplicatedBufferConfig dram_global{.size = page_size};
+    auto probe = MeshBuffer::create(dram_global, dram, mesh.get());
+    std::vector<uint32_t> src(page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 7);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), probe, src);
+    Finish(mesh->mesh_command_queue());
+    std::vector<uint32_t> dst;
+    ReadShard(mesh->mesh_command_queue(), dst, probe, MeshCoordinate(0, 0));
+    EXPECT_EQ(dst, src);
+
+    // A later clean session must succeed.
+    resident.reset();
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+}
+
+TEST_F(DispatchContextFixture, AllowDestructiveProceedsAndOverwritesResidentL1) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size,
+        .buffer_type = BufferType::L1,
+        .sharding_args = two_dispatch_core_sharding_args(page_size),
+        .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+
+    std::vector<uint32_t> src(2 * page_size / sizeof(uint32_t));
+    std::iota(src.begin(), src.end(), 0x12340000);
+    EnqueueWriteMeshBuffer(mesh->mesh_command_queue(), resident, src);
+    Finish(mesh->mesh_command_queue());
+
+    experimental::FastDispatchSetupOptions options{.allow_destructive = true};
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), options));
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+
+    std::vector<uint32_t> dst;
+    ReadShard(mesh->mesh_command_queue(), dst, resident, MeshCoordinate(0, 0));
+    EXPECT_NE(dst, src) << "The destructive override did not expose the expected dispatch-core overwrite.";
+}
+
+TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1InsideDispatchFootprint) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch cores (12,0) and (12,1).";
+    }
+
+    constexpr uint32_t page_size = 4096;
+    auto sharding_args = two_dispatch_core_sharding_args(page_size);
+    experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    DeviceLocalBufferConfig low_l1{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = sharding_args, .bottom_up = true};
+    ReplicatedBufferConfig low_l1_global{.size = 2 * page_size};
+    auto resident = MeshBuffer::create(low_l1_global, low_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    ASSERT_FALSE(error.empty()) << "Expected per-core resident L1 to block Fast Dispatch setup.";
+    EXPECT_NE(error.find("chip ledger"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+}
+
+TEST_F(DispatchContextFixture, WriteOnlyStillChecksPinnedWriteScratchRegion) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+    if (!MetalContext::instance().rtoptions().get_allocator_mode_hybrid()) {
+        GTEST_SKIP() << "Per-core L1 allocation requires TT_METAL_ALLOCATOR_MODE_HYBRID=1.";
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch core (12,0).";
+    }
+
+    // Top-down placement gives 0x180000 - 0x110000 = 0x70000, which is
+    // above cmddat end (0x5CFC0) but inside pinned-write scratch (to 0x7CFC0).
+    constexpr uint32_t page_size = 4096;
+    constexpr uint32_t per_core_size = 0x110000;
+    CoreRangeSet shard_grid(CoreRange({12, 0}));
+    ShardSpecBuffer shard_spec(
+        shard_grid,
+        /*shard_shape=*/{per_core_size, 1},
+        ShardOrientation::ROW_MAJOR,
+        /*page_shape=*/{page_size, 1},
+        /*tensor2d_shape_in_pages=*/{per_core_size / page_size, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    experimental::per_core_allocation::set_per_core_allocation(sharding_args, true);
+    DeviceLocalBufferConfig scratch_l1{
+        .page_size = page_size, .buffer_type = BufferType::L1, .sharding_args = sharding_args, .bottom_up = false};
+    ReplicatedBufferConfig scratch_l1_global{.size = per_core_size};
+    auto resident = MeshBuffer::create(scratch_l1_global, scratch_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    experimental::FastDispatchSetupOptions options{.write_only = true};
+    std::string error;
+    try {
+        experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get(), options);
+    } catch (const std::runtime_error& exception) {
+        error = exception.what();
+    }
+    if (error.empty()) {
+        experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get());
+    }
+    ASSERT_FALSE(error.empty()) << "write_only preflight failed to include the pinned-write scratch region.";
+    EXPECT_NE(error.find("[prefetch]"), std::string::npos);
+    EXPECT_EQ(error.find("[dispatch]"), std::string::npos);
+}
+
+TEST_F(DispatchContextFixture, RefusesPersistentArenaResidentL1InsideDispatchFootprint) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+    if (!has_expected_dispatch_column(*mesh)) {
+        GTEST_SKIP() << "This test expects Blackhole dispatch core (12,1).";
+    }
+
+    auto& arena = mesh->allocator_impl()->persistent_l1();
+    const auto allocation = arena.allocate(CoreRangeSet(CoreRange({12, 1})), /*size=*/4096, /*alignment=*/64);
+
+    const std::string error = capture_default_fd_refusal(mesh.get());
+    arena.deallocate(allocation.id);
+    ASSERT_FALSE(error.empty()) << "Expected persistent arena L1 to block Fast Dispatch setup.";
+    EXPECT_NE(error.find("mesh arena ledger"), std::string::npos);
+    EXPECT_NE(error.find("[dispatch]"), std::string::npos);
+}
+
+TEST_F(DispatchContextFixture, AllowsResidentL1AboveDispatchFootprint) {
+    if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
+        GTEST_SKIP() << *reason;
+    }
+
+    const MeshShape system_shape = MetalContext::instance().get_system_mesh().shape();
+    auto mesh = MeshDevice::create(MeshDeviceConfig(system_shape));
+
+    constexpr uint32_t page_size = 4096;
+    DeviceLocalBufferConfig high_l1{.page_size = page_size, .buffer_type = BufferType::L1, .bottom_up = false};
+    ReplicatedBufferConfig high_l1_global{.size = page_size};
+    auto resident = MeshBuffer::create(high_l1_global, high_l1, mesh.get());
+    ASSERT_NE(resident, nullptr);
+
+    ASSERT_NO_THROW(experimental::DispatchContext::get().initialize_fast_dispatch(mesh.get()));
+    ASSERT_NO_THROW(experimental::DispatchContext::get().terminate_fast_dispatch(mesh.get()));
+}
 
 TEST_F(DispatchContextFixture, TestWritesAndWorkloads) {
     // Test using DispatchContext to turn FD on and off during runtime.

@@ -3,18 +3,32 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/distributed_context.hpp>
+
+#include <algorithm>
+#include <functional>
+#include <optional>
+
 #include "impl/context/context_types.hpp"
 #include "mesh_device_impl.hpp"
 #include "mesh_command_queue.hpp"
 #include "fd_mesh_command_queue.hpp"
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/allocator/allocator.hpp"
+#include "impl/debug/dprint_server.hpp"
 #include "impl/device/device_manager.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/dispatch/cq_shared_state.hpp"
+#include "impl/dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -25,6 +39,53 @@ namespace tt::tt_metal::experimental {
 struct DispatchContext::StashedQueues {
     std::vector<std::unique_ptr<distributed::MeshCommandQueueBase>> queues;
 };
+
+struct DispatchContext::FdL1Conflict {
+    ChipId chip;
+    CoreCoord core;
+    const char* role;
+    const char* ledger;
+    DeviceAddr lowest;
+    DeviceAddr window_end;
+};
+
+namespace {
+
+std::optional<DeviceAddr> lowest_arena_address(const AllocatorImpl& allocator, const CoreCoord& core) {
+    std::optional<DeviceAddr> lowest;
+    for (const auto& range : allocator.persistent_l1().occupied_ranges(core)) {
+        lowest = lowest.has_value() ? std::min(*lowest, range.first) : std::make_optional(range.first);
+    }
+    return lowest;
+}
+
+struct LedgerReading {
+    std::optional<DeviceAddr> lowest;
+    const char* source = "";
+};
+
+LedgerReading read_ledger(
+    const AllocatorImpl& allocator, const CoreCoord& core, const char* free_list_source, const char* arena_source) {
+    LedgerReading reading;
+    if (!allocator.has_bank(BufferType::L1, core)) {
+        return reading;
+    }
+
+    const uint32_t bank = allocator.get_bank_ids_from_logical_core(BufferType::L1, core).at(0);
+    if (auto free_list_lowest = allocator.get_lowest_occupied_l1_address(bank); free_list_lowest.has_value()) {
+        reading.lowest = free_list_lowest;
+        reading.source = free_list_source;
+    }
+
+    if (auto arena_lowest = lowest_arena_address(allocator, core);
+        arena_lowest.has_value() && (!reading.lowest.has_value() || *arena_lowest < *reading.lowest)) {
+        reading.lowest = arena_lowest;
+        reading.source = arena_source;
+    }
+    return reading;
+}
+
+}  // namespace
 
 // Define the static member with custom deleter
 std::unique_ptr<DispatchContext, DispatchContext::Deleter> DispatchContext::dispatch_context_ptr_ = nullptr;
@@ -44,7 +105,138 @@ DispatchContext& DispatchContext::get() {
     return *dispatch_context_ptr_;
 }
 
+DispatchCoreAxis DispatchContext::get_dispatch_core_axis(distributed::MeshDevice* mesh_device) const {
+    return MetalContext::instance(extract_context_id(mesh_device)).get_dispatch_core_config().get_dispatch_core_axis();
+}
+
 void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_device) {
+    initialize_fast_dispatch(mesh_device, FastDispatchSetupOptions{});
+}
+
+std::vector<DispatchContext::FdL1Conflict> DispatchContext::find_fd_l1_conflicts(
+    MetalContext& context,
+    distributed::MeshDevice* mesh_device,
+    const std::vector<::tt::tt_metal::Device*>& devices,
+    bool write_only) const {
+    const DispatchMemMap& mem_map = context.dispatch_mem_map();
+    auto& dispatch_core_manager = context.get_dispatch_core_manager();
+
+    // Lockstep allocations live in the allocator of the MeshDevice view that
+    // created them. Walk the live tree rooted at the system mesh so this check
+    // does not depend on HYBRID mirroring them into each physical allocator.
+    std::vector<distributed::MeshDevice*> mesh_views;
+    distributed::MeshDevice* root = mesh_device;
+    while (root->get_parent_mesh()) {
+        root = root->get_parent_mesh().get();
+    }
+    std::function<void(distributed::MeshDevice*)> collect_views = [&](distributed::MeshDevice* mesh) {
+        // A remote-only view (including one not yet fully initialized) has no
+        // local devices, SubDeviceManagerTracker, or allocator on this host.
+        if (!mesh->get_view().get_devices().empty()) {
+            mesh_views.push_back(mesh);
+        }
+        for (const auto& submesh : mesh->get_submeshes()) {
+            collect_views(submesh.get());
+        }
+    };
+    collect_views(root);
+
+    std::vector<FdL1Conflict> conflicts;
+    for (::tt::tt_metal::Device* device : devices) {
+        const uint16_t channel = context.get_cluster().get_assigned_channel_for_device(device->id());
+
+        std::vector<distributed::MeshDevice*> views_over_device;
+        for (distributed::MeshDevice* view : mesh_views) {
+            for (IDevice* view_device : view->get_view().get_devices()) {
+                if (view_device->id() == device->id()) {
+                    views_over_device.push_back(view);
+                    break;
+                }
+            }
+        }
+        for (distributed::MeshDevice* view : views_over_device) {
+            if (view->get_active_sub_device_manager_id() != view->get_default_sub_device_manager_id()) {
+                TT_THROW(
+                    "Fast-dispatch L1 preflight does not support a live non-default sub-device manager on mesh {}. "
+                    "Unload it before entering a manual Fast Dispatch session.",
+                    view->id());
+            }
+        }
+
+        auto check_core = [&](const tt_cxy_pair& core_with_chip, const char* role, DeviceAddr window_end) {
+            if (core_with_chip.chip != device->id()) {
+                TT_THROW(
+                    "Fast-dispatch L1 preflight does not support a {} interface core on chip {} while checking device "
+                    "{}. Refusing instead of silently skipping a potentially destructive remote-chip topology.",
+                    role,
+                    core_with_chip.chip,
+                    device->id());
+            }
+
+            const CoreCoord core(core_with_chip.x, core_with_chip.y);
+            LedgerReading best = read_ledger(*device->allocator_impl(), core, "chip", "chip arena");
+            for (distributed::MeshDevice* view : views_over_device) {
+                LedgerReading reading = read_ledger(*view->allocator_impl(), core, "mesh", "mesh arena");
+                if (reading.lowest.has_value() && (!best.lowest.has_value() || *reading.lowest < *best.lowest)) {
+                    best = reading;
+                }
+            }
+
+            if (best.lowest.has_value() && *best.lowest < window_end) {
+                conflicts.push_back({device->id(), core, role, best.source, *best.lowest, window_end});
+            }
+        };
+
+        for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
+            const DeviceAddr cmddat_end = mem_map.cmddat_q_base(cq_id) + mem_map.cmddat_q_size();
+            const DeviceAddr scratch_end = mem_map.scratch_db_base(cq_id) + mem_map.scratch_db_size();
+            const DeviceAddr ringbuffer_end = mem_map.scratch_db_base(cq_id) + mem_map.ringbuffer_size();
+            const DeviceAddr prefetch_end =
+                write_only ? std::max(cmddat_end, scratch_end) : std::max(scratch_end, ringbuffer_end);
+
+            // dispatch_s performs DEVICE_PRINT aggregation only on CQ0 and only
+            // when this device has at least one configured print core.
+            const auto& dprint_server = context.dprint_server();
+            const bool dprint_on = cq_id == 0 && context.get_dispatch_query_manager().dispatch_s_enabled() &&
+                                   dprint_server && !dprint_server->get_print_cores(device->id()).empty();
+            const DeviceAddr dispatch_end = mem_map.dispatch_s_buffer_end(cq_id) +
+                                            (dprint_on ? mem_map.dispatch_s_device_print_l1_cache_size() : 0);
+
+            check_core(dispatch_core_manager.prefetcher_core(device->id(), channel, cq_id), "prefetch", prefetch_end);
+            check_core(dispatch_core_manager.dispatcher_core(device->id(), channel, cq_id), "dispatch", dispatch_end);
+        }
+    }
+    return conflicts;
+}
+
+std::string DispatchContext::format_fd_l1_conflicts(const std::vector<FdL1Conflict>& conflicts) const {
+    std::string report;
+    for (const auto& conflict : conflicts) {
+        report += fmt::format(
+            "  chip {} core ({},{}) [{}]: {} ledger has L1 handed out down to 0x{:X}, "
+            "fast-dispatch firmware writes up to 0x{:X}\n",
+            conflict.chip,
+            conflict.core.x,
+            conflict.core.y,
+            conflict.role,
+            conflict.ledger,
+            conflict.lowest,
+            conflict.window_end);
+    }
+    return report;
+}
+
+void DispatchContext::unwind_failed_fd_setup(
+    MetalContext& context, const std::vector<::tt::tt_metal::Device*>& devices) {
+    for (::tt::tt_metal::Device* device : devices) {
+        device->command_queue_programs_.clear();
+        device->command_queues_.clear();
+    }
+    context.set_fast_dispatch_mode(false);
+}
+
+void DispatchContext::initialize_fast_dispatch(
+    distributed::MeshDevice* mesh_device, const FastDispatchSetupOptions& options) {
     // If the mesh device is inactive, do not attempt to initialize fast dispatch.
     if (mesh_device->impl().view_->get_devices().empty()) {
         return;
@@ -82,10 +274,34 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
     context.set_fast_dispatch_mode(true);
 
-    for (const auto& dev : active_devices) {
-        TT_FATAL(dev->num_hw_cqs() == num_hw_cqs, "All devices must have the same number of command queues.");
-        dev->init_command_queue_host();
+    try {
+        for (const auto& dev : active_devices) {
+            TT_FATAL(dev->num_hw_cqs() == num_hw_cqs, "All devices must have the same number of command queues.");
+            dev->init_command_queue_host();
+        }
+
+        // Dispatch cores are assigned, but no fast-dispatch firmware has been
+        // written yet. Refuse before bring-up can overwrite resident L1.
+        const auto conflicts = find_fd_l1_conflicts(context, mesh_device, active_devices, options.write_only);
+        if (!conflicts.empty()) {
+            const std::string report = format_fd_l1_conflicts(conflicts);
+            if (!options.allow_destructive) {
+                TT_THROW(
+                    "Fast-dispatch bring-up would overwrite resident L1 on dispatch cores (tt-blaze #2019):\n{}"
+                    "Free or relocate those allocations before entering fast dispatch, or pass "
+                    "allow_destructive=true to proceed and accept that the listed L1 will be corrupted.",
+                    report);
+            }
+            log_warning(
+                tt::LogAlways,
+                "allow_destructive=true: fast-dispatch bring-up will overwrite resident L1 on dispatch cores:\n{}",
+                report);
+        }
+    } catch (...) {
+        unwind_failed_fd_setup(context, active_devices);
+        throw;
     }
+
     // Query the number of command queues requested
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
 
