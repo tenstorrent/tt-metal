@@ -11,9 +11,15 @@
 
 #ifdef TRISC_MATH
 #include "llk_math_binary_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_math_eltwise_mul_scalar_block_api.h"
+#endif
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
+#ifdef ARCH_BLACKHOLE
+#include "experimental/llk_unpack_AB_scalar_block_api.h"
+#endif
 #endif
 
 namespace ckernel {
@@ -48,6 +54,26 @@ ALWI void deepseek_mul_tiles_bcast_scalar(
           MATH_FIDELITY,
           EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
     UNPACK((llk_unpack_AB<BroadcastType::SCALAR>(icb0, icb1, itile0, itile1)));
+}
+
+// Reuse one scalar SrcB across a block of full 32x32 tiles. The caller owns
+// destination acquisition and must keep the block within that allocation.
+ALWI void mul_tiles_bcast_scalar_block_init(uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    state_configure(icb0, icb1, call_line);
+    MATH((llk_math_eltwise_mul_scalar_block_init()));
+    UNPACK((llk_unpack_AB_scalar_block_init(icb0, icb1)));
+}
+
+ALWI void mul_tiles_bcast_scalar_block(
+    uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, uint32_t block_size) {
+    MATH((llk_math_eltwise_mul_scalar_block(idst, block_size)));
+    UNPACK((llk_unpack_AB_scalar_block(icb0, icb1, itile0, itile1, block_size)));
+}
+
+// Source-compatible spelling for callers already using the short initializer.
+ALWI void deepseek_mul_tiles_bcast_scalar_init_short(
+    uint32_t icb0, uint32_t icb1, uint32_t call_line = __builtin_LINE()) {
+    deepseek_mul_bcast_scalar_init(icb0, icb1, call_line);
 }
 
 // ============================================================================

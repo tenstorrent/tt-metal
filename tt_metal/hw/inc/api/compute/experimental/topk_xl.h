@@ -4,6 +4,12 @@
 
 #pragma once
 
+// Define TOPK_XL_BLAZE_COMPAT consistently for all TRISCs before including this
+// header to use the Blaze-managed protocol. It disables SFPLOADMACRO, leaves
+// destination zero flags and generic-sort SrcB validity to the caller, and uses
+// PACK replay slots [0, 3) for index extraction. The caller must serialize MATH
+// and PACK SFPU/replay access and preserve ADDR_MOD_7 = zero advance across it.
+// Use topk_xl_copy_tile_init_short after configuring formats in that pipeline.
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
@@ -73,9 +79,11 @@ ALWI void topk_xl_local_sort(std::uint32_t idst, bool ascending) {
  */
 template <std::uint32_t K, bool early_exit_K64 = false>
 ALWI void topk_xl_local_sort_generic(std::uint32_t idst, bool ascending) {
+#ifndef TOPK_XL_BLAZE_COMPAT
     if constexpr (!early_exit_K64) {
         UNPACK((llk_unpack_set_srcb_dummy_valid()));
     }
+#endif
     MATH((llk_math_eltwise_unary_sfpu_topk_xl_local_sort_generic<K, early_exit_K64>(idst, ascending)));
 }
 
@@ -171,6 +179,12 @@ ALWI void topk_xl_copy_tile_init(std::uint32_t cbid, std::uint32_t call_line = _
     state_configure<Operand::SRCA>(cbid, call_line);
     UNPACK((llk_unpack_hw_configure<is_fp32_dest_acc_en>(cbid)));
     MATH((llk_math_hw_configure<is_fp32_dest_acc_en>(cbid, cbid)));
+    UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
+    MATH((llk_math_topk_xl_copy_init(cbid)));
+}
+
+/** Initialize only the TopK copy MOP; the caller has already configured CB formats. */
+ALWI void topk_xl_copy_tile_init_short(std::uint32_t cbid) {
     UNPACK((llk_unpack_topk_xl_copy_init(cbid)));
     MATH((llk_math_topk_xl_copy_init(cbid)));
 }
