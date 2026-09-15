@@ -15,6 +15,7 @@
 #pragma once
 
 #include "compute_common.hpp"
+#include "compute_streaming.hpp"
 
 template <
     SDPAType sdpa_type,

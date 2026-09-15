@@ -10,8 +10,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "compute_common.hpp"
-#include "sol_attn_driver.hpp"
 #include "compute_streaming.hpp"
+#include "sol_attn_driver.hpp"
 
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
