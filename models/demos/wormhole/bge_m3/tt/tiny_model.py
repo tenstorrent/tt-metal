@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_weight import LazyWeight, resolve_lazy_weight
+from models.demos.wormhole.bge_m3.tt.device_kernels import bge_m3_matmul_compute_kernel_config
 
 
 @dataclass
@@ -19,6 +20,7 @@ class TinyLinearConfig:
     memory_config: ttnn.MemoryConfig | None = None
     compute_kernel_config: object | None = None
     activation: object | None = None
+    max_seq_len: int | None = None
 
 
 class TinyLinear(LightweightModule):
@@ -77,15 +79,6 @@ class SparseLinear(TinyLinear):
         return instance
 
 
-def _default_tiny_linear_compute_kernel_config() -> ttnn.WormholeComputeKernelConfig:
-    return ttnn.WormholeComputeKernelConfig(
-        math_fidelity=ttnn.MathFidelity.HiFi2,
-        math_approx_mode=False,
-        fp32_dest_acc_en=False,
-        packer_l1_acc=True,
-    )
-
-
 def _resolve_tiny_linear_config(config: TinyLinearConfig) -> TinyLinearConfig:
     to_set: dict[str, object] = {}
 
@@ -93,8 +86,6 @@ def _resolve_tiny_linear_config(config: TinyLinearConfig) -> TinyLinearConfig:
         to_set["dtype"] = ttnn.bfloat16
     if config.memory_config is None:
         to_set["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
-    if config.compute_kernel_config is None:
-        to_set["compute_kernel_config"] = _default_tiny_linear_compute_kernel_config()
 
     param_devices = [
         param.device for param in (config.weight, config.bias) if param is not None and param.device is not None
@@ -111,6 +102,11 @@ def _resolve_tiny_linear_config(config: TinyLinearConfig) -> TinyLinearConfig:
     )
     if mesh_device is None:
         raise ValueError("Unable to resolve target device for TinyLinear")
+
+    if config.compute_kernel_config is None:
+        to_set["compute_kernel_config"] = bge_m3_matmul_compute_kernel_config(
+            mesh_device, max_seq_len=config.max_seq_len
+        )
 
     dtype = to_set.get("dtype", config.dtype)
     memory_config = to_set.get("memory_config", config.memory_config)

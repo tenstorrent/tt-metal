@@ -108,6 +108,7 @@
 #include "lltt.h"
 #include "sfpi.h"
 #include "sfpu/ckernel_sfpu_load_config.h"
+#include "sfpu/experimental/ckernel_sfpu_set_dst_write_addr_offset.h"
 
 // SFPLOADMACRO acceleration of the UNFUSED merge / rebuild bodies — see the
 // "SFPLOADMACRO acceleration for the UNFUSED merge / rebuild" section below
@@ -155,11 +156,38 @@ inline void topk_mop_config()
 #if TOPK_XL_UNFUSED_MACRO
     constexpr int body_len = 16;
 #else
-    constexpr int body_len              = fused ? 16 : 18;
+    constexpr int body_len = fused ? 16 : 18;
 #endif
     constexpr std::uint32_t replay_body = lltt::replay_insn(0, body_len);
     ckernel_unpack_template tmpl        = ckernel_unpack_template::lA(replay_body, TT_OP_NOP);
     tmpl.program();
+}
+
+// _llk_math_topk_xl_copy_init_ rewrites ADDR_MOD_0 and ADDR_MOD_3 for datacopy,
+// so ADDR_MOD_3 must be restored here. ADDR_MOD_2 is not clobbered by copy init;
+// it is (re)established because the unfused rebuild needs the unfused stride and
+// the preceding phase may have been fused. All other TopK state (ADDR_MOD_1/4/5/6,
+// index tracking, and formats) remains live, so a full topk_xl_init is unnecessary.
+// Caveat: ADDR_MOD_4 stays live only if _topk_xl_add_lsb_indices_init_ (which
+// reprograms it to +16; unfused rebuild needs +8) has not run since the last full
+// unfused init — callers in that situation need topk_xl_init<false>, not this.
+inline void topk_reinit_unfused_rebuild_after_copy()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 40},
+    }
+        .set(ADDR_MOD_3);
+
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 24},
+    }
+        .set(ADDR_MOD_2);
+
+    topk_mop_config<false>();
 }
 
 // Program the MOP Expander for the stride-2 length-2048 build phase of
@@ -615,14 +643,10 @@ inline void _topk_xl_init_()
 // caller can fold a trailing INCRWC into the last store. See "Address-mod
 // recipe" at the top of the file.
 
-// Rebase the Dst write pointer for subsequent SFPSTOREs. Used by the
-// top-level functions to switch between the even and odd columns of the
-// two-tile DST region (offsets +0 and +2 from the tile base).
-inline void set_dst_write_addr_offset(std::uint32_t addr)
-{
-    std::uint32_t dst_index = addr + get_dest_buffer_base();
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, dst_index);
-}
+// set_dst_write_addr_offset (defined in ckernel_sfpu_set_dst_write_addr_offset.h,
+// shared with deepseek_top32_rm) rebases the Dst write pointer for subsequent
+// SFPSTOREs; here it switches between the even and odd columns of the two-tile
+// DST region (offsets +0 and +2 from the tile base).
 
 // Load 16 rows × 2 strips into LREG0..LREG7 (fused path).
 //   group 1: LREG0..3 at base+{0,4,8,12}
@@ -1474,7 +1498,7 @@ inline void canonical_big_block_with_replay(bool dir)
 // `set_dst_write_addr_offset(tile_offset + (col ? 0 : 2))` flips the Dst
 // pointer between the even and odd columns of the current pair of DST tiles.
 // Forward declaration — defined below the K=2048 optimized body.
-template <std::uint32_t K>
+template <std::uint32_t K, bool early_exit_K64 = false>
 inline void _topk_xl_local_sort_generic_(std::uint32_t dst_index, bool ascending);
 
 template <std::uint32_t K>
@@ -1729,10 +1753,19 @@ inline void _topk_xl_local_sort_(const std::uint32_t dst_index, const bool ascen
 // The K=2048 case continues to be routed to the K=2048 fast path by
 // `_topk_xl_local_sort_`'s `if constexpr (K != 2048)` guard, so the
 // codegen here is exercised only by K=512 and K=1024.
-template <std::uint32_t K>
+template <std::uint32_t K, bool early_exit_K64>
 inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bool ascending)
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+    // early_exit_K64 sorts each 64-row column in isolation and returns before the
+    // cross-column merge phases (sparse-K reader: sink all-zero packed mask words
+    // to the bottom of each column). The length-64 build lives in the K >= 1024
+    // block, so a K=512 instantiation would return before it runs.
+    static_assert(!early_exit_K64 || K >= 1024, "early_exit_K64 requires K >= 1024: the length-64 build phase lives in the K >= 1024 block");
+    // The cross-column phases do not converge at row_scale_factor = 4: they leave the
+    // length-64 runs unmerged, so a K=2048 full sort here comes back with each column
+    // sorted but the columns out of order with respect to each other.
+    static_assert(early_exit_K64 || K != 2048, "K = 2048 has no generic full sort: call _topk_xl_local_sort_, which routes it to the K=2048 fast path");
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
     bool dir                            = ascending;
     const std::uint32_t tile_offset     = dst_index << DstTileSizeLog2[DstTileShape::Tile32x32];
@@ -1799,7 +1832,13 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                 load16_rows_x2<32>();
                 bitonic_sort_len_k(dir);
                 store16_rows_x2<32, 48>();
-                dir = !dir;
+                // Early-exit sorts each column in isolation, so it suppresses the
+                // inter-pair flip when there is only one pair; the full sort keeps
+                // its historical unconditional flip.
+                if constexpr (!early_exit_K64 || (row_scale_factor >> 1) > 1)
+                {
+                    dir = !dir;
+                }
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
@@ -1817,16 +1856,28 @@ inline void _topk_xl_local_sort_generic_(const std::uint32_t dst_index, const bo
                 lltt::replay(0, 8);
                 bitonic_sort_len_32(dir);
                 lltt::replay(8, 8);
-                if ((i & 1) == 1)
+                if constexpr (!early_exit_K64 || row_scale_factor > 2)
                 {
-                    dir = !dir;
+                    if ((i & 1) == 1)
+                    {
+                        dir = !dir;
+                    }
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
         }
 
         set_dst_write_addr_offset(tile_offset + (col ? 0 : 2));
-        dir = !dir;
+        if constexpr (!early_exit_K64)
+        {
+            dir = !dir;
+        }
+    }
+
+    if constexpr (early_exit_K64)
+    {
+        // Each column is fully sorted in isolation; skip the cross-column merge.
+        return;
     }
 
     // ── build bitonic sequences of len=(K/8) ──────────────────────────────
@@ -2682,10 +2733,81 @@ inline void _topk_xl_add_lsb_indices_init_()
 //   bits [ 4: 0] — within-row column (5 bits, lane id)
 //
 // After this routine each DST word reads as `[ bf16 value | u16 index ]`.
-template <std::uint32_t K, std::uint32_t core_id>
+// `row_major` (default false) selects the within-chunk index ordering. The
+// default numbers the two [32, 32] tiles as a 64-row x 32-col grid in
+// COLUMN-MAJOR order: index(tile, row, col) = col*64 + tile*32 + row. Set
+// `row_major = true` for a plain ROW-MAJOR order: index = tile*1024 + row*32 + col.
+template <std::uint32_t K, std::uint32_t core_id, bool row_major = false>
 inline void _topk_xl_add_lsb_indices_()
 {
     static_assert(K == 512 || K == 1024 || K == 2048, "K must be 512, 1024, or 2048");
+
+    if constexpr (row_major)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
+
+        // Tile ID into LREG0 (across the 32 lanes: 0, 2, 4, ..., 60, 62).
+        TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG0, 0);
+
+        // Load core_id and place it in bits [15:11] of every lane.
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, core_id);
+        TTI_SFPSHFT(11, 0, p_sfpu::LREG1, 1);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
+
+        // LREG1 = LREG0 + 1, LREG2 = LREG0 + 256, LREG3 = LREG0 + 257 — give the
+        // four index variants we need across the four-row LREG block.
+        TTI_SFPIADD(1, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(257, p_sfpu::LREG0, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+        // ── OR the precomputed indices into the low 16 bits of every DST word.
+        // Same 16-slot record/replay shape as the column-major body below.
+        lltt::record<lltt::Exec>(0, 16);
+        TTI_SFPLOAD(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPLOAD(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPLOAD(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
+        TTI_SFPLOAD(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 2);
+
+        TTI_SFPOR(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+        TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
+        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+
+        TTI_SFPIADD(64, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(64, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(64, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPIADD(64, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+
+        TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::INT32, ADDR_MOD_7, 0);
+        TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::INT32, ADDR_MOD_7, 2);
+        TTI_SFPSTORE(p_sfpu::LREG6, InstrModLoadStore::INT32, ADDR_MOD_7, 16 + 0);
+        TTI_SFPSTORE(p_sfpu::LREG7, InstrModLoadStore::INT32, ADDR_MOD_6, 16 + 2);
+
+        for (int i = 1; i < 4; i++)
+        {
+            lltt::replay(0, 16);
+        }
+
+        // Outer loop over the remaining face-pairs, same shape as the
+        // column-major body below; the row-major index advance between
+        // face-pairs is +256 (tile*1024 spans two 512-element face-pairs).
+        constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
+        for (int j = 1; j < row_scale_factor; j++)
+        {
+            TTI_SFPIADD(256, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(256, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(256, p_sfpu::LREG2, p_sfpu::LREG2, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPIADD(256, p_sfpu::LREG3, p_sfpu::LREG3, sfpi::SFPIADD_MOD1_ARG_IMM | sfpi::SFPIADD_MOD1_CC_NONE);
+            TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
+
+            for (int i = 0; i < 4; i++)
+            {
+                lltt::replay(0, 16);
+            }
+        }
+        return;
+    }
+
     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_D);
 
     // Tile ID into LREG0 (across the 32 lanes: 0, 2, 4, ..., 60, 62).
@@ -2766,7 +2888,7 @@ inline void _topk_xl_add_lsb_indices_()
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
         for (int i = 0; i < 4; i++)
         {
@@ -2840,7 +2962,7 @@ inline void _topk_xl_add_lsb_indices_rt_(const std::uint32_t chunk_id)
     constexpr int row_scale_factor = K == 512 ? 1 : K == 1024 ? 2 : 4;
     for (int j = 1; j < row_scale_factor; j++)
     {
-        TTI_SFPLOAD(p_sfpu::LREG4, 10, ADDR_MOD_4, 0);
+        TTI_SFPLOAD(p_sfpu::LCONST_0, InstrModLoadStore::INT32, ADDR_MOD_4, 0);
 
         for (int i = 0; i < 4; i++)
         {
@@ -3160,7 +3282,7 @@ inline void _topk_xl_separate_indices_row_major_global_base_(std::uint32_t seg_b
     constexpr int row_scale_factor       = K == 512 ? 1 : K == 1024 ? 2 : 4;
     constexpr int num_tiles_per_sequence = K == 512 ? 1 : K == 1024 ? 1 : 2;
     constexpr int indices_offset         = num_tiles_per_sequence * 64;
-    constexpr int chunk_field_shift = K == 2048 ? 0 : K == 1024 ? -1 : -2;
+    constexpr int chunk_field_shift      = K == 2048 ? 0 : K == 1024 ? -1 : -2;
 
     TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_UPPER, (seg_base >> 16) & 0xFFFF);
     TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_LOWER, seg_base & 0xFFFF);

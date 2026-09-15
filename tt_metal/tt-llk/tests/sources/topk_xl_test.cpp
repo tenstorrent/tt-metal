@@ -10,11 +10,13 @@
 // llk_math_eltwise_unary_sfpu_topk_xl.h), which wrap the llk_lib entry points:
 //   * ckernel::_llk_unpack_topk_xl_copy_init_ / _llk_unpack_topk_xl_copy_
 //   * ckernel::_llk_math_topk_xl_copy_init_ / _llk_math_topk_xl_copy_
-//   * ckernel::sfpu::_topk_xl_init_ / _topk_xl_local_sort_ / _topk_xl_merge_ /
-//     _topk_xl_rebuild_ / _topk_xl_add_lsb_indices_(_init_) /
+//   * ckernel::sfpu::_topk_xl_init_ / _topk_xl_local_sort_ /
+//     _topk_xl_local_sort_generic_ / _topk_xl_merge_ / _topk_xl_rebuild_ /
+//     _topk_xl_add_lsb_indices_(_init_) /
 //     _topk_xl_separate_indices_row_major_(_init_static_ / _reinit_ /
 //     _advance_chunk_base_) / _topk_xl_separate_indices_(_init_) /
-//     _topk_xl_remove_msb_values_(_init_)
+//     _topk_xl_remove_msb_values_(_init_) / topk_mop_config /
+//     topk_reinit_unfused_rebuild_after_copy
 //
 // The shared core is copy_sort (copy -> add_lsb_indices -> init(fused) ->
 // local_sort); TOPK_XL_INDEX_OP picks the terminal index step. Op 0 mirrors the
@@ -51,11 +53,25 @@ std::uint32_t math_sync_tile_dst_index = 0;
 //                   chunk.
 //   TOPK_XL_GROUP_ID / TOPK_XL_GROUP_SHIFT : generic separate_indices params
 //   TOPK_XL_CORE_ID:         add_lsb_indices core_id, index bits [15:11] (0 .. 31)
-//   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending)
+//   TOPK_XL_ASCENDING:       rebuild direction (false descending, true ascending),
+//                            or, for the single-chunk terminal index ops that never
+//                            rebuild, the local-sort direction
 //   TOPK_XL_FUSED_REDUCE:    false unfused merge/rebuild (op path), true fused
 //   TOPK_XL_CHUNK_BASE_MODE: three ways to init chunk_base:
 //                            0 init_static<hi,lo> | 1 init_upper<hi>(lo) | 2 init(runtime)
 //   TOPK_XL_CHUNK_BASE:      starting chunk_base (must be a multiple of K)
+//   TOPK_XL_SORT_MODE:       which local-sort entry point copy_sort calls:
+//     0 dispatch    _topk_xl_local_sort_, K=2048 through its fast path
+//     1 generic     _topk_xl_local_sort_generic_ direct, K=512 | 1024
+//     2 early_exit  the same, stopping after the per-column len-64 builds so each
+//                   64-element column ends up sorted on its own. K=1024 | 2048,
+//                   single chunk, no merge.
+//   TOPK_XL_LSB_ROW_MAJOR:   add_lsb_indices numbering: false stamps a tile coordinate
+//                            to decode, true the element's chunk offset directly. Only
+//                            the raw-coordinate index ops (1, 2) read it back;
+//                            separate_indices_row_major decodes the coordinate one.
+//   TOPK_XL_REINIT_AFTER_COPY: reach each merge stage through the post-copy reinit
+//                            entry points instead of a full topk_xl_init
 
 constexpr std::uint32_t ELEMENTS_PER_TILE = ckernel::TILE_R_DIM * ckernel::TILE_C_DIM;
 constexpr std::uint32_t TILES_PER_SEQ     = (TOPK_XL_K + ELEMENTS_PER_TILE - 1) / ELEMENTS_PER_TILE;
@@ -65,11 +81,34 @@ constexpr bool INDEX_OP_ROW_MAJOR  = (TOPK_XL_INDEX_OP == 0);
 constexpr bool INDEX_OP_SEPARATE   = (TOPK_XL_INDEX_OP == 1);
 constexpr bool INDEX_OP_REMOVE_MSB = (TOPK_XL_INDEX_OP == 2);
 
+constexpr bool SORT_MODE_GENERIC    = (TOPK_XL_SORT_MODE == 1);
+constexpr bool SORT_MODE_EARLY_EXIT = (TOPK_XL_SORT_MODE == 2);
+
 constexpr bool FUSED_REDUCE = TOPK_XL_FUSED_REDUCE;
 // Fused END-TO-END (the topk_large_indices wide-row family): runtime chunk-id
 // stamp in index bits [15:11], fused merge/rebuild, one row-major GLOBAL split
 // at the end (plain, or with a segment base for segmented fusion).
 constexpr bool FUSED_E2E = TOPK_XL_FUSED_E2E;
+
+// The early-exit column sort is the one sort the compute API does not pair with a
+// dummy SrcB valid: it returns before anything consumes the operand.
+constexpr bool LOCAL_SORT_NEEDS_SRCB = !SORT_MODE_EARLY_EXIT;
+
+// copy_sort_rt hard-codes the dispatch sort, so TOPK_XL_SORT_MODE reaches copy_sort
+// only. Under fused-e2e a non-default mode would compile and then be ignored: Generic
+// silently runs the dispatch sort, and early exit also drops the SrcB dummy valid on
+// UNPACK (below) that the dispatch sort it actually runs still waits for, so MATH hangs.
+static_assert(TOPK_XL_SORT_MODE == 0 || !FUSED_E2E, "TOPK_XL_SORT_MODE has no effect on the fused-e2e path: copy_sort_rt always calls the dispatch sort");
+// The early-exit sort leaves each column sorted on its own, so nothing may merge or
+// rebuild over it: no second chunk, neither fused reduction, and not the row-major op
+// path, whose lone-chunk rebuild would permute the partial order into a bogus one.
+static_assert(
+    !SORT_MODE_EARLY_EXIT || (TOPK_XL_NUM_CHUNKS == 1 && !FUSED_REDUCE && !INDEX_OP_ROW_MAJOR),
+    "the early-exit sort leaves a partial order, so nothing may merge or rebuild over it");
+// Op 0 is the only index op that decodes the tile-coordinate numbering. It is also the
+// ignored default under the fused branches, which reach their own terminal split, so
+// exclude those before rejecting the combination.
+static_assert(!TOPK_XL_LSB_ROW_MAJOR || !INDEX_OP_ROW_MAJOR || FUSED_REDUCE, "separate_indices_row_major decodes the coordinate add_lsb numbering");
 
 // Second merge operand. `_topk_xl_merge_` reads it at a fixed distance from the
 // first: 64 dest units (one tile) per sequence-tile when fused, 128 (value +
@@ -148,7 +187,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         for (std::uint32_t c = 0; c < TOPK_XL_NUM_CHUNKS; c++)
         {
             unpack_copy_tile(params, r, c, src_format, dst_format); // chunk 0 -> slot0, the rest -> slot1
-            _llk_unpack_set_srcb_dummy_valid_();                    // local_sort
+            if constexpr (LOCAL_SORT_NEEDS_SRCB)
+            {
+                _llk_unpack_set_srcb_dummy_valid_(); // local_sort
+            }
             if (c > 0)
             {
                 _llk_unpack_set_srcb_dummy_valid_(); // rebuild(slot0)
@@ -189,6 +231,26 @@ inline void topk_xl_local_sort(std::uint32_t dst_index, bool ascending)
     _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_local_sort_<K>, dst_index, VectorMode::RC_custom, dst_index, ascending);
 }
 
+template <std::uint32_t K, bool early_exit_K64>
+inline void topk_xl_local_sort_generic(std::uint32_t dst_index, bool ascending)
+{
+    _llk_math_eltwise_unary_sfpu_params_(
+        ckernel::sfpu::_topk_xl_local_sort_generic_<K, early_exit_K64>, dst_index, VectorMode::RC_custom, dst_index, ascending);
+}
+
+// The two post-copy reinit entry points, verbatim from the Metal wrappers
+// llk_math_eltwise_unary_sfpu_topk_xl_reinit_{mop,unfused_rebuild}_after_copy.
+template <bool fused>
+inline void topk_xl_reinit_mop_after_copy()
+{
+    ckernel::sfpu::topk_mop_config<fused>();
+}
+
+inline void topk_xl_reinit_unfused_rebuild_after_copy()
+{
+    ckernel::sfpu::topk_reinit_unfused_rebuild_after_copy();
+}
+
 template <std::uint32_t K, bool fused>
 inline void topk_xl_merge(std::uint32_t dst_index)
 {
@@ -207,11 +269,11 @@ inline void topk_xl_add_lsb_indices_init()
     ckernel::sfpu::_topk_xl_add_lsb_indices_init_();
 }
 
-template <std::uint32_t K, std::uint32_t core_id>
+template <std::uint32_t K, std::uint32_t core_id, bool row_major>
 inline void topk_xl_add_lsb_indices(std::uint32_t dst_index)
 {
     static_assert(core_id < 32, "core_id occupies index bits [15:11]");
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_<K, core_id>, dst_index, VectorMode::RC_custom);
+    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_topk_xl_add_lsb_indices_<K, core_id, row_major>, dst_index, VectorMode::RC_custom);
 }
 
 // --- Row-major index split (topk_large_indices op path) ---
@@ -282,10 +344,21 @@ __attribute__((noinline)) void copy_sort(std::uint32_t slot, std::uint32_t activ
     }
 
     topk_xl_add_lsb_indices_init();
-    topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID>(slot);
+    topk_xl_add_lsb_indices<K, TOPK_XL_CORE_ID, TOPK_XL_LSB_ROW_MAJOR>(slot);
 
     topk_xl_init<K, true>();
-    topk_xl_local_sort<K>(slot, ascending);
+    if constexpr (SORT_MODE_EARLY_EXIT)
+    {
+        topk_xl_local_sort_generic<K, true /* early_exit_K64 */>(slot, ascending);
+    }
+    else if constexpr (SORT_MODE_GENERIC)
+    {
+        topk_xl_local_sort_generic<K, false /* early_exit_K64 */>(slot, ascending);
+    }
+    else
+    {
+        topk_xl_local_sort<K>(slot, ascending);
+    }
 }
 
 // Fused-e2e variant of copy_sort: the chunk id is stamped at RUNTIME into
@@ -334,15 +407,50 @@ __attribute__((noinline)) void process_chunk_math(std::uint32_t slot, std::uint3
     topk_xl_separate_indices_row_major_advance_chunk_base<K>();
 }
 
+// Put the math thread in the state a merge stage sees on the tt-blaze recv path, where
+// the operand arrives by copy so the copy init is the last thing to touch the config.
+// The init is what rewrites ADDR_MOD_0/3 and reprograms the MOP Expander for datacopy,
+// so issuing it alone reproduces that state without an operand to copy.
+//
+// The unfused reinit restores ADDR_MOD_2/3 and the MOP only, and add_lsb_indices_init
+// left ADDR_MOD_4/6 on its own values, hence the full unfused init first.
+template <std::uint32_t K, bool fused>
+inline void topk_xl_reinit_after_copy(std::uint32_t dst_format)
+{
+    if constexpr (!fused)
+    {
+        topk_xl_init<K, false /* fused */>();
+    }
+    ckernel::_llk_math_topk_xl_copy_init_(dst_format);
+    if constexpr (fused)
+    {
+        topk_xl_reinit_mop_after_copy<fused>();
+    }
+    else
+    {
+        topk_xl_reinit_unfused_rebuild_after_copy();
+    }
+}
+
 // Init + (optional) merge of slot1 into slot0 + rebuild, in either fused mode.
 // `fused` selects the whole merge/rebuild code family: operand distance, MOP body
 // length and iteration count all differ (see topk_mop_config / _topk_xl_merge_).
 // `_topk_xl_merge_` always keeps the max half, so TOPK_XL_ASCENDING changes only
 // the order the surviving top-K is rebuilt into, not which elements survive.
+// Under TOPK_XL_REINIT_AFTER_COPY the stage is reached through topk_xl_reinit_after_copy
+// instead of a full init, which is why `dst_format` is needed: the copy init it replays
+// takes it.
 template <std::uint32_t K, bool fused>
-__attribute__((noinline)) void merge_and_rebuild(bool do_merge)
+__attribute__((noinline)) void merge_and_rebuild(bool do_merge, std::uint32_t dst_format)
 {
-    topk_xl_init<K, fused>();
+    if constexpr (TOPK_XL_REINIT_AFTER_COPY)
+    {
+        topk_xl_reinit_after_copy<K, fused>(dst_format);
+    }
+    else
+    {
+        topk_xl_init<K, fused>();
+    }
     if (do_merge)
     {
         topk_xl_merge<K, fused>(SLOT0);
@@ -390,7 +498,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 copy_sort_rt<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, c, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
             }
             topk_xl_separate_indices_row_major_global_init();
             if constexpr (TOPK_XL_SEG_BASE != 0)
@@ -411,7 +519,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             for (std::uint32_t c = 1; c < TOPK_XL_NUM_CHUNKS; c++)
             {
                 copy_sort<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
-                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */);
+                merge_and_rebuild<TOPK_XL_K, true /* fused */>(true /* do_merge */, math_format);
             }
 
             topk_xl_separate_indices_init(TOPK_XL_GROUP_SHIFT);
@@ -428,11 +536,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 // chunk c -> slot1, local-sort ascending, then merge into slot0.
                 process_chunk_math<TOPK_XL_K>(SLOT1, chunk_active_elements(c), true /* ascending */, math_format);
-                merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */);
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(true /* do_merge */, math_format);
             }
             if constexpr (REBUILD_LONE_CHUNK)
             {
-                merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */);
+                merge_and_rebuild<TOPK_XL_K, false /* fused */>(false /* do_merge */, math_format);
             }
         }
         else
@@ -440,8 +548,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // Single-chunk terminal ops: copy_sort, then the index step. For separate
             // the split is here (MATH). For remove_msb the value-half zero runs on
             // PACK (as the op does), so MATH just leaves the fused [value|index] in slot0.
+            // Nothing rebuilds here, so TOPK_XL_ASCENDING drives the local sort instead.
             static_assert(INDEX_OP_ROW_MAJOR || TOPK_XL_NUM_CHUNKS == 1, "terminal index ops (INDEX_OP 1/2) are single-chunk only");
-            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), false /* fused */, math_format);
+            copy_sort<TOPK_XL_K>(SLOT0, chunk_active_elements(0), TOPK_XL_ASCENDING, math_format);
 
             if constexpr (INDEX_OP_SEPARATE)
             {

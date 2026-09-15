@@ -29,7 +29,7 @@ from typing import List
 
 import pytest
 import torch
-from helpers.format_config import DataFormat, FormatConfig, InputOutputFormat
+from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import (
     DataCopyType,
     DestAccumulation,
@@ -39,7 +39,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
-    generate_sfpu_format_dest_acc_combinations,
+    QuasarSfpuVariant,
+    generate_quasar_sfpu_format_variants,
     input_output_formats,
     parametrize,
     runtime,
@@ -247,25 +248,15 @@ def _prepare_swiglu_inputs(
     return gate.to(torch_dtype), up.to(torch_dtype)
 
 
-def _generate_sfpu_swiglu_combinations(formats_list: List[FormatConfig]):
-    """
-    Build the parametrize product for the swiglu test. Wraps the shared
-    ``generate_sfpu_format_dest_acc_combinations`` from ``helpers.param_config``
-    with an extra ``implied_math_format`` axis.
-    """
+def _generate_sfpu_swiglu_combinations(formats_list: List[InputOutputFormat]):
+    """Build the resolved format/path and implied-math parameter product."""
     combinations = []
 
-    for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
+    for format_variant in generate_quasar_sfpu_format_variants(
+        MathOperation.SfpuSwiGLU, formats_list
+    ):
         for implied_math_format in [ImpliedMathFormat.No, ImpliedMathFormat.Yes]:
-            # MX formats aren't part of this test but keep the pattern
-            # consistent with other float SFPU tests.
-            if (
-                fmt.input_format.is_mx_format()
-                and implied_math_format == ImpliedMathFormat.No
-            ):
-                continue
-
-            combinations.append((fmt, dest_acc, implied_math_format))
+            combinations.append((format_variant, implied_math_format))
 
     return combinations
 
@@ -299,7 +290,10 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     next 1024 → up. The first ``len(_SWIGLU_CORNER_CASES)`` lanes are
     deterministic boundary cases; the rest is sampled from ``distribution``.
     """
-    (formats, dest_acc, implied_math_format) = formats_dest_acc_implied_math
+    format_variant, implied_math_format = formats_dest_acc_implied_math
+    assert isinstance(format_variant, QuasarSfpuVariant)
+    formats = format_variant.formats
+    dest_acc = format_variant.dest_acc
 
     torch.manual_seed(42)
 
@@ -325,10 +319,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
     # Golden is a single tile's worth of elements.
     golden_tensor = golden_tile.flatten().to(format_dict[formats.output_format])
 
-    # SFPU tests: unpack_to_dest only when format bit-width matches Dest mode.
-    unpack_to_dest = formats.input_format.is_32_bit() == (
-        dest_acc == DestAccumulation.Yes
-    )
+    unpack_to_dest = format_variant.unpack_to_dest
 
     configuration = TestConfig(
         "sources/quasar/sfpu_swiglu_quasar_test.cpp",
@@ -363,6 +354,7 @@ def test_sfpu_swiglu_quasar(formats_dest_acc_implied_math, distribution):
         unpack_to_dest=unpack_to_dest,
         dest_acc=dest_acc,
     )
+    format_variant.apply_formats(configuration.formats_config)
 
     res_from_L1 = configuration.run().result
 

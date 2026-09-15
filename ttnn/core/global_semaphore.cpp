@@ -4,19 +4,15 @@
 
 #include "ttnn/global_semaphore.hpp"
 
-#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::global_semaphore {
 
 GlobalSemaphore create_global_semaphore(
-    IDevice* device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return CreateGlobalSemaphore(device, cores, initial_value, buffer_type);
-}
-
-GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
-    return CreateGlobalSemaphore(mesh_device, cores, initial_value, buffer_type);
+    auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_semaphore");
+    return GlobalSemaphore(*mesh_device, cores, initial_value, buffer_type);
 }
 
 tt::tt_metal::DeviceAddr get_global_semaphore_address(const GlobalSemaphore& global_semaphore) {

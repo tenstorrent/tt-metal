@@ -127,7 +127,6 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
         # BH-Quietbox-2 (qb2) exposes the model store at /mnt/models on the host rather than
         # /mnt/MLPerf, so mount that into the container's /mnt/MLPerf. All other runners use the
         # direct 1:1 /mnt/MLPerf mount. See .github/workflows/models-unit-tests-impl.yaml
@@ -135,7 +134,6 @@ jobs:
         - ${{ inputs.runner-label == 'BH-Quietbox-2' && '/mnt/models:/mnt/MLPerf:ro' || '/mnt/MLPerf:/mnt/MLPerf:ro' }}
       options: >
         --device /dev/tenstorrent
-        --group-add 1457
         --tmpfs /tmp
     defaults:
       run:

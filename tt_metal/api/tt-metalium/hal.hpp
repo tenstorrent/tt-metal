@@ -54,6 +54,14 @@ uint32_t get_l1_alignment();
 uint32_t get_pcie_alignment();
 
 /**
+ * @brief Uses the hardware abstraction layer to inform client of the architecture specific maximum
+ * NoC burst size (NOC_MAX_BURST_SIZE from the architecture's noc_parameters.h).
+ *
+ * @return Maximum NoC burst size in bytes
+ */
+uint32_t get_noc_max_burst_size_bytes();
+
+/**
  * @brief Uses the hardware abstraction layer to inform client of architecture specific address.
  * this address corresponds to the beginning of free space in the ERISC's L1 SRAM
  *

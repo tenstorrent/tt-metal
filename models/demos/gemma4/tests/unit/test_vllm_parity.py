@@ -1805,6 +1805,8 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
+            if kv_shared_override <= 0:
+                pytest.skip("Model has no kv-shared layers — all-kv-shared case not applicable")
         hf_text_config = _create_hf_text_config_with_pli(vocab_size=256, num_layers=num_layers, pli_size=64)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1819,6 +1821,8 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
+            if kv_shared_override <= 0:
+                pytest.skip("Model has no kv-shared layers — all-kv-shared case not applicable")
         hf_text_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override

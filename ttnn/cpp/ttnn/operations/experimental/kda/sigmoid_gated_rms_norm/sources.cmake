@@ -6,8 +6,6 @@ set(TTNN_OP_EXPERIMENTAL_KDA_SIGMOID_GATED_RMS_NORM_SRCS
     device/sigmoid_gated_rms_norm_program_factory.cpp
 )
 
-set(TTNN_OP_EXPERIMENTAL_KDA_SHARED_SRCS ../factory/kda_factory_utils.cpp)
-
 set(TTNN_OP_EXPERIMENTAL_KDA_SIGMOID_GATED_RMS_NORM_NANOBIND_SRCS
     sigmoid_gated_rms_norm_nanobind.cpp
     ../kda_nanobind.cpp

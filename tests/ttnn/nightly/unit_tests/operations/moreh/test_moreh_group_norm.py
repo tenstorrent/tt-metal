@@ -13,6 +13,9 @@ from loguru import logger
 
 from tests.ttnn.unit_tests.operations.test_utils import TILE_HEIGHT, TILE_WIDTH, to_ttnn, to_torch
 
+# Module-scoped device: opens once per file instead of once per test case.
+pytestmark = pytest.mark.use_module_device
+
 
 def torch_group_norm(input, num_groups, gamma=None, beta=None, eps=1e-05, compute_mean_rstd=True):
     N, _, _, _ = input.shape
@@ -327,6 +330,8 @@ def test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, d
 )
 def test_moreh_group_norm_callback(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_test_moreh_group_norm(N, C_num_groups, HW, eps, affine, compute_mean_rstd, device)
@@ -535,6 +540,8 @@ def test_moreh_group_norm_backward_callback(
     device,
 ):
     torch.manual_seed(2024)
+    # Start from an empty cache: the module-scoped device carries entries over from earlier tests in this file.
+    device.clear_program_cache()
     num_program_cache_entries_list = []
     for i in range(2):
         run_test_moreh_group_norm_backward(

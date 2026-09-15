@@ -5,10 +5,13 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
+#include <nanobind/stl/string.h>
 #include <nanobind/stl/tuple.h>
+#include <nanobind/stl/variant.h>
 #include <nanobind/stl/vector.h>
 
 #include <span>
+#include <string>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "autograd/autocast_tensor.hpp"
@@ -26,7 +29,7 @@
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
-#include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_kv_assemble_op.hpp"
 #include "ops/mla_q_rope.hpp"
 #include "ops/moe_ffn_swiglu_op.hpp"
 #include "ops/moe_group_op.hpp"
@@ -333,15 +336,16 @@ void py_module(nb::module_& m) {
     {
         auto py_mla = static_cast<nb::module_>(m.attr("mla"));
         py_mla.def(
-            "qkv_assemble",
-            &ttml::ops::mla_qkv_assemble,
-            nb::arg("q_pre"),
+            "kv_assemble",
+            &ttml::ops::mla_kv_assemble,
             nb::arg("kv_up"),
             nb::arg("k_pe"),
             nb::arg("n_heads"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            nb::arg("v_dim"));
+            nb::arg("v_dim"),
+            "Fused MLA KV assembly: demuxes kv_up and broadcasts k_pe into head-major K/V.\n"
+            "Q head-split + RoPE is handled by rope.mla_q_rope.");
     }
 
     {
@@ -398,12 +402,14 @@ void py_module(nb::module_& m) {
         py_rope.def(
             "mla_q_rope",
             &ttml::ops::mla_q_rope,
-            nb::arg("q_full"),
+            nb::arg("q_pre"),
             nb::arg("rope_params"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
-            "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
+            "MLA Q RoPE + head-split with autograd: packed q_pre -> head-major q_roped "
+            "(backward uses neg cos/sin and packs dq_pre).\n"
+            "q_pre: [B, 1, S, n_heads * (qk_nope_dim + qk_rope_dim)] TILE bf16. "
+            "Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",
             &ttml::ops::gen_freqs,
@@ -557,7 +563,14 @@ void py_module(nb::module_& m) {
     {
         auto py_unary = static_cast<nb::module_>(m.attr("unary"));
         py_unary.def("relu", &ttml::ops::relu, nb::arg("tensor"));
-        py_unary.def("gelu", &ttml::ops::gelu, nb::arg("tensor"));
+        py_unary.def(
+            "gelu",
+            &ttml::ops::gelu,
+            nb::arg("tensor"),
+            nb::kw_only(),
+            nb::arg("variant") = GeluVariant::ACCURATE,
+            "GELU activation. `variant` takes a ttnn.GeluVariant. Unlike ttnn, the FastLut variant is\n"
+            "not supported.");
         py_unary.def("silu", &ttml::ops::silu, nb::arg("tensor"), nb::arg("use_composite_bw") = false);
         py_unary.def("exp", &ttml::ops::exp, nb::arg("tensor"));
         py_unary.def("clip", &ttml::ops::clip, nb::arg("tensor"), nb::arg("lo"), nb::arg("hi"));

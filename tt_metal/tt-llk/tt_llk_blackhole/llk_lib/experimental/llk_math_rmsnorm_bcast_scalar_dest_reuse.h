@@ -73,8 +73,8 @@ inline void rmsnorm_bcast_scalar_reuse_dest_as_src()
 {
     TTI_STALLWAIT(
         p_stall::STALL_MATH,
-        p_stall::WAIT_SFPU | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
-                                                 // data_valid, so we want to wait on that
+        p_stall::WAIT_SFPU | p_stall::MATH | p_stall::SRCB_VLD); // MOVD2B for a whole face assumes unpacker will set a dummy
+                                                                 // data_valid, so we want to wait on that
     TTI_MOVD2B(0, p_movd2b::SRC_ZERO_OFFSET + 0, ADDR_MOD_1, p_movd2b::MOV_1_ROW, 0);
 }
 

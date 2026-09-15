@@ -394,6 +394,12 @@ inline __attribute__((interrupt, hot)) void synchronous_exception_handler() {
 #endif
 }
 
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_DISPATCH_INTERRUPT_TABLE_BASE;
+#else
+constexpr uint32_t INTERRUPT_TABLE_BASE = MEM_INTERRUPT_TABLE_BASE;
+#endif
+
 constexpr uint32_t SYNC_INTERRUPT_INDEX = 0;                  // synchronized interrupts index
 constexpr uint32_t MACHINE_EXTERNAL_INTERRUPT_OFFSET = 11;    // machine external interrupt offset
 constexpr uint32_t ROCC_INTERRUPT_INDEX = 13;                 // rocc interrupt index
@@ -422,9 +428,10 @@ inline __attribute__((always_inline)) uint32_t encode_j_immediate(int32_t offset
 
 inline __attribute__((always_inline)) void register_handler_for_interrupt(uint32_t interrupt_index, void(*handler)()) {
     uint64_t isr_address = reinterpret_cast<uint64_t>(handler);
-    uint32_t encoded_offset = encode_j_immediate(int32_t(isr_address) - int32_t(MEM_INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
+    uint32_t encoded_offset =
+        encode_j_immediate(int32_t(isr_address) - int32_t(INTERRUPT_TABLE_BASE + interrupt_index * sizeof(uint32_t)));
     uint32_t instruction = 0x0000006f | encoded_offset; // create a jump instruction to the handler
-    *((uint32_t*)(MEM_INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
+    *((uint32_t*)(INTERRUPT_TABLE_BASE) + interrupt_index) = instruction;
 }
 
 inline __attribute__((always_inline)) void setup_isr_csrs() {
@@ -432,10 +439,10 @@ inline __attribute__((always_inline)) void setup_isr_csrs() {
     register_handler_for_interrupt(SYNC_INTERRUPT_INDEX, synchronous_exception_handler);
     register_handler_for_interrupt(ROCC_INTERRUPT_INDEX, dfb_implicit_sync_handler);
     // point mtvec to the interrupt table and verify it
-    asm volatile("csrw mtvec, %0" : : "r"(MEM_INTERRUPT_TABLE_BASE | 1));
+    asm volatile("csrw mtvec, %0" : : "r"(INTERRUPT_TABLE_BASE | 1));
     uintptr_t check;
     __asm__ volatile("csrr %0, mtvec" : "=r"(check));
-    if ((check & ~0x3UL) != MEM_INTERRUPT_TABLE_BASE || (check & 0x3UL) != 0x1) {
+    if ((check & ~0x3UL) != INTERRUPT_TABLE_BASE || (check & 0x3UL) != 0x1) {
         /* BASE wasn't 256-aligned, or MODE was rejected. Halt. */
         ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
     }
@@ -527,19 +534,28 @@ void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     }
 }
 
-// Get the wall clock timestamp. Reading RISCV_DEBUG_REG_WALL_CLOCK_L samples/freezes (for readback)
-// upper 32 bits of the 64-bit timestamp. Upper 32 bits are read from RISCV_DEBUG_REG_WALL_CLOCK_H.
+// NOTE: Timestamps from different processors are NOT directly comparable. Do not subtract one
+// processor's value from another's without an explicit correlation step.
+//   * TRISC and DM sit in different clock domains running at different frequencies.
+//   * The TRISC clock counter is per-NEO. Empirically the four counters on different NEOs are
+//     synchronized, meaning if two TRISCs on different NEOs read their own counters at exactly
+//     the same time, the value will be the same.
+//   * The DM value is per-hart: rdcycle counts that core's own cycles since reset.
 inline uint64_t get_timestamp() {
-    volatile uint timestamp_low =
-        *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
-    volatile uint timestamp_high =
-        *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_REG_ADDR);
-    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
+#if defined(COMPILE_FOR_TRISC)
+    uint32_t timestamp_low = *reinterpret_cast<volatile uint32_t tt_reg_ptr*>(
+        LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_OFFSET);
+    uint32_t timestamp_high = *reinterpret_cast<volatile uint32_t tt_reg_ptr*>(
+        LOCAL_REGS_BASE + NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_1_AT_REG_OFFSET);
+    return (static_cast<uint64_t>(timestamp_high) << 32) | timestamp_low;
+#else
+    uint64_t cycle;
+    asm volatile("rdcycle %0" : "=r"(cycle));
+    return cycle;
+#endif
 }
 
-// Get only the lower 32 bits of the wall clock timestamp
-inline uint32_t get_timestamp_32b() {
-    return *reinterpret_cast<volatile uint tt_reg_ptr*>(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_WALL_CLOCK_0_REG_ADDR);
-}
+// Lower 32 bits of the timestamp. Same cross-processor caveats as get_timestamp().
+inline uint32_t get_timestamp_32b() { return static_cast<uint32_t>(get_timestamp()); }
 
 #endif
