@@ -150,6 +150,23 @@ SHAPES = [
     (9472, 5120, 3456, 12, 9, True, "ff1_gelu"),
     # cross_attn_kv: cross-attention KV via minimal_matmul_split, chunks=2 (11x10 grid)
     (128, 5120, 2560, 11, 10, False, "cross_attn_kv"),
+    # --- Wan2.2 TI2V-5B, single BH Galaxy 4x8 (SP=8, TP=4) ---------------------------
+    # dim=3072 -> dim/tp=768, qkv 3*dim/tp=2304, ffn 14336/tp=3584, proj_out 48*2*2=192.
+    # M is the SP-local padded token count: 1024 at 832x480/81f, 2336 at 1280x704/81f.
+    # These are the shapes the model actually requests (confirmed from get_matmul_config
+    # warnings on real runs); the table registered in pipeline_wan_ti2v_5b.py keys on
+    # M values the model never asks for, so none of its entries are reachable.
+    (1024, 3072, 2304, 12, 9, True, "qkv"),  # 5B 480p self-attn qkv
+    (2336, 3072, 2304, 12, 9, True, "qkv"),  # 5B 720p self-attn qkv
+    (1024, 3072, 768, 12, 9, True, "to_out"),  # 5B 480p self-attn out
+    (2336, 3072, 768, 12, 9, True, "to_out"),  # 5B 720p self-attn out
+    (1024, 3072, 3584, 12, 9, True, "ff1_gelu"),  # 5B 480p ffn1 (gelu_tanh)
+    (2336, 3072, 3584, 12, 9, True, "ff1_gelu"),  # 5B 720p ffn1 (gelu_tanh)
+    (1024, 3584, 3072, 12, 8, False, "mmrs"),  # 5B 480p ffn2 (fused MMRS, ring)
+    (2336, 3584, 3072, 12, 8, False, "mmrs"),  # 5B 720p ffn2 (fused MMRS, ring)
+    (1024, 3072, 192, 11, 10, False, "plain"),  # 5B 480p proj_out
+    (2336, 3072, 192, 11, 10, False, "plain"),  # 5B 720p proj_out
+    (512, 3072, 1536, 11, 10, False, "cross_attn_kv"),  # 5B cross-attn kv (prompt seq 512)
     # WH AGMM Wan2.2 shapes (8x8 grid), K-fractured across 4 devices.
     # All have bias (always allocated/passed by _build_op_runner).
     # N=3456 has fused GELU (exact, non-approx) to match the test config.
