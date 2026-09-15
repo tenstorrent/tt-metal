@@ -156,8 +156,11 @@ def test_audio_decode_perf(
     is_fsdp: bool,
 ):
     ckpt = _resolve_checkpoint(
-        [f"{_LOCAL_CHECKPOINT_DIR}/{_DEV_CHECKPOINT}"],
-        (_DEV_CHECKPOINT,),
+        [
+            f"{_LOCAL_CHECKPOINT_DIR}/{_DISTILLED_CHECKPOINT}",
+            f"{_LOCAL_CHECKPOINT_DIR}/{_DEV_CHECKPOINT}",
+        ],
+        (_DISTILLED_CHECKPOINT, _DEV_CHECKPOINT),
     )
     if ckpt is None:
         pytest.skip("checkpoint not found (set LTX_CHECKPOINT)")
@@ -178,7 +181,8 @@ def test_audio_decode_perf(
     )
     mesh_shape = tuple(mesh_device.shape)
 
-    audio_latent = torch.randn(1, 256, 128, dtype=torch.float32)
+    audio_n = int(os.environ.get("LTX_AUDIO_TEST_N", "256"))
+    audio_latent = torch.randn(1, audio_n, 128, dtype=torch.float32)
     num_frames, fps = 145, 24.0
 
     t0 = time.time()
@@ -187,16 +191,20 @@ def test_audio_decode_perf(
     assert dev_audio is not None
 
     warm_times = []
-    for _ in range(_WARM_ITERS):
+    for _ in range(int(os.environ.get("LTX_AUDIO_TEST_WARM_ITERS", str(_WARM_ITERS)))):
         t0 = time.time()
         out = pipeline.decode_audio(audio_latent, num_frames, fps=fps)
         warm_times.append(time.time() - t0)
         assert out is not None
 
+    warm_summary = (
+        f" warm_min={min(warm_times):.2f}s warm_mean={sum(warm_times)/len(warm_times):.2f}s"
+        if warm_times
+        else ""
+    )
     logger.info(
         f"Audio decode perf (mesh {mesh_shape}, T-shard={parallel_config.sequence_parallel.factor}): "
-        f"cold={t_cold:.2f}s warm_min={min(warm_times):.2f}s warm_mean={sum(warm_times)/len(warm_times):.2f}s "
-        f"wave={tuple(dev_audio.waveform.shape)} sr={dev_audio.sampling_rate}"
+        f"cold={t_cold:.2f}s{warm_summary} wave={tuple(dev_audio.waveform.shape)} sr={dev_audio.sampling_rate}"
     )
 
 

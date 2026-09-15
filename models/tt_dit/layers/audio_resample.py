@@ -72,6 +72,7 @@ class LowPassFilter1d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         allow_recovery: bool = True,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
         if cutoff < 0.0 or cutoff > 0.5:
@@ -93,6 +94,7 @@ class LowPassFilter1d(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self.allow_recovery = allow_recovery
+        self.use_persistent_neighbor_pad = use_persistent_neighbor_pad
 
         kernel = _make_kaiser_sinc_kernel_1d(cutoff, half_width, kernel_size)
         self._taps_cpu = kernel.tolist()
@@ -122,6 +124,7 @@ class LowPassFilter1d(Module):
                     parallel_config=self.parallel_config,
                     ccl_manager=self.ccl_manager,
                     padding_mode=self.padding_mode,
+                    use_persistent_buffer=self.use_persistent_neighbor_pad,
                 )
             elif self.padding_mode == "replicate":
                 x = _replicate_pad_t(x_BTC, self.pad_left, self.pad_right, self.mesh_device)
@@ -161,6 +164,7 @@ class UpSample1d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         allow_recovery: bool = True,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
         sharded = parallel_config is not None and parallel_config.factor > 1
@@ -174,6 +178,7 @@ class UpSample1d(Module):
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
         self.allow_recovery = allow_recovery
+        self.use_persistent_neighbor_pad = use_persistent_neighbor_pad
 
         if window == "hann":
             kernel, self.kernel_size, self.pad, self.pad_left_crop, self.pad_right_crop = _make_hann_sinc_kernel_1d(
@@ -220,6 +225,7 @@ class UpSample1d(Module):
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
                 padding_mode="replicate",
+                use_persistent_buffer=self.use_persistent_neighbor_pad,
             )
         else:
             x_pad = _replicate_pad_t(x_BTC, eff_pad, eff_pad, self.mesh_device)
@@ -292,6 +298,7 @@ class DownSample1d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         allow_recovery: bool = True,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
         self.ratio = ratio
@@ -308,6 +315,7 @@ class DownSample1d(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             allow_recovery=allow_recovery,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:
@@ -331,6 +339,7 @@ class Activation1d(Module):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         allow_recovery: bool = True,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -344,6 +353,7 @@ class Activation1d(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             allow_recovery=allow_recovery,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
         self.downsample = DownSample1d(
             ratio=down_ratio,
@@ -353,6 +363,7 @@ class Activation1d(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             allow_recovery=allow_recovery,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:

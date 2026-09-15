@@ -56,6 +56,7 @@ class DilatedConv1d(_AlignedOutConv1d):
         parallel_config: ParallelFactor | None = None,
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -70,6 +71,7 @@ class DilatedConv1d(_AlignedOutConv1d):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             split_mode=split_mode,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
 
@@ -89,6 +91,7 @@ class AMPBlock1(Module):
         ccl_manager: CCLManager | None = None,
         split_mode: str = "off",
         allow_depthwise_recovery: bool = True,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
         self.channels = channels
@@ -111,6 +114,7 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    use_persistent_neighbor_pad=use_persistent_neighbor_pad,
                 )
                 for i in range(self.num_branches)
             ]
@@ -128,6 +132,7 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     split_mode=split_mode,
+                    use_persistent_neighbor_pad=use_persistent_neighbor_pad,
                 )
                 for i in range(self.num_branches)
             ]
@@ -149,6 +154,7 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     allow_recovery=allow_depthwise_recovery,
+                    use_persistent_neighbor_pad=use_persistent_neighbor_pad,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -169,6 +175,7 @@ class AMPBlock1(Module):
                     parallel_config=parallel_config,
                     ccl_manager=ccl_manager,
                     allow_recovery=allow_depthwise_recovery,
+                    use_persistent_neighbor_pad=use_persistent_neighbor_pad,
                 )
                 for _ in range(self.num_branches)
             ]
@@ -237,6 +244,7 @@ class Vocoder(Module):
         allow_depthwise_recovery: bool = True,
         use_local_tpad_tail: bool = True,
         legacy_replicate_tail: bool = False,
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
 
@@ -293,6 +301,7 @@ class Vocoder(Module):
             parallel_config=None if self._conv_pre_unsharded else parallel_config,
             ccl_manager=None if self._conv_pre_unsharded else ccl_manager,
             split_mode=split_mode,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
         self.ups = ModuleList(
@@ -330,6 +339,7 @@ class Vocoder(Module):
                         ccl_manager=ccl_manager,
                         split_mode=split_mode,
                         allow_depthwise_recovery=allow_depthwise_recovery,
+                        use_persistent_neighbor_pad=use_persistent_neighbor_pad,
                     )
                 )
 
@@ -349,6 +359,7 @@ class Vocoder(Module):
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
             allow_recovery=allow_depthwise_recovery,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
         self.conv_post = _AlignedOutConv1d(
@@ -365,6 +376,7 @@ class Vocoder(Module):
             # out_channels=2 is too small to channel-shard; keep output full (no trailing gather).
             channel_shard_output=False,
             split_mode=split_mode,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:

@@ -216,6 +216,7 @@ def _t_neighbor_pad(
     parallel_config: "ParallelFactor | AudioTParallelConfig",
     ccl_manager: CCLManager,
     padding_mode: str = "zeros",
+    use_persistent_buffer: bool = True,
 ) -> ttnn.Tensor:
     """Halo exchange on the T axis (dim 1 in BTC), single- or two-axis sharded."""
     if pad_left == 0 and pad_right == 0:
@@ -236,11 +237,14 @@ def _t_neighbor_pad(
 
     outer_dims = x_BTC.shape[0]
     num_links = max(1, min(outer_dims, ccl_manager.num_links))
+    neighbor_pad = (
+        ccl_manager.neighbor_pad_persistent_buffer if use_persistent_buffer else ccl_manager.neighbor_pad
+    )
 
     if isinstance(parallel_config, AudioTParallelConfig):
         # Two-axis halo: one call per mesh axis (distinct pad dims required).
         sem0 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis0.mesh_axis)
-        x_BTC = ccl_manager.neighbor_pad_persistent_buffer(
+        x_BTC = neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -251,7 +255,7 @@ def _t_neighbor_pad(
             num_links=[num_links],
         )
         sem1 = ccl_manager.get_np_ping_pong_semaphore(parallel_config.axis1.mesh_axis)
-        return ccl_manager.neighbor_pad_persistent_buffer(
+        return neighbor_pad(
             x_BTC,
             dims=[1],
             pad_left=[pad_left],
@@ -263,7 +267,7 @@ def _t_neighbor_pad(
         )
 
     sem = ccl_manager.get_np_ping_pong_semaphore(parallel_config.mesh_axis)
-    return ccl_manager.neighbor_pad_persistent_buffer(
+    return neighbor_pad(
         x_BTC,
         dims=[1],
         pad_left=[pad_left],
@@ -996,6 +1000,7 @@ class Conv1dViaConv3d(Module):
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
         split_mode: str = "off",
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__()
 
@@ -1027,6 +1032,7 @@ class Conv1dViaConv3d(Module):
         self.dtype = dtype
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
+        self.use_persistent_neighbor_pad = use_persistent_neighbor_pad
 
         eff_k = (kernel_size - 1) * dilation + 1
         # ``eff_k // 2`` (the ``padding=None`` default) is torch's "same" padding and is right
@@ -1185,6 +1191,7 @@ class Conv1dViaConv3d(Module):
                 parallel_config=self.parallel_config,
                 ccl_manager=self.ccl_manager,
                 padding_mode="zeros",
+                use_persistent_buffer=self.use_persistent_neighbor_pad,
             )
         elif self.external_pad_front > 0:
             B, T, C = x_BTC.shape
@@ -1237,6 +1244,7 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
         ccl_manager: CCLManager | None = None,
         channel_shard_output: bool = True,
         split_mode: str = "off",
+        use_persistent_neighbor_pad: bool = True,
     ) -> None:
         super().__init__(
             in_channels=in_channels,
@@ -1253,6 +1261,7 @@ class _AlignedOutConv1d(Conv1dViaConv3d):
             ccl_manager=ccl_manager,
             channel_shard_output=channel_shard_output,
             split_mode=split_mode,
+            use_persistent_neighbor_pad=use_persistent_neighbor_pad,
         )
 
     def forward(self, x_BTC: ttnn.Tensor) -> ttnn.Tensor:

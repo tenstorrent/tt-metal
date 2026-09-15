@@ -184,7 +184,8 @@ class LTXAudioDecoderAdapter:
         )
         self._vocoder_with_bwe.use_trace = self._traced and _env_flag("LTX_VOC_TRACE", default=True)
         self._vocoder_with_bwe.use_trace_bwe = self._traced and _env_flag("LTX_BWE_TRACE", default=True)
-        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_VAE_TRACE", default=False)
+        legacy_vae_trace = _env_flag("LTX_VAE_TRACE", default=False)
+        self._mel_decoder.use_trace = self._traced and _env_flag("LTX_MEL_TRACE", default=legacy_vae_trace)
         if isinstance(audio_parallel_config, AudioTCParallelConfig):
             cfg_desc = f"T-shard={t_factor} axis{t_axis} + channel-TP={c_factor} axis{c_axis}"
         elif audio_parallel_config is not None:
@@ -216,6 +217,7 @@ class LTXAudioDecoderAdapter:
             allow_depthwise_recovery=False,
             use_local_tpad_tail=False,
             legacy_replicate_tail=True,
+            use_persistent_neighbor_pad=True,
         )
 
     def _audio_decoder_state_provider(self) -> dict[str, torch.Tensor]:
