@@ -144,10 +144,6 @@ void kernel_main() {
     // data-landed signal); advances by kIncsPerTransfer each transfer.
     uint32_t last_seen_sent = 0;
     bool terminated = false;
-#if defined(TT_INJECT_HANG_AFTER)
-    // Fault injection (see build_receiver_program). Counts completed transfers.
-    uint32_t injected_transfer_count = 0;
-#endif
     while (!terminated) {
         // LEASE mode: wait for a grant before the transfer's overwrite-OK inc (which
         // is sent over fabric, so it needs the link). Termination-aware. While not
@@ -192,20 +188,6 @@ void kernel_main() {
         if (terminated) {
             break;
         }
-
-#if defined(TT_INJECT_HANG_AFTER)
-        // Fault injection: wedge this core after TT_INJECT_HANG_AFTER transfers.
-        // Not termination-aware, because a genuinely hung core does not answer the
-        // termination semaphore either -- that is why teardown wraps its core waits in
-        // bounded timeouts it catches. This models an ordinary mid-workload device hang:
-        // the dispatch watchdog fires, triage runs, then teardown grinds through its
-        // 10s-per-wait timeouts and the process exits.
-        if (++injected_transfer_count > TT_INJECT_HANG_AFTER) {
-            while (true) {
-                invalidate_l1_cache();
-            }
-        }
-#endif
 
         // 2. Optional inline-metadata: the sender staged the blob in our vestigial
         //    socket-FIFO L1 (covered by the same Flush'd data-landed inc, so it is

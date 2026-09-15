@@ -1258,23 +1258,14 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # DO NOT MERGE -- fault injection. Wedges the D2D receiver service core on rank 2
-    # mid-workload to exercise hang -> watchdog -> triage -> teardown end to end. Both
-    # vars are TT_-prefixed, so tt-run's parent-env passthrough forwards them to every
-    # rank. The receiver workload is launched once at create_pair, so the count spans all
-    # requests: 55k@5k is 11 chunks, so 15 lands a few chunks into the measured request,
-    # past the throwaway warmup and its first-chunk compile.
-    # Flip TT_INJECT_D2D_HANG_RANK to 0 to target the H2D/producer-facing rank instead.
-    export TT_INJECT_D2D_HANG_AFTER=15
-    export TT_INJECT_D2D_HANG_RANK=2
+    # DO NOT MERGE -- model-op hang injection goes here (pending).
     # Periodic all-thread Python stack dumps, so a rank that wedges says where.
     export TT_INJECT_FAULTHANDLER_SECONDS=60
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
   test_type: prefill_runner_kv_pcc
   # DO NOT MERGE -- `hang_injection` is a unique selector so `test-type: hang_injection`
   # dispatches ONLY this leg. Without it the narrowest existing token
-  # (prefill_runner_kv_pcc / disagg_prefill) drags in 3 more galaxy legs, including the
-  # uninjected GLM SC4 one, which would run with the 300s watchdog armed for no reason.
+  # (prefill_runner_kv_pcc / disagg_prefill) drags in 3 more galaxy legs.
   test_tags: [kimi_k2_7, runner, kv_cache, hang_injection]
   test_group: disagg_prefill
   skus:

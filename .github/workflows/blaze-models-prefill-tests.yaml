@@ -153,7 +153,7 @@ jobs:
       # unbounded request loop until the producer connects, so a short watchdog fires
       # mid-idle, runs tt-triage (which halts the cores) and wedges the fabric. 300s sits
       # well above the up-to-120s producer-connect window, so it only fires on a real
-      # hang -- here, the one injected via TT_INJECT_D2D_HANG_AFTER.
+      # hang -- here, the deliberately injected one.
       hang-detection-timeout: 300
 
   Galaxy-Blaze-models-prefill-sc1-runner:

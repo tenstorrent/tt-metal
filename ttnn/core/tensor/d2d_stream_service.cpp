@@ -5,7 +5,6 @@
 #include "tensor/d2d_stream_service.hpp"
 
 #include <chrono>
-#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
@@ -823,25 +822,6 @@ Program build_receiver_program(
     };
     ct_args.insert(ct_args.end(), accessor_ct.begin(), accessor_ct.end());
 
-    // DO NOT MERGE -- fault injection for multihost hang-detection testing.
-    // TT_INJECT_D2D_HANG_AFTER=<n> wedges the receiver service core after n transfers;
-    // TT_INJECT_D2D_HANG_RANK=<r> picks the rank (default 2). Both are TT_-prefixed so
-    // tt-run's parent-env passthrough forwards them to every rank automatically.
-    std::map<std::string, std::string> receiver_defines;
-    if (const char* hang_after = std::getenv("TT_INJECT_D2D_HANG_AFTER")) {
-        const char* hang_rank_env = std::getenv("TT_INJECT_D2D_HANG_RANK");
-        const int hang_rank = hang_rank_env ? std::atoi(hang_rank_env) : 2;
-        const auto ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
-        if (static_cast<int>(*ctx->rank()) == hang_rank) {
-            receiver_defines["TT_INJECT_HANG_AFTER"] = hang_after;
-            log_warning(
-                tt::LogOp,
-                "D2D receiver FAULT INJECTION ACTIVE on rank {}: wedging service core after {} transfers",
-                hang_rank,
-                hang_after);
-        }
-    }
-
     auto kernel = CreateKernel(
         program,
         "ttnn/core/tensor/kernels/persistent_d2d_receiver.cpp",
@@ -850,7 +830,6 @@ Program build_receiver_program(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::RISCV_0_default,
             .compile_args = ct_args,
-            .defines = receiver_defines,
         });
 
     // The receiver returns socket credits to the sender, so its fabric
