@@ -55,8 +55,17 @@ def _parse_perf_cfg(text: str) -> dict:
     return cfg
 
 
+def _parse_uint(text: str, name: str) -> int:
+    """One `constexpr std::uint32_t <name> = <literal>;` from counters.h."""
+    m = re.search(rf"{name}\s*=\s*({_C_LITERAL})[uUlL]*\s*;", text)
+    if m is None:
+        raise RuntimeError(f"{name} not found in counters.h")
+    return int(m.group(1), 0)
+
+
 # Config word layout, parsed from the device-side header so the two cannot drift apart.
-_PERF_CFG = _parse_perf_cfg(LLK_COUNTERS_HEADER.read_text())
+_HEADER_TEXT = LLK_COUNTERS_HEADER.read_text()
+_PERF_CFG = _parse_perf_cfg(_HEADER_TEXT)
 PERF_CFG_VALID_BIT = _PERF_CFG["VALID_BIT"]
 PERF_CFG_L1_MUX_SHIFT = _PERF_CFG["L1_MUX_SHIFT"]
 PERF_CFG_L1_MUX_MASK = _PERF_CFG["L1_MUX_MASK"]
@@ -98,7 +107,9 @@ def _zone_sync_ctrl_addr(zone: int) -> int:
 
 
 # Lightweight sync: SYNC_ZONE_COMPLETE marker (matches counters.h)
-_SYNC_ZONE_COMPLETE = 0xFF
+_SYNC_ZONE_COMPLETE = _parse_uint(_HEADER_TEXT, "SYNC_ZONE_COMPLETE")
+# The device stores this when the counter select never took effect; the count is unknown, not zero.
+_COUNTER_SELECT_MISSED = _parse_uint(_HEADER_TEXT, "COUNTER_SELECT_MISSED")
 
 
 def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
@@ -192,6 +203,14 @@ def _read_zone_counters(location: str, zone: int, zone_name: str) -> list[dict]:
         cycles = bank_cycles[bank_id] if bank_id < bank_cycles_words else 0
         count = counter_counts[count_idx]
         count_idx += 1
+
+        if count == _COUNTER_SELECT_MISSED:
+            # The readout gave up on the mode register, so the slot has no value to publish.
+            logger.warning(
+                f"Zone {zone_name}: {bank_name}.{counter_name} (sel {counter_id}) missed its select "
+                "readback; reporting it as missing"
+            )
+            count = float("nan")
 
         results.append(
             {

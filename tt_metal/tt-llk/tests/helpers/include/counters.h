@@ -65,7 +65,10 @@ constexpr std::uint32_t COUNTER_BANK_COUNT = llk::perf::NUM_BANKS;
 
 // Unbounded, a corrupt config word would hang every thread and surface only as TENSIX TIMED OUT.
 constexpr std::uint32_t MODE_REG_POLL_LIMIT = 1024;
-constexpr std::uint32_t COUNTER_SLOT_COUNT  = PERF_COUNTERS_CONFIG_WORDS;
+// Stored instead of a count when the mode register never reports the selection: a stale read would look like a
+// plausible number. No counter reaches 2^32-1 inside a zone, so the value is free to use as a sentinel.
+constexpr std::uint32_t COUNTER_SELECT_MISSED = 0xFFFFFFFFu;
+constexpr std::uint32_t COUNTER_SLOT_COUNT    = PERF_COUNTERS_CONFIG_WORDS;
 
 constexpr std::uint32_t PERF_CFG_VALID_BIT     = 1u << 31; // bit 31: slot active
 constexpr std::uint32_t PERF_CFG_L1_MUX_SHIFT  = 17;       // bits 19:17
@@ -345,9 +348,10 @@ inline __attribute__((always_inline)) void freeze_and_read_all_counters(std::uin
         }
         const llk::perf::BankRegs& regs = llk::perf::bank_regs(static_cast<Bank>(bank_id));
         // No mux write: it is fixed once by configure_hardware and cannot be re-aimed afterwards.
-        // select() polls the mode register back; without that the read samples the previous counter.
-        llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
-        counter_counts[out_idx] = llk::perf::read_count(regs);
+        // select() polls the mode register back; without that the read samples the previous counter, so a poll
+        // that never converges stores the sentinel instead of that stale value.
+        const bool selected     = llk::perf::select<MODE_REG_POLL_LIMIT>(regs, static_cast<std::uint16_t>(counter_id));
+        counter_counts[out_idx] = selected ? llk::perf::read_count(regs) : COUNTER_SELECT_MISSED;
         ++out_idx;
     }
 
