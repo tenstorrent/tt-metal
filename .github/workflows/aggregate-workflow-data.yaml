@@ -73,7 +73,7 @@ jobs:
               ".github/workflows/galaxy-sanity.yaml",
               ".github/workflows/galaxy-health.yaml",
               ".github/workflows/t3000-tests.yaml",
-              ".github/workflows/t3000-profiler-tests.yaml",
+              ".github/workflows/t3000-manual-tests.yaml",
               ".github/workflows/single-card-profiler-tests.yaml",
               ".github/workflows/pipeline-select-profiler.yaml",
 

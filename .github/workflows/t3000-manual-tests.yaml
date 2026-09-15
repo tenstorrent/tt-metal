@@ -1,8 +1,18 @@
-name: "(T3K) T3000 fast tests"
+name: "T3K manual tests"
 
 on:
   workflow_dispatch:
     inputs:
+      run-fast-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the T3000 fast (sanity) tests"
+      run-profiler-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run the T3000 profiler tests"
       platform:
         required: false
         type: choice
@@ -31,14 +41,17 @@ on:
         required: false
         type: boolean
         default: false
-        description: "Enable watcher for long-running tests"
+        description: "Enable watcher for long-running tests (fast tests only)"
 
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+
+  # Fast tests run against a plain build; profiler tests need a Tracy build, so
+  # the two suites cannot share one artifact.
   build-artifact:
     needs: check-harbor
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && inputs.run-fast-tests }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       contents: read
@@ -50,9 +63,26 @@ jobs:
       build-inplace-wheel: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
+
+  build-artifact-tracy:
+    needs: check-harbor
+    if: ${{ !cancelled() && inputs.run-profiler-tests }}
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      tracy: true
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-inplace-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
   t3000-sanity-tests:
     needs: [check-harbor, build-artifact]
-    if: ${{ !cancelled() && needs.build-artifact.result == 'success' }}
+    if: ${{ !cancelled() && inputs.run-fast-tests && needs.build-artifact.result == 'success' }}
     secrets: inherit
     uses: ./.github/workflows/t3000-sanity-tests-impl.yaml
     with:
@@ -62,3 +92,13 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 80 || 0 }}
+
+  t3000-profiler-tests:
+    needs: [check-harbor, build-artifact-tracy]
+    if: ${{ !cancelled() && inputs.run-profiler-tests && needs.build-artifact-tracy.result == 'success' }}
+    secrets: inherit
+    uses: ./.github/workflows/t3000-profiler-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-tracy.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-tracy.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-tracy.outputs.wheel-artifact-name }}
