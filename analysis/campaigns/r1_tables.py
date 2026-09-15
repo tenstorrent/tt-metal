@@ -76,7 +76,10 @@ def zon_view(tag):
         rb = v("NCRISC", "R_BARRIER")
         dom.append("reader/DRAM" if kv[-1] >= 25 else ("compute (PACK)" if t2 > t1 else "compute (MATH)"))
     return dict(
-        wall_zon=sum(wz) / len(wz), kv_wait_pct=sum(kv) / len(kv), dominant=max(set(dom), key=dom.count), n_zon=len(its)
+        wall_zon=sum(wz) / len(wz),
+        kv_wait_pct=sum(kv) / len(kv),
+        dominant=max(sorted(set(dom)), key=dom.count),
+        n_zon=len(its),
     )
 
 
