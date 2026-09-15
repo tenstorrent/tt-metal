@@ -26,7 +26,6 @@ tests/ttnn/unit_tests/operations/sdpa/sdpa_test_utils.py:342-541.
 
 import pytest
 import torch
-
 import ttnn
 from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 
@@ -37,6 +36,7 @@ from models.experimental.llama32_1b_quasar.tests.ops import op_utils as U
 # multi-chunk flash accumulation (batch32 = one core does all K-chunks) and the deeper multi-round tree
 # reduction (batch1 = one K-chunk per core, combined across more cores) where merge bugs actually bite.
 DECODE_SEQ_CONFIGS = [
+    (256, 128, 32),  # Exercises the minimum QK scratch capacity used by tree correction.
     (256, 128, 128),  # 2 K-chunks: nearest_n(129, 128) == 256
     (1024, 896, 128),  # 8 K-chunks: nearest_n(897, 128) == 1024
 ]
