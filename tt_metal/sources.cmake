@@ -4,6 +4,7 @@ set(TT_METAL_PUBLIC_API
     api/internal/disaggregation/layer_completion_queue.hpp
     api/internal/disaggregation/layer_completion_reorder_buffer.hpp
     api/internal/disaggregation/layer_completion_router.hpp
+    api/internal/reload_table.hpp
     api/tt-metalium/allocator.hpp
     api/tt-metalium/base_types.hpp
     api/tt-metalium/bfloat16.hpp
@@ -87,6 +88,8 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
+    api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp
+    api/tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp
     api/tt-metalium/experimental/pinned_memory.hpp
     api/tt-metalium/experimental/prefetcher_pipe.hpp
     api/tt-metalium/experimental/profiler.hpp

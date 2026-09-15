@@ -8,7 +8,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/dataflow_buffer.h"
+#include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
@@ -37,11 +37,7 @@ void kernel_main() {
     const auto d = TensorAccessor(tensor::dst);
 
     Noc noc;
-    DataflowBuffer dfb(dfb::in0);
-    dfb.reserve_back(1);
-    const uint32_t cb_slot = dfb.get_write_ptr();
-    dfb.push_back(1);
-    const CoreLocalMem<uint32_t> cb_mem(cb_slot);
+    Scratchpad<uint32_t> cb_mem(scratch::in0);
 
     for (uint32_t h = higher_dim_start; h < higher_dim_end; h++) {
         const uint32_t h_offset = h * LOWER_DIMS_TIMES_REP_DIM;
