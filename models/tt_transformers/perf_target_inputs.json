@@ -1,0 +1,29 @@
+{
+ "source": "hand-tuned 2026-09-11 for the tt_hw_planner optimizer: served widths from models/tt_transformers DecodersPrecision.performance (FF1/FF3 bfloat4_b, all other weights and the KV cache bfloat8_b); param count and geometry from the checkpoint's safetensors headers and config.json (meta-llama/Llama-3.1-8B-Instruct). Keep this file when the served widths are unchanged.",
+ "model_id": "meta-llama/Llama-3.1-8B-Instruct",
+ "unit": "token",
+ "total_params": 7504924672,
+ "params_basis": "read set for unit=token: the embed_tokens lookup table is excluded, lm_head is included",
+ "weight_bytes": 6094934272,
+ "bytes_per_param": 0.812125,
+ "device_census_complete": true,
+ "dominant_dtype": "bfloat8_b",
+ "kv_dtype": "bfloat8_b",
+ "layers": 32,
+ "hidden_size": 4096,
+ "intermediate_size": 14336,
+ "kv_heads": 8,
+ "head_dim": 128,
+ "blocks": {
+  "model": {
+   "layers": 32,
+   "hidden_size": 4096,
+   "intermediate_size": 14336,
+   "kv_heads": 8,
+   "head_dim": 128,
+   "params": 7504924672,
+   "lookup_params": 525336576,
+   "matmul_params": 6979588096
+  }
+ }
+}

@@ -17,10 +17,17 @@ namespace {
 
 const tt::tt_metal::Device& concrete_device(const IDevice& device) {
     if (const auto* mesh = dynamic_cast<const distributed::MeshDevice*>(&device)) {
-        TT_FATAL(mesh->num_devices() == 1, "Experimental NOC geometry APIs are only supported on unit MeshDevice.");
-        const auto* only_device = mesh->get_devices().front();
-        TT_FATAL(only_device != nullptr, "Device pointer cannot be null");
-        return concrete_device(*only_device);
+        // NOC geometry is a device-local physical property (logical->physical worker coordinates come from
+        // that chip's SoC descriptor), so measuring it on the mesh's first local device is exact whenever the
+        // mesh is homogeneously harvested and a best-effort approximation otherwise. Restricting this to a unit
+        // mesh gave multi-device callers no answer at all: the DRAM-sharded matmul's multi-reader placement
+        // asks for the hop distance purely to rank candidate worker cores, so a unit-mesh-only assert silently
+        // barred every mesh from using more than one reader per DRAM bank.
+        const auto local_devices = mesh->get_devices();
+        TT_FATAL(!local_devices.empty(), "Experimental NOC geometry APIs: mesh has no local devices to measure on.");
+        const auto* first_device = local_devices.front();
+        TT_FATAL(first_device != nullptr, "Device pointer cannot be null");
+        return concrete_device(*first_device);
     }
 
     const auto* dev = dynamic_cast<const tt::tt_metal::Device*>(&device);
