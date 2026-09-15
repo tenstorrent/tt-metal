@@ -422,7 +422,6 @@ void kernel_main() {
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Reconfig register DF
             reconfig_data_format(dfb_k_in, dfb_q_in);
-            pack_reconfig_out(dfb_qk_im);
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
 #ifdef DYNAMIC_CHUNK_SIZE
@@ -447,6 +446,10 @@ void kernel_main() {
             // K-chunk into dfb_kt, then run the standard matmul with transpose=false (mask fusion intact).
             transpose_block(dfb_k_in, dfb_kt, Sk_chunk_t_dynamic * DHt);
             reconfig_data_format(dfb_kt, dfb_q_in);
+            // Re-point the packer to the QK output AFTER transpose_block (which packs dfb_kt). matmul_blocks
+            // packs via pack_tile naming dfb_qk_im but does not itself reconfig the packer, so this switch
+            // must sit here (mirrors prefill sdpa), not before transpose_block, or the packer stays on dfb_kt.
+            pack_reconfig_out(dfb_qk_im);
             matmul_blocks(
                 dfb_q_in,
                 dfb_kt,
