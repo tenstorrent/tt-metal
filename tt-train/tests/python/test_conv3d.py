@@ -304,6 +304,25 @@ def test_conv3d_prepared_weight_mismatch_is_rejected(expect_error):
         ttml.ops.conv.conv3d(x, w, None, prepared_for_one_group, groups=2)
 
 
+def test_conv3d_prepared_weight_is_a_snapshot():
+    """After the parameter's value changes, a prepared weight still computes with the values it was built from."""
+    np.random.seed(2)
+    x = _to_ttml(np.random.uniform(-1, 1, (1, 4, 5, 6, 32)).astype(np.float32), ttnn.Layout.ROW_MAJOR, BF16, False)
+    old_np = np.random.uniform(-0.5, 0.5, (32, 32, 3, 3, 3)).astype(np.float32)
+    new_np = np.random.uniform(-0.5, 0.5, (32, 32, 3, 3, 3)).astype(np.float32)
+    w = _to_ttml(old_np, ttnn.Layout.ROW_MAJOR, BF16, False)
+
+    prepared = ttml.ops.conv.prepare_conv3d_weight(w.get_value(), groups=1)
+    with_old = ttml.ops.conv.conv3d(x, w, padding=(1, 1, 1)).to_numpy(FP32)
+
+    w.assign(_to_ttml(new_np, ttnn.Layout.ROW_MAJOR, BF16, False))
+    with_new = ttml.ops.conv.conv3d(x, w, padding=(1, 1, 1)).to_numpy(FP32)
+    stale = ttml.ops.conv.conv3d(x, w, None, prepared, padding=(1, 1, 1)).to_numpy(FP32)
+
+    np.testing.assert_array_equal(stale, with_old)
+    assert np.abs(stale - with_new).max() > 0.1
+
+
 def _zeros(shape, dtype=np.float32, layout=ttnn.Layout.ROW_MAJOR, new_type=BF16):
     return ttml.autograd.Tensor.from_numpy(np.zeros(shape, dtype=dtype), layout=layout, new_type=new_type)
 
