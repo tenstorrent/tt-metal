@@ -17,7 +17,7 @@ import pytest
 
 import ttnn
 import ttml
-from ttml.testing import assert_within_ulp
+from bf16_ulp import assert_within_bf16_ulp
 
 pytestmark = pytest.mark.requires_device
 
@@ -76,13 +76,13 @@ def pack(gate, up):
 
 
 def assert_forward(got, gate, up, label):
-    assert_within_ulp(got, reference_forward(as_stored(gate), as_stored(up)), label, MAX_ULP, MAX_ULP_P99)
+    assert_within_bf16_ulp(got, reference_forward(as_stored(gate), as_stored(up)), label, MAX_ULP, MAX_ULP_P99)
 
 
 def assert_backward(got, gate, up, dh, inner, label):
     dgate, dup = reference_backward(as_stored(gate), as_stored(up), as_stored(dh))
-    assert_within_ulp(got[..., :inner], dgate, f"{label} dgate", MAX_ULP, MAX_ULP_P99_DGATE)
-    assert_within_ulp(got[..., inner:], dup, f"{label} dup", MAX_ULP, MAX_ULP_P99)
+    assert_within_bf16_ulp(got[..., :inner], dgate, f"{label} dgate", MAX_ULP, MAX_ULP_P99_DGATE)
+    assert_within_bf16_ulp(got[..., inner:], dup, f"{label} dup", MAX_ULP, MAX_ULP_P99)
 
 
 class TestForward:
