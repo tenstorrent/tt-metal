@@ -1,0 +1,261 @@
+{
+  "qualification_cases": 32,
+  "comparisons": [
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "common_k",
+      "bitwise_equal": true,
+      "l2_pct": 16.427360575769324,
+      "pcc": 0.9868885036723573
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "common_q",
+      "bitwise_equal": true,
+      "l2_pct": 3.9827495436093305,
+      "pcc": 0.9992065858263142
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "common_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.9876299164601257,
+      "pcc": 0.027982926583715956
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "constant_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.5343278473691222,
+      "pcc": null
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "normal",
+      "bitwise_equal": true,
+      "l2_pct": 3.1493161542414403,
+      "pcc": 0.9997146651865488
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "outliers",
+      "bitwise_equal": true,
+      "l2_pct": 3.212718229373194,
+      "pcc": 0.9994984046545967
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "scaled_qk",
+      "bitwise_equal": true,
+      "l2_pct": 5.5721505992554805,
+      "pcc": 0.9985209892716861
+    },
+    {
+      "length": 262144,
+      "seed": 1236,
+      "distribution": "uniform",
+      "bitwise_equal": true,
+      "l2_pct": 2.032046332863299,
+      "pcc": 0.9999497739147292
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "common_k",
+      "bitwise_equal": true,
+      "l2_pct": 17.43751346540374,
+      "pcc": 0.9852149046457548
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "common_q",
+      "bitwise_equal": true,
+      "l2_pct": 18.714723903281115,
+      "pcc": 0.9823126884854184
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "common_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.9821265127709159,
+      "pcc": 0.022104364125845252
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "constant_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.5513471577459118,
+      "pcc": null
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "normal",
+      "bitwise_equal": true,
+      "l2_pct": 3.2181689723051976,
+      "pcc": 0.9996992571159196
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "outliers",
+      "bitwise_equal": true,
+      "l2_pct": 3.514148908738045,
+      "pcc": 0.999459203769826
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "scaled_qk",
+      "bitwise_equal": true,
+      "l2_pct": 5.5535689604988745,
+      "pcc": 0.9985008992416805
+    },
+    {
+      "length": 262144,
+      "seed": 1237,
+      "distribution": "uniform",
+      "bitwise_equal": true,
+      "l2_pct": 2.045496669692254,
+      "pcc": 0.9999441583035736
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "common_k",
+      "bitwise_equal": true,
+      "l2_pct": 17.86569508136414,
+      "pcc": 0.9843925682293945
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "common_q",
+      "bitwise_equal": true,
+      "l2_pct": 18.42017236789464,
+      "pcc": 0.9831156272158175
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "common_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.9672253275876157,
+      "pcc": 0.04807133792853822
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "constant_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.5529663893020487,
+      "pcc": null
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "normal",
+      "bitwise_equal": true,
+      "l2_pct": 2.5750574001281654,
+      "pcc": 0.999696631759512
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "outliers",
+      "bitwise_equal": true,
+      "l2_pct": 1.71793343088829,
+      "pcc": 0.9998717704136102
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "scaled_qk",
+      "bitwise_equal": true,
+      "l2_pct": 5.142189097333943,
+      "pcc": 0.9987082276843973
+    },
+    {
+      "length": 32768,
+      "seed": 1236,
+      "distribution": "uniform",
+      "bitwise_equal": true,
+      "l2_pct": 1.2502963016658797,
+      "pcc": 0.9999438622700635
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "common_k",
+      "bitwise_equal": true,
+      "l2_pct": 15.95031563687948,
+      "pcc": 0.9875044608730112
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "common_q",
+      "bitwise_equal": true,
+      "l2_pct": 9.253638872488796,
+      "pcc": 0.9958548039135505
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "common_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.9972588027167217,
+      "pcc": 0.05325174891008999
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "constant_v",
+      "bitwise_equal": true,
+      "l2_pct": 0.5615234375000028,
+      "pcc": null
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "normal",
+      "bitwise_equal": true,
+      "l2_pct": 2.4495094715905097,
+      "pcc": 0.9997235169691868
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "outliers",
+      "bitwise_equal": true,
+      "l2_pct": 1.9011901021677082,
+      "pcc": 0.9998590398466947
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "scaled_qk",
+      "bitwise_equal": true,
+      "l2_pct": 5.0185637730849,
+      "pcc": 0.9988015432324615
+    },
+    {
+      "length": 32768,
+      "seed": 1237,
+      "distribution": "uniform",
+      "bitwise_equal": true,
+      "l2_pct": 1.0877232424764736,
+      "pcc": 0.9999556950036576
+    }
+  ]
+}

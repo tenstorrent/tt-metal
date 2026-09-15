@@ -1,0 +1,17 @@
+{
+  "label": "math-all-v2",
+  "math_pack": true,
+  "cores": 110,
+  "repetitions": 65536,
+  "median_ms": 82.48303801519796,
+  "trace_replay_ms": [
+    82.57318899268284,
+    82.48303801519796,
+    82.51020999159664,
+    82.48141797957942,
+    82.48070001718588
+  ],
+  "full_output_checked": true,
+  "score_value": 0.4784250259399414,
+  "warning": "Independent QK + score reload/exp pipeline probe, not SDPA performance."
+}

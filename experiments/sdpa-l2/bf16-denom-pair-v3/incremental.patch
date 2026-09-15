@@ -1,0 +1,127 @@
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -522,13 +522,37 @@
+     TTI_SFPLOADMACRO(6, 0, ADDR_MOD_7, 256);
+ }
+ 
+-template <int pairs>
++// Same update as the paired numerator, but each denominator row owns its
++// correction. Eight BF16 tiles fill one half-DST. Keep this 16-instruction
++// program beside the numerator's 15 entries without reconfiguring macros.
++inline void init_sdpa_compensated_sum_replay() {
++    TTI_REPLAY(15, 16, 0, 1);
++    TTI_SFPLOAD(6, 0, ADDR_MOD_6, 384);
++    TTI_SFPLOAD(7, 0, ADDR_MOD_6, 448);
++    TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOAD(3, 0, ADDR_MOD_6, 192);
++    TTI_SFPLOADMACRO(9, 0, ADDR_MOD_6, 64);
++    TTI_SFPLOADMACRO(14, 0, ADDR_MOD_6, 256);
++    TTI_SFPLOAD(4, 0, ADDR_MOD_6, 128);
++    TTI_SFPLOAD(5, 0, ADDR_MOD_6, 320);
++    TTI_SFPMAD(1, 6, 4, 0, 0);
++    TTI_SFPMAD(2, 7, 5, 3, 0);
++    TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOADMACRO(6, 0, ADDR_MOD_6, 192);
++    TTI_SFPADD(10, 0, 1, 0, 2);
++    TTI_SFPADD(10, 3, 2, 3, 2);
++    TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 64);
++    TTI_SFPLOADMACRO(6, 0, ADDR_MOD_7, 256);
++}
++
++template <int pairs, bool separate_corrections = false>
+ inline void calculate_sdpa_compensated_state() {
+     static_assert(pairs == 1 || pairs == 2);
++    static_assert(!separate_corrections || pairs == 2);
+     if constexpr (pairs == 2) {
+ #pragma GCC unroll 8
+         for (int i = 0; i < 32; ++i) {
+-            TTI_REPLAY(0, 15, 0, 0);
++            TTI_REPLAY(separate_corrections ? 15 : 0, separate_corrections ? 16 : 15, 0, 0);
+         }
+         // Retire the last scheduled round/stores before PACK reads DST or
+         // another SFPU operation overwrites the working registers.
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -1057,7 +1057,7 @@
+ // The caller fences the current chunk's unpublished L1 writes once per row
+ // group, then keeps pack in overwrite/single-tile mode for all state updates.
+ // Copying the next DST half can overlap the current half's PACK-thread SFPU work.
+-template <int pairs = 1>
++template <int pairs = 1, int state_stride = 1, bool separate_corrections = false>
+ ALWI void sdpa_compensated_state_update(
+     uint32_t old_cb,
+     uint32_t new_cb,
+@@ -1071,21 +1071,30 @@
+     tile_regs_acquire();
+     copy_init(old_cb);
+     for (uint32_t b = 0; b < pairs; ++b) {
+-        copy_tile(old_cb, old_hi + b, 3 * b);
+-        copy_tile(old_cb, old_lo + b, 3 * b + 1);
+-        copy_tile(new_cb, new_read_hi + b, 3 * b + 2);
++        copy_tile(old_cb, old_hi + b * state_stride, 3 * b);
++        copy_tile(old_cb, old_lo + b * state_stride, 3 * b + 1);
++        copy_tile(new_cb, new_read_hi + b * state_stride, 3 * b + 2);
+     }
+     unary_bcast_init<BroadcastType::COL>(correction_cb);
+     unary_bcast<BroadcastType::COL>(correction_cb, correction_row, 3 * pairs);
++    if constexpr (separate_corrections) {
++        static_assert(pairs == 2);
++        unary_bcast<BroadcastType::COL>(correction_cb, correction_row + 1, 3 * pairs + 1);
++    }
+     unary_bcast_uninit<BroadcastType::COL>(correction_cb);
+     tile_regs_commit();
+     tile_regs_wait();
+     PACK((SFPU_UNARY_CALL(
+-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_compensated_state, (pairs), 0, VectorMode::None)));
++        DST_SYNC_MODE,
++        DST_ACCUM_MODE,
++        calculate_sdpa_compensated_state,
++        (pairs, separate_corrections),
++        0,
++        VectorMode::None)));
+     PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+     for (uint32_t b = 0; b < pairs; ++b) {
+-        pack_tile<true>(3 * b, new_cb, new_hi + b);
+-        pack_tile<true>(3 * b + 1, new_cb, new_lo + b);
++        pack_tile<true>(3 * b, new_cb, new_hi + b * state_stride);
++        pack_tile<true>(3 * b + 1, new_cb, new_lo + b * state_stride);
+     }
+     tile_regs_release();
+ }
+@@ -1206,7 +1215,7 @@
+     PACK((llk_pack_reconfig_l1_acc(0)));
+     configure_single_tile_pack(out_out_cb);
+     constexpr uint32_t pairs = tiles_per_column % 2 == 0 ? 2 : 1;
+-    if constexpr (pairs == 2) {
++    if constexpr (pairs == 2 || tiles_per_row >= 2) {
+         PACK((ckernel::sfpu::init_sdpa_compensated_state_macros()));
+     }
+     for (uint32_t i = 0; i < tiles_per_row; ++i) {
+@@ -1282,7 +1291,26 @@
+     PACK((llk_pack_reconfig_l1_acc(0)));
+     configure_single_tile_pack(sum_out_cb);
+ #endif
+-    for (uint32_t i = 0; i < tiles_per_row; ++i) {
++    if constexpr (tiles_per_row >= 2) {
++#ifndef SDPA_STREAMING_NUMERATOR_COMPENSATION
++        PACK((ckernel::sfpu::init_sdpa_compensated_state_macros()));
++#endif
++        PACK((ckernel::sfpu::init_sdpa_compensated_sum_replay()));
++    }
++    for (uint32_t i = 0; i + 1 < tiles_per_row; i += 2) {
++        sdpa_compensated_state_update<2, 2, true>(
++            sum_in_cb,
++            sum_out_cb,
++            bcast_cb,
++            2 * (sum_row_base + i),
++            2 * (sum_row_base + i) + 1,
++            2 * (write_row_base + i),
++            2 * (write_row_base + i) + 1,
++            ob_row_base + i,
++            2 * (current_sum_popped ? write_row_base + i : sum_row_base + i));
++    }
++    if constexpr (tiles_per_row % 2 != 0) {
++        constexpr uint32_t i = tiles_per_row - 1;
+         sdpa_compensated_state_update(
+             sum_in_cb,
+             sum_out_cb,

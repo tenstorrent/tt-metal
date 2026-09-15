@@ -1,0 +1,28 @@
+{
+  "label": "smoke-accurate-v2",
+  "mode": "accurate",
+  "q_repeats": 2,
+  "k_chunks": 4,
+  "warmup": 1,
+  "iters": 2,
+  "seed": 1236,
+  "distribution": "normal",
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "kv_slots": 1,
+  "cb_bytes": 1335296,
+  "useful_flops": 536870912,
+  "median_ms": 0.7397544977720827,
+  "trace_replay_ms": [
+    0.740688992664218,
+    0.7388200028799474
+  ],
+  "tflops_per_core": 0.7257420044310554,
+  "l2_pct": 0.17763128798874384,
+  "pcc": 0.9999984183039663,
+  "full_output_sha256": "9b1e651f348452780f780628bcc4ae1ce7ffba0242e28f8103949d0e06908c22",
+  "trace_equal": true,
+  "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput"
+}

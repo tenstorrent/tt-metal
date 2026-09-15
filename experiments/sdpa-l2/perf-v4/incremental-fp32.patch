@@ -1,0 +1,830 @@
+diff --git a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+index 71dde8a..6590785 100644
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -59,6 +59,49 @@ inline void init_sdpa_exp_grid() {
+     TTI_SFPCONFIG(0, 14, 0);
+ }
+ 
++template <int pairs>
++inline void calculate_sdpa_fp32_update() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    for (int i = 0; i < 32; ++i) {
++        sfpi::vFloat correction = sfpi::dst_reg[32 * pairs];
++#pragma GCC unroll 2
++        for (int p = 0; p < pairs; ++p) {
++            sfpi::vFloat old = sfpi::dst_reg[32 * p];
++            sfpi::dst_reg[32 * p] = old * correction;
++        }
++        sfpi::dst_reg++;
++    }
++}
++
++inline void calculate_sdpa_fp32_update_first_col() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    for (int i = 0; i < 4; ++i) {
++        sfpi::vFloat old = sfpi::dst_reg[0];
++        sfpi::vFloat correction = sfpi::dst_reg[32];
++        sfpi::dst_reg[0] = old * correction;
++        sfpi::dst_reg += 2;
++    }
++}
++
++inline void calculate_sdpa_fp32_normalize() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    for (int i = 0; i < 32; ++i) {
++        sfpi::vFloat out = sfpi::dst_reg[0];
++        sfpi::vFloat inv = sfpi::dst_reg[32];
++        sfpi::dst_reg[0] = out * inv;
++        sfpi::dst_reg++;
++    }
++}
++
++inline void calculate_sdpa_fp32_recip() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    sfpi::vConstFloatPrgm0 = 2.0f;
++    for (int d = 0; d < 4; ++d) {
++        sfpi::dst_reg[0] = sfpu_reciprocal_iter<2>(sfpi::dst_reg[0]);
++        sfpi::dst_reg += 2;
++    }
++}
++
+ template <int iterations>
+ inline void calculate_sdpa_exp_hifi2() {
+     // Fast-exp leaves an auto-incrementing address modifier; SFPI advances explicitly.
+@@ -104,6 +147,68 @@ inline void calculate_sdpa_exp_hifi2() {
+     }
+ }
+ 
++template <int iterations>
++inline void calculate_sdpa_exp_grid_batch() {
++    static_assert(iterations % 4 == 0);
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
++#pragma GCC unroll 8
++    for (int i = 0; i < iterations / 4; ++i) {
++        lltt::replay(0, 8);
++    }
++    TTI_SFPNOP;
++    TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG14, p_sfpu::LREG4, 5);
++    TTI_SFPNOP;
++    TTI_SFPSHFT2(p_sfpu::LREG3, p_sfpu::LREG14, p_sfpu::LREG4, 5);
++    TTI_SFPNOP;
++    TTI_SFPNOP;
++}
++
++template <int iterations>
++inline void calculate_sdpa_exp_stream_effective() {
++    static_assert(iterations % 2 == 0);
++    // Replay slots 0..7 retain the fast-exp macro's repeating four-vector pattern.
++    // Slots 8..21 hold the two-chain refiner. Only the second store advances DST.
++    // Fit (0.995 * 2^(m-1) + 1/128) / m on [1,2], with 2^96 folded
++    // into the coefficients. The linear grid carries the exponent. PV and the
++    // LoFi denominator consume the same six-bit effective SrcB weights.
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_7);
++    constexpr float a = -8.106702647031e27f;
++    constexpr float b = 5.446591617222e28f;
++    constexpr float c = -1.069245718291e29f;
++    constexpr float d = 1.399030410717e29f;
++    TTI_SFPLOADI(6, 0xA, sdpa_lo16(a));
++    TTI_SFPLOADI(6, 0x8, sdpa_hi16(a));
++    TTI_SFPLOADI(0, 0xA, sdpa_lo16(b));
++    TTI_SFPLOADI(0, 0x8, sdpa_hi16(b));
++    TTI_SFPCONFIG(0, 12, 0);
++    TTI_SFPLOADI(0, 0xA, sdpa_lo16(c));
++    TTI_SFPLOADI(0, 0x8, sdpa_hi16(c));
++    TTI_SFPCONFIG(0, 13, 0);
++    TTI_SFPLOADI(0, 0xA, sdpa_lo16(d));
++    TTI_SFPLOADI(0, 0x8, sdpa_hi16(d));
++    TTI_SFPCONFIG(0, 14, 0);
++    TTI_REPLAY(8, 14, 1, 1);
++    TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOAD(1, 0, ADDR_MOD_6, 2);
++    TTI_SFPSETEXP(127, 0, 2, 1);
++    TTI_SFPSETEXP(127, 1, 3, 1);
++    TTI_SFPMAD(2, 6, 12, 4, 0);
++    TTI_SFPMAD(3, 6, 12, 5, 0);
++    TTI_SFPMAD(2, 4, 13, 4, 0);
++    TTI_SFPMAD(3, 5, 13, 5, 0);
++    TTI_SFPMAD(2, 4, 14, 4, 0);
++    TTI_SFPMAD(3, 5, 14, 5, 0);
++    TTI_SFPMUL(0, 4, p_sfpu::LCONST_0, 0, 0);
++    TTI_SFPMUL(1, 5, p_sfpu::LCONST_0, 1, 0);
++    TTI_SFPSTORE(0, 0, ADDR_MOD_6, 0);
++    TTI_SFPSTORE(1, 0, ADDR_MOD_7, 2);
++#pragma GCC unroll 8
++    for (int i = 2; i < iterations; i += 2) {
++        lltt::replay(8, 14);
++    }
++}
++
+ // Approximate exp and add a half-ULP bias for HiFi2's six-bit SrcB grid.
+ // The caller MUST form the denominator from these same effective FPU weights.
+ template <int iterations>
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index 4d90bdb..d200330 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -190,13 +190,56 @@ constexpr uint32_t MIN_BLOCKED_PACK_TILES = 8;
+ #endif
+ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width >= MIN_BLOCKED_PACK_TILES; }
+ 
++template <typename... Args>
++ALWI void sdpa_stream_reconfig(Args... args) {
++#ifdef SDPA_FP32_STREAMING
++    reconfig_data_format_skip_int8(args...);
++#else
++    reconfig_data_format(args...);
++#endif
++}
++
++template <typename... Args>
++ALWI void sdpa_stream_reconfig_srca(Args... args) {
++#ifdef SDPA_FP32_STREAMING
++    reconfig_data_format_srca_skip_int8(args...);
++#else
++    reconfig_data_format_srca(args...);
++#endif
++}
++
++template <typename... Args>
++ALWI void sdpa_stream_reconfig_srcb(Args... args) {
++#ifdef SDPA_FP32_STREAMING
++    reconfig_data_format_srcb_skip_int8(args...);
++#else
++    reconfig_data_format_srcb(args...);
++#endif
++}
++
++#if defined(SDPA_FP32_STREAMING) && defined(TRISC_PACK)
++static uint32_t sdpa_pack_format_cb = INVALID_CB;
++static uint32_t sdpa_pack_width = 0;
++ALWI void sdpa_cached_pack_format(uint32_t cb) {
++    if (sdpa_pack_format_cb == INVALID_CB || pack_src_format[sdpa_pack_format_cb] != pack_src_format[cb] ||
++        pack_dst_format[sdpa_pack_format_cb] != pack_dst_format[cb]) {
++        pack_reconfig_data_format(cb);
++    }
++    sdpa_pack_format_cb = cb;
++}
++#endif
++
+ template <uint32_t old_cb, uint32_t new_cb>
+ ALWI void sdpa_maybe_pack_reconfig_data_format() {
+ #ifdef TRISC_PACK
++#ifdef SDPA_FP32_STREAMING
++    sdpa_cached_pack_format(new_cb);
++#else
+     if constexpr (pack_dst_format[old_cb] != pack_dst_format[new_cb]) {
+         pack_reconfig_data_format(old_cb, new_cb);
+     }
+ #endif
++#endif
+ }
+ 
+ template <uint32_t old_cb, uint32_t new_cb>
+@@ -217,7 +260,7 @@ ALWI void sdpa_maybe_reconfig_data_format() {
+     if constexpr (
+         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
+         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
+-        reconfig_data_format(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
++        sdpa_stream_reconfig(srca_old_cb, srca_new_cb, srcb_old_cb, srcb_new_cb);
+     }
+ #endif
+ }
+@@ -228,7 +271,7 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
+     if constexpr (
+         sdpa_unpack_format_changed<srca_old_cb, srca_new_cb>() ||
+         sdpa_unpack_format_changed<srcb_old_cb, srcb_new_cb>()) {
+-        reconfig_data_format(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
++        sdpa_stream_reconfig(runtime_srca_old_cb, srca_new_cb, runtime_srcb_old_cb, srcb_new_cb);
+     }
+ #endif
+ }
+@@ -236,6 +279,13 @@ ALWI void sdpa_maybe_reconfig_data_format(uint32_t runtime_srca_old_cb, uint32_t
+ // Keep this out-of-line even on BH: repeated pack-width configuration sites
+ // inflate SDPA streaming code size more than this call costs in measured cases.
+ static __attribute__((noinline, noclone)) void configure_pack_width(uint32_t cb, uint32_t pack_width) {
++#ifdef SDPA_FP32_STREAMING
++    PACK((sdpa_cached_pack_format(cb)));
++#endif
++#ifdef SDPA_FP32_STREAMING
++    PACK(if (sdpa_pack_width == pack_width) { return; })
++    PACK(sdpa_pack_width = pack_width;)
++#endif
+     // Pure MOP refresh: addrmod and packer strides are already configured from
+     // the initial pack init, and changing pack_width only requires re-issuing
+     // the MOP. Skipping the packer-strides reconfig saves a THCON stall per
+@@ -449,6 +499,9 @@ void reduce_c_row_group(
+ 
+     if (do_eltwise_max) {
+         CircularBuffer(prev_cb).wait_front(cumulative_prev_tiles);
++#ifdef SDPA_FP32_STREAMING
++        sdpa_stream_reconfig_srca(prev_cb);
++#endif
+         sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+         for (uint32_t i = 0; i < group_size; i++) {
+             copy_tile(prev_cb, row_start + i, i);
+@@ -464,6 +517,9 @@ void reduce_c_row_group(
+         CircularBuffer(in0_cb).wait_front(cumulative_input_tiles);
+     }
+ 
++#ifdef SDPA_FP32_STREAMING
++    sdpa_stream_reconfig(in0_cb, scale_cb);
++#endif
+     reduce_block_max_row_init_runtime(out_cb, reduce_cols, in0_cb, scale_cb, respect_trigger);
+     for (uint32_t i = 0; i < group_size; i++) {
+         const uint32_t input_tile_start = (row_start + i) * row_stride;
+@@ -473,6 +529,9 @@ void reduce_c_row_group(
+ 
+     tile_regs_commit();
+     tile_regs_wait();
++#ifdef SDPA_FP32_STREAMING
++    configure_single_tile_pack(out_cb);
++#endif
+ 
+     for (uint32_t i = 0; i < group_size; i++) {
+         pack_tile<false>(i, out_cb);
+@@ -510,6 +569,13 @@ void sub_exp_block_bcast_cols(
+ 
+     {
+         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
++#ifdef SDPA_FP32_STREAMING
++        if (skip_pack_configure) {
++            sdpa_stream_reconfig_srca(inout_cb);
++        } else {
++            sdpa_stream_reconfig(inout_cb, max_cb);
++        }
++#endif
+         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
+     }
+ 
+@@ -536,9 +602,39 @@ void sub_exp_block_bcast_cols(
+         uint32_t dst_index = 0;
+         constexpr int iterations = 32;
+         constexpr VectorMode vector_mode_exp = VectorMode::None;
+-        for (uint32_t i = 0; i < tiles_per_row; i++) {
+-            for (uint32_t j = 0; j < tiles_per_column; j++) {
+-                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
++#ifdef SDPA_FP32_STREAMING
++        if (tiles_per_row * tiles_per_column == 4) {
++            PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
++            PACK((SFPU_UNARY_CALL(
++                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_grid_batch, (128), 0, vector_mode_exp)));
++            PACK((SFPU_UNARY_CALL(
++                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_stream_effective, (128), 0, vector_mode_exp)));
++        } else
++#endif
++        {
++            for (uint32_t i = 0; i < tiles_per_row; i++) {
++                for (uint32_t j = 0; j < tiles_per_column; j++) {
++#ifdef SDPA_FP32_STREAMING
++                    PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
++                    PACK((SFPU_UNARY_CALL(
++                        DST_SYNC_MODE,
++                        DST_ACCUM_MODE,
++                        calculate_sdpa_exp_grid_batch,
++                        (iterations),
++                        dst_index,
++                        vector_mode_exp)));
++                    PACK((SFPU_UNARY_CALL(
++                        DST_SYNC_MODE,
++                        DST_ACCUM_MODE,
++                        calculate_sdpa_exp_stream_effective,
++                        (iterations),
++                        dst_index,
++                        vector_mode_exp)));
++                    ++dst_index;
++#else
++                    exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
++#endif
++                }
+             }
+         }
+         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+@@ -556,6 +652,7 @@ void sub_exp_block_bcast_cols(
+         } else {
+             pack_contiguous_rows(inout_cb, max_row_base, tiles_per_row, cols_in_row, global_col_base, tiles_per_column);
+         }
++#ifndef SDPA_FP32_STREAMING
+         configure_single_tile_pack(reduce_cb);
+         {
+             uint32_t dst_index = 0;
+@@ -575,6 +672,7 @@ void sub_exp_block_bcast_cols(
+                 }
+             }
+         }
++#endif
+     }
+ 
+     tile_regs_release();
+@@ -589,16 +687,45 @@ void sub_exp_block_bcast_cols(
+  * Operates on first-column subset of tiles.
+  */
+ template <bool profiling_enabled, uint32_t scale_fp32>
+-void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
++bool sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
+     const uint32_t tiles_per_row = sbh;
+     const uint32_t global_row_base = q_subblock * tiles_per_row;
+     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
+ 
++#ifdef SDPA_FP32_STREAMING
++    sdpa_stream_reconfig(in0_cb, in1_cb);
++#endif
+     sub_init(in0_cb, in1_cb);
+ 
+     CircularBuffer(in0_cb).wait_front((q_subblock + 1) * tiles_per_row);
+     CircularBuffer(in1_cb).wait_front((q_subblock + 1) * tiles_per_row);
+ 
++#ifdef SDPA_FP32_STREAMING
++    uint32_t identical = 1;
++    UNPACK({
++        for (uint32_t t = 0; t < tiles_per_row && identical; ++t) {
++            auto* old_max = reinterpret_cast<volatile uint32_t*>(
++                get_tile_l1_byte_address(get_operand_id(in0_cb), global_row_base + t));
++            auto* new_max = reinterpret_cast<volatile uint32_t*>(
++                get_tile_l1_byte_address(get_operand_id(in1_cb), global_row_base + t));
++            for (uint32_t r = 0; r < 32; ++r) {
++                const uint32_t offset = (r / 16) * 256 + (r % 16) * 8;
++                if (((old_max[offset] ^ new_max[offset]) & 0xffffu) != 0) {
++                    identical = 0;
++                    break;
++                }
++            }
++        }
++        mailbox_write(ckernel::ThreadId::MathThreadId, identical);
++        mailbox_write(ckernel::ThreadId::PackThreadId, identical);
++    })
++    MATH(identical = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++    PACK(identical = mailbox_read(ckernel::ThreadId::UnpackThreadId);)
++    if (identical) {
++        return true;
++    }
++#endif
++
+     {
+         tile_regs_acquire();
+         for (uint32_t i = 0; i < tiles_per_row; i++) {
+@@ -611,7 +738,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
+     {
+         tile_regs_wait();
+         for (uint32_t dst_index = 0; dst_index < tiles_per_row; dst_index++) {
+-#ifdef SDPA_STREAMING_ACCURACY
++#if defined(SDPA_STREAMING_ACCURACY) || defined(SDPA_FP32_STREAMING)
+             PACK((SFPU_UNARY_CALL(
+                 DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_correction, (scale_fp32), dst_index, VectorMode::C)));
+ #else
+@@ -627,6 +754,7 @@ void sub_exp_first_col_blocks(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb,
+ 
+         tile_regs_release();
+     }
++    return false;
+ }
+ 
+ /**
+@@ -676,6 +804,49 @@ ALWI void sdpa_compensated_state_update(
+ }
+ #endif
+ 
++#ifdef SDPA_FP32_STREAMING
++template <int pairs = 1, bool first_column = false>
++ALWI void sdpa_fp32_state_update(
++    uint32_t old_cb,
++    uint32_t new_cb,
++    uint32_t correction_cb,
++    uint32_t old_index,
++    uint32_t new_read_index,
++    uint32_t new_write_index,
++    uint32_t correction_index,
++    bool identity_correction = false) {
++    tile_regs_acquire();
++    sdpa_stream_reconfig(old_cb, old_cb);
++    unary_bcast_init<BroadcastType::NONE>(old_cb);
++    for (int p = 0; p < pairs; ++p) {
++        unary_bcast<BroadcastType::NONE>(old_cb, old_index + p, p);
++    }
++    unary_bcast_uninit<BroadcastType::NONE>(old_cb);
++    if (!identity_correction) {
++        sdpa_stream_reconfig(correction_cb, correction_cb);
++        unary_bcast_init<BroadcastType::COL>(correction_cb);
++        unary_bcast<BroadcastType::COL>(correction_cb, correction_index, pairs);
++        unary_bcast_uninit<BroadcastType::COL>(correction_cb);
++    }
++    tile_regs_commit();
++    tile_regs_wait();
++    if (!identity_correction) {
++        if constexpr (first_column) {
++            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
++                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_fp32_update_first_col, 0, VectorMode::C)));
++        } else {
++            PACK((SFPU_UNARY_CALL(
++                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_fp32_update, (pairs), 0, VectorMode::None)));
++        }
++        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++    }
++    for (int p = 0; p < pairs; ++p) {
++        pack_tile<true>(p, new_cb, new_write_index + p);
++    }
++    tile_regs_release();
++}
++#endif
++
+ template <uint32_t sbh_t, uint32_t sbw_t, uint32_t dst_size>
+ void salad_correct_fused(
+     uint32_t out_in_cb,
+@@ -686,7 +857,8 @@ void salad_correct_fused(
+     uint32_t ob_q_subblock,
+     uint32_t sum_q_subblock,
+     uint32_t write_q_subblock,
+-    bool current_sum_popped = false) {
++    bool current_sum_popped = false,
++    bool identity_correction = false) {
+     constexpr uint32_t tiles_per_row = sbh_t;
+     constexpr uint32_t tiles_per_column = sbw_t;
+     constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
+@@ -699,6 +871,39 @@ void salad_correct_fused(
+     const uint32_t sum_row_base = sum_q_subblock * tiles_per_row;
+     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
+ 
++#ifdef SDPA_FP32_STREAMING
++    CircularBuffer(out_in_cb).wait_front((ob_q_subblock + 1) * tiles_per_row * tiles_per_column);
++    CircularBuffer(sum_in_cb).wait_front((sum_q_subblock + 1) * tiles_per_row);
++    CircularBuffer(bcast_cb).wait_front((ob_q_subblock + 1) * tiles_per_row);
++    PACK((llk_pack_reconfig_l1_acc(1)));
++    configure_single_tile_pack(out_out_cb);
++    for (uint32_t i = 0; i < tiles_per_row; ++i) {
++        const uint32_t read_row = current_sum_popped ? write_row_base + i : sum_row_base + i;
++        for (uint32_t j = 0; j < tiles_per_column; j += 2) {
++            sdpa_fp32_state_update<2>(
++                out_in_cb,
++                out_out_cb,
++                bcast_cb,
++                (ob_row_base + i) * tiles_per_column + j,
++                read_row * tiles_per_column + j,
++                (write_row_base + i) * tiles_per_column + j,
++                ob_row_base + i,
++                identity_correction);
++        }
++        sdpa_fp32_state_update<1, true>(
++            sum_in_cb,
++            sum_out_cb,
++            bcast_cb,
++            sum_row_base + i,
++            read_row,
++            write_row_base + i,
++            ob_row_base + i,
++            identity_correction);
++    }
++    PACK((llk_pack_reconfig_l1_acc(1)));
++    return;
++#endif
++
+ #ifndef SDPA_STREAMING_NUMERATOR_COMPENSATION
+     mul_bcast_cols_init(out_in_cb, bcast_cb);
+ #endif
+@@ -824,6 +1029,58 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
+     uint32_t sbh,
+     [[maybe_unused]] uint32_t cur_max_cb_rt = 0,
+     [[maybe_unused]] uint32_t sink_row_offset = 0) {
++#ifdef SDPA_FP32_STREAMING
++    PACK((llk_pack_reconfig_l1_acc(0)));
++    for (uint32_t s = 0; s < sbh; ++s) {
++        PACK(sdpa_pack_format_cb = INVALID_CB; sdpa_pack_width = 0;)
++        CircularBuffer(cur_sum_cb).wait_front(1);
++        CircularBuffer(col_identity_cb).wait_front(1);
++        CircularBuffer(scratch_cb).reserve_back(1);
++        sdpa_stream_reconfig(cur_sum_cb, cur_sum_cb);
++        tile_regs_acquire();
++        unary_bcast_init<BroadcastType::NONE>(cur_sum_cb);
++        unary_bcast<BroadcastType::NONE>(cur_sum_cb, 0, 0);
++        unary_bcast_uninit<BroadcastType::NONE>(cur_sum_cb);
++        tile_regs_commit();
++        tile_regs_wait();
++        PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
++            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_fp32_recip, 0, VectorMode::C)));
++        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++        configure_single_tile_pack(scratch_cb);
++        pack_tile(0, scratch_cb);
++        tile_regs_release();
++        CircularBuffer(scratch_cb).push_back(1);
++        CircularBuffer(cur_sum_cb).pop_front(1);
++        CircularBuffer(scratch_cb).wait_front(1);
++        CircularBuffer(cur_out_cb).wait_front(head_dim_t_);
++        CircularBuffer(normalized_out_cb).reserve_back(head_dim_t_);
++        configure_single_tile_pack(normalized_out_cb);
++        for (uint32_t j = 0; j < head_dim_t_; ++j) {
++            tile_regs_acquire();
++            sdpa_stream_reconfig(cur_out_cb, cur_out_cb);
++            unary_bcast_init<BroadcastType::NONE>(cur_out_cb);
++            unary_bcast<BroadcastType::NONE>(cur_out_cb, j, 0);
++            unary_bcast_uninit<BroadcastType::NONE>(cur_out_cb);
++            sdpa_stream_reconfig(scratch_cb, scratch_cb);
++            unary_bcast_init<BroadcastType::COL>(scratch_cb);
++            unary_bcast<BroadcastType::COL>(scratch_cb, 0, 1);
++            unary_bcast_uninit<BroadcastType::COL>(scratch_cb);
++            tile_regs_commit();
++            tile_regs_wait();
++            PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
++                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_fp32_normalize, 0, VectorMode::None)));
++            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++            pack_tile(0, normalized_out_cb);
++            tile_regs_release();
++        }
++        CircularBuffer(normalized_out_cb).push_back(head_dim_t_);
++        CircularBuffer(cur_out_cb).pop_front(head_dim_t_);
++        CircularBuffer(scratch_cb).pop_front(1);
++    }
++    pack_reconfig_data_format(scratch_cb);
++    return;
++#endif
++
+     // Attention sink: cb_attention_sink holds one raw per-head scalar tile. Broadcast it for each
+     // row, compute exp((sink - max)*scale), and fold it into the col-reduced denominator (DST[0]).
+     if constexpr (use_attention_sink) {
+@@ -1250,7 +1507,7 @@ template <bool reconfig_dt>
+ static inline void begin_mask_l1_accumulate(uint32_t cb_qkt_im, uint32_t cb_mask_in) {
+     configure_single_tile_pack(cb_qkt_im);
+     if constexpr (reconfig_dt) {
+-        reconfig_data_format_srca(cb_qkt_im, cb_mask_in);
++        sdpa_stream_reconfig_srca(cb_qkt_im, cb_mask_in);
+         copy_init(cb_mask_in);
+     } else {
+         copy_init(cb_mask_in);
+@@ -1397,6 +1654,9 @@ static void sdpa_inner_loop_step(
+     // Tile offset of this call's Q chunk from the front of cb_q_in. Non-zero only for head-serial
+     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
+     const uint32_t q_base_tiles = 0) {
++#ifdef SDPA_FP32_STREAMING
++    PACK(sdpa_pack_format_cb = INVALID_CB; sdpa_pack_width = 0;)
++#endif
+     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
+     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
+     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
+@@ -1449,7 +1709,11 @@ static void sdpa_inner_loop_step(
+         kt_index_offset = 0;
+ 
+         sdpa_maybe_pack_reconfig_data_format<cb_normalized_out, cb_qkt_im>();
++#ifdef SDPA_FP32_STREAMING
++        sdpa_stream_reconfig(cb_kt_in, cb_q_in);
++#else
+         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_identity_scale_in, cb_q_in>();
++#endif
+         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
+         // and blocked_matmul_and_pack skip their internal configure (same cb+width).
+@@ -1493,7 +1757,9 @@ static void sdpa_inner_loop_step(
+         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
+             if (q_subblock > 0) {
+                 uint32_t prev_q_subblock = q_subblock - 1;
++#ifndef SDPA_FP32_STREAMING
+                 sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
++#endif
+                 sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+                     cb_qkt_im,
+                     cur.max,
+@@ -1505,7 +1771,11 @@ static void sdpa_inner_loop_step(
+                     actual_sbw,
+                     /*skip_pack_configure=*/true);
+                 sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
++#ifdef SDPA_FP32_STREAMING
++                sdpa_stream_reconfig_srca(cb_kt_in);
++#else
+                 sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
++#endif
+                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+             }
+             {
+@@ -1522,7 +1792,11 @@ static void sdpa_inner_loop_step(
+                     qkt_subblock_h,
+                     in0_block_w,
+                     in0_block_w,
++#ifdef SDPA_FP32_STREAMING
++                    /*skip_pack_configure=*/true);
++#else
+                     /*skip_pack_configure=*/q_subblock == 0);
++#endif
+                 // Signal the first half is committed so run()#1 overlaps the second-half
+                 // pack. STALL_PACK drains the L1 writes before the token retires.
+                 if (overlap_first_half && kt_subblock == first_half_last_sb) {
+@@ -1531,8 +1805,10 @@ static void sdpa_inner_loop_step(
+                 kt_index_offset += actual_sbw;
+             }
+         }
+-        // Restore float16b for mask/reduce after Q@KT.
++        // The FP32 max-reduce helper configures its own input views.
++#ifndef SDPA_FP32_STREAMING
+         sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
++#endif
+ 
+         // Mask stamp/apply: L1-accumulate the mask onto cb_qkt_im for this row group. A dense
+         // user-provided mask and the structured lightweight palette are mutually exclusive — the
+@@ -1557,7 +1833,7 @@ static void sdpa_inner_loop_step(
+                 active_Sk);
+             end_mask_l1_accumulate();
+             // Restore srcA to fp16 for the following max reduce / next-subblock Q@KT.
+-            reconfig_data_format_srca(cb_mask_in, cb_qkt_im);
++            sdpa_stream_reconfig_srca(cb_mask_in, cb_qkt_im);
+             CircularBuffer(cb_mask_in).pop_front(mask_subblock_tiles);
+         } else if constexpr (uses_lightweight_mask) {
+             // Lightweight stamp: causal and/or padding masks. Active for ring, causal non-ring, or
+@@ -1817,6 +2093,32 @@ static void sdpa_inner_loop_step(
+         UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+         UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+ 
++#ifdef SDPA_FP32_STREAMING
++        // All P rows are committed by the drain barrier above. Use exactly the
++        // effective HiFi2 weights in the denominator, without SFPU mantissa masking.
++        CircularBuffer(cb_col_identity).wait_front(1);
++        sdpa_stream_reconfig(cb_col_identity, cb_qkt_im);
++        matmul_block_init(cb_qkt_im, cb_col_identity, 0, 1, 4, KT_stride);
++        MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
++        configure_single_tile_pack(cur.sum);
++        PACK((llk_pack_reconfig_l1_acc(0)));
++        for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
++            tile_regs_acquire();
++            for (uint32_t col = 0; col < active_Sk; ++col) {
++                UNPACK((llk_unpack_AB_matmul(cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
++                MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, 1, 4)));
++            }
++            tile_regs_commit();
++            tile_regs_wait();
++            for (uint32_t j = 0; j < 4; ++j) {
++                pack_tile<true>(j, cur.sum, row + j);
++            }
++            tile_regs_release();
++        }
++        MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(
++            cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_h)));
++#endif
++
+         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm).
+         // Takes sbh so it works for both full subblocks (qktv_h) and remainder (qktv_remainder_h).
+         [[maybe_unused]] uint32_t sink_row_offset = 0;
+@@ -1840,6 +2142,8 @@ static void sdpa_inner_loop_step(
+             pushed++;
+         };
+ 
++        bool identity_corrections[Sq_chunk_t] = {};
++
+         // SALAD correction lambda — works for both full subblocks (sbh=qktv_h) and
+         // remainder (sbh=qktv_remainder_h). Normalization is independently guarded at call sites.
+         // prev.out is consumed row-by-row: always read from CB front, then pop after use.
+@@ -1852,14 +2156,41 @@ static void sdpa_inner_loop_step(
+                 if constexpr (has_qktv_remainder) {
+                     if (sbh == qktv_remainder_h) {
+                         salad_correct_fused<qktv_remainder_h, vDHt, dst_size>(
+-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad, is_last_iter);
++                            prev.out,
++                            prev.sum,
++                            cb_exp_max_diff,
++                            out_cb,
++                            cur.sum,
++                            0,
++                            salad_row,
++                            w_salad,
++                            is_last_iter,
++                            identity_corrections[salad_row]);
+                     } else {
+                         salad_correct_fused<qktv_h, vDHt, dst_size>(
+-                            prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad, is_last_iter);
++                            prev.out,
++                            prev.sum,
++                            cb_exp_max_diff,
++                            out_cb,
++                            cur.sum,
++                            0,
++                            salad_row,
++                            w_salad,
++                            is_last_iter,
++                            identity_corrections[salad_row]);
+                     }
+                 } else {
+                     salad_correct_fused<qktv_h, vDHt, dst_size>(
+-                        prev.out, prev.sum, cb_exp_max_diff, out_cb, cur.sum, 0, salad_row, w_salad, is_last_iter);
++                        prev.out,
++                        prev.sum,
++                        cb_exp_max_diff,
++                        out_cb,
++                        cur.sum,
++                        0,
++                        salad_row,
++                        w_salad,
++                        is_last_iter,
++                        identity_corrections[salad_row]);
+                 }
+             }
+             CircularBuffer(cb_exp_max_diff).pop_front(sbh);
+@@ -1887,7 +2218,7 @@ static void sdpa_inner_loop_step(
+             // SALAD for previous group (always a full group, h=qktv_h)
+             if (!is_first_iter) {
+                 CircularBuffer(cb_exp_max_diff).reserve_back(qktv_h);
+-                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
++                identity_corrections[salad_row] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                     prev.max, cur.max, cb_exp_max_diff, salad_row, qktv_h);
+                 CircularBuffer(cb_exp_max_diff).push_back(qktv_h);
+             }
+@@ -1943,7 +2274,7 @@ static void sdpa_inner_loop_step(
+                         has_qktv_remainder ? (qktv_q_num_subblocks * qktv_h) : (qktv_q_num_subblocks - 1);
+ 
+                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
+-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
++                    identity_corrections[drain_salad_row] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+ 
+@@ -1997,7 +2328,7 @@ static void sdpa_inner_loop_step(
+                 if (!is_first_iter) {
+                     constexpr uint32_t drain_salad_row = 0;
+                     CircularBuffer(cb_exp_max_diff).reserve_back(drain_h);
+-                    sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
++                    identity_corrections[drain_salad_row] = sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
+                         prev.max, cur.max, cb_exp_max_diff, drain_salad_row, drain_h);
+                     CircularBuffer(cb_exp_max_diff).push_back(drain_h);
+                     salad_correct_row(drain_salad_row, 0, drain_h);
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+index 81f8af5..2bc6871 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -480,7 +480,20 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     auto [qk_out_subblock_h, qk_out_subblock_w] =
+         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
+ 
+-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
++    // Experimental FP32 streaming: keep activation within validated long-context
++    // BF16/HiFi2 geometry. Other features retain the previous FP32 implementation.
++    const bool fp32_streaming =
++        fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && math_fidelity == MathFidelity::HiFi2 &&
++        math_approx_mode && exp_approx_mode && !is_causal && !use_attention_sink && !use_mla && !is_chunked &&
++        !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && !generated_padding_mask &&
++        q_chunk_size == 128 && (k_chunk_size == 512 || k_chunk_size == 1024) && padded_Sk >= 32768 && DHt == 4 &&
++        vDHt == 4 && input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == DataType::BFLOAT16 &&
++        input_tensor_v.dtype() == DataType::BFLOAT16;
++    if (fp32_streaming) {
++        qk_out_subblock_h = 1;
++        qk_out_subblock_w = 4;
++    }
++    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) || fp32_streaming;
+ 
+     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+     // A user-provided dense mask on the streaming path takes its own per-chunk apply
+@@ -502,6 +515,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
+     uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
+     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
++    if (fp32_streaming && (q_chunk_size == 256 || k_chunk_size == 1024)) {
++        k_tiles /= 2;
++        v_tiles /= 2;
++    }
+     uint32_t mask_tiles = lightweight_mask
+                               ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
+                               : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
+@@ -531,8 +548,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     // now for out0
+     const uint32_t out_in0_block_w = Sk_chunk_t;
+ 
+-    auto [out_out_subblock_h, out_out_subblock_w] =
+-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
++    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
++        Sq_chunk_t, vDHt, dst_size, fp32_streaming ? 1 : (use_streaming_compute ? 2 : UINT32_MAX));
+ 
+     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
+     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
+@@ -750,6 +767,9 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     };
+ 
+     std::map<std::string, std::string> defines_map;
++    if (fp32_streaming) {
++        defines_map["SDPA_FP32_STREAMING"] = "1";
++    }
+     const bool preserve_fp32_state = fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+                                      input_tensor_q.dtype() == DataType::BFLOAT16 &&
+                                      input_tensor_k.dtype() == DataType::BFLOAT16 &&
+@@ -760,7 +780,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+             defines_map["SDPA_HIFI2_ROUND"] = "1";
+             // Opt into the effective-weight denominator only for the measured
+             // long-context, noncausal geometry; retain the prior accurate path elsewhere.
+-            if (!is_causal && !use_mla && !is_chunked && !is_windowed && !attn_mask.has_value() &&
++            if (!fp32_streaming && !is_causal && !use_mla && !is_chunked && !is_windowed && !attn_mask.has_value() &&
+                 !sliding_window_size.has_value() && !generated_padding_mask && q_chunk_size == 128 &&
+                 k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64) {
+                 defines_map["SDPA_HIFI2_EFFECTIVE_WEIGHTS"] = "1";
+@@ -769,7 +789,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     }
+     // Experimental long-context streaming compensation: restrict activation to
+     // the measured BF16/HiFi2 geometry. Other shapes/features keep main's path.
+-    if (use_streaming_compute && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
++    if (use_streaming_compute && !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+         math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode && !use_mla && !is_chunked &&
+         !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && q_chunk_size == 128 &&
+         k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64 &&
+@@ -1480,6 +1500,11 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+             unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+         }
+     }
++    if (fp32_streaming) {
++        for (auto cb : {cb_ids.out_im_A, cb_ids.out_im_B, cb_ids.exp_max_diff, cb_ids.recip_scratch}) {
++            unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
++        }
++    }
+     compute_desc.config = ComputeConfigDescriptor{
+         .math_fidelity = math_fidelity,
+         .fp32_dest_acc_en = fp32_dest_acc_en,

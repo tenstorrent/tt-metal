@@ -1,0 +1,22 @@
+{
+  "planned": 1320,
+  "completed": 1320,
+  "missing": 0,
+  "errors": [],
+  "historical_records": 1321,
+  "historical_errors": 1,
+  "full_trace_equality_checks": 218,
+  "full_padding_equality_checks": 100,
+  "matching_mode_input_pairs": 430,
+  "status_counts": {
+    "fast": {
+      "PASS": 344,
+      "FAIL": 316
+    },
+    "accurate": {
+      "UNSUPPORTED": 230,
+      "FAIL": 313,
+      "PASS": 117
+    }
+  }
+}

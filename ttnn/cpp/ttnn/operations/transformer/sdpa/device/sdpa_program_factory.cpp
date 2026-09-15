@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <cmath>
+#include <cstdlib>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -480,7 +481,94 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     auto [qk_out_subblock_h, qk_out_subblock_w] =
         detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
 
-    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en);
+    // Experimental FP32 streaming: keep activation within validated long-context
+    // BF16/HiFi2 geometry. Other features retain the previous FP32 implementation.
+    const bool fp32_streaming =
+        fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && math_fidelity == MathFidelity::HiFi2 &&
+        math_approx_mode && exp_approx_mode && !is_causal && !use_attention_sink && !use_mla && !is_chunked &&
+        !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && !generated_padding_mask &&
+        q_chunk_size == 128 && (k_chunk_size == 512 || k_chunk_size == 1024) && padded_Sk >= 32768 && DHt == 4 &&
+        vDHt == 4 && input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == DataType::BFLOAT16 &&
+        input_tensor_v.dtype() == DataType::BFLOAT16;
+    if (fp32_streaming) {
+        qk_out_subblock_h = 1;
+        qk_out_subblock_w = 4;
+    }
+    const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) || fp32_streaming;
+    const char* diag_setting = std::getenv("TT_SDPA_ACCURACY_DIAG");
+    const int diag_mode = diag_setting ? std::atoi(diag_setting) : -1;
+    TT_FATAL(!diag_setting || fp32_streaming, "QUALIFICATION_UNSUPPORTED: accuracy diagnostic forbids fallback");
+    const char* sub_batch_setting = std::getenv("TT_SDPA_FP32_SUB_BATCH");
+    const int sub_batch = sub_batch_setting ? std::atoi(sub_batch_setting) : 1;
+    TT_FATAL(
+        !sub_batch_setting || (fp32_streaming && diag_mode == 4 && (sub_batch == 1 || sub_batch == 2)),
+        "FP32 subtraction batching requires mode 4 and batch 1 or 2");
+    const char* qk_width_setting = std::getenv("TT_SDPA_FP32_QK_WIDTH");
+    const int qk_width = qk_width_setting ? std::atoi(qk_width_setting) : 4;
+    TT_FATAL(
+        !qk_width_setting || (fp32_streaming && diag_mode == 4 && sub_batch == 2 && (qk_width == 2 || qk_width == 4)),
+        "QK scheduling width requires mode 4, batch 2, and width 2 or 4");
+    if (qk_width_setting) {
+        qk_out_subblock_w = qk_width;
+    }
+    const char* qk_height_setting = std::getenv("TT_SDPA_FP32_QK_HEIGHT");
+    const int qk_height = qk_height_setting ? std::atoi(qk_height_setting) : 1;
+    TT_FATAL(
+        !qk_height_setting || (fp32_streaming && diag_mode == 4 && qk_width == 2 && qk_height == 2),
+        "Two-row QK schedule requires mode 4 and width 2");
+    if (qk_height_setting) {
+        qk_out_subblock_h = qk_height;
+    }
+    const bool fused_exp = std::getenv("TT_SDPA_FP32_FUSED_EXP") != nullptr;
+    TT_FATAL(
+        !fused_exp || (fp32_streaming && diag_mode == 4 && sub_batch == 2),
+        "Fused FP32 exp requires mode 4 and batch 2");
+    const bool cache_max = std::getenv("TT_SDPA_FP32_CACHE_MAX") != nullptr;
+    const bool shadow_max = std::getenv("TT_SDPA_FP32_SHADOW_MAX") != nullptr;
+    const bool paired_unpack = std::getenv("TT_SDPA_FP32_PAIRED_UNPACK") != nullptr;
+    const bool paired_pack = std::getenv("TT_SDPA_FP32_PAIRED_PACK") != nullptr;
+    TT_FATAL(
+        !paired_pack || (fp32_streaming && diag_mode == 4 && sub_batch == 2 && !cache_max && !shadow_max),
+        "Paired FP32 score pack requires mode 4, batch 2, and no max caching");
+    TT_FATAL(
+        !paired_unpack || (fp32_streaming && diag_mode == 4 && sub_batch == 2),
+        "Paired FP32 score unpack requires mode 4 and batch 2");
+    TT_FATAL(
+        !shadow_max || (fp32_streaming && diag_mode == 4 && !cache_max),
+        "FP32 maximum shadow requires mode 4 without cached BF16 maximum");
+    const bool reuse_exp = std::getenv("TT_SDPA_FP32_REUSE_EXP") != nullptr;
+    TT_FATAL(!reuse_exp || fused_exp, "Exp setup reuse requires fused exp");
+    const bool extra_const = std::getenv("TT_SDPA_FP32_EXTRA_CONST") != nullptr;
+    TT_FATAL(!extra_const || fused_exp, "Extra exp constant requires fused exp");
+    const bool fp32_pipeline = std::getenv("TT_SDPA_FP32_PIPELINE") != nullptr;
+    const bool fp32_l1_sub = std::getenv("TT_SDPA_FP32_L1_SUB") != nullptr;
+    const bool fp32_l1_macro = std::getenv("TT_SDPA_FP32_L1_MACRO") != nullptr;
+    const bool fp32_refine_macro = std::getenv("TT_SDPA_FP32_REFINE_MACRO") != nullptr;
+    TT_FATAL(!fp32_refine_macro || fp32_l1_macro, "Refine macro requires mode4 L1 macro configuration");
+    TT_FATAL(!fp32_l1_macro || fp32_l1_sub, "Macro exp requires L1 subtraction");
+    const bool fp32_l1_repeat = std::getenv("TT_SDPA_FP32_L1_REPEAT") != nullptr;
+    TT_FATAL(!fp32_l1_repeat || fp32_l1_sub, "Repeated pack requires L1 subtraction");
+    TT_FATAL(
+        !fp32_l1_sub ||
+            (!fp32_pipeline && fp32_streaming && diag_mode == 4 && sub_batch == 2 && reuse_exp && extra_const &&
+             paired_unpack && paired_pack && !cache_max && !shadow_max && qk_width == 4 && qk_height == 1),
+        "L1 subtraction requires the validated mode4 v1 configuration");
+    TT_FATAL(
+        !fp32_pipeline ||
+            (fp32_streaming && diag_mode == 4 && sub_batch == 2 && reuse_exp && extra_const && paired_unpack &&
+             paired_pack && !cache_max && !shadow_max && qk_width == 4 && qk_height == 1),
+        "Fixed-half pipeline requires the validated mode4 v1 configuration");
+    const char* denom_phases_setting = std::getenv("TT_SDPA_DENOM_PHASES");
+    const int denom_phases = denom_phases_setting ? std::atoi(denom_phases_setting) : 4;
+    TT_FATAL(
+        !denom_phases_setting || (fp32_streaming && diag_mode == 4 && (denom_phases >= 2 && denom_phases <= 4)),
+        "Denominator phase control requires mode 4 and 2, 3, or 4 phases");
+    TT_FATAL(!cache_max || (fp32_streaming && diag_mode == 4), "Cached maximum requires mode 4");
+    const char* util_profile_setting = std::getenv("TT_SDPA_UTIL_PROFILE");
+    const int util_profile = util_profile_setting ? std::atoi(util_profile_setting) : 0;
+    TT_FATAL(
+        !util_profile_setting || (fp32_streaming && diag_mode == 4 && (util_profile == 1 || util_profile == 2)),
+        "Utilization stage profile requires mode 4 and profile 1 or 2");
 
     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
     // A user-provided dense mask on the streaming path takes its own per-chunk apply
@@ -502,6 +590,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
     uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
+    if (fp32_streaming && (q_chunk_size == 256 || k_chunk_size == 1024)) {
+        k_tiles /= 2;
+        v_tiles /= 2;
+    }
     uint32_t mask_tiles = lightweight_mask
                               ? lightweight_mask_tile_count(is_causal, has_sliding_window, lw_partial_active)
                               : Sq_chunk_t * Sk_chunk_t * 2;  // double buffer
@@ -531,8 +623,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // now for out0
     const uint32_t out_in0_block_w = Sk_chunk_t;
 
-    auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, vDHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
+    auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
+        Sq_chunk_t, vDHt, dst_size, fp32_streaming ? 1 : (use_streaming_compute ? 2 : UINT32_MAX));
 
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
@@ -643,8 +735,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     // Windowed K-range narrowing: the reader needs its own view of cu_window_seqlens and the per-device
     // Q-offset tensor to compute each Q chunk's [k_lo, k_hi) — same placeholder rule as the writer's pair.
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(reader_compile_time_args);
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(reader_compile_time_args);
 
     // Set up semaphore IDs for KV chain forwarding (non-causal only).
     // In the descriptor pattern, semaphore IDs are explicit sequential integers
@@ -707,8 +798,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     TensorAccessorArgs(buffer_or_null(tensor_args.cu_window_seqlens)).append_to(writer_compile_time_args);
     // Then the per-device Q-offset accessor. Same chain, same placeholder rule: nullptr when the caller
     // passed the offset as a scalar (or is not windowed), in which case the writer never reads it.
-    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor))
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(buffer_or_null(tensor_args.windowed_q_token_offset_tensor)).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         // matmul args
@@ -750,6 +840,82 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     };
 
     std::map<std::string, std::string> defines_map;
+    if (fp32_streaming) {
+        defines_map["SDPA_FP32_STREAMING"] = "1";
+        if (diag_mode >= 0) {
+            TT_FATAL(diag_mode <= 4, "Invalid SDPA accuracy diagnostic mode");
+            defines_map["SDPA_DIAG_EXP_MODE"] = std::to_string(diag_mode);
+            defines_map["SDPA_FP32_SUB_BATCH"] = std::to_string(sub_batch);
+            if (fused_exp) {
+                defines_map["SDPA_FP32_FUSED_EXP"] = "1";
+            }
+            if (cache_max) {
+                defines_map["SDPA_FP32_CACHE_MAX"] = "1";
+            }
+            if (reuse_exp) {
+                defines_map["SDPA_FP32_REUSE_EXP"] = "1";
+            }
+            if (extra_const) {
+                defines_map["SDPA_FP32_EXTRA_CONST"] = "1";
+            }
+            if (paired_unpack) {
+                defines_map["SDPA_FP32_PAIRED_UNPACK"] = "1";
+            }
+            if (paired_pack) {
+                defines_map["SDPA_FP32_PAIRED_PACK"] = "1";
+            }
+            if (fp32_pipeline) {
+                defines_map["SDPA_FP32_PIPELINE"] = "1";
+            }
+            if (fp32_l1_sub) {
+                defines_map["SDPA_FP32_L1_SUB"] = "1";
+            }
+            if (fp32_l1_macro) {
+                defines_map["SDPA_FP32_L1_MACRO"] = "1";
+            }
+            if (fp32_refine_macro) {
+                defines_map["SDPA_FP32_REFINE_MACRO"] = "1";
+            }
+            if (fp32_l1_repeat) {
+                defines_map["SDPA_FP32_L1_REPEAT"] = "1";
+            }
+            defines_map["SDPA_DENOM_PHASES"] = std::to_string(denom_phases);
+            if (qk_width == 2) {
+                defines_map["SDPA_FP32_QK_WIDTH2"] = "1";
+            }
+            if (util_profile) {
+                defines_map["SDPA_UTIL_PROFILE"] = std::to_string(util_profile);
+            }
+        }
+    }
+    const bool preserve_fp32_state = fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+                                     input_tensor_q.dtype() == DataType::BFLOAT16 &&
+                                     input_tensor_k.dtype() == DataType::BFLOAT16 &&
+                                     input_tensor_v.dtype() == DataType::BFLOAT16;
+    if (preserve_fp32_state) {
+        defines_map["SDPA_FP32_STATE"] = "1";
+        if (math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode) {
+            defines_map["SDPA_HIFI2_ROUND"] = "1";
+            // Opt into the effective-weight denominator only for the measured
+            // long-context, noncausal geometry; retain the prior accurate path elsewhere.
+            if (!fp32_streaming && !is_causal && !use_mla && !is_chunked && !is_windowed && !attn_mask.has_value() &&
+                !sliding_window_size.has_value() && !generated_padding_mask && q_chunk_size == 128 &&
+                k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64) {
+                defines_map["SDPA_HIFI2_EFFECTIVE_WEIGHTS"] = "1";
+            }
+        }
+    }
+    // Experimental long-context streaming compensation: restrict activation to
+    // the measured BF16/HiFi2 geometry. Other shapes/features keep main's path.
+    if (use_streaming_compute && !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+        math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode && !use_mla && !is_chunked &&
+        !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && q_chunk_size == 128 &&
+        k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64 &&
+        input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == DataType::BFLOAT16 &&
+        input_tensor_v.dtype() == DataType::BFLOAT16) {
+        defines_map["SDPA_STREAMING_ACCURACY"] = "1";
+        defines_map["SDPA_STREAMING_NUMERATOR_COMPENSATION"] = "1";
+    }
     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
     defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
@@ -777,9 +943,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat im_df =
-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
-    tt::DataFormat stats_df = im_df;
+    tt::DataFormat im_df = preserve_fp32_state ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_df = tt::DataFormat::Float16_b;
     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
@@ -879,13 +1044,37 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     }
 
     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
-    cb_ids.out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    cb_ids.out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
+    uint32_t diag_score_cb = 0;
+    if (fp32_streaming && diag_mode >= 3) {
+        diag_score_cb = next_cb_index++;
+        desc.cbs.back().format_descriptors.push_back(CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(diag_score_cb),
+            .data_format = tt::DataFormat::Float32,
+            .page_size = qk_im_tile_size,
+        });
+        defines.emplace_back("SDPA_DIAG_SCORE_CB", std::to_string(diag_score_cb));
+    }
+    const uint32_t out_state_tiles =
+        out_im_tiles * (defines_map.count("SDPA_STREAMING_NUMERATOR_COMPENSATION") ? 2 : 1);
+    cb_ids.out_im_A = allocate_tile_cb(out_state_tiles, im_tile_size, im_df);
+    cb_ids.out_im_B = allocate_tile_cb(out_state_tiles, im_tile_size, im_df);
+    if (defines_map.count("SDPA_STREAMING_NUMERATOR_COMPENSATION")) {
+        defines.emplace_back("SDPA_OUT_A_CB", std::to_string(cb_ids.out_im_A));
+        defines.emplace_back("SDPA_OUT_B_CB", std::to_string(cb_ids.out_im_B));
+    }
     cb_ids.max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     cb_ids.max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    cb_ids.sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
+    uint32_t shadow_max_cb = 0;
+    if (shadow_max) {
+        shadow_max_cb =
+            allocate_tile_cb(statistics_tiles, tt::tile_size(tt::DataFormat::Float32), tt::DataFormat::Float32);
+        defines.emplace_back("SDPA_FP32_MAX_SHADOW_CB", std::to_string(shadow_max_cb));
+    }
+    const uint32_t sum_state_tiles = statistics_tiles * (defines_map.count("SDPA_STREAMING_ACCURACY") ? 2 : 1);
+    cb_ids.sum_A = allocate_tile_cb(sum_state_tiles, sum_tile_size, sum_df);
+    cb_ids.sum_B = allocate_tile_cb(sum_state_tiles, sum_tile_size, sum_df);
+    const auto correction_df = preserve_fp32_state ? tt::DataFormat::Float32 : stats_df;
+    cb_ids.exp_max_diff = allocate_tile_cb(statistics_tiles, tt::tile_size(correction_df), correction_df);
     cb_ids.out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
     const auto reader_cb_compile_time_args = cb_ids.reader_compile_time_args();
@@ -1439,10 +1628,28 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
     compute_desc.core_ranges = core_grid;
     compute_desc.compile_time_args = compute_compile_time_args;
     compute_desc.defines = defines;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (preserve_fp32_state) {
+        for (auto cb : {cb_ids.sum_A, cb_ids.sum_B}) {
+            unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+    if (fp32_streaming) {
+        for (auto cb : {cb_ids.out_im_A, cb_ids.out_im_B, cb_ids.exp_max_diff, cb_ids.recip_scratch}) {
+            unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+        }
+        if (diag_mode >= 3) {
+            unpack_to_dest_mode[diag_score_cb] = UnpackToDestMode::UnpackToDestFp32;
+            if (shadow_max) {
+                unpack_to_dest_mode[shadow_max_cb] = UnpackToDestMode::UnpackToDestFp32;
+            }
+        }
+    }
     compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
+        .math_fidelity = fp32_streaming && diag_mode >= 0 ? MathFidelity::HiFi4 : math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = dst_full_sync_en,
+        .unpack_to_dest_mode = unpack_to_dest_mode,
         .math_approx_mode = math_approx_mode,
     };
 

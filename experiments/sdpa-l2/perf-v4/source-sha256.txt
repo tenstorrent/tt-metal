@@ -1,0 +1,5 @@
+99cdf132ab834e4bf877a7fdb95c16dffc5b527c3c1839f40aaeb6d02a4ba60a  tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+56a6c0a84e393e06783bdd6938ca0470cb25a0b8dc814787266fea07eac861ca  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+524cadeaab87ef2101251a05af093cc45089f1f9a09133639706032ef6cf72c0  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+65573ccbd20777c5d64f558d845a95c5438dbeaa74fc9d92d7e0ad913559f62c  ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+859f4ac53b1dea5dc79335445dd11774e2b96cb83fa13a32ce6cab1a791cbd1d  tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py

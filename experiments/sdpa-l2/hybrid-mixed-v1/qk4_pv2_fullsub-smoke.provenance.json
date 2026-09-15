@@ -1,0 +1,137 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader.cpp": "c41ea4a25292e873e589d11f8f7621de79642a814e8eaf63579fb1ba2d5bc5cc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/hybrid-mixed-v1/compute.cpp": "5f22db898226b368c32fc4558cbfd0a35dd7f297055f15cf655be08c3c2932fc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "cab2aaa1267d3c503200f166c3949856b405bf377c8606b4394ca3e49dcd6cfa",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+    "experiments/sdpa-l2/hybrid-mixed-v1/run.py": "04982490df0caf1f5984cb45e840235948485c644b7b656dcbcd085b1550577a"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DIAG_SCORE_CB": "7",
+    "SDPA_QK4": "1",
+    "SDPA_MATCH_HIFI2": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "qk4_pv2_fullsub-smoke",
+    "mode": "qk4_pv2_fullsub",
+    "q_repeats": 2,
+    "k_chunks": 64,
+    "warmup": 2,
+    "iters": 2,
+    "seed": 1236,
+    "distribution": "normal"
+  }
+}

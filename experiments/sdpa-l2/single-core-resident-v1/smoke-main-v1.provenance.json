@@ -1,0 +1,125 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/single-core-resident-v1/reader.cpp": "1f907c9a35325dcb7d478f7e4c2c0b302fcc98ae5dc9072bb2e600e4f70d2b23",
+    "experiments/sdpa-l2/single-core-resident-v1/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/single-core-resident-v1/compute.cpp": "ae60b48190e755198cbb69333ac362dc8d68089dfa5fcdb743b16c8da8c64b6c",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "5444bde7658a0018c99092aa513349087b99c8accbc11813b12becf0caebed55",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "76c86dbfa6816812e3caa1070b2577f7be68e2b399a223961f9e80be7183ebe0",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/run.py": "93f280936426a95f8c27bd98c3ab6ba8023949486d15d994da8b41e45215cf48"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "RESIDENT_MAIN": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      6,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      8,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      9,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      13,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      14,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      16,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "smoke-main-v1",
+    "mode": "main",
+    "q_repeats": 2,
+    "k_chunks": 4,
+    "warmup": 1,
+    "iters": 2,
+    "seed": 1236,
+    "distribution": "normal"
+  }
+}

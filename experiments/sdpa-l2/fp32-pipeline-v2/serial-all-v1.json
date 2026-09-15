@@ -1,0 +1,17 @@
+{
+  "label": "serial-all-v1",
+  "serial": true,
+  "cores": 110,
+  "repetitions": 65536,
+  "median_ms": 111.3009919936303,
+  "trace_replay_ms": [
+    111.3009919936303,
+    111.30386299919337,
+    111.30420200061053,
+    111.29966299631633,
+    111.29919200902805
+  ],
+  "full_output_checked": true,
+  "score_value": 0.4784250259399414,
+  "warning": "Independent QK + score reload/exp pipeline probe, not SDPA performance."
+}

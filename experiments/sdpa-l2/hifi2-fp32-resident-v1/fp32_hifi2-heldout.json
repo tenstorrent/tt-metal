@@ -1,0 +1,28 @@
+{
+  "label": "fp32_hifi2-heldout",
+  "mode": "fp32_hifi2",
+  "q_repeats": 2,
+  "k_chunks": 64,
+  "warmup": 2,
+  "iters": 2,
+  "seed": 1237,
+  "distribution": "normal",
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "kv_slots": 1,
+  "cb_bytes": 1335296,
+  "useful_flops": 8589934592,
+  "median_ms": 9.368719009216875,
+  "trace_replay_ms": [
+    9.368964994791895,
+    9.368473023641855
+  ],
+  "tflops_per_core": 0.9168739700218661,
+  "l2_pct": 0.9754207447268043,
+  "pcc": 0.9999844235577768,
+  "full_output_sha256": "3159e17bd32680458e41538ca60145833fd5275a3b1a697f7db0e6451367a6d1",
+  "trace_equal": true,
+  "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput"
+}

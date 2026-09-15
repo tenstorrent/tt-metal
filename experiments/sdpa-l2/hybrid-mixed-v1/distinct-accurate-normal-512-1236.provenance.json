@@ -1,0 +1,142 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_compute.cpp": "403451c92eafc9c3f5267ca9d22755afdf4c3ea1cd76d987687e2cd5d9a7495e",
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_reader.cpp": "ac64afd7fe8e134be7497a44d5259a91781266cd8c9bb2508534eb1818786563",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader.cpp": "c41ea4a25292e873e589d11f8f7621de79642a814e8eaf63579fb1ba2d5bc5cc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/state_writer.cpp": "b9b6900c81c022951afd670871f3d24c15054169351085fb85b1e23e2d760249",
+    "experiments/sdpa-l2/hybrid-mixed-v1/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/hybrid-mixed-v1/reader_distinct.cpp": "6e606508f0b3d069794d4581baa93bb62f05fb2b7b0340a34260c681a3515d96",
+    "experiments/sdpa-l2/hybrid-mixed-v1/compute.cpp": "5f22db898226b368c32fc4558cbfd0a35dd7f297055f15cf655be08c3c2932fc",
+    "experiments/sdpa-l2/hybrid-mixed-v1/hybrid.hpp": "e80d65d786309548e6ffced1cbb1012ad891000d7dd4456457b194a1a9bcea12",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "8efffc64eb1c7cc8c95724a2fe22d3ff65374facefc7c5bc2725e9eff3ee58f9",
+    "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+    "experiments/sdpa-l2/hybrid-mixed-v1/run.py": "fa0c162b1fbb90f91bebc926b88c67e6fdf1ca54fe1ceffe57f071849c2265da"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      128,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      32,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      8,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "distinct-accurate-normal-512-1236",
+    "mode": "accurate",
+    "q_repeats": 1,
+    "k_chunks": 512,
+    "warmup": 10,
+    "iters": 0,
+    "seed": 1236,
+    "distribution": "normal",
+    "distinct_kv": true
+  }
+}

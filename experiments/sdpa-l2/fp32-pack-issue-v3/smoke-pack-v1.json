@@ -1,0 +1,17 @@
+{
+  "label": "smoke-pack-v1",
+  "math_pack": false,
+  "cores": 1,
+  "repetitions": 16,
+  "median_ms": 0.04132901085540652,
+  "trace_replay_ms": [
+    0.04148000152781606,
+    0.04148000152781606,
+    0.04132901085540652,
+    0.04129999433644116,
+    0.041229999624192715
+  ],
+  "full_output_checked": true,
+  "score_value": 0.4784250259399414,
+  "warning": "Independent QK + score reload/exp pipeline probe, not SDPA performance."
+}

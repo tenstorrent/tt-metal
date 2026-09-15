@@ -1,0 +1,223 @@
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -41,6 +41,35 @@
+     }
+ }
+ 
++// Investigation-only exact-exp and full-FP32 score-subtraction controls.
++template <uint32_t scale_fp32, int iterations>
++inline void calculate_sdpa_diag_exp() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    constexpr float scale = __builtin_bit_cast(float, scale_fp32);
++    for (int i = 0; i < iterations; ++i) {
++        sfpi::vFloat x = sfpi::dst_reg[0];
++        sfpi::dst_reg[0] = _sfpu_exp_fp32_accurate_(x * scale);
++        sfpi::dst_reg++;
++    }
++}
++
++template <uint32_t scale_fp32, bool apply_exp>
++inline void calculate_sdpa_diag_sub() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    constexpr float scale = __builtin_bit_cast(float, scale_fp32);
++    for (int i = 0; i < 32; ++i) {
++        sfpi::vFloat score = sfpi::dst_reg[0];
++        sfpi::vFloat maximum = sfpi::dst_reg[32];
++        sfpi::vFloat x = score - maximum;
++        if constexpr (apply_exp) {
++            sfpi::dst_reg[0] = _sfpu_exp_fp32_accurate_(x * scale);
++        } else {
++            sfpi::dst_reg[0] = x;
++        }
++        sfpi::dst_reg++;
++    }
++}
++
+ // Experimental negative-logit grid: trade exponent range for 10 fraction bits
+ // in the fast-exp macro's signed-magnitude INT16 encoding. Values below about
+ // -21.45 after scaling are zeroed by packer ReLU. This is not a general exp.
+@@ -173,10 +202,18 @@
+     // LoFi denominator consume the same six-bit effective SrcB weights.
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 4}}.set(ADDR_MOD_7);
++#if defined(SDPA_DIAG_EXP_MODE) && (SDPA_DIAG_EXP_MODE == 1 || SDPA_DIAG_EXP_MODE == 4)
++    // Relative fit to exp2(m-1), without HiFi2's six-bit rounding bias.
++    constexpr float a = -8.01081703839006e27f;
++    constexpr float b = 5.39213985142374e28f;
++    constexpr float c = -1.05653430577460e29f;
++    constexpr float d = 1.38859037541378e29f;
++#else
+     constexpr float a = -8.106702647031e27f;
+     constexpr float b = 5.446591617222e28f;
+     constexpr float c = -1.069245718291e29f;
+     constexpr float d = 1.399030410717e29f;
++#endif
+     TTI_SFPLOADI(6, 0xA, sdpa_lo16(a));
+     TTI_SFPLOADI(6, 0x8, sdpa_hi16(a));
+     TTI_SFPLOADI(0, 0xA, sdpa_lo16(b));
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -567,6 +567,44 @@
+     const uint32_t tiles_per_column = sbw;
+     const uint32_t max_row_base = q_subblock * tiles_per_row;
+ 
++#if defined(SDPA_DIAG_EXP_MODE) && SDPA_DIAG_EXP_MODE >= 3
++    CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
++    UNPACK((get_local_cb_interface(SDPA_DIAG_SCORE_CB).fifo_rd_ptr = get_local_cb_interface(inout_cb).fifo_rd_ptr));
++    configure_single_tile_pack(inout_cb);
++    PACK((llk_pack_relu_config(ReluConfig::zero())));
++    for (uint32_t i = 0; i < tiles_per_row; ++i) {
++        for (uint32_t j = 0; j < tiles_per_column; ++j) {
++            const uint32_t index = (max_row_base + i) * cols_in_row + global_col_base + j;
++            tile_regs_acquire();
++            sdpa_stream_reconfig(SDPA_DIAG_SCORE_CB, SDPA_DIAG_SCORE_CB);
++            unary_bcast_init<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB);
++            unary_bcast<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB, index, 0);
++            unary_bcast_uninit<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB);
++            sdpa_stream_reconfig(max_cb, max_cb);
++            unary_bcast_init<BroadcastType::COL>(max_cb);
++            unary_bcast<BroadcastType::COL>(max_cb, max_row_base + i, 1);
++            unary_bcast_uninit<BroadcastType::COL>(max_cb);
++            tile_regs_commit();
++            tile_regs_wait();
++            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_diag_sub,
++                                 (scale_fp32, SDPA_DIAG_EXP_MODE == 3), 0, VectorMode::None)));
++#if SDPA_DIAG_EXP_MODE == 4
++            PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
++            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_grid_batch, (32), 0, VectorMode::None)));
++            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_stream_effective, (32), 0, VectorMode::None)));
++#endif
++            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++            pack_tile<true>(0, inout_cb, index);
++            tile_regs_release();
++        }
++    }
++    sdpa_stream_reconfig(inout_cb, max_cb);
++    configure_row_pack_width(inout_cb, tiles_per_column);
++    PACK((llk_pack_relu_config(ReluConfig::none())));
++    PACK((llk_pack_reconfig_l1_acc(0)));
++    return;
++#endif
++
+     {
+         MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
+ #ifdef SDPA_FP32_STREAMING
+@@ -604,17 +642,26 @@
+         constexpr VectorMode vector_mode_exp = VectorMode::None;
+ #ifdef SDPA_FP32_STREAMING
+         if (tiles_per_row * tiles_per_column == 4) {
++#if defined(SDPA_DIAG_EXP_MODE) && SDPA_DIAG_EXP_MODE == 2
++            PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_diag_exp,
++                                 (scale_fp32, 128), 0, vector_mode_exp)));
++#else
+             PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+             PACK((SFPU_UNARY_CALL(
+                 DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_grid_batch, (128), 0, vector_mode_exp)));
+             PACK((SFPU_UNARY_CALL(
+                 DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_stream_effective, (128), 0, vector_mode_exp)));
++#endif
+         } else
+ #endif
+         {
+             for (uint32_t i = 0; i < tiles_per_row; i++) {
+                 for (uint32_t j = 0; j < tiles_per_column; j++) {
+ #ifdef SDPA_FP32_STREAMING
++#if defined(SDPA_DIAG_EXP_MODE) && SDPA_DIAG_EXP_MODE == 2
++                    PACK((SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_diag_exp,
++                                         (scale_fp32, iterations), dst_index, vector_mode_exp)));
++#else
+                     PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+                     PACK((SFPU_UNARY_CALL(
+                         DST_SYNC_MODE,
+@@ -630,6 +677,7 @@
+                         (iterations),
+                         dst_index,
+                         vector_mode_exp)));
++#endif
+                     ++dst_index;
+ #else
+                     exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
+@@ -2099,14 +2147,19 @@
+         CircularBuffer(cb_col_identity).wait_front(1);
+         sdpa_stream_reconfig(cb_col_identity, cb_qkt_im);
+         matmul_block_init(cb_qkt_im, cb_col_identity, 0, 1, 4, KT_stride);
+-        MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
++#ifdef SDPA_DIAG_EXP_MODE
++        constexpr auto denom_fidelity = MathFidelity::HiFi4;
++#else
++        constexpr auto denom_fidelity = MathFidelity::LoFi;
++#endif
++        MATH((llk_math_matmul_init<denom_fidelity, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
+         configure_single_tile_pack(cur.sum);
+         PACK((llk_pack_reconfig_l1_acc(0)));
+         for (uint32_t row = 0; row < Sq_chunk_t; row += 4) {
+             tile_regs_acquire();
+             for (uint32_t col = 0; col < active_Sk; ++col) {
+                 UNPACK((llk_unpack_AB_matmul(cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
+-                MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, 1, 4)));
++                MATH((llk_math_matmul<denom_fidelity, MM_THROTTLE>(0, 1, 4)));
+             }
+             tile_regs_commit();
+             tile_regs_wait();
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -19,6 +19,7 @@
+ #include <optional>
+ #include <string>
+ #include <cmath>
++#include <cstdlib>
+ 
+ using namespace tt::constants;
+ using namespace tt::tt_metal;
+@@ -494,6 +495,9 @@
+         qk_out_subblock_w = 4;
+     }
+     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) || fp32_streaming;
++    const char* diag_setting = std::getenv("TT_SDPA_ACCURACY_DIAG");
++    const int diag_mode = diag_setting ? std::atoi(diag_setting) : -1;
++    TT_FATAL(!diag_setting || fp32_streaming, "QUALIFICATION_UNSUPPORTED: accuracy diagnostic forbids fallback");
+ 
+     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+     // A user-provided dense mask on the streaming path takes its own per-chunk apply
+@@ -769,6 +773,10 @@
+     std::map<std::string, std::string> defines_map;
+     if (fp32_streaming) {
+         defines_map["SDPA_FP32_STREAMING"] = "1";
++        if (diag_mode >= 0) {
++            TT_FATAL(diag_mode <= 4, "Invalid SDPA accuracy diagnostic mode");
++            defines_map["SDPA_DIAG_EXP_MODE"] = std::to_string(diag_mode);
++        }
+     }
+     const bool preserve_fp32_state = fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+                                      input_tensor_q.dtype() == DataType::BFLOAT16 &&
+@@ -926,6 +934,16 @@
+     }
+ 
+     cb_ids.qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
++    uint32_t diag_score_cb = 0;
++    if (fp32_streaming && diag_mode >= 3) {
++        diag_score_cb = next_cb_index++;
++        desc.cbs.back().format_descriptors.push_back(CBFormatDescriptor{
++            .buffer_index = static_cast<uint8_t>(diag_score_cb),
++            .data_format = tt::DataFormat::Float32,
++            .page_size = qk_im_tile_size,
++        });
++        defines.emplace_back("SDPA_DIAG_SCORE_CB", std::to_string(diag_score_cb));
++    }
+     const uint32_t out_state_tiles =
+         out_im_tiles * (defines_map.count("SDPA_STREAMING_NUMERATOR_COMPENSATION") ? 2 : 1);
+     cb_ids.out_im_A = allocate_tile_cb(out_state_tiles, im_tile_size, im_df);
+@@ -1504,9 +1522,12 @@
+         for (auto cb : {cb_ids.out_im_A, cb_ids.out_im_B, cb_ids.exp_max_diff, cb_ids.recip_scratch}) {
+             unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
+         }
++        if (diag_mode >= 3) {
++            unpack_to_dest_mode[diag_score_cb] = UnpackToDestMode::UnpackToDestFp32;
++        }
+     }
+     compute_desc.config = ComputeConfigDescriptor{
+-        .math_fidelity = math_fidelity,
++        .math_fidelity = fp32_streaming && diag_mode >= 0 ? MathFidelity::HiFi4 : math_fidelity,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
+         .unpack_to_dest_mode = unpack_to_dest_mode,

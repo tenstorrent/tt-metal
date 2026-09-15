@@ -1,0 +1,20 @@
+{
+  "shape": {"batch": 1, "heads": 5, "q_len": 32768, "kv_len": 32768, "dim": 128, "seed": 1234},
+  "fast": {
+    "full_output_sha256": "a3fff03e5dab144f7dac933ab33e8f151386a0e80adbba48c4bef334a4439353",
+    "full_output_match": true,
+    "sampled_output_match": true,
+    "input_hashes_match": true,
+    "per_head_metrics_match": true
+  },
+  "accurate": {
+    "full_output_sha256": "5f507c0212958915d319795cd3778cb887bd258fe67182faa37a9a1272fe3c59",
+    "full_output_match": true,
+    "sampled_output_match": true,
+    "input_hashes_match": true,
+    "per_head_metrics_match": true
+  },
+  "qualification_override_removed": true,
+  "host_factory_explicitly_recompiled": true,
+  "numerical_kernels_changed": false
+}

@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "status": "selected_research_checkpoint",
+  "date": "2026-09-14",
+  "base_commit": "2ba6fc2339d53300ae87c5202f335ef56492cfb3",
+  "scope": "Blackhole; four streaming numeric configurations; not a production API/default rollout",
+  "inputs": "BF16 Q/K/V, no preprocessing",
+  "output": "BF16",
+  "fallback_allowed_in_accuracy_runner": false,
+  "accuracy_runner": "experiments/sdpa-l2/frontier-accuracy-v1/run.py",
+  "accuracy_results": [
+    "experiments/sdpa-l2/frontier-accuracy-v1/sweep-v1.jsonl",
+    "experiments/sdpa-l2/frontier-accuracy-v1/repeat-v1.jsonl"
+  ],
+  "performance_contract": "experiments/sdpa-l2/pareto-v1/README.md",
+  "harness_source_sha256": {
+    "experiments/sdpa-l2/frontier-accuracy-v1/run.py": "6b719aa29e5c93b2062979e03b7047bc06ea43dee7553e6702b8f8ca4af60c09",
+    "experiments/sdpa-l2/frontier-accuracy-v1/compute.cpp": "43c4b7bffc7308d248c72ca9c4ec93e11c6109e3a615f3427e1ac7a70423ffda",
+    "experiments/sdpa-l2/frontier-accuracy-v1/reader.cpp": "532b1f82502dc14ab72fb381dde5dff3ee71b15209dd01c0d33a5115756ff595",
+    "experiments/sdpa-l2/frontier-accuracy-v1/writer.cpp": "df085d6d091f014c8483b036cad338cd1ac5f87e48de6c6c02ca6e8dc97295f8",
+    "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py": "8a78370d89e0a11f22e1d835b53b88141cb81b6b7e1a3e963228ea365631ae2d"
+  },
+  "variants": [
+    {
+      "id": "main_bf16",
+      "name": "Main BF16",
+      "harness_mode": "main",
+      "qk_fidelity": "HiFi2",
+      "pv_fidelity": "HiFi2",
+      "fp32_destination": false,
+      "recurrent_state": "BF16",
+      "performance_record": "experiments/sdpa-l2/single-core-resident-v1/hifi2-fp32-main-control.json",
+      "source_sha256": {
+        "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+        "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+        "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6"
+      }
+    },
+    {
+      "id": "fast_bf16",
+      "name": "FAST (compensated BF16)",
+      "harness_mode": "fast",
+      "qk_fidelity": "HiFi2",
+      "pv_fidelity": "HiFi2",
+      "fp32_destination": false,
+      "recurrent_state": "BF16 high/low numerator and denominator",
+      "performance_record": "experiments/sdpa-l2/hybrid-mixed-v1/qualified-fast-steady.json",
+      "source_sha256": {
+        "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "54c51c56aa457134aed0181202c6fd3cad66df0a507659f364857c77dca9bb42",
+        "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+        "experiments/sdpa-l2/bf16-denom-pair-v3/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b471e527b61f55f2c9f30573ee4cdd82f5cbad7d0b02e1c654814835d3d0916b"
+      }
+    },
+    {
+      "id": "balanced_fp32",
+      "name": "FP32 QK4/PV2",
+      "harness_mode": "qk4_pv2",
+      "qk_fidelity": "HiFi4",
+      "pv_fidelity": "HiFi2",
+      "fp32_destination": true,
+      "recurrent_state": "FP32",
+      "performance_record": "experiments/sdpa-l2/hybrid-mixed-v1/qualified-qk4_pv2-steady.json",
+      "source_sha256": {
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b8668252145ff7ad2b151245cb9d3ddbe21a4573f459709b291be4ea353404c3"
+      }
+    },
+    {
+      "id": "accurate_fp32",
+      "name": "ACCURATE",
+      "harness_mode": "accurate",
+      "qk_fidelity": "HiFi4",
+      "pv_fidelity": "HiFi4",
+      "fp32_destination": true,
+      "recurrent_state": "FP32",
+      "performance_record": "experiments/sdpa-l2/hybrid-mixed-v1/qualified-accurate-steady.json",
+      "source_sha256": {
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "bf797dff103676fc55990681aad82b8e508938edd581e2b619822ab97b27531c",
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+        "experiments/sdpa-l2/hybrid-mixed-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "b8668252145ff7ad2b151245cb9d3ddbe21a4573f459709b291be4ea353404c3"
+      }
+    }
+  ]
+}

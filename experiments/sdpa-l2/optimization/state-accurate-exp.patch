@@ -1,0 +1,244 @@
+diff --git a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+index fb46f90cc6a..63598896628 100644
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -47,10 +47,10 @@ inline void calculate_recip_first_column() {
+             sfpi::vFloat in = sfpi::dst_reg[0];
+             sfpi::vFloat out;
+ 
+-            if constexpr (APPROX) {
+-                out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
+-            } else if constexpr (is_fp32_dest_acc_en) {
++            if constexpr (is_fp32_dest_acc_en) {
+                 out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
++            } else if constexpr (APPROX) {
++                out = ckernel::sfpu::sfpu_reciprocal_iter<0>(in);
+             } else {
+                 out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
+                 out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+index 2d428112696..4bf0d7d8fc9 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+@@ -19,6 +19,7 @@
+ #include "api/compute/eltwise_unary/negative.h"
+ #include "api/compute/eltwise_unary/binop_with_scalar.h"
+ #include "api/compute/bcast.h"
++#include "api/compute/eltwise_binary_sfpu.h"
+ #include "api/compute/tile_move_copy.h"
+ #include "api/compute/matmul.h"
+ #include "api/compute/reduce.h"
+@@ -270,14 +271,22 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+     // Postcondition: in_cb has num_tiles produced
+     reconfig_data_format_srca(in_cb);
+     copy_init(in_cb);
++#if defined(ARCH_BLACKHOLE)
++    recip_tile_init<!DST_ACCUM_MODE>();
++#else
+     recip_tile_init();
++#endif
+     pack_reconfig_data_format(in_cb);
+ 
+     cb_in.wait_front(num_tiles);
+     for (uint32_t i = 0; i < num_tiles; ++i) {
+         tile_regs_acquire();
+         copy_tile(in_cb, i, 0);
++#if defined(ARCH_BLACKHOLE)
++        MATH((recip_tile_first_column<!DST_ACCUM_MODE>(0)));
++#else
+         MATH((recip_tile_first_column(0)));
++#endif
+         tile_regs_commit();
+         tile_regs_wait();
+         pack_tile(0, in_cb);
+@@ -315,7 +324,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
+     // The exponential function uses InputClamping::None for better performance. This version
+     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
+     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
+-    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
++#ifdef SDPA_FP32_STATE
++    constexpr bool approx_exp = false;
++#else
++    constexpr bool approx_exp = true;
++#endif
++    exp_tile_init<approx_exp, scale_fp32, InputClamping::None>();
+     PACK((llk_pack_relu_config(ReluConfig::zero())));
+ 
+     cb_in0.wait_front(rows * cols);
+@@ -339,7 +353,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
+                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
+                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+-                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
++                exp_tile<approx_exp, !approx_exp, InputClamping::None, iterations>(
++                    j, vector_mode_exp, static_cast<uint16_t>(scale_fp32 >> 16));
+             }
+             tile_regs_commit();
+ 
+@@ -475,6 +490,53 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
+     }
+ }
+ 
++#ifdef ARCH_BLACKHOLE
++// Preserve the previous FP32 state through unpack and arithmetic. The packer
++// adds it to the current chunk without an extra SrcA/B round-trip.
++template <uint32_t rows, uint32_t cols, bool pop_scale, bool accumulate = true>
++void rescale_accumulate_fp32(uint32_t prev_cb, uint32_t scale_cb, uint32_t cur_cb) {
++    CircularBuffer prev(prev_cb), scale(scale_cb), cur(cur_cb);
++    prev.wait_front(rows * cols);
++    scale.wait_front(rows);
++    if constexpr (accumulate) {
++        cur.wait_front(rows * cols);
++    } else {
++        cur.reserve_back(rows * cols);
++    }
++    pack_reconfig_data_format(cur_cb);
++    PACK((llk_pack_reconfig_l1_acc(accumulate)));
++    for (uint32_t row = 0; row < rows; ++row) {
++        for (uint32_t col = 0; col < cols; ++col) {
++            tile_regs_acquire();
++            reconfig_data_format_srca(scale_cb);
++            unary_bcast_init<BroadcastType::COL>(scale_cb);
++            unary_bcast<BroadcastType::COL>(scale_cb, row, 1);
++            unary_bcast_uninit<BroadcastType::COL>(scale_cb);
++            reconfig_data_format_srca(prev_cb);
++            unary_bcast_init<BroadcastType::NONE>(prev_cb);
++            unary_bcast<BroadcastType::NONE>(prev_cb, row * cols + col, 0);
++            unary_bcast_uninit<BroadcastType::NONE>(prev_cb);
++            mul_binary_tile_init();
++            mul_binary_tile(0, 1, 0);
++            tile_regs_commit();
++            tile_regs_wait();
++            pack_tile(0, cur_cb);
++            tile_regs_release();
++        }
++    }
++    PACK((llk_pack_reconfig_l1_acc(false)));
++    prev.pop_front(rows * cols);
++    if constexpr (pop_scale) {
++        scale.pop_front(rows);
++    }
++    if constexpr (accumulate) {
++        cur.pop_front(rows * cols);
++        cur.reserve_back(rows * cols);
++    }
++    cur.push_back(rows * cols);
++}
++#endif
++
+ /**
+  * in0_cb *= in1_cb
+  */
+@@ -680,6 +742,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
+ 
+     sub_init(in0_cb, in1_cb);
+     exp_tile_init<EXP_APPROX_MODE>();
++    pack_reconfig_data_format(out_cb);
+     cb_in0.wait_front(num_tiles);
+     cb_in1.wait_front(num_tiles);
+     cb_out.reserve_back(num_tiles);
+@@ -1920,17 +1983,29 @@ void sdpa_inner_loop(
+                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
+                  * reduction, containing the sum of tiles in dim=-1 of QK.
+                  */
+-                mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
+-
+-                /* cb_cur_sum += cb_prev_sum */
+-                add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
++#ifdef SDPA_FP32_STATE
++                {
++                    rescale_accumulate_fp32<Sq_chunk_t, 1, false>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum);
++                }
++#else
++                {
++                    mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
++                    /* cb_cur_sum += cb_prev_sum */
++                    add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
++                }
++#endif
+ 
+                 /**
+                  * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
+                  * This uses L1 accumulation to accumulate onto mm2_cur_out.
+                  */
++#ifdef SDPA_FP32_STATE
++                rescale_accumulate_fp32<Sq_chunk_t, vDHt, true>(
++                    alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
++#else
+                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
+                     alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
++#endif
+             }
+ 
+             // Swap CB handles to prepare for next iteration
+@@ -1944,6 +2019,13 @@ void sdpa_inner_loop(
+         /**
+          * Performs final row-reduction on the partial sum.
+          */
++#ifdef SDPA_FP32_STATE
++        // Final FPU reduction is a single TF32 ingress, not a recurrent one.
++        reconfig_data_format_srca(alias_prev_sum);
++        pack_reconfig_data_format(cb_qk_im);
++        copy_block(alias_prev_sum, cb_qk_im, Sq_chunk_t);
++        alias_prev_sum = cb_qk_im;
++#endif
+         matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+ 
+         /**
+@@ -2061,7 +2143,11 @@ void sdpa_inner_loop(
+ 
+             /* cb_out_accumulate_im *= cb_cur_sum */
+             pack_reconfig_data_format(cb_out);
++#ifdef SDPA_FP32_STATE
++            rescale_accumulate_fp32<Sq_chunk_t, vDHt, true, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
++#else
+             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
++#endif
+ 
+             // free up cb_prev_max after K chunks
+             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+index 79d9af13e62..20adfcb6ea2 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -750,6 +750,10 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     };
+ 
+     std::map<std::string, std::string> defines_map;
++    const bool preserve_fp32_state = fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink;
++    if (preserve_fp32_state) {
++        defines_map["SDPA_FP32_STATE"] = "1";
++    }
+     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
+     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+     defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+@@ -777,9 +781,8 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+     tt::DataFormat scalar_df =
+         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+-    tt::DataFormat im_df =
+-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
+-    tt::DataFormat stats_df = im_df;
++    tt::DataFormat im_df = preserve_fp32_state ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
++    tt::DataFormat stats_df = tt::DataFormat::Float16_b;
+     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+     // salad_correct_fused inits mul_bcast_cols with out CB and applies it to sum CB too —
+@@ -1439,10 +1442,17 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     compute_desc.core_ranges = core_grid;
+     compute_desc.compile_time_args = compute_compile_time_args;
+     compute_desc.defines = defines;
++    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
++    if (preserve_fp32_state) {
++        for (auto cb : {cb_ids.sum_A, cb_ids.sum_B, cb_ids.out_im_A, cb_ids.out_im_B}) {
++            unpack_to_dest_mode[cb] = UnpackToDestMode::UnpackToDestFp32;
++        }
++    }
+     compute_desc.config = ComputeConfigDescriptor{
+         .math_fidelity = math_fidelity,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+         .dst_full_sync_en = dst_full_sync_en,
++        .unpack_to_dest_mode = unpack_to_dest_mode,
+         .math_approx_mode = math_approx_mode,
+     };
+ 

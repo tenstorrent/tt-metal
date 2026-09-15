@@ -1,0 +1,15 @@
+76c86dbfa6816812e3caa1070b2577f7be68e2b399a223961f9e80be7183ebe0  tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+5444bde7658a0018c99092aa513349087b99c8accbc11813b12becf0caebed55  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+536a857d3fe62e0a534acf4daa7d40c2c30c0386be4ba13f99b9eebcd9641e76  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_fp32_pipeline.hpp
+e81828b1b2dc0e08029eaa28fadc7c5ea9bfa50edc5460836a1b5bc6a5a05bca  ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+8a78370d89e0a11f22e1d835b53b88141cb81b6b7e1a3e963228ea365631ae2d  tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py
+a4eba29d79c8d2f8ee262eb760bf8591403dc8490c34e55638cd3ab1cb1da5d4  experiments/sdpa-l2/fp32-pack-issue-v3/run.py
+8ace30d458bd54271ff1a8688c280e2b6e91c90f611f0c6de5d92b185a801605  experiments/sdpa-l2/fp32-pack-issue-v3/validate.py
+c3c3aa6486dd3b38e414f61d3867f28fee6a16953d4ed5c683dc965891acf502  experiments/sdpa-l2/fp32-pack-issue-v3/profile.sh
+a2f84ab0fe86c684600e8f277c56a69f4d6e461920530e1e5bab6d2921a0e029  experiments/sdpa-l2/fp32-pack-issue-v3/candidate-env.sh
+56a6c0a84e393e06783bdd6938ca0470cb25a0b8dc814787266fea07eac861ca  ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+793487a5f89a2c581341a48bc688da05e5ce1dedfb74aa8ed6e8a4bc2fd678e0  experiments/sdpa-l2/fp32-pack-issue-v3/compute.cpp
+d1812511440ca12af9b7695f6c2a340a6e287cb5e2da08617fe25ea4061091c2  experiments/sdpa-l2/fp32-pack-issue-v3/reader.cpp
+ea8e5f700c54cdd9ffa1a9c384a31973e06d7ab772208eb6450157b9f24ef91e  experiments/sdpa-l2/fp32-pack-issue-v3/probe.py
+960043a9bda975ef326ec2439080294e9ea085827b694de0a912df227cd2c947  experiments/sdpa-l2/fp32-pack-issue-v3/exp.py
+9b812ad8c4f9de7ad94ce887c8b30d82f6d39b8e7775275a7517073688a8eae1  experiments/sdpa-l2/fp32-pack-issue-v3/exp_compute.cpp

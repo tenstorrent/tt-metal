@@ -19,6 +19,7 @@
 #include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/bcast.h"
+#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
@@ -270,14 +271,22 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Postcondition: in_cb has num_tiles produced
     reconfig_data_format_srca(in_cb);
     copy_init(in_cb);
+#ifdef SDPA_FP32_STATE
+    recip_tile_init<false>();
+#else
     recip_tile_init();
+#endif
     pack_reconfig_data_format(in_cb);
 
     cb_in.wait_front(num_tiles);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_cb, i, 0);
+#ifdef SDPA_FP32_STATE
+        MATH((recip_tile_first_column<false>(0)));
+#else
         MATH((recip_tile_first_column(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, in_cb);
@@ -316,6 +325,9 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
     exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
+#ifdef SDPA_HIFI2_ROUND
+    MATH((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+#endif
     PACK((llk_pack_relu_config(ReluConfig::zero())));
 
     cb_in0.wait_front(rows * cols);
@@ -339,7 +351,22 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+#ifdef SDPA_HIFI2_ROUND
+                MATH((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+#endif
                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
+                MATH((SFPU_UNARY_CALL(
+                    DST_SYNC_MODE,
+                    DST_ACCUM_MODE,
+                    calculate_sdpa_exp_hifi2_effective,
+                    (iterations),
+                    j,
+                    vector_mode_exp)));
+#elif defined(SDPA_HIFI2_ROUND)
+                MATH((SFPU_UNARY_CALL(
+                    DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_hifi2, (iterations), j, vector_mode_exp)));
+#endif
             }
             tile_regs_commit();
 
@@ -415,6 +442,12 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
     reconfig_data_format(in0_cb, in1_cb);
     pack_reconfig_data_format(out_cb);
     mul_bcast_cols_init(in0_cb, in1_cb);
+#ifdef SDPA_FP32_STATE
+    if constexpr (!pack_accumulate && !immediate_pop) {
+        MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MathFidelity::HiFi4>(
+            in0_cb, in1_cb)));
+    }
+#endif
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(rows);
 
@@ -451,7 +484,20 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
             for (uint32_t u = 0; u < granularity; ++u) {
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < dst_tiles; ++j) {
-                    mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+#ifdef SDPA_FP32_STATE
+                    if constexpr (!pack_accumulate) {
+                        MATH((llk_math_eltwise_binary<
+                              EltwiseBinaryType::ELWMUL,
+                              BroadcastType::COL,
+                              DST_ACCUM_MODE,
+                              MathFidelity::HiFi4,
+                              EltwiseBinaryReuseDestType::NONE>(in0_cb, in1_cb, j, true)));
+                        UNPACK((llk_unpack_AB<BroadcastType::COL>(in0_cb, in1_cb, in0_index, i)));
+                    } else
+#endif
+                    {
+                        mul_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
+                    }
                     in0_index++;
                 }
                 tile_regs_commit();
@@ -474,6 +520,159 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb) {
         }
     }
 }
+
+#ifdef SDPA_FP32_STATE
+// Only used once per query chunk. The reciprocal uses full FP32 unpack;
+// the numerator retains its normal TF32 ingress for compatibility with L1 updates.
+template <uint32_t rows, uint32_t cols>
+void normalize_sdpa_sfpu(uint32_t numerator_cb, uint32_t recip_cb, uint32_t out_cb) {
+    CircularBuffer numerator(numerator_cb), recip(recip_cb), out(out_cb);
+    numerator.wait_front(rows * cols);
+    recip.wait_front(rows);
+    out.reserve_back(rows * cols);
+    pack_reconfig_data_format(out_cb);
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t col = 0; col < cols; ++col) {
+            tile_regs_acquire();
+            reconfig_data_format(recip_cb, recip_cb);
+            unary_bcast_init<BroadcastType::COL>(recip_cb);
+            unary_bcast<BroadcastType::COL>(recip_cb, row, 1);
+            unary_bcast_uninit<BroadcastType::COL>(recip_cb);
+            reconfig_data_format_srca(numerator_cb);
+            copy_init(numerator_cb);
+            copy_tile(numerator_cb, row * cols + col, 0);
+            mul_binary_tile_init();
+            mul_binary_tile(0, 1, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, out_cb);
+            tile_regs_release();
+        }
+    }
+    numerator.pop_front(rows * cols);
+    recip.pop_front(rows);
+    out.push_back(rows * cols);
+}
+
+// Rescale the denominator directly, then reuse its broadcast scale tile to
+// prepare correction - 1 for the compensated numerator update.
+template <uint32_t rows>
+void rescale_sum_and_prepare_delta(uint32_t prev_cb, uint32_t scale_cb, uint32_t cur_cb) {
+    CircularBuffer prev(prev_cb), scale(scale_cb), cur(cur_cb);
+    prev.wait_front(rows);
+    scale.wait_front(rows);
+    cur.wait_front(rows);
+    for (uint32_t row = 0; row < rows; ++row) {
+        tile_regs_acquire();
+        reconfig_data_format(scale_cb, scale_cb);
+        unary_bcast_init<BroadcastType::COL>(scale_cb);
+        unary_bcast<BroadcastType::COL>(scale_cb, row, 1);
+        unary_bcast_uninit<BroadcastType::COL>(scale_cb);
+        reconfig_data_format_srca(prev_cb);
+        unary_bcast_init<BroadcastType::NONE>(prev_cb);
+        unary_bcast<BroadcastType::NONE>(prev_cb, row, 0);
+        unary_bcast_uninit<BroadcastType::NONE>(prev_cb);
+#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
+        MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_scale_sum_and_delta, 0, VectorMode::C)));
+#else
+        mul_binary_tile_init();
+        mul_binary_tile(0, 1, 0);
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            calculate_binop_with_scalar,
+            (APPROX, SUB_UNARY, 8, DST_ACCUM_MODE),
+            1,
+            VectorMode::C,
+            0x3f800000));
+#endif
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_reconfig_data_format(cur_cb);
+        PACK((llk_pack_reconfig_l1_acc(true)));
+        pack_tile<true>(0, cur_cb, row);
+        PACK((llk_pack_reconfig_l1_acc(false)));
+        pack_reconfig_data_format(scale_cb);
+        pack_tile<true>(1, scale_cb, row);
+        tile_regs_release();
+    }
+    prev.pop_front(rows);
+    cur.pop_front(rows);
+    cur.reserve_back(rows);
+    cur.push_back(rows);
+    scale.pop_front(rows);
+    scale.reserve_back(rows);
+    scale.push_back(rows);
+}
+
+// old * correction + chunk = old + old * (correction - 1) + chunk.
+// Keep the leading old term in FP32 L1. The product and new chunk still
+// pass through SrcA/B; this avoids recurrent rounding when correction == 1.
+// Do not use this cancellation-based update for the positive denominator:
+// a large maximum change can make its rounding residual significant.
+// On return, cur_cb names the updated state and prev_cb names the consumed
+// scratch CB, matching the caller's normal end-of-chunk alias swap.
+template <uint32_t rows, uint32_t cols>
+void rescale_numerator_l1(uint32_t& prev_cb, uint32_t scale_cb, uint32_t& cur_cb) {
+    CircularBuffer prev(prev_cb), scale(scale_cb), cur(cur_cb);
+    prev.wait_front(rows * cols);
+    scale.wait_front(rows);
+    cur.wait_front(rows * cols);
+    pack_reconfig_data_format(prev_cb);
+    reconfig_data_format(prev_cb, scale_cb);
+    mul_bcast_cols_init(prev_cb, scale_cb);
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL, MathFidelity::HiFi4>(
+        prev_cb, scale_cb)));
+    PACK((llk_pack_reconfig_l1_acc(true)));
+    for (uint32_t row = 0; row < rows; ++row) {
+        for (uint32_t col = 0; col < cols; col += 4) {
+            const uint32_t batch = (cols - col < 4) ? cols - col : 4;
+            tile_regs_acquire();
+            for (uint32_t j = 0; j < batch; ++j) {
+                UNPACK((llk_unpack_AB<BroadcastType::COL>(prev_cb, scale_cb, row * cols + col + j, row)));
+                MATH((llk_math_eltwise_binary<
+                      EltwiseBinaryType::ELWMUL,
+                      BroadcastType::COL,
+                      DST_ACCUM_MODE,
+                      MathFidelity::HiFi4,
+                      EltwiseBinaryReuseDestType::NONE>(prev_cb, scale_cb, j, true)));
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < batch; ++j) {
+                pack_tile(j, prev_cb);
+            }
+            tile_regs_release();
+        }
+    }
+    prev.pop_front(rows * cols);
+    prev.reserve_back(rows * cols);
+    prev.push_back(rows * cols);
+    reconfig_data_format_srca(cur_cb);
+    copy_init(cur_cb);
+    for (uint32_t base = 0; base < rows * cols; base += 4) {
+        const uint32_t batch = (rows * cols - base < 4) ? rows * cols - base : 4;
+        tile_regs_acquire();
+        for (uint32_t j = 0; j < batch; ++j) {
+            copy_tile(cur_cb, base + j, j);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < batch; ++j) {
+            pack_tile(j, prev_cb);
+        }
+        tile_regs_release();
+    }
+    PACK((llk_pack_reconfig_l1_acc(false)));
+    prev.pop_front(rows * cols);
+    prev.reserve_back(rows * cols);
+    prev.push_back(rows * cols);
+    cur.pop_front(rows * cols);
+    scale.pop_front(rows);
+    std::swap(prev_cb, cur_cb);
+}
+#endif
 
 /**
  * in0_cb *= in1_cb
@@ -680,6 +879,7 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
 
     sub_init(in0_cb, in1_cb);
     exp_tile_init<EXP_APPROX_MODE>();
+    pack_reconfig_data_format(out_cb);
     cb_in0.wait_front(num_tiles);
     cb_in1.wait_front(num_tiles);
     cb_out.reserve_back(num_tiles);
@@ -691,7 +891,12 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
         invalidate_l1_cache();
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+#ifdef SDPA_FP32_STATE
+        MATH((SFPU_UNARY_CALL(
+            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_correction, (scale_fp32), 0, VectorMode::C)));
+#else
         MATH((exp_tile_first_column<EXP_APPROX_MODE, scale_bf16>(0)));
+#endif
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out_cb);
@@ -1077,6 +1282,37 @@ ALWI void matmul_blocks(
     cb_in1.pop_front(K * N);
 }
 
+#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
+// SrcA is exactly one: LoFi and HiFi2 consume the same six SrcB fraction bits.
+// Reducing P through this FPU path matches the weights actually consumed by PV;
+// summing the untruncated FP32 exponential would introduce normalization bias.
+template <uint32_t rows, uint32_t cols>
+void reduce_effective_p(uint32_t p_cb, uint32_t identity_cb, uint32_t sum_cb) {
+    constexpr uint32_t batch = rows % 4 == 0 ? 4 : 1;
+    CircularBuffer(p_cb).wait_front(rows * cols);
+    CircularBuffer(identity_cb).wait_front(1);
+    CircularBuffer(sum_cb).reserve_back(rows);
+    reconfig_data_format(identity_cb, p_cb);
+    matmul_block_init(p_cb, identity_cb, 0, 1, batch, cols);
+    MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(p_cb, identity_cb, 0, 1, batch)));
+    pack_reconfig_data_format(sum_cb);
+    for (uint32_t row = 0; row < rows; row += batch) {
+        tile_regs_acquire();
+        for (uint32_t col = 0; col < cols; ++col) {
+            UNPACK((llk_unpack_AB_matmul(p_cb, identity_cb, row * cols + col, 0, 1, batch, cols)));
+            MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, 1, batch)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t j = 0; j < batch; ++j) {
+            pack_tile(j, sum_cb);
+        }
+        tile_regs_release();
+    }
+    CircularBuffer(sum_cb).push_back(rows);
+}
+#endif
+
 template <uint32_t M>
 void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     CircularBuffer cb_in1(in1_cb);
@@ -1107,6 +1343,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
     reconfig_data_format(in1_cb, out_cb);
     matmul_block_init(
         out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+#ifdef SDPA_FP32_STATE
+    MATH((llk_math_matmul_init<MathFidelity::HiFi4, MM_THROTTLE>(out_cb, in1_cb, 0, subblock_w, subblock_h)));
+#endif
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
@@ -1122,7 +1361,12 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
         uint32_t in0_index = 0;
         uint32_t in1_index = 0;
 
+#ifdef SDPA_FP32_STATE
+        UNPACK((llk_unpack_AB_matmul(out_cb, in1_cb, in0_index, in1_index, subblock_w, subblock_h, in0_block_w)));
+        MATH((llk_math_matmul<MathFidelity::HiFi4, MM_THROTTLE>(dst_index, subblock_w, subblock_h)));
+#else
         matmul_block(out_cb, in1_cb, in0_index, in1_index, dst_index, 0, subblock_w, subblock_h, in0_block_w);
+#endif
 
         tile_regs_commit();
         cb_out.pop_front(subblock_h);
@@ -1879,8 +2123,14 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
+#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
+            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false>(
+                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            reduce_effective_p<Sq_chunk_t, Sk_chunk_t>(cb_qk_im, cb_col_identity, alias_cur_sum);
+#else
             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
+#endif
 
             // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
             // matmul)
@@ -1920,17 +2170,24 @@ void sdpa_inner_loop(
                  * This is a bcast_cols since max_diff is a column vector and prev_sum is a partial
                  * reduction, containing the sum of tiles in dim=-1 of QK.
                  */
+#ifdef SDPA_FP32_STATE
+                rescale_sum_and_prepare_delta<Sq_chunk_t>(alias_prev_sum, cb_exp_max_diff, alias_cur_sum);
+#else
                 mul_tiles_bcast_cols_inplace(alias_prev_sum, cb_exp_max_diff, Sq_chunk_t);
-
                 /* cb_cur_sum += cb_prev_sum */
                 add_block_inplace(alias_cur_sum, alias_prev_sum, Sq_chunk_t);
+#endif
 
                 /**
                  * alias_mm2_cur_out += alias_mm2_prev_out * cb_exp_max_diff
                  * This uses L1 accumulation to accumulate onto mm2_cur_out.
                  */
+#ifdef SDPA_FP32_STATE
+                rescale_numerator_l1<Sq_chunk_t, vDHt>(alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+#else
                 mul_block_bcast_cols<Sq_chunk_t, vDHt, false, true>(
                     alias_mm2_prev_out, cb_exp_max_diff, alias_mm2_cur_out);
+#endif
             }
 
             // Swap CB handles to prepare for next iteration
@@ -1943,8 +2200,31 @@ void sdpa_inner_loop(
 
         /**
          * Performs final row-reduction on the partial sum.
+         * Effective-weight sums are already reduced; retain their full-FP32
+         * unpack view through reciprocal instead of copying to the TF32 view.
          */
+#if defined(SDPA_FP32_STATE) && !defined(SDPA_HIFI2_EFFECTIVE_WEIGHTS)
+        reconfig_data_format_srca(alias_prev_sum);
+        pack_reconfig_data_format(cb_exp_max_diff);
+        CircularBuffer(alias_prev_sum).wait_front(Sq_chunk_t);
+        CircularBuffer(cb_exp_max_diff).reserve_back(Sq_chunk_t);
+        unary_bcast_init<BroadcastType::NONE>(alias_prev_sum);
+        for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+            tile_regs_acquire();
+            unary_bcast<BroadcastType::NONE>(alias_prev_sum, r, 0);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_exp_max_diff);
+            tile_regs_release();
+        }
+        unary_bcast_uninit<BroadcastType::NONE>(alias_prev_sum);
+        CircularBuffer(alias_prev_sum).pop_front(Sq_chunk_t);
+        CircularBuffer(cb_exp_max_diff).push_back(Sq_chunk_t);
+        alias_prev_sum = cb_exp_max_diff;
+#endif
+#ifndef SDPA_HIFI2_EFFECTIVE_WEIGHTS
         matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
+#endif
 
         /**
          * Process attention sink as a virtual K chunk.
@@ -2061,7 +2341,11 @@ void sdpa_inner_loop(
 
             /* cb_out_accumulate_im *= cb_cur_sum */
             pack_reconfig_data_format(cb_out);
+#ifdef SDPA_HIFI2_ROUND
+            normalize_sdpa_sfpu<Sq_chunk_t, vDHt>(alias_mm2_prev_out, alias_prev_sum, cb_out);
+#else
             mul_block_bcast_cols<Sq_chunk_t, vDHt, false, false>(alias_mm2_prev_out, alias_prev_sum, cb_out);
+#endif
 
             // free up cb_prev_max after K chunks
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);

@@ -1,0 +1,18 @@
+# Local build/profiler outputs and bulky diagnostic artifacts stay on disk.
+__pycache__/
+*.py[cod]
+._*
+.DS_Store
+*.log
+*.pt
+*.tracy
+*.tar
+*.tar.gz
+profile*/
+reports/
+
+# Keep the final static plot and editable chart; omit browser QA outputs.
+pareto-v1/preview.html
+pareto-v1/light-*.png
+pareto-v1/dark-*.png
+pareto-v1/check_preview.py

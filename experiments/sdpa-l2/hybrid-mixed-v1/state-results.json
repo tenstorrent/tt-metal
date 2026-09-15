@@ -1,0 +1,86 @@
+[
+  {
+    "seed": 1236,
+    "pattern": "roundtrip",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1236,
+    "pattern": "small_increment",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1236,
+    "pattern": "rescale",
+    "max_abs": 2.384185791015625e-07,
+    "bit_mismatches": 56,
+    "finite": true
+  },
+  {
+    "seed": 1236,
+    "pattern": "cancellation",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1237,
+    "pattern": "roundtrip",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1237,
+    "pattern": "small_increment",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1237,
+    "pattern": "rescale",
+    "max_abs": 2.384185791015625e-07,
+    "bit_mismatches": 54,
+    "finite": true
+  },
+  {
+    "seed": 1237,
+    "pattern": "cancellation",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1238,
+    "pattern": "roundtrip",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1238,
+    "pattern": "small_increment",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  },
+  {
+    "seed": 1238,
+    "pattern": "rescale",
+    "max_abs": 2.384185791015625e-07,
+    "bit_mismatches": 56,
+    "finite": true
+  },
+  {
+    "seed": 1238,
+    "pattern": "cancellation",
+    "max_abs": 0.0,
+    "bit_mismatches": 0,
+    "finite": true
+  }
+]

@@ -1,0 +1,14 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+index 79d9af13e62..98bc23ba918 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -777,8 +777,7 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
+     tt::DataFormat scalar_df =
+         (input_tensor_q.dtype() == DataType::FLOAT32) ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+-    tt::DataFormat im_df =
+-        tt::DataFormat::Float16_b;  // Keep most intermediates in bf16 to save L1; opt-in fp32 per-CB below.
++    tt::DataFormat im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+     tt::DataFormat stats_df = im_df;
+     tt::DataFormat qk_im_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);
+     tt::DataFormat sum_df = fp32_dest_intermediate_dataformat(fp32_dest_acc_en);

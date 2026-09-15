@@ -1,0 +1,11 @@
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -792,7 +792,7 @@
+     if (use_streaming_compute && !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+         math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode && !use_mla && !is_chunked &&
+         !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && q_chunk_size == 128 &&
+-        k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64 &&
++        k_chunk_size == 512 && DHt == 4 && vDHt == 4 &&
+         input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == DataType::BFLOAT16 &&
+         input_tensor_v.dtype() == DataType::BFLOAT16) {
+         defines_map["SDPA_STREAMING_ACCURACY"] = "1";

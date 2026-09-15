@@ -1,0 +1,46 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+index 2d428112696..1160299ad6e 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+@@ -315,7 +315,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
+     // The exponential function uses InputClamping::None for better performance. This version
+     // produces incorrect outputs for inputs <~ -88, but those outputs are guaranteed to be negative.
+     // Enable packer ReLU to zero any negative values produced by the exponential approximation.
+-    exp_tile_init<true /* approx */, scale_fp32, InputClamping::None>();
++    exp_tile_init<EXP_APPROX_MODE, scale_fp32, InputClamping::None>();
+     PACK((llk_pack_relu_config(ReluConfig::zero())));
+ 
+     cb_in0.wait_front(rows * cols);
+@@ -339,7 +339,8 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
+                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
+                 constexpr int iterations = (vector_mode == VectorMode::RC) ? 32 /*ITER*/ : 8 /*ITER*/;
+                 constexpr VectorMode vector_mode_exp = (vector_mode == VectorMode::RC) ? VectorMode::None : vector_mode;
+-                exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
++                exp_tile<EXP_APPROX_MODE, !EXP_APPROX_MODE, InputClamping::None, iterations>(
++                    j, vector_mode_exp, static_cast<uint16_t>(scale_fp32 >> 16));
+             }
+             tile_regs_commit();
+ 
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+index 31554e45d88..96032118b7a 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -519,7 +519,8 @@ void sub_exp_block_bcast_cols(
+         constexpr VectorMode vector_mode_exp = VectorMode::None;
+         for (uint32_t i = 0; i < tiles_per_row; i++) {
+             for (uint32_t j = 0; j < tiles_per_column; j++) {
+-                exp_packthread_tile<true, false, InputClamping::None, iterations>(dst_index++, vector_mode_exp);
++                exp_packthread_tile<EXP_APPROX_MODE, !EXP_APPROX_MODE, InputClamping::None, iterations>(
++                    dst_index++, vector_mode_exp, static_cast<uint16_t>(scale_fp32 >> 16));
+             }
+         }
+         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+@@ -1297,7 +1298,7 @@ static void sdpa_inner_loop_step(
+     uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
+     uint32_t kt_index_offset = 0;
+ 
+-    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
++    exp_packthread_tile_init<EXP_APPROX_MODE, scale_fp32, InputClamping::None>();
+ 
+     // Use KT_stride for cb_qkt_im layout to keep CB pointers aligned across iterations
+     CircularBuffer(cb_qkt_im).reserve_back(Sq_chunk_t * KT_stride);

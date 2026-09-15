@@ -1,0 +1,107 @@
+
+/home/cglagovich/.cache/tt-metal-cache/3807247354253530461/kernels/sdpa/12149655707023248152/trisc2/trisc2.elf:     file format elf32-littleriscv
+
+
+Disassembly of section .text:
+
+00009a38 <.LM3304>:
+    9a38:	c0430101          	sfpload	L1,64,0,6
+
+00009a3c <.LM3305>:
+    9a3c:	c0830201          	sfpload	L2,128,0,6
+
+00009a40 <.LM3306>:
+    9a40:	14280402          	sfpadd	L0,L0,L1,0
+
+00009a44 <.LM3307>:
+    9a44:	10018802          	sfpmad	L0,L0,L6,L2,0
+
+00009a48 <.LM3308>:
+    9a48:	38000046          	sfpstochrnd	L1,L0,L0,0,1,0
+
+00009a4c <.LM3309>:
+    9a4c:	1428040a          	sfpadd	L0,L0,L1,2
+
+00009a50 <.LM3310>:
+    9a50:	38000006          	sfpstochrnd	L0,L0,L0,0,1,0
+
+00009a54 <.LM3311>:
+    9a54:	c8430001          	sfpstore	L1,0,0,6
+
+00009a58 <.LM3312>:
+    9a58:	c8038101          	sfpstore	L0,64,0,7
+
+00009a5c <.LBB6508>:
+    9a5c:	88040012          	ttstallwait	2,4
+
+00009a60 <.LM3315>:
+    9a60:	90000102          	ttsempost	16
+
+00009a64 <.LBB6510>:
+    9a64:	89000022          	ttstallwait	128,8
+
+00009a68 <.LBB6514>:
+    9a68:	b50807b7          	lui	a5,0xb5080
+    9a6c:	04778793          	addi	a5,a5,71 # b5080047 <__device_print_strings_info_end+0xaeb80047>
+    9a70:	00fc2023          	sw	a5,0(s8)
+
+00009a74 <.LBB6517>:
+    9a74:	00100593          	li	a1,1
+    9a78:	00040513          	mv	a0,s0
+    9a7c:	525000ef          	jal	a7a0 <configure_pack_width(unsigned long, unsigned long)>
+
+00009a80 <.LBB6519>:
+    9a80:	508c0937          	lui	s2,0x508c0
+
+00009a84 <.LBB6573>:
+    9a84:	00c12783          	lw	a5,12(sp)
+
+00009a88 <.LBB6540>:
+    9a88:	010008b7          	lui	a7,0x1000
+
+00009a8c <.LBB6578>:
+    9a8c:	00fb07b3          	add	a5,s6,a5
+    9a90:	0147a603          	lw	a2,20(a5)
+    9a94:	0087a683          	lw	a3,8(a5)
+    9a98:	8101a583          	lw	a1,-2032(gp) # ffb00000 <ckernel::dest_offset_id>
+    9a9c:	fff60613          	addi	a2,a2,-1
+    9aa0:	20d6a3b3          	sh1add	t2,a3,a3
+
+00009aa4 <.LBB6548>:
+    9aa4:	01898e93          	addi	t4,s3,24
+
+00009aa8 <.LM3327>:
+    9aa8:	01998793          	addi	a5,s3,25
+
+00009aac <.LM3328>:
+    9aac:	f0088893          	addi	a7,a7,-256 # ffff00 <.LASF821+0xfed09e>
+
+00009ab0 <.LBB6580>:
+    9ab0:	00000493          	li	s1,0
+
+00009ab4 <.LBB6549>:
+    9ab4:	00800e37          	lui	t3,0x800
+
+00009ab8 <.LBB6630>:
+    9ab8:	00100f13          	li	t5,1
+
+00009abc <.L119>:
+    9abc:	20c6c833          	sh2add	a6,a3,a2
+    9ac0:	40780533          	sub	a0,a6,t2
+    9ac4:	20a6c2b3          	sh2add	t0,a3,a0
+
+00009ac8 <.LM3333>:
+    9ac8:	00200f93          	li	t6,2
+    9acc:	00028313          	mv	t1,t0
+
+00009ad0 <.L122>:
+    9ad0:	98060026          	ttsemwait	3,2,1
+
+00009ad4 <.LBB6662>:
+    9ad4:	00b03733          	snez	a4,a1
+
+00009ad8 <.LBE6667>:
+    9ad8:	b2010a37          	lui	s4,0xb2010
+
+00009adc <.LBB6670>:
+    9adc:	00971713          	slli	a4,a4,0x9

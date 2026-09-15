@@ -1,0 +1,124 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/frontier-accuracy-v1/reader.cpp": "532b1f82502dc14ab72fb381dde5dff3ee71b15209dd01c0d33a5115756ff595",
+    "experiments/sdpa-l2/frontier-accuracy-v1/writer.cpp": "df085d6d091f014c8483b036cad338cd1ac5f87e48de6c6c02ca6e8dc97295f8",
+    "experiments/sdpa-l2/frontier-accuracy-v1/compute.cpp": "43c4b7bffc7308d248c72ca9c4ec93e11c6109e3a615f3427e1ac7a70423ffda",
+    "experiments/sdpa-l2/frontier-accuracy-v1/run.py": "6b719aa29e5c93b2062979e03b7047bc06ea43dee7553e6702b8f8ca4af60c09"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "SDPA_STREAMING_ACCURACY": "1",
+    "SDPA_STREAMING_NUMERATOR_COMPENSATION": "1",
+    "SDPA_OUT_A_CB": "8",
+    "SDPA_OUT_B_CB": "9"
+  },
+  "cb_specs": [
+    [
+      0,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      6,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      8,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      9,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      10,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      13,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      14,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      16,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "mode": "fast",
+    "q_repeats": 1,
+    "k_chunks": 512,
+    "warmup": 0,
+    "iters": 0,
+    "seed": 1240,
+    "distribution": "uniform",
+    "distinct_kv": true,
+    "hybrid_block_pack": false,
+    "label": "repeat-v1-262144-1240-uniform-fast"
+  }
+}

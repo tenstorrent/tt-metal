@@ -1,0 +1,29 @@
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -494,6 +494,7 @@
+         qk_out_subblock_w = 4;
+     }
+     const bool use_streaming_compute = can_use_streaming_compute(fp32_dest_acc_en) || fp32_streaming;
++    TT_FATAL(!fp32_dest_acc_en || fp32_streaming, "QUALIFICATION_UNSUPPORTED_FP32_STREAMING: fallback disabled");
+ 
+     const bool has_sliding_window = sliding_window_size.value_or(0) != 0;
+     // A user-provided dense mask on the streaming path takes its own per-chunk apply
+@@ -792,13 +793,17 @@
+     if (use_streaming_compute && !fp32_dest_acc_en && device->arch() == tt::ARCH::BLACKHOLE && !use_attention_sink &&
+         math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode && !use_mla && !is_chunked &&
+         !is_windowed && !attn_mask.has_value() && !sliding_window_size.has_value() && q_chunk_size == 128 &&
+-        k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64 &&
++        k_chunk_size == 512 && DHt == 4 && vDHt == 4 &&
+         input_tensor_q.dtype() == DataType::BFLOAT16 && input_tensor_k.dtype() == DataType::BFLOAT16 &&
+         input_tensor_v.dtype() == DataType::BFLOAT16) {
+         defines_map["SDPA_STREAMING_ACCURACY"] = "1";
+         defines_map["SDPA_STREAMING_NUMERATOR_COMPENSATION"] = "1";
+     }
+     defines_map["STATS_GRANULARITY"] = std::to_string(stats_granularity);
++    TT_FATAL(fp32_dest_acc_en || defines_map.count("SDPA_STREAMING_ACCURACY"),
++             "QUALIFICATION_UNSUPPORTED_BF16_COMPENSATION: fallback disabled");
++    log_info(tt::LogOp, "QUALIFICATION_PATH fp32_streaming={} bf16_compensated={} Sq={} Sk={}",
++             fp32_streaming, defines_map.count("SDPA_STREAMING_ACCURACY"), Sq, Sk);
+     defines_map["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
+     defines_map["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
+     defines_map["DHT_GRANULARITY"] = std::to_string(dht_granularity);

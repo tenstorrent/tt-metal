@@ -1,0 +1,9 @@
+{
+  "full_output_bitwise_equal": true,
+  "eager_trace_bitwise_equal": true,
+  "old_ms": 2734.7371985088103,
+  "new_ms": 2725.7784435059875,
+  "l2_pct": 3.159529558334994,
+  "pcc": 0.9997112248307877,
+  "output_sha256": "f4661dca4d1d5dc8f941ad9308127a198b76d307187c8d8d396d6d696dfddc9c"
+}

@@ -1,0 +1,14 @@
+{"pattern": "normal128", "parts": 1, "l2_pct": 0.03202857073667813, "max_abs": 0.01395714282989502}
+{"pattern": "normal128", "parts": 2, "l2_pct": 0.023484654153245653, "max_abs": 0.0117112398147583}
+{"pattern": "normal128", "parts": 4, "l2_pct": 0.014147599769071413, "max_abs": 0.005288600921630859}
+{"pattern": "normal128", "parts": 8, "l2_pct": 2.8107070228298876e-06, "max_abs": 1.5124678611755371e-06}
+{"pattern": "normal128", "parts": 16, "l2_pct": 1.683011410623247e-06, "max_abs": 8.344650268554688e-07}
+{"pattern": "normal128", "parts": 32, "l2_pct": 9.000759119057699e-07, "max_abs": 8.344650268554688e-07}
+{"pattern": "normal128", "parts": 128, "l2_pct": 0.0, "max_abs": 0.0}
+{"pattern": "outlier128", "parts": 1, "l2_pct": 0.02997123130488114, "max_abs": 1.6872763633728027}
+{"pattern": "outlier128", "parts": 2, "l2_pct": 0.02224234515203161, "max_abs": 0.9586176872253418}
+{"pattern": "outlier128", "parts": 4, "l2_pct": 0.011858978304683231, "max_abs": 0.4778914451599121}
+{"pattern": "outlier128", "parts": 8, "l2_pct": 2.3195962522339786e-05, "max_abs": 0.0012254714965820312}
+{"pattern": "outlier128", "parts": 16, "l2_pct": 1.2462646127791096e-05, "max_abs": 0.0005359649658203125}
+{"pattern": "outlier128", "parts": 32, "l2_pct": 7.169197477476373e-06, "max_abs": 0.0004405975341796875}
+{"pattern": "outlier128", "parts": 128, "l2_pct": 0.0, "max_abs": 0.0}

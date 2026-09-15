@@ -1,0 +1,158 @@
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -472,65 +472,90 @@
+     }
+ }
+ 
+-// Each state is hi + lo, with both parts stored as BF16. Keep the online
+-// rescale/add in SFPU FP32 registers and re-split only at the store boundary.
+-// Inputs occupy triples (hi, lo, new_chunk), followed by one shared correction
+-// tile; up to two triples fit in the BF16 half-DST (seven of eight tiles).
+-template <int pairs>
+-inline void calculate_sdpa_compensated_state() {
+-    static_assert(pairs == 1 || pairs == 2);
+-    // This PACK-thread phase follows all logit exp tiles. The next K chunk
+-    // restores fast-exp's replay program before using it again.
++// Each state is hi + lo, with both parts stored as BF16. Preserve the FP32
++// update and both nearest BF16 conversions:
++// sum = (hi + lo) * correction + chunk; hi = bf16(sum); lo = bf16(sum - hi).
++//
++// PACK calls this once before a group of two-state updates. It owns macro
++// slots 0..3, replay entries 0..14, and address modifiers 6/7 until that group
++// finishes. The one-state denominator update may overwrite replay afterwards;
++// the next group reinitializes it, and the next exp init restores exp's macros.
++inline void init_sdpa_compensated_state_macros() {
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
+-    constexpr uint32_t body_len = pairs == 2 ? 21 : 11;
+-    // Record and execute the first vector; the final store advances DST.
+-    // Interleave the independent pairs to hide SFPMAD's dependent-use latency.
+-    // Preserve the previous SFPI arithmetic and nearest conversion instructions:
+-    // sum = (hi + lo) * correction + chunk; hi = bf16(sum); lo = bf16(sum - hi).
+-    // L0/L1/L2 and L3/L4/L5 hold the pairs; L6 holds their shared correction.
+-    // body_len must count every recorded instruction and fit the 32-entry buffer.
+-    TTI_REPLAY(0, body_len, 1, 1);
+-    TTI_SFPLOAD(6, 0, ADDR_MOD_6, 192 * pairs);
+-    TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
+-    TTI_SFPLOAD(1, 0, ADDR_MOD_6, 64);
+-    TTI_SFPLOAD(2, 0, ADDR_MOD_6, 128);
+-    if constexpr (pairs == 2) {
+-        TTI_SFPLOAD(3, 0, ADDR_MOD_6, 192);
+-        TTI_SFPLOAD(4, 0, ADDR_MOD_6, 256);
+-        TTI_SFPLOAD(5, 0, ADDR_MOD_6, 320);
+-    }
+-    TTI_SFPADD(10, 0, 1, 0, 0);
+-    if constexpr (pairs == 2) {
+-        TTI_SFPADD(10, 3, 4, 3, 0);
+-    }
+-    TTI_SFPMAD(0, 6, 2, 0, 0);
+-    if constexpr (pairs == 2) {
+-        TTI_SFPMAD(3, 6, 5, 3, 0);
+-    }
+-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+-    if constexpr (pairs == 2) {
+-        TTI_SFP_STOCH_RND(0, 0, 3, 3, 4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+-    }
++    // Templates 0/1 round fixed VC=L0/L3. Override VB with the load's
++    // register, leaving VC intact; store that rounded register two instructions
++    // later at the load's captured DST address.
++    TTI_SFP_STOCH_RND(0, 0, 0, 0, 12, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    TTI_SFP_STOCH_RND(0, 0, 3, 3, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    TTI_SFPLOADI(0, 0xA, 0x0000);
++    TTI_SFPLOADI(0, 0x8, 0x1384);
++    TTI_SFPCONFIG(0, 4, 0);
++    TTI_SFPLOADI(0, 0x8, 0x1385);
++    TTI_SFPCONFIG(0, 5, 0);
++    // Templates 2/3 add the loaded low component to the fixed high component.
++    TTI_SFPADD(10, 0, 1, 14, 0);
++    TTI_SFPADD(10, 3, 2, 15, 0);
++    TTI_SFPCONFIG(0x600, 6, 1);
++    TTI_SFPCONFIG(0x700, 7, 1);
++    TTI_SFPCONFIG(0xF00, 8, 1);  // BF16 stores; delays count SFPU instructions.
++
++    // Record only: no DST access occurs until a subsequent tile_regs_wait.
++    // DST holds (hi0, lo0, chunk0, hi1, lo1, chunk1, correction).
++    // L0/L3 retain full sums; L1/L2 hold rounded results; L4/L5 are chunks.
++    // Keep macro-load destinations below L4: VDHi also encodes address bit 0.
++    TTI_REPLAY(0, 15, 0, 1);
++    TTI_SFPLOAD(6, 0, ADDR_MOD_6, 384);
++    TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOAD(3, 0, ADDR_MOD_6, 192);
++    TTI_SFPLOADMACRO(9, 0, ADDR_MOD_6, 64);
++    TTI_SFPLOADMACRO(14, 0, ADDR_MOD_6, 256);
++    TTI_SFPLOAD(4, 0, ADDR_MOD_6, 128);
++    TTI_SFPLOAD(5, 0, ADDR_MOD_6, 320);
++    TTI_SFPMAD(1, 6, 4, 0, 0);
++    TTI_SFPMAD(2, 6, 5, 3, 0);
++    TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOADMACRO(6, 0, ADDR_MOD_6, 192);
+     TTI_SFPADD(10, 0, 1, 0, 2);
++    TTI_SFPADD(10, 3, 2, 3, 2);
++    TTI_SFPLOADMACRO(1, 0, ADDR_MOD_6, 64);
++    TTI_SFPLOADMACRO(6, 0, ADDR_MOD_7, 256);
++}
++
++template <int pairs>
++inline void calculate_sdpa_compensated_state() {
++    static_assert(pairs == 1 || pairs == 2);
+     if constexpr (pairs == 2) {
+-        TTI_SFPADD(10, 3, 4, 3, 2);
+-    }
+-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+-    if constexpr (pairs == 2) {
+-        TTI_SFP_STOCH_RND(0, 0, 3, 3, 3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
+-    }
+-    TTI_SFPSTORE(1, 0, ADDR_MOD_6, 0);
+-    if constexpr (pairs == 2) {
+-        TTI_SFPSTORE(4, 0, ADDR_MOD_6, 192);
+-        TTI_SFPSTORE(0, 0, ADDR_MOD_6, 64);
+-        TTI_SFPSTORE(3, 0, ADDR_MOD_7, 256);
++#pragma GCC unroll 8
++        for (int i = 0; i < 32; ++i) {
++            TTI_REPLAY(0, 15, 0, 0);
++        }
++        // Retire the last scheduled round/stores before PACK reads DST or
++        // another SFPU operation overwrites the working registers.
++        TTI_SFPNOP;
++        TTI_SFPNOP;
++        TTI_SFPNOP;
+     } else {
+-        TTI_SFPSTORE(0, 0, ADDR_MOD_7, 64);
+-    }
++        // Keep the original one-state schedule. The paired macro relies on
++        // the other chain to separate dependent arithmetic and pending stores.
++        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
++        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
++        TTI_REPLAY(0, 11, 1, 1);
++        TTI_SFPLOAD(6, 0, ADDR_MOD_6, 192);
++        TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
++        TTI_SFPLOAD(1, 0, ADDR_MOD_6, 64);
++        TTI_SFPLOAD(2, 0, ADDR_MOD_6, 128);
++        TTI_SFPADD(10, 0, 1, 0, 0);
++        TTI_SFPMAD(0, 6, 2, 0, 0);
++        TTI_SFP_STOCH_RND(0, 0, 0, 0, 1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++        TTI_SFPADD(10, 0, 1, 0, 2);
++        TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++        TTI_SFPSTORE(1, 0, ADDR_MOD_6, 0);
++        TTI_SFPSTORE(0, 0, ADDR_MOD_7, 64);
+ #pragma GCC unroll 8
+-    for (int i = 1; i < 32; ++i) {
+-        TTI_REPLAY(0, body_len, 0, 0);
++        for (int i = 1; i < 32; ++i) {
++            TTI_REPLAY(0, 11, 0, 0);
++        }
+     }
+ }
+ 
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -1206,6 +1206,9 @@
+     PACK((llk_pack_reconfig_l1_acc(0)));
+     configure_single_tile_pack(out_out_cb);
+     constexpr uint32_t pairs = tiles_per_column % 2 == 0 ? 2 : 1;
++    if constexpr (pairs == 2) {
++        PACK((ckernel::sfpu::init_sdpa_compensated_state_macros()));
++    }
+     for (uint32_t i = 0; i < tiles_per_row; ++i) {
+         for (uint32_t j = 0; j < tiles_per_column; j += pairs) {
+             const uint32_t old_hi = 2 * (ob_row_base + i) * tiles_per_column + j;

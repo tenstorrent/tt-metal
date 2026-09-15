@@ -1,0 +1,495 @@
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -93,12 +93,30 @@
+ 
+ // Investigation-only fused two-score FP32 subtraction/grid/refinement. Keep
+ // the subtraction separate from the grid MAD, matching mode 4's FP32 rounding.
++inline void calculate_sdpa_negate_max() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    for (int i = 0; i < 32; ++i) {
++        sfpi::vFloat negative = -sfpi::dst_reg[0];
++        sfpi::dst_reg[0] = negative;
++#ifdef SDPA_FP32_L1_REPEAT
++        sfpi::dst_reg[32] = negative;
++        sfpi::dst_reg[64] = negative;
++        sfpi::dst_reg[96] = negative;
++#endif
++        sfpi::dst_reg++;
++    }
++}
++
+ template <uint32_t scale_fp32, bool init_only = false, bool reuse = false>
+ inline void calculate_sdpa_fused_sub_exp() {
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
+     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
+ #ifdef SDPA_FP32_EXTRA_CONST
++#ifdef SDPA_FP32_L1_SUB
++    constexpr uint32_t replay_length = 22;
++#else
+     constexpr uint32_t replay_length = 25;
++#endif
+     if constexpr (!init_only) {
+         // L11 is programmable but SFPI reserves it for -1. This raw-instruction
+         // body temporarily borrows it and restores -1 before returning.
+@@ -133,11 +151,15 @@
+         // Each replay handles corresponding vectors from both score tiles and
+         // their common maximum. The last store alone advances the DST address.
+         TTI_REPLAY(0, replay_length, init_only ? 0 : 1, 1);
++#ifndef SDPA_FP32_L1_SUB
+         TTI_SFPLOAD(2, 0, ADDR_MOD_6, 128);
++#endif
+         TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
+         TTI_SFPLOAD(1, 0, ADDR_MOD_6, 64);
++#ifndef SDPA_FP32_L1_SUB
+         TTI_SFPADD(10, 0, 2, 0, 2);
+         TTI_SFPADD(10, 1, 2, 1, 2);
++#endif
+ #ifdef SDPA_FP32_EXTRA_CONST
+         TTI_SFPMAD(7, 0, 11, 0, 0);
+         TTI_SFPMAD(7, 1, 11, 1, 0);
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -576,9 +576,46 @@
+             pack_tile<false>(i, mirror_cb);
+         }
+     }
++
++    tile_regs_release();
++}
+ 
++#ifdef SDPA_FP32_L1_SUB
++// Apply the same BF16-derived maximum once to the entire FP32 score row using
++// the L1 FP32 adder, then reload four score tiles without a resident maximum.
++static void sdpa_subtract_max_l1(uint32_t inout_cb, uint32_t max_cb, uint32_t row, uint32_t cols) {
++    tile_regs_acquire();
++    sdpa_stream_reconfig(max_cb, max_cb);
++    unary_bcast_init<BroadcastType::COL>(max_cb);
++    unary_bcast<BroadcastType::COL>(max_cb, row, 0);
++    unary_bcast_uninit<BroadcastType::COL>(max_cb);
++    tile_regs_commit();
++    tile_regs_wait();
++    PACK((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
++        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_negate_max, 0, VectorMode::None)));
++    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++    configure_single_tile_pack(inout_cb);
++    PACK((llk_pack_relu_config(ReluConfig::none())));
++    PACK((llk_pack_reconfig_l1_acc(1)));
++#ifdef SDPA_FP32_L1_REPEAT
++    // The negate operation populated four identical maximum tiles in this
++    // acquired half. Pack them as a block without changing any packer strides.
++    configure_pack_width(inout_cb, 4);
++    for (uint32_t col = 0; col < cols; col += 4) {
++        pack_tile<true>(0, inout_cb, row * cols + col);
++    }
++#else
++    for (uint32_t col = 0; col < cols; ++col) {
++        pack_tile<true>(0, inout_cb, row * cols + col);
++    }
++#endif
++    PACK((llk_pack_reconfig_l1_acc(0)));
+     tile_regs_release();
++    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
++    UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
++    UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
+ }
++#endif
+ 
+ /**
+  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
+@@ -603,13 +640,20 @@
+     const uint32_t max_row_base = q_subblock * tiles_per_row;
+ 
+ #if defined(SDPA_DIAG_EXP_MODE) && SDPA_DIAG_EXP_MODE >= 3
+-#ifdef SDPA_FP32_SUB_BATCH
++#ifdef SDPA_FP32_L1_SUB
++    constexpr uint32_t score_batch = 4;
++#elif defined(SDPA_FP32_SUB_BATCH)
+     constexpr uint32_t score_batch = SDPA_FP32_SUB_BATCH;
+ #else
+     constexpr uint32_t score_batch = 1;
+ #endif
+     // Validated 1x4 QK subblocks and unpadded 512/1024 K chunks have even widths.
+     CircularBuffer(max_cb).wait_front((q_subblock + 1) * tiles_per_row);
++#ifdef SDPA_FP32_L1_SUB
++    if (global_col_base == 0) {
++        sdpa_subtract_max_l1(inout_cb, max_cb, max_row_base, cols_in_row);
++    }
++#endif
+     UNPACK((get_local_cb_interface(SDPA_DIAG_SCORE_CB).fifo_rd_ptr = get_local_cb_interface(inout_cb).fifo_rd_ptr));
+ #ifdef SDPA_FP32_PAIRED_PACK
+     configure_pack_width(inout_cb, score_batch);
+@@ -624,18 +668,24 @@
+             sdpa_stream_reconfig(SDPA_DIAG_SCORE_CB, SDPA_DIAG_SCORE_CB);
+             unary_bcast_init<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB);
+ #ifdef SDPA_FP32_PAIRED_UNPACK
+-            sdpa_score_unpack_mop(8);
++            sdpa_score_unpack_mop(4 * score_batch);
+             unary_bcast<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB, index, 0);
+             // The generic one-tile helper cleared tile 0's zero flags. Preserve
+             // the Blackhole unpack-to-DST workaround for tile 1 as well.
+-            MATH(for (uint32_t face = 0; face < 4;
+-                      ++face) { TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(1, face)); })
++            MATH(for (uint32_t tile = 1; tile < score_batch; ++tile) {
++                for (uint32_t face = 0; face < 4; ++face) {
++                    TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
++                }
++            })
+             sdpa_score_unpack_mop(4);
+ #else
+             for (uint32_t tile = 0; tile < score_batch; ++tile) {
+                 unary_bcast<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB, index + tile, tile);
+             }
+ #endif
++#ifdef SDPA_FP32_L1_SUB
++            unary_bcast_uninit<BroadcastType::NONE>(SDPA_DIAG_SCORE_CB);
++#else
+ #ifdef SDPA_FP32_MAX_SHADOW_CB
+             const bool shadow_first_use = global_col_base + j == 0;
+             if (!shadow_first_use) {
+@@ -663,17 +713,36 @@
+ #ifdef SDPA_FP32_MAX_SHADOW_CB
+             }
+ #endif
++#endif
+             tile_regs_commit();
+             tile_regs_wait();
+-#ifdef SDPA_FP32_FUSED_EXP
+-#ifdef SDPA_FP32_REUSE_EXP
++#ifdef SDPA_FP32_L1_MACRO
++            PACK((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+             PACK((SFPU_UNARY_CALL(
+                 DST_SYNC_MODE,
+                 DST_ACCUM_MODE,
+-                calculate_sdpa_fused_sub_exp,
+-                (scale_fp32, false, true),
++                calculate_sdpa_exp_grid_batch,
++                (32 * score_batch),
+                 0,
+                 VectorMode::None)));
++            PACK((SFPU_UNARY_CALL(
++                DST_SYNC_MODE,
++                DST_ACCUM_MODE,
++                calculate_sdpa_exp_stream_effective,
++                (32 * score_batch),
++                0,
++                VectorMode::None)));
++#elif defined(SDPA_FP32_FUSED_EXP)
++#ifdef SDPA_FP32_REUSE_EXP
++            for (uint32_t pair = 0; pair < score_batch; pair += 2) {
++                PACK((SFPU_UNARY_CALL(
++                    DST_SYNC_MODE,
++                    DST_ACCUM_MODE,
++                    calculate_sdpa_fused_sub_exp,
++                    (scale_fp32, false, true),
++                    pair,
++                    VectorMode::None)));
++            }
+ #else
+             PACK((SFPU_UNARY_CALL(
+                 DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_fused_sub_exp, (scale_fp32), 0, VectorMode::None)));
+@@ -1788,6 +1857,10 @@
+     }
+     return false;
+ }
++
++#ifdef SDPA_FP32_PIPELINE
++#include "compute_fp32_pipeline.hpp"
++#endif
+ 
+ /**
+  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
+@@ -1879,7 +1952,9 @@
+     uint32_t q_index_offset = has_q_base_tiles ? q_base_tiles : 0;
+     uint32_t kt_index_offset = 0;
+ 
+-#ifdef SDPA_FP32_REUSE_EXP
++#ifdef SDPA_FP32_L1_MACRO
++    exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
++#elif defined(SDPA_FP32_REUSE_EXP)
+     PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
+     PACK((ckernel::sfpu::calculate_sdpa_fused_sub_exp<scale_fp32, true>()));
+ #else
+@@ -1970,55 +2045,71 @@
+         // [active_Sk/2 - 1]; committing a superset of [0, active_Sk/2) is safe (run()#1's cols are a subset).
+         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
+ 
+-        for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
+-            if (q_subblock > 0) {
+-                uint32_t prev_q_subblock = q_subblock - 1;
+-#ifndef SDPA_FP32_STREAMING
+-                sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
++#ifdef SDPA_FP32_PIPELINE
++        if (q_subblock > 0) {
++            sdpa_pipeline_qk_row<scale_fp32, KT_stride>(
++                cb_q_in,
++                cb_kt_in,
++                SDPA_DIAG_SCORE_CB,
++                cb_qkt_im,
++                cur.max,
++                q_index_offset,
++                q_subblock,
++                active_Sk,
++                overlap_first_half);
++        } else
+ #endif
+-                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
+-                    cb_qkt_im,
+-                    cur.max,
+-                    cur.sum,
+-                    KT_stride,
+-                    prev_q_subblock,
+-                    kt_subblock * actual_sbw,
+-                    qkt_subblock_h,
+-                    actual_sbw,
+-                    /*skip_pack_configure=*/true);
+-                sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
++        {
++            for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
++                if (q_subblock > 0) {
++                    uint32_t prev_q_subblock = q_subblock - 1;
++#ifndef SDPA_FP32_STREAMING
++                    sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
++#endif
++                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
++                        cb_qkt_im,
++                        cur.max,
++                        cur.sum,
++                        KT_stride,
++                        prev_q_subblock,
++                        kt_subblock * actual_sbw,
++                        qkt_subblock_h,
++                        actual_sbw,
++                        /*skip_pack_configure=*/true);
++                    sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
+ #ifdef SDPA_FP32_STREAMING
+-                sdpa_stream_reconfig_srca(cb_kt_in);
++                    sdpa_stream_reconfig_srca(cb_kt_in);
+ #else
+-                sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
++                    sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
+ #endif
+-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
+-            }
+-            {
+-                MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
+-                blocked_matmul_and_pack<true, KT_stride, KT_stride>(
+-                    cb_q_in,
+-                    cb_kt_in,
+-                    cb_qkt_im,
+-                    q_index_offset,
+-                    kt_index_offset,
+-                    q_subblock,
+-                    kt_subblock * actual_sbw,
+-                    actual_sbw,
+-                    qkt_subblock_h,
+-                    in0_block_w,
+-                    in0_block_w,
+-#ifdef SDPA_FP32_STREAMING
+-                    /*skip_pack_configure=*/true);
+-#else
+-                    /*skip_pack_configure=*/q_subblock == 0);
++                    mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
++                }
++                {
++                    MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
++                    blocked_matmul_and_pack<true, KT_stride, KT_stride>(
++                        cb_q_in,
++                        cb_kt_in,
++                        cb_qkt_im,
++                        q_index_offset,
++                        kt_index_offset,
++                        q_subblock,
++                        kt_subblock * actual_sbw,
++                        actual_sbw,
++                        qkt_subblock_h,
++                        in0_block_w,
++                        in0_block_w,
++#ifdef SDPA_FP32_STREAMING
++                        /*skip_pack_configure=*/true);
++#else
++                        /*skip_pack_configure=*/q_subblock == 0);
+ #endif
+-                // Signal the first half is committed so run()#1 overlaps the second-half
+-                // pack. STALL_PACK drains the L1 writes before the token retires.
+-                if (overlap_first_half && kt_subblock == first_half_last_sb) {
+-                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
++                    // Signal the first half is committed so run()#1 overlaps the second-half
++                    // pack. STALL_PACK drains the L1 writes before the token retires.
++                    if (overlap_first_half && kt_subblock == first_half_last_sb) {
++                        PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
++                    }
++                    kt_index_offset += actual_sbw;
+                 }
+-                kt_index_offset += actual_sbw;
+             }
+         }
+         // The FP32 max-reduce helper configures its own input views.
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -540,6 +540,22 @@
+     TT_FATAL(!reuse_exp || fused_exp, "Exp setup reuse requires fused exp");
+     const bool extra_const = std::getenv("TT_SDPA_FP32_EXTRA_CONST") != nullptr;
+     TT_FATAL(!extra_const || fused_exp, "Extra exp constant requires fused exp");
++    const bool fp32_pipeline = std::getenv("TT_SDPA_FP32_PIPELINE") != nullptr;
++    const bool fp32_l1_sub = std::getenv("TT_SDPA_FP32_L1_SUB") != nullptr;
++    const bool fp32_l1_macro = std::getenv("TT_SDPA_FP32_L1_MACRO") != nullptr;
++    TT_FATAL(!fp32_l1_macro || fp32_l1_sub, "Macro exp requires L1 subtraction");
++    const bool fp32_l1_repeat = std::getenv("TT_SDPA_FP32_L1_REPEAT") != nullptr;
++    TT_FATAL(!fp32_l1_repeat || fp32_l1_sub, "Repeated pack requires L1 subtraction");
++    TT_FATAL(
++        !fp32_l1_sub ||
++            (!fp32_pipeline && fp32_streaming && diag_mode == 4 && sub_batch == 2 && reuse_exp && extra_const &&
++             paired_unpack && paired_pack && !cache_max && !shadow_max && qk_width == 4 && qk_height == 1),
++        "L1 subtraction requires the validated mode4 v1 configuration");
++    TT_FATAL(
++        !fp32_pipeline ||
++            (fp32_streaming && diag_mode == 4 && sub_batch == 2 && reuse_exp && extra_const && paired_unpack &&
++             paired_pack && !cache_max && !shadow_max && qk_width == 4 && qk_height == 1),
++        "Fixed-half pipeline requires the validated mode4 v1 configuration");
+     const char* denom_phases_setting = std::getenv("TT_SDPA_DENOM_PHASES");
+     const int denom_phases = denom_phases_setting ? std::atoi(denom_phases_setting) : 4;
+     TT_FATAL(
+@@ -847,7 +863,19 @@
+             }
+             if (paired_pack) {
+                 defines_map["SDPA_FP32_PAIRED_PACK"] = "1";
++            }
++            if (fp32_pipeline) {
++                defines_map["SDPA_FP32_PIPELINE"] = "1";
+             }
++            if (fp32_l1_sub) {
++                defines_map["SDPA_FP32_L1_SUB"] = "1";
++            }
++            if (fp32_l1_macro) {
++                defines_map["SDPA_FP32_L1_MACRO"] = "1";
++            }
++            if (fp32_l1_repeat) {
++                defines_map["SDPA_FP32_L1_REPEAT"] = "1";
++            }
+             defines_map["SDPA_DENOM_PHASES"] = std::to_string(denom_phases);
+             if (qk_width == 2) {
+                 defines_map["SDPA_FP32_QK_WIDTH2"] = "1";
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_fp32_pipeline.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_fp32_pipeline.hpp
+@@ -0,0 +1,121 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++#pragma once
++
++// Investigation-only fixed-half ownership. The caller drains the ordinary
++// half-sync queue first. MATH uses lower DST; UNPACK/PACK own scores in upper
++// DST, with a resident BF16-derived, broadcast FP32 maximum at logical tile 6.
++ALWI void sdpa_pipeline_reload(uint32_t score_cb, uint32_t index) {
++    UNPACK((t6_semaphore_wait_on_max < p_stall::STALL_UNPACK | p_stall::STALL_SYNC > (semaphore::UNPACK_TO_DEST)));
++    UNPACK((tensix_sync()));
++    UNPACK((llk_unpack_reconfig_data_format<true, p_dim_stride_target::IGNORE, true>(score_cb, score_cb)));
++    UNPACK((
++        llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, true>(false, false, score_cb)));
++    sdpa_score_unpack_mop(8);
++    UNPACK({
++        TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
++        wait_for_next_context(2);
++        auto& cb = get_local_cb_interface(score_cb);
++        volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
++        const uint32_t base =
++            unp_cfg_context == 0 ? THCON_SEC0_REG3_Base_address_ADDR32 : THCON_SEC0_REG3_Base_cntx1_address_ADDR32;
++        cfg[base] = cb.fifo_rd_ptr - 1 + index * cb.fifo_page_size;
++        semaphore_post(semaphore::UNPACK_SYNC);
++        TTI_SETC16(SRCA_SET_Base_ADDR32, 0);
++        const uint32_t dst_byte_addr = 16 * (4 + 4 * 64);
++        if (unp_cfg_context == 0) {
++            cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx0_RMW>(1);
++            cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx0_address_RMW>(dst_byte_addr);
++        } else {
++            cfg_reg_rmw_tensix<THCON_SEC0_REG2_Unpack_if_sel_cntx1_RMW>(1);
++            cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
++        }
++        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
++        ckernel_template::run();
++        t6_semaphore_get(semaphore::UNPACK_SYNC);
++        unpack_to_dest_tile_done(unp_cfg_context, static_cast<uint32_t>(DataFormat::Float32));
++        switch_config_context(unp_cfg_context);
++    });
++}
++
++template <uint32_t scale_fp32>
++ALWI void sdpa_pipeline_exp(uint32_t inout_cb, uint32_t index) {
++    PACK(
++        (t6_semaphore_wait_on_zero < p_stall::STALL_SYNC | p_stall::STALL_SFPU |
++         p_stall::STALL_MATH > (semaphore::UNPACK_TO_DEST)));
++    // ZEROACC uses a bank-local face index; SFPU uses the full-DST logical index.
++    PACK(TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 512));
++    PACK(for (uint32_t tile = 0; tile < 2; ++tile) {
++        for (uint32_t face = 0; face < 4; ++face) {
++            TT_ZEROACC(p_zeroacc::CLR_16, 1, 1, ADDR_MOD_3, get_dest_index_in_faces(tile, face));
++        }
++    });
++    PACK((SFPU_UNARY_CALL(
++        DstSync::SyncFull, true, calculate_sdpa_fused_sub_exp, (scale_fp32, false, true), 4, VectorMode::None)));
++    PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
++    configure_pack_width(inout_cb, 2);
++    PACK((llk_pack_relu_config(ReluConfig::zero())));
++    PACK({
++        // This region explicitly owns full-DST addresses, independent of the
++        // surrounding kernel's ordinary half-sync pack API capacity check.
++        const uint32_t address = get_output_tile_address<true, PackMode::Default>(get_output_id(inout_cb), index);
++        _llk_pack_<DstSync::SyncFull, true, PackMode::Default>(4, address);
++    });
++    PACK((t6_semaphore_get<p_stall::PACK>(semaphore::UNPACK_TO_DEST)));
++}
++
++template <uint32_t scale_fp32, uint32_t stride>
++static void sdpa_pipeline_qk_row(
++    uint32_t q_cb,
++    uint32_t k_cb,
++    uint32_t score_cb,
++    uint32_t inout_cb,
++    uint32_t max_cb,
++    uint32_t q_index,
++    uint32_t row,
++    uint32_t cols,
++    bool overlap_first_half) {
++    // Drain existing work, then establish one lower-half matmul slot. PACK
++    // release below clears only that half; the maximum remains resident above.
++    MATH((_llk_math_pack_sync_init_<DstSync::SyncFull, true>()));
++    PACK((_llk_pack_dest_init_<DstSync::SyncFull, true>()));
++    tile_regs_acquire();
++    MATH(dest_offset_id = 1;);
++    sdpa_stream_reconfig(max_cb, max_cb);
++    unary_bcast_init<BroadcastType::COL>(max_cb);
++    unary_bcast<BroadcastType::COL>(max_cb, row - 1, 2);
++    unary_bcast_uninit<BroadcastType::COL>(max_cb);
++    MATH(dest_offset_id = 0;);
++    MATH((_llk_math_dest_section_done_<DstSync::SyncFull, true>()));
++    tile_regs_wait();
++    PACK((_llk_packer_set_math_semaphore_<p_stall::MATH>()));
++    UNPACK(get_local_cb_interface(score_cb).fifo_rd_ptr = get_local_cb_interface(inout_cb).fifo_rd_ptr;);
++    MATH((llk_math_matmul_init_no_mop<MATH_FIDELITY, MM_THROTTLE>(q_cb, k_cb, true, 4, 1)));
++    for (uint32_t col = 0; col < cols; col += 4) {
++        const uint32_t prev_index = (row - 1) * stride + col;
++        sdpa_pipeline_reload(score_cb, prev_index);
++        sdpa_pipeline_exp<scale_fp32>(inout_cb, prev_index);
++        sdpa_stream_reconfig(k_cb, q_cb);
++        UNPACK((llk_unpack_AB_matmul_init(q_cb, k_cb, true, 4, 1, 4)));
++        tile_regs_acquire();
++        MATH(TTI_ZEROACC(p_zeroacc::CLR_HALF, 1, 0, ADDR_MOD_1, 0));
++        for (uint32_t k = 0; k < 4; ++k) {
++            matmul_block_no_mop(q_cb, k_cb, q_index + k, col + k * stride, 0, true, 4, 1, 4);
++        }
++        MATH((_llk_math_dest_section_done_<DstSync::SyncFull, true>()));
++        sdpa_pipeline_reload(score_cb, prev_index + 2);
++        tile_regs_wait();
++        configure_pack_width(inout_cb, 4);
++        PACK((llk_pack_relu_config(ReluConfig::none())));
++        pack_tile<true>(0, inout_cb, row * stride + col);
++        PACK(TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::PACK));
++        PACK(TTI_ZEROACC(p_zeroacc::CLR_HALF, 1, 0, ADDR_MOD_1, 0));
++        PACK((_llk_packer_set_math_semaphore_<p_stall::NONE>()));
++        sdpa_pipeline_exp<scale_fp32>(inout_cb, prev_index + 2);
++        if (overlap_first_half && col + 4 == cols / 2) {
++            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
++        }
++    }
++    MATH((_llk_math_pack_sync_init_<DST_SYNC_MODE, true>()));
++    PACK((_llk_pack_dest_init_<DST_SYNC_MODE, true>()));
++}

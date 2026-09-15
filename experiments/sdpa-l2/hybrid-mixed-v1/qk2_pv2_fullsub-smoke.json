@@ -1,0 +1,28 @@
+{
+  "label": "qk2_pv2_fullsub-smoke",
+  "mode": "qk2_pv2_fullsub",
+  "q_repeats": 2,
+  "k_chunks": 64,
+  "warmup": 2,
+  "iters": 2,
+  "seed": 1236,
+  "distribution": "normal",
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "kv_slots": 1,
+  "cb_bytes": 1335296,
+  "useful_flops": 8589934592,
+  "median_ms": 9.345829021185637,
+  "trace_replay_ms": [
+    9.346033039037138,
+    9.345625003334135
+  ],
+  "tflops_per_core": 0.9191195957606186,
+  "l2_pct": 0.5896133209985236,
+  "pcc": 0.9999858742330758,
+  "full_output_sha256": "af889c342ec201c1a7c62232ce83ce5d762ddec74e79e93a692e9e277eb81b94",
+  "trace_equal": true,
+  "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput"
+}

@@ -1,0 +1,125 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/single-core-resident-v1/reader.cpp": "c41ea4a25292e873e589d11f8f7621de79642a814e8eaf63579fb1ba2d5bc5cc",
+    "experiments/sdpa-l2/single-core-resident-v1/writer.cpp": "e562709e2ecf36b1c2f7b1d673c9eda8451ac4a1f9996d941806b0784110a911",
+    "experiments/sdpa-l2/single-core-resident-v1/compute.cpp": "5f22db898226b368c32fc4558cbfd0a35dd7f297055f15cf655be08c3c2932fc",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "2a1955a9c655ffce2bd4cab35a05830277ade33e8832049b4552e26b99b1eae5",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "5444bde7658a0018c99092aa513349087b99c8accbc11813b12becf0caebed55",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "e216a923296e053f86c3aaa6bce3a097f79e323197023bc1a773e6ceef521a6d",
+    "experiments/sdpa-l2/single-core-resident-v1/main/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "e531a51efc6c47c4e4634b088f3d0256354c2096419379b1861b6f565a085ef6",
+    "experiments/sdpa-l2/single-core-resident-v1/candidate/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "76c86dbfa6816812e3caa1070b2577f7be68e2b399a223961f9e80be7183ebe0",
+    "experiments/sdpa-l2/single-core-resident-v1/main/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "221331267dcdd1cc8acd4967b47779db7c671e03aa0506f67f0ea63237d5b48e",
+    "experiments/sdpa-l2/single-core-resident-v1/run.py": "1240d68b80ab97a5afee9ff6937a9d10bd0a788b46b8b76e655703704993561c"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "8",
+    "SUB_EXP_GRANULARITY": "8",
+    "MUL_BCAST_GRANULARITY": "8",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "4",
+    "RESIDENT_MAIN": "1"
+  },
+  "cb_specs": [
+    [
+      0,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      6,
+      128,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      8,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      9,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      10,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      13,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      14,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      16,
+      16,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "label": "profile-v1-main",
+    "mode": "main",
+    "q_repeats": 8,
+    "k_chunks": 512,
+    "warmup": 10,
+    "iters": 0,
+    "seed": 1236,
+    "distribution": "normal"
+  }
+}

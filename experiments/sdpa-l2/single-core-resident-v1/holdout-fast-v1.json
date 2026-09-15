@@ -1,0 +1,28 @@
+{
+  "label": "holdout-fast-v1",
+  "mode": "fast",
+  "q_repeats": 2,
+  "k_chunks": 64,
+  "warmup": 1,
+  "iters": 2,
+  "seed": 1237,
+  "distribution": "normal",
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "kv_slots": 2,
+  "cb_bytes": 1333248,
+  "useful_flops": 8589934592,
+  "median_ms": 5.8627935068216175,
+  "trace_replay_ms": [
+    5.8633030275814235,
+    5.8622839860618114
+  ],
+  "tflops_per_core": 1.4651606920839417,
+  "l2_pct": 2.629520209348752,
+  "pcc": 0.9996549311951153,
+  "full_output_sha256": "e63e40963269e502d72586368ee8fe56fa0942fec66bb4c0b3d305b45ee72c73",
+  "trace_equal": true,
+  "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput"
+}

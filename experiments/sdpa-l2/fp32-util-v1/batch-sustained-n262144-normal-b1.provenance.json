@@ -1,0 +1,41 @@
+{
+  "command": [
+    "/localdev/cglagovich/tt-metal-blackhole-20260908/python_env/bin/python",
+    "tests/ttnn/unit_tests/operations/sdpa/repro_sdpa_l2.py",
+    "--kv-lens",
+    "262144",
+    "--full",
+    "--heads",
+    "10",
+    "--q-chunk",
+    "128",
+    "--k-chunks",
+    "1024",
+    "--variants",
+    "fp32_hifi2",
+    "--seed",
+    "1236",
+    "--q-len",
+    "512",
+    "--query-sampling",
+    "spread",
+    "--distribution",
+    "normal",
+    "--benchmark-warmup",
+    "40",
+    "--benchmark-iters",
+    "10",
+    "--per-head-metrics",
+    "--check-full-output",
+    "--label",
+    "batch-sustained-n262144-normal-b1",
+    "--output",
+    "/localdev/cglagovich/tt-metal-blackhole-20260908/experiments/sdpa-l2/fp32-util-v1/batch-sustained-n262144-normal-b1.jsonl"
+  ],
+  "source_sha256": {
+    "tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h": "4191d194bd8b85ed96302928d57ad18339eede4a4821d26ef9180057c5ca3821",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp": "56a6c0a84e393e06783bdd6938ca0470cb25a0b8dc814787266fea07eac861ca",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp": "5819a150e20f2b843f82589ce4703a7cbbd010357e545303c84ffb096fd322e3",
+    "ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp": "4b797a47c9277c1f17ab13b68ff3163faf03e6fd46c275fcecbb9e4decf7f922"
+  }
+}

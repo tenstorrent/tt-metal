@@ -1,0 +1,113 @@
+<div id="sdpa-pareto-v1">
+  <h3>SDPA: throughput versus L2 error</h3>
+  <div class="text-small">Blackhole · one core · Q256 / K512 / D128 · noncausal · original BF16 inputs</div>
+  <div class="plot"></div>
+  <div class="text-small symbols">● Practical choices &nbsp; ◇ Other nondominated variants &nbsp; × Dominated variants<br>Line: measured Pareto frontier · upper-left is better</div>
+  <div class="key"></div>
+  <div class="text-small">Resident diagnostic: normal K/V block repeated 512× (256K tokens), seed 1236. FP64 reference. No recurring input DM; internal traffic remains. All plotted variants use streaming.</div>
+  <div class="tooltip" role="tooltip" hidden></div>
+</div>
+<style>
+#sdpa-pareto-v1 { position:relative; color:var(--foreground); }
+#sdpa-pareto-v1 .plot { width:100%; }
+#sdpa-pareto-v1 .chart { display:block; width:100%; overflow:visible; }
+#sdpa-pareto-v1 .chart text { fill:var(--foreground); font-size:12px; }
+#sdpa-pareto-v1 .chart .tick line,#sdpa-pareto-v1 .chart .domain { stroke:var(--border); }
+#sdpa-pareto-v1 .symbols { margin:4px 0 12px; }
+#sdpa-pareto-v1 .key { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 20px; margin-bottom:16px; }
+#sdpa-pareto-v1 .key-item { display:flex; gap:8px; align-items:baseline; }
+#sdpa-pareto-v1 .key-id { min-width:14px; font-weight:500; }
+#sdpa-pareto-v1 .tooltip { position:absolute; z-index:2; pointer-events:none; background:var(--popover); color:var(--popover-foreground); max-width:280px; padding:10px; border:1px solid var(--border); }
+#sdpa-pareto-v1 .tooltip[hidden] { display:none; }
+@media(max-width:520px) { #sdpa-pareto-v1 .key {grid-template-columns:1fr;} }
+</style>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
+<script>
+(() => {
+  const root=document.getElementById("sdpa-pareto-v1");
+  const data=[{"id":"A","name":"Main BF16 streaming","source":"single-core-resident-v1/hifi2-fp32-main-control.json","selection":"selected","median_ms":275.7133824925404,"tflops_per_core":1.993939535752763,"l2_pct":20.410617358511182,"pcc":0.9795895614882945,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"B","name":"FAST · compensated BF16, current","source":"hybrid-mixed-v1/qualified-fast-steady.json","selection":"selected","median_ms":345.4447955300566,"tflops_per_core":1.5914433246691269,"l2_pct":2.44566714845054,"pcc":0.9997008692872359,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"C","name":"BF16 compute + FP32 state · blocked pack","source":"hybrid-mixed-v1/blocked-hybrid-steady.json","selection":"alternative","median_ms":474.16660451563075,"tflops_per_core":1.1594148737015861,"l2_pct":2.410126173576259,"pcc":0.9997121589414314,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"D","name":"FP32 QK2/PV2 · cheaper exp","source":"hybrid-mixed-v1/qualified-fp32_hifi2_cheap-steady.json","selection":"alternative","median_ms":575.7528395042755,"tflops_per_core":0.9548468998630402,"l2_pct":0.620096078295774,"pcc":0.999984544628951,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"E","name":"FP32 QK4/PV2 · cheaper subtraction","source":"hybrid-mixed-v1/qualified-qk4_pv2-steady.json","selection":"selected","median_ms":587.8439540101681,"tflops_per_core":0.9352070564605837,"l2_pct":0.36369968203249897,"pcc":0.999993378859606,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"F","name":"FP32 QK4/PV2 · full-FP32 subtraction","source":"hybrid-mixed-v1/qualified-qk4_pv2_fullsub-steady.json","selection":"alternative","median_ms":631.6651050001383,"tflops_per_core":0.8703279784433867,"l2_pct":0.35099294817609106,"pcc":0.9999938280906057,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"G","name":"ACCURATE · QK4/PV4, full-FP32 subtraction","source":"hybrid-mixed-v1/qualified-accurate-steady.json","selection":"selected","median_ms":723.5227409692015,"tflops_per_core":0.7598321141248021,"l2_pct":0.1776171367017995,"pcc":0.9999984185446898,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":true},{"id":"H","name":"BF16 compute + FP32 state · single-tile pack","source":"hybrid-mixed-v1/qualified-hybrid-steady.json","selection":"alternative","median_ms":532.4985110200942,"tflops_per_core":1.0324081711230448,"l2_pct":2.410126173576259,"pcc":0.9997121589414314,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":false},{"id":"I","name":"FP32 QK2/PV2 · full subtraction, matched denominator","source":"hybrid-mixed-v1/qk2_pv2_fullsub-steady.json","selection":"alternative","median_ms":595.863405498676,"tflops_per_core":0.9226205348655557,"l2_pct":0.5897316891908387,"pcc":0.9999858692900605,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":false},{"id":"J","name":"FP32 QK2/PV2 · accurate softmax, unmatched denominator","source":"hifi2-fp32-resident-v1/fp32_hifi2-steady.json","selection":"alternative","median_ms":597.0221080060583,"tflops_per_core":0.9208299098404935,"l2_pct":0.9079203493020099,"pcc":0.9999865175268271,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":false},{"id":"K","name":"FAST · before SFPU scheduling optimizations","source":"single-core-resident-v1/sfpu-v2-fast-control.json","selection":"alternative","median_ms":374.5676139660645,"tflops_per_core":1.4677078139964534,"l2_pct":2.44566714845054,"pcc":0.9997008692872359,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":false},{"id":"L","name":"FAST · numerator optimization only","source":"bf16-sfpu-v2/final-steady.json","selection":"alternative","median_ms":355.61689449241385,"tflops_per_core":1.5459215307323586,"l2_pct":2.44566714845054,"pcc":0.9997008692872359,"q_chunk":256,"k_chunk":512,"dim":128,"seed":1236,"q_repeats":16,"k_chunks":512,"distribution":"normal","frontier":false}];
+  const plot=root.querySelector(".plot");
+  const tooltip=root.querySelector(".tooltip");
+  const key=root.querySelector(".key");
+  const short={A:"Main BF16",B:"FAST",E:"QK4/PV2",G:"ACCURATE"};
+  const details=d => d.id+" · "+d.name+" | L2 "+d.l2_pct.toFixed(4)+"% | "+d.tflops_per_core.toFixed(4)+" TFLOP/s/core | "+d.median_ms.toFixed(3)+" ms | PCC "+d.pcc.toFixed(8)+(d.frontier?" | Nondominated":" | Dominated");
+  data.forEach(d=>{
+    const item=document.createElement("div");
+    item.className="key-item text-small";
+    item.setAttribute("data-tooltip",details(d));
+    const id=document.createElement("span"); id.className="key-id"; id.textContent=d.id;
+    const label=document.createElement("span"); label.textContent=d.name;
+    item.append(id,label); key.append(item);
+  });
+  let pinned=false;
+  function draw(){
+    const width=plot.getBoundingClientRect().width;
+    if(!width)return;
+    const narrow=width<520, height=narrow?400:420;
+    const m={left:70,right:18,top:30,bottom:62}, r=7;
+    const xExtent=d3.extent([...data.map(d=>Math.log10(d.l2_pct)),Math.log10(.5)]);
+    const yExtent=d3.extent(data,d=>d.tflops_per_core);
+    const xp=(xExtent[1]-xExtent[0])*.075, yp=(yExtent[1]-yExtent[0])*.11;
+    const x=d3.scaleLog().domain([10**(xExtent[0]-xp),10**(xExtent[1]+xp)]).range([m.left+r,width-m.right-r]);
+    const y=d3.scaleLinear().domain([yExtent[0]-yp,yExtent[1]+yp]).range([height-m.bottom-r,m.top+r]);
+    d3.select(plot).selectAll("*").remove();
+    const svg=d3.select(plot).append("svg").attr("class","chart").attr("viewBox","0 0 "+width+" "+height).attr("role","img").attr("aria-label","Twelve streaming SDPA variants. Main BF16 is fastest at 1.994 TFLOP per second per core and 20.411 percent L2. FAST achieves 1.591 and 2.446 percent; QK4 PV2 achieves 0.935 and 0.364 percent; ACCURATE achieves 0.760 and 0.178 percent.");
+    svg.append("rect").attr("data-chart-frame","").attr("x",m.left).attr("y",m.top).attr("width",width-m.left-m.right).attr("height",height-m.top-m.bottom).attr("fill","none").attr("stroke","var(--border)");
+    const xticks=(narrow?[.2,.5,2,20]:[.2,.5,1,2,5,10,20]).filter(v=>v>=x.domain()[0]&&v<=x.domain()[1]);
+    svg.append("g").attr("transform","translate(0,"+(height-m.bottom)+")").call(d3.axisBottom(x).tickValues(xticks).tickFormat(d=>String(d)).tickSizeOuter(0));
+    svg.append("g").attr("transform","translate("+m.left+",0)").call(d3.axisLeft(y).ticks(5).tickSizeOuter(0));
+    y.ticks(5).forEach(v=>svg.append("line").attr("x1",m.left).attr("x2",width-m.right).attr("y1",y(v)).attr("y2",y(v)).attr("stroke","var(--border)").attr("stroke-opacity",.5));
+    svg.append("text").attr("class","axis-title").attr("data-axis","x").attr("x",(m.left+width-m.right)/2).attr("y",height-14).attr("text-anchor","middle").text("L2 error (%) · log scale · lower is better");
+    svg.append("text").attr("class","axis-title").attr("data-axis","y").attr("transform","translate(18,"+((m.top+height-m.bottom)/2)+") rotate(-90)").attr("text-anchor","middle").text("Useful TFLOP/s/core · higher is better");
+    svg.append("line").attr("x1",x(.5)).attr("x2",x(.5)).attr("y1",m.top).attr("y2",height-m.bottom).attr("stroke","var(--foreground)").attr("stroke-opacity",.5).attr("stroke-dasharray","4 4");
+    svg.append("text").attr("x",x(.5)+5).attr("y",m.top-9).text("0.5% goal");
+    const frontier=data.filter(d=>d.frontier).sort((a,b)=>a.l2_pct-b.l2_pct);
+    svg.append("path").datum(frontier).attr("d",d3.line().x(d=>x(d.l2_pct)).y(d=>y(d.tflops_per_core))).attr("fill","none").attr("stroke","var(--viz-series-1)").attr("stroke-opacity",.5).attr("stroke-width",1.5);
+    data.forEach(d=>{
+      const g=svg.append("g").attr("class","observation").attr("data-id",d.id).attr("transform","translate("+x(d.l2_pct)+","+y(d.tflops_per_core)+")");
+      if(d.selection==="selected")g.append("circle").attr("r",6).attr("fill","var(--viz-series-1)");
+      else if(d.frontier)g.append("path").attr("d","M0,-6 L6,0 L0,6 L-6,0 Z").attr("fill","none").attr("stroke","var(--viz-series-2)").attr("stroke-width",1.8);
+      else g.append("path").attr("d","M-4,-4 L4,4 M-4,4 L4,-4").attr("fill","none").attr("stroke","var(--foreground)").attr("stroke-width",1.5);
+    });
+    // Place labels against already rendered axes and all markers, using measured boxes.
+    const occupied=Array.from(svg.node().querySelectorAll("text")).map(n=>n.getBoundingClientRect());
+    const svgRect=svg.node().getBoundingClientRect();
+    const markBoxes=data.map(d=>({left:svgRect.left+x(d.l2_pct)-7,right:svgRect.left+x(d.l2_pct)+7,top:svgRect.top+y(d.tflops_per_core)-7,bottom:svgRect.top+y(d.tflops_per_core)+7}));
+    const overlaps=(a,b)=>a.left<b.right+4&&a.right>b.left-4&&a.top<b.bottom+4&&a.bottom>b.top-4;
+    [...data].sort((a,b)=>(b.selection==="selected")-(a.selection==="selected")).forEach(d=>{
+      const label=svg.append("text").attr("class","point-label");
+      const forms=!narrow&&short[d.id]?[d.id+" · "+short[d.id],d.id]:[d.id];
+      let placed=false;
+      for(const text of forms){
+        label.text(text);
+        for(const [dx,dy,anchor] of [[12,-10,"start"],[-12,-10,"end"],[12,21,"start"],[-12,21,"end"],[0,-18,"middle"],[0,29,"middle"],[20,4,"start"],[-20,4,"end"],[26,-22,"start"],[-26,33,"end"]]){
+          label.attr("x",x(d.l2_pct)+dx).attr("y",y(d.tflops_per_core)+dy).attr("text-anchor",anchor);
+          const b=label.node().getBoundingClientRect();
+          if(b.left>=svgRect.left+m.left+3&&b.right<=svgRect.left+width-m.right-3&&b.top>=svgRect.top+m.top+3&&b.bottom<=svgRect.top+height-m.bottom-3&&!occupied.some(o=>overlaps(b,o))&&!markBoxes.some(o=>overlaps(b,o))){
+            occupied.push(b);placed=true;break;
+          }
+        }
+        if(placed)break;
+      }
+      if(!placed)label.remove();
+    });
+    // Nearest-observation hit surface avoids overlapping point targets.
+    const overlay=svg.append("rect").attr("data-chart-hit","").attr("x",m.left).attr("y",m.top).attr("width",width-m.left-m.right).attr("height",height-m.top-m.bottom).attr("fill","transparent");
+    function show(event){
+      const [mx,my]=d3.pointer(event,svg.node());
+      const nearest=d3.least(data,d=>(mx-x(d.l2_pct))**2+(my-y(d.tflops_per_core))**2);
+      tooltip.textContent=details(nearest);tooltip.hidden=false;
+      const rr=root.getBoundingClientRect();
+      const left=Math.max(0,Math.min(event.clientX-rr.left+12,rr.width-tooltip.offsetWidth));
+      const top=Math.max(0,event.clientY-rr.top-tooltip.offsetHeight-12);
+      tooltip.style.left=left+"px";tooltip.style.top=top+"px";
+      root.dataset.hovered=nearest.id;
+    }
+    overlay.on("pointermove",event=>{if(!pinned)show(event);}).on("pointerleave",()=>{if(!pinned)tooltip.hidden=true;}).on("click",event=>{pinned=!pinned;show(event);});
+    root.dataset.points=data.length;
+    root.dataset.frontier=frontier.map(d=>d.id).join(",");
+  }
+  new ResizeObserver(draw).observe(plot);
+  draw();
+})();
+</script>

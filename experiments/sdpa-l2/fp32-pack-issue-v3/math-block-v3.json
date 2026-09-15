@@ -1,0 +1,17 @@
+{
+  "label": "math-block-v3",
+  "math_pack": true,
+  "cores": 110,
+  "repetitions": 65536,
+  "median_ms": 80.2142129978165,
+  "trace_replay_ms": [
+    80.27439299621619,
+    80.22911299485713,
+    80.2142129978165,
+    80.18362300936133,
+    80.18482400802895
+  ],
+  "full_output_checked": true,
+  "score_value": 0.4784250259399414,
+  "warning": "Independent QK + score reload/exp pipeline probe, not SDPA performance."
+}

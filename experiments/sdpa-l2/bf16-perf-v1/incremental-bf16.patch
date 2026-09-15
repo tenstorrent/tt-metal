@@ -1,0 +1,77 @@
+diff --git a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -263,21 +263,58 @@ inline void calculate_sdpa_scale_sum_and_delta() {
+ template <int pairs>
+ inline void calculate_sdpa_compensated_state() {
+     static_assert(pairs == 1 || pairs == 2);
+-    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
+-    for (int i = 0; i < 32; ++i) {
+-        sfpi::vFloat correction = sfpi::dst_reg[96 * pairs];
+-#pragma GCC unroll 2
+-        for (int b = 0; b < pairs; ++b) {
+-            sfpi::vFloat hi = sfpi::dst_reg[96 * b];
+-            sfpi::vFloat lo = sfpi::dst_reg[96 * b + 32];
+-            sfpi::vFloat chunk = sfpi::dst_reg[96 * b + 64];
+-            sfpi::vFloat sum = (hi + lo) * correction + chunk;
+-            hi = sfpi::convert<sfpi::vFloat16b>(sum, sfpi::RoundMode::Nearest);
+-            lo = sfpi::convert<sfpi::vFloat16b>(sum - hi, sfpi::RoundMode::Nearest);
+-            sfpi::dst_reg[96 * b] = hi;
+-            sfpi::dst_reg[96 * b + 32] = lo;
+-        }
+-        sfpi::dst_reg++;
++    // This PACK-thread phase follows all logit exp tiles. The next K chunk
++    // restores fast-exp's replay program before using it again.
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_6);
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_7);
++    constexpr uint32_t body_len = pairs == 2 ? 21 : 11;
++    // Record and execute the first vector; the final store advances DST.
++    // Interleave the independent pairs to hide SFPMAD's dependent-use latency.
++    // Preserve the previous SFPI arithmetic and nearest conversion instructions:
++    // sum = (hi + lo) * correction + chunk; hi = bf16(sum); lo = bf16(sum - hi).
++    // L0/L1/L2 and L3/L4/L5 hold the pairs; L6 holds their shared correction.
++    // body_len must count every recorded instruction and fit the 32-entry buffer.
++    TTI_REPLAY(0, body_len, 1, 1);
++    TTI_SFPLOAD(6, 0, ADDR_MOD_6, 192 * pairs);
++    TTI_SFPLOAD(0, 0, ADDR_MOD_6, 0);
++    TTI_SFPLOAD(1, 0, ADDR_MOD_6, 64);
++    TTI_SFPLOAD(2, 0, ADDR_MOD_6, 128);
++    if constexpr (pairs == 2) {
++        TTI_SFPLOAD(3, 0, ADDR_MOD_6, 192);
++        TTI_SFPLOAD(4, 0, ADDR_MOD_6, 256);
++        TTI_SFPLOAD(5, 0, ADDR_MOD_6, 320);
++    }
++    TTI_SFPADD(10, 0, 1, 0, 0);
++    if constexpr (pairs == 2) {
++        TTI_SFPADD(10, 3, 4, 3, 0);
++    }
++    TTI_SFPMAD(0, 6, 2, 0, 0);
++    if constexpr (pairs == 2) {
++        TTI_SFPMAD(3, 6, 5, 3, 0);
++    }
++    TTI_SFP_STOCH_RND(0, 0, 0, 0, 1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    if constexpr (pairs == 2) {
++        TTI_SFP_STOCH_RND(0, 0, 3, 3, 4, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    }
++    TTI_SFPADD(10, 0, 1, 0, 2);
++    if constexpr (pairs == 2) {
++        TTI_SFPADD(10, 3, 4, 3, 2);
++    }
++    TTI_SFP_STOCH_RND(0, 0, 0, 0, 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    if constexpr (pairs == 2) {
++        TTI_SFP_STOCH_RND(0, 0, 3, 3, 3, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
++    }
++    TTI_SFPSTORE(1, 0, ADDR_MOD_6, 0);
++    if constexpr (pairs == 2) {
++        TTI_SFPSTORE(4, 0, ADDR_MOD_6, 192);
++        TTI_SFPSTORE(0, 0, ADDR_MOD_6, 64);
++        TTI_SFPSTORE(3, 0, ADDR_MOD_7, 256);
++    } else {
++        TTI_SFPSTORE(0, 0, ADDR_MOD_7, 64);
++    }
++#pragma GCC unroll 8
++    for (int i = 1; i < 32; ++i) {
++        TTI_REPLAY(0, body_len, 0, 0);
+     }
+ }
+ 

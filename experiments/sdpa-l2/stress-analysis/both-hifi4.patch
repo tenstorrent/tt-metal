@@ -1,0 +1,21 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -1508,3 +1508,3 @@
+     compute_desc.config = ComputeConfigDescriptor{
+-        .math_fidelity = math_fidelity,
++        .math_fidelity = fp32_streaming ? MathFidelity::HiFi4 : math_fidelity,
+         .fp32_dest_acc_en = fp32_dest_acc_en,
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -2101,3 +2101,3 @@
+         matmul_block_init(cb_qkt_im, cb_col_identity, 0, 1, 4, KT_stride);
+-        MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
++        MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(cb_qkt_im, cb_col_identity, 0, 1, 4)));
+         configure_single_tile_pack(cur.sum);
+@@ -2108,3 +2108,3 @@
+                 UNPACK((llk_unpack_AB_matmul(cb_qkt_im, cb_col_identity, row * KT_stride + col, 0, 1, 4, KT_stride)));
+-                MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, 1, 4)));
++                MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(0, 1, 4)));
+             }

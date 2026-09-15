@@ -1,0 +1,30 @@
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_streaming.hpp
+@@ -409,6 +409,14 @@ void blocked_matmul_and_pack(
+     uint32_t in0_index = in0_index_start;
+     uint32_t in1_index = in1_index_start;
+     for (uint32_t inner = 0; inner < inner_dim; ++inner) {
++#ifdef SDPA_FP32_STREAMING
++        if constexpr (transpose) {
++            UNPACK((llk_unpack_AB_matmul(in0_cb, in1_cb, in0_index, in1_index, subblock_w, subblock_h, matmul_stride)));
++            MATH((llk_math_matmul_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(in0_cb, in1_cb, dst_index, subblock_w, subblock_h)));
++        } else
++#endif
++        {
+         matmul_block_no_mop(
+             in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, matmul_stride);
++        }
+         in0_index++;
+@@ -1717,2 +1725,5 @@
+         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
++#ifdef SDPA_FP32_STREAMING
++        MATH((llk_math_matmul_init_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
++#endif
+         // Configure pack once before the kt loop for cb_qkt_im. Both sub_exp
+@@ -1779,2 +1790,5 @@
+                 mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h, in0_block_w);
++#ifdef SDPA_FP32_STREAMING
++                MATH((llk_math_matmul_reinit_no_mop<MathFidelity::HiFi4, MM_THROTTLE>(cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
++#endif
+             }

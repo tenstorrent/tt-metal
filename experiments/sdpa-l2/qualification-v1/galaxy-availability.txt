@@ -1,0 +1,11 @@
+IRD discovery on 2026-09-10 around 19:01 UTC (availability snapshot, not a reservation):
+bh-glx6u-16  tt_yyz  fabric_interactive  blackhole    mixed  glx6u(0|32)
+wh-glx6u-02  tt_yyz  sw_interactive      wormhole_b0  idle   glx6u(32|32)
+wh-glx6u-08  tt_yyz  sw_interactive      wormhole_b0  idle   glx6u(32|32)
+
+No Blackhole Galaxy cards were available in the returned listing. The
+available Wormhole Galaxies do not meet either retained specialization's
+Blackhole architecture guard. No Galaxy reservation was made and no Galaxy
+qualification is claimed. Existing reservation 215262 is yyzo-bh-26, P100A.
+
+Runtime used for synthetic inputs/reference: Python 3.10.19, torch 2.11.0+cpu.

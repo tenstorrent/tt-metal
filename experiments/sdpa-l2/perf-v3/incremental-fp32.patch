@@ -1,0 +1,191 @@
+diff --git a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+index cf1878da166..71dde8ab02d 100644
+--- a/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
++++ b/tt_metal/hw/ckernels/blackhole/metal/llk_api/experimental/llk_sfpu/ckernel_sfpu_sdpa.h
+@@ -104,6 +104,53 @@ inline void calculate_sdpa_exp_hifi2() {
+     }
+ }
+ 
++// Approximate exp and add a half-ULP bias for HiFi2's six-bit SrcB grid.
++// The caller MUST form the denominator from these same effective FPU weights.
++template <int iterations>
++inline void calculate_sdpa_exp_hifi2_effective() {
++    // Fast-exp leaves an auto-incrementing address modifier; SFPI advances explicitly.
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    // Relative least-squares fit of (0.995 * 2^(m-1) + 1/128) / m on [1,2].
++    // Fold 2^96 into the coefficients and multiply by the fast macro's linear
++    // result, preserving its exponent without EXEXP/IADD/SETEXP. The common
++    // factor cancels in normalization. Negative underflow encodings remain
++    // negative (the polynomial is positive on [-2,-1]) and packer ReLU zeros them.
++    const sfpi::vFloat a = -8.106702647031e27f;
++    // Programmable constants leave enough working registers for two independent
++    // Horner chains. They overlap the fast macro's grid constants, which the
++    // caller must restore before every subsequent exp tile.
++    sfpi::vConstFloatPrgm0 = 5.446591617222e28f;
++    sfpi::vConstFloatPrgm1 = -1.069245718291e29f;
++    sfpi::vConstFloatPrgm2 = 1.399030410717e29f;
++#pragma GCC unroll 4
++    for (int i = 0; i < iterations; i += 2) {
++        sfpi::vFloat linear = sfpi::dst_reg[0];
++        sfpi::vFloat linear1 = sfpi::dst_reg[1];
++        sfpi::vFloat m = sfpi::setexp(linear, 127);
++        sfpi::vFloat m1 = sfpi::setexp(linear1, 127);
++        sfpi::vFloat p = m * a + sfpi::vConstFloatPrgm0;
++        sfpi::vFloat p1 = m1 * a + sfpi::vConstFloatPrgm0;
++        p = m * p + sfpi::vConstFloatPrgm1;
++        p1 = m1 * p1 + sfpi::vConstFloatPrgm1;
++        p = m * p + sfpi::vConstFloatPrgm2;
++        p1 = m1 * p1 + sfpi::vConstFloatPrgm2;
++        sfpi::dst_reg[0] = linear * p;
++        sfpi::dst_reg[1] = linear1 * p1;
++        sfpi::dst_reg += 2;
++    }
++}
++
++inline void calculate_sdpa_scale_sum_and_delta() {
++    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
++    for (int d = 0; d < 4; ++d) {
++        sfpi::vFloat sum = sfpi::dst_reg[0];
++        sfpi::vFloat correction = sfpi::dst_reg[32];
++        sfpi::dst_reg[0] = sum * correction;
++        sfpi::dst_reg[32] = correction - 1.0f;
++        sfpi::dst_reg += 2;
++    }
++}
++
+ // Each state is hi + lo, with both parts stored as BF16. Keep the online
+ // rescale/add in SFPU FP32 registers and re-split only at the store boundary.
+ // Inputs occupy triples (hi, lo, new_chunk), followed by one shared correction
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+index bae309923fd..6b1c530c396 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/compute_common.hpp
+@@ -355,7 +355,15 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb, uint3
+                 MATH((ckernel::sfpu::init_sdpa_exp_grid<scale_fp32>()));
+ #endif
+                 exp_tile<true /* approx */, false /* scale_en */, InputClamping::None, iterations>(j, vector_mode_exp);
+-#ifdef SDPA_HIFI2_ROUND
++#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
++                MATH((SFPU_UNARY_CALL(
++                    DST_SYNC_MODE,
++                    DST_ACCUM_MODE,
++                    calculate_sdpa_exp_hifi2_effective,
++                    (iterations),
++                    j,
++                    vector_mode_exp)));
++#elif defined(SDPA_HIFI2_ROUND)
+                 MATH((SFPU_UNARY_CALL(
+                     DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_exp_hifi2, (iterations), j, vector_mode_exp)));
+ #endif
+@@ -564,6 +572,10 @@ void rescale_sum_and_prepare_delta(uint32_t prev_cb, uint32_t scale_cb, uint32_t
+         unary_bcast_init<BroadcastType::NONE>(prev_cb);
+         unary_bcast<BroadcastType::NONE>(prev_cb, row, 0);
+         unary_bcast_uninit<BroadcastType::NONE>(prev_cb);
++#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
++        MATH((SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
++            DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sdpa_scale_sum_and_delta, 0, VectorMode::C)));
++#else
+         mul_binary_tile_init();
+         mul_binary_tile(0, 1, 0);
+         MATH(SFPU_UNARY_CALL(
+@@ -574,6 +586,7 @@ void rescale_sum_and_prepare_delta(uint32_t prev_cb, uint32_t scale_cb, uint32_t
+             1,
+             VectorMode::C,
+             0x3f800000));
++#endif
+         tile_regs_commit();
+         tile_regs_wait();
+         pack_reconfig_data_format(cur_cb);
+@@ -1269,6 +1282,37 @@ ALWI void matmul_blocks(
+     cb_in1.pop_front(K * N);
+ }
+ 
++#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
++// SrcA is exactly one: LoFi and HiFi2 consume the same six SrcB fraction bits.
++// Reducing P through this FPU path matches the weights actually consumed by PV;
++// summing the untruncated FP32 exponential would introduce normalization bias.
++template <uint32_t rows, uint32_t cols>
++void reduce_effective_p(uint32_t p_cb, uint32_t identity_cb, uint32_t sum_cb) {
++    constexpr uint32_t batch = rows % 4 == 0 ? 4 : 1;
++    CircularBuffer(p_cb).wait_front(rows * cols);
++    CircularBuffer(identity_cb).wait_front(1);
++    CircularBuffer(sum_cb).reserve_back(rows);
++    reconfig_data_format(identity_cb, p_cb);
++    matmul_block_init(p_cb, identity_cb, 0, 1, batch, cols);
++    MATH((llk_math_matmul_init<MathFidelity::LoFi, MM_THROTTLE>(p_cb, identity_cb, 0, 1, batch)));
++    pack_reconfig_data_format(sum_cb);
++    for (uint32_t row = 0; row < rows; row += batch) {
++        tile_regs_acquire();
++        for (uint32_t col = 0; col < cols; ++col) {
++            UNPACK((llk_unpack_AB_matmul(p_cb, identity_cb, row * cols + col, 0, 1, batch, cols)));
++            MATH((llk_math_matmul<MathFidelity::LoFi, MM_THROTTLE>(0, 1, batch)));
++        }
++        tile_regs_commit();
++        tile_regs_wait();
++        for (uint32_t j = 0; j < batch; ++j) {
++            pack_tile(j, sum_cb);
++        }
++        tile_regs_release();
++    }
++    CircularBuffer(sum_cb).push_back(rows);
++}
++#endif
++
+ template <uint32_t M>
+ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
+     CircularBuffer cb_in1(in1_cb);
+@@ -2079,8 +2123,14 @@ void sdpa_inner_loop(
+              * Partial reduce_sum is used to push the final row_reduction within a tile
+              * outside of the loop over K chunks.
+              */
++#ifdef SDPA_HIFI2_EFFECTIVE_WEIGHTS
++            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true, false>(
++                alias_cur_max, alias_cur_sum, Sk_chunk_t);
++            reduce_effective_p<Sq_chunk_t, Sk_chunk_t>(cb_qk_im, cb_col_identity, alias_cur_sum);
++#else
+             sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
++#endif
+ 
+             // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
+             // matmul)
+@@ -2150,8 +2200,10 @@ void sdpa_inner_loop(
+ 
+         /**
+          * Performs final row-reduction on the partial sum.
++         * Effective-weight sums are already reduced; retain their full-FP32
++         * unpack view through reciprocal instead of copying to the TF32 view.
+          */
+-#ifdef SDPA_FP32_STATE
++#if defined(SDPA_FP32_STATE) && !defined(SDPA_HIFI2_EFFECTIVE_WEIGHTS)
+         reconfig_data_format_srca(alias_prev_sum);
+         pack_reconfig_data_format(cb_exp_max_diff);
+         CircularBuffer(alias_prev_sum).wait_front(Sq_chunk_t);
+@@ -2170,7 +2222,9 @@ void sdpa_inner_loop(
+         CircularBuffer(cb_exp_max_diff).push_back(Sq_chunk_t);
+         alias_prev_sum = cb_exp_max_diff;
+ #endif
++#ifndef SDPA_HIFI2_EFFECTIVE_WEIGHTS
+         matmul_reduce<Sq_chunk_t>(cb_col_identity, alias_prev_sum);
++#endif
+ 
+         /**
+          * Process attention sink as a virtual K chunk.
+diff --git a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+index 3fafc0b05e5..81f8af553ca 100644
+--- a/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+@@ -758,6 +758,13 @@ ProgramDescriptor SDPAOperation::SDPAProgramFactory::create_descriptor(
+         defines_map["SDPA_FP32_STATE"] = "1";
+         if (math_fidelity == MathFidelity::HiFi2 && math_approx_mode && exp_approx_mode) {
+             defines_map["SDPA_HIFI2_ROUND"] = "1";
++            // Opt into the effective-weight denominator only for the measured
++            // long-context, noncausal geometry; retain the prior accurate path elsewhere.
++            if (!is_causal && !use_mla && !is_chunked && !is_windowed && !attn_mask.has_value() &&
++                !sliding_window_size.has_value() && !generated_padding_mask && q_chunk_size == 128 &&
++                k_chunk_size == 512 && DHt == 4 && vDHt == 4 && k_num_chunks >= 64) {
++                defines_map["SDPA_HIFI2_EFFECTIVE_WEIGHTS"] = "1";
++            }
+         }
+     }
+     // Experimental long-context streaming compensation: restrict activation to

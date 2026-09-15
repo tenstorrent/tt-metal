@@ -1,0 +1,135 @@
+{
+  "source_sha256": {
+    "experiments/sdpa-l2/frontier-accuracy-v1/reader.cpp": "532b1f82502dc14ab72fb381dde5dff3ee71b15209dd01c0d33a5115756ff595",
+    "experiments/sdpa-l2/frontier-accuracy-v1/writer.cpp": "df085d6d091f014c8483b036cad338cd1ac5f87e48de6c6c02ca6e8dc97295f8",
+    "experiments/sdpa-l2/frontier-accuracy-v1/compute.cpp": "43c4b7bffc7308d248c72ca9c4ec93e11c6109e3a615f3427e1ac7a70423ffda",
+    "experiments/sdpa-l2/frontier-accuracy-v1/run.py": "4cbc20400047367e6b7cf4aba6a2f600fcc4c8b2950d5ff52210ee44e9691c63"
+  },
+  "defines": {
+    "EXP_APPROX_MODE": "1",
+    "STATS_GRANULARITY": "4",
+    "SUB_EXP_GRANULARITY": "4",
+    "MUL_BCAST_GRANULARITY": "4",
+    "DHT_GRANULARITY": "4",
+    "REDUCE_GRANULARITY": "2",
+    "SDPA_FP32_STREAMING": "1",
+    "SDPA_FP32_STATE": "1",
+    "SDPA_HIFI2_ROUND": "1",
+    "SDPA_FP32_FUSED_EXP": "1",
+    "SDPA_FP32_REUSE_EXP": "1",
+    "SDPA_FP32_EXTRA_CONST": "1",
+    "SDPA_FP32_PAIRED_UNPACK": "1",
+    "SDPA_FP32_PAIRED_PACK": "1",
+    "SDPA_FP32_L1_SUB": "1",
+    "SDPA_FP32_L1_MACRO": "1",
+    "SDPA_FP32_REFINE_MACRO": "1",
+    "SDPA_DIAG_EXP_MODE": "4",
+    "SDPA_FP32_SUB_BATCH": "2",
+    "SDPA_DENOM_PHASES": "2",
+    "SDPA_DIAG_SCORE_CB": "7"
+  },
+  "cb_specs": [
+    [
+      0,
+      32,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      1,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      2,
+      64,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      3,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      4,
+      1,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      5,
+      1,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      6,
+      64,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      8,
+      16,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      9,
+      16,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      10,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      11,
+      4,
+      2048,
+      "DataType.BFLOAT16"
+    ],
+    [
+      12,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      13,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      14,
+      4,
+      4096,
+      "DataType.FLOAT32"
+    ],
+    [
+      16,
+      8,
+      2048,
+      "DataType.BFLOAT16"
+    ]
+  ],
+  "arguments": {
+    "mode": "accurate",
+    "q_repeats": 1,
+    "k_chunks": 64,
+    "warmup": 0,
+    "iters": 0,
+    "seed": 1240,
+    "distribution": "outliers",
+    "distinct_kv": true,
+    "hybrid_block_pack": false,
+    "label": "sweep-v1-32768-1240-outliers-accurate"
+  }
+}

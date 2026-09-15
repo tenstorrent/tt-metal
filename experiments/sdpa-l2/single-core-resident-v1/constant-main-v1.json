@@ -1,0 +1,28 @@
+{
+  "label": "constant-main-v1",
+  "mode": "main",
+  "q_repeats": 2,
+  "k_chunks": 512,
+  "warmup": 1,
+  "iters": 2,
+  "seed": 1236,
+  "distribution": "constant_v",
+  "cores": 1,
+  "q_chunk": 256,
+  "k_chunk": 512,
+  "dim": 128,
+  "kv_slots": 2,
+  "cb_bytes": 1169408,
+  "useful_flops": 68719476736,
+  "median_ms": 34.49889499461278,
+  "trace_replay_ms": [
+    34.49987998465076,
+    34.497910004574805
+  ],
+  "tflops_per_core": 1.991932690792878,
+  "l2_pct": 18.71773805255205,
+  "pcc": -0.08597740412549529,
+  "full_output_sha256": "fb81939a525dd987e0078d9d72d87a287d4aa6696224819413561023953aa9e6",
+  "trace_equal": true,
+  "warning": "Repeated resident Q/K/V, not general-input accuracy qualification or measured chip throughput"
+}
