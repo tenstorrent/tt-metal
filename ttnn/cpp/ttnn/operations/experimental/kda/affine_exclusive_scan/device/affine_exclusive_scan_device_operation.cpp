@@ -59,8 +59,8 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     const auto& b_shape = in.b.logical_shape();
     const auto& state_shape = in.initial_state.logical_shape();
     TT_FATAL(
-        a_shape.rank() == 3 && b_shape.rank() == 3 && state_shape.rank() == 3,
-        "affine_exclusive_scan: inputs must be rank 3");
+        a_shape.rank() == 3 && b_shape.rank() == 3 && (state_shape.rank() == 3 || state_shape.rank() == 4),
+        "affine_exclusive_scan: summaries must be rank 3 and initial_state must be rank 3 or rank 4");
     TT_FATAL(a_shape[0] > 0, "affine_exclusive_scan: leading dimension must be positive");
     TT_FATAL(
         a_shape[0] % attrs.groups_per_head == 0,
@@ -76,9 +76,11 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
         a_shape[0] == attrs.batch_heads * attrs.groups_per_head && a_shape[1] == attrs.key_dim &&
             b_shape[2] == attrs.value_dim,
         "affine_exclusive_scan: input shapes must match operation attributes");
-    TT_FATAL(
-        state_shape[0] == attrs.batch_heads && state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim,
-        "affine_exclusive_scan: initial_state shape must be [batch_heads, K, V]");
+    const bool valid_state_shape = (state_shape.rank() == 3 && state_shape[0] == attrs.batch_heads &&
+                                    state_shape[1] == attrs.key_dim && state_shape[2] == attrs.value_dim) ||
+                                   (state_shape.rank() == 4 && state_shape[0] * state_shape[1] == attrs.batch_heads &&
+                                    state_shape[2] == attrs.key_dim && state_shape[3] == attrs.value_dim);
+    TT_FATAL(valid_state_shape, "affine_exclusive_scan: initial_state shape must be [BH,K,V] or [B,H,K,V]");
 
     constexpr uint32_t max_coordinate_table_workers = 128;
     const auto grid = in.a.device()->compute_with_storage_grid_size();
@@ -92,9 +94,17 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
 }
 
 AffineExclusiveScanOperation::spec_return_value_t AffineExclusiveScanOperation::compute_output_specs(
-    const operation_attributes_t& a, const tensor_args_t&) {
+    const operation_attributes_t& a, const tensor_args_t& in) {
+    auto output_shape = tt::tt_metal::Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim});
+    if (in.initial_state.logical_shape().rank() == 4) {
+        output_shape = tt::tt_metal::Shape(
+            {in.initial_state.logical_shape()[0],
+             in.initial_state.logical_shape()[1] * a.groups_per_head,
+             a.key_dim,
+             a.value_dim});
+    }
     return {tt::tt_metal::TensorSpec(
-        tt::tt_metal::Shape({a.batch_heads * a.groups_per_head, a.key_dim, a.value_dim}),
+        output_shape,
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::FLOAT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -135,8 +145,8 @@ Tensor affine_exclusive_scan(
     const auto& b_shape = b.logical_shape();
     const auto& state_shape = state.logical_shape();
     TT_FATAL(
-        shape.rank() == 3 && b_shape.rank() == 3 && state_shape.rank() == 3,
-        "affine_exclusive_scan: inputs must be rank 3");
+        shape.rank() == 3 && b_shape.rank() == 3 && (state_shape.rank() == 3 || state_shape.rank() == 4),
+        "affine_exclusive_scan: summaries must be rank 3 and initial_state must be rank 3 or rank 4");
     TT_FATAL(shape[0] > 0, "affine_exclusive_scan: leading dimension must be positive");
     TT_FATAL(shape[0] % groups == 0, "affine_exclusive_scan: leading dimension must be divisible by groups_per_head");
     auto outputs = ::ttnn::device_operation::launch<AffineExclusiveScanOperation>(

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include <tt-metalium/program_descriptors.hpp>
@@ -17,13 +18,17 @@ struct QkvCausalConv1dSiluParams {
     uint32_t k_width;
     uint32_t v_width;
     uint32_t channel_chunk_size;
+    std::optional<uint32_t> history_sequence_parallel_axis;
     tt::tt_metal::MemoryConfig output_mem_config;
+    tt::tt_metal::MemoryConfig state_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };
 
 struct QkvCausalConv1dSiluInputs {
     Tensor input;
     Tensor history;
+    Tensor predecessor_history;
+    Tensor state_source;
     Tensor tap0;
     Tensor tap1;
     Tensor tap2;
