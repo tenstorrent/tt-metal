@@ -377,7 +377,6 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_6, 2, tt::DataFormat::Float16_b);     // causal mask: triangle, all -inf
     // Intermediates.
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
-    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
     make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
@@ -390,9 +389,17 @@ Gradients run_algorithm2(
     make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
     make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     // Each gradient: seed from the reader, accumulator, output to the writer.
-    make_cb(tt::CBIndex::c_15, rowT, tt::DataFormat::Float32);
+    // dQ seed in, dQ out: two views of one slot (see the compute kernel's
+    // UPDATE-DQ). The release protocol keeps the writer's read of one
+    // timestep ahead of the reader's load of the next.
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            rowT * fp32_tile, {{tt::CBIndex::c_15, tt::DataFormat::Float32}, {tt::CBIndex::c_17, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_15, fp32_tile)
+            .set_page_size(tt::CBIndex::c_17, fp32_tile));
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
@@ -461,7 +468,6 @@ Gradients run_algorithm2(
     // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.
@@ -655,12 +661,19 @@ Gradients run_relay(
         CircularBufferConfig(2 * Bt * 512, {{tt::CBIndex::c_4, tt::DataFormat::Float32}})
             .set_page_size(tt::CBIndex::c_4, 512));  // statistic block
     make_cb(tt::CBIndex::c_5, 4 * Bt, tt::DataFormat::Float32);      // L_i, D_i scratch
-    make_cb(tt::CBIndex::c_15, 2 * rowT, tt::DataFormat::Float32);   // dQ_i, travels along
+    // dQ_i, travels along: two slots, two views (see the compute kernel).
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            2 * rowT * fp32_tile,
+            {{tt::CBIndex::c_15, tt::DataFormat::Float32}, {tt::CBIndex::c_17, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_15, fp32_tile)
+            .set_page_size(tt::CBIndex::c_17, fp32_tile));
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);      // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);      // V_j
     make_cb(tt::CBIndex::c_6, 2, tt::DataFormat::Float16_b);         // causal mask: triangle, all -inf
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);  // P^T
-    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);   // dQ seed, transposed
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);      // transpose fence
     make_cb(tt::CBIndex::c_9, 2U * Bt, tt::DataFormat::Float16_b);   // -L remainder, column 0
     make_cb(tt::CBIndex::c_29, 2U * Bt, tt::DataFormat::Float16_b);  // -D remainder, column 0
@@ -673,7 +686,6 @@ Gradients run_relay(
     make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
     make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);  // dQ to the relay
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);  // dK seed
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
@@ -775,7 +787,6 @@ Gradients run_relay(
     // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.

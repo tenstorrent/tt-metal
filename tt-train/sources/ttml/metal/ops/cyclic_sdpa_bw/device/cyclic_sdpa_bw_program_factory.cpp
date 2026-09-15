@@ -199,12 +199,21 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
         CircularBufferConfig(2U * Bt * 512U, {{tt::CBIndex::c_4, tt::DataFormat::Float32}})
             .set_page_size(tt::CBIndex::c_4, 512U));
     make_cb(tt::CBIndex::c_5, 4U * Bt, tt::DataFormat::Float32);       // L_i, D_i scratch
-    make_cb(tt::CBIndex::c_15, 2U * rowT, tt::DataFormat::Float32);    // dQ_i, travels along
+    // dQ_i, travels along: two slots, and two views of them -- the compute
+    // kernel reads the seed through c_15 and packs the updated packet through
+    // c_17, onto the same memory (see the compute kernel's UPDATE-DQ).
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            2U * rowT * fp32_tile,
+            {{tt::CBIndex::c_15, tt::DataFormat::Float32}, {tt::CBIndex::c_17, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_15, fp32_tile)
+            .set_page_size(tt::CBIndex::c_17, fp32_tile));
     make_cb(tt::CBIndex::c_1, rowT, tt::DataFormat::Float16_b);        // K_j
     make_cb(tt::CBIndex::c_2, valT, tt::DataFormat::Float16_b);        // V_j
     make_cb(tt::CBIndex::c_6, 2U, tt::DataFormat::Float16_b);          // causal mask: triangle, all -inf
     make_cb(tt::CBIndex::c_10, scoreT, tt::DataFormat::Float32);       // P^T
-    make_cb(tt::CBIndex::c_11, rowT, tt::DataFormat::Float32);        // dQ seed, transposed, at streak starts
     make_cb(tt::CBIndex::c_8, 1, tt::DataFormat::Float16_b);           // transpose fence
     // The statistics' remainders (see cyclic_dataflow_utils.hpp) and the
     // ones column that carries -D's into the matmul.
@@ -221,7 +230,6 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
     make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_17, rowT, tt::DataFormat::Float32);         // dQ to the relay
     make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);         // dK seed
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
@@ -333,7 +341,6 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // read only by copies.
     std::vector<UnpackToDestMode> unpack_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     unpack_mode[tt::CBIndex::c_15] = UnpackToDestMode::UnpackToDestFp32;
-    unpack_mode[tt::CBIndex::c_11] = UnpackToDestMode::UnpackToDestFp32;
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.

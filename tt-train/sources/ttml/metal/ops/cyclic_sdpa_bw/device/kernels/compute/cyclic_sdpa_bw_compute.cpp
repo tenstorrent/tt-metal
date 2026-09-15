@@ -273,14 +273,15 @@ constexpr uint32_t cb_attention_weights = tt::CBIndex::c_10;   // P^T
 constexpr uint32_t cb_grad_scores = tt::CBIndex::c_12;         // dS^T
 
 // The row gradient: the packet's seed in, the packet's next hop out, and a
-// scratch copy of the seed transposed for the timesteps where it came from
-// DRAM as dQ rather than from the packet as dQ^T.
+// The two are views of the same memory (the host creates them as one
+// buffer with two indices, the same slots): the outgoing packet is the
+// incoming one, updated where it lies. This kernel reads the seed through
+// the first view and packs through the second, and their pointers advance
+// together, one slot a timestep, on this side and on the reader's.
 constexpr uint32_t cb_grad_query_seed = tt::CBIndex::c_15;
-constexpr uint32_t cb_grad_query_seed_t = tt::CBIndex::c_11;
 constexpr uint32_t cb_grad_query_out = tt::CBIndex::c_17;
-// A one-tile buffer whose push, made by the pack thread after the packs that
-// follow a dest-register transpose, is what the unpacker waits on before it
-// may feed the next matmul. See UPDATE-DQ.
+// A one-tile buffer for unpacker_fence (below); its page is also the zero
+// tile the mask add takes.
 constexpr uint32_t cb_transpose_fence = tt::CBIndex::c_8;
 // Column gradients: what the reader loaded, the accumulator, the writer's copy.
 constexpr uint32_t cb_grad_key_seed = tt::CBIndex::c_18;
@@ -367,6 +368,44 @@ void pack_score_outputs_rounded() {
           PCK_DEST_RD_CTRL_Round_10b_mant_ADDR32,
           PCK_DEST_RD_CTRL_Round_10b_mant_SHAMT,
           PCK_DEST_RD_CTRL_Round_10b_mant_MASK>(1)));
+}
+
+// The unpacker waits here for everything the pack thread has packed so far:
+// a push the pack thread makes after its packs, waited on before the next
+// unpack. Two uses. A dest-register transpose must not overlap the unpack of
+// the next matmul's SrcB operand (the transpose has the unpacker mark SrcB
+// valid for it and clears both sources when done; an operand already
+// delivered gets cleared and that matmul sums zeros), and packed sums must
+// be in L1 before they are read back. The buffer is private to this kernel:
+// waiting on one another RISC pops would deadlock.
+void unpacker_fence() {
+    cb_reserve_back(cb_transpose_fence, 1);
+    cb_push_back(cb_transpose_fence, 1);
+    cb_wait_front(cb_transpose_fence, 1);
+    cb_pop_front(cb_transpose_fence, 1);
+}
+
+// Every tile of the dQ packet transposed within itself, in place: read
+// through the seed view straight into DST (exact), transposed there, packed
+// back through the out view to the same address. The unpacker reads a tile
+// whole before the packer writes it, and the fence after keeps the
+// transposes clear of the next matmul.
+void transpose_packet_in_place(const uint32_t cb_prev_srca) {
+    reconfig_data_format_srca(cb_prev_srca, cb_grad_query_seed);
+    for (uint32_t p = 0; p < Bt * qWt; ++p) {
+        tile_regs_acquire();
+        // Both inits every tile: the transpose reprograms the math MOP the
+        // copy needs.
+        copy_init(cb_grad_query_seed);
+        copy_tile(cb_grad_query_seed, p, /* register idx */ 0);
+        transpose_dest_init</* is_32bit */ true>(cb_grad_query_seed);
+        transpose_dest</* is_32bit */ true>(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile</* out_of_order */ true>(0, cb_grad_query_out, p);
+        tile_regs_release();
+    }
+    unpacker_fence();
 }
 
 // Broadcast a query tile's statistic (row 0 of its row-layout tile) down the
@@ -639,11 +678,11 @@ void kernel_main() {
         // relay every timestep is both.
 #if COLUMN_RESIDENT
         // A spill that a later streak of the same row will reload -- inside
-        // this launch -- stays in the packet's transposed tile order, so only
-        // a row's very first seed (the op's dQ input) and its very last spill
-        // (the op's dQ output) are transposed. The reloading core knows the
-        // order from the same schedule; the DRAM pages are the same either
-        // way, only the tiles' order within the block differs.
+        // this launch -- stays in the packet's transposed form, so only a
+        // row's very first seed (the op's dQ input) and its very last spill
+        // (the op's dQ output) are transposed. The transposed form keeps
+        // every tile in its place and transposes it within itself, so the
+        // DRAM pages and the tile order are the same either way.
         const bool seed_transposed =
             sched.producer(my_core, t).internal || sched.is_later_streak_start(pair.i, t);
         const bool emit_transposed =
@@ -859,66 +898,35 @@ void kernel_main() {
         cb_wait_front(cb_grad_scores, score_tiles);
         }
 
-        // ---- dQ_i^T = (dQ_i^T from the packet) + K_j^T dS^T, straight from the
-        // seed to the outgoing packet: the seed tiles are copied into the DST
-        // registers, transposed there if they came from DRAM as dQ, the
-        // matmul accumulates on top (the FPU adds into DST), and the result
-        // is transposed back before the pack if it goes to DRAM.
+        // ---- dQ_i^T += K_j^T dS^T, on the packet where it lies. The products
+        // are formed in the registers from zero and the packer adds them onto
+        // the seed in L1 (the same L1 accumulation the column gradients use),
+        // so no seed is ever copied into the registers. Where the seed came
+        // from DRAM as dQ it is first transposed in place, tile by tile, and
+        // where the result goes back to DRAM it is transposed back the same
+        // way -- both exact (unpack straight to DST, transpose, pack), and
+        // both once per streak. (Transposing the products in the registers
+        // instead, to save the second pass, needs a fence after every block
+        // and measured slower.)
         {
             DeviceZoneScopedN("UPDATE-DQ");
             cb_wait_front(cb_grad_query_seed, Bt * qWt);
-            // A dest transpose must not overlap the unpack of a matmul operand
-            // into SrcB: the transpose has the unpacker mark SrcB valid for it
-            // and clears both sources when it is done, and an operand the
-            // unpacker had already run ahead and delivered for the next matmul
-            // is what gets cleared -- the dV update then sums zeros. So both
-            // transposes below sit behind a buffer handshake that the unpacker
-            // has to wait on before it may feed the next matmul: the seed is
-            // transposed into a scratch buffer of its own, and the emitted dQ
-            // is waited for before the dV update starts.
-            uint32_t seed_cb = cb_grad_query_seed;
-            if (!seed_transposed) {
-                DeviceZoneScopedN("SEED-T");
-                cb_reserve_back(cb_grad_query_seed_t, Bt * qWt);
-                pack_reconfig_data_format(cb_grad_query_seed_t);
-                reconfig_data_format_srca(cb_grad_output, cb_grad_query_seed);
-                for (uint32_t a = 0; a < Bt; ++a) {
-                    for (uint32_t e = 0; e < qWt; ++e) {
-                        tile_regs_acquire();
-                        // Both inits every tile: the transpose reprograms the
-                        // math MOP the copy needs.
-                        copy_init(cb_grad_query_seed);
-                        copy_tile(cb_grad_query_seed, a * qWt + e, /* register idx */ 0);
-                        transpose_dest_init</* is_32bit */ true>(cb_grad_query_seed);
-                        transpose_dest</* is_32bit */ true>(0);
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        pack_tile</* out_of_order */ true>(0, cb_grad_query_seed_t, e * Bt + a);
-                        tile_regs_release();
-                    }
-                }
-                cb_push_back(cb_grad_query_seed_t, Bt * qWt);
-                cb_wait_front(cb_grad_query_seed_t, Bt * qWt);
-                seed_cb = cb_grad_query_seed_t;
-            }
+            // The out view's next slot is the seed's slot (see the buffers).
             cb_reserve_back(cb_grad_query_out, Bt * qWt);
             pack_reconfig_data_format(cb_grad_query_out);
+            if (!seed_transposed) {
+                DeviceZoneScopedN("SEED-T");
+                transpose_packet_in_place(cb_grad_output);
+            }
+            // K^T is the first operand (bf16, SrcB), dS^T the second (Float32,
+            // SrcA). The previous SrcA operand was dO (bf16) or, after the
+            // transposes, the seed (Float32, unpack-to-dest).
+            reconfig_data_format(/* SrcA */ cb_grad_scores, /* SrcB */ cb_key_operand_t);
+            matmul_init(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
+            pack_reconfig_l1_acc(true);
             for (uint32_t a = 0; a < Bt; ++a) {
                 for (uint32_t k0 = 0; k0 < qWt; k0 += block_size) {
                     tile_regs_acquire();
-                    // The seed tiles, dQ^T in either buffer, go through SrcA as
-                    // they always did (Float32 in, Float32 out). The previous
-                    // SrcA operand was dO (bf16) for the first block and dS^T
-                    // (Float32) after that.
-                    reconfig_data_format_srca((a == 0u && k0 == 0u) ? cb_grad_output : cb_grad_scores, seed_cb);
-                    copy_init(seed_cb);
-                    for (uint32_t bi = 0; bi < block_size; ++bi) {
-                        copy_tile(seed_cb, (k0 + bi) * Bt + a, bi);
-                    }
-                    // dQ^T[e][a] += sum_b K^T[e][b] dS^T[b][a]: K^T is the first
-                    // operand (bf16, SrcB), dS^T the second (Float32, SrcA).
-                    reconfig_data_format(/* SrcA */ cb_grad_scores, /* SrcB */ cb_key_operand_t);
-                    matmul_init(cb_key_operand_t, cb_grad_scores, /* transpose */ 0);
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
                         // Key tiles above the query tile hold no dS^T on a
                         // diagonal pair (see the score pass).
@@ -929,42 +937,23 @@ void kernel_main() {
                             matmul_tiles(cb_key_operand_t, cb_grad_scores, (k0 + bi) * Bt + b, b * Bt + a, bi);
                         }
                     }
-                    if (!emit_transposed) {
-                        // Streak end: dQ goes back to DRAM untransposed. In the
-                        // registers, exact; nothing else of this acquire reads
-                        // the unpacker after this point, and the fence below
-                        // keeps the dV matmul's operands out of the way.
-                        transpose_dest_init</* is_32bit */ true>(cb_grad_query_out);
-                        for (uint32_t bi = 0; bi < block_size; ++bi) {
-                            transpose_dest</* is_32bit */ true>(bi);
-                        }
-                    }
                     tile_regs_commit();
                     tile_regs_wait();
                     for (uint32_t bi = 0; bi < block_size; ++bi) {
-                        const uint32_t e = k0 + bi;
-                        const uint32_t out_tile = emit_transposed ? e * Bt + a : a * qWt + e;
-                        pack_tile</* out_of_order */ true>(bi, cb_grad_query_out, out_tile);
+                        pack_tile</* out_of_order */ true>(bi, cb_grad_query_out, a * qWt + k0 + bi);
                     }
                     tile_regs_release();
                 }
             }
-            cb_push_back(cb_grad_query_out, Bt * qWt);
+            pack_reconfig_l1_acc(false);
             if (!emit_transposed) {
-                // The fence: pushed by the pack thread once the packs above,
-                // and so the transposes before them, are done; waited on by the
-                // unpacker before it unpacks anything for the dV matmul. The
-                // packet buffer itself cannot serve, since the relay reader pops
-                // it.
-                cb_reserve_back(cb_transpose_fence, 1);
-                cb_push_back(cb_transpose_fence, 1);
-                cb_wait_front(cb_transpose_fence, 1);
-                cb_pop_front(cb_transpose_fence, 1);
+                // Streak end: dQ goes back to DRAM untransposed. The sums must
+                // have landed in L1 before the unpacker reads them back.
+                unpacker_fence();
+                transpose_packet_in_place(cb_grad_scores);
             }
+            cb_push_back(cb_grad_query_out, Bt * qWt);
             cb_pop_front(cb_grad_query_seed, Bt * qWt);
-            if (!seed_transposed) {
-                cb_pop_front(cb_grad_query_seed_t, Bt * qWt);
-            }
         }
 
         // ---- dV_j += P^T dO_i, summed over the block's query tiles
