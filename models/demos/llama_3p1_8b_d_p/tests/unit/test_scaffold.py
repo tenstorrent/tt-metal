@@ -39,6 +39,37 @@ def test_adapter_is_import_light():
     assert out == "", f"adapter import pulled in heavy modules: {out}"
 
 
+def test_hardware_labels_partition_the_suite(request):
+    """tt-blaze#4152: every cell carries exactly one of ``cpu_only`` / ``device_required``.
+
+    The pipeline runs ``-m device_required`` on dispatch and ``-m cpu_only`` where a CPU leg exists,
+    so the two sets have to cover the suite and not overlap. An unlabelled cell is the failure that
+    matters: it runs in neither leg, so it silently stops being tested while both legs stay green.
+
+    Read off the live session rather than by shelling out to ``pytest --collect-only``. The
+    subprocess version deadlocks: collecting this package opens the mesh (the device fixtures'
+    parametrization is resolved at collection time), and the parent session already holds those
+    devices, so the child blocks on the device lock until the job's wall clock runs out. It also
+    tells the truth about whatever is actually running -- under ``-k`` or ``-m`` the child would
+    re-collect the whole package and disagree with the session it is supposedly describing.
+    """
+    items = request.session.items
+    assert items, "no collected items to check"
+
+    unlabelled = [
+        i.nodeid for i in items if not (i.get_closest_marker("cpu_only") or i.get_closest_marker("device_required"))
+    ]
+    both = [i.nodeid for i in items if i.get_closest_marker("cpu_only") and i.get_closest_marker("device_required")]
+    assert not unlabelled, f"{len(unlabelled)} cell(s) carry neither label, e.g. {unlabelled[:5]}"
+    assert not both, f"{len(both)} cell(s) carry both labels, e.g. {both[:5]}"
+
+    # Both legs non-empty, or a selector typo reads as a clean run of nothing. Only meaningful for
+    # an unfiltered run of the package: a deliberate `-m cpu_only` leg is legitimately one-sided.
+    if not (request.config.option.markexpr or request.config.option.keyword):
+        cpu_only = sum(1 for i in items if i.get_closest_marker("cpu_only"))
+        assert cpu_only and cpu_only < len(items), f"cpu_only={cpu_only} of {len(items)}"
+
+
 def test_weight_cache_path_uses_sp_times_tp(tmp_path, monkeypatch):
     """`{name}_{arch}_{N}dev / {sp}x{tp}`, with N = sp*tp.
 
