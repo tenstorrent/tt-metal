@@ -598,22 +598,25 @@ def test_recurrent_chunk_scan_does_not_expose_prototype_modes(
 
 @run_for_blackhole()
 @pytest.mark.parametrize(
-    "num_chunks,wrap_chunk",
+    "num_chunks,wrap_chunk,key_dim,value_dim",
     [
-        pytest.param(20, 1, id="c20-w1"),
-        pytest.param(20, 7, id="c20-w7"),
-        pytest.param(20, 13, id="c20-w13"),
-        pytest.param(20, 19, id="c20-w19"),
-        pytest.param(8, 3, id="c8-w3"),
+        pytest.param(20, 1, 32, 32, id="c20-w1"),
+        pytest.param(20, 7, 32, 32, id="c20-w7"),
+        pytest.param(20, 13, 32, 32, id="c20-w13"),
+        pytest.param(20, 19, 32, 32, id="c20-w19"),
+        pytest.param(8, 3, 32, 32, id="c8-w3"),
+        pytest.param(4, 2, 64, 32, id="c4-w2-k64-v32"),
     ],
 )
-def test_wrap_reloads_the_carry_from_tail_state(device, num_chunks, wrap_chunk):
+def test_wrap_reloads_the_carry_from_tail_state(
+    device: ttnn.Device, num_chunks: int, wrap_chunk: int, key_dim: int, value_dim: int
+) -> None:
     """A wrap reloads the carry from tail_state, with no extra output slot.
 
     Seeds are five orders of magnitude apart so a leaked pre-wrap carry cannot
     hide inside a tolerance. Shapes are identical to the unwrapped case.
     """
-    batch_heads, key_dim, value_dim = 2, 32, 32
+    batch_heads = 2
     protocol = host_protocol(batch_heads, num_chunks, key_dim, value_dim)
     head_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e-3
     tail_seed = torch.eye(key_dim, value_dim).expand(batch_heads, key_dim, value_dim) * 1e2
