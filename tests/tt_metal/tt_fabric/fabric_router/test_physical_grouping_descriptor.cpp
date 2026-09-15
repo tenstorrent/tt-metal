@@ -2721,17 +2721,410 @@ TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_WithManyToManyPinn
     }
 }
 
+// ----- a 4x4 on a machine split into four hosts, one per quadrant -------------------------------
+//
+// The MGD host_topology contract on the split-host square. A mesh host rank is one process on one host,
+// so a physical host boundary may never cut through a declared rank, though a declared rank boundary may
+// sit anywhere inside a physical host. A quadrant machine divides on both axes at once, so containment
+// has to hold in both directions at the same time: [2,2] lands on it exactly and anything finer fits
+// inside a quadrant. The refusing direction -- a declared band that spans two hosts of a 2D host grid --
+// is CoarserSplitAcrossATwoAxisHostGridIsRejected in PhysicalGroupingDescriptorTestsHostSplit.
+//
+// The machine is test_16asic_4x4_four_hosts_by_quadrant; its header draws the grid and names the host of
+// every ASIC. A [2,2] partition is invariant under the rotations a wrapped mesh would add, so these hold
+// for RING/RING as they do here; the RING/RING path is exercised by PhysicalGroupingDescriptorTestsHostSplit further
+// down under Phase2AgreesWithPhase1OnASymmetricTorus, which also tests this rule on a 2x4, where the shape is not
+// square and no rotation can satisfy an axis by accident.
+
+// The 4x4 on a machine split into four hosts, one per quadrant, declaring [2,2]: four ranks of 4 chips
+// that line up with the quadrants exactly. The split-host case where the machine is divided on both axes
+// at once, so containment has to hold in both directions at the same time.
+//
+//   machine: four hosts, one per quadrant      MGD host_topology [2,2]
+//
+//     100 101 | 102 103    h0 h0 h1 h1           aa | bb     four ranks of 4 chips, each
+//     104 105 | 106 107    h0 h0 h1 h1           aa | bb     one sitting on one quadrant:
+//     --------+--------                          ---+---     the declared grid and the host
+//     108 109 | 110 111    h2 h2 h3 h3           cc | dd     grid are the same partition
+//     112 113 | 114 115    h2 h2 h3 h3           cc | dd
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_QuadrantSplitPsdMatchingQuadrantMgdCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+    { id: 8  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+    { id: 9  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+    { id: 10 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+    { id: 11 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+    { id: 12 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+    { id: 13 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } },
+    { id: 14 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+    { id: 15 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [4, 4]
+  }
+}
+
+# The PGD's own host level: eight hosts of 2 chips, each one half of a tray. One preset_type: HOSTS
+# grouping is one host -- what it contains is that host's chips -- so eight hosts are eight
+# definitions sharing a name, the way the galaxy PGDs repeat their MESH groupings.
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    // host_topology [2,2] on a 4x4 declares four ranks, each a 2x2 block.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
+        {0, 1, 4, 5}, {2, 3, 6, 7}, {8, 9, 12, 13}, {10, 11, 14, 15}};
+
+    // Against the PSD's hosts this is the aligned case and the seating is correct, so check it first:
+    // whatever came back has each declared rank inside one quadrant of the machine.
+    for (std::size_t rank = 0; rank < declared_ranks.size() && !committed.empty(); ++rank) {
+        std::set<uint32_t> psd_hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // Quadrant of the ASIC: trays 1-2 are the top half, asic_locations 1-2 the left half.
+            psd_hosts.insert(((*position.first - 1) / 2) * 2 + (*position.second - 1) / 2);
+        }
+        EXPECT_EQ(psd_hosts.size(), 1u) << "declared rank " << rank << " was seated across " << psd_hosts.size()
+                                        << " hosts of the machine";
+    }
+
+    // TODO: and now the same question against the PGD's host level, which is the half of the contract
+    // that is not implemented. The PGD above declares eight 2-chip hosts where the MGD declares four
+    // 4-chip ranks, so every declared rank needs two PGD hosts -- the coarser-than-the-hosts violation
+    // that CoarserSplitThanThePhysicalHostsIsRejected rejects when the hosts come from the PSD. The only
+    // correct answer is a refusal, so this loop is guarded on a non-empty commit and will pass once the
+    // matcher consults the PGD hosts and declines. Today it commits and the loop fails, because the
+    // HOSTS grouping is parsed and then never consulted: the host split is taken from the MGD alone, in
+    // compose_mesh_node_to_host_group_from_mgd_match, and checked only against the PSD. Same root cause
+    // as the rotation gap -- there is no PGD host level in the matching -- so both go away together.
+    for (std::size_t rank = 0; rank < declared_ranks.size() && !committed.empty(); ++rank) {
+        std::set<uint32_t> pgd_hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // The PGD's halfrow holding this ASIC: one per tray half.
+            pgd_hosts.insert((*position.first - 1) * 2 + (*position.second - 1) / 2);
+        }
+        EXPECT_EQ(pgd_hosts.size(), 1u) << "declared rank " << rank << " was seated across " << pgd_hosts.size()
+                                        << " hosts of the PGD, which declares finer hosts than the MGD declares "
+                                           "ranks -- the grouping should not have been committed at all";
+    }
+}
+
+// Finer than the quadrants, and finer on both axes: eight ranks of 2 chips, two to a quadrant. Legal --
+// subdividing inside a host cuts nothing, and that stays true when the hosts are quadrants.
+//
+//   machine: four hosts, one per quadrant      MGD host_topology [2,4]
+//
+//     100 101 | 102 103    h0 h0 h1 h1           ab | cd     eight ranks of 2 chips, each a
+//     104 105 | 106 107    h0 h0 h1 h1           ab | cd     column of one band: two ranks to
+//     --------+--------                          ---+---     a quadrant, and no rank crosses
+//     108 109 | 110 111    h2 h2 h3 h3           ef | gh     a boundary the machine drew
+//     112 113 | 114 115    h2 h2 h3 h3           ef | gh
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_QuadrantSplitPsdFinerSplitInsideEachQuadrantCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_four_hosts_by_quadrant.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+    { id: 8  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+    { id: 9  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+    { id: 10 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+    { id: 11 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+    { id: 12 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+    { id: 13 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } },
+    { id: 14 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+    { id: 15 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [4, 4]
+  }
+}
+
+# The PGD's own host level, aligned with the machine: four hosts of 4 chips, one per quadrant.
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 4 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty()) << "eight 2-chip ranks fit two to a quadrant";
+
+    // host_topology [2,4] on a 4x4 declares eight ranks, each two rows of the same column.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
+        {0, 4}, {1, 5}, {2, 6}, {3, 7}, {8, 12}, {9, 13}, {10, 14}, {11, 15}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert(((*position.first - 1) / 2) * 2 + (*position.second - 1) / 2);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // The (tray_id, asic_location) each mesh node was actually given. A rank landing on one host is
+    // necessary but far from sufficient: it would hold just as well if the nodes inside a quadrant were
+    // shuffled among themselves, or if two nodes were handed the same chip. So check the seating itself
+    // -- every node gets a slot this PGD declares, no slot is handed out twice, and the mesh's own
+    // neighbours stay neighbours on the machine.
+    const auto& seating = committed.front().mesh_node_to_asic_position;
+    ASSERT_EQ(seating.size(), 16u) << "all sixteen nodes should be seated";
+
+    std::set<std::pair<uint32_t, uint32_t>> occupied;
+    for (const auto& [node, position] : seating) {
+        const uint32_t tray = *position.first;
+        const uint32_t asic_location = *position.second;
+        EXPECT_TRUE(tray >= 1 && tray <= 4)
+            << "node " << node << " got tray " << tray << ", which this PGD never declares";
+        EXPECT_TRUE(asic_location >= 1 && asic_location <= 4)
+            << "node " << node << " got asic_location " << asic_location << ", which this PGD never declares";
+        EXPECT_TRUE(occupied.emplace(tray, asic_location).second)
+            << "tray " << tray << " asic_location " << asic_location << " was handed to two nodes, the second being "
+            << node;
+    }
+    EXPECT_EQ(occupied.size(), 16u) << "the sixteen nodes should cover the sixteen declared slots exactly";
+
+    // One step apart on the machine means adjacent tray or adjacent asic_location, not both: the
+    // fixture numbers ASICs (tray, asic_location) = (row+1, col+1), so a mesh edge has to become a
+    // single step along one of the two axes whichever orientation the match chose.
+    const auto one_step_apart = [&seating](LogicalChipId a, LogicalChipId b) {
+        const auto& first = seating.at(a);
+        const auto& second = seating.at(b);
+        const uint32_t tray_delta =
+            *first.first > *second.first ? *first.first - *second.first : *second.first - *first.first;
+        const uint32_t asic_delta =
+            *first.second > *second.second ? *first.second - *second.second : *second.second - *first.second;
+        return tray_delta + asic_delta == 1;
+    };
+    for (uint32_t row = 0; row < 4; ++row) {
+        for (uint32_t col = 0; col < 4; ++col) {
+            const auto node = static_cast<LogicalChipId>(row * 4 + col);
+            if (col + 1 < 4) {
+                EXPECT_TRUE(one_step_apart(node, node + 1))
+                    << "mesh nodes " << node << " and " << node + 1 << " are neighbours but were seated apart";
+            }
+            if (row + 1 < 4) {
+                EXPECT_TRUE(one_step_apart(node, node + 4))
+                    << "mesh nodes " << node << " and " << node + 4 << " are neighbours but were seated apart";
+            }
+        }
+    }
+}
+
+// ----- cases the PGD host level is needed for ---------------------------------------------------
+
+// FIXME: a PGD that declares hosts the machine does not have should be rejected, and nothing rejects
+// it. Every PGD in this file that is used with a PSD declares a host level aligned with that PSD's
+// hosts, because that is what a PGD is -- a description of the machine. This test hands the matcher one
+// that disagrees, and it is accepted.
+//
+// The machine is cut by column and the PGD claims its hosts are the trays:
+//
+//   machine: hosts cut by column       PGD declares hosts by row
+//
+//     100 101 | 102 103                  hhhh   <- claimed host 0, one tray
+//     104 105 | 106 107                  iiii   <- claimed host 1
+//      host0  |  host1                   each claimed host spans both real ones
+//
+// Neither claimed host is a subset of a real one, so no seating can satisfy both, and every answer the
+// matcher gives from here is built on a false picture of the machine.
+//
+// The check to add, at the enumerate stage: flatten each declared PGD host to the set of chips it holds,
+// and require that for at least one of the PGD's variants every flattened host lands inside a single PSD
+// host. One variant matching is enough -- a PGD legitimately offers several orientations and only needs
+// one that fits the machine it is given -- but if none does, the descriptor does not describe this
+// machine and should throw rather than be quietly used.
+TEST(PhysicalGroupingDescriptorTests, GetValidGroupingsForMGD_PgdHostsThatContradictThePsdAreRejected) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# Hosts by row, on a machine whose hosts are by column: each of these spans both real hosts.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    EXPECT_ANY_THROW(pgd.get_valid_groupings_for_mgd(mgd, psd))
+        << "a PGD whose declared hosts fit no PSD host does not describe this machine";
+}
+
 // ---------------------------------------------------------------------------------------------
 // Adjacency-guided placement
 //
 // These load a handcrafted PSD straight from a textproto rather than going through a mock cluster,
 // so unlike the tests above they need no TT_METAL_MOCK_CLUSTER_DESC_PATH and never skip.
 //
-// All three share one PGD and vary only the PSD and the MGD, which isolates the seam constraint:
-// the same pair of meshes must place when the physical chips they need are linked and must fail
-// when they are not.
+// All three use the same PGD and vary only the PSD and the MGD, which isolates the seam
+// constraint: the same pair of meshes must place when the physical chips they need are linked and
+// must fail when they are not.
 //
-// The shared PGD, test_1x2_mesh_grouping.textproto, is a single MESH grouping of two chips with
+// Each test spells out its PGD and MGD in full, so a case can be read start to finish without
+// looking anything up; only the machines are loaded from files, because a PSD is long and its
+// header draws the grid. The PGD the first three share is a single MESH grouping of two chips with
 // both ASIC locations UNSPECIFIED, so it is free to land on any linked pair:
 //
 //     1x2_Mesh:   [ ]---[ ]
@@ -2979,10 +3372,61 @@ tt::tt_metal::PhysicalSystemDescriptor load_psd_from_text(const std::string& tex
 //   unlinked, so no second mesh could form; that is what makes the answer unique.
 TEST(AdjacencyGuidedPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is,
+# a 1x4 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 4] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two 1x2 meshes joined by one intermesh connection. The unlinked pair below is the same
+# descriptor without the connection, which is what isolates the seam: only this one requires
+# the two placements to touch.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
 
@@ -3030,10 +3474,67 @@ TEST(AdjacencyGuidedPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
 //   The only reason to reject is the M0[0]--M0[1] edge, which has no physical link to sit on.
 TEST(AdjacencyGuidedPlacement, LinkedMeshesFailOnDisconnectedPairs) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is two disjoint pairs.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 2 dst_instance: 3 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two 1x2 meshes joined by one intermesh connection. The unlinked pair below is the same
+# descriptor without the connection, which is what isolates the seam: only this one requires
+# the two placements to touch.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
@@ -3067,10 +3568,59 @@ TEST(AdjacencyGuidedPlacement, LinkedMeshesFailOnDisconnectedPairs) {
 //   pairs, so each still takes one whole pair and the footprints match the line test's.
 TEST(AdjacencyGuidedPlacement, UnlinkedMeshesPlaceOnDisconnectedPairs) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_unlinked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is two disjoint pairs.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 2 dst_instance: 3 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# The same two 1x2 meshes with no mesh-level edge, so the placements only have to be disjoint.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
@@ -3157,10 +3707,105 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPacki
     const std::set<uint64_t> whole_ring = {100, 101, 102, 103, 104, 105};
 
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 6 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is a ring, which row_major_mesh cannot express -- it has no wrap.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 1 dst_instance: 2 },
+      { src_instance: 2 dst_instance: 3 },
+      { src_instance: 3 dst_instance: 4 },
+      { src_instance: 4 dst_instance: 5 },
+      { src_instance: 0 dst_instance: 5 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Four meshes in a ring alternating two shapes, so every mesh-level edge crosses a shape
+# boundary. 2 + 1 + 2 + 1 = 6 chips, exactly the machine, so there is no spare room.
+mesh_descriptors {
+  name: "A"  # 1x2
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "B"  # 1x1
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_ring.textproto");
 
@@ -3271,10 +3916,95 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingDfsPlacesAndMapsWhereOldPacki
 //   emit a disjoint-but-unroutable answer.
 TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_alternating_ring_meshes.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 6 chips, wired the way the machine is,
+# a 1x6 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 6] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Four meshes in a ring alternating two shapes, so every mesh-level edge crosses a shape
+# boundary. 2 + 1 + 2 + 1 = 6 chips, exactly the machine, so there is no spare room.
+mesh_descriptors {
+  name: "A"  # 1x2
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "B"  # 1x1
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 0 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_line.textproto");
 
@@ -3340,10 +4070,145 @@ TEST(AdjacencyGuidedPlacement, AlternatingShapeRingFailsWhenRingCannotClose) {
 // walk that back and send C down the short branch instead.
 TEST(AdjacencyGuidedPlacement, MixedShapeChainPlacesTheOnlyWayItFits) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_mixed_shape_chain_meshes.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "1x3_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 10 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is a 4-cycle with two branches off it.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 6 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 7 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 8 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 9 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 0 dst_instance: 3 },
+      { src_instance: 1 dst_instance: 2 },
+      { src_instance: 2 dst_instance: 3 },
+      { src_instance: 2 dst_instance: 4 },
+      { src_instance: 4 dst_instance: 5 },
+      { src_instance: 4 dst_instance: 7 },
+      { src_instance: 5 dst_instance: 6 },
+      { src_instance: 7 dst_instance: 8 },
+      { src_instance: 8 dst_instance: 9 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Four shapes chained D(2x2) - C(1x3) - B(1x2) - A(1x1). 4 + 3 + 2 + 1 = 10 chips, exactly the
+# machine.
+mesh_descriptors {
+  name: "D"  # 2x2
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "C"  # 1x3
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 3 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "B"  # 1x2
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "A"  # 1x1
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "D" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "C" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "B" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "A" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "D" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "C" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "C" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 2 } }
+    channels { count: 2 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "B" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "A" mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_10asic_square_fork.textproto");
 
@@ -3411,10 +4276,149 @@ TEST(AdjacencyGuidedPlacement, MixedShapeChainPlacesTheOnlyWayItFits) {
 // asks for, not every chip in the system.
 TEST(AdjacencyGuidedPlacement, StarSeamsPlaceByChannelCount) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_mixed_shape_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_star_channel_count_meshes.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [2, 2] }
+}
+groupings {
+  name: "1x3_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 12 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is a 4-cycle with three spokes.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 6 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 7 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 8 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 9 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 10 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 11 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 0 dst_instance: 2 },
+      { src_instance: 1 dst_instance: 3 },
+      { src_instance: 1 dst_instance: 4 },
+      { src_instance: 2 dst_instance: 3 },
+      { src_instance: 2 dst_instance: 10 },
+      { src_instance: 3 dst_instance: 7 },
+      { src_instance: 4 dst_instance: 5 },
+      { src_instance: 5 dst_instance: 6 },
+      { src_instance: 7 dst_instance: 8 },
+      { src_instance: 8 dst_instance: 9 },
+      { src_instance: 10 dst_instance: 11 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# A 2x2 hub with three spokes, each seam asking for a different number of channels. Ask every
+# seam for one channel instead and four placements satisfy this rather than one.
+mesh_descriptors {
+  name: "H"  # the 2x2 hub
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "Sa"  # 1x3 spoke, on the 4-channel branch
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 3 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "Sb"  # 1x2 spoke, on the 3-channel branch
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "Sc"  # 1x1 spoke, on the 2-channel branch
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "H" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "Sa" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "Sb" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "Sc" mesh_id: 3 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "H" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Sa" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "H" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Sb" mesh_id: 2 } }
+    channels { count: 3 policy: RELAXED }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "H" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "Sc" mesh_id: 3 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_12asic_star.textproto");
 
@@ -3475,13 +4479,120 @@ TEST(AdjacencyGuidedPlacement, StarSeamsPlaceByChannelCount) {
 // which takes 104 is genuinely not pinned down; the test asserts that pair as a set.
 TEST(AdjacencyGuidedPlacement, TwoDescriptorsPlaceWithoutBorrowingEachOthersMeshes) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 5 chips, wired the way the machine is,
+# a 1x5 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 5] }
+}
+)delimiter")};
     std::vector<MeshGraphDescriptor> mgds;
-    mgds.emplace_back(
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto"));
-    mgds.emplace_back(
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_two_1x1.textproto"));
+    mgds.emplace_back(std::string(R"delimiter(
+# One of a pair of descriptors placed together. Both reuse the instance names M0 and M1:
+# descriptors placed at once are kept apart by descriptor index, and that reuse is what makes a
+# failure of the keying visible -- look up "M0" without knowing which descriptor asked and a mesh
+# is built with the wrong shape. The STRICT count on the seam is what decides which side of a
+# pinched machine each descriptor lands on.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
+    mgds.emplace_back(std::string(R"delimiter(
+# The companion of the descriptor above of descriptors placed together. Both reuse the instance names M0 and M1:
+# descriptors placed at once are kept apart by descriptor index, and that reuse is what makes a
+# failure of the keying visible -- look up "M0" without knowing which descriptor asked and a mesh
+# is built with the wrong shape. The STRICT count on the seam is what decides which side of a
+# pinched machine each descriptor lands on.
+# Two single chips rather than a mirror of it, so the two are not interchangeable: only one 1x2
+# mesh exists across the pair, and it belongs to the other descriptor.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 3 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_5asic_dumbbell.textproto");
 
@@ -3579,13 +4690,118 @@ TEST(AdjacencyGuidedPlacement, TwoDescriptorsPlaceWithoutBorrowingEachOthersMesh
 // A MeshGraph needs a cluster to build, so the mode is set directly here rather than derived.
 TEST(AdjacencyGuidedPlacement, StrictSeamSurvivesInterMeshMapping) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 6 chips, wired the way the machine is,
+# a 1x6 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 4 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 5 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 6] }
+}
+)delimiter")};
     std::vector<MeshGraphDescriptor> mgds;
-    mgds.emplace_back(
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x2_then_1x1.textproto"));
-    mgds.emplace_back(
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_pair_1x1_then_1x2.textproto"));
+    mgds.emplace_back(std::string(R"delimiter(
+# One of a pair of descriptors placed together. Both reuse the instance names M0 and M1:
+# descriptors placed at once are kept apart by descriptor index, and that reuse is what makes a
+# failure of the keying visible -- look up "M0" without knowing which descriptor asked and a mesh
+# is built with the wrong shape. The STRICT count on the seam is what decides which side of a
+# pinched machine each descriptor lands on.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
+    mgds.emplace_back(std::string(R"delimiter(
+# The mirror of the 1x2-then-1x1 descriptor: same two names, shapes the other way round. That
+# makes the two interchangeable by shape, so nothing but the channel count on the seam says which
+# side each belongs on -- which is what the mapper seam-width test wants, and exactly why the
+# placement test uses a non-interchangeable pair instead.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 3 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_dumbbell.textproto");
 
@@ -3648,10 +4864,75 @@ TEST(AdjacencyGuidedPlacement, StrictSeamSurvivesInterMeshMapping) {
 // The preference half of RELAXED, as opposed to the requirement half below.
 TEST(AdjacencyGuidedPlacement, RelaxedSeamPrefersTheFullChannelCount) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 3 chips, laid out the way the machine is,
+# a 1x3 line. One preset_type: HOSTS grouping is one host and what it holds is that
+# host's chips.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two single-chip meshes whose seam asks for 4 channels as a preference: satisfiable on the 3-chip
+# machine, but only on 101-102.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
@@ -3685,10 +4966,74 @@ TEST(AdjacencyGuidedPlacement, RelaxedSeamPrefersTheFullChannelCount) {
 // relax a RELAXED count does not quietly relax a STRICT one too.
 TEST(AdjacencyGuidedPlacement, StrictSeamFailsWhenChannelsFallShort) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 3 chips, wired the way the machine is,
+# a 1x3 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# The same unsatisfiable count as a requirement: there is no valid placement at all.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 8 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
@@ -3709,10 +5054,75 @@ TEST(AdjacencyGuidedPlacement, StrictSeamFailsWhenChannelsFallShort) {
 // logs that the seam is narrower than requested.
 TEST(AdjacencyGuidedPlacement, RelaxedSeamStillPlacesWhenChannelsFallShort) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_wide_seam.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 3 chips, wired the way the machine is,
+# a 1x3 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# The same pair asking for 8 channels, which no link on that machine carries. As a preference the
+# meshes only have to touch, so a placement should still be found, on the widest seam there is.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 8 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
@@ -3748,13 +5158,109 @@ TEST(AdjacencyGuidedPlacement, RelaxedSeamStillPlacesWhenChannelsFallShort) {
 // seams -- the same reason MGD validation rejects mixing within one descriptor. Temporary, until per-seam
 // policy is supported: https://github.com/tenstorrent/tt-metal/issues/49960
 TEST(AdjacencyGuidedPlacement, DescriptorsThatDisagreeOnInterMeshPolicyAreRejected) {
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 3 chips, wired the way the machine is,
+# a 1x3 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 3] }
+}
+)delimiter")};
     std::vector<MeshGraphDescriptor> mgds;
-    mgds.emplace_back(
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto"));
-    mgds.emplace_back(std::filesystem::path(
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_strict_wide_seam.textproto"));
+    mgds.emplace_back(std::string(R"delimiter(
+# Two single-chip meshes whose seam asks for 4 channels as a preference: satisfiable on the 3-chip
+# machine, but only on 101-102.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
+    mgds.emplace_back(std::string(R"delimiter(
+# The same unsatisfiable count as a requirement: there is no valid placement at all.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 8 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter"));
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
 
@@ -3771,10 +5277,58 @@ TEST(AdjacencyGuidedPlacement, DescriptorsThatDisagreeOnInterMeshPolicyAreReject
 
 // A descriptor with no inter-mesh connections defaults to STRICT, so it conflicts with a RELAXED sibling.
 TEST(AdjacencyGuidedPlacement, DescriptorWithoutInterMeshConnectionsDefaultsToStrictPolicy) {
-    MeshGraphDescriptor relaxed{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
-    MeshGraphDescriptor single{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+    MeshGraphDescriptor relaxed{std::string(R"delimiter(
+# Two single-chip meshes whose seam asks for 4 channels as a preference: satisfiable on the 3-chip
+# machine, but only on 101-102.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
+    MeshGraphDescriptor single{std::string(R"delimiter(
+# One 1x2 mesh, nothing else and no seams.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
 
     EXPECT_FALSE(single.is_inter_mesh_policy_relaxed()) << "no inter-mesh connections defaults to STRICT";
     EXPECT_TRUE(relaxed.is_inter_mesh_policy_relaxed());
@@ -3784,10 +5338,58 @@ TEST(AdjacencyGuidedPlacement, DescriptorWithoutInterMeshConnectionsDefaultsToSt
 
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is two disjoint pairs.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 2 dst_instance: 3 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# One 1x2 mesh, nothing else and no seams.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
 
@@ -3841,10 +5443,53 @@ TEST(AdjacencyGuidedPlacement, PgdGroupingThatPlacesIsCommittedDirectly) {
 // for. The pinning map is how we tell which variant actually won: PGD carries one, MGD does not.
 TEST(AdjacencyGuidedPlacement, PlaceableMgdFallbackDoesNotOutrankPgd) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_single_1x2_mesh.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# A 1x2 shape pinned to ASIC locations 0 and 1 -- chips 100 and 101 of the 4-chip line. It matches
+# an MGD 1x2 and embeds on its own, so the matcher commits it; it just cannot serve two mesh
+# instances, because both would land on that one pair.
+groupings {
+  name: "1x2_Mesh_OnePair"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_0 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_1 } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, laid out the way the machine is,
+# a 1x4 line. One preset_type: HOSTS grouping is one host and what it holds is that
+# host's chips.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 4] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# One 1x2 mesh, nothing else and no seams.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
 
@@ -3906,10 +5551,62 @@ TEST(AdjacencyGuidedPlacement, PlaceableMgdFallbackDoesNotOutrankPgd) {
 // pair and the other on the unpinned 1x2. Two entries, not a replacement.
 TEST(AdjacencyGuidedPlacement, PgdGroupingThatCannotCoverEveryInstanceShouldDowngrade) {
     // build pgd
-    PhysicalGroupingDescriptor pgd{std::filesystem::path(
-        "tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping_pinned_to_one_pair.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# A 1x2 shape pinned to ASIC locations 0 and 1 -- chips 100 and 101 of the 4-chip line. It matches
+# an MGD 1x2 and embeds on its own, so the matcher commits it; it just cannot serve two mesh
+# instances, because both would land on that one pair.
+groupings {
+  name: "1x2_Mesh_OnePair"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_0 } },
+    { id: 1 location { asic_location: ASIC_LOCATION_1 } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is,
+# a 1x4 line. One preset_type: HOSTS grouping is one host, what it holds is that host's chips,
+# and its connection block is that host's own topology.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 4] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two 1x2 meshes joined by one intermesh connection. The unlinked pair below is the same
+# descriptor without the connection, which is what isolates the seam: only this one requires
+# the two placements to touch.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
 
@@ -4008,12 +5705,63 @@ TEST(AdjacencyGuidedPlacement, StrainManyMeshesReportsDfsStats) {
 
 // The unique seating on the 4-chip line is found by the master solve, with every candidate list
 // exhausted (the 1x2 grouping has exactly three seats on a line of four).
-TEST(SatJointPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
+TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
     ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, laid out the way the machine is,
+# a 1x4 line. One preset_type: HOSTS grouping is one host and what it holds is that
+# host's chips.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 4] }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two 1x2 meshes joined by one intermesh connection. The unlinked pair below is the same
+# descriptor without the connection, which is what isolates the seam: only this one requires
+# the two placements to touch.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_line.textproto");
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -4035,12 +5783,69 @@ TEST(SatJointPlacement, LinkedMeshesPlaceAdjacentlyOnLine) {
 
 // Two disjoint pairs cannot carry the seam. With every candidate list exhausted the UNSAT verdict is
 // trustworthy, so `auto` mode must NOT fall back to the DFS, and the stats must say why.
-TEST(SatJointPlacement, LinkedMeshesFailOnDisconnectedPairsWithTrustworthyUnsat) {
+TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, LinkedMeshesFailOnDisconnectedPairsWithTrustworthyUnsat) {
     ScopedEnv auto_mode("TT_METAL_PLACEMENT_SOLVER", "auto");
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_1x2_mesh_grouping.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x2_meshes_linked.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is two disjoint pairs.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 2 dst_instance: 3 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two 1x2 meshes joined by one intermesh connection. The unlinked pair below is the same
+# descriptor without the connection, which is what isolates the seam: only this one requires
+# the two placements to touch.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2mesh.textproto");
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -4058,12 +5863,84 @@ TEST(SatJointPlacement, LinkedMeshesFailOnDisconnectedPairsWithTrustworthyUnsat)
 
 // Under a RELAXED policy the strict seam tier is solved first, so the full channel count wins when it
 // is available -- the same preference next_step_pool expresses per seam, here as a global one.
-TEST(SatJointPlacement, RelaxedSeamPrefersTheFullChannelCount) {
+TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, RelaxedSeamPrefersTheFullChannelCount) {
     ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
-    PhysicalGroupingDescriptor pgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/physical_groupings/test_ring_mesh_groupings.textproto")};
-    MeshGraphDescriptor mgd{
-        std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/test_two_1x1_relaxed_seam.textproto")};
+    PhysicalGroupingDescriptor pgd{std::string(R"delimiter(
+# Mesh shapes with every ASIC location UNSPECIFIED, so a grouping is free to land anywhere: that is
+# what gives the search more than one candidate to choose between.
+groupings {
+  name: "1x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 2] }
+}
+groupings {
+  name: "1x1_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  row_major_mesh { dims: [1, 1] }
+}
+
+# The machine's host level: one host owning all 4 chips, wired the way the machine is.
+# One preset_type: HOSTS grouping is one host, what it holds is that host's chips, and its
+# connection block is that host's own topology -- spelled out link by link here, because
+# this machine is two disjoint pairs.
+groupings {
+  name: "machine_host"
+  preset_type: HOSTS
+  instances: [
+    { id: 0 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 1 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 2 location { asic_location: ASIC_LOCATION_UNSPECIFIED } },
+    { id: 3 location { asic_location: ASIC_LOCATION_UNSPECIFIED } }
+  ]
+  custom {
+    connections: [
+      { src_instance: 0 dst_instance: 1 },
+      { src_instance: 2 dst_instance: 3 }
+    ]
+  }
+}
+)delimiter")};
+    MeshGraphDescriptor mgd{std::string(R"delimiter(
+# Two single-chip meshes whose seam asks for 4 channels as a preference: satisfiable on the 3-chip
+# machine, but only on 101-102.
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+mesh_descriptors {
+  name: "M1"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 1, 1 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+    channels { count: 4 policy: RELAXED }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)delimiter")};
     auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
         "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_3asic_uneven_line.textproto");
     const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
@@ -4078,10 +5955,11 @@ TEST(SatJointPlacement, RelaxedSeamPrefersTheFullChannelCount) {
     EXPECT_TRUE(stats.master_solve_success) << stats.to_string();
 }
 
-// Trait-free (unpinned) groupings are deferred to the second tier and enumerated in batches, so the
-// grid descriptors exercise column generation: the first master attempt has no candidates at all,
-// the fallback tier is enabled, and the solve completes from those lists.
-TEST(SatJointPlacement, StrainManyMeshesPlacesFromTraitFreeTier) {
+// Trait-free (unpinned) groupings give the master solve nothing to narrow the search with: every mesh may
+// sit anywhere on the fabric, so there are far more distinct footprints than enumeration will list and the
+// pool it hands the solver is a capped sample of them. Both grids are still placed by a single joint SAT
+// solve over that sample, with no column-generation round needed to grow it and no adjacency DFS behind it.
+TEST(PhysicalGroupingDescriptorTestsSatJointPlacement, StrainManyMeshesPlacesInOneMasterSolve) {
     ScopedEnv sat_only("TT_METAL_PLACEMENT_SOLVER", "sat");
     auto run_case = [](std::size_t mesh_rows,
                        std::size_t mesh_cols,
@@ -4106,6 +5984,12 @@ TEST(SatJointPlacement, StrainManyMeshesPlacesFromTraitFreeTier) {
         EXPECT_TRUE(stats.master_solve_success) << label << "\n" << stats.to_string();
         EXPECT_EQ(stats.adjacency_nodes_expanded, 0u) << label << "\n" << stats.to_string();
         EXPECT_GE(stats.master_candidates_enumerated, expected_meshes) << label << "\n" << stats.to_string();
+        EXPECT_EQ(stats.master_growth_rounds, 0u) << label << "\n" << stats.to_string();
+        EXPECT_EQ(stats.master_sat_attempts, 1u) << label << "\n" << stats.to_string();
+        // The pools are truncated: enumeration stops at its per-mesh cap long before it has listed every
+        // footprint on a fabric this open. That is the point of the case -- a partial pool is still enough
+        // for one solve to seat every mesh, which is why no growth round is needed above.
+        EXPECT_FALSE(stats.candidate_lists_complete) << label << "\n" << stats.to_string();
         // Every placement must be a disjoint footprint of the right size.
         std::set<uint64_t> seen;
         for (const auto& placement : placements) {
@@ -4118,6 +6002,1915 @@ TEST(SatJointPlacement, StrainManyMeshesPlacesFromTraitFreeTier) {
 
     run_case(2, 2, 2, 4, "8x 2x2 meshes on 4x8");
     run_case(4, 4, 2, 2, "4x 4x4 meshes on 8x8");
+}
+
+// Asserts that every declared MGD host rank landed inside a single one of the PGD's declared hosts.
+// A rank is a list of logical chip ids, a host is the (tray_id, asic_location) slots it holds, and
+// each caller writes both out next to the PGD that declares them. Takes the seating rather than the
+// grouping, so a matcher GroupingInfo and a placement result can both be checked with it.
+//
+// TODO: nothing in the matcher reads a PGD host level. The split is taken from the MGD alone, in
+// compose_mesh_node_to_host_group_from_mgd_match, and checked only against the PSD, so the HOSTS
+// groupings are parsed and then ignored. These checks are the target behaviour rather than a live
+// constraint: where one fails, it marks the missing MGD<->PGD host match rather than a regression.
+void expect_each_rank_inside_one_pgd_host(
+    const std::map<LogicalChipId, tt::tt_metal::ASICPosition>& seating,
+    const std::vector<std::vector<LogicalChipId>>& declared_ranks,
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>>& pgd_hosts) {
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<std::size_t> hosts_used;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = seating.at(chip);
+            const std::pair<uint32_t, uint32_t> slot{*position.first, *position.second};
+            for (std::size_t host = 0; host < pgd_hosts.size(); ++host) {
+                if (pgd_hosts[host].contains(slot)) {
+                    hosts_used.insert(host);
+                }
+            }
+        }
+        EXPECT_EQ(hosts_used.size(), 1u) << "declared rank " << rank << " was seated across " << hosts_used.size()
+                                         << " of the PGD's declared hosts";
+    }
+}
+
+// Drops the MGD fallback, the grouping get_valid_groupings_for_mgd offers last under the mesh
+// descriptor's own name, from a pool before it is handed to placement.
+//
+// A test that wants to look at where the chips landed has to, because the fallback is the MGD's own
+// topology rather than a PGD layout: it carries no chip -> slot pinning, so a placement that lands on
+// it reports a footprint and nothing to check a host split against. Leaving it in would also not test
+// what these tests are about, since SAT joint placement currently seats it ahead of a placeable PGD
+// grouping (AdjacencyGuidedPlacement.PlaceableMgdFallbackDoesNotOutrankPgd, failing).
+ValidGroupingsMap without_mgd_fallback(ValidGroupingsMap valid_groupings, const std::string& mgd_mesh_name) {
+    for (auto& [preset, by_instance] : valid_groupings) {
+        for (auto& [instance, groupings] : by_instance) {
+            std::erase_if(groupings, [&](const GroupingInfo& grouping) { return grouping.name == mgd_mesh_name; });
+        }
+    }
+    return valid_groupings;
+}
+
+// ----- Phase 1: get_valid_groupings_for_mgd ----------------------------------------------------
+
+// A mesh host rank is one process on one host, so it cannot own chips on two hosts. That makes the
+// contract between an MGD's host_topology and the PSD's hosts one-directional, and it is what every
+// test from here on is checking:
+//
+//   a physical host boundary may never cut through a declared mesh host rank,
+//   but a declared rank boundary may sit anywhere inside a physical host.
+//
+// This first case has neither: nothing is declared and nothing is split, so there is no contract to
+// check and the grouping commits.
+//
+//   machine: one host              MGD host_topology [1,1]
+//
+//     100 101 102 103                aaaa      one rank owning all 8 chips, and one
+//     104 105 106 107                aaaa      host to put it on
+//          host0
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdSingleHostMgdCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: one host holding all 8 chips.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 4] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    // The committed groupings that came from the PGD. The MGD fallback is named after the MGD instance
+    // and carries no layout, so it is not evidence that the PGD matched.
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    ASSERT_FALSE(committed.empty()) << "an undeclared split on an undivided machine has nothing to violate";
+    EXPECT_EQ(committed.front().mesh_node_to_asic_position.size(), 8u);
+
+    // The PGD's declared hosts, as the slots each one holds, and the rank that has to land inside one:
+    //
+    //   rank a = chips 0 1 2 3 4 5 6 7 -> slots (1,1) (1,2) (1,3) (1,4) (2,1) (2,2) (2,3) (2,4)
+    //   PGD host0 = all eight of those slots, so a is inside it
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {2, 1}, {2, 2}, {2, 3}, {2, 4}}};
+    expect_each_rank_inside_one_pgd_host(
+        committed.front().mesh_node_to_asic_position, {{0, 1, 2, 3, 4, 5, 6, 7}}, pgd_hosts);
+}
+
+// The declared split is finer than the machine: both ranks live on the one host. Legal -- ranks sharing a
+// host is ordinary, and no host boundary exists to cut either of them.
+//
+//   machine: one host              MGD host_topology [1,2]
+//
+//     100 101 102 103                aa bb     two ranks sharing host0: there is no
+//     104 105 106 107                aa bb     boundary here for either to straddle
+//          host0
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostPsdColumnSplitMgdCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_one_host.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: one host holding all 8 chips.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 4] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    ASSERT_FALSE(committed.empty()) << "two declared ranks may share the single host";
+    EXPECT_EQ(committed.front().mesh_node_to_asic_position.size(), 8u);
+
+    // The PGD's declared hosts, as the slots each one holds, and the ranks that land in them:
+    //
+    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2)
+    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4)
+    //   PGD host0 = all eight slots, so both ranks are inside it
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {2, 1}, {2, 2}, {2, 3}, {2, 4}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+}
+
+// Declared split and physical split agree: two ranks of one column-half each, on a machine split by
+// column. Each rank lands wholly on one host.
+//
+//   machine: hosts cut by column     MGD host_topology [1,2]
+//
+//     100 101 | 102 103                aa | bb    the declared boundary and the
+//     104 105 | 106 107                aa | bb    physical one are the same line:
+//      host0  |  host1                            a is host0, b is host1
+TEST(PhysicalGroupingDescriptorTestsHostSplit, ColumnSplitPsdColumnSplitMgdCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column-half.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty()) << "the declared split lies along the machine's own boundary";
+
+    // host_topology [1,2] on a 2x4 declares two ranks of one column-half each, by row-major chip id. Where
+    // those chips landed is read back from the seating rather than from what the matcher believed.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // host0 holds asic_location 1-2, host1 holds 3-4.
+            hosts.insert((*position.second - 1) / 2);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // And against the PGD's own hosts, which here draw the same boundary as the machine's:
+    //
+    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
+    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+}
+
+// The same agreement on the other axis: two ranks of one row each, on a machine split by row. Kept so
+// that a transposed reading of host_topology -- rows taken for columns anywhere in the path -- has
+// somewhere to show up.
+//
+//   machine: hosts cut by row        MGD host_topology [2,1]
+//
+//     100 101 102 103   host0          aaaa      a is host0
+//     -----------------------          ----
+//     104 105 106 107   host1          bbbb      b is host1
+TEST(PhysicalGroupingDescriptorTestsHostSplit, RowSplitPsdRowSplitMgdCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_row.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, one per tray.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty()) << "the declared split lies along the machine's own boundary";
+
+    // host_topology [2,1] on a 2x4 declares two ranks of one row each.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // host0 is tray 1, host1 is tray 2.
+            hosts.insert(*position.first - 1);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // And against the PGD's own hosts, which here draw the same boundary as the machine's:
+    //
+    //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4) = PGD host0, tray 1
+    //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4) = PGD host1, tray 2
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {1, 3}, {1, 4}}, {{2, 1}, {2, 2}, {2, 3}, {2, 4}}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+}
+
+// The wrong axis, checked in both places it has to hold. The machine is cut widthwise -- across the
+// mesh's long side -- into two 2x4/2 halves, while the MGD declares its split lengthwise, two ranks of
+// one full 1x4 row each:
+//
+//   machine: hosts cut widthwise        MGD host_topology [2,1]: ranks cut lengthwise
+//
+//     100 101 | 102 103                   aaaa aaaa
+//     104 105 | 106 107                   bbbb bbbb
+//      host0  |  host1                    each rank spans both hosts
+//
+// So each declared rank needs chips from both hosts, and on a 2x4 there is no way out of it: the grid
+// has no 90-degree automorphism, so the mesh cannot be turned to lay the ranks alongside the boundary
+// instead of across it. There is no seating, and both phases have to say so -- the matcher must refuse
+// to commit the grouping, and the rank-bound path must not come back with a pinned graph either. A
+// verdict that held in phase 1 and then quietly reversed in phase 2 is the failure mode this pair is
+// here to catch.
+//
+// SquareMeshCommitsWhenTheDeclaredAxisAlreadyMatches is the aligned control, and the 2x2 case below is
+// the same pairing on a shape where the turn does exist -- where the refusal is therefore a bug.
+//
+// require_placement is false here, as it is in every case below whose expected answer is a rejection:
+// it makes the refusal come back as an empty result rather than a throw. What is under test is whether
+// the grouping survives the host constraint, not what an unplaceable mesh does to its caller.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsFailsEnumerateAndMapping) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column-half. The declared
+# lengthwise ranks straddle these exactly as they straddle the machine's.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    // Phase 1: enumerate must reject the grouping rather than seat a rank across the boundary.
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(committed.empty()) << "enumerate seated a lengthwise split on a widthwise-split machine, got "
+                                   << committed.size() << " grouping(s)";
+
+    // Guarded, because the verdict above is that nothing is committed: should anything ever be, it has
+    // to keep each declared rank inside one of the PGD's hosts as well as one of the machine's. There
+    // is no such seating here, which is the point -- the declared rows cross the declared columns:
+    //
+    //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4), which is half of host0 and half of host1
+    //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4), the other half of each
+    //   PGD host0 = (1,1) (1,2) (2,1) (2,2)   PGD host1 = (1,3) (1,4) (2,3) (2,4)
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+    if (!committed.empty()) {
+        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+
+    // Phase 2: the same question against a rank-bound graph, one rank per host.
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    // What matters is that no seating comes back. How that is reported is the caller's business and is
+    // currently in flux: with require_placement=true in topology_mapper_utils.cpp the empty result
+    // aborts, and with it restored the graph is simply left unpinned. Either is a refusal; a pinned
+    // graph would not be, so that is what is asserted. Phase2DegradesToNoPinnings... covers which of
+    // the two it should be.
+    bool phase2_produced_a_seating = false;
+    try {
+        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
+        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
+    } catch (const std::exception&) {
+        phase2_produced_a_seating = false;
+    }
+    EXPECT_FALSE(phase2_produced_a_seating)
+        << "the rank-bound path pinned a mesh whose declared ranks cannot fit on one host each";
+}
+
+// FIXME: the same pairing on a 2x2, where the mesh is square and the turn the 2x4 lacked does exist --
+// and it is still rejected, which is the one verdict here that is wrong. The machine is cut between its
+// two columns, the MGD declares two ranks of one row each, and a quarter turn lays those rows down the
+// columns so each rank owns one host outright:
+//
+//   machine: hosts cut by column       MGD host_topology [2,1]     seated a quarter turn round
+//
+//     100 | 101                          aa                          ab
+//     102 | 103                          bb                          ab
+//    host0| host1                                                    a is host0, b is host1
+//
+// Both phases should therefore succeed. Enumerate refuses instead, reporting that each 2-chip rank has
+// only one of its two members on its best host -- it is being asked about the unturned orientation.
+//
+// The reason is the order the two halves are solved in. solve_topology_mapping returns one MGD<->PGD
+// match per PGD variant (one, here), and compose_mesh_node_to_host_group_from_mgd_match stamps the
+// declared split onto that match's orientation right there -- before the PSD is consulted at all. Only
+// then does enumerate check the stamped groups against the PSD hosts. So the orientation is chosen by a
+// solve that cannot see the host boundaries, and if it comes back with the other one there is no second
+// chance: the variant is discarded rather than re-matched. What is missing is a PGD host level for the
+// MGD host partition to be matched *against*, so the orientation is decided with the hosts in view; that
+// is the TODO on compose_mesh_node_to_host_group_from_mgd_match.
+//
+// Four chips is the smallest this can be shown on, which rules out the search space being the problem. A
+// 4x4 fails the same way, LINE/LINE or RING/RING, and a torus has more orientations to come back with
+// since wrapping an axis adds translations to the automorphisms.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, LengthwiseSplitOnWidthwiseSplitHostsIsTurnedToFitOnASquareMesh) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_4asic_2x2_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x2_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } }
+  ]
+  row_major_mesh {
+    dims: [2, 2]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column.
+groupings { name: "2x2_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } } ]
+  row_major_mesh { dims: [2, 1] } }
+groupings { name: "2x2_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 1] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 2 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    // Phase 1: the grouping commits, and each declared rank sits on exactly one host.
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty()) << "a quarter turn seats this split, so enumerate should commit it";
+
+    // host_topology [2,1] on a 2x2 declares two ranks of one row each.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1}, {2, 3}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // host0 is asic_location 1, host1 is asic_location 2.
+            hosts.insert(*position.second - 1);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // And against the PGD's own hosts, which draw the same two columns. The quarter turn that seats the
+    // declared rows on them is the one the matcher does not consider:
+    //
+    //   unturned          a quarter turn round
+    //     rank a = chips 0 1 -> slots (1,1) (1,2)      rank a -> slots (1,1) (2,1) = PGD host0
+    //     rank b = chips 2 3 -> slots (2,1) (2,2)      rank b -> slots (1,2) (2,2) = PGD host1
+    //     each rank half in host0, half in host1       each rank inside one host
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {{{1, 1}, {2, 1}}, {{1, 2}, {2, 2}}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+
+    // Phase 2: the rank-bound path reaches the same verdict and the pinnings arrive.
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    utils::PhysicalMultiMeshGraph physical;
+    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd))
+        << "the rank-bound path should map a mesh that phase 1 already seated";
+    ASSERT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 should reach phase 1's verdict on the same machine";
+    EXPECT_EQ(physical.mesh_pgd_pinnings_.at(MeshId{0}).size(), 4u);
+}
+
+// Being finer than the machine does not rescue a split that runs the wrong way. The host grid is [2,1],
+// two hosts cut by row, and the MGD declares [1,3]: three ranks where there are only two hosts, which by
+// the counting argument alone ought to be the easy, legal direction. It is not, because each of those
+// three ranks is a column with one chip on each host:
+//
+//   machine: host grid [2,1]        MGD host_topology [1,3]
+//
+//     100 101 102   host0            a b c      three ranks, each a column
+//     -------------------           a b c      every one of them straddles the boundary
+//     103 104 105   host1
+//
+// Containment is per rank, so what matters is where a rank's chips are, not how many ranks there are.
+// the subdivision TwoAxisSplitInsideRowSplitHostsCommits allows is legal precisely because those ranks
+// land inside a host; these do not. The third column also makes the mesh oblong, so there is no quarter
+// turn to escape with.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, FinerSplitAcrossTheHostBoundaryIsRejected) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_6asic_2x3_hosts_by_row.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x3_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } }
+  ]
+  row_major_mesh {
+    dims: [2, 3]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, one per tray.
+groupings { name: "2x3_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } } ]
+  row_major_mesh { dims: [1, 3] } }
+groupings { name: "2x3_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } } ]
+  row_major_mesh { dims: [1, 3] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 3 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 3 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    EXPECT_TRUE(committed.empty()) << "three column ranks on a row-split machine each straddle the boundary, got "
+                                   << committed.size() << " grouping(s)";
+
+    // Guarded on that verdict: the PGD draws the same two rows, so each declared column rank straddles
+    // them there too, and anything committed would have to violate one or the other:
+    //
+    //   rank a = chips 0 3 -> slots (1,1) (2,1)    one chip in each PGD host
+    //   rank b = chips 1 4 -> slots (1,2) (2,2)    likewise
+    //   rank c = chips 2 5 -> slots (1,3) (2,3)    likewise
+    //   PGD host0 = (1,1) (1,2) (1,3)   PGD host1 = (2,1) (2,2) (2,3)
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {1, 3}}, {{2, 1}, {2, 2}, {2, 3}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 3}, {1, 4}, {2, 5}};
+    if (!committed.empty()) {
+        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+
+    // Phase 2: the same question on a rank-bound graph, one rank per host, must reach the same verdict. A
+    // split that enumerate refused must not become seatable just because the graph arrived pre-ranked.
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    // A refusal may arrive as an abort or as an unpinned graph depending on the require_placement toggle in
+    // topology_mapper_utils.cpp; both are refusals, and a pinned graph is what must never happen.
+    bool phase2_produced_a_seating = false;
+    try {
+        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
+        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
+    } catch (const std::exception&) {
+        phase2_produced_a_seating = false;
+    }
+    EXPECT_FALSE(phase2_produced_a_seating) << "the rank-bound path pinned a mesh enumerate had refused";
+}
+
+// The declared split need not be parallel to the physical one, only contained by it. The host grid is
+// [2,1] and the MGD declares [2,2], which cuts the columns the machine does not cut -- but each of the
+// four ranks is a 1x2 block wholly inside one host, so it is legal:
+//
+//   machine: host grid [2,1]          MGD host_topology [2,2]
+//
+//     100 101 102 103   host0          aa bb        a and b inside host0
+//     -----------------------          cc dd        c and d inside host1
+//     104 105 106 107   host1
+//
+// This is what makes the rule per-rank containment rather than axis equality, and it is the accepting
+// half of the pair with CoarserSplitAcrossATwoAxisHostGridIsRejected below: same mesh, and the host grid
+// and declared grid exchanged.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, TwoAxisSplitInsideRowSplitHostsCommits) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_row.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, one per tray.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 4] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty()) << "each 1x2 block sits inside one host";
+
+    // host_topology [2,2] on a 2x4 declares four ranks, each one row by two columns.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1}, {2, 3}, {4, 5}, {6, 7}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            // host0 is tray 1, host1 is tray 2.
+            hosts.insert(*position.first - 1);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // And against the PGD's own two hosts: each declared rank is finer than a host and has to land
+    // inside one of them, which is the whole point of allowing a subdivision:
+    //
+    //   rank a = chips 0 1 -> slots (1,1) (1,2)     both in PGD host0
+    //   rank b = chips 2 3 -> slots (1,3) (1,4)     both in PGD host0
+    //   rank c = chips 4 5 -> slots (2,1) (2,2)     both in PGD host1
+    //   rank d = chips 6 7 -> slots (2,3) (2,4)     both in PGD host1
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {1, 3}, {1, 4}}, {{2, 1}, {2, 2}, {2, 3}, {2, 4}}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+
+    // Mapping the mesh onto the machine: the seating the placement search returns has to honour the split
+    // too, not just the grouping the matcher committed.
+    const auto placements = pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+    ASSERT_EQ(placements.size(), 1u) << "the 2x4 mesh should be placed";
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            hosts.insert(*placements.front().mesh_node_to_asic_position.at(chip).first - 1);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "placement seated declared rank " << rank << " across " << hosts.size()
+                                    << " hosts";
+    }
+
+    // Phase 2: the rank-bound graph has two ranks of 4 where the MGD declared four of 2, so the declared
+    // split is finer than the partitions phase 2 sees. Finer is legal, so the hints must still arrive --
+    // this is the accepting counterpart of the finer-slices divergence in
+    // SecondGetValidGroupingsOnRankSlicedPsdRejectsWhatTheFirstCommitted.
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    utils::PhysicalMultiMeshGraph physical;
+    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd))
+        << "the rank-bound path should map a mesh that phase 1 already seated";
+    ASSERT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 should reach phase 1's verdict on the same machine";
+    EXPECT_EQ(physical.mesh_pgd_pinnings_.at(MeshId{0}).size(), 8u);
+}
+
+// The refusing half of that pair, with the two grids exchanged: the machine is now cut on both axes into
+// a [2,2] host grid of 2-chip hosts, and the MGD declares [2,1], two ranks of one full row each. A row
+// here is two hosts wide, so each declared rank needs chips from both hosts of its row:
+//
+//   machine: host grid [2,2]          MGD host_topology [2,1]
+//
+//     100 101 | 102 103                 aaaa aaaa      rank a spans h0 and h1
+//     --------+--------                 bbbb bbbb      rank b spans h2 and h3
+//     104 105 | 106 107
+//       h0/h1 above, h2/h3 below
+//
+// Which is the one-rank-owns-chips-it-cannot-reach violation again, and the direction that has to stay
+// hard however the machine is divided: a 2D host grid can carve a declared split as readily as a 1D one.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, CoarserSplitAcrossATwoAxisHostGridIsRejected) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_quadrant.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: four hosts of 2 chips, one per quadrant.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [1, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [1, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    EXPECT_TRUE(committed.empty()) << "a 4-chip row rank cannot fit on a 2-chip host, got " << committed.size()
+                                   << " grouping(s)";
+
+    // Guarded on that verdict: the PGD declares the same four quadrant hosts, so a declared 4-chip row
+    // rank cannot sit inside one of those either:
+    //
+    //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4) = PGD host0 plus host1
+    //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4) = PGD host2 plus host3
+    //   the PGD's hosts hold 2 chips each, so a 4-chip rank needs two of them
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}}, {{1, 3}, {1, 4}}, {{2, 1}, {2, 2}}, {{2, 3}, {2, 4}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+    if (!committed.empty()) {
+        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+
+    // Phase 2: same verdict on a rank-bound graph, one rank per host -- four 2-chip ranks here, so the
+    // declared 4-chip rank has even less room than it had in phase 1.
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    bool phase2_produced_a_seating = false;
+    try {
+        const auto physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd);
+        phase2_produced_a_seating = physical.mesh_pgd_pinnings_.contains(MeshId{0});
+    } catch (const std::exception&) {
+        phase2_produced_a_seating = false;
+    }
+    EXPECT_FALSE(phase2_produced_a_seating) << "the rank-bound path pinned a mesh enumerate had refused";
+}
+
+// Coarser than the machine: the MGD declares 2 ranks of 4 chips where the machine offers 4 hosts of 2.
+// Each declared rank spans two hosts, so it is rejected. This is the direction that must stay hard -- it
+// is one process being asked to own chips it cannot reach.
+//
+//   machine: one host per column     MGD host_topology [1,2]
+//
+//     100 | 101 | 102 | 103            aa | bb    rank a wants h0 and h1,
+//     104 | 105 | 106 | 107            aa | bb    rank b wants h2 and h3
+//      h0 | h1  | h2  | h3
+//
+// Note this is the same declared split that ColumnSplitPsdColumnSplitMgdCommits accepts, on the same
+// mesh and the same axis. Only the machine got finer, which is all it takes.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, CoarserSplitThanThePhysicalHostsIsRejected) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: four hosts of 2 chips, one per column.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } } ]
+  row_major_mesh { dims: [2, 1] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 1] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } } ]
+  row_major_mesh { dims: [2, 1] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 1 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 1] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    EXPECT_TRUE(committed.empty()) << "a 4-chip rank cannot fit on a 2-chip host, got " << committed.size()
+                                   << " grouping(s)";
+
+    // Guarded on that verdict: the PGD declares the same four column hosts, so a 4-chip declared rank
+    // has no single PGD host to sit in either:
+    //
+    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0 plus host1
+    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host2 plus host3
+    //   each PGD host is one column of 2 chips, and each declared rank wants two columns
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {2, 1}}, {{1, 2}, {2, 2}}, {{1, 3}, {2, 3}}, {{1, 4}, {2, 4}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
+    if (!committed.empty()) {
+        expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+}
+
+// A mesh that declares no split cannot be seated on a machine that has one. host_topology [1,1] is one
+// rank owning all 8 chips, so a 2-host seating would hand that rank chips it cannot reach -- the same
+// violation CoarserSplitThanThePhysicalHostsIsRejected covers, with one rank instead of two. A mesh that
+// genuinely needs both hosts, torus or not, has to say so in its host_topology.
+//
+//   machine: hosts cut by column     MGD host_topology [1,1]
+//
+//     100 101 | 102 103                aaaa       the one declared rank wants every
+//     104 105 | 106 107                aaaa       chip, so it wants both hosts
+//      host0  |  host1
+//
+// SingleHostPsdSingleHostMgdCommits is the control: the same MGD on an undivided machine commits, so the
+// rejection here is about the host boundary and not about the mesh being too big to fit.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SingleHostMgdOnSplitPsdIsRejected) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column-half.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings =
+        pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+
+    EXPECT_TRUE(committed.empty()) << "one declared rank cannot own chips on two hosts, got " << committed.size()
+                                   << " grouping(s)";
+
+    // Guarded on that verdict: the PGD declares the same two hosts, and the single declared rank owns
+    // every chip, so it cannot sit inside either of them:
+    //
+    //   rank a = chips 0 1 2 3 4 5 6 7 -> every slot, which is PGD host0 and host1 together
+    //   PGD host0 = (1,1) (1,2) (2,1) (2,2)   PGD host1 = (1,3) (1,4) (2,3) (2,4)
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+    if (!committed.empty()) {
+        expect_each_rank_inside_one_pgd_host(
+            committed.front().mesh_node_to_asic_position, {{0, 1, 2, 3, 4, 5, 6, 7}}, pgd_hosts);
+    }
+}
+
+// ----- the constraint as the placement search sees it -------------------------------------------
+
+// The checks above read the verdict off the committed grouping. This one reads it off the seating the
+// placement search actually returns, on both backends: the host split is encoded as constraints inside
+// enumerate_distinct_placements_for_grouping, so SAT and DFS have to honour it equally or a mesh accepted
+// during matching can still come back seated across a host boundary.
+//
+//   machine: hosts cut by column     MGD host_topology [1,2]
+//
+//     100 101 | 102 103                aa | bb    the aligned case again, but the
+//     104 105 | 106 107                aa | bb    seating is read from the search
+//      host0  |  host1                            rather than from the matcher
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SatAndDfsPlacementBothSeatEachDeclaredRankOnOneHost) {
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+            "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+        PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column-half.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+        MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+        const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+        const auto placements =
+            pgd.solve_adjacency_guided_placement(mgd, without_mgd_fallback(valid_groupings, "M0"), psd);
+        ASSERT_EQ(placements.size(), 1u) << solver << ": the 2x4 mesh should be placed";
+        EXPECT_EQ(placements.front().asics.size(), 8u) << solver;
+
+        const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
+        for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+            std::set<uint32_t> hosts;
+            for (LogicalChipId chip : declared_ranks[rank]) {
+                const auto& position = placements.front().mesh_node_to_asic_position.at(chip);
+                hosts.insert((*position.second - 1) / 2);
+            }
+            EXPECT_EQ(hosts.size(), 1u) << solver << ": placement seated declared rank " << rank << " across "
+                                        << hosts.size() << " hosts";
+        }
+
+        // And the same of the PGD's own hosts, on the seating the search returned rather than the one
+        // the matcher committed:
+        //
+        //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
+        //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
+        const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+            {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+        expect_each_rank_inside_one_pgd_host(placements.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+}
+
+// The other half of the pair: when the declared split is on the wrong axis, whatever the search returns
+// must still respect it -- either nothing, or a seating that keeps each rank on one host. It must not
+// answer by throwing.
+//
+//   machine: hosts cut by column     MGD host_topology [2,1]
+//
+//     100 101 | 102 103                aaaa       no seating on this machine keeps
+//     104 105 | 106 107                bbbb       either rank on a single host, so
+//      host0  |  host1                            the honest answer is "nothing"
+//
+// FIXME: the answer it gives is the MGD fallback, which is not an answer to the question. The host
+// constraint rejects the only PGD grouping, so the fallback -- the mesh descriptor's own topology,
+// committed last by get_valid_groupings_for_mgd -- is all that is left, and the mesh places on it. That
+// grouping carries neither a chip -> slot pinning nor a mesh_node_to_host_group, so the placement claims
+// eight ASICs while saying nothing about which rank sits where, and the declared split it was supposed to
+// respect is not applied to it at all. The loop below can only skip such a placement, which is why this
+// test currently proves the weaker statement: no seating that violates the split is returned, because no
+// seating is returned. Holding the fallback to the MGD's own host_topology is what would close this.
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SatAndDfsPlacementNeverSeatTheWrongAxisAcrossHosts) {
+    for (const char* solver : {"sat", "dfs"}) {
+        ScopedEnv pick_solver("TT_METAL_PLACEMENT_SOLVER", solver);
+
+        auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+            "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+
+        PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts, each one column-half. The declared
+# lengthwise ranks cross these as well, so neither host level admits this split.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+        MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 2, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+        const auto valid_groupings =
+            pgd.get_valid_groupings_for_mgd(mgd, psd, /*pinnings=*/std::nullopt, /*require_placement=*/false);
+
+        std::vector<GroupingInfo> committed;
+        for (const auto& [preset, by_instance] : valid_groupings) {
+            for (const auto& [instance, groupings] : by_instance) {
+                for (const auto& grouping : groupings) {
+                    if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                        committed.push_back(grouping);
+                    }
+                }
+            }
+        }
+        EXPECT_TRUE(committed.empty()) << solver;
+
+        std::vector<PsdPlacement> placements;
+        ASSERT_NO_THROW(placements = pgd.solve_adjacency_guided_placement(mgd, valid_groupings, psd)) << solver;
+
+        const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 2, 3}, {4, 5, 6, 7}};
+        for (const auto& placement : placements) {
+            if (placement.mesh_node_to_asic_position.empty()) {
+                // The MGD fallback, per the FIXME above: a footprint with nothing to check.
+                continue;
+            }
+            for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+                std::set<uint32_t> hosts;
+                for (LogicalChipId chip : declared_ranks[rank]) {
+                    const auto& position = placement.mesh_node_to_asic_position.at(chip);
+                    hosts.insert((*position.second - 1) / 2);
+                }
+                EXPECT_EQ(hosts.size(), 1u)
+                    << solver << ": a row split cannot be seated on a column-split machine, rank " << rank
+                    << " landed on " << hosts.size() << " hosts";
+            }
+
+            // And of the PGD's hosts, which draw the same boundary. No seating satisfies this, which
+            // is what the test asserts the search must never return:
+            //
+            //   rank a = chips 0 1 2 3 -> slots (1,1) (1,2) (1,3) (1,4), half in each PGD host
+            //   rank b = chips 4 5 6 7 -> slots (2,1) (2,2) (2,3) (2,4), likewise
+            const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+                {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+            expect_each_rank_inside_one_pgd_host(placement.mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+        }
+    }
+}
+
+// ----- the same rule on the square shape --------------------------------------------------------
+//
+// The quadrant-machine cases live with the other GetValidGroupingsForMGD tests further up, under
+// PhysicalGroupingDescriptorTests. What is left here is the column-split 4x4, which is where the
+// rotation question below is asked.
+
+// Control for the case below: on a square mesh, the split that happens to be declared along the machine's
+// own axis commits, exactly as it does on the 2x4. No turn is needed, so the orientation the match
+// happens to return is the right one and the rotation gap cannot be reached from here.
+//
+//   machine: 4x4, hosts cut by column   MGD host_topology [1,2]
+//
+//     100 101 | 102 103                   aa | bb
+//     104 105 | 106 107                   aa | bb     a is host0, b is host1,
+//     108 109 | 110 111                   aa | bb     as declared
+//     112 113 | 114 115                   aa | bb
+//      host0  |  host1
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SquareMeshCommitsWhenTheDeclaredAxisAlreadyMatches) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+    { id: 8  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+    { id: 9  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+    { id: 10 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+    { id: 11 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+    { id: 12 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+    { id: 13 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } },
+    { id: 14 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+    { id: 15 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [4, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts of 8 chips, each two columns.
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [4, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [4, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    const auto valid_groupings = pgd.get_valid_groupings_for_mgd(mgd, psd);
+
+    std::vector<GroupingInfo> committed;
+    for (const auto& [preset, by_instance] : valid_groupings) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    committed.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(committed.empty());
+
+    // host_topology [1,2] on a 4x4 declares two ranks of one column-half each.
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
+        {0, 1, 4, 5, 8, 9, 12, 13}, {2, 3, 6, 7, 10, 11, 14, 15}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = committed.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert((*position.second - 1) / 2);
+        }
+        EXPECT_EQ(hosts.size(), 1u) << "declared rank " << rank << " was seated across " << hosts.size() << " hosts";
+    }
+
+    // And against the PGD's own two hosts, which draw the same two columns. On a square mesh this is
+    // the orientation the match returns anyway, so it holds without needing the turn:
+    //
+    //   rank a = chips 0 1 4 5 8 9 12 13 -> slots (1,1) (1,2) (2,1) (2,2) (3,1) (3,2) (4,1) (4,2) = host0
+    //   rank b = chips 2 3 6 7 10 11 14 15 -> slots (1,3) (1,4) (2,3) (2,4) (3,3) (3,4) (4,3) (4,4) = host1
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}, {3, 1}, {3, 2}, {4, 1}, {4, 2}},
+        {{1, 3}, {1, 4}, {2, 3}, {2, 4}, {3, 3}, {3, 4}, {4, 3}, {4, 4}}};
+    expect_each_rank_inside_one_pgd_host(committed.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+}
+
+// ----- Phase 2: asking the matcher a second time ------------------------------------------------
+
+// The two phases do not ask about the same machine. Phase 1 runs against the PSD's hosts; phase 2 runs
+// after rank binding, against a PSD whose host names are per-rank slices, which are finer. So the second
+// call can reject the very host split the first call accepted and placed -- the matcher is consistent, it
+// is being asked a different question.
+//
+// This is the disagreement itself, told apart from what either caller does about it. The declared split
+// is [1,2] both times; only the machine under it changes:
+//
+//   phase 1: the PSD's two hosts      phase 2: the same chips as four rank slices
+//
+//     100 101 | 102 103                  100 | 101 | 102 | 103
+//     104 105 | 106 107                  104 | 105 | 106 | 107
+//      host0  |  host1                    r0  | r1  | r2  | r3
+//
+//        aa   |   bb    accepted             aa | bb    rejected: rank a now needs r0 and r1
+//        aa   |   bb                         aa | bb
+TEST(PhysicalGroupingDescriptorTestsHostSplit, SecondGetValidGroupingsOnRankSlicedPsdRejectsWhatTheFirstCommitted) {
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level: the machine's two real hosts, each one column-half. A PGD describes the
+# system, so it knows these and not the per-rank slices phase 2 is handed.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    auto host_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_hosts_by_column.textproto");
+    std::vector<GroupingInfo> on_hosts;
+    for (const auto& [preset, by_instance] :
+         pgd.get_valid_groupings_for_mgd(mgd, host_psd, /*pinnings=*/std::nullopt, /*require_placement=*/false)) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    on_hosts.push_back(grouping);
+                }
+            }
+        }
+    }
+    EXPECT_FALSE(on_hosts.empty()) << "two declared ranks on two hosts: accepted";
+
+    // The PGD's hosts are the same two, so the accepted seating sits inside them as well:
+    //
+    //   rank a = chips 0 1 4 5 -> slots (1,1) (1,2) (2,1) (2,2) = PGD host0
+    //   rank b = chips 2 3 6 7 -> slots (1,3) (1,4) (2,3) (2,4) = PGD host1
+    //
+    // It is only the PSD that changes below; the PGD's host level says the same thing across both
+    // calls, which is the property that would make the two phases agree once the matcher reads it.
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}}, {{1, 3}, {1, 4}, {2, 3}, {2, 4}}};
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {{0, 1, 4, 5}, {2, 3, 6, 7}};
+    if (!on_hosts.empty()) {
+        expect_each_rank_inside_one_pgd_host(on_hosts.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+    }
+
+    auto rank_sliced_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
+    std::vector<GroupingInfo> on_rank_slices;
+    for (const auto& [preset, by_instance] : pgd.get_valid_groupings_for_mgd(
+             mgd, rank_sliced_psd, /*pinnings=*/std::nullopt, /*require_placement=*/false)) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    on_rank_slices.push_back(grouping);
+                }
+            }
+        }
+    }
+    EXPECT_TRUE(on_rank_slices.empty()) << "the same two ranks against four slices: each rank now spans two, so "
+                                           "rejected";
+}
+
+// The phase-2 happy path, taken on the most rotation-prone shape there is: a 4x4 RING/RING, symmetric on
+// both axes and wrapped on both, asked the same question twice. It holds -- the match returns the same
+// orientation each time, so phase 2 reaches phase 1's verdict and the pinnings arrive. This is also the
+// suite's one RING/RING split-host case that commits.
+//
+// Worth stating as a test because it bounds the rotation gap. An arbitrary orientation would be far more
+// damaging if it were also an unstable one, re-rolled per call; it is not. The gap costs a declared split
+// that needs a rotation to fit (LengthwiseSplitOnWidthwiseSplitHostsIsTurnedToFitOnASquareMesh), and a
+// phase-2 divergence only when the two calls are given genuinely different host partitions, which is
+// SecondGetValidGroupingsOnRankSlicedPsdRejectsWhatTheFirstCommitted, not this.
+//
+//   machine: 4x4 RING/RING, hosts cut by column     MGD host_topology [1,2]
+//
+//     100 101 | 102 103     wrapped on both           aa | bb
+//     104 105 | 106 107     axes, so translations     aa | bb    the declared split already
+//     108 109 | 110 111     along either one are      aa | bb    lies along the boundary, and
+//     112 113 | 114 115     automorphisms as well     aa | bb    asking twice gives the same
+//      host0  |  host1      as the reflections                   orientation twice
+TEST(PhysicalGroupingDescriptorTestsHostSplit, Phase2AgreesWithPhase1OnASymmetricTorus) {
+    auto psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_16asic_4x4_torus_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "4x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3  location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7  location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+    { id: 8  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+    { id: 9  location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+    { id: 10 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+    { id: 11 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+    { id: 12 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+    { id: 13 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } },
+    { id: 14 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+    { id: 15 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [4, 4]
+  }
+}
+
+# The PGD's own host level, mirroring the machine: two hosts of 8 chips, each two columns. A wrapped
+# mesh has translations among its automorphisms, so this is the shape where an orientation chosen
+# without the hosts in view has the most room to disagree with them.
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_1 } },
+               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_2 } },
+               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_1 } },
+               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [4, 2] } }
+groupings { name: "4x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } },
+               { id: 4 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_3 } },
+               { id: 5 location { tray_id: TRAY_3 asic_location: ASIC_LOCATION_4 } },
+               { id: 6 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_3 } },
+               { id: 7 location { tray_id: TRAY_4 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [4, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 4, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    std::vector<GroupingInfo> phase1;
+    for (const auto& [preset, by_instance] : pgd.get_valid_groupings_for_mgd(mgd, psd)) {
+        for (const auto& [instance, groupings] : by_instance) {
+            for (const auto& grouping : groupings) {
+                if (grouping.name != "M0" && !grouping.mesh_node_to_asic_position.empty()) {
+                    phase1.push_back(grouping);
+                }
+            }
+        }
+    }
+    ASSERT_FALSE(phase1.empty()) << "phase 1 commits the split that lies along the hosts";
+
+    const std::vector<std::vector<LogicalChipId>> declared_ranks = {
+        {0, 1, 4, 5, 8, 9, 12, 13}, {2, 3, 6, 7, 10, 11, 14, 15}};
+    for (std::size_t rank = 0; rank < declared_ranks.size(); ++rank) {
+        std::set<uint32_t> hosts;
+        for (LogicalChipId chip : declared_ranks[rank]) {
+            const auto& position = phase1.front().mesh_node_to_asic_position.at(chip);
+            hosts.insert((*position.second - 1) / 2);
+        }
+        ASSERT_EQ(hosts.size(), 1u) << "and seats declared rank " << rank << " on one host";
+    }
+
+    // And on the PGD's own hosts, which draw the same two columns:
+    //
+    //   rank a = chips 0 1 4 5 8 9 12 13 -> slots (1,1) (1,2) (2,1) (2,2) (3,1) (3,2) (4,1) (4,2) = host0
+    //   rank b = chips 2 3 6 7 10 11 14 15 -> slots (1,3) (1,4) (2,3) (2,4) (3,3) (3,4) (4,3) (4,4) = host1
+    const std::vector<std::set<std::pair<uint32_t, uint32_t>>> pgd_hosts = {
+        {{1, 1}, {1, 2}, {2, 1}, {2, 2}, {3, 1}, {3, 2}, {4, 1}, {4, 2}},
+        {{1, 3}, {1, 4}, {2, 3}, {2, 4}, {3, 3}, {3, 4}, {4, 3}, {4, 4}}};
+    expect_each_rank_inside_one_pgd_host(phase1.front().mesh_node_to_asic_position, declared_ranks, pgd_hosts);
+
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        rank_of_host.emplace(psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(psd.get_host_name_for_asic(asic_id));
+    }
+
+    utils::PhysicalMultiMeshGraph physical;
+    ASSERT_NO_THROW(physical = utils::build_physical_multi_mesh_adjacency_graph(psd, asic_id_to_mesh_rank, pgd, mgd));
+    EXPECT_TRUE(physical.mesh_pgd_pinnings_.contains(MeshId{0}))
+        << "phase 2 should reach the same verdict on the same machine";
+}
+
+// FIXME: currently throws. Phase 2 owns no placement decision, so a grouping it cannot get is a missing
+// hint, not a broken system: it should leave the graph unpinned and carry on. get_valid_groupings_for_mgd
+// takes require_placement for exactly this, but the rank-bound caller in topology_mapper_utils.cpp is
+// passing true behind a FIXME while the gemma failure is being reproduced, so the empty result aborts the
+// run instead. This is what took down that run -- a split phase 1 had already accepted and placed became
+// fatal the second time it was looked at. Re-enabling require_placement=false there should fix this.
+//
+//   machine: four rank slices        MGD host_topology [1,2]
+//
+//     100 | 101 | 102 | 103            aa | bb    the rejection itself is correct and is
+//     104 | 105 | 106 | 107            aa | bb    SecondGetValidGroupings...'s subject; what
+//      r0 | r1  | r2  | r3                        is wrong is that it aborts instead of
+//                                                 leaving the graph unpinned
+TEST(PhysicalGroupingDescriptorTestsHostSplit, Phase2DegradesToNoPinningsWhenRankSlicesAreFinerThanHosts) {
+    auto rank_sliced_psd = tt::tt_metal::deserialize_physical_system_descriptor_from_text_proto_file(
+        "tests/tt_metal/tt_fabric/custom_mock_PSDs/test_8asic_2x4_four_hosts_by_column.textproto");
+
+    PhysicalGroupingDescriptor pgd{std::string(R"(
+groupings {
+  name: "2x4_Mesh"
+  preset_type: MESH
+  instances: [
+    { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+    { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+    { id: 2 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+    { id: 3 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+    { id: 4 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+    { id: 5 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } },
+    { id: 6 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+    { id: 7 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } }
+  ]
+  row_major_mesh {
+    dims: [2, 4]
+  }
+}
+
+# The PGD's own host level: the machine's two real hosts, each one column-half. Deliberately not the
+# four rank slices this call is handed -- a PGD describes the system, and the divergence between the
+# two is the whole subject of this test.
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_1 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_2 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_1 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_2 } } ]
+  row_major_mesh { dims: [2, 2] } }
+groupings { name: "2x4_hosts" preset_type: HOSTS
+  instances: [ { id: 0 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_3 } },
+               { id: 1 location { tray_id: TRAY_1 asic_location: ASIC_LOCATION_4 } },
+               { id: 2 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_3 } },
+               { id: 3 location { tray_id: TRAY_2 asic_location: ASIC_LOCATION_4 } } ]
+  row_major_mesh { dims: [2, 2] } }
+)")};
+
+    MeshGraphDescriptor mgd{std::string(R"(
+mesh_descriptors {
+  name: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [ 2, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 2 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+)")};
+
+    std::map<std::string, MeshHostRankId> rank_of_host;
+    for (const auto& [asic_id, descriptor] : rank_sliced_psd.get_asic_descriptors()) {
+        rank_of_host.emplace(rank_sliced_psd.get_host_name_for_asic(asic_id), MeshHostRankId{0});
+    }
+    uint32_t next_rank = 0;
+    for (auto& [host_name, rank] : rank_of_host) {
+        rank = MeshHostRankId{next_rank++};
+    }
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (const auto& [asic_id, descriptor] : rank_sliced_psd.get_asic_descriptors()) {
+        asic_id_to_mesh_rank[MeshId{0}][asic_id] = rank_of_host.at(rank_sliced_psd.get_host_name_for_asic(asic_id));
+    }
+
+    utils::PhysicalMultiMeshGraph physical;
+    ASSERT_NO_THROW(
+        physical = utils::build_physical_multi_mesh_adjacency_graph(rank_sliced_psd, asic_id_to_mesh_rank, pgd, mgd))
+        << "a hint the matcher cannot produce must not abort the rank-bound path";
+    EXPECT_TRUE(physical.mesh_pgd_pinnings_.empty())
+        << "no grouping survived the finer slices, so there is nothing to pin with";
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests

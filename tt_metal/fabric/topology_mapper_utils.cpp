@@ -850,7 +850,12 @@ void assign_pgd_pinnings_to_rank_bound_physical_graph(
     }
 
     const auto valid_groupings_map = physical_grouping_descriptor.get_valid_groupings_for_mgd(
-        mesh_graph_descriptor, physical_system_descriptor, pinnings);
+        // FIXME: Revert this this way to test and catch failure
+        // mesh_graph_descriptor, physical_system_descriptor, pinnings, /*require_placement=*/false);
+        mesh_graph_descriptor,
+        physical_system_descriptor,
+        pinnings,
+        /*require_placement=*/true);
     if (!valid_groupings_map.contains("MESH") || valid_groupings_map.at("MESH").empty()) {
         log_debug(
             tt::LogFabric,
@@ -2065,6 +2070,11 @@ TopologyMappingResult complete_intra_mesh_for_placement(
                 physical_exit_node_graph,
                 inter_mesh_validation_mode);
             if (!exit_node_constraints_success) {
+                log_debug(
+                    tt::LogFabric,
+                    "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (exit-node constraints)",
+                    logical_mesh_id.get(),
+                    physical_mesh_id.get());
                 result.success = false;
                 if (failing_pair_out) {
                     *failing_pair_out = {logical_mesh_id, physical_mesh_id};
@@ -2077,6 +2087,11 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto pinning_constraint_failure =
             add_pinning_constraints(intra_mesh_constraints, asic_positions_to_asic_ids, config, logical_mesh_id);
         if (pinning_constraint_failure.has_value()) {
+            log_debug(
+                tt::LogFabric,
+                "DIAG intra-mesh: logical mesh {} -> physical mesh {} FAILED (MGD pinning constraints)",
+                logical_mesh_id.get(),
+                physical_mesh_id.get());
             result.success = false;
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
@@ -2105,12 +2120,27 @@ TopologyMappingResult complete_intra_mesh_for_placement(
         auto sub_mapping = ::tt::tt_fabric::solve_topology_mapping(
             logical_graph, physical_graph, intra_mesh_constraints, validation_mode, /*quiet_mode=*/true);
         if (!sub_mapping.success) {
+            log_debug(
+                tt::LogFabric,
+                "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) FAILED (solve): {}",
+                logical_mesh_id.get(),
+                logical_graph.get_nodes().size(),
+                physical_mesh_id.get(),
+                physical_graph.get_nodes().size(),
+                sub_mapping.error_message);
             result.success = false;
             if (failing_pair_out) {
                 *failing_pair_out = {logical_mesh_id, physical_mesh_id};
             }
             return result;
         }
+        log_debug(
+            tt::LogFabric,
+            "DIAG intra-mesh: logical mesh {} ({} node(s)) -> physical mesh {} ({} asic(s)) OK",
+            logical_mesh_id.get(),
+            logical_graph.get_nodes().size(),
+            physical_mesh_id.get(),
+            physical_graph.get_nodes().size());
         for (const auto& [fabric_node, asic] : sub_mapping.target_to_global) {
             result.fabric_node_to_asic.insert({fabric_node, asic});
             result.asic_to_fabric_node.insert({asic, fabric_node});
@@ -2256,6 +2286,43 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
         // returned placement already respects it -- an infeasible cap surfaces as the session finding no placement,
         // handled by the relax on the !placement.success path above. No post-hoc cap filter is needed here.
         excluded_.emplace_back(placement.target_to_global.begin(), placement.target_to_global.end());
+        // DIAG: report every pairing whose physical footprint is too small for the logical mesh, plus the
+        // footprint handed to each of the largest logical meshes (the ones most likely to be undersized).
+        std::vector<std::string> undersized_pairs;
+        std::vector<std::string> big_mesh_pairs;
+        std::size_t largest_logical = 0;
+        for (const auto& [logical_id, logical_adj] : adjacency_map_logical_.mesh_adjacency_graphs_) {
+            largest_logical = std::max(largest_logical, logical_adj.get_nodes().size());
+        }
+        for (const auto& [logical_id, physical_id] : placement.target_to_global) {
+            auto logical_it = adjacency_map_logical_.mesh_adjacency_graphs_.find(logical_id);
+            auto physical_it = adjacency_map_physical_.mesh_adjacency_graphs_.find(physical_id);
+            if (logical_it == adjacency_map_logical_.mesh_adjacency_graphs_.end() ||
+                physical_it == adjacency_map_physical_.mesh_adjacency_graphs_.end()) {
+                continue;
+            }
+            const std::size_t logical_nodes = logical_it->second.get_nodes().size();
+            const std::size_t physical_asics = physical_it->second.get_nodes().size();
+            const std::string pair_text =
+                fmt::format("L{}({})->P{}({})", logical_id.get(), logical_nodes, physical_id.get(), physical_asics);
+            if (logical_nodes > physical_asics) {
+                undersized_pairs.push_back(pair_text);
+            }
+            if (logical_nodes == largest_logical) {
+                big_mesh_pairs.push_back(pair_text);
+            }
+        }
+        std::sort(big_mesh_pairs.begin(), big_mesh_pairs.end());
+        std::sort(undersized_pairs.begin(), undersized_pairs.end());
+        log_info(
+            tt::LogFabric,
+            "DIAG multi-solution: inter-mesh placement #{} returned ({} mesh pair(s)); largest meshes [{}]; "
+            "{} undersized pair(s) [{}]",
+            excluded_.size(),
+            placement.target_to_global.size(),
+            fmt::join(big_mesh_pairs, " "),
+            undersized_pairs.size(),
+            fmt::join(undersized_pairs, " "));
 
         std::unordered_map<MeshId, MeshId> mesh_mappings(
             placement.target_to_global.begin(), placement.target_to_global.end());
@@ -2295,6 +2362,34 @@ std::optional<TopologyMappingResult> MultiMeshSolutionEnumerator::next() {
                     inter_mesh_validation_mode_,
                     forbid_result,
                     "intra-mesh completion failed");
+                log_info(
+                    tt::LogFabric,
+                    "DIAG multi-solution: placement #{} rejected, forbidding logical mesh {} -> physical mesh {} "
+                    "(can_retry={}, forbidden so far={})",
+                    excluded_.size(),
+                    intra_failing_pair->first.get(),
+                    intra_failing_pair->second.get(),
+                    can_retry,
+                    intra_failed_mesh_pairs_.size() + current_attempt_failed_pairs.size());
+                // The forbidden constraint already makes every mapping that assigns this pair unreachable, so a
+                // blocking clause for such an excluded mapping is redundant -- and cannot be encoded at all once
+                // the pair has left the target's allowed domain, which would fail the whole re-encode.
+                if (can_retry) {
+                    const MeshId forbidden_logical = intra_failing_pair->first;
+                    const MeshId forbidden_physical = intra_failing_pair->second;
+                    const std::size_t removed = std::erase_if(excluded_, [&](const std::map<MeshId, MeshId>& mapping) {
+                        auto it = mapping.find(forbidden_logical);
+                        return it != mapping.end() && it->second == forbidden_physical;
+                    });
+                    log_debug(
+                        tt::LogFabric,
+                        "DIAG multi-solution: dropped {} redundant excluded mapping(s) containing forbidden pair "
+                        "{} -> {}; {} exclusion(s) remain",
+                        removed,
+                        forbidden_logical.get(),
+                        forbidden_physical.get(),
+                        excluded_.size());
+                }
                 // Re-encode with the new forbidden constraint; excluded_ is re-applied so already-returned
                 // placements cannot re-emerge. The forbidden pair makes the just-tried orientation unreachable.
                 session_ = {};

@@ -245,6 +245,41 @@ std::unordered_map<MeshId, std::string> MeshGraphDescriptor::mesh_id_to_instance
     return mesh_id_to_name;
 }
 
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(GlobalNodeId instance_id) const {
+    return get_declared_topology(get_instance(instance_id));
+}
+
+DeclaredTopology MeshGraphDescriptor::get_declared_topology(const InstanceData& instance) const {
+    const proto::TorusTopology* device_topology = nullptr;
+    const proto::MeshTopology* host_topology = nullptr;
+    if (is_mesh(instance)) {
+        const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+        if (mesh_desc != nullptr) {
+            device_topology = &mesh_desc->device_topology();
+            host_topology = &mesh_desc->host_topology();
+        }
+    } else if (is_switch(instance)) {
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(instance.desc);
+        if (switch_desc != nullptr) {
+            device_topology = &switch_desc->device_topology();
+        }
+    }
+
+    DeclaredTopology topology;
+    if (device_topology == nullptr) {
+        return topology;
+    }
+    topology.dims.assign(device_topology->dims().begin(), device_topology->dims().end());
+    topology.ring_dims.reserve(device_topology->dim_types_size());
+    for (int dim = 0; dim < device_topology->dim_types_size(); ++dim) {
+        topology.ring_dims.push_back(device_topology->dim_types(dim) == proto::TorusTopology::RING);
+    }
+    if (host_topology != nullptr) {
+        topology.host_dims.assign(host_topology->dims().begin(), host_topology->dims().end());
+    }
+    return topology;
+}
+
 uint32_t MeshGraphDescriptor::get_chip_count(GlobalNodeId mesh_instance_id) const {
     const auto& instance = get_instance(mesh_instance_id);
     return get_chip_count(instance);

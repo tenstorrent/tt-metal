@@ -223,10 +223,14 @@ public:
     // Requires a PhysicalSystemDescriptor reference for validation/filtering
     // pinnings: optional many-to-many pinning groups keyed by local mesh id (same shape as
     // MeshGraphDescriptor::get_pinnings()), applied during PGD<->MGD topology matching
+    // require_placement: when true (the default) a mesh that cannot be placed on the PSD is fatal, since the
+    // caller is discovering footprints and has nothing to fall back on. Callers that already have a rank-bound
+    // physical graph and only want preferred pinnings pass false: the mesh is simply omitted from the result.
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
+        bool require_placement = true) const;
 
     // Build one GroupingInfo per MGD mesh instance for PSD placement fallback when PGD groupings fail to embed.
     // Includes torus wrap-around edges when the MGD device topology uses RING dimensions.
@@ -405,7 +409,8 @@ private:
     ValidGroupingsMap get_valid_groupings_for_mgd(
         const MeshGraphDescriptor& mesh_graph_descriptor,
         const tt::tt_metal::PhysicalSystemDescriptor* physical_system_descriptor,
-        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt) const;
+        const std::optional<tt::tt_metal::experimental::tt_fabric::PinningsByMesh>& pinnings = std::nullopt,
+        bool require_placement = true) const;
 
     // Private helper that takes PSD pointer (used internally by public overloads)
     std::vector<GroupingInfo> build_flattened_adjacency_mesh(

@@ -22,7 +22,6 @@
 #include <fmt/format.h>
 
 #include "protobuf/physical_grouping_descriptor.pb.h"
-#include "protobuf/mesh_graph_descriptor.pb.h"
 #include <tt-metalium/experimental/fabric/physical_grouping_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
@@ -455,6 +454,17 @@ GroupingInfo PhysicalGroupingDescriptor::convert_grouping_to_info(const proto::G
         const auto& custom = grouping.custom();
         info.adjacency_graph = build_custom_connections_graph(node_ids, custom);
     } else {
+        // A host is a tile, not a bag of chips: meshes are composed by referencing HOSTS, so how a
+        // host's own instances are arranged is what a mesh built out of hosts inherits. Left off, the
+        // grouping would carry an empty adjacency graph and describe a host with no internal
+        // connectivity at all, which is never true of a real machine. Any of the connection types may
+        // say it -- row_major_mesh for a grid, custom for anything that is not one.
+        TT_FATAL(
+            grouping.preset_type() != proto::HOSTS,
+            "Physical groupings: HOSTS grouping '{}' declares no connection. A host must declare its own "
+            "topology (row_major_mesh, custom, or all_to_all) so that meshes composed from it inherit the "
+            "right layout.",
+            info.name);
         // No connection specified - empty adjacency graph (instances are not connected)
         info.adjacency_graph = tt::tt_fabric::AdjacencyGraph<GroupingChipId>();
     }
@@ -1132,8 +1142,7 @@ std::vector<GroupingInfo> PhysicalGroupingDescriptor::build_flattened_adjacency_
 
         for (auto& meshe : meshes) {
             for (auto& variant : flattened_mesh_to_topology_variants(grouping, meshe)) {
-                if (physical_system_descriptor != nullptr &&
-                    !can_map_to_psd(variant, *physical_system_descriptor)) {
+                if (physical_system_descriptor != nullptr && !can_map_to_psd(variant, *physical_system_descriptor)) {
                     continue;
                 }
                 result.push_back(std::move(variant));

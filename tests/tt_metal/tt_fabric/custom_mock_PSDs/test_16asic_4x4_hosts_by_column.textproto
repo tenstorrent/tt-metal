@@ -1,0 +1,1215 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# A 4x4 grid of ASICs split into two hosts by column. The square shape is the point: a [2,1]
+# host_topology and a [1,2] one describe the same partition up to a 90-degree rotation, so this is
+# where the matcher's choice of orientation becomes observable. No wraps, so a LINE/LINE mesh has
+# exactly the embeddings the grid allows and nothing more.
+#
+#   100 101 | 102 103
+#   104 105 | 106 107
+#   108 109 | 110 111
+#   112 113 | 114 115
+#
+#   host of each ASIC:
+#   h0 h0 h1 h1
+#   h0 h0 h1 h1
+#   h0 h0 h1 h1
+#   h0 h0 h1 h1
+#
+# Every ASIC gets its own (tray_id, asic_location) = (row+1, col+1) so a PGD can name individual
+# chips and pinnings stay injective. Links carry 2 channels and are marked non-local exactly when
+# they cross a host boundary. Channels 0/1 run along a row, 2/3 along a column.
+target_device_type: 0
+system_graph {
+  asic_connectivity_graph {
+    host_name: "host0"
+    asic_topologies {
+      asic_id: 100
+      topology {
+        asic_connections {
+          dst_asic_id: 101
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 104
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 101
+      topology {
+        asic_connections {
+          dst_asic_id: 100
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 102
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 105
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 104
+      topology {
+        asic_connections {
+          dst_asic_id: 105
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 100
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 108
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 105
+      topology {
+        asic_connections {
+          dst_asic_id: 104
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 106
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 101
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 109
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 108
+      topology {
+        asic_connections {
+          dst_asic_id: 109
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 104
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 112
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 109
+      topology {
+        asic_connections {
+          dst_asic_id: 108
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 110
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 105
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 113
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 112
+      topology {
+        asic_connections {
+          dst_asic_id: 113
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 108
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 113
+      topology {
+        asic_connections {
+          dst_asic_id: 112
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 114
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 109
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  asic_connectivity_graph {
+    host_name: "host1"
+    asic_topologies {
+      asic_id: 102
+      topology {
+        asic_connections {
+          dst_asic_id: 101
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 103
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 106
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 103
+      topology {
+        asic_connections {
+          dst_asic_id: 102
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 107
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 106
+      topology {
+        asic_connections {
+          dst_asic_id: 105
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 107
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 102
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 110
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 107
+      topology {
+        asic_connections {
+          dst_asic_id: 106
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 103
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 111
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 110
+      topology {
+        asic_connections {
+          dst_asic_id: 109
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 111
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 106
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 114
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 111
+      topology {
+        asic_connections {
+          dst_asic_id: 110
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 107
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 115
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 114
+      topology {
+        asic_connections {
+          dst_asic_id: 113
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: false
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: false
+          }
+        }
+        asic_connections {
+          dst_asic_id: 115
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 110
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+    asic_topologies {
+      asic_id: 115
+      topology {
+        asic_connections {
+          dst_asic_id: 114
+          eth_connections {
+            src_chan: 0
+            dst_chan: 0
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 1
+            dst_chan: 1
+            is_local: true
+          }
+        }
+        asic_connections {
+          dst_asic_id: 111
+          eth_connections {
+            src_chan: 2
+            dst_chan: 2
+            is_local: true
+          }
+          eth_connections {
+            src_chan: 3
+            dst_chan: 3
+            is_local: true
+          }
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "host0"
+    host_connections {
+      dst_host_name: "host1"
+      exit_node_connections {
+        src_exit_node: 101
+        dst_exit_node: 102
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 101
+        dst_exit_node: 102
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 105
+        dst_exit_node: 106
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 105
+        dst_exit_node: 106
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 109
+        dst_exit_node: 110
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 109
+        dst_exit_node: 110
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 113
+        dst_exit_node: 114
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 113
+        dst_exit_node: 114
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+    }
+  }
+  host_connectivity_graph {
+    src_host_name: "host1"
+    host_connections {
+      dst_host_name: "host0"
+      exit_node_connections {
+        src_exit_node: 102
+        dst_exit_node: 101
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 102
+        dst_exit_node: 101
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 106
+        dst_exit_node: 105
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 106
+        dst_exit_node: 105
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 110
+        dst_exit_node: 109
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 110
+        dst_exit_node: 109
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 114
+        dst_exit_node: 113
+        eth_conn {
+          src_chan: 0
+          dst_chan: 0
+          is_local: false
+        }
+      }
+      exit_node_connections {
+        src_exit_node: 114
+        dst_exit_node: 113
+        eth_conn {
+          src_chan: 1
+          dst_chan: 1
+          is_local: false
+        }
+      }
+    }
+  }
+}
+asic_descriptors {
+  asic_id: 100
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 1
+    board_type: 1
+    unique_id: 100
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 101
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 2
+    board_type: 1
+    unique_id: 101
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 102
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 3
+    board_type: 1
+    unique_id: 102
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 103
+  asic_descriptor {
+    tray_id: 1
+    asic_location: 4
+    board_type: 1
+    unique_id: 103
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 104
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 1
+    board_type: 1
+    unique_id: 104
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 105
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 2
+    board_type: 1
+    unique_id: 105
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 106
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 3
+    board_type: 1
+    unique_id: 106
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 107
+  asic_descriptor {
+    tray_id: 2
+    asic_location: 4
+    board_type: 1
+    unique_id: 107
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 108
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 1
+    board_type: 1
+    unique_id: 108
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 109
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 2
+    board_type: 1
+    unique_id: 109
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 110
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 3
+    board_type: 1
+    unique_id: 110
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 111
+  asic_descriptor {
+    tray_id: 3
+    asic_location: 4
+    board_type: 1
+    unique_id: 111
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 112
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 1
+    board_type: 1
+    unique_id: 112
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 113
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 2
+    board_type: 1
+    unique_id: 113
+    host_name: "host0"
+  }
+}
+asic_descriptors {
+  asic_id: 114
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 3
+    board_type: 1
+    unique_id: 114
+    host_name: "host1"
+  }
+}
+asic_descriptors {
+  asic_id: 115
+  asic_descriptor {
+    tray_id: 4
+    asic_location: 4
+    board_type: 1
+    unique_id: 115
+    host_name: "host1"
+  }
+}
+host_to_rank {
+  host_name: "host0"
+  rank: 0
+}
+host_to_rank {
+  host_name: "host1"
+  rank: 1
+}
+exit_node_connection_table {
+  host_name: "host0"
+  exit_connections {
+    src_exit_node: 101
+    dst_exit_node: 102
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 101
+    dst_exit_node: 102
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 105
+    dst_exit_node: 106
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 105
+    dst_exit_node: 106
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 109
+    dst_exit_node: 110
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 109
+    dst_exit_node: 110
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 113
+    dst_exit_node: 114
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 113
+    dst_exit_node: 114
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+}
+exit_node_connection_table {
+  host_name: "host1"
+  exit_connections {
+    src_exit_node: 102
+    dst_exit_node: 101
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 102
+    dst_exit_node: 101
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 106
+    dst_exit_node: 105
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 106
+    dst_exit_node: 105
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 110
+    dst_exit_node: 109
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 110
+    dst_exit_node: 109
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 114
+    dst_exit_node: 113
+    eth_conn {
+      src_chan: 0
+      dst_chan: 0
+      is_local: false
+    }
+  }
+  exit_connections {
+    src_exit_node: 114
+    dst_exit_node: 113
+    eth_conn {
+      src_chan: 1
+      dst_chan: 1
+      is_local: false
+    }
+  }
+}
+ethernet_firmware_version {
+  major: 1
+  minor: 0
+  patch: 0
+}
