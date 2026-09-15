@@ -29,7 +29,7 @@ void kernel_main() {
     const uint32_t start_tile_id = get_arg(args::start_tile_id);
     const uint32_t dst_num_tiles = get_arg(args::dst_num_tiles);
 
-    constexpr uint32_t onetile = 1;
+    constexpr uint32_t dm_batch = get_arg(args::dm_batch);
 
     Noc noc;
     DataflowBuffer dfb_in0(dfb::in0);
@@ -46,27 +46,65 @@ void kernel_main() {
     // Each thread reads BOTH operands for its own k. Splitting them across two MULTI-THREAD reader
     // kernels collides on barrier slot 0: the thread barriers are a fixed pair keyed by role rather
     // than allocated per group, which is a current DFB/LLK implementation limit, not a design one.
-    for (uint32_t k = thread_id; k < dst_num_tiles; k += num_threads) {
-        const uint32_t page_id = start_tile_id + k;
+    // Entry i of a reserved batch sits at i * stride_size, NOT i * entry_size: with more than one
+    // producer or consumer the ring is STRIDED and a thread's entries interleave with its siblings'.
+    const uint32_t in0_stride = dfb_in0.get_stride_size();
+    const uint32_t in1_stride = dfb_in1.get_stride_size();
+
+    // n of this thread's tiles starting at k. Page and ring offset walk by addition: num_threads is
+    // thread_local runtime state, so indexing them off i would be a multiply per read.
+    auto read_batch = [&](uint32_t k, uint32_t n) {
         // DeviceZoneScopedSum* feeds the work-split gate (per-thread RD_RSV / RD_BAR). Zero-cost
         // unless TT_METAL_PROFILER_SUM=1, and compiled OUT under PROFILER_OPT_DO_ACCUMULATE.
         // Not "nativeness" -- keep when reconciling against kernels_dfb/.
         {
             DeviceZoneScopedSumN1("RD_RSV");
-            dfb_in0.reserve_back(onetile);
+            dfb_in0.reserve_back(n);
         }
-        noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = page_id}, {.offset_bytes = 0});
+        uint32_t page = start_tile_id + k;
+        uint32_t offset = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = page}, {.offset_bytes = offset});
+            page += num_threads;
+            offset += in0_stride;
+        }
         {
             DeviceZoneScopedSumN1("RD_RSV");
-            dfb_in1.reserve_back(onetile);
+            dfb_in1.reserve_back(n);
         }
-        noc.async_read(src_b, dfb_in1, src_tile_bytes_b, {.page_id = page_id}, {.offset_bytes = 0});
+        page = start_tile_id + k;
+        offset = 0;
+        for (uint32_t i = 0; i < n; ++i) {
+            noc.async_read(src_b, dfb_in1, src_tile_bytes_b, {.page_id = page}, {.offset_bytes = offset});
+            page += num_threads;
+            offset += in1_stride;
+        }
         {
             DeviceZoneScopedSumN2("RD_BAR");
             noc.async_read_barrier();
         }
-        dfb_in0.push_back(onetile);
-        dfb_in1.push_back(onetile);
+        dfb_in0.push_back(n);
+        dfb_in1.push_back(n);
+    };
+
+    // This thread owns tiles {thread_id, thread_id + num_threads, ...}. Once k passes
+    // dst_num_tiles - (dm_batch-1)*num_threads fewer than dm_batch of them remain, so exactly one short
+    // batch can follow and its count is derived once rather than per batch. dm_batch is a compile-time
+    // arg: at 1 this is the plain per-tile loop with no tail and no batching arithmetic at all.
+    const uint32_t batch_span = (dm_batch - 1) * num_threads;
+    const uint32_t full_limit = dst_num_tiles > batch_span ? dst_num_tiles - batch_span : 0;
+    const uint32_t k_step = dm_batch * num_threads;
+
+    uint32_t k = thread_id;
+    for (; k < full_limit; k += k_step) {
+        read_batch(k, dm_batch);
+    }
+    if (k < dst_num_tiles) {
+        uint32_t n = 1;
+        for (uint32_t t = k + num_threads; t < dst_num_tiles; t += num_threads) {
+            ++n;
+        }
+        read_batch(k, n);
     }
     // Drains this thread's outstanding credits; the ack wait is unguarded and runs even at zero tiles,
     // which is benign there (posted == acked == 0). No deadlock because finish()'s thread barrier sits
