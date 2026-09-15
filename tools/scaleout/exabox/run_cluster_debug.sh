@@ -9,9 +9,11 @@
 #     3. the dumps are merged here into one cluster.jsonl
 #
 # The collector is a single self-contained executable. It is not installed on the hosts:
-# one copy on a mount every host shares is run by every rank. Loading the merged file into
-# a database and browsing it is a separate step, done afterwards on whatever machine you
-# like: `tt-bh-glx-cluster-debug db --db cluster.db --dumps cluster.jsonl --serve`.
+# one copy on a mount every host shares is run by every rank. Where there is no shared
+# mount, --no-shared-mount copies the binary to each host first and the dumps back after,
+# over ssh, and everything in between is the same. Loading the merged file into a database
+# and browsing it is a separate step, done afterwards on whatever machine you like:
+# `tt-bh-glx-cluster-debug db --db cluster.db --dumps cluster.jsonl --serve`.
 #
 # Built to be called from recover.sh after a failed attempt, so: it never needs root, it
 # runs without a descriptor, a host that fails to collect does not fail the run, and the
@@ -57,8 +59,11 @@ Collection:
     --reason <text>                         Free text recorded in each dump's envelope, e.g. a repro id
 
 Output:
-    --output <directory>                    Output directory. Must be on a mount every host shares.
-                                            (default: cluster_debug_<cluster-name>_<timestamp>)
+    --output <directory>                    Output directory. Must be on a mount every host shares,
+                                            unless --no-shared-mount. (default: cluster_debug_<cluster-name>_<timestamp>)
+    --no-shared-mount                       The hosts share no filesystem: copy the tool to each host over
+                                            ssh before collecting, and copy each dump back here afterwards.
+                                            Needs passwordless ssh to every host, which mpirun needs anyway.
     --cluster-name <name>                   Name for the merged cluster; a cluster has no serial to read.
                                             (default: cluster_debug_dump)
 
@@ -90,6 +95,7 @@ COLLECT_TIMEOUT="$COLLECT_TIMEOUT_DEFAULT"
 REASON=""
 OUTPUT_DIR=""
 CLUSTER_NAME="cluster_debug_dump"
+SHARED_MOUNT=true
 MPI_IF=""
 MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
@@ -114,6 +120,7 @@ while [[ $# -gt 0 ]]; do
         --reason)                   require_value "$1" "$2"; REASON="$2"; shift 2 ;;
         --output)                   require_value "$1" "$2"; OUTPUT_DIR="$2"; shift 2 ;;
         --cluster-name)             require_value "$1" "$2"; CLUSTER_NAME="$2"; shift 2 ;;
+        --no-shared-mount)          SHARED_MOUNT=false; shift ;;
         --mpi-if)                   require_value "$1" "$2"; MPI_IF="$2"; MPI_IF_EXPLICIT=true; shift 2 ;;
         --mpi-args)
             require_value "$1" "$2"
@@ -235,7 +242,68 @@ if [[ ${#MPI_EXTRA_ARGS[@]} -gt 0 ]]; then
     echo "MPI extra args: ${MPI_EXTRA_ARGS[*]}"
 fi
 echo "Output directory: $OUTPUT_DIR"
+[[ "$SHARED_MOUNT" == false ]] && echo "Shared mount: none; the tool and the dumps travel over ssh"
 echo ""
+
+# ---------------------------------------------------------------------------
+# Where a rank finds the tool and writes its dump. With a shared mount, the paths here;
+# without one, a scratch directory on each host, filled before the pre-flight and emptied
+# after the dumps are copied back. Everything between reads these two variables only.
+# ---------------------------------------------------------------------------
+
+RANK_TOOL="$TOOL"
+RANK_DUMP_DIR="$DUMP_DIR"
+SELF="$(hostname)"
+
+# ssh and scp never prompt: a host wanting a password fails at once and is named below.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new)
+
+# Run `cp` when the host is this one, else scp; likewise for a remote command. The launching
+# host is usually in the host list, and ssh to itself is not something every box allows.
+copy_to_host() { local h="$1" src="$2" dst="$3"; if [[ "$h" == "$SELF" ]]; then cp "$src" "$dst"; else scp -q "${SSH_OPTS[@]}" "$src" "$h:$dst"; fi; }
+run_on_host()  { local h="$1"; shift; if [[ "$h" == "$SELF" ]]; then bash -c "$*"; else ssh "${SSH_OPTS[@]}" "$h" "$@"; fi; }
+# The rank names its dump after its own hostname, which need not be the name in --hosts
+# (short against fully qualified), so the fetch takes whatever cluster_dump_*.jsonl is there.
+fetch_dumps_from_host() {
+    local h="$1"
+    if [[ "$h" == "$SELF" ]]; then cp "$RANK_DUMP_DIR"/cluster_dump_*.jsonl "$DUMP_DIR/"
+    else scp -q "${SSH_OPTS[@]}" "$h:$RANK_DUMP_DIR/cluster_dump_*.jsonl" "$DUMP_DIR/"; fi
+}
+
+if [[ "$SHARED_MOUNT" == false ]]; then
+    REMOTE_DIR="/tmp/tt-cluster-debug-${USER:-$(id -un)}/$(basename "$OUTPUT_DIR")"
+    RANK_TOOL="$REMOTE_DIR/$(basename "$TOOL")"
+    RANK_DUMP_DIR="$REMOTE_DIR/dumps"
+
+    echo "Copying the tool to $NUM_HOSTS hosts ($REMOTE_DIR)..."
+    COPY_FAIL_FILE="$OUTPUT_DIR/.copy_failed_$$"
+    : > "$COPY_FAIL_FILE"
+    # One copy per host at once, waited for by PID: a bare `wait` would also wait for the
+    # log pipeline this script writes through, which cannot end while the script runs.
+    copy_pids=()
+    for h in "${HOST_LIST[@]}"; do
+        (
+            if run_on_host "$h" "mkdir -p '$RANK_DUMP_DIR'" && copy_to_host "$h" "$TOOL" "$RANK_TOOL" \
+               && run_on_host "$h" "chmod 755 '$RANK_TOOL'"; then
+                :
+            else
+                echo "$h" >> "$COPY_FAIL_FILE"
+                echo "  ERROR: could not copy the tool to $h" >&2
+            fi
+        ) &
+        copy_pids+=($!)
+    done
+    wait "${copy_pids[@]}"
+    mapfile -t copy_failed < "$COPY_FAIL_FILE"
+    rm -f "$COPY_FAIL_FILE"
+    if [[ ${#copy_failed[@]} -gt 0 ]]; then
+        echo "Error: the tool could not be copied to: ${copy_failed[*]}" >&2
+        echo "       --no-shared-mount needs passwordless ssh and scp to every host." >&2
+        exit 1
+    fi
+    echo "  copied to all $NUM_HOSTS hosts"
+    echo ""
+fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight: the tool and the output directory must be reachable from every rank.
@@ -250,11 +318,11 @@ PREFLIGHT_FILE="$OUTPUT_DIR/.preflight_$$"
 # through ipmitool under passwordless sudo, and without that it still writes every ETH
 # port but no cages or modules. Known before collecting, so the operator is told which
 # hosts will come back ETH-only rather than finding out from the dumps.
-tool_q=$(printf '%q' "$TOOL")
-out_q=$(printf '%q' "$OUTPUT_DIR")
+tool_q=$(printf '%q' "$RANK_TOOL")
+out_q=$(printf '%q' "$RANK_DUMP_DIR")
 PREFLIGHT_CMD="h=\$(hostname); bad=\"\"
-test -x $tool_q || { echo \"[\$h] ERROR: tool not executable here: $TOOL\" >&2; bad=1; }
-test -w $out_q || { echo \"[\$h] ERROR: output directory not writable here: $OUTPUT_DIR\" >&2; bad=1; }
+test -x $tool_q || { echo \"[\$h] ERROR: tool not executable here: $RANK_TOOL\" >&2; bad=1; }
+test -w $out_q || { echo \"[\$h] ERROR: dump directory not writable here: $RANK_DUMP_DIR\" >&2; bad=1; }
 if ! command -v ipmitool >/dev/null 2>&1; then ipmi=no-ipmitool
 elif sudo -n ipmitool help >/dev/null 2>&1; then ipmi=ok
 else ipmi=no-sudo; fi
@@ -287,7 +355,10 @@ rm -f "$PREFLIGHT_FILE"
 
 if [[ ${#preflight_failed[@]} -gt 0 ]]; then
     echo "Error: pre-flight failed on: ${preflight_failed[*]}" >&2
-    echo "       The tool and the output directory must both be on a mount every host shares." >&2
+    if [[ "$SHARED_MOUNT" == true ]]; then
+        echo "       The tool and the output directory must both be on a mount every host shares," >&2
+        echo "       or pass --no-shared-mount to have them copied over ssh." >&2
+    fi
     exit 1
 fi
 if [[ $preflight_seen -ne $NUM_HOSTS ]]; then
@@ -332,8 +403,8 @@ collect_args=(collect)
 # %q-quote the command here, then one `bash -c` on the rank. Only --out differs per rank,
 # because only the rank knows its own hostname. Each rank tags its log lines with [host]
 # on stderr and prints one COLLECT_RESULT line to stdout for the summary below.
-collect_bin=$(printf '%q ' "$TOOL" "${collect_args[@]}")
-dump_prefix=$(printf '%q' "$DUMP_DIR/cluster_dump_")
+collect_bin=$(printf '%q ' "$RANK_TOOL" "${collect_args[@]}")
+dump_prefix=$(printf '%q' "$RANK_DUMP_DIR/cluster_dump_")
 COLLECT_CMD="set -o pipefail; h=\$(hostname); $collect_bin --out $dump_prefix\$h.jsonl 2>&1 | while IFS= read -r l; do printf '[%s] %s\n' \"\$h\" \"\$l\"; done >&2; echo \"COLLECT_RESULT|\$h|\${PIPESTATUS[0]}\""
 
 # The descriptor may live on a "latest" path that changes under us, so record which bytes
@@ -345,6 +416,7 @@ COLLECT_CMD="set -o pipefail; h=\$(hostname); $collect_bin --out $dump_prefix\$h
     echo "tool: $TOOL"
     echo "skip_qsfp: $SKIP_QSFP"
     echo "parallelize: $PARALLELIZE"
+    echo "shared_mount: $SHARED_MOUNT"
     echo "hosts_reading_cages: $cage_hosts of $NUM_HOSTS"
     [[ ${#no_sudo_hosts[@]} -gt 0 ]] && echo "hosts_without_ipmitool_sudo: ${no_sudo_hosts[*]}"
     [[ ${#no_ipmitool_hosts[@]} -gt 0 ]] && echo "hosts_without_ipmitool: ${no_ipmitool_hosts[*]}"
@@ -400,6 +472,31 @@ if [[ ${#collect_failed[@]} -gt 0 ]]; then
 fi
 if [[ $COLLECT_MPI_EXIT -ne 0 && "$COLLECT_TIMED_OUT" == false && ${#collect_failed[@]} -eq 0 ]]; then
     echo "WARNING: mpirun exited $COLLECT_MPI_EXIT but every rank that reported succeeded"
+fi
+
+# Without a shared mount the dumps are on the hosts; bring back whatever each one wrote and
+# clear its scratch directory. A host with no dump is named; the run goes on with the rest,
+# as it does when a rank fails on a shared mount.
+if [[ "$SHARED_MOUNT" == false ]]; then
+    echo "Copying the dumps back from $NUM_HOSTS hosts..."
+    FETCH_FAIL_FILE="$OUTPUT_DIR/.fetch_failed_$$"
+    : > "$FETCH_FAIL_FILE"
+    fetch_pids=()
+    for h in "${HOST_LIST[@]}"; do
+        (
+            if ! fetch_dumps_from_host "$h" 2>/dev/null; then
+                echo "$h" >> "$FETCH_FAIL_FILE"
+            fi
+            run_on_host "$h" "rm -rf '$REMOTE_DIR'" 2>/dev/null || true
+        ) &
+        fetch_pids+=($!)
+    done
+    wait "${fetch_pids[@]}"
+    mapfile -t fetch_failed < "$FETCH_FAIL_FILE"
+    rm -f "$FETCH_FAIL_FILE"
+    if [[ ${#fetch_failed[@]} -gt 0 ]]; then
+        echo "Hosts with no dump to copy back: ${fetch_failed[*]}"
+    fi
 fi
 
 # The ranks wrote straight into the shared directory, so gathering is checking they arrived.
