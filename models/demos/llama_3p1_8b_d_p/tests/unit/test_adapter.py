@@ -16,9 +16,14 @@ constructor, which keeps the assertions on the mapping itself rather than on a 1
 
 from __future__ import annotations
 
+import inspect
+import json
+import os
+import struct
 import subprocess
 import sys
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -26,6 +31,8 @@ import ttnn
 from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillRunParams, get_adapter
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import galaxy_torus_xy_device_params
+from models.demos.llama_3p1_8b_d_p.tt.runners.adapters import llama_3p1_8b as llama_adapter
+from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
 MODEL_NAME = "llama_3p1_8b"
 
@@ -252,6 +259,66 @@ def test_weight_loader_reports_a_missing_checkpoint(tmp_path, expect_error):
 
     with expect_error(FileNotFoundError, "no .safetensors"):
         load_llama_state_dict(tmp_path, num_layers=1)
+
+
+# =====================================================================================
+# Inter-process contract with the shared runner
+# =====================================================================================
+def test_h2d_metadata_stays_twelve_bytes():
+    """The H2D metadata blob is exactly 12 B, and this model's chunk call matches it field for field.
+
+    The shared runner owns the constant — no adapter sets it — but the size is a hard contract on
+    both ends: ``H2DStreamService::forward_to_tensor`` TT_FATALs unless the span is exactly
+    ``metadata_size_bytes``, so a fourth field added upstream breaks serving here with a message
+    about a byte count rather than about the field someone added.
+
+    Asserted against ``struct.calcsize`` for the three words the runner decodes and
+    ``prefill_chunk`` consumes — ``(slot_id, actual_start, actual_end)`` — so the test states the
+    layout it depends on instead of restating the literal 12.
+    """
+    from models.demos.common.prefill.runners.prefill_producer import METADATA_SIZE_BYTES as producer_size
+    from models.demos.common.prefill.runners.prefill_runner import METADATA_SIZE_BYTES as runner_size
+
+    three_uint32 = struct.calcsize("<III")  # slot_id, actual_start, actual_end
+    assert three_uint32 == 12
+    assert runner_size == three_uint32, f"runner metadata is {runner_size} B, not the 3-word blob"
+    assert producer_size == runner_size, "producer and runner disagree on the metadata size"
+
+    # The runtime's per-chunk signature is the Python-side half of that same triple.
+    chunk_params = inspect.signature(TtPrefillRuntime.prefill_chunk).parameters
+    assert {"slot_id", "actual_start", "actual_end"} <= set(chunk_params)
+
+
+def test_manifest_env_precedence():
+    """``global_env`` > manifest > code default, which is exactly what ``setdefault`` buys.
+
+    Three cases in one pass, because the ordering only means something if all three hold:
+    a key the rank binding already exported must survive the manifest, a key only the manifest names
+    must be filled from it, and a key neither mentions must stay unset so the runner's own default
+    applies. ``tt-run`` forwards only ``TT_/ARCH_/WH_/TTNN_/DEEPSEEK_/MESH_`` prefixes, so a
+    shell-exported ``PREFILL_*`` never reaches the runner and ``global_env`` is the only way in —
+    which makes this ordering the difference between a knob that works and one that is ignored.
+    """
+    from models.demos.common.prefill.runners import prefill_runner
+
+    manifest_path = Path(llama_adapter.__file__).parents[1] / "manifests" / f"{MODEL_NAME}.json"
+    manifest = json.loads(manifest_path.read_text())["env"]
+    assert {"PREFILL_CHUNK_SIZE", "PREFILL_MAX_SEQ_LEN"} <= set(manifest), "manifest lost a key this test uses"
+    assert "PREFILL_NUM_USERS" not in manifest, "manifest gained the key that stands in for a code default"
+
+    with mock.patch.dict(os.environ, {}, clear=False):
+        os.environ["PREFILL_MANIFEST"] = str(manifest_path)
+        os.environ["PREFILL_CHUNK_SIZE"] = "4096"  # as a rank binding's global_env would set it
+        os.environ.pop("PREFILL_MAX_SEQ_LEN", None)
+        os.environ.pop("PREFILL_NUM_USERS", None)
+
+        prefill_runner._apply_manifest_env()
+
+        assert os.environ["PREFILL_CHUNK_SIZE"] == "4096", "manifest overwrote global_env"
+        assert (
+            os.environ["PREFILL_MAX_SEQ_LEN"] == manifest["PREFILL_MAX_SEQ_LEN"]
+        ), "manifest did not fill an unset key"
+        assert "PREFILL_NUM_USERS" not in os.environ, "a key no manifest names must be left to the code default"
 
 
 # =====================================================================================

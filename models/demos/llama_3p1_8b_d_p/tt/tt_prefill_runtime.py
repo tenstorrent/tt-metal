@@ -25,8 +25,10 @@ position:
     shards (``kv_cache.validate_chunk_layout``).
   * ``max_seq_len % chunk_size == 0`` — the cache is an exact number of chunk slabs, so no chunk
     straddles its end.
-  * ``actual_start % chunk_size == 0`` — a continuation resumes on a chunk boundary. The cache read
-    addresses the prefix in whole chunks, so resuming mid-chunk scrambles it.
+  * ``actual_start % 32 == 0`` — a continuation resumes on a tile boundary, which is all the three
+    position-dependent ops require. It need **not** be chunk-aligned: a multi-turn request resumes
+    at ``kv_cache.aligned_resume_length``, a multiple of 32, and ``make_chunk_input`` deals that
+    chunk's tokens out in the matching block-cyclic order.
 
 Kept free of reference-model and safetensors imports; the import-light contract is asserted by
 ``tests/unit/test_scaffold.py``.
@@ -47,10 +49,33 @@ from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     Llama31KVCache,
+    rotated_chip_positions,
+    slot_index,
     validate_chunk_layout,
 )
 from models.demos.llama_3p1_8b_d_p.tt.model import TtLlamaPrefillModel
 from models.demos.llama_3p1_8b_d_p.tt.rope import build_indexed_rope, build_transformation_mat
+
+
+def _quantize_like(t: torch.Tensor, dtype: ttnn.DataType, mesh_device) -> torch.Tensor:
+    """Round-trip a golden through the device cache dtype, on device.
+
+    A bf16 golden compared against a ``bfloat8_b`` cache measures the cache's quantisation rather
+    than the model: it costs roughly 0.94-0.96 PCC and reads as a real bug. Rounded on device so the
+    result is the hardware's rounding and not an approximation of it.
+    """
+    if dtype == ttnn.float32:
+        return t
+    tt = ttnn.from_torch(
+        t,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    out = ttnn.to_torch(ttnn.get_device_tensors(tt)[0]).float()
+    ttnn.deallocate(tt)
+    return out
 
 
 @dataclass
@@ -170,12 +195,21 @@ class TtPrefillRuntime:
         """
         self._layer_completion_sink = sink
 
-    def make_chunk_input(self, token_ids) -> ttnn.Tensor:
+    def make_chunk_input(self, token_ids, *, actual_start: int = 0) -> ttnn.Tensor:
         """One chunk's token IDs as an SP-sharded uint32 ROW_MAJOR tensor, per-chip ``(1, 1, s_local)``.
 
-        Row ``r`` holds the contiguous slice ``[r * s_local : (r+1) * s_local]``, replicated across
-        the TP columns — the same per-chip layout the request-mode H2D socket delivers, so the
-        socket path and this one feed one code path.
+        Reproduces the device-major order the request-mode H2D socket delivers, so the socket path
+        and this one feed one code path. The engine reshuffles host-side before
+        ``forward_to_tensor``, and ``prefill_chunk`` consumes whatever arrives **as given** — so the
+        ordering belongs here, on the side that builds the payload, and nowhere downstream.
+
+        ``actual_start`` is why this is a gather and not a reshape. The chunk's tokens are dealt to
+        the SP rows by the block-cyclic staircase the KV writer and the indexed-RoPE reader both
+        derive from it, which is the contiguous split **only** when ``actual_start`` is a multiple of
+        ``chunk_size``. Leaving it out is the trap in tt-blaze#4148: every single-turn request starts
+        at 0 and passes, and the first multi-turn continuation — resuming at
+        ``aligned_resume_length``, a multiple of 32 — silently rotates the tokens away from the RoPE
+        rows that rotate them and the cache rows that store them.
 
         On a non-first pipeline rank the real input is a hidden-state activation arriving over the
         D2D socket; a placeholder of the right spec is returned so warm-up can still run.
@@ -189,7 +223,13 @@ class TtPrefillRuntime:
                 f"tail), got {len(token_ids)}"
             )
         sp = self.config.sp_factor
-        tokens = torch.as_tensor(token_ids, dtype=torch.int32).reshape(sp, 1, self.config.chunk_size_local)
+        chunk_local = self.config.chunk_size_local
+        positions = rotated_chip_positions(actual_start, sp, chunk_local)
+        # positions are absolute; token_ids covers [actual_start, actual_start + chunk_size).
+        tokens = torch.tensor(
+            [[[token_ids[pos - actual_start] for pos in positions[chip]]] for chip in range(sp)],
+            dtype=torch.int32,
+        )
         dims = [None, None]
         dims[self.config.sp_axis] = 0  # the sp-major leading dim; replicated across TP
         return ttnn.from_torch(
@@ -232,12 +272,21 @@ class TtPrefillRuntime:
             # offset), so a bucket past the first would raise rather than compile. One bucket is
             # also all there is to warm: without a cache read, every chunk runs the same program.
             starts = starts[:1]
+        elif len(starts) > 1:
+            # One tile-aligned-but-not-chunk-aligned bucket, because a continuation resumes at
+            # aligned_resume_length and takes the rotated branch of the block-cyclic map. The three
+            # position-dependent ops appear to keep the offset out of their program hash, so this
+            # likely compiles nothing new — cheap enough to warm anyway rather than risk discovering
+            # otherwise as a stall in the middle of a served continuation.
+            # A single tile step, so it always fits: more than one bucket means
+            # max_seq_len >= 2 * chunk_size, hence 32 + chunk_size is inside the cache.
+            starts.append(NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK)
 
         logger.info(f"TtPrefillRuntime.compile: warming {len(starts)} KV-length bucket(s)")
         t0 = time.perf_counter()
         for start in starts:
             out = self.prefill_chunk(
-                self.make_chunk_input([0] * config.chunk_size),
+                self.make_chunk_input([0] * config.chunk_size, actual_start=start),
                 kv_cache,
                 slot_id=0,
                 actual_start=start,
@@ -297,16 +346,16 @@ class TtPrefillRuntime:
                 f"[actual_start={actual_start}, actual_end={actual_end}) is not within one chunk of "
                 f"{config.chunk_size}"
             )
-        # The block-cyclic cache read addresses the prefix in whole chunks. Resuming from a prefix
-        # that is not chunk-aligned does not fail in the kernel, it reads the wrong rows — so refuse
-        # here, where the caller's offset is named, rather than deep in attention.
-        if actual_start % config.chunk_size:
-            raise ValueError(
-                f"actual_start={actual_start} must be a multiple of chunk_size={config.chunk_size}; "
-                f"resuming from a non-chunk-aligned prefix is not supported"
-            )
+        # 32, not chunk_size. The three position-dependent ops — the KV writer, the indexed-RoPE
+        # reader and the ring SDPA's KV-pad rotation — each derive the same block-cyclic staircase
+        # from this offset and each assert only tile alignment, so a 32-aligned continuation is a
+        # supported case. What it requires is that the chunk arrives in the matching device-major
+        # order, which is make_chunk_input's job.
         if actual_start % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK:
-            raise ValueError(f"actual_start={actual_start} must be a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}")
+            raise ValueError(
+                f"actual_start={actual_start} must be a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}; a "
+                f"continuation should resume at kv_cache.aligned_resume_length(prev_len) and replay the remainder"
+            )
         # Rank-local, not global: the cache holds this rank's layers only, indexed from 0 (see
         # tt/decoder.py's cache_layer_idx).
         if kv_cache.num_layers < config.num_layers:
@@ -377,8 +426,13 @@ class TtPrefillRuntime:
         chunk_size = self.config.chunk_size
         tokens = list(token_ids)
         total = len(tokens)
-        if start_pos % chunk_size:
-            raise ValueError(f"start_pos={start_pos} must be a multiple of chunk_size={chunk_size}")
+        # 32, matching prefill_chunk: a continuation resumes at aligned_resume_length(prev_len),
+        # which is a multiple of 32 and only incidentally ever a multiple of chunk_size.
+        if start_pos % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK:
+            raise ValueError(
+                f"start_pos={start_pos} must be a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK} "
+                f"(see kv_cache.aligned_resume_length)"
+            )
         if start_pos + total > self.config.max_seq_len:
             raise ValueError(
                 f"prompt of {total} tokens at start_pos={start_pos} exceeds the per-user cache "
@@ -398,7 +452,7 @@ class TtPrefillRuntime:
                 ttnn.deallocate(last)
             actual_start = start_pos + offset
             last = self.prefill_chunk(
-                self.make_chunk_input(chunk),
+                self.make_chunk_input(chunk, actual_start=actual_start),
                 kv_cache,
                 slot_id=slot_id,
                 actual_start=actual_start,
@@ -416,3 +470,136 @@ class TtPrefillRuntime:
         layer builds is anchored on K with V at a fixed stride from it.
         """
         return int(kv_cache.k.buffer_address())
+
+    # =====================================================================
+    # Validation read-back
+    # =====================================================================
+    def read_slot_kv(self, kv_cache: Llama31KVCache, slot_id: int, *, num_tokens: int):
+        """One user's cached K and V as host tensors in **natural token order**.
+
+        Returns ``(k, v)``, each ``[num_layers, num_kv_heads, num_tokens, head_dim]`` float32 — the
+        same axes and order the golden trace stores, so a caller compares without further permuting.
+
+        Undoes both shardings the cache applies. KV heads are TP-sharded across the columns, so the
+        chip at column ``c`` owns heads ``[c * heads_per_chip, (c+1) * heads_per_chip)``. The
+        sequence is block-cyclic across the SP rows, so row ``r``'s local index ``i`` holds absolute
+        position ``positions[r * seq_local + i]`` — the inverse walk, taken from the same
+        ``blockcyclic_positions`` the writer is graded against, rather than re-derived here.
+
+        Reads the caches once each and slices on the host: a per-layer device read would be 32x the
+        transfers for the same bytes.
+        """
+        # Lazily imported: tt.mla.utils pulls safetensors and transformers onto the import path, and
+        # tt/tt_prefill_runtime.py is asserted import-light for the H2D producers. This is a
+        # validation path, so the cost lands only where someone asked for a read-back.
+        from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+
+        config = self.config
+        if not 0 <= slot_id < config.num_users:
+            raise ValueError(f"slot_id {slot_id} out of range [0, {config.num_users})")
+        if not 0 < num_tokens <= config.max_seq_len:
+            raise ValueError(f"num_tokens {num_tokens} out of range (0, {config.max_seq_len}]")
+
+        rows, cols = config.mesh_shape
+        sp, tp = config.sp_factor, config.tp_factor
+        seq_local = config.max_seq_len // sp
+        heads_per_chip = kv_cache.num_kv_heads_per_chip
+        head_dim = Llama31_8BConfig.HEAD_DIM
+        num_layers = config.num_layers
+
+        positions = blockcyclic_positions(sp, config.chunk_size, config.max_seq_len)
+
+        out = {}
+        for name, cache in (("k", kv_cache.k), ("v", kv_cache.v)):
+            shards = ttnn.get_device_tensors(cache)
+            full = torch.zeros(num_layers, heads_per_chip * tp, num_tokens, head_dim)
+            for row in range(sp):
+                # Which absolute position each of this row's local slots holds. Slots beyond
+                # num_tokens belong to a longer request and are dropped.
+                local_to_abs = positions[row * seq_local : (row + 1) * seq_local]
+                keep = [(i, p) for i, p in enumerate(local_to_abs) if p < num_tokens]
+                if not keep:
+                    continue
+                local_idx = torch.tensor([i for i, _ in keep])
+                abs_idx = torch.tensor([p for _, p in keep])
+                for col in range(tp):
+                    # mesh_shape is (rows, cols) and the sp/tp axes may be either way round, so the
+                    # flat device index is derived from sp_axis rather than assumed row-major.
+                    chip = (row * cols + col) if config.sp_axis == 0 else (col * cols + row)
+                    shard = ttnn.to_torch(shards[chip]).float()
+                    for layer in range(num_layers):
+                        block = shard[slot_index(slot_id, layer, kv_cache.num_layers)]
+                        head_slice = slice(col * heads_per_chip, (col + 1) * heads_per_chip)
+                        full[layer, head_slice, abs_idx, :] = block[:, local_idx, :]
+            out[name] = full
+        return out["k"], out["v"]
+
+    def kv_cache_pcc_check(
+        self,
+        kv_cache: Llama31KVCache,
+        golden_dir,
+        *,
+        num_tokens: int,
+        slot_id: int = 0,
+        min_pcc: float = 0.99,
+    ) -> dict:
+        """Per-layer PCC of this rank's cached KV against a golden trace. Returns ``{layer: (k, v)}``.
+
+        The golden is ``<golden_dir>/kv_cache/layer_<L>.safetensors`` holding
+        ``key_cache_layer_<L>`` / ``value_cache_layer_<L>`` at ``[1, num_kv_heads, tokens, head_dim]``
+        — what ``scripts/generate_golden_kv_cache.py`` writes, and the same layout gpt-oss and
+        MiniMax use, so ``PREFILL_TRACE_DIR`` is interchangeable between them.
+
+        The golden is cast to the cache's dtype before comparing. Skipping that leaves a spurious
+        ~0.94-0.96 gap, because a bf16 golden against a bfloat8_b cache measures the cache's
+        quantisation and reads as a real bug.
+
+        Layers are addressed by GLOBAL index in the golden and rank-local index in the cache, which
+        is what lets a pipeline rank holding layers 24..31 grade itself against a whole-model trace.
+
+        Raises if it compared nothing — a missing or empty trace dir must not read as a pass. That
+        is the failure this check exists to prevent, so it cannot be one of its own outcomes.
+        """
+        from safetensors.torch import safe_open  # heavy; keep off the module import path
+
+        from models.common.utility_functions import comp_pcc
+
+        kv_dir = Path(golden_dir) / "kv_cache"
+        if not kv_dir.is_dir():
+            raise FileNotFoundError(f"golden KV dir {kv_dir} does not exist; set PREFILL_TRACE_DIR to a trace dir")
+
+        dev_k, dev_v = self.read_slot_kv(kv_cache, slot_id, num_tokens=num_tokens)
+        cache_dtype = kv_cache.k.dtype
+
+        results = {}
+        for local_layer in range(self.config.num_layers):
+            global_layer = self.config.first_layer_idx + local_layer
+            path = kv_dir / f"layer_{global_layer}.safetensors"
+            if not path.exists():
+                raise FileNotFoundError(f"golden layer {global_layer} missing: {path}")
+            with safe_open(str(path), framework="pt") as handle:
+                golden_k = handle.get_tensor(f"key_cache_layer_{global_layer}").float()
+                golden_v = handle.get_tensor(f"value_cache_layer_{global_layer}").float()
+
+            pccs = []
+            for golden, got in ((golden_k, dev_k[local_layer]), (golden_v, dev_v[local_layer])):
+                # Quantise at the stored length, then slice: the round-trip goes through a tiled
+                # device tensor, and num_tokens need not be a multiple of the 32-row tile.
+                want = _quantize_like(golden[0], cache_dtype, self.mesh_device)[:, :num_tokens, :]
+                pccs.append(float(comp_pcc(want, got, 0.0)[1]))
+            results[global_layer] = (pccs[0], pccs[1])
+            logger.info(f"KV PCC layer {global_layer}: k={pccs[0]:.6f} v={pccs[1]:.6f}")
+
+        if not results:
+            raise RuntimeError(
+                f"KV PCC check compared 0 layers (num_layers={self.config.num_layers}); a read-back "
+                f"that checked nothing is a failure, not a pass"
+            )
+        worst_layer, (worst_k, worst_v) = min(results.items(), key=lambda kv: min(kv[1]))
+        worst = min(worst_k, worst_v)
+        logger.info(f"KV PCC over {len(results)} layer(s): worst {worst:.6f} at layer {worst_layer}")
+        if worst < min_pcc:
+            raise AssertionError(
+                f"KV PCC {worst:.6f} at layer {worst_layer} (k={worst_k:.6f} v={worst_v:.6f}) below {min_pcc}"
+            )
+        return results

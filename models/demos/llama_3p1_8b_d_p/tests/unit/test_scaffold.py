@@ -9,10 +9,14 @@ values live in ``reference/llama_3p1_8b_config.py`` and a test that re-typed the
 check that copy-paste worked.
 """
 
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 ADAPTER_MODULE = "models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b"
+# models/demos/llama_3p1_8b_d_p/tests/unit/ -> repo root
+REPO_ROOT = Path(__file__).parents[5]
 
 # Anything in this set at adapter-import time breaks the H2D producers, which import the module only
 # to read the registry. The prefill engine's docs make this a hard contract.
@@ -37,6 +41,48 @@ def test_adapter_is_import_light():
     )
     out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, check=True).stdout.strip()
     assert out == "", f"adapter import pulled in heavy modules: {out}"
+
+
+def _collect_count(marker_expr: str | None) -> int:
+    """How many cells in this package pytest would select, optionally under ``-m``.
+
+    Collection runs in a subprocess so it goes through the real conftest hook and the real ``-m``
+    machinery — the two things CI depends on. Asserting on marker objects in-process would test a
+    different code path than the one the pipeline uses.
+    """
+    package_tests = Path(__file__).parents[1]
+    cmd = [sys.executable, "-m", "pytest", str(package_tests), "--collect-only", "-q", "-p", "no:randomly"]
+    if marker_expr:
+        cmd += ["-m", marker_expr]
+    out = subprocess.run(cmd, capture_output=True, text=True, cwd=REPO_ROOT).stdout
+    # "N tests collected", or "N/M tests collected" once -m deselects, or "no tests collected" for
+    # an empty selection — which is a real answer here, not a parse failure, since asking for the
+    # overlap of the two labels is supposed to come back empty.
+    if re.search(r"no tests collected", out):
+        return 0
+    match = re.search(r"(\d+)(?:/\d+)? tests? collected", out)
+    assert match, f"could not read a collection count from:\n{out[-3000:]}"
+    return int(match.group(1))
+
+
+def test_hardware_labels_partition_the_suite():
+    """tt-blaze#4152: every cell carries exactly one of ``cpu_only`` / ``device_required``.
+
+    The pipeline runs ``-m cpu_only`` on every PR and ``-m device_required`` on dispatch, so the two
+    sets have to cover the suite and not overlap. An unlabelled cell is the failure that matters: it
+    runs in neither leg, so it silently stops being tested while both legs stay green.
+    """
+    total = _collect_count(None)
+    cpu_only = _collect_count("cpu_only")
+    device_required = _collect_count("device_required")
+
+    assert cpu_only + device_required == total, (
+        f"{total - cpu_only - device_required} cell(s) carry neither label (cpu_only={cpu_only}, "
+        f"device_required={device_required}, total={total})"
+    )
+    assert _collect_count("cpu_only and device_required") == 0, "a cell carries both labels"
+    # Both legs must be non-empty, or a selector typo would read as a clean run of nothing.
+    assert cpu_only > 0 and device_required > 0, f"cpu_only={cpu_only} device_required={device_required}"
 
 
 def test_weight_cache_path_uses_sp_times_tp(tmp_path, monkeypatch):

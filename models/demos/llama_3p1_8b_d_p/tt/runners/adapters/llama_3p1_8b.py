@@ -60,7 +60,11 @@ class Llama31PrefillAdapter(PrefillModelAdapter):
     # PREFILL_HF_MODEL overrides, and when it does it supplies both config and weights.
     hf_model_default = "models/tt_transformers/model_params/Llama-3.1-8B-Instruct"
     ttnn_cache_default = ""  # TTNN weight-cache root; PREFILL_TTNN_CACHE overrides (empty => no cache)
-    prefill_trace_default = ""  # golden trace dir (token_ids + KV); PREFILL_TRACE_DIR overrides
+    # Golden trace (metadata.json + kv_cache/layer_*.safetensors) for the #4150 per-layer KV check,
+    # staged beside the other models' traces; PREFILL_TRACE_DIR overrides. 2048 tokens x 32 layers,
+    # K in the **meta** frame (what blaze decode reads) and stored bf16 -- a consumer must round-trip
+    # it through bfloat8_b before PCC, which tt_prefill_runtime.kv_cache_pcc_check does.
+    prefill_trace_default = "/mnt/models/llama-3.1-8b-prefill-cache/golden/llama31_8b_kv_2048_32L"
     default_gate_mode = "DEVICE_FP32"  # dense model — no gate; the engine reads this unconditionally
 
     # --- test metadata ---

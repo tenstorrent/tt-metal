@@ -2,7 +2,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Skip the mesh arms the box in hand cannot open, so one suite runs everywhere.
+"""Hardware labelling for the tiered pipeline, and skipping the mesh arms a box cannot open.
+
+Two jobs, both at collection time.
+
+**Labels (tt-blaze#4152).** Every cell carries exactly one of ``cpu_only`` or ``device_required``,
+so ``-m cpu_only`` is the PR-CI selector and ``-m device_required`` the dispatch one. The label is
+*derived* from whether the cell asks for a device fixture rather than written on each test, because
+the two must agree and a hand-written label is free to be wrong: a mislabelled device test does not
+fail, it gets scheduled on a runner with no silicon and errors in fixture setup, which reads as a
+broken test rather than a broken label. Deriving it means a new test is labelled correctly by
+construction, and ``test_hardware_labels_partition_the_suite`` asserts the partition holds.
+
+
 
 The device arms of these tests span a loudbox (1x8, 4x2), a QuietBox (2x2) and a Galaxy (4x8).
 Only one of those is ever the machine under test, and the stock ``mesh_device`` fixture skips only
@@ -26,6 +38,16 @@ import pytest
 
 import ttnn
 
+# Asking for any of these means the cell needs an allocation. ``mesh_device`` covers every arm in
+# this package today; the rest are listed so a future test that takes a plain device fixture is
+# labelled correctly instead of landing in the cpu_only set and erroring on a runner with no chips.
+DEVICE_FIXTURES = frozenset({"mesh_device", "device", "all_devices", "pcie_devices", "mesh_device_fixture"})
+
+
+def _needs_device(item) -> bool:
+    """True when the cell requests a device fixture, directly or through another fixture."""
+    return bool(DEVICE_FIXTURES & set(getattr(item, "fixturenames", ())))
+
 
 def _requested_fabric(item):
     """The arm's requested fabric, or None when it never opens one."""
@@ -45,6 +67,9 @@ def _requested_mesh_shape(item):
 
 
 def pytest_collection_modifyitems(config, items):
+    for item in items:
+        item.add_marker(pytest.mark.device_required if _needs_device(item) else pytest.mark.cpu_only)
+
     mesh_arms = [item for item in items if _requested_mesh_shape(item) and _requested_fabric(item)]
     if not mesh_arms:
         # Nothing selected needs a fabric, so do not open a device just to count chips.

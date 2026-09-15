@@ -168,12 +168,16 @@ class TtLlamaPrefillModel(LightweightModule):
     def embed(self, tt_tokens: ttnn.Tensor) -> ttnn.Tensor:
         """SP-sharded uint32 token IDs -> the TP-sharded residual ``[1, 1, seq_local, emb/tp]``.
 
-        ``tt_tokens`` is already on device, per-chip shape ``(1, 1, seq_local)``: the sequence
-        sharded contiguously across the SP rows and replicated across the TP columns. That is the
-        layout ``tt_prefill_runtime.make_chunk_input`` builds *and* the layout the request-mode H2D
-        socket delivers, so both feed one code path. For a chunk, the contiguous split is exactly
-        what the block-cyclic KV writer and ``rope.build_indexed_rope``'s reordering assume — pinned
-        by ``test_kv_cache_vs_ref``'s block-cyclic tests.
+        ``tt_tokens`` is already on device, per-chip shape ``(1, 1, seq_local)``: the sequence dealt
+        to the SP rows in the block-cyclic order the KV writer and ``rope.build_indexed_rope``
+        assume, and replicated across the TP columns. That is the layout
+        ``tt_prefill_runtime.make_chunk_input`` builds *and* the layout the request-mode H2D socket
+        delivers, so both feed one code path.
+
+        The order is the plain contiguous split only when the chunk starts on a chunk boundary; a
+        continuation resuming mid-chunk arrives rotated (``kv_cache.rotated_chip_positions``). This
+        method does not care either way — it embeds row-wise — but the distinction is why it must
+        not "helpfully" reorder anything.
 
         The caller keeps ownership of ``tt_tokens``.
         """

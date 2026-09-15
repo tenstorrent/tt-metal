@@ -44,7 +44,7 @@ from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_
 from models.demos.llama_3p1_8b_d_p.reference.model import Llama31Model, build_hf_cos_sin
 from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
-from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
+from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig, _quantize_like
 
 EMB_DIM = Llama31_8BConfig.EMB_SIZE
 N_KV_HEADS = Llama31_8BConfig.NUM_KEY_VALUE_HEADS
@@ -267,23 +267,239 @@ def test_layer_completion_sink_fires_once_per_layer_per_chunk(mesh_device, devic
     [pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2")],
     indirect=["mesh_device", "device_params"],
 )
-def test_prefill_chunk_rejects_unaligned_resume(mesh_device, device_params, expect_error, reset_seeds):
-    """A continuation must resume on a chunk boundary.
+def test_prefill_chunk_rejects_a_sub_tile_resume(mesh_device, device_params, expect_error, reset_seeds):
+    """A continuation must resume on a 32-token tile boundary — but need not be chunk-aligned.
 
-    The block-cyclic cache read addresses the prefix in whole chunks, so a mid-chunk resume does not
-    fail in the kernel — it reads the wrong rows. Refused where the caller's offset is named.
+    32 is the real constraint: the KV writer derives its tile offset by dividing the offset by 32,
+    and the indexed-RoPE reader and ring SDPA assert the same. A sub-tile offset does not fail in
+    the kernel, so it is refused here where the caller's offset is named.
     """
     chunk_size = 256
     runtime, kv_cache, config = _build(mesh_device, chunk_size=chunk_size, max_seq_len=1024)
     tokens = runtime.make_chunk_input([0] * chunk_size)
 
-    with expect_error(ValueError, "must be a multiple of chunk_size"):
-        runtime.prefill_chunk(tokens, kv_cache, slot_id=0, actual_start=32, actual_end=32 + chunk_size)
+    with expect_error(ValueError, "must be a multiple of 32"):
+        runtime.prefill_chunk(tokens, kv_cache, slot_id=0, actual_start=8, actual_end=8 + chunk_size)
     with expect_error(ValueError, "out of range"):
         runtime.prefill_chunk(tokens, kv_cache, slot_id=3, actual_start=0, actual_end=chunk_size)
     with expect_error(ValueError, "past the per-user cache"):
         runtime.prefill_chunk(tokens, kv_cache, slot_id=0, actual_start=1024, actual_end=1024 + chunk_size)
     ttnn.deallocate(tokens)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_chunk_input_matches_the_engine_h2d_geometry(mesh_device, device_params, reset_seeds):
+    """What ``make_chunk_input`` builds is spec-identical to what the engine's H2D socket delivers.
+
+    ``prefill_chunk`` consumes the socket payload as given, so the two producers have to agree on
+    shape, dtype, layout and sharding. They are written independently — ``make_global_spec`` and
+    ``H2D_MAPPER_CONFIG`` live in the shared runner, this one in the model — and nothing else
+    compares them: a mismatch would not fail here, it would fail only under a live socket, which is
+    the most expensive place to find it.
+
+    (The issue asks for this against ``MockPrefillRunner``. No such symbol exists in this repo —
+    the engine's device-free half is ``prefill_producer.py`` driving a real ``prefill_runner.py``
+    over a socket — so the geometry those two agree on is what gets pinned instead.)
+    """
+    from models.demos.common.prefill.runners.prefill_runner import H2D_MAPPER_CONFIG
+    from models.demos.common.prefill.runners.runner_utils import make_global_spec
+
+    chunk_size = 256
+    runtime, _kv_cache, config = _build(mesh_device, chunk_size=chunk_size, max_seq_len=1024)
+    tokens = runtime.make_chunk_input(list(range(chunk_size)))
+
+    want = make_global_spec(tuple(mesh_device.shape), chunk_size)
+    assert tuple(tokens.shape) == tuple(want.shape), f"shape {tuple(tokens.shape)} != engine {tuple(want.shape)}"
+    assert tokens.dtype == want.dtype == ttnn.uint32
+    assert tokens.layout == want.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    # The engine shards dim 0 over the first mesh axis and replicates over the second; this model
+    # must put its SP axis in the same place or every chip gets the wrong tokens.
+    placements = H2D_MAPPER_CONFIG.placements
+    assert config.sp_axis == 0, (
+        f"the engine's H2D mapper shards dim 0 on mesh axis 0 ({placements}), so sp_axis must be 0, "
+        f"got {config.sp_axis}"
+    )
+    ttnn.deallocate(tokens)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_non_chunk_aligned_continuation_matches_the_reference(mesh_device, device_params, reset_seeds):
+    """#4148's non-identity case: a continuation resuming off a chunk boundary.
+
+    The trap this covers: the block-cyclic map that deals a chunk's tokens to the SP rows is the
+    plain contiguous split **exactly** when ``actual_start % chunk_size == 0``. Every single-turn
+    request starts at 0, so a runtime that assumes prompt order passes the entire suite and then
+    misplaces every token of the first multi-turn continuation — which resumes at
+    ``aligned_resume_length``, a multiple of 32 and only incidentally of ``chunk_size``.
+
+    ``first_len`` is chosen so the resume offset is 32-aligned and *not* chunk-aligned, and so that
+    it does not land on a ``chunk_size / sp`` boundary either — that sub-case is a pure rotation,
+    while an offset inside a chip's own slab additionally rotates the boundary chip, which is the
+    half a naive rotation gets wrong.
+
+    Graded on the cache rather than the hidden states because the cache is what prefill produces:
+    misplaced tokens can leave the last chunk's hidden states plausible while the cache decode
+    inherits is scrambled.
+    """
+    from models.demos.llama_3p1_8b_d_p.reference.model import to_meta_frame
+    from models.demos.llama_3p1_8b_d_p.tt.kv_cache import aligned_resume_length
+
+    torch.manual_seed(0)
+    chunk_size, max_seq_len = 256, 1024
+    sp = mesh_device.shape[0]
+    first_len = 160  # 32-aligned; not a multiple of chunk_size (256) nor of chunk_size/sp (64)
+    resume = aligned_resume_length(first_len)
+    assert (
+        resume % 32 == 0 and resume % chunk_size and resume % (chunk_size // sp)
+    ), f"resume={resume} does not exercise the rotated branch at sp={sp}"
+    total = resume + chunk_size
+
+    reference = Llama31Model(num_layers=TEST_LAYERS, vocab_size=TEST_VOCAB).eval()
+    with torch.no_grad():
+        # Default norms are all ones, which would hide a dropped gamma anywhere in the stack.
+        for layer in reference.layers:
+            layer.input_layernorm.weight.copy_(1.0 + torch.randn(EMB_DIM) * 0.05)
+            layer.post_attention_layernorm.weight.copy_(1.0 + torch.randn(EMB_DIM) * 0.05)
+        reference.norm.weight.copy_(1.0 + torch.randn(EMB_DIM) * 0.05)
+
+    token_ids = torch.randint(0, TEST_VOCAB, (1, total))
+
+    # Reference KV for the whole sequence in one shot: the device has to reproduce this regardless
+    # of how the prompt was split into turns.
+    with torch.no_grad():
+        _, past_kvs = reference(token_ids, start_pos=0, past_kvs=None, return_kv=True)
+
+    runtime, kv_cache, config = _build(
+        mesh_device,
+        chunk_size=chunk_size,
+        max_seq_len=max_seq_len,
+        state_dict=_reference_state_dict(reference),
+    )
+
+    # Turn 1, then the continuation from a non-chunk-aligned prefix.
+    runtime.prefill_prompt(token_ids[0, :first_len].tolist(), kv_cache, start_pos=0)
+    runtime.prefill_prompt(token_ids[0, resume:total].tolist(), kv_cache, start_pos=resume)
+
+    got_k, got_v = runtime.read_slot_kv(kv_cache, 0, num_tokens=total)
+
+    pccs = []
+    for layer, (ref_k, ref_v) in enumerate(past_kvs):
+        # The device stores K post-RoPE in the Meta-interleaved frame; the reference keeps HF.
+        want_k = _quantize_like(to_meta_frame(ref_k)[0, :, :total], ttnn.bfloat8_b, mesh_device)
+        want_v = _quantize_like(ref_v[0, :, :total], ttnn.bfloat8_b, mesh_device)
+        for name, want, got in (("k", want_k, got_k[layer]), ("v", want_v, got_v[layer])):
+            _, pcc = comp_pcc(want, got, PCC_REQUIRED)
+            logger.info(f"continuation layer {layer} {name} PCC: {pcc}")
+            pccs.append(pcc)
+
+    assert min(pccs) >= PCC_REQUIRED, (
+        f"KV PCC {min(pccs)} after a continuation resuming at {resume} (chunk_size={chunk_size}); "
+        f"the chunk's tokens were dealt to the wrong SP rows"
+    )
+
+
+# =====================================================================================
+# Validation read-back (#4150 / #4152)
+# =====================================================================================
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card"),
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kv_readback_inverts_the_blockcyclic_write(mesh_device, device_params, reset_seeds):
+    """``read_slot_kv``'s host inverse agrees with the writer kernel's walk, across two chunks.
+
+    The read-back is what grades the full-model run, so it has to be wrong-able independently of the
+    model: here the cache is written directly with known per-position vectors, so a mismatch means
+    the inverse walk disagrees with the kernel and nothing else.
+
+    Two chunks specifically. The block-cyclic mapping is contiguous-per-row for chunk 0 only (see
+    ``test_blockcyclic_first_chunk_covers_exactly_the_first_chunk`` in the KV suite), so an inverse
+    that merely un-shards would pass a one-chunk test and scramble every continuation.
+    """
+    from models.demos.llama_3p1_8b_d_p.tt.kv_cache import write_kv_chunk
+
+    torch.manual_seed(0)
+    chunk_size, max_seq_len, num_tokens = 128, 256, 256
+    runtime, kv_cache, config = _build(mesh_device, chunk_size=chunk_size, max_seq_len=max_seq_len, num_layers=1)
+
+    heads = kv_cache.num_kv_heads_per_chip * config.tp_factor
+    head_dim = Llama31_8BConfig.HEAD_DIM
+    # A distinct random vector per (head, absolute position): unique enough that any misplacement is
+    # a mismatch, and unlike a position-stamped integer it survives bfloat8_b without aliasing its
+    # neighbours (bf8 cannot hold 2047 exactly, so stamping would blur adjacent positions together).
+    ref_k = torch.randn(1, heads, num_tokens, head_dim)
+    ref_v = torch.randn(1, heads, num_tokens, head_dim)
+
+    shard_dims = [None, None]
+    shard_dims[config.sp_axis] = 2  # sequence over the SP rows
+    shard_dims[config.tp_axis] = 1  # KV heads over the TP columns
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=config.mesh_shape, dims=tuple(shard_dims))
+
+    for start in range(0, num_tokens, chunk_size):
+        sl = slice(start, start + chunk_size)
+
+        def to_dev(t):
+            return ttnn.from_torch(
+                t[:, :, sl], device=mesh_device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, mesh_mapper=mapper
+            )
+
+        tt_k, tt_v = to_dev(ref_k), to_dev(ref_v)
+        write_kv_chunk(kv_cache, tt_k, tt_v, slot_idx=0, layer_idx=0, kv_actual=start, sp_axis=config.sp_axis)
+    ttnn.synchronize_device(mesh_device)
+
+    got_k, got_v = runtime.read_slot_kv(kv_cache, 0, num_tokens=num_tokens)
+    assert got_k.shape == (1, heads, num_tokens, head_dim), f"unexpected read-back shape {tuple(got_k.shape)}"
+
+    for name, ref, got in (("k", ref_k, got_k), ("v", ref_v, got_v)):
+        want = _quantize_like(ref[0], ttnn.bfloat8_b, mesh_device)
+        moved = [p for p in range(num_tokens) if not torch.allclose(want[:, p], got[0, :, p], atol=1e-2)]
+        assert not moved, (
+            f"{name}: {len(moved)} position(s) read back from the wrong cache row, first few "
+            f"{moved[:8]} — the host inverse walk disagrees with the writer kernel"
+        )
+    logger.info(f"KV read-back round-trip exact over {num_tokens} positions, {heads} head(s)")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card")],
+    indirect=["mesh_device", "device_params"],
+)
+def test_kv_pcc_check_refuses_a_trace_it_could_not_read(mesh_device, device_params, tmp_path, expect_error):
+    """A read-back that compared nothing fails (#4152), rather than reporting a vacuous pass.
+
+    The failure mode this guards is a green galaxy job that validated zero layers because
+    ``PREFILL_TRACE_DIR`` pointed somewhere empty — the most expensive kind of false pass, since it
+    is the one that makes everything downstream look verified.
+    """
+    runtime, kv_cache, _ = _build(mesh_device, chunk_size=128, max_seq_len=256, num_layers=1)
+
+    with expect_error(FileNotFoundError, "does not exist"):
+        runtime.kv_cache_pcc_check(kv_cache, tmp_path, num_tokens=128)
+
+    (tmp_path / "kv_cache").mkdir()  # present but empty: no layer_*.safetensors to compare
+    with expect_error(FileNotFoundError, "golden layer 0 missing"):
+        runtime.kv_cache_pcc_check(kv_cache, tmp_path, num_tokens=128)
 
 
 @pytest.mark.skipif(
@@ -338,3 +554,65 @@ def test_real_checkpoint_hidden_states(mesh_device, device_params, reset_seeds):
     passing, pcc = comp_pcc(torch_hidden[:, -chunk_size:], got, PCC_REQUIRED)
     logger.info(f"real-checkpoint 32-layer hidden-state PCC: {pcc}")
     assert passing, f"real-checkpoint PCC {pcc} below {PCC_REQUIRED}"
+
+
+@pytest.mark.skipif(
+    os.getenv("LLAMA31_8B_REAL_WEIGHTS") != "1",
+    reason="opt-in: reads the real 16 GB checkpoint (set LLAMA31_8B_REAL_WEIGHTS=1)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        # #4150's acceptance geometry: SP=4 x TP=8 on one Galaxy, 32 layers, 2 chunks of 1024.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_real_checkpoint_kv_pcc_vs_golden(mesh_device, device_params, reset_seeds):
+    """#4150: 32 layers, real weights, 2 chunks, per-layer KV PCC against the CPU-generated golden.
+
+    This is the acceptance run, and it grades a different thing than
+    ``test_real_checkpoint_hidden_states``: hidden states are the model's *output*, while the cache
+    is its *product* — prefill is headless, so a cache written to the wrong rows, in the wrong RoPE
+    frame, or with V converted as if it were K can leave the hidden states intact and still hand
+    decode garbage. Only a per-layer cache comparison sees that.
+
+    The golden's tokens come from the trace, not from a fresh random draw, because the golden KV is
+    only meaningful for the prompt it was generated from.
+    """
+    import json
+    from pathlib import Path
+
+    from models.demos.llama_3p1_8b_d_p.reference.model import load_hf_state_dict
+    from models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b import Llama31PrefillAdapter
+
+    trace_dir = Path(os.environ.get("PREFILL_TRACE_DIR") or Llama31PrefillAdapter.prefill_trace_default)
+    if not (trace_dir / "metadata.json").exists():
+        pytest.skip(f"no golden trace at {trace_dir}; generate with scripts/generate_golden_kv_cache.py")
+
+    metadata = json.loads((trace_dir / "metadata.json").read_text())
+    # The two fields a consumer must not guess. A golden in the HF frame would fail on K and pass on
+    # V, which looks like a RoPE bug rather than a mis-generated golden.
+    assert metadata["rope_frame"] == "meta", f"golden is in the {metadata['rope_frame']} frame; decode reads meta"
+    assert metadata["num_layers"] == Llama31_8BConfig.NUM_LAYERS, "golden is not a full 32-layer trace"
+
+    chunk_size, max_seq_len = 1024, 2048
+    token_ids = list(metadata["token_ids"])[:max_seq_len]
+    num_tokens = len(token_ids)
+    assert num_tokens == max_seq_len, f"golden has {num_tokens} tokens, this arm needs {max_seq_len}"
+
+    runtime, kv_cache, _ = _build(
+        mesh_device,
+        chunk_size=chunk_size,
+        max_seq_len=max_seq_len,
+        num_layers=Llama31_8BConfig.NUM_LAYERS,
+        vocab_size=Llama31_8BConfig.VOCAB_SIZE,
+        state_dict=load_hf_state_dict(),
+    )
+    runtime.prefill_prompt(token_ids, kv_cache)
+
+    results = runtime.kv_cache_pcc_check(kv_cache, trace_dir, num_tokens=num_tokens, min_pcc=PCC_REQUIRED)
+    assert len(results) == Llama31_8BConfig.NUM_LAYERS, f"graded {len(results)} layers, not all 32"
+    worst = min(min(pair) for pair in results.values())
+    logger.info(f"#4150 per-layer KV PCC: {len(results)} layers, worst {worst:.6f}")

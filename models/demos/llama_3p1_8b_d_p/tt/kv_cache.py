@@ -82,6 +82,61 @@ def slot_index(user_id: int, layer_idx: int, num_layers: int) -> int:
     return user_id * num_layers + layer_idx
 
 
+def rotated_chip_positions(kv_actual: int, sp: int, chunk_local: int) -> list[list[int]]:
+    """Which absolute position each chip's local row carries, for a chunk starting at ``kv_actual``.
+
+    ``positions[c][r]`` is the global token position that SP row ``c``'s ``r``-th row holds. This is
+    the host-side inverse of the ``update_padded_kv_cache`` writer's ``update_idxt`` staircase: each
+    chip writes ``chunk_local`` rows starting at ``update_idxt``, and cache row ``lr`` on chip ``c``
+    holds position ``(lr // chunk_local) * chunk_size_global + c * chunk_local + (lr % chunk_local)``.
+    Chips before the boundary chip advance a whole slab, the boundary chip advances by the pad
+    offset, and chips after it stay at the slab base.
+
+    **Why a chunk is not simply dealt out contiguously.** When ``kv_actual`` is a multiple of
+    ``chunk_size`` this returns exactly the contiguous split — row ``c`` gets
+    ``[c * chunk_local, (c+1) * chunk_local)`` — which is why prompt order works for every
+    single-turn request and why getting this wrong is invisible until the first continuation. At any
+    other 32-aligned start the map is a rotation of that by ``kv_actual % chunk_size``, *plus* a
+    further rotation within the single boundary chip, which is the part a plain rotation misses.
+
+    The union over all ``(c, r)`` covers ``[kv_actual, kv_actual + sp * chunk_local)`` exactly and is
+    increasing in ``r`` on every chip, so each chip's real tokens stay a prefix and its pad a suffix
+    — which is what makes the pad tail inert under causality with no extra plumbing.
+
+    Restated from ``deepseek_v3_d_p/tt/mla/utils.py:rotated_chip_positions`` rather than imported:
+    that module pulls ``safetensors`` and ``transformers`` onto the import path, and this one is
+    reachable from the import-light runtime. ``test_kv_cache_vs_ref.py`` grades the copy against the
+    original so the two cannot drift, the same arrangement ``tt/rope.py:block_cyclic_reorder`` uses.
+    """
+    if chunk_local <= 0 or sp <= 0:
+        raise ValueError(f"sp ({sp}) and chunk_local ({chunk_local}) must be positive")
+    if kv_actual % NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK:
+        raise ValueError(
+            f"kv_actual ({kv_actual}) must be a multiple of {NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK}; the "
+            f"writer derives its tile offset by dividing by it"
+        )
+
+    chunk_size_global = sp * chunk_local
+    boundary_slab = kv_actual // chunk_size_global
+    boundary_chip = (kv_actual // chunk_local) % sp
+    boundary_offset = kv_actual % chunk_local
+
+    positions = [[0] * chunk_local for _ in range(sp)]
+    for chip in range(sp):
+        if chip < boundary_chip:
+            update_idxt = (boundary_slab + 1) * chunk_local
+        elif chip == boundary_chip:
+            update_idxt = boundary_slab * chunk_local + boundary_offset
+        else:
+            update_idxt = boundary_slab * chunk_local
+        for row in range(chunk_local):
+            local_row = update_idxt + row
+            positions[chip][row] = (
+                (local_row // chunk_local) * chunk_size_global + chip * chunk_local + (local_row % chunk_local)
+            )
+    return positions
+
+
 def aligned_resume_length(prev_total_tokens: int) -> int:
     """Where a multi-turn continuation resumes, given the previous turn's total length.
 

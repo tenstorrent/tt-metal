@@ -40,6 +40,7 @@ from models.demos.llama_3p1_8b_d_p.tt.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_D
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     aligned_resume_length,
     allocate_kv_cache,
+    rotated_chip_positions,
     slot_index,
     validate_chunk_layout,
     write_kv_chunk,
@@ -129,6 +130,70 @@ def test_aligned_resume_rounds_down_and_never_leaves_a_hole():
 
 @pytest.mark.parametrize("sp", [1, 2, 4])
 @pytest.mark.parametrize("chunk_size, max_seq_len", [(128, 512), (256, 1024), (128, 1024)])
+@pytest.mark.parametrize("sp", [2, 4])
+@pytest.mark.parametrize("chunk_local", [32, 64, 256])
+def test_rotated_chip_positions_matches_the_deepseek_original(sp, chunk_local):
+    """The local copy tracks ``deepseek_v3_d_p``'s, which is the one graded against the kernel.
+
+    Llama restates it instead of importing it, because that module drags ``safetensors`` and
+    ``transformers`` onto the import path of an import-light runtime. Restating is only safe while
+    something notices a drift, which is this test — the same arrangement ``block_cyclic_reorder``
+    has in ``test_rope_vs_ref.py``.
+
+    Swept over offsets that cover all three branches of the staircase: slab-aligned (the identity
+    case), inside a chip's slab (the boundary chip rotates too) and past a whole slab.
+    """
+    from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions as original
+
+    chunk_global = sp * chunk_local
+    offsets = [0, 32, chunk_local, chunk_local + 32, chunk_global, chunk_global + chunk_local + 32]
+    for kv_actual in offsets:
+        assert rotated_chip_positions(kv_actual, sp, chunk_local) == original(
+            kv_actual, sp, chunk_local
+        ), f"local copy diverged at kv_actual={kv_actual}, sp={sp}, chunk_local={chunk_local}"
+
+
+@pytest.mark.parametrize("sp", [2, 4])
+@pytest.mark.parametrize("chunk_local", [32, 64])
+def test_rotated_chip_positions_tiles_the_chunk_exactly(sp, chunk_local):
+    """Every position in the chunk appears once, and each chip's rows increase.
+
+    Both properties are load-bearing and neither is implied by matching the reference. The cover
+    means no position is dropped or written twice; the monotonicity per chip is what keeps a
+    request's real tokens a prefix and its pad a suffix on every chip, which is the reason the pad
+    tail can be left inert under causality with no extra plumbing.
+    """
+    chunk_global = sp * chunk_local
+    for kv_actual in (0, 32, chunk_local + 32, chunk_global + 32):
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = sorted(p for chip in positions for p in chip)
+        assert flat == list(
+            range(kv_actual, kv_actual + chunk_global)
+        ), f"chunk at {kv_actual} does not tile [{kv_actual}, {kv_actual + chunk_global}) exactly"
+        for chip, rows in enumerate(positions):
+            assert rows == sorted(rows), f"chip {chip} positions are not increasing at kv_actual={kv_actual}"
+
+
+def test_rotated_chip_positions_is_contiguous_only_when_chunk_aligned():
+    """The identity case, stated as a test so the trap in #4148 is written down somewhere.
+
+    At a chunk-aligned offset the map is exactly the contiguous split, which is why prompt order
+    works for every single-turn request; one tile further along it is not, which is why the first
+    continuation breaks a runtime that assumes prompt order.
+    """
+    sp, chunk_local = 4, 64
+    chunk_global = sp * chunk_local
+
+    for aligned in (0, chunk_global, 3 * chunk_global):
+        positions = rotated_chip_positions(aligned, sp, chunk_local)
+        expected = [[aligned + c * chunk_local + r for r in range(chunk_local)] for c in range(sp)]
+        assert positions == expected, f"offset {aligned} should be the contiguous split"
+
+    off_by_one_tile = rotated_chip_positions(chunk_global + 32, sp, chunk_local)
+    contiguous = [[chunk_global + 32 + c * chunk_local + r for r in range(chunk_local)] for c in range(sp)]
+    assert off_by_one_tile != contiguous, "a 32-aligned non-chunk-aligned offset must not be contiguous"
+
+
 def test_blockcyclic_positions_is_a_permutation(sp, chunk_size, max_seq_len):
     """The block-cyclic inverse maps cache rows to global positions bijectively.
 

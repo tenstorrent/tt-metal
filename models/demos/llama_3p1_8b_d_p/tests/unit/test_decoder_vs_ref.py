@@ -33,6 +33,7 @@ Eight-chip loudbox (all):
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 
@@ -53,6 +54,29 @@ from models.demos.llama_3p1_8b_d_p.tt.rope import build_llama3_cos_sin, build_tr
 
 EMB_DIM = Llama31_8BConfig.EMB_SIZE
 PCC_REQUIRED = 0.99
+# The norm is graded tighter than the layer: it is one reduction over 4096 elements with no matmul
+# in it, so anything below this is a real arithmetic difference rather than accumulated bf16 error.
+PCC_REQUIRED_NORM = 0.999
+# bf16 activations move the output RMS by well under a percent; 2% leaves room without admitting the
+# order-of-magnitude rescale _assert_scale_matches exists to catch.
+NORM_SCALE_RTOL = 0.02
+
+
+def _assert_scale_matches(expected: torch.Tensor, got: torch.Tensor, *, rtol: float, what: str) -> None:
+    """Reject a uniformly rescaled output, which ``comp_pcc`` cannot see (tt-blaze#1314).
+
+    A double bit-cast of epsilon makes the denominator ``sqrt(garbage)`` instead of the row RMS, so
+    the op returns ``x * gamma * tiny_const``. That correlates ~1.0 with the true norm, so a
+    PCC-only test passes at ~0.9998 while the normalisation and its reduce path never ran at all.
+    Comparing absolute scale is what separates "correlates" from "is equal", and it is cheap.
+    """
+    expected_rms = expected.float().pow(2).mean().sqrt()
+    got_rms = got.float().pow(2).mean().sqrt()
+    ratio = (got_rms / expected_rms).item()
+    assert abs(ratio - 1.0) <= rtol, (
+        f"{what}: output RMS is {ratio:.4g}x the reference's. The values correlate but the scale is "
+        f"wrong, which is the tt-blaze#1314 epsilon false-pass — PCC alone cannot see it."
+    )
 
 
 def _replicated(t: torch.Tensor, mesh_device, dtype=ttnn.bfloat16) -> ttnn.Tensor:
@@ -143,6 +167,37 @@ def test_layer_weight_slice_matches_reference_parameter_names(expect_error):
         TtLlamaDecoderLayer.weights_from_layer_state_dict(state_dict, 31)
 
 
+def test_scale_check_catches_the_epsilon_false_pass(expect_error):
+    """The guard in ``test_norm_vs_ref`` is itself tested, against the bug it is named for.
+
+    tt-blaze#1314: a double bit-cast of epsilon left a garbage-huge denominator, so RMSNorm returned
+    ``x * gamma * tiny_const`` and the micro-op test passed at ~0.9998 without ever exercising the
+    normalisation. Reproduce that output exactly and assert the two halves of the claim: ``comp_pcc``
+    accepts it, and ``_assert_scale_matches`` does not.
+
+    Without this, the guard could be vacuous — comparing a ratio that is 1 by construction, say —
+    and ``test_norm_vs_ref`` would look protected while being exactly as blind as before.
+    """
+    torch.manual_seed(0)
+    x = torch.randn(1, 1, 128, EMB_DIM)
+    gamma = 1.0 + torch.randn(EMB_DIM) * 0.05
+
+    reference = Llama31RMSNorm().eval()
+    with torch.no_grad():
+        reference.weight.copy_(gamma)
+        good = reference(x)
+
+    # The bug's output: the denominator is sqrt(garbage epsilon) rather than each row's RMS, which
+    # is a single constant factor across the whole tensor.
+    bad = x * gamma / math.sqrt(1e30)
+
+    passing, pcc = comp_pcc(good, bad, PCC_REQUIRED_NORM)
+    assert passing, f"precondition failed: PCC should be blind to a pure rescale, got {pcc}"
+
+    with expect_error(AssertionError, "output RMS is"):
+        _assert_scale_matches(good, bad, rtol=NORM_SCALE_RTOL, what="RMSNorm")
+
+
 # =====================================================================================
 # Device PCC
 # =====================================================================================
@@ -187,9 +242,12 @@ def test_norm_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     assert tt_out.shape[-1] == EMB_DIM, f"norm must return full width for attention/MLP, got {tt_out.shape[-1]}"
     got = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).reshape(torch_output.shape).to(torch.float32)
 
-    passing, pcc = comp_pcc(torch_output, got, PCC_REQUIRED)
+    passing, pcc = comp_pcc(torch_output, got, PCC_REQUIRED_NORM)
     logger.info(f"RMSNorm PCC: {pcc}")
-    assert passing, f"RMSNorm PCC {pcc} below {PCC_REQUIRED}"
+    assert passing, f"RMSNorm PCC {pcc} below {PCC_REQUIRED_NORM}"
+    # PCC is scale-invariant, so it grades direction only. Without this the whole normalisation
+    # could be off by a constant factor and this test would still pass — see tt-blaze#1314.
+    _assert_scale_matches(torch_output, got, rtol=NORM_SCALE_RTOL, what="RMSNorm")
 
 
 @pytest.mark.parametrize("seq_len", [256], ids=["s256"])
