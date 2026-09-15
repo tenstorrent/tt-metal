@@ -8,6 +8,16 @@ MEASURED 2026-09-15, and it found a bug that fails this test at length 120 BY DE
     len  64   acceptance eager 1.917  traced 2.091  tokens SAME  text coherent
     len 120   AssertionError: "drafter context is at 126 + 1 new rows but the block starts at 128"
 
+CAVEAT ON THAT TABLE: it was produced by an earlier version of this file that captured the trace
+INSIDE the length loop. Tracing cannot be switched off again once enabled, so only ``len 8``'s
+eager column is really eager; ``len 64``'s "eager 1.917" was already running the trace. The
+ordering is fixed below (whole eager sweep, then one capture, then the traced sweep) but the table
+has NOT been re-measured, so treat the len-64 row as two traced runs rather than as a comparison.
+That those two traced runs disagree on acceptance (1.917 vs 2.091) while emitting identical tokens
+is worth its own look: under greedy decoding the tokens are fixed, so a different accept/verify
+split means the drafter entered the second run with different state -- i.e. state leaks across
+generations on a reused drafter.
+
 THE BUG. ``TtTarget.max_block(start) = ANCHOR - (start % ANCHOR)`` returns 1 when
 ``start % 128 == 127``. generate.py then computes ``verify_size = 1`` and its ``if verify_size > 1``
 guard SKIPS ``drafter.propose`` entirely -- so the drafter never receives that step's taps, its
@@ -151,19 +161,25 @@ def test_acceptance_and_text_vs_prompt_length(mesh_device, device_params, reset_
     base_ids = tokenizer(BASE_TEXT, return_tensors="pt", add_special_tokens=False).input_ids
     assert base_ids.shape[1] >= max(LENGTHS), f"BASE_TEXT is only {base_ids.shape[1]} tokens"
 
-    def run(prompt, traced):
+    def run(prompt):
         stats = dflash_generate(drafter, target, prompt, max_new_tokens=NEW_TOKENS, return_stats=True)
         text = tokenizer.decode(stats.output_ids[0, stats.num_input_tokens :], skip_special_tokens=True)
         return stats, text
 
+    # Tracing is a property of the TARGET, not of a call: once enable_traced_verify() has run there
+    # is no way back to the eager path on that object. Capturing inside the length loop -- as this
+    # test first did -- therefore made length 8 the ONLY genuinely eager arm and silently compared
+    # traced against traced everywhere else, which is exactly the comparison the test exists to
+    # make. Sweep every length eager first, capture ONCE (one capture serves every valid_len below
+    # the bucket), then sweep the same lengths traced.
+    eager_runs = {length: run(base_ids[:, :length]) for length in LENGTHS}
+
+    target.enable_traced_verify()
+
     rows = []
     for length in LENGTHS:
-        prompt = base_ids[:, :length]
-        eager_stats, eager_text = run(prompt, traced=False)
-        # One capture serves every valid_len below the bucket, so enable it once and reuse.
-        if getattr(target, "_traced_verify", False) is False:
-            target.enable_traced_verify()
-        traced_stats, traced_text = run(prompt, traced=True)
+        eager_stats, eager_text = eager_runs[length]
+        traced_stats, traced_text = run(base_ids[:, :length])
 
         same = torch.equal(eager_stats.output_ids, traced_stats.output_ids)
         rows.append((length, eager_stats.mean_acceptance_length, traced_stats.mean_acceptance_length, same))

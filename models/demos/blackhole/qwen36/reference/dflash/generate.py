@@ -206,6 +206,23 @@ def _as_drafter(drafter, target):
     return HostDrafter(drafter, target)
 
 
+def _taps_join(target, parts):
+    """Concatenate consecutive tap sets, in order, into one the drafter can consume.
+
+    Needed because a step can commit tokens WITHOUT the drafter running (see the loop's
+    ``verify_size == 1`` case): those taps must be carried forward and handed over with the next
+    draft, or the drafter's context silently falls behind the target's.
+
+    Host taps are ``[1, S, n*H]`` and concatenate on the row axis; device taps are a list of ttnn
+    tensors, one per tap layer, which ``TtTarget._taps_cat`` joins per tap.
+    """
+    if len(parts) == 1:
+        return parts[0]
+    if hasattr(target, "_taps_cat"):
+        return target._taps_cat(parts)
+    return torch.cat(parts, dim=1)
+
+
 def _taps_head(target, taps, rows):
     """The FIRST ``rows`` rows of a block's taps — the tokens that were actually accepted.
 
@@ -266,6 +283,9 @@ def dflash_generate(
     target.reset()
     drafter.reset()
     logits, target_hidden = target.forward(input_ids, 0, all_logits=False)
+    # Taps the drafter has NOT yet consumed, oldest first. A list rather than a single tensor
+    # because a step can commit tokens without the drafter running -- see the loop below.
+    pending_taps = [target_hidden]
     output_ids[:, :num_input_tokens] = input_ids
     output_ids[:, num_input_tokens] = sample(logits.cpu(), temperature, top_p, top_k)[0, -1]
 
@@ -287,9 +307,22 @@ def dflash_generate(
             # One drafter forward fills slots 1..verify_size-1. Everything about HOW — the noise
             # embedding, the KV history, the LM head, the sampling — sits behind `propose`, which
             # is what lets the ttnn drafter keep the entire draft on the mesh.
+            #
+            # EVERY outstanding tap set goes over, not just the last one. A step with
+            # verify_size == 1 commits a token but never calls propose, so its taps wait here until
+            # the next draft claims them. Handing over only the newest set loses the skipped step's
+            # rows and the drafter's context falls one token behind the target's -- which its own
+            # assert catches on the following step ("context is at 126 + 1 new rows but the block
+            # starts at 128").
             drafted, draft_probs = drafter.propose(
-                target_hidden, block_ids, start, temperature=temperature, top_p=top_p, top_k=top_k
+                _taps_join(target, pending_taps),
+                block_ids,
+                start,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
             )
+            pending_taps = []
             block_ids[:, 1:] = drafted.cpu()
 
         # ---- verify: one target forward over the whole block ----
@@ -326,13 +359,13 @@ def dflash_generate(
                 # `restore` only rewound: replay the accepted prefix to re-advance the GDN state.
                 # It also yields the next draft's taps, so the second forward is not pure overhead.
                 _, taps = target.forward(output_ids[:, start : start + produced], start)
-                target_hidden = taps
+                pending_taps.append(taps)
             else:
                 # The target recomputes from its own anchor, so the rejected tail never happened
                 # and the taps already in hand are correct. No replay.
-                target_hidden = _taps_head(target, taps, produced)
+                pending_taps.append(_taps_head(target, taps, produced))
         else:
-            target_hidden = _taps_head(target, taps, produced)
+            pending_taps.append(_taps_head(target, taps, produced))
 
         start += produced
         acceptance_lengths.append(produced)
