@@ -119,6 +119,19 @@ constexpr uint32_t FO_PAGE_MASK = (1u << FO_PAGE_BITS) - 1u;
 constexpr uint32_t FO_HOP_MASK = (1u << FO_HOP_BITS) - 1u;
 static_assert(FO_PAGE_BITS + FO_HOP_BITS + FO_SLOT_BITS <= 32);
 
+// One multicast entry: the token, how many destinations it carries, then the packed destinations.
+// A token reaches at most one page per top-k pick, so topk bounds the list.
+constexpr uint32_t fo_entry_words(uint32_t topk) { return 2u + topk; }
+
+// Words per token the routing index needs. The unicast layout is 3 per (token, pick); the multicast
+// one is 2 directions x (token + count + dests). Only one mode runs, so they share the region -- but
+// which is larger flips with topk, so both sides must size it from the same expression.
+constexpr uint32_t routing_index_words_per_token(uint32_t topk) {
+    const uint32_t uni = 3u * topk;
+    const uint32_t mc = 2u * fo_entry_words(topk);
+    return uni > mc ? uni : mc;
+}
+
 // Destinations one multicast page can carry. A token reaches at most one page per top-k pick, so this
 // is the top-k bound rather than anything about the ring.
 constexpr uint32_t FO_MAX_DESTS = 8;

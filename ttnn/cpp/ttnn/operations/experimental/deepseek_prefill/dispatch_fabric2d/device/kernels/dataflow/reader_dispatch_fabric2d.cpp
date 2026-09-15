@@ -39,6 +39,7 @@ struct Control {
     volatile tt_l1_ptr uint32_t* bucket_len;    // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* bucket_start;  // extent x experts_per_chip
     volatile tt_l1_ptr uint32_t* entries;       // 3 words per surviving (token, top-k slot)
+    volatile tt_l1_ptr uint32_t* mc_count;      // fanout: entries emitted per direction
     volatile tt_l1_ptr uint32_t* reach;         // fanout: extent x 2 x (m + 2), tokens reaching >= h hops
     volatile tt_l1_ptr uint32_t* in_start;      // page offset of each chunk this stream reads
     volatile tt_l1_ptr uint32_t* out_start;     // page offset of each chunk it writes downstream
@@ -64,7 +65,9 @@ Control carve_control() {
     c.chip_experts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.bucket_len = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
     c.bucket_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * ct.experts_per_chip));
-    c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(3 * ct.seq_len * ct.topk));
+    c.entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        words(ct.seq_len * dspf2d::routing_index_words_per_token(ct.topk)));
+    c.mc_count = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(2));
     c.reach = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.extent * 2u * (ct.extent / 2u + 2u)));
     c.in_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
     c.out_start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(words(ct.num_relay * ct.experts_per_chip));
@@ -249,6 +252,72 @@ void fill_entries(const Control& c) {
                 c.entries[at + 1] = page;
                 c.entries[at + 2] = k;
                 break;
+            }
+        }
+    }
+}
+
+// Which way round the ring a destination lies, and how far. A tie at exactly half the ring goes
+// clockwise, matching how the reach table was built -- pick the other way here and a chunk's length
+// stops agreeing with what the origin actually sends.
+uint32_t mc_dir_of(uint32_t my_row, uint32_t dst_row, uint32_t* hop_out) {
+    const uint32_t cw = (dst_row + ct.extent - my_row) % ct.extent;
+    const uint32_t ccw = ct.extent - cw;
+    if (cw <= ccw) {
+        *hop_out = cw;
+        return 0;
+    }
+    *hop_out = ccw;
+    return 1;
+}
+
+// Collapse each token to at most one entry per direction: the token, how many destinations it carries
+// that way, then one packed word per destination. Replays the same allocator the unicast path does --
+// same drop rule, same page numbering -- so both modes land a token on the page `dispatch` would.
+void build_multicast_entries(const Control& c) {
+    const uint32_t stride = dspf2d::fo_entry_words(ct.topk);
+    c.mc_count[0] = 0;
+    c.mc_count[1] = 0;
+    for (uint32_t e = 0; e < ct.num_routed_experts; e++) {
+        c.alloc[e] = c.offsets[ct.my_row * ct.num_routed_experts + e];
+    }
+    for (uint32_t t = 0; t < ct.seq_len; t++) {
+        volatile tt_l1_ptr uint16_t* idx =
+            reinterpret_cast<volatile tt_l1_ptr uint16_t*>((uint32_t)c.indices + t * ct.indices_pad_stride);
+        uint32_t n_dir[2] = {0, 0};
+        uint32_t packed[2][dspf2d::FO_MAX_DESTS];
+        for (uint32_t k = 0; k < ct.topk; k++) {
+            const uint32_t e = idx[k];
+            const int32_t row = c.table[e];
+            if (row == -1) {
+                continue;
+            }
+            if (c.alloc[e] >= ct.max_dispatch_buf_tokens) {
+                c.alloc[e]++;
+                continue;
+            }
+            const uint32_t page = c.alloc[e]++;
+            if ((uint32_t)row == ct.my_row) {
+                continue;  // the local phase owns these; they never touch a cable
+            }
+            uint32_t hop = 0;
+            const uint32_t d = mc_dir_of(ct.my_row, (uint32_t)row, &hop);
+            if (n_dir[d] < dspf2d::FO_MAX_DESTS) {
+                packed[d][n_dir[d]++] = (page & dspf2d::FO_PAGE_MASK) |
+                                        ((hop & dspf2d::FO_HOP_MASK) << dspf2d::FO_HOP_SHIFT) |
+                                        (k << dspf2d::FO_SLOT_SHIFT);
+            }
+        }
+        for (uint32_t d = 0; d < 2; d++) {
+            if (n_dir[d] == 0) {
+                continue;
+            }
+            const uint32_t at = c.mc_count[d]++;
+            volatile tt_l1_ptr uint32_t* ent = c.entries + (d * ct.seq_len + at) * stride;
+            ent[0] = t;
+            ent[1] = n_dir[d];
+            for (uint32_t i = 0; i < n_dir[d]; i++) {
+                ent[2 + i] = packed[d][i];
             }
         }
     }
