@@ -47,6 +47,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 from models.demos.llama_3p1_8b_d_p.reference.model import Llama31MLP
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import drop_sp_replicas, galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.mlp import TtLlamaMLP
 
@@ -81,6 +82,16 @@ PCC_REQUIRED = 0.99
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
             FULL_INTERMEDIATE,
             id="tp8-1x8-reduce-scatter",
+        ),
+        # 4. ``galaxy-tp8-4x8`` — the production geometry: TP=8 on the column axis with the four SP
+        #    rows replicating, i.e. case 3's collective on the mesh that ships. A Galaxy cannot open
+        #    the 1x8 of case 3 at all (see ``galaxy_torus_xy_device_params``), so this is the only
+        #    arm that exercises the real reduce-scatter there.
+        pytest.param(
+            (4, TARGET_TP),
+            galaxy_torus_xy_device_params(),
+            FULL_INTERMEDIATE,
+            id="galaxy-tp8-4x8-reduce-scatter",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -137,9 +148,12 @@ def test_mlp_vs_ref(mesh_device, device_params, hidden_dim, seq_len, reset_seeds
             f"reduce_scatter should leave {EMB_DIM // tp}/chip on the hidden dim (the layout the "
             f"residual stream is in), got {tt_output.shape[-1]}"
         )
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        tt_output_torch = drop_sp_replicas(
+            ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            ),
+            rows,
         )
     else:
         assert tt_output.shape[-1] == EMB_DIM

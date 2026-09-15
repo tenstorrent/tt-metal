@@ -25,6 +25,7 @@ import pytest
 import ttnn
 from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillRunParams, get_adapter
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import galaxy_torus_xy_device_params
 
 MODEL_NAME = "llama_3p1_8b"
 
@@ -97,6 +98,22 @@ def test_kv_heads_per_chip_follows_tp(tp, expected_heads_per_chip):
     adapter = get_adapter(MODEL_NAME)
     params = _params(mesh_shape=(4, tp))
     assert adapter._num_kv_heads_per_chip(params) == expected_heads_per_chip
+
+
+def test_kv_caches_handle_is_constructible_off_device():
+    """``Llama31KvCaches(caches=[...])`` must build and index without a device.
+
+    The handle is only ever constructed at the end of ``allocate_kv_cache``, which needs a mesh, so
+    a missing ``@dataclass`` on it (the annotation alone gives no ``__init__``, and the ABC base
+    supplies none) failed as ``TypeError: Llama31KvCaches() takes no arguments`` on hardware and
+    nowhere else. Constructing it with a stand-in cache keeps that a device-free failure.
+    """
+    from models.demos.llama_3p1_8b_d_p.tt.runners.adapters.llama_3p1_8b import Llama31KvCaches
+
+    sentinel = object()
+    caches = Llama31KvCaches(caches=[sentinel])
+    # The engine only ever reaches the single full-causal cache through [0].
+    assert caches[0] is sentinel
 
 
 def test_tp_wider_than_the_kv_head_count_is_refused(expect_error):
@@ -242,7 +259,11 @@ def test_weight_loader_reports_a_missing_checkpoint(tmp_path, expect_error):
 # =====================================================================================
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2")],
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        # The production SP=4 x TP=8, where the KV-head assertion below pins one head per chip.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 def test_adapter_allocates_a_cache_the_runtime_accepts(mesh_device, device_params, reset_seeds):
@@ -256,7 +277,9 @@ def test_adapter_allocates_a_cache_the_runtime_accepts(mesh_device, device_param
     from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
     adapter = get_adapter(MODEL_NAME)
-    params = _params(mesh_shape=(4, 2), num_layers=2, max_seq_len=1024, chunk_size=256)
+    # From the device, not a constant: the runtime rejects a config whose mesh_shape disagrees with
+    # the mesh it is handed, so this has to follow the arm.
+    params = _params(mesh_shape=tuple(mesh_device.shape), num_layers=2, max_seq_len=1024, chunk_size=256)
 
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=None, params=params)
     cache = caches[0]

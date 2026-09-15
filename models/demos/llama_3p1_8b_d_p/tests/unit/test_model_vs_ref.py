@@ -42,6 +42,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 from models.demos.llama_3p1_8b_d_p.reference.model import Llama31Model, build_hf_cos_sin
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import allocate_kv_cache
 from models.demos.llama_3p1_8b_d_p.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
 
@@ -152,6 +153,11 @@ def test_runtime_config_rejects_bad_chunk_geometry(expect_error):
         # that can regress the block-cyclic cache read at all, and four chips is a QuietBox, so the
         # chunked path stays testable without an eight-chip box.
         pytest.param((2, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, 256, 512, id="sp2-2x2-two-chunks"),
+        # The production geometry, and the only shape a Galaxy will open (see
+        # ``galaxy_torus_xy_device_params``): 4x8 is SP=4 x TP=8, i.e. the full 32 chips, which is
+        # also ``TtPrefillRuntimeConfig``'s default mesh. Chunked, so the Galaxy exercises the
+        # block-cyclic cache read rather than just a single chunk.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), 256, 512, id="galaxy-sp4-tp8-4x8-two-chunks"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -286,7 +292,12 @@ def test_prefill_chunk_rejects_unaligned_resume(mesh_device, device_params, expe
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2")],
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        # #4150: the full model on one Galaxy, at the production 4x8 (SP=4 x TP=8). This arm is the
+        # acceptance run -- 32 layers, real weights, chunked, on the geometry that ships.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 def test_real_checkpoint_hidden_states(mesh_device, device_params, reset_seeds):

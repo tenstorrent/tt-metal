@@ -48,6 +48,7 @@ from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_
 from models.demos.llama_3p1_8b_d_p.reference.model import Llama31Attention
 from models.demos.llama_3p1_8b_d_p.reference.model import apply_rope as hf_apply_rope
 from models.demos.llama_3p1_8b_d_p.reference.model import build_hf_cos_sin, to_meta_frame
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import drop_sp_replicas, galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.attention import TtLlamaAttention, hf_to_meta_head_frame
 from models.demos.llama_3p1_8b_d_p.tt.ccl import CCLManager
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
@@ -228,6 +229,9 @@ def test_reference_attention_is_sinkless_and_biasfree():
     [
         pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card-tp1"),
         pytest.param((1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="tp8-1x8"),
+        # Production TP=8 on the geometry that ships; the four SP rows replicate this SP=1 case.
+        # The only arm here a Galaxy can open, since it refuses every partial mesh.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-tp8-4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -288,9 +292,12 @@ def test_attention_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
             f"reduce_scatter should leave {EMB_DIM // tp}/chip on the hidden dim (the layout the "
             f"residual stream is in, matching tt/mlp.py), got {tt_output.shape[-1]}"
         )
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+        tt_output_torch = drop_sp_replicas(
+            ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
+            ),
+            rows,
         )
     else:
         assert tt_output.shape[-1] == EMB_DIM
@@ -307,7 +314,13 @@ def test_attention_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
 
 @pytest.mark.parametrize(
     "mesh_device, device_params",
-    [pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2")],
+    [
+        pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        # The production SP=4 x TP=8, which only a Galaxy can open. Worth both arms: this one is
+        # the geometry that ships and the only one where each chip owns exactly one KV head, while
+        # the 4x2 above keeps the same code path reachable on an eight-chip box.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("chunk_size, max_seq_len", [(256, 1024)], ids=["c256-s1024"])
@@ -318,7 +331,8 @@ def test_attention_sp_cache_read_vs_ref(mesh_device, device_params, chunk_size, 
     K/V and the ring reader accepts chunk 0 — which is the whole point of the cache-backed design
     (one ring program for the entire prefill, no separate bootstrap).
 
-    TP=2 here, so 4 KV heads land on each chip rather than production's 1. See the module docstring.
+    The 4x2 arm runs TP=2, so 4 KV heads land on each chip; the 4x8 Galaxy arm is production's
+    one-KV-head-per-chip. See the module docstring.
     """
     torch.manual_seed(0)
     rows, cols = mesh_device.shape

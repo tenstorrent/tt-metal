@@ -44,6 +44,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 from models.demos.llama_3p1_8b_d_p.reference.model import Llama31DecoderLayer, Llama31RMSNorm, build_hf_cos_sin
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import drop_sp_replicas, galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.ccl import CCLManager
 from models.demos.llama_3p1_8b_d_p.tt.config import MeshConfig
 from models.demos.llama_3p1_8b_d_p.tt.decoder import TtLlamaDecoderLayer
@@ -77,8 +78,11 @@ def _residual_to_host(tt: ttnn.Tensor, mesh_device, tp: int, shape) -> torch.Ten
     if tp == 1:
         out = ttnn.to_torch(ttnn.get_device_tensors(tt)[0])
     else:
-        out = ttnn.to_torch(
-            tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1))
+        out = drop_sp_replicas(
+            ttnn.to_torch(
+                tt, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1))
+            ),
+            mesh_device.shape[0],
         )
     return out.reshape(shape).to(torch.float32)
 
@@ -148,6 +152,8 @@ def test_layer_weight_slice_matches_reference_parameter_names(expect_error):
     [
         pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card-tp1"),
         pytest.param((1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="tp8-1x8"),
+        # Production TP=8 with the four SP rows replicating; the only arm a Galaxy can open.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-tp8-4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -193,6 +199,8 @@ def test_norm_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     [
         pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card-tp1"),
         pytest.param((1, 8), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="tp8-1x8"),
+        # Production TP=8 with the four SP rows replicating; the only arm a Galaxy can open.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-tp8-4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )

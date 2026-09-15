@@ -1255,10 +1255,13 @@
 # real checkpoint are opt-in (LLAMA31_8B_REAL_WEIGHTS / LLAMA31_REF_CHECKPOINT) and skip here, so
 # this stage cannot break on a checkpoint move.
 #
-# Runs sub-meshes of the galaxy (1x1 single-card, 1x8 at the production TP=8, and 4x2 for SP=4
-# chunked prefill) rather than the full 4x8: TP=8 with SP=4 needs 32 chips and the full-model 4x8
-# run is its own stage (tt-blaze#4150). FABRIC_1D per test via the device_params fixture; the
-# torus_xy profile is still the right one because the 4x2 cases drive the SP ring cache-read.
+# Runs the 1x1 single-card arms and the production 4x8 (SP=4 x TP=8) ones, which is everything a
+# galaxy can open: a Blackhole fabric only comes up across the whole allocation, so the 1x8 and 4x2
+# arms are not sub-meshes this sku can take and are skipped here by
+# models/demos/llama_3p1_8b_d_p/tests/conftest.py -- a loudbox covers those. The torus_xy profile is
+# what makes the 4x8 arms open at all; FABRIC_2D_TORUS_XY with RELAXED_INIT comes from each arm's
+# device_params. The 4x8 arms drive the SP ring cache-read, and the real-checkpoint full-model run
+# remains its own stage (tt-blaze#4150).
 - name: "(Llama-3.1-8B) prefill module PCC (MLP/RoPE/KV/attention/decoder/model)"
   fabric_profile: torus_xy
   cmd: |
@@ -1276,10 +1279,13 @@
   test_group: module
   skus:
     bh_sc1:
-      # ~15 min measured on an 8-chip loudbox for the whole suite (the device-free half is
-      # seconds; the cost is one mesh open/close plus kernel JIT per device parametrization).
-      # Headroom for cold kernel JIT, which this stage pays in full -- it has no weight cache to
-      # warm and no golden to read.
+      # 4.5 min measured on a bh_sc1 Galaxy (100 passed, 16 skipped): the device-free half is
+      # seconds, and the cost is one mesh open/close plus kernel JIT per device parametrization.
+      # The skips are the arms this sku cannot open -- a Blackhole fabric only comes up across the
+      # whole allocation, so a 32-chip Galaxy runs the 1x1 and production 4x8 arms and skips the
+      # 1x8/4x2/2x2 ones (models/demos/llama_3p1_8b_d_p/tests/conftest.py), which a loudbox and a
+      # QuietBox cover instead. Headroom for cold kernel JIT, which this stage pays in full -- it
+      # has no weight cache to warm and no golden to read.
       timeout: 40
       tier: 2
       release_ready: false

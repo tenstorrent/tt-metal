@@ -35,6 +35,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
+from models.demos.llama_3p1_8b_d_p.tests.mesh_profiles import galaxy_torus_xy_device_params
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK as BANK_TOKENS
 from models.demos.llama_3p1_8b_d_p.tt.kv_cache import (
     aligned_resume_length,
@@ -191,6 +192,9 @@ def _read_slot(cache, device_index: int, slot: int) -> torch.Tensor:
     [
         pytest.param((1, 1), {"fabric_config": ttnn.FabricConfig.DISABLED}, id="single-card-sp1"),
         pytest.param((4, 2), {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="sp4-4x2"),
+        # The production SP=4 x TP=8, the only shape a Galaxy opens. Same block-cyclic walk as the
+        # 4x2 arm (SP is 4 in both), now with the production number of TP replicas.
+        pytest.param((4, 8), galaxy_torus_xy_device_params(), id="galaxy-sp4-tp8-4x8"),
     ],
     indirect=["mesh_device", "device_params"],
 )

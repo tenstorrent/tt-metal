@@ -24,6 +24,7 @@ by name from the runner.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,7 @@ from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, P
 from models.demos.llama_3p1_8b_d_p.reference.llama_3p1_8b_config import Llama31_8BConfig
 
 
+@dataclass
 class Llama31KvCaches(KvCaches):
     """The engine's opaque handle to this model's KV cache.
 
