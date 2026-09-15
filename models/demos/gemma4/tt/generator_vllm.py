@@ -230,6 +230,25 @@ class Gemma4ForCausalLM(ChunkedPrefillPageTableGuardMixin, HybridAttentionForCau
     # ``GEMMA4_SUPPORTS_ASYNC_DECODE=0``. PLI models narrow the instance dict
     # in ``__init__``; that does not reach the platform, so PLI still needs
     # the kill-switch to disable async_scheduling.
+    @staticmethod
+    def _spec_pt_identity(page_table):
+        """Stable identity for the request a spec session belongs to: the first
+        block id of its page-table row.
+
+        Serving runs with prefix caching OFF, so live requests own disjoint KV
+        blocks and a row's first block does not move while the request lives.
+        Available on BOTH the prefill and the decode call (``page_table``
+        kwarg), which is what lets the owner recorded at capture time be
+        re-checked before the taps are bootstrapped.
+        """
+        if page_table is None:
+            return None
+        try:
+            row = page_table[0] if page_table.dim() > 1 else page_table
+            return int(row.reshape(-1)[0])
+        except Exception:
+            return None
+
     model_capabilities = {
         "supports_prefix_caching": False,
         "supports_async_decode": os.environ.get("GEMMA4_SUPPORTS_ASYNC_DECODE", "1").lower() in ("1", "true", "yes"),
@@ -2107,25 +2126,6 @@ class Gemma4DFlashForCausalLM(Gemma4ForCausalLM):
         logger.info("Gemma4DFlash: warming batched baseline decode buckets")
         return super().warmup_model_decode(*args, **kwargs)
 
-    @staticmethod
-    def _spec_pt_identity(page_table):
-        """Stable identity for the request a spec session belongs to: the first
-        block id of its page-table row.
-
-        Serving runs with prefix caching OFF, so live requests own disjoint KV
-        blocks and a row's first block does not move while the request lives.
-        Available on BOTH the prefill and the decode call (``page_table``
-        kwarg), which is what lets the owner recorded at capture time be
-        re-checked before the taps are bootstrapped.
-        """
-        if page_table is None:
-            return None
-        try:
-            row = page_table[0] if page_table.dim() > 1 else page_table
-            return int(row.reshape(-1)[0])
-        except Exception:
-            return None
-
     def _spec_pending_is_mine(self, page_table):
         """True when the pending session was captured for the request whose
         page table this is. Unknown identity on either side (no page table)
@@ -2599,7 +2599,13 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         "supports_async_decode": os.environ.get("GEMMA4_SPEC_ASYNC", "0") != "0",
         "supports_sample_on_device": True,
         "output_tokens_per_step": _SPEC_N,
-        "tt_spec_variable_output": True,
+        # ADAPTIVE block-output (mirrors the dFlash twin): emit the spec row only
+        # when decoding ALONE (batch==1); batch>1 decodes as plain batched
+        # baseline at width 1, for which the adaptive scheduler reserved exactly
+        # one placeholder. This lets ONE server run max_num_seqs>1 -- MTP spec at
+        # conc-1, baseline batched above it -- instead of pinning max_num_seqs=1.
+        # Speculation only pays bandwidth-bound / low batch anyway.
+        "tt_adaptive_block_output": _SPEC_N > 1,
     }
 
     def __init__(self, *args, **kwargs):
@@ -2607,6 +2613,7 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         self._spec_assistant = None
         self._spec = None
         self._spec_pending = None  # prompt_len awaiting first decode
+        self._spec_pending_owner = None  # request the pending session belongs to
         self._spec_first_step = True
         self._spec_horizon = int(os.environ.get("GEMMA4_MTP_SERVE_HORIZON", "2048"))
         logger.info(
@@ -2624,15 +2631,21 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         tokens = kwargs.get("tokens")
         if tokens is None and args:
             tokens = args[0]
+        # ADAPTIVE: a spec session is B=1. A batched prefill is served as plain
+        # baseline and arms NO session -- the decode side then serves those rows
+        # through the batched fallback.
         if tokens is not None and int(tokens.shape[0]) != 1:
-            raise ValueError(
-                "Gemma4MTP serving is B=1 (set max_num_seqs=1 in the model spec); "
-                f"got prefill batch {int(tokens.shape[0])}"
-            )
+            self._spec_release_session()
+            return super().prefill_forward(*args, **kwargs)
         out = super().prefill_forward(*args, **kwargs)
         prompt_lens = kwargs.get("prompt_lens")
         n = int(prompt_lens[0]) if prompt_lens is not None else int(tokens.shape[1])
         self._spec_pending = n
+        # Record WHICH request these pending taps belong to. At max_num_seqs>1
+        # several prefills can land before the next solo decode step, and the
+        # session slot is global: without this the decode would bootstrap from
+        # another prompt's length -- wrong tokens, not just a wrong width.
+        self._spec_pending_owner = self._spec_pt_identity(kwargs.get("page_table"))
         return out
 
     def _spec_bootstrap(self, anchor_id, start, page_table, kv_cache, page_tables_per_layer=None):
@@ -2722,9 +2735,28 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
         start_pos = kwargs.get("start_pos")
         if start_pos is None and len(args) > 1:
             start_pos = args[1]
-        if tokens is None or int(tokens.shape[0]) != 1:
-            raise ValueError("Gemma4MTP decode expects B=1 token input")
+        if tokens is None:
+            raise ValueError("Gemma4MTP decode expects token input")
+        # Adaptive block-output: a BATCHED decode step (concurrency>1) runs plain
+        # baseline and returns the RAW device output, which the runner's
+        # read_decode_output/process_decode_output_host pipeline converts, trims
+        # to the real batch and samples exactly as for a baseline model. A solo
+        # request that just joined a batch drops its MTP session first, so
+        # baseline owns its KV from vLLM's committed position.
+        if int(tokens.shape[0]) != 1:
+            self._spec_release_session()
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         anchor_from_runner = int(tokens.reshape(-1)[0])
+        if self._spec_pending is not None and not self._spec_pending_is_mine(kwargs.get("page_table")):
+            # The pending session was captured for a DIFFERENT request (its
+            # owner finished or was aborted before it ever decoded). Bootstrap-
+            # ing it here would speculate from another prompt's length. Drop it
+            # and serve this request as plain baseline -- the width the adaptive
+            # scheduler reserved for a non-owner row.
+            logger.warning(
+                "Gemma4MTP: pending spec session belongs to another request; serving this one as plain baseline"
+            )
+            self._spec_release_session()
         if self._spec_pending is not None:
             start = int(start_pos.reshape(-1)[0]) if start_pos is not None else None
             self._spec_bootstrap(
@@ -2735,37 +2767,78 @@ class Gemma4MTPForCausalLM(Gemma4ForCausalLM):
                 page_tables_per_layer=page_tables_per_layer,
             )
         if self._spec is None:
-            raise RuntimeError("Gemma4MTP decode without an active session (prefill first)")
+            # No session for this row (batched prefill, or a dropped non-owner
+            # session): serve plain baseline, matching the reserved width.
+            return super().decode_forward(*args, page_tables_per_layer=page_tables_per_layer, **kwargs)
         cur_token, cur_pos = self._spec_cur
         if cur_pos >= self._spec_budget_end:
-            eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
-            if isinstance(eos, (list, tuple)):
-                eos = eos[0]
             logger.warning(
                 f"Gemma4MTP: horizon ({self._spec_horizon} new tokens) exhausted at "
                 f"position {cur_pos}; ending the request with EOS"
             )
-            out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
-            out[0, 0] = int(eos)
-            return out
+            return torch.full((1, self._SPEC_N), self._eos_fill_id(), dtype=torch.int32)
         committed, m = self._spec.serving_step(cur_token, cur_pos)
         self._spec_cur = (committed[-1], cur_pos + m + 1)
-        out = torch.full((1, self._SPEC_N), -1, dtype=torch.int32)
+        # Exactly-N valid tokens: MTP commits an accepted prefix + bonus, so a
+        # SHORT row happens only at a genuine stop. Fill the tail with EOS --
+        # the scheduler trims committed tokens at the first stop token, and the
+        # plugin does not accept sentinel padding (the dFlash twin does the
+        # same). A -1 tail would put an invalid id on the wire.
+        out = torch.full((1, self._SPEC_N), self._eos_fill_id(), dtype=torch.int32)
         out[0, : len(committed)] = torch.tensor(committed, dtype=torch.int32)
         return out
 
     def read_decode_output(self, tt_out, async_read=False, *_, **__):
-        return (tt_out, []) if async_read else tt_out
+        # A SOLO SPEC step returns committed host tokens (a torch.Tensor) from
+        # decode_forward -- nothing to read, pass them straight through (no
+        # events). The ADAPTIVE BATCHED fallback returns the RAW DEVICE output
+        # of the baseline decode instead, so route that to the base reader
+        # (events under async_read) for the deferred read pipeline. Mirrors the
+        # dFlash twin; without this the device tensor reaches the runner as if
+        # it were host tokens and the engine dies on the first batched step.
+        if isinstance(tt_out, torch.Tensor):
+            return (tt_out, []) if async_read else tt_out
+        return super().read_decode_output(tt_out, async_read, *_, **__)
+
+    def _eos_fill_id(self) -> int:
+        """Token used to fill a short spec row. See decode_forward."""
+        eos = getattr(self.model[0].hf_config, "eos_token_id", 1)
+        eos_set = set(eos) if isinstance(eos, (list, tuple)) else {int(eos)}
+        return int(min(eos_set))
+
+    def _spec_pending_is_mine(self, page_table) -> bool:
+        """True when the pending session was captured for the request whose page
+        table this is. Unknown identity on either side falls back to True (the
+        pre-existing single-session behaviour)."""
+        owner = self._spec_pending_owner
+        cur = self._spec_pt_identity(page_table)
+        if owner is None or cur is None:
+            return True
+        return owner == cur
+
+    def _spec_release_session(self) -> None:
+        """Drop any pending/active MTP session (batched fallback and lifecycle).
+
+        Also drops the bounded per-layer page tables this session installed, so a
+        later BATCHED baseline decode (the adaptive fallback) rebuilds its own set
+        instead of reading this request's stale B=1 ring tables. ``_spec_bootstrap``
+        deletes and re-installs them itself, so it is unaffected -- it calls
+        ``serving_release`` directly rather than going through here.
+        """
+        self._spec_pending = None
+        self._spec_pending_owner = None
+        if self._spec is not None:
+            self._spec.serving_release()
+            self._spec = None
+        try:
+            if hasattr(self.model[0], "_active_page_tables_per_layer"):
+                del self.model[0]._active_page_tables_per_layer
+        except Exception:
+            pass
 
     # -- plugin lifecycle hooks (block-output contract) -----------------------
     def release_request(self, row: int) -> None:
-        self._spec_pending = None
-        if self._spec is not None:
-            self._spec.serving_release()
-            self._spec = None
+        self._spec_release_session()
 
     def release_persistent_capture(self) -> None:
-        self._spec_pending = None
-        if self._spec is not None:
-            self._spec.serving_release()
-            self._spec = None
+        self._spec_release_session()
