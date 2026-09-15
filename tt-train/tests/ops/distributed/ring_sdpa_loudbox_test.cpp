@@ -1309,19 +1309,24 @@ TEST_F(LoudboxRingSDPATest, DISABLED_ProfileOneBackward) {
         rows_per_chip = std::strtoul(env, nullptr, 10);
     }
     using Kind = ttml::ops::distributed::RingBackwardKind;
-    // TTML_LOUDBOX_PROFILE_LAYOUT=zigzag profiles the zigzag layout instead.
+    // TTML_LOUDBOX_PROFILE_LAYOUT=zigzag profiles the zigzag layout instead,
+    // and TTML_LOUDBOX_PROFILE_BT the block height (default 4).
     RingLayout layout = RingLayout::Contiguous;
+    uint32_t Bt = 4U;
+    if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_BT"); env != nullptr && *env != '\0') {
+        Bt = static_cast<uint32_t>(std::strtoul(env, nullptr, 10));
+    }
     if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_LAYOUT"); env != nullptr && std::string(env) == "zigzag") {
         layout = RingLayout::Zigzag;
     }
     for (const auto transport : {RingShiftTransport::Fifo, RingShiftTransport::Direct}) {
         for (const auto kind : {Kind::TwoPass, Kind::Cyclic, Kind::CyclicInPlace}) {
-            std::cout << "== " << (layout == RingLayout::Zigzag ? "zigzag, " : "") << rows_per_chip << " rows/chip, "
+            std::cout << "== " << (layout == RingLayout::Zigzag ? "zigzag, " : "") << rows_per_chip << " rows/chip, Bt=" << Bt << ", "
                       << (kind == Kind::TwoPass ? "two-pass" : kind == Kind::Cyclic ? "cyclic" : "cyclic in-place")
                       << ", " << (transport == RingShiftTransport::Fifo ? "fifo" : "direct")
                       << " shifts (second profile is the timed one)\n";
             const double seconds = time_ring_backward(
-                1, 4, rows_per_chip * cp_size, 64, kind, /* Bt */ 4U, transport, /* samples */ 1U, layout);
+                1, 4, rows_per_chip * cp_size, 64, kind, Bt, transport, /* samples */ 1U, layout);
             std::cout << "   unprofiled-style total (with profile syncs): " << seconds * 1e3 << " ms\n";
         }
     }
