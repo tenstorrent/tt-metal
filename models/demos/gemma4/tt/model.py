@@ -1180,6 +1180,7 @@ class Gemma4Model:
                 m=hidden_states.shape[2],
                 k=self.hidden_size,
                 n=self.lm_head_weight.shape[-1],
+                weight=self.lm_head_weight,
             )
             logits = ttnn.linear(
                 hidden_states,

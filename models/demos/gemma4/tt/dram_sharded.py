@@ -172,6 +172,70 @@ def _prefill_hifi4_ckc():
     )
 
 
+_SINGLE_TILE_FID_LOGGED = False
+
+
+def single_tile_matmul_ckc(m, weight):
+    """Fidelity for the one-tile matmuls every tuned config declines, bf16 only.
+
+    ``in_prefill_l1_matmul_band`` opens *above* one tile (``TILE_SIZE < m``), so
+    at ``m <= 32`` — a short prompt's whole prefill, a last-token slice, or a
+    decode step — ``interleaved_{gate_up,down_proj,o_proj}_prefill_config`` and
+    ``interleaved_prefill_config`` all return ``(None, None, None)``. The call
+    sites then pass ``compute_kernel_config=None`` and ttnn.linear falls back to
+    its own default, which here is HiFi2 (``increase_fidelity`` in
+    matmul_device_operation.cpp: a bf16 activation keeps it off the LoFi path).
+
+    HiFi2 feeds the FPU only 5 of one operand's mantissa bits. Against a **bf16**
+    weight that throws away real precision on every QKV, O, gate/up and down
+    projection, and 48 layers of it dominated the 12B full-model logit error:
+    on a WH T3K at 1x8 (all-bf16 weights) this took test_full_model from 0.9628
+    to 0.9890 and full_model_decode from 0.9647 to 0.9744.
+
+    Against a **BFP8_B** weight it is worse than useless. BFP8_B carries a 7-bit
+    mantissa under a block-shared exponent, which HiFi2 already covers, so the
+    extra passes add no information and only change rounding. Measured on the
+    same T3K, raising every bfp8 matmul to HiFi4 *cost* accuracy: 1x2 0.9780 ->
+    0.9690, and 1x4 0.9591 -> 0.8789 (below its 0.945 gate). Hence the dtype
+    gate — which also makes this a no-op for every gemma4 variant still on
+    all-bfp8 weights.
+
+    ``fp32_dest_acc_en`` stays False deliberately: HiFi4 *together with* fp32
+    dest-accumulation trips Wormhole hardware bug #38306, which is what produced
+    the garbage decode output behind the "do not re-enable" note on Linear
+    fidelity in compute_config.py. Fidelity on its own does not trip it.
+
+    Override with ``GEMMA4_SINGLE_TILE_FIDELITY``: ``hifi2`` / ``hifi3`` /
+    ``hifi4``, each optionally suffixed ``_fp32`` to add fp32 dest-accumulation,
+    or ``auto`` (return None and let ttnn decide).
+    """
+    if int(m) > TILE_SIZE:
+        return None
+    if weight is None or weight.dtype != ttnn.bfloat16:
+        return None
+    mode = os.environ.get("GEMMA4_SINGLE_TILE_FIDELITY", "hifi3_fp32").strip().lower()
+    global _SINGLE_TILE_FID_LOGGED
+    if not _SINGLE_TILE_FID_LOGGED:
+        logger.info(f"Gemma4 single-tile matmul fidelity={mode}")
+        _SINGLE_TILE_FID_LOGGED = True
+    if mode in ("auto", "none", "off", "0"):
+        return None
+    dest_acc = mode.endswith("_fp32")
+    fidelity = {
+        "hifi2": ttnn.MathFidelity.HiFi2,
+        "hifi3": ttnn.MathFidelity.HiFi3,
+        "hifi4": ttnn.MathFidelity.HiFi4,
+    }.get(mode[: -len("_fp32")] if dest_acc else mode)
+    if fidelity is None:
+        raise ValueError(f"GEMMA4_SINGLE_TILE_FIDELITY={mode!r} — expected auto/hifi2/hifi3/hifi4, optionally +_fp32")
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=dest_acc,
+        packer_l1_acc=not dest_acc,
+    )
+
+
 _L1_FALLBACK_SHAPES: set[tuple[int, int, int]] = set()
 
 
@@ -612,10 +676,53 @@ def interleaved_o_proj_prefill_config(m, k, n, grid=None):
     return program_config, out_memcfg, _prefill_hifi2_ckc()
 
 
-def lm_head_decode_config(mesh_device, m, k, n):
+def wide_vocab_lm_head_ckc(weight):
+    """Fidelity for an LM head too wide for the tuned 1D-mcast program config.
+
+    ``lm_head_decode_config`` declines a per-device vocab shard above 64K because
+    the in1 circular buffer overruns L1 -- a *program config* limit, not a
+    fidelity one. Returning a bare ``None`` surrendered the compute kernel config
+    too, leaving ttnn's default (HiFi2, and crucially ``fp32_dest_acc_en=False``)
+    on the matmul that produces the logits. 12B at tp=2 shards the 262144 vocab
+    only down to 131072 and lands here; tp=8's 32768 keeps the tuned path, which
+    already accumulates in fp32.
+
+    So this mirrors the tuned path's HiFi3 + fp32 dest-acc -- the runtime's own
+    #38306-safe recommendation for Wormhole. Dtype-gated like
+    ``single_tile_matmul_ckc``: against a BFP8_B weight raising fidelity here
+    measured as nothing (0.98328 -> 0.98330).
+
+    ``GEMMA4_WIDE_LM_HEAD_FIDELITY`` = ``hifi3_fp32`` (default) / ``hifi4`` /
+    ``hifi2`` / ``auto``.
+    """
+    if weight is None or weight.dtype != ttnn.bfloat16:
+        return None
+    mode = os.environ.get("GEMMA4_WIDE_LM_HEAD_FIDELITY", "hifi3_fp32").strip().lower()
+    if mode in ("auto", "none", "off", "0"):
+        return None
+    if mode == "hifi3_fp32":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi3, True
+    elif mode == "hifi4":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi4, False
+    elif mode == "hifi2":
+        fidelity, dest_acc = ttnn.MathFidelity.HiFi2, False
+    else:
+        raise ValueError(f"GEMMA4_WIDE_LM_HEAD_FIDELITY={mode!r} — expected auto/hifi2/hifi3_fp32/hifi4")
+    return ttnn.WormholeComputeKernelConfig(
+        math_fidelity=fidelity,
+        math_approx_mode=False,
+        fp32_dest_acc_en=dest_acc,
+        packer_l1_acc=not dest_acc,
+    )
+
+
+def lm_head_decode_config(mesh_device, m, k, n, weight=None):
     """Tuned last-token LM head with safe HiFi3 + fp32 destination accumulation."""
-    if max(1, math.ceil(m / TILE_SIZE)) > 1 or n > 64 * 1024:
+    if max(1, math.ceil(m / TILE_SIZE)) > 1:
         return None, None, None
+    if n > 64 * 1024:
+        # Too wide for the 1D-mcast program config; keep an explicit fidelity.
+        return None, None, wide_vocab_lm_head_ckc(weight)
     grid = mesh_device.compute_with_storage_grid_size()
     program_config = prefill_progcfg_1d(
         m,

@@ -36,6 +36,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_matmul_lofi_enabled,
     prefill_progcfg_1d_for_width_sharded_in0,
     should_prefill_long_2d,
+    single_tile_matmul_ckc,
 )
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
 
@@ -253,6 +254,8 @@ class SharedMLP:
         program_config, out_memcfg, compute_kernel_config = interleaved_gate_up_prefill_config(rows, k, n)
         if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(rows):
             compute_kernel_config = prefill_lofi_ckc()
+        if compute_kernel_config is None:
+            compute_kernel_config = single_tile_matmul_ckc(rows, self.gate_up_proj)
         if out_memcfg is None and rows <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         if program_config is not None and hidden_states.is_sharded():
@@ -304,6 +307,8 @@ class SharedMLP:
         program_config, out_memcfg, compute_kernel_config = interleaved_down_proj_prefill_config(
             rows, int(hidden.shape[-1]), int(self.down_proj.shape[-1])
         )
+        if compute_kernel_config is None:
+            compute_kernel_config = single_tile_matmul_ckc(rows, self.down_proj)
         if out_memcfg is None and rows <= TILE_SIZE:
             out_memcfg = ttnn.L1_MEMORY_CONFIG
         activation, owned = self._prepare_prefill_act(hidden, program_config)

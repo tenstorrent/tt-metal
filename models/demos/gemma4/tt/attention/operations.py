@@ -31,6 +31,7 @@ from models.demos.gemma4.tt.dram_sharded import (
     prefill_lofi_ckc,
     prefill_matmul_lofi_enabled,
     should_prefill_long_2d,
+    single_tile_matmul_ckc,
 )
 
 from .weights import AttentionWeights
@@ -166,6 +167,8 @@ def apply_qkv_projection(hidden_states, weights: AttentionWeights, memory_config
         )
         if program_config is None and compute_kernel_config is None and prefill_matmul_lofi_enabled(rows):
             compute_kernel_config = prefill_lofi_ckc()
+        if compute_kernel_config is None:
+            compute_kernel_config = single_tile_matmul_ckc(rows, weights.wqkv)
     activation, owned_activation = hoist_prefill_matmul_in0_if_needed(hidden_states, program_config)
     output = linear_l1_safe(
         activation,
@@ -708,6 +711,8 @@ def apply_output_projection(tensor, weights: AttentionWeights, memory_config=Non
     program_config, tuned_out_memcfg, compute_kernel_config = interleaved_o_proj_prefill_config(
         rows, int(tensor.shape[-1]), int(weights.o_proj.shape[-1])
     )
+    if compute_kernel_config is None:
+        compute_kernel_config = single_tile_matmul_ckc(rows, weights.o_proj)
     if program_config is None and should_prefill_long_2d(rows):
         out = prefill_linear_above_cutoff(tensor, weights.o_proj, out_memory_config=memory_config)
         tensor.deallocate(True)
