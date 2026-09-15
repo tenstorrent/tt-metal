@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -90,7 +90,7 @@ inline constexpr std::array<float, 84> PRECOMPUTED_POW10_TABLE = {
 };
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_floor_()
+sfpi_inline void calculate_floor()
 {
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
@@ -101,7 +101,7 @@ sfpi_inline void _calculate_floor_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_ceil_()
+sfpi_inline void calculate_ceil()
 {
 #pragma GCC unroll 4
     for (int d = 0; d < ITERATIONS; d++)
@@ -112,7 +112,7 @@ sfpi_inline void _calculate_ceil_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_trunc_()
+sfpi_inline void calculate_trunc()
 {
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
@@ -123,7 +123,7 @@ sfpi_inline void _calculate_trunc_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_frac_()
+sfpi_inline void calculate_frac()
 {
 #pragma GCC unroll 2
     for (int d = 0; d < ITERATIONS; d++)
@@ -155,7 +155,7 @@ sfpi_inline sfpi::vFloat _round_even_(sfpi::vFloat v)
 }
 
 template <bool APPROXIMATE, int ITERATIONS = 8>
-void _calculate_round_(const int decimals)
+void calculate_round(const int decimals)
 {
     const auto exp10i = [](int n)
     {
@@ -186,7 +186,7 @@ void _calculate_round_(const int decimals)
 
 // Performs stochastic rounding of values in DST from fp32 to fp16b format.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-sfpi_inline void _calculate_stochastic_round_()
+sfpi_inline void calculate_stochastic_round()
 {
 #pragma GCC unroll ITERATIONS
     for (int d = 0; d < ITERATIONS; d++)

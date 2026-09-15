@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -15,12 +15,12 @@ namespace ckernel::sfpu
 {
 
 template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS>
-inline void _calculate_where_(
+inline void calculate_where(
     const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_in2, const std::uint32_t dst_index_out)
 {
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b || data_format == DataFormat::Int32 || data_format == DataFormat::UInt32,
-        "Unsupported data format for _calculate_where_(). Only Float32, Int32, UInt32, and Float16_b are allowed.");
+        "Unsupported data format for calculate_where(). Only Float32, Int32, UInt32, and Float16_b are allowed.");
 
     int offset0 = (dst_index_in0 * 32) << 1;
     int offset1 = (dst_index_in1 * 32) << 1;
@@ -32,12 +32,12 @@ inline void _calculate_where_(
     int offset3 = (dst_index_out * 32) << 1;
 
     lltt::record(0, 6);
-    TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_7, offset0);
-    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset1);
+    TT_SFPLOAD(p_sfpu::LREG0, mod0, ADDR_MOD_3, offset0);
+    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset1);
     TTI_SFPSETCC(0, p_sfpu::LREG0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_7, offset2);
+    TT_SFPLOAD(p_sfpu::LREG1, mod0, ADDR_MOD_3, offset2);
     TTI_SFPENCC(0, 0, 0, sfpi::SFPENCC_MOD1_EU_R1);
-    TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_6, offset3);
+    TT_SFPSTORE(p_sfpu::LREG1, mod0, ADDR_MOD_2, offset3);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
@@ -55,15 +55,10 @@ inline void _calculate_where_(
         // SFPLOAD L0=Dst[offset2] | SFPENCC (LaneEnabled=true)     |
         // (next SFPLOAD L0)       |                                | SFPSTORE Dst[offset0]=L0
 
-        load_replay_buf(
-            0,
-            3,
-            [offset0, offset1, offset2]
-            {
-                TT_SFPLOADMACRO((0 << 2), mod0, ADDR_MOD_7, offset0);
-                TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_7, offset1);
-                TT_SFPLOAD(0, mod0, ADDR_MOD_6, offset2);
-            });
+        lltt::record(0, 3);
+        TT_SFPLOADMACRO((0 << 2), mod0, ADDR_MOD_3, offset0);
+        TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_3, offset1);
+        TT_SFPLOAD(0, mod0, ADDR_MOD_2, offset2);
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
@@ -84,16 +79,11 @@ inline void _calculate_where_(
 
         int offset3 = (dst_index_out * 32) << 1;
 
-        load_replay_buf(
-            0,
-            4,
-            [offset0, offset1, offset2, offset3]
-            {
-                TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_7, offset0);
-                TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_7, offset1);
-                TT_SFPLOAD(0, mod0, ADDR_MOD_7, offset2);
-                TT_SFPSTORE(0, mod0, ADDR_MOD_6, offset3);
-            });
+        lltt::record(0, 4);
+        TT_SFPLOADMACRO((1 << 2), mod0, ADDR_MOD_3, offset0);
+        TT_SFPLOADMACRO((2 << 2), mod0, ADDR_MOD_3, offset1);
+        TT_SFPLOAD(0, mod0, ADDR_MOD_3, offset2);
+        TT_SFPSTORE(0, mod0, ADDR_MOD_2, offset3);
 
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++)
@@ -105,7 +95,7 @@ inline void _calculate_where_(
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_where_()
+inline void where_init()
 {
 #ifndef DISABLE_SFPLOADMACRO
     // InstructionTemplate[0]

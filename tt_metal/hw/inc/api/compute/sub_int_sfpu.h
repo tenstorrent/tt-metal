@@ -6,7 +6,7 @@
 
 #include "api/compute/common_globals.h"
 #ifdef TRISC_MATH
-#include "sfpu/ckernel_sfpu_sub_int.h"
+#include "ckernel_sfpu_sub_int.h"
 #include "ckernel_sfpu_rsub_int32.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
 #endif
@@ -45,7 +45,7 @@ ALWI void sub_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
-        _sub_int_,
+        sub_int,
         (APPROX, 8 /* ITERATIONS */, INSTRUCTION_MODE, false /* SIGN_MAGNITUDE_FORMAT */),
         idst0,
         idst1,

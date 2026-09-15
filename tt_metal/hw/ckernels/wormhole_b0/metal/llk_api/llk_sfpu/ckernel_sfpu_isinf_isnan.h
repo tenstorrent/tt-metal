@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ namespace ckernel::sfpu
 {
 
 template <SfpuType operation, bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sfpu_isinf_isnan_()
+inline void calculate_sfpu_isinf_isnan()
 {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)

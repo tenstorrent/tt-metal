@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include "llk_math_eltwise_ternary_sfpu.h"
-#include "sfpu/ckernel_sfpu_ema.h"
+#include "ckernel_sfpu_ema.h"
 #include "sanitizer/api.h"
 
 namespace ckernel {
@@ -29,7 +29,7 @@ inline void llk_math_ema_sfpu_clear_previous_output() {
 inline void llk_math_ema_sfpu_tile(std::uint32_t input_dst_index) {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_sfpu_start_(input_dst_index);
-    sfpu::_calculate_ema_tile_();
+    sfpu::calculate_ema_tile();
     _llk_math_eltwise_sfpu_done_();
 }
 

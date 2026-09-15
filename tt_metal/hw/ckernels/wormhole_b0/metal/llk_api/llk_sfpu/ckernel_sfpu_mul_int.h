@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-FileCopyrightText: © 2025 Jason Davies <jason@jasondavies.com>
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -16,7 +16,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+inline void mul_int(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
 {
     int offset0    = (dst_index_in0 * 32) << 1;
     int offset1    = (dst_index_in1 * 32) << 1;
@@ -163,7 +163,7 @@ inline void _mul_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_mul_int_()
+inline void mul_int_init()
 {
     sfpi::vConstIntPrgm0 = 0xff; // LREG12
 #ifdef DISABLE_SFPLOADMACRO

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -18,7 +18,7 @@ template <typename T>
 constexpr bool is_supported_threshold_type_v = std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, typename T>
-inline void _calculate_threshold_(T threshold, T value)
+inline void calculate_threshold(T threshold, T value)
 {
     static_assert(is_supported_threshold_type_v<T>, "Type T must be either float or uint32_t");
 
