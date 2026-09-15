@@ -14,6 +14,9 @@ import os
 
 import torch
 
+# kernels sit next to this harness, so the path follows the file and not a fixed workspace
+_KDIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels")
+
 
 def test_zone_tax(device):
     import ttnn
@@ -22,26 +25,47 @@ def test_zone_tax(device):
     cores_env = os.environ.get("ZT_CORES", "1x1")
     cx, cy = [int(v) for v in cores_env.split("x")]
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cx - 1, cy - 1))])
-    io = ttnn.from_torch(torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
-                         layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    out_t = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device,
-                                           ttnn.DRAM_MEMORY_CONFIG)
+    io = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 32, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_t = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32, 32]), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     for spec in grid.split(","):
         mode, n, loop = [int(v) for v in spec.split(":")]
         defines = [("ZT_MODE", str(mode)), ("ZT_N", str(n)), ("ZT_LOOP", str(loop))]
         print(f"\n[zone_tax] mode={mode} n={n} loop={loop} cores={cores_env}", flush=True)
-        rd = ttnn.KernelDescriptor(kernel_source="/proj_sw/user_dev/mvlahovic/SDPA/tt-metal/analysis/kernels/zone_tax_dm.cpp",
-                                   source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                                   core_ranges=core_grid, compile_time_args=[], defines=defines,
-                                   runtime_args=[], config=ttnn.ReaderConfigDescriptor())
-        wr = ttnn.KernelDescriptor(kernel_source="/proj_sw/user_dev/mvlahovic/SDPA/tt-metal/analysis/kernels/zone_tax_dm.cpp",
-                                   source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                                   core_ranges=core_grid, compile_time_args=[], defines=defines,
-                                   runtime_args=[], config=ttnn.WriterConfigDescriptor())
-        cp = ttnn.KernelDescriptor(kernel_source="/proj_sw/user_dev/mvlahovic/SDPA/tt-metal/analysis/kernels/zone_tax_compute.cpp",
-                                   source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
-                                   core_ranges=core_grid, compile_time_args=[], defines=defines,
-                                   runtime_args=[], config=ttnn.ComputeConfigDescriptor())
+        rd = ttnn.KernelDescriptor(
+            kernel_source=_KDIR + "/zone_tax_dm.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_grid,
+            compile_time_args=[],
+            defines=defines,
+            runtime_args=[],
+            config=ttnn.ReaderConfigDescriptor(),
+        )
+        wr = ttnn.KernelDescriptor(
+            kernel_source=_KDIR + "/zone_tax_dm.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_grid,
+            compile_time_args=[],
+            defines=defines,
+            runtime_args=[],
+            config=ttnn.WriterConfigDescriptor(),
+        )
+        cp = ttnn.KernelDescriptor(
+            kernel_source=_KDIR + "/zone_tax_compute.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_grid,
+            compile_time_args=[],
+            defines=defines,
+            runtime_args=[],
+            config=ttnn.ComputeConfigDescriptor(),
+        )
         prog = ttnn.ProgramDescriptor(kernels=[rd, wr, cp], semaphores=[], cbs=[])
         out = ttnn.generic_op([io, out_t], prog)
         ttnn.synchronize_device(device)
