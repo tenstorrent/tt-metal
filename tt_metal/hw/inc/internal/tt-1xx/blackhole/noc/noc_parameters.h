@@ -358,7 +358,7 @@
 
 #define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
 
-// Base address pulled from tt::umd::Cluster::get_pcie_base_addr_from_device
+// Base address pulled from tt::umd::Cluster::get_sysmem_window_noc_base
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 

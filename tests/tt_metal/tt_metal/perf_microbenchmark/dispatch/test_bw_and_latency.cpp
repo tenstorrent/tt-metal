@@ -242,7 +242,7 @@ int main(int argc, char** argv) {
         void* host_pcie_base =
             (void*)tt::tt_metal::MetalContext::instance().get_cluster().host_dma_address(0, mmio_device_id, channel);
         uint64_t dev_pcie_base =
-            tt::tt_metal::MetalContext::instance().get_cluster().get_pcie_base_addr_from_device(device_id);
+            tt::tt_metal::MetalContext::instance().get_cluster().get_sysmem_window_noc_base(device_id);
         uint64_t pcie_offset = 1024 * 1024 * 50;  // beyond where FD will write...maybe
 
         const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
