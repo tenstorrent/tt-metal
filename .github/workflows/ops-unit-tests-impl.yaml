@@ -101,12 +101,13 @@ jobs:
       image: ${{ inputs.prebuilt-image || inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         TT_METAL_HOME: /work
-        # /work/ttnn because the image installs no wheel: /work/ttnn is a namespace
-        # dir and the package is /work/ttnn/ttnn. /work/tools carries the `tracy`
-        # module, which _ttnn imports during init on a tracy-enabled build, and the
-        # L2 nightly builds with tracy on. Missing it fails as "error while
-        # initializing the extension", naming neither tracy nor the path.
-        PYTHONPATH: /work:/work/ttnn:/work/tools
+        # Only on the image path. There /work/ttnn is required because no wheel is
+        # installed: it is a namespace dir whose package is /work/ttnn/ttnn, and
+        # /work/tools carries the `tracy` module _ttnn imports during init on a
+        # tracy-enabled build, which the L2 nightly is. On the artifact path a wheel
+        # IS installed and prepending the source tree would shadow it, which matters
+        # because release-build-test-publish reaches this impl with a manylinux wheel.
+        PYTHONPATH: ${{ inputs.prebuilt-image != '' && '/work:/work/ttnn:/work/tools' || '/work' }}
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
