@@ -6,8 +6,13 @@
 
 #include <fmt/core.h>
 
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
+#include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <tt-metalium/distributed.hpp>
 #include <umd/device/cluster.hpp>
 
@@ -30,6 +35,8 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/full/full.hpp"
+#include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
@@ -37,6 +44,96 @@
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 namespace ttml::ops::distributed {
+
+namespace {
+
+// A zero tensor of `like`'s shape in `dtype`, filled on the device.
+// ttnn::zeros_like builds the tensor on the host and writes it to every chip,
+// which for the eight tensors of a 4096-row backward was 25 ms of a 45 ms
+// total; moreh_full_like is a device kernel and takes a dispatch.
+ttnn::Tensor device_zeros_like(const ttnn::Tensor& like, ttnn::DataType dtype) {
+    return ttnn::moreh_full_like(like, 0.0F, dtype, like.layout(), like.memory_config());
+}
+
+// The same for a fresh shape and value, on the mesh.
+ttnn::Tensor device_full(
+    ttnn::MeshDevice* mesh_device, const ttsl::SmallVector<uint32_t>& shape, float value, ttnn::DataType dtype) {
+    return ttnn::moreh_full(shape, value, mesh_device, dtype, ttnn::Layout::TILE, ttnn::DRAM_MEMORY_CONFIG);
+}
+
+// Where a ring backward's time goes, by phase, when TTML_RING_PROFILE is set.
+// Each mark synchronises the mesh, so the profile perturbs what it measures
+// (nothing overlaps that would otherwise); what it is good for is the split
+// of the total. Off, it costs a getenv and nothing else.
+class RingBackwardProfile {
+public:
+    explicit RingBackwardProfile(tt::tt_metal::distributed::MeshDevice* device) :
+        m_device(device), m_enabled(std::getenv("TTML_RING_PROFILE") != nullptr) {
+        if (m_enabled) {
+            sync();
+            m_last = std::chrono::steady_clock::now();
+        }
+    }
+
+    void mark(const char* phase) {
+        if (!m_enabled) {
+            return;
+        }
+        sync();
+        const auto now = std::chrono::steady_clock::now();
+        auto& slot = m_phases[phase];
+        slot.first += std::chrono::duration<double>(now - m_last).count() * 1e3;
+        slot.second += 1U;
+        m_order.emplace(phase);
+        m_last = now;
+    }
+
+    ~RingBackwardProfile() {
+        if (!m_enabled) {
+            return;
+        }
+        double total = 0.0;
+        for (const auto& [name, v] : m_phases) {
+            total += v.first;
+        }
+        fmt::print("[ring backward profile] total {:.2f} ms\n", total);
+        for (const auto& name : m_order_vector()) {
+            const auto& v = m_phases.at(name);
+            fmt::print("  {:<28} {:8.2f} ms  ({:2d} x {:7.1f} us)\n", name, v.first, v.second, v.first / v.second * 1e3);
+        }
+    }
+
+private:
+    void sync() {
+        tt::tt_metal::distributed::Synchronize(*m_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+    }
+    std::vector<std::string> m_order_vector() const {
+        std::vector<std::string> names;
+        for (const auto& n : m_order_seq) {
+            names.push_back(n);
+        }
+        return names;
+    }
+    struct Order {
+        std::vector<std::string>& seq;
+        std::unordered_set<std::string>& seen;
+        void emplace(const std::string& n) {
+            if (seen.insert(n).second) {
+                seq.push_back(n);
+            }
+        }
+    };
+
+    tt::tt_metal::distributed::MeshDevice* m_device{};
+    bool m_enabled{};
+    std::chrono::steady_clock::time_point m_last;
+    std::unordered_map<std::string, std::pair<double, uint32_t>> m_phases;
+    std::vector<std::string> m_order_seq;
+    std::unordered_set<std::string> m_order_seen;
+    Order m_order{m_order_seq, m_order_seen};
+};
+
+}  // namespace
 
 namespace {
 
@@ -94,22 +191,17 @@ autograd::TensorPtr ring_attention_sdpa(
     // compounds ~ring_size rounding errors into the saved O. Backward consumes that O in
     // u = rowsum(dO * O), where the error is amplified by the softmax-backward
     // cancellation in (dP - u) — enough to push dK outside test tolerance.
-    ttnn::Tensor output_accum = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, dim},
-        0.0F,
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+    ttnn::Tensor output_accum = device_full(
+        mesh_device, ttsl::SmallVector<uint32_t>{batch_num, heads, seq_len_local, dim}, 0.0F, ttnn::DataType::FLOAT32);
 
     // global_lse: running logsumexp across all steps
     // lse = log(sum(exp(scale * score_i))) — the log of the softmax normalizer
     // Initialized to -inf (no contribution: exp(-inf) = 0)
-    ttnn::Tensor global_lse = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+    ttnn::Tensor global_lse = device_full(
+        mesh_device,
+        ttsl::SmallVector<uint32_t>{batch_num, heads, seq_len_local, 1U},
         -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+        ttnn::DataType::FLOAT32);
 
     // Allocate output and intermediate tensors (mesh tensors)
     // These will be reused each step
@@ -123,12 +215,11 @@ autograd::TensorPtr ring_attention_sdpa(
 
     // "no contribution" intermediate: logsumexp = -inf (col 0), rest zeros
     // exp(-inf) = 0, so this chunk contributes nothing to the combined softmax
-    ttnn::Tensor col0_neg_inf = ttnn::full(
-        ttnn::Shape{batch_num, heads, seq_len_local, 1U},
+    ttnn::Tensor col0_neg_inf = device_full(
+        mesh_device,
+        ttsl::SmallVector<uint32_t>{batch_num, heads, seq_len_local, 1U},
         -std::numeric_limits<float>::infinity(),
-        ttnn::DataType::FLOAT32,
-        ttnn::Layout::TILE,
-        std::ref(*mesh_device));
+        ttnn::DataType::FLOAT32);
     ttnn::Tensor no_contrib_intermediate = pad_lse_to_intermediates_layout(col0_neg_inf);
 
     for (uint32_t step = 0; step < ring_size; ++step) {
@@ -205,6 +296,7 @@ autograd::TensorPtr ring_attention_sdpa(
                                       shift_transport,
                                       mesh_device]() mutable {
         tt::tt_metal::distributed::Synchronize(*mesh_device, std::nullopt, std::vector<tt::tt_metal::SubDeviceId>());
+        RingBackwardProfile profile(mesh_device);
         const auto& grad_output = out->get_grad();
         const auto& attn_output = out->get_value();
         const auto& query_tensor = query->get_value();
@@ -212,21 +304,39 @@ autograd::TensorPtr ring_attention_sdpa(
         // FP32 host accumulators: each ring step contributes a bf16 kernel output, but
         // summing them in bf16 rounds the full running magnitude every step. The
         // accumulators are cast back to the input dtype once, after the loop.
-        ttnn::Tensor grad_Q_accum = ttnn::zeros_like(query_tensor, ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_K_accum = ttnn::zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_V_accum = ttnn::zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_Q_accum = device_zeros_like(query_tensor, ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_K_accum = device_zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
+        ttnn::Tensor grad_V_accum = device_zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
 
-        ttnn::Tensor grad_Q_step = ttnn::zeros_like(query_tensor);
-        ttnn::Tensor grad_K_step = ttnn::zeros_like(key->get_value());
-        ttnn::Tensor grad_V_step = ttnn::zeros_like(value->get_value());
-        // The cyclic op is FP32 in and out, so its step buffers are too. That
-        // is a precision difference between the two paths, in the cyclic
+        const bool cyclic =
+            backward_kind == RingBackwardKind::Cyclic || backward_kind == RingBackwardKind::CyclicInPlace;
+        const bool in_place = backward_kind == RingBackwardKind::CyclicInPlace;
+
+        // Step buffers and the zero sources that reset them before every ring
+        // step: only the ones this backward_kind uses. The two-pass op writes
+        // bf16; the cyclic op is FP32 in and out, so its step buffers are too.
+        // That is a precision difference between the two paths, in the cyclic
         // path's favour, and it is the op's own dtype rather than a choice
         // made here: its gradients are read back and accumulated into on
-        // device, which bf16 would round at every streak start.
-        ttnn::Tensor grad_Q_step_fp32 = ttnn::zeros_like(query_tensor, ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_K_step_fp32 = ttnn::zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
-        ttnn::Tensor grad_V_step_fp32 = ttnn::zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
+        // device, which bf16 would round at every streak start. The in-place
+        // cyclic path writes the accumulators and needs neither.
+        ttnn::Tensor grad_Q_step, grad_K_step, grad_V_step, zero_Q, zero_K, zero_V;
+        ttnn::Tensor grad_Q_step_fp32, grad_K_step_fp32, grad_V_step_fp32, zero_Q_fp32, zero_K_fp32, zero_V_fp32;
+        if (!cyclic) {
+            grad_Q_step = device_zeros_like(query_tensor, query_tensor.dtype());
+            grad_K_step = device_zeros_like(key->get_value(), key->get_value().dtype());
+            grad_V_step = device_zeros_like(value->get_value(), value->get_value().dtype());
+            zero_Q = device_zeros_like(grad_Q_step, grad_Q_step.dtype());
+            zero_K = device_zeros_like(grad_K_step, grad_K_step.dtype());
+            zero_V = device_zeros_like(grad_V_step, grad_V_step.dtype());
+        } else if (!in_place) {
+            grad_Q_step_fp32 = device_zeros_like(query_tensor, ttnn::DataType::FLOAT32);
+            grad_K_step_fp32 = device_zeros_like(key->get_value(), ttnn::DataType::FLOAT32);
+            grad_V_step_fp32 = device_zeros_like(value->get_value(), ttnn::DataType::FLOAT32);
+            zero_Q_fp32 = device_zeros_like(grad_Q_step_fp32, ttnn::DataType::FLOAT32);
+            zero_K_fp32 = device_zeros_like(grad_K_step_fp32, ttnn::DataType::FLOAT32);
+            zero_V_fp32 = device_zeros_like(grad_V_step_fp32, ttnn::DataType::FLOAT32);
+        }
 
         // Standard ring-flash-attention backward: every step gets the UNSCALED upstream
         // gradient, the GLOBAL forward output, and the GLOBAL logsumexp. The sdpa_bw
@@ -237,22 +347,11 @@ autograd::TensorPtr ring_attention_sdpa(
         // bias dQ/dK (per-chunk u instead of global) — only dV would come out right.
         ttnn::Tensor global_intermediates = pad_lse_to_intermediates_layout(final_lse);
 
-        // Zero sources for resetting the step buffers before every ring step.
-        const ttnn::Tensor zero_Q = ttnn::zeros_like(grad_Q_step);
-        const ttnn::Tensor zero_K = ttnn::zeros_like(grad_K_step);
-        const ttnn::Tensor zero_V = ttnn::zeros_like(grad_V_step);
-        const ttnn::Tensor zero_Q_fp32 = ttnn::zeros_like(grad_Q_step_fp32);
-        const ttnn::Tensor zero_K_fp32 = ttnn::zeros_like(grad_K_step_fp32);
-        const ttnn::Tensor zero_V_fp32 = ttnn::zeros_like(grad_V_step_fp32);
-
         // The cyclic backward needs D = rowsum(dO . O), which the two-pass
         // backward computes for itself inside its dQ pass, once per ring step.
         // It is global and constant across steps, so it is computed once here.
         // The product is taken in FP32 rather than the operands' bf16: D is
         // subtracted from dP, so a rounding here lands directly in dS.
-        const bool cyclic =
-            backward_kind == RingBackwardKind::Cyclic || backward_kind == RingBackwardKind::CyclicInPlace;
-        const bool in_place = backward_kind == RingBackwardKind::CyclicInPlace;
         ttnn::Tensor row_scalar;
         if (cyclic) {
             row_scalar = pad_lse_to_intermediates_layout(ttml::ttnn_fixed::sum_ttnn(
@@ -262,6 +361,8 @@ autograd::TensorPtr ring_attention_sdpa(
                 /* dim */ 3,
                 /* keep_dim */ true));
         }
+
+        profile.mark("setup (accumulators, D)");
 
         // Loop over ring steps in reverse order (from last to first)
         for (int step = ring_size - 1; step >= 0; --step) {
@@ -280,6 +381,8 @@ autograd::TensorPtr ring_attention_sdpa(
                 ttnn::copy(zero_K, grad_K_step);
                 ttnn::copy(zero_V, grad_V_step);
             }
+
+            profile.mark("zero step buffers");
 
             if (in_place) {
                 // The step's contribution lands in the accumulators themselves.
@@ -307,6 +410,7 @@ autograd::TensorPtr ring_attention_sdpa(
                 grad_Q_accum = gq;
                 grad_K_accum = gk;
                 grad_V_accum = gv;
+                profile.mark(step_idx == 0 ? "kernel, diagonal step" : "kernel, dense step");
             } else if (cyclic) {
                 // The cyclic op returns FP32 and accumulates into whatever the
                 // step buffers hold, so they are zeroed above and the step's
@@ -331,9 +435,11 @@ autograd::TensorPtr ring_attention_sdpa(
                     grad_Q_step_fp32,
                     grad_K_step_fp32,
                     grad_V_step_fp32);
+                profile.mark(step_idx == 0 ? "kernel, diagonal step" : "kernel, dense step");
                 grad_Q_accum = ttnn::add(grad_Q_accum, grad_Q_result);
                 grad_K_accum = ttnn::add(grad_K_accum, grad_K_result);
                 grad_V_accum = ttnn::add(grad_V_accum, grad_V_result);
+                profile.mark("accumulate");
             } else {
             // Use Backward direction (same as forward) since src = (device + step) % ring_size
             auto [grad_Q_result, grad_K_result, grad_V_result] = ttml::metal::ring_sdpa_bw(
@@ -351,12 +457,14 @@ autograd::TensorPtr ring_attention_sdpa(
                 grad_Q_step,
                 grad_K_step,
                 grad_V_step);
+            profile.mark(step_idx == 0 ? "kernel, diagonal step" : "kernel, dense step");
 
             // The results alias the preallocated step buffers; skipped devices keep the
             // zeros written above. Upcast so the accumulation stays FP32.
             grad_Q_accum = ttnn::add(grad_Q_accum, ttnn::typecast(grad_Q_result, ttnn::DataType::FLOAT32));
             grad_K_accum = ttnn::add(grad_K_accum, ttnn::typecast(grad_K_result, ttnn::DataType::FLOAT32));
             grad_V_accum = ttnn::add(grad_V_accum, ttnn::typecast(grad_V_result, ttnn::DataType::FLOAT32));
+            profile.mark("accumulate");
             }
 
             // Ring shift K/V and grad accumulators in FORWARD direction
@@ -374,6 +482,7 @@ autograd::TensorPtr ring_attention_sdpa(
                     grad_K_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
                 grad_V_accum = ttnn_fixed::distributed::ring_shift(
                     grad_V_accum, cp_axis_value, ttnn_fixed::distributed::RingShiftDirection::Forward, shift_transport);
+                profile.mark("shift K, V, dK, dV");
             }
         }
 
@@ -381,6 +490,7 @@ autograd::TensorPtr ring_attention_sdpa(
         query->add_grad(ttnn::typecast(grad_Q_accum, query_tensor.dtype()));
         key->add_grad(ttnn::typecast(grad_K_accum, key->get_value().dtype()));
         value->add_grad(ttnn::typecast(grad_V_accum, value->get_value().dtype()));
+        profile.mark("finish (typecast, add_grad)");
     };
 
     out->set_node(autograd::add_backward_node(std::move(grad_fn), out, query, key, value));

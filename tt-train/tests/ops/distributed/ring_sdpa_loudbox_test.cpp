@@ -948,7 +948,8 @@ double time_ring_backward(
     const size_t head_dim,
     ttml::ops::distributed::RingBackwardKind kind = ttml::ops::distributed::RingBackwardKind::TwoPass,
     uint32_t rows_per_block_tiles = 1U,
-    RingShiftTransport transport = RingShiftTransport::Fifo) {
+    RingShiftTransport transport = RingShiftTransport::Fifo,
+    uint32_t samples_to_take = 5U) {
     using namespace ttml;
     auto* device = &autograd::ctx().get_device();
     const uint32_t cp_axis = autograd::ctx().get_parallelism_context().get_cp_axis().value();
@@ -981,7 +982,7 @@ double time_ring_backward(
 
     sample();  // warm the program cache and the kernel build
     std::vector<double> samples;
-    for (uint32_t k = 0; k < 5; ++k) {
+    for (uint32_t k = 0; k < samples_to_take; ++k) {
         samples.push_back(sample());
     }
     std::sort(samples.begin(), samples.end());
@@ -1034,6 +1035,35 @@ TEST_F(LoudboxRingSDPATest, DISABLED_CompareTheTwoBackwards) {
                       << two_pass / in_place << "x)\n";
         }
     }
+}
+
+// One whole backward per implementation and transport, with the phase
+// profile in ring_attention_sdpa switched on (TTML_RING_PROFILE), so the
+// whole-backward total above can be split into kernel, accumulate, shift
+// and setup instead of inferred from components timed on their own. The
+// profile synchronises after each phase, so its total runs a little over the
+// unprofiled one. Rows per chip from TTML_LOUDBOX_PROFILE_ROWS (default 4096),
+// heads=4, d=64, Bt=4.
+TEST_F(LoudboxRingSDPATest, DISABLED_ProfileOneBackward) {
+    setenv("TTML_RING_PROFILE", "1", /* overwrite */ 1);
+    const uint32_t cp_size = ttml::autograd::ctx().get_parallelism_context().get_cp_size();
+    size_t rows_per_chip = 4096;
+    if (const char* env = std::getenv("TTML_LOUDBOX_PROFILE_ROWS"); env != nullptr && *env != '\0') {
+        rows_per_chip = std::strtoul(env, nullptr, 10);
+    }
+    using Kind = ttml::ops::distributed::RingBackwardKind;
+    for (const auto transport : {RingShiftTransport::Fifo, RingShiftTransport::Direct}) {
+        for (const auto kind : {Kind::TwoPass, Kind::Cyclic, Kind::CyclicInPlace}) {
+            std::cout << "== " << rows_per_chip << " rows/chip, "
+                      << (kind == Kind::TwoPass ? "two-pass" : kind == Kind::Cyclic ? "cyclic" : "cyclic in-place")
+                      << ", " << (transport == RingShiftTransport::Fifo ? "fifo" : "direct")
+                      << " shifts (second profile is the timed one)\n";
+            const double seconds =
+                time_ring_backward(1, 4, rows_per_chip * cp_size, 64, kind, /* Bt */ 4U, transport, /* samples */ 1U);
+            std::cout << "   unprofiled-style total (with profile syncs): " << seconds * 1e3 << " ms\n";
+        }
+    }
+    unsetenv("TTML_RING_PROFILE");
 }
 
 // Where a ring step's time goes. The whole-backward numbers above barely move
