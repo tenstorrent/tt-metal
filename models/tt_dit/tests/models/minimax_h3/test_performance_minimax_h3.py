@@ -8,6 +8,8 @@ then `tt-perf-report <csv> --start-signpost start --end-signpost stop`. Profile 
 
 from __future__ import annotations
 
+import time
+
 import pytest
 import torch
 from diffusers.models.transformers.transformer_minimax_h3 import MINIMAX_H3_MODALITY_NUM, MiniMaxH3RotaryPosEmbed
@@ -204,7 +206,22 @@ def test_minimax_h3_transformer_block_perf(
         return out
 
     logger.info("iteration 1: compiling kernels and populating the program cache")
+    compile_start = time.perf_counter()
     run_block()
+    logger.info(f"BLOCK_TIMING compile+first={((time.perf_counter() - compile_start) * 1e3):.1f}ms")
+
+    # Host-side wall time per block, logged per iteration. Coarser than the Tracy capture below, but
+    # it needs no profiler, it is what a plain run reports, and it keeps the broker's no-output
+    # reaper from firing on a long sweep.
+    warm_ms = []
+    for i in range(3):
+        warm_start = time.perf_counter()
+        run_block()
+        warm_ms.append((time.perf_counter() - warm_start) * 1e3)
+        logger.info(f"BLOCK_TIMING warm[{i}]={warm_ms[-1]:.1f}ms")
+    logger.info(
+        f"BLOCK_TIMING median={sorted(warm_ms)[len(warm_ms) // 2]:.1f}ms " f"all={[round(m, 1) for m in warm_ms]}"
+    )
 
     logger.info("iteration 2: warm run (the profiled region)")
     signpost("start")
