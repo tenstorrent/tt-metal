@@ -18,27 +18,15 @@ from models.common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.reference.mhc.mhc_reference import MHCConfig, parametrize
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import build_consts
 
-# The kernel has only ever been exercised on Blackhole. The group suite that folder-collects
-# this directory also runs on Wormhole under -x, where an unproven failure would abort tests
-# belonging to other teams.
-pytestmark = pytest.mark.skipif(not is_blackhole(), reason="mhc_split_sinkhorn is validated on Blackhole only")
+# The op ships for Blackhole prefill. The suite that folder-collects this directory also runs on
+# Wormhole under -x, where a failure off the target arch would abort other teams' tests.
+pytestmark = pytest.mark.skipif(not is_blackhole(), reason="mhc_split_sinkhorn targets Blackhole")
 
 PCC = 0.999
 
 # A 5120-token prefill split over SP=8 lands 640 tokens (20 tiles) on each device, and the op is
 # token-flattened, so that count is the only shape the model ever asks of it.
 TOKENS = 640
-
-
-@pytest.fixture(autouse=True)
-def _p150_only(device):
-    """The kernel is brought up on P150 only.
-
-    The cluster query hangs off the open device rather than a collection-time skipif because
-    get_cluster_type() takes the chip lock, which would strand anything that later forks.
-    """
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
-        pytest.skip("mhc_split_sinkhorn is validated on P150 only")
 
 
 def _check(name, ref, dev, pcc=PCC):
