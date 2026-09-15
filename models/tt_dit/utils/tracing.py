@@ -86,6 +86,7 @@ class Tracer:
     """
 
     _traces_live: ClassVar[dict[int, int]] = {}
+    _instances: ClassVar[weakref.WeakSet["Tracer"]] = weakref.WeakSet()
 
     @overload
     def __init__(
@@ -96,8 +97,7 @@ class Tracer:
         device: ttnn.MeshDevice,
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @overload
     def __init__(
@@ -108,8 +108,7 @@ class Tracer:
         devices: Sequence[ttnn.MeshDevice],
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def __init__(
         self,
@@ -157,6 +156,37 @@ class Tracer:
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
         self._trace_ids: tuple[ttnn.MeshTraceId, ...] | None = None
+        Tracer._instances.add(self)
+
+    @classmethod
+    def residency(cls, device: ttnn.MeshDevice) -> tuple[int, int | None]:
+        """Return live trace count and cumulative trace-buffer bytes for one mesh."""
+        count = cls._traces_live.get(device.id(), 0)
+        size_fn = getattr(ttnn, "get_trace_buffers_size", None)
+        return count, int(size_fn(device)) if size_fn is not None else None
+
+    @classmethod
+    def input_buffer_addresses(cls, device: ttnn.MeshDevice) -> tuple[tuple[int, str, int], ...]:
+        """Snapshot every captured input tensor address associated with ``device``."""
+        rows: list[tuple[int, str, int]] = []
+
+        def collect(tracer_id: int, path: str, value: Any) -> None:
+            if isinstance(value, ttnn.Tensor):
+                rows.append((tracer_id, path, int(value.buffer_address())))
+            elif isinstance(value, (tuple, list)):
+                for index, child in enumerate(value):
+                    collect(tracer_id, f"{path}[{index}]", child)
+            elif isinstance(value, dict):
+                for key, child in value.items():
+                    collect(tracer_id, f"{path}[{key!r}]", child)
+
+        for tracer in cls._instances:
+            if not tracer.trace_captured or not any(d.id() == device.id() for d in tracer._devices):
+                continue
+            tracer_id = id(tracer)
+            collect(tracer_id, "args", tracer._args)
+            collect(tracer_id, "kwargs", tracer._kwargs)
+        return tuple(sorted(rows))
 
     def __call__(
         self,

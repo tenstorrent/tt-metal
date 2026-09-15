@@ -71,6 +71,11 @@ void py_module(nb::module_& mod) {
         nb::arg("mesh_device"),
         nb::arg("trace_id"),
         nb::call_guard<nb::gil_scoped_release>());
+    mod.def(
+        "get_trace_buffers_size",
+        [](MeshDevice* device) { return device->get_trace_buffers_size(); },
+        nb::arg("mesh_device"),
+        "Return cumulative resident mesh trace-buffer bytes.");
 
     // Unsafe allocation tracking
     mod.def(

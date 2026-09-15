@@ -120,6 +120,7 @@ from ttnn._ttnn.operations.trace import (
     begin_trace_capture,
     end_trace_capture,
     execute_trace as _ttnn_execute_trace,
+    get_trace_buffers_size,
     release_trace,
 )
 
