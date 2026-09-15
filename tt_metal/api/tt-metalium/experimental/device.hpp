@@ -28,6 +28,10 @@ uint32_t get_worker_noc_hop_distance(
 
 // Returns the hop distance between two logical worker coordinates on a given NOC
 // NOC distances may vary depending on the target device due to harvesting
+// `mesh_coord` selects the device to measure on. When it maps to a device this rank does not drive
+// (a submesh co-owned by several ranks), the distance is measured on an arbitrary local device
+// instead: exact only when the mesh is homogeneously harvested. Throws if the mesh has no local
+// device to fall back to.
 // This API is experimental and may evolve into a stable Device API in the future
 uint32_t get_worker_noc_hop_distance(
     distributed::MeshDevice* mesh_device,
@@ -35,4 +39,17 @@ uint32_t get_worker_noc_hop_distance(
     const CoreCoord& logical_src,
     const CoreCoord& logical_dst,
     NOC noc);
+
+// Represents a logical coord of a core at the specified distance from a reference point.
+// Reference point is context-defined. E.g. the closest worker to a given core returned
+// by a function which takes the reference point as an argument.
+struct CoreAtNocHops {
+    CoreCoord logical_coord;
+    uint32_t distance_in_noc_hops;
+};
+
+// Returns the logical worker coordinate with the fewest hops to logical_eth_core
+// on a given NOC, and that hop count. The distance is measured worker -> eth core.
+// This API is experimental and may evolve into a stable Device API in the future
+CoreAtNocHops get_closest_worker_to_eth_core(const IDevice& device, const CoreCoord& logical_eth_core, NOC noc);
 }  // namespace tt::tt_metal::experimental::Device

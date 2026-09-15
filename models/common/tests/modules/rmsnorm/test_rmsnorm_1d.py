@@ -11,6 +11,7 @@ This test suite verifies:
 """
 
 import os
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -29,11 +30,13 @@ except ImportError:
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
 from models.common.modules.lazy_weight import LazyWeight
+from models.common.modules.rmsnorm import rmsnorm_1d
 from models.common.modules.rmsnorm.rmsnorm_1d import (
     RMSNorm1D,
     RMSNorm1DConfig,
     _compute_norm_core_grid,
     _create_sharded_norm_program_config,
+    resolve_rmsnorm_1d_arch_config,
 )
 from models.common.utility_functions import comp_allclose, comp_pcc
 
@@ -115,6 +118,7 @@ def test_rmsnorm_1d_config_defaults():
     assert config.tt_ccl is None
     assert config.prefill_distributed is None
     assert config.decode_program_config is None
+    assert config.compute_kernel_config is None
 
 
 def test_rmsnorm_1d_config_power_user_overrides():
@@ -132,6 +136,18 @@ def test_rmsnorm_1d_config_power_user_overrides():
     assert config.decode_program_config == mock_prg_config
     assert config.decode_memory_config == mock_mem_config
     assert config.decode_in_sharded is False
+
+
+@pytest.mark.parametrize(
+    "base_model_name,fp32_dest_acc_en",
+    [("Llama-3.1-8B", True), ("Qwen2.5-7B", False), ("Qwen2.5-VL-7B", False)],
+)
+def test_legacy_rmsnorm_compute_recipe_is_preserved(base_model_name, fp32_dest_acc_en):
+    config = rmsnorm_1d._legacy_rmsnorm_compute_kernel_config(ttnn.device.Arch.BLACKHOLE, base_model_name)
+    assert config.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert config.math_approx_mode is False
+    assert config.fp32_dest_acc_en is fp32_dest_acc_en
+    assert config.packer_l1_acc is False
 
 
 def test_compute_norm_core_grid():
@@ -157,6 +173,141 @@ def test_create_sharded_norm_program_config():
 
     # Just verify the config is created successfully
     assert isinstance(config, ttnn.LayerNormShardedMultiCoreProgramConfig)
+
+
+def _pure_rmsnorm_config(arch):
+    mesh = MagicMock()
+    mesh.arch.return_value = arch
+    mesh.get_num_devices.return_value = 1
+    mesh.compute_with_storage_grid_size.return_value = ttnn.CoreCoord(8, 10)
+    weight = MagicMock()
+    weight.device = mesh
+    weight.source.numel.return_value = 4096
+    program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[8, 4],
+        subblock_w=4,
+        block_h=1,
+        block_w=4,
+        inplace=False,
+    )
+    memory_config = ttnn.create_sharded_memory_config(
+        (32, 128),
+        ttnn.CoreGrid(x=8, y=4),
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    return RMSNorm1DConfig(
+        weight=weight,
+        mesh_device=mesh,
+        prefill_distributed=False,
+        decode_program_config=program_config,
+        decode_memory_config=memory_config,
+    )
+
+
+@pytest.mark.parametrize("arch", [ttnn.device.Arch.WORMHOLE_B0, ttnn.device.Arch.BLACKHOLE])
+def test_rmsnorm_arch_resolver_selects_once_without_mutation(monkeypatch, arch):
+    config = _pure_rmsnorm_config(arch)
+    original_program_config = config.decode_program_config
+    monkeypatch.setattr(rmsnorm_1d, "_resolve_1d_config", lambda common: common)
+
+    resolved = resolve_rmsnorm_1d_arch_config(config)
+
+    assert isinstance(resolved, RMSNorm1DConfig)
+    assert resolved is not config
+    assert config.decode_program_config is original_program_config
+    assert config.mesh_device.arch.call_count == 1
+    assert resolved.compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi2
+    assert resolved.compute_kernel_config.math_approx_mode is False
+    assert resolved.compute_kernel_config.fp32_dest_acc_en is True
+    assert resolved.compute_kernel_config.packer_l1_acc is True
+    assert resolved.compute_kernel_config.dst_full_sync_en is False
+    assert resolved.compute_kernel_config.throttle_level == ttnn.ThrottleLevel.NO_THROTTLE
+
+
+def test_rmsnorm_rejects_explicit_distributed_prefill_on_single_device(expect_error):
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    config.prefill_distributed = True
+    with expect_error(ValueError, "requires more than one device"):
+        rmsnorm_1d._resolve_1d_config(config)
+
+
+def test_rmsnorm_explicit_common_override_is_copied(monkeypatch):
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    monkeypatch.setattr(rmsnorm_1d, "_resolve_1d_config", lambda common: common)
+    override = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.BLACKHOLE,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    config.compute_kernel_config = override
+    resolved = resolve_rmsnorm_1d_arch_config(config)
+    assert resolved.compute_kernel_config is not override
+    assert resolved.compute_kernel_config.math_fidelity == ttnn.MathFidelity.HiFi4
+    assert resolved.compute_kernel_config.math_approx_mode is True
+    assert resolved.compute_kernel_config.fp32_dest_acc_en is False
+    assert resolved.compute_kernel_config.packer_l1_acc is False
+    assert config.compute_kernel_config is override
+
+
+def test_rmsnorm_arch_resolver_fails_closed(monkeypatch, expect_error):
+    config = _pure_rmsnorm_config(object())
+    monkeypatch.setattr(rmsnorm_1d, "_resolve_1d_config", lambda common: common)
+    with expect_error(ValueError, "Unsupported RMSNorm1D architecture"):
+        resolve_rmsnorm_1d_arch_config(config)
+
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    config.decode_program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[8, 2],
+        subblock_w=8,
+        block_h=1,
+        block_w=8,
+        inplace=False,
+    )
+    with expect_error(ValueError, "destination-register capacity"):
+        resolve_rmsnorm_1d_arch_config(config)
+
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    config.compute_kernel_config = object()
+    with expect_error(ValueError, "Invalid RMSNorm1D compute recipe"):
+        resolve_rmsnorm_1d_arch_config(config)
+
+
+def test_rmsnorm_resolutions_are_independent(monkeypatch):
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    monkeypatch.setattr(rmsnorm_1d, "_resolve_1d_config", lambda common: common)
+    first = resolve_rmsnorm_1d_arch_config(config)
+    second = resolve_rmsnorm_1d_arch_config(config)
+    assert first is not second
+    assert first.compute_kernel_config is not second.compute_kernel_config
+
+
+def test_rmsnorm_weight_device_mismatch_fails_before_architecture_query(expect_error):
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    config.weight.device = MagicMock()
+    with expect_error(ValueError, "must match weight.device"):
+        resolve_rmsnorm_1d_arch_config(config)
+    assert config.mesh_device.arch.call_count == 0
+
+
+def test_rmsnorm_construction_is_only_architecture_query(monkeypatch):
+    config = _pure_rmsnorm_config(ttnn.device.Arch.BLACKHOLE)
+    monkeypatch.setattr(rmsnorm_1d, "_resolve_1d_config", lambda common: common)
+    module = RMSNorm1D.from_config(config)
+    assert config.mesh_device.arch.call_count == 1
+    assert isinstance(module.config, RMSNorm1DConfig)
+    assert module.config is not config
+    assert module.config.compute_kernel_config is not None
+    assert not hasattr(module, "arch_config")
+
+    module._bind_forward_methods()
+    _ = module.decode_forward
+    _ = module.prefill_forward
+    assert config.mesh_device.arch.call_count == 1
 
 
 # ============================================================================
@@ -677,6 +828,155 @@ def test_rmsnorm_1d_vs_reference(
     assert passing, f"RMSNorm1D output does not meet PCC requirement {pcc}: {pcc_message}."
     logger.info(
         f"RMSNorm1D vs HF reference: PASSED for model={model_name}, mode={mode}, shard_shape={input_shard_shape}"
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device,mode,dim,shape,prefill_distributed",
+    [
+        pytest.param((1, 1), "decode", 4096, (1, 1, 32, 4096), False, id="p150-local-decode"),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            "prefill",
+            4096,
+            (1, 1, 128, 4096),
+            True,
+            id="p150x4-distributed-prefill-dim4096",
+        ),
+        pytest.param(
+            {"mesh_shape": (1, 4), "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            "prefill",
+            8192,
+            (1, 1, 128, 8192),
+            True,
+            id="p150x4-distributed-prefill-dim8192",
+        ),
+    ],
+    indirect=["ttnn_mesh_device"],
+)
+def test_rmsnorm_1d_blackhole_common_config_correctness_cache_and_timing(
+    request, ttnn_mesh_device, require_blackhole_mesh_device, mode, dim, shape, prefill_distributed
+):
+    """Focused BH correctness/cache gate; timing is evidence, not a threshold."""
+    torch.manual_seed(2026)
+    weight = torch.randn(dim, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    reference = torch.nn.functional.rms_norm(torch_input, (dim,), weight, eps=1e-5)
+    compute = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.BLACKHOLE,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    common = RMSNorm1DConfig(
+        weight=LazyWeight(source=weight),
+        mesh_device=ttnn_mesh_device,
+        prefill_distributed=prefill_distributed,
+        max_batch_size=32,
+        compute_kernel_config=compute,
+    )
+    model = RMSNorm1D.from_config(common)
+    assert model.config.prefill_distributed is prefill_distributed
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+    input_weight = LazyWeight(source=torch_input)
+
+    def run_once():
+        output = model.forward(input_weight, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.999)
+    assert passing, f"Blackhole RMSNorm1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+    logger.info(
+        "BH RMSNorm1D measurement mode={} mesh={} dim={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
+    )
+
+
+@pytest.mark.parametrize(
+    "ttnn_mesh_device,mode,shape",
+    [
+        pytest.param((1, 1), "prefill", (1, 1, 128, 4096), id="n150-local-prefill"),
+        pytest.param((1, 1), "decode", (1, 1, 32, 4096), id="n150-local-decode"),
+    ],
+    indirect=["ttnn_mesh_device"],
+)
+def test_rmsnorm_1d_wormhole_common_config_correctness_cache_and_timing(request, ttnn_mesh_device, mode, shape):
+    """Focused WH correctness/cache gate; timing is evidence, not a threshold."""
+    torch.manual_seed(2026)
+    dim = 4096
+    weight = torch.randn(dim, dtype=torch.bfloat16)
+    torch_input = torch.randn(shape, dtype=torch.bfloat16)
+    reference = torch.nn.functional.rms_norm(torch_input, (dim,), weight, eps=1e-5)
+    compute = ttnn.init_device_compute_kernel_config(
+        ttnn.device.Arch.WORMHOLE_B0,
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    common = RMSNorm1DConfig(
+        weight=LazyWeight(source=weight),
+        mesh_device=ttnn_mesh_device,
+        prefill_distributed=False,
+        max_batch_size=32,
+        compute_kernel_config=compute,
+    )
+    model = RMSNorm1D.from_config(common)
+    assert isinstance(model.config, RMSNorm1DConfig)
+    assert model.config.prefill_distributed is False
+    ttnn_mesh_device.enable_program_cache()
+    ttnn_mesh_device.clear_program_cache()
+    request.addfinalizer(ttnn_mesh_device.disable_and_clear_program_cache)
+    input_weight = LazyWeight(source=torch_input)
+
+    def run_once():
+        output = model.forward(input_weight, mode=mode)
+        ttnn.synchronize_device(ttnn_mesh_device)
+        return output
+
+    output = run_once()
+    actual = to_torch_auto_compose(output)
+    output.deallocate(True)
+    passing, pcc_message = comp_pcc(reference, actual, 0.999)
+    assert passing, f"Wormhole RMSNorm1D PCC failed: {pcc_message}"
+
+    cache_entries = ttnn_mesh_device.num_program_cache_entries()
+    assert cache_entries > 0
+    timings_ms = []
+    for _ in range(3):
+        start = time.perf_counter()
+        output = run_once()
+        timings_ms.append((time.perf_counter() - start) * 1000)
+        assert ttnn_mesh_device.num_program_cache_entries() == cache_entries
+        output.deallocate(True)
+    logger.info(
+        "WH RMSNorm1D measurement mode={} mesh={} dim={}: warm-cache mean={:.3f} ms, samples={}",
+        mode,
+        tuple(ttnn_mesh_device.shape),
+        dim,
+        sum(timings_ms) / len(timings_ms),
+        timings_ms,
     )
 
 

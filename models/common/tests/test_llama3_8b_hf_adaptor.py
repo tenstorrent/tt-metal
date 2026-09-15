@@ -7,6 +7,7 @@ from pathlib import Path
 from models.common.models.llama3_8b import hf_adaptor
 from models.common.models.llama3_8b.hf_adaptor import (
     Llama3RuntimeConfig,
+    _disable_batched_prefill,
     _max_prefill_chunk_size,
     _model_cache_path,
     _trace_prefill_supported_seq_lens,
@@ -51,6 +52,42 @@ def test_llama3_8b_n150x4_prefill_chunk_size_matches_compatibility_default(monke
     monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "N150x4")
 
     assert _max_prefill_chunk_size(object()) == 4 * 1024
+
+
+def test_llama3_8b_p150_prefill_policy_matches_tttv1_candidate(monkeypatch):
+    monkeypatch.delenv("MAX_PREFILL_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "P150")
+
+    assert _max_prefill_chunk_size(object()) == 4 * 1024
+    assert _trace_prefill_supported_seq_lens("P150", 4 * 1024, 128 * 1024) == (128, 1024)
+
+
+def test_llama3_8b_p300_prefill_policy_matches_two_chip_bh_candidate(monkeypatch):
+    monkeypatch.delenv("MAX_PREFILL_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "P300")
+
+    assert _max_prefill_chunk_size(object()) == 4 * 1024
+    assert _trace_prefill_supported_seq_lens("P300", 4 * 1024, 128 * 1024) == (128, 1024)
+
+
+def test_llama3_8b_p150x4_prefill_policy_matches_tttv1_candidate(monkeypatch):
+    monkeypatch.delenv("MAX_PREFILL_CHUNK_SIZE", raising=False)
+    monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "P150x4")
+
+    assert _max_prefill_chunk_size(object()) == 128 * 1024
+    assert _trace_prefill_supported_seq_lens("P150x4", 128 * 1024, 128 * 1024) == (128, 1024)
+
+
+def test_llama3_8b_bh_product_policy_disables_batched_prefill(monkeypatch):
+    monkeypatch.delenv("DISABLE_BATCHED_PREFILL", raising=False)
+    for device_name in ("P150", "P300", "P150x4", "P150x8"):
+        monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device, value=device_name: value)
+        assert _disable_batched_prefill(object())
+
+    monkeypatch.setattr(hf_adaptor, "get_device_name", lambda mesh_device: "N150")
+    assert not _disable_batched_prefill(object())
+    monkeypatch.setenv("DISABLE_BATCHED_PREFILL", "1")
+    assert _disable_batched_prefill(object())
 
 
 def test_llama3_8b_prefill_chunk_size_override_applies_to_n150x4(monkeypatch):

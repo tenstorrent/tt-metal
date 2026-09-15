@@ -27,6 +27,10 @@ wormhole_b0:
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill.py
   - tests/ttnn/unit_tests/operations/sdpa/test_mla_prefill_v_embedding_space.py
 
+  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_std_var_wide_low_variance
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
+
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob
 
@@ -50,6 +54,10 @@ blackhole:
   - tests/ttnn/unit_tests/base_functionality/test_to_layout.py::test_to_layout_fp8_input_to_tile
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa.py
   - tests/ttnn/unit_tests/operations/sdpa/test_sparse_sdpa_msa.py
+
+  # Long-running tests that cause the group's 40-minute job timeout on ttsim (#54860); still run on HW.
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_std_var_wide_low_variance
+  - tests/ttnn/unit_tests/operations/reduce/test_reduction.py::test_2d_topk
 
   # Likely OOM killer related failures -- probably need to run these tests serially
   - tests/ttnn/unit_tests/base_functionality/test_reshape.py::test_reshape_oob

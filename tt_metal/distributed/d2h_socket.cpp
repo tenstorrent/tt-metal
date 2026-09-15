@@ -155,7 +155,11 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer_hugepage(const std::shar
     auto pcie_xy = pcie_cores.front();
     uint32_t pcie_xy_enc = hal.noc_xy_pcie64_encoding(pcie_xy.x, pcie_xy.y);
 
-    log_info(
+    // One D2HSocket is created per profiler/host-device channel, so this fires once per socket
+    // rather than once per program run; at info level it drowns out real signal in test logs
+    // with hundreds of otherwise-identical lines (see galaxy/t3000 CI: hundreds of occurrences
+    // per job). The fallback itself is expected on WH x86 hosts, so debug is sufficient here.
+    log_debug(
         tt::LogMetal,
         "D2HSocket: Using hugepage fallback for device {} "
         "(data_dev_addr=0x{:x}, pcie_xy_enc=0x{:x})",
@@ -476,8 +480,13 @@ uint32_t D2HSocket::required_config_buffer_size() {
 }
 
 D2HSocket::~D2HSocket() noexcept {
+    // An owning service holds the mesh by shared_ptr, so a socket can outlive close(): the mesh
+    // object is alive but its command queues are gone, its service cores are already released and
+    // the host FIFO window is unmapped. Each device-side step then costs a full barrier timeout and
+    // a failed L1 release, per socket, so gate them on the mesh actually being open.
+    const bool device_live = mesh_device_ != nullptr && mesh_device_->is_initialized();
     try {
-        if (!exported_) {
+        if (!exported_ && device_live) {
             barrier(1000);
         }
     } catch (const std::exception& e) {
@@ -485,7 +494,7 @@ D2HSocket::~D2HSocket() noexcept {
     } catch (...) {
         log_warning(LogMetal, "D2HSocket destructor: barrier failed with unknown exception");
     }
-    if (svc_config_l1_addr_.has_value()) {
+    if (svc_config_l1_addr_.has_value() && device_live) {
         try {
             config_buffer_.reset();
             auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();

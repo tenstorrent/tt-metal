@@ -3,10 +3,12 @@
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 from transformers import LlamaConfig, LlamaForCausalLM
 from transformers.models.llama.modeling_llama import LlamaRotaryEmbedding
 
+import ttnn
 from models.common.models.llama33_70b import hf_adaptor
 from models.common.models.llama33_70b import model as llama_model
 from models.common.models.llama33_70b import weight_utils
@@ -50,12 +52,50 @@ def test_runtime_config_preserves_t3k_trace_and_batched_prefill_policy():
     assert runtime.batched_prefill_batched_extract
 
 
-def test_trace_policy_is_tp8_only_and_includes_fixed_chunk_invocation(expect_error):
-    assert hf_adaptor._trace_seq_lens(8, 2048, 4096) == (128, 2048)
-    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096) == (128, 2048, 4096)
-    for devices in (1, 2, 4):
-        with expect_error(ValueError, "exactly 8 devices"):
+def test_trace_policy_supports_t3k_and_p150x4_and_includes_fixed_chunk_invocation(expect_error):
+    t3k_supported = hf_adaptor._trace_seq_lens(8, 2048, 4096)
+    p150x4_supported = hf_adaptor._trace_seq_lens(4, 2048, 4096)
+    assert t3k_supported == (128, 2048)
+    assert p150x4_supported == (128,)
+    assert hf_adaptor._trace_seq_lens(4, 2048, 64) == ()
+    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096, t3k_supported) == (128, 2048, 4096)
+    assert hf_adaptor._trace_warmup_seq_lens(2048, 4096, p150x4_supported) == (128,)
+    assert all(
+        min(length, 2048) in p150x4_supported
+        for length in hf_adaptor._trace_warmup_seq_lens(2048, 4096, p150x4_supported)
+    )
+    for devices in (1, 2, 32):
+        with expect_error(ValueError, "T3K.*P150x4"):
             hf_adaptor._trace_seq_lens(devices, 2048, 4096)
+
+
+@pytest.mark.parametrize(
+    "cluster_type",
+    [ttnn.cluster.ClusterType.P150_X4, ttnn.cluster.ClusterType.P300_X2],
+)
+def test_supported_sku_resolution_is_physical_and_fail_closed(cluster_type, expect_error):
+    assert (
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.WORMHOLE_B0,
+            cluster_type=ttnn.cluster.ClusterType.T3K,
+            num_devices=8,
+        )
+        == "T3K"
+    )
+    assert (
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.BLACKHOLE,
+            cluster_type=cluster_type,
+            num_devices=4,
+        )
+        == "P150x4"
+    )
+    with expect_error(ValueError, "physical Wormhole T3K.*BlackHole P150_X4/P300_X2.*logical P150x4"):
+        hf_adaptor._resolve_supported_sku(
+            arch=ttnn.device.Arch.BLACKHOLE,
+            cluster_type=ttnn.cluster.ClusterType.P150_X8,
+            num_devices=4,
+        )
 
 
 def test_product_binds_runtime_and_preserves_all_llama3_stop_ids():

@@ -24,8 +24,9 @@ import ttnn
 from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.glm_5_2_config import GLM52Config
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import ACTIVATION_SILU, ACTIVATION_SITU
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
@@ -47,7 +48,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     get_tp_mesh_composer,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import ROUTED_EXPERT_ACTIVATION_BY_NAME
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     compare_recall,
@@ -113,12 +114,14 @@ def run_model(
     shared_hidden_dim=None,
     latent_use_norm=True,
     rms_norm_eps=1e-5,
+    shared_output_pcc=0.997,
+    routed_output_pcc=0.96,
     final_output_pcc=0.982,
     routed_activation=ttnn.RoutedExpertActivation.Silu,
     shared_activation=ACTIVATION_SILU,
     measure=None,
 ):
-    """TtMoe PCC body — shared between `test_ds_moe` / `test_kimi_moe`.
+    """TtMoe PCC body — shared by every per-model test in this file.
 
     The gate's grouping (n_group, topk_group) and route_scale are read from
     the variant's HF config. DSv3 values are a no-op; Kimi values switch the
@@ -148,6 +151,7 @@ def run_model(
     upstream_activation = _UPSTREAM_ACT[routed_activation]
     if shared_activation not in (ACTIVATION_SILU, ACTIVATION_SITU):
         raise ValueError(f"unknown shared_activation {shared_activation!r}")
+    assert_gate_mode_matches_adapter(variant, gate_fallback_mode)
 
     profiler.clear()
     profiler.start("test_ttnn_moe")
@@ -207,7 +211,8 @@ def run_model(
     if use_latent:
         logger.info(f"LatentMoE: routed side at {routed_emb} (emb_dim={emb_dim}), shared inter={shared_hidden}")
 
-    weights_type = "realistic" if run_pcc_check else "dummy"
+    bias_free_router = not getattr(variant.model_config, "ROUTER_HAS_CORRECTION_BIAS", True)
+    weights_type = ("realistic" if run_pcc_check else "dummy") + ("_bias0" if bias_free_router else "")
     # Base dir is env-overridable so concurrent users don't collide on a single shared /tmp path
     # (the default /tmp/{variant}_moe_cache is world-visible but owner-writable → cross-user EACCES).
     _moe_cache_base = os.environ.get("DS_MOE_CACHE_DIR", f"/tmp/{variant.name}_moe_cache")
@@ -248,6 +253,11 @@ def run_model(
             all_routed_weights = None
             shared_expert_weights = None
         gate_weights = create_gate_weights(num_routed_experts, emb_dim, seed=9012)
+        if bias_free_router:
+            # For the DEVICE side only: TtMoe indexes this key directly, and TtMoEGatePrefill
+            # substitutes torch.empty (uninitialized, not zeros) for a None bias and then persists it
+            # to the weight cache. TorchMoe gets the key removed instead -- see torch_gate_weights.
+            gate_weights["e_score_correction_bias"] = torch.zeros_like(gate_weights["e_score_correction_bias"])
         # Fixed seed for the same reason as above: a perf-built cache must match the PCC reference.
         latent_weights = create_latent_weights(emb_dim, routed_emb, seed=3456) if use_latent else None
         profiler.end("weights_creation")
@@ -342,7 +352,19 @@ def run_model(
     # ========================================
     if run_pcc_check:
         profiler.start("torch_moe_creation")
+        # Drop the key rather than passing the zeroed tensor, so the reference builds its own
+        # bias-free gate -- the behaviour a model with no correction bias actually has.
+        torch_gate_weights = (
+            {k: v for k, v in gate_weights.items() if k != "e_score_correction_bias"}
+            if bias_free_router
+            else gate_weights
+        )
         torch_moe = TorchMoe(
+            topk_method=(
+                "gpt_softmax"
+                if gate_fallback_mode in (GateComputeMode.GPT_HOST, GateComputeMode.GPT_DEVICE)
+                else "noaux_tc"
+            ),
             dispatch_group_size=dispatch_group_size,
             experts_per_chip=experts_per_chip,
             num_routed_experts=num_routed_experts,
@@ -357,7 +379,7 @@ def run_model(
             num_dispatch_groups=num_dispatch_groups,
             routed_expert_weights=all_routed_weights,
             shared_expert_weights=shared_expert_weights,
-            gate_weights=gate_weights,
+            gate_weights=torch_gate_weights,
             n_expert_groups=config.n_group,
             n_limited_groups=config.topk_group,
             route_scale=config.routed_scaling_factor,
@@ -403,6 +425,13 @@ def run_model(
         routed_expert_activations_dtype=ttnn.bfloat8_b,
         routed_expert_weights_dtype=ttnn.bfloat4_b,
         routed_expert_activation=routed_activation,
+        # Straight off the variant's own dimension-constants class, which is where TtPrefillBlock
+        # takes it too, so every variant this file can run is graded on the dispatch it ships -- the
+        # fused-only sentinel for K2.6/2.7, 1792 for GLM 5.1/5.2, absent (single-op) everywhere else,
+        # K3 included: its crossover is measured but parked until the split is enabled for it.
+        routed_expert_hybrid_token_threshold=getattr(
+            variant.model_config, "ROUTED_EXPERT_HYBRID_TOKEN_THRESHOLD", None
+        ),
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation=shared_activation,
@@ -502,8 +531,8 @@ def run_model(
     # Dense tensor checks with PCC
     # fmt: off
     dense_checks = [
-        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), shared_output_pcc),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), routed_output_pcc),
         ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), final_output_pcc),
     ]
     if use_latent:
@@ -721,11 +750,6 @@ def _ci_unsupported_param_combos_ds_moe(**params):
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE, 256, 8, 8, GateComputeMode.DEVICE_FP32,   True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-256"),
         # Perf: LB 8x1 dispatch/combine proxy. 64 experts + 2 picks/tok match one glx column's per-chip traffic (balanced_load=160).
         pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, DeepSeekV3Config.EMB_SIZE, DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,  64, 2, 8, GateComputeMode.HOST_ALL, False, False, marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-host-64"),
-        # GLM-5.2 MoE (256 experts / top-8, emb 6144, moe_int 2048). Exercises the >64-expert unfused
-        # extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
-        # GLM's noaux_tc knife-edge gate is validated at the transformer level.
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
         # fmt: on
     ],
 )
@@ -808,6 +832,147 @@ def test_ds_moe(
     )
 
 
+# ---------------------------------------------------------------------------
+# GLM-5.2 MoE
+# ---------------------------------------------------------------------------
+#
+# 256 experts / top-8, emb 6144, moe_int 2048. Exercises the >64-expert unfused
+# extract->FFN->insert routed-expert path on GLM dims. Gate is generic here (op-level test);
+# GLM's noaux_tc knife-edge gate is validated at the transformer level.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check, is_balanced"
+    ),
+    [
+        # fmt: off
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, True,  False, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(900)], id="pcc-device-glm-256"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, GLM52Config.EMB_SIZE, GLM52Config.MOE_INTERMEDIATE_SIZE, GLM52Config.NUM_ROUTED_EXPERTS, GLM52Config.NUM_EXPERTS_PER_TOKEN, 8, GateComputeMode.DEVICE_FP32, False, True,  marks=pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), id="perf-device-glm-256"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 1),
+            torus_y_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="torus-y-8x1",
+        ),
+        pytest.param(
+            (4, 2),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
+            (2, 4),
+            fabric2d_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
+            id="fabric2d-mesh-2x4",
+        ),
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(fabric_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+# Deliberately the DSv3 variant, not glm_5_2: the GLM adapter bundles no upstream MoE reference,
+# so running under it would silently drop the CPU cross-check this test still gets. The MoE dims
+# all come from GLM52Config above; the variant only supplies the generic gate config and the
+# reference class.
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p"], indirect=True, ids=["ds-ref"])
+def test_glm_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    is_balanced,
+    num_links,
+    gate_fallback_mode,
+    request,
+    padded_percent,
+):
+    topology = per_axis_topology(device_params["fabric_config"])
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        topology,
+        gate_fallback_mode,
+        request,
+        is_balanced=is_balanced,
+        padded_percent=padded_percent,
+    )
+
+
+def _run_moe_case(
+    *,
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+    **run_model_kwargs,
+):
+    """Resolve topology from the fabric config, then run_model. Keyword-only: run_model takes 16
+    positional arguments, and a reordering slip in them is silent, so the per-variant entrypoints
+    pass names and this is the only place that maps them onto the positional call. test_ds_moe and
+    test_kimi_k3_moe still call run_model directly; converting them is a separate cleanup."""
+    run_model(
+        variant,
+        config_only,
+        mesh_device,
+        device_params,
+        seq_len_per_chip,
+        emb_dim,
+        hidden_dim,
+        num_routed_experts,
+        num_experts_per_tok,
+        dispatch_buffer_capacity_factor,
+        run_pcc_check,
+        num_links,
+        per_axis_topology(device_params["fabric_config"]),
+        gate_fallback_mode,
+        request,
+        **run_model_kwargs,
+    )
+
+
 @pytest.mark.parametrize(
     (
         "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
@@ -815,7 +980,7 @@ def test_ds_moe(
     ),
     [
         # fmt: off
-        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK26Config.EMB_SIZE, KimiK26Config.MOE_INTERMEDIATE_SIZE, KimiK26Config.NUM_ROUTED_EXPERTS, KimiK26Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc"),
+        pytest.param(PREFILL_CHUNK_TOKENS_PER_CHIP, KimiK27Config.EMB_SIZE, KimiK27Config.MOE_INTERMEDIATE_SIZE, KimiK27Config.NUM_ROUTED_EXPERTS, KimiK27Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.DEVICE_FP32, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Blackhole only"), pytest.mark.timeout(0)], id="kimi-5k-pcc"),
         # fmt: on
     ],
 )
@@ -838,7 +1003,7 @@ def test_ds_moe(
         ),
         pytest.param(
             (8, 4),
-            torus_xy_device_params(fabric_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+            torus_xy_device_params(fabric_payload_size=KimiK27Config.FABRIC_PAYLOAD_SIZE),
             2 if is_blackhole() else 1,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
@@ -846,7 +1011,7 @@ def test_ds_moe(
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.parametrize("variant", ["kimi_k2_7"], indirect=True, ids=["kimi"])
 def test_kimi_moe(
     variant,
     config_only,
@@ -863,23 +1028,21 @@ def test_kimi_moe(
     gate_fallback_mode,
     request,
 ):
-    topology = per_axis_topology(device_params["fabric_config"])
-    run_model(
-        variant,
-        config_only,
-        mesh_device,
-        device_params,
-        seq_len_per_chip,
-        emb_dim,
-        hidden_dim,
-        num_routed_experts,
-        num_experts_per_tok,
-        dispatch_buffer_capacity_factor,
-        run_pcc_check,
-        num_links,
-        topology,
-        gate_fallback_mode,
-        request,
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
     )
 
 
@@ -986,4 +1149,92 @@ def test_kimi_k3_moe(
         final_output_pcc=0.965,
         routed_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[KimiK3Config.ROUTED_EXPERT_ACTIVATION],
         shared_activation=KimiK3Config.SHARED_EXPERT_ACTIVATION,
+    )
+
+
+# Mistral-Small-4-119B MoE. Own test function rather than a row on test_ds_moe because the upstream
+# reference is a different class; the shared run_model body is unchanged.
+#
+# 640 x dgs 8 = 5120 tokens, matching the rest of the mistral4 suite. 128 experts at top-4 exercises
+# the unfused extract -> FFN -> insert path that DSv3/Kimi/GLM only cover at top-8. 3200 x dgs 8 =
+# 25600 tokens is the same shape at 5x the load. Random weights only: the checkpoint stacks the
+# routed experts, so the pretrained fixture loads attention alone.
+#
+# GPT_DEVICE, not DEVICE_FP32. Mistral's router is softmax -> top-4 -> renormalize, which at zero
+# bias equals top-4 on the raw logits followed by softmax over the selection -- what the GPT gate
+# computes. Exact in real arithmetic; in bf16 the softmax quantizes before the top-k, so ~0.3% of
+# tokens tie differently and land on another expert. That residual is the gap to a perfect PCC.
+# The sigmoid modes would apply a different affinity silently. The synthesized
+# correction bias is zeroed to match a router that has none, and the weight cache is keyed on that so
+# a cache built with a random bias cannot be loaded over it.
+@pytest.mark.parametrize(
+    (
+        "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, "
+        "dispatch_buffer_capacity_factor, gate_fallback_mode, run_pcc_check"
+    ),
+    [
+        # fmt: off
+        pytest.param( 640, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-5k-pcc"),
+        pytest.param(3200, MistralSmall4Config.EMB_SIZE, MistralSmall4Config.MOE_INTERMEDIATE_SIZE, MistralSmall4Config.NUM_ROUTED_EXPERTS, MistralSmall4Config.NUM_EXPERTS_PER_TOKEN, 5, GateComputeMode.GPT_DEVICE, True, marks=[pytest.mark.skipif(not is_blackhole(), reason="Mistral-Small-4 requires Blackhole"), pytest.mark.timeout(0)], id="mistral4-25k-pcc"),
+        # fmt: on
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links",
+    [
+        pytest.param(
+            (8, 4),
+            # fabric2d, not torus_xy, and deliberately unlike the sibling 8x4 rows: measured on CI run
+            # 32567382271, every torus_xy mistral4 case SKIPPED ("Galaxy TorusXY ... requires an
+            # explicit ring/ring descriptor and a cabling-certified allocation"), and a skipped leg
+            # reports green. FABRIC_2D is what this test ran under on ssalice/mistral4-119b-prefill,
+            # where it genuinely passed on CI. Revert once bh_sc1 is ring-cabled.
+            fabric2d_device_params(
+                fabric_payload_size=MistralSmall4Config.FABRIC_PAYLOAD_SIZE,
+            ),
+            2 if is_blackhole() else 1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["mistral_small_4"], indirect=True, ids=["mistral4"])
+def test_mistral4_moe(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    seq_len_per_chip,
+    emb_dim,
+    hidden_dim,
+    num_routed_experts,
+    num_experts_per_tok,
+    dispatch_buffer_capacity_factor,
+    run_pcc_check,
+    num_links,
+    gate_fallback_mode,
+    request,
+):
+    _run_moe_case(
+        variant=variant,
+        config_only=config_only,
+        mesh_device=mesh_device,
+        device_params=device_params,
+        seq_len_per_chip=seq_len_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+        run_pcc_check=run_pcc_check,
+        num_links=num_links,
+        gate_fallback_mode=gate_fallback_mode,
+        request=request,
+        # Measured on this row, and identical at 5k and 25k to within 2e-5: shared 0.999761,
+        # routed 0.976144, final 0.994548. The inherited defaults (0.997 / 0.96 / 0.982) are
+        # DeepSeek-derived and leave enough slack here to pass a real regression through.
+        shared_output_pcc=0.998,
+        routed_output_pcc=0.972,
+        final_output_pcc=0.992,
     )

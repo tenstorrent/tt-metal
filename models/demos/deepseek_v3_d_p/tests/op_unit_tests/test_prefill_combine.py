@@ -24,9 +24,10 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSe
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_20b_config import GptOss20BConfig
 from models.demos.deepseek_v3_d_p.reference.gpt_oss_120b_config import GptOss120BConfig
-from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
 from models.demos.deepseek_v3_d_p.reference.minimax_m3_config import MiniMaxM3Config
+from models.demos.deepseek_v3_d_p.reference.mistral_small_4_config import MistralSmall4Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import fabric_to_device_params
@@ -375,11 +376,15 @@ ONLY_PROXY_QB_MESH = _Test_Mesh(
 COMBINE_MODELS = [
     ("dsv3", DeepSeekV3Config, SINGLE_GLX_AND_PROXY_MESHES),
     ("glm_51", GLM51Config, ONLY_PROXY_QB_MESH),
-    ("kimi_k26", KimiK26Config, ONLY_PROXY_QB_MESH),
+    ("kimi_k2_7", KimiK27Config, ONLY_PROXY_QB_MESH),
     ("minimax_m27", MiniMaxM27Config, ONLY_PROXY_QB_MESH),
     ("dsv4_pro", DeepSeekV4ProConfig, ONLY_PROXY_QB_MESH),
     ("dsv4_flash", DeepSeekV4FlashConfig, ONLY_PROXY_QB_MESH),
     ("gptoss_120b", GptOss120BConfig, ONLY_PROXY_QB_MESH),
+    # Mistral-Small-4-119B: 128 experts top-4 over a 4096 emb, the same expert/topk pair as
+    # gptoss_120b, so _model_scaledown_for_combine hits its max() floors on the smaller proxy
+    # meshes (top-k cannot scale below 2, experts below the chip count) rather than dividing freely.
+    ("mistral4", MistralSmall4Config, ONLY_PROXY_QB_MESH),
 ]
 
 

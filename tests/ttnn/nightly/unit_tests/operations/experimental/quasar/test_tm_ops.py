@@ -40,7 +40,7 @@ def _run_quasar_slice(shape, begins, ends, step, imc, omc, device):
     slices = tuple(slice(b, e, s) for b, e, s in zip(begins, ends, step))
     ref = x[slices]
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
-    assert_with_ulp(ref, got, ulp_threshold=0)
+    assert_with_ulp(expected_result=ref, actual_result=got, ulp_threshold=0)
 
 
 @pytest.mark.parametrize(

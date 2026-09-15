@@ -74,9 +74,12 @@ struct GroupingInfo {
     // Empty until flattening completes. Used for MGD topology matching and torus variant rebuild.
     std::vector<int32_t> flattened_node_grid_dims;
 
-    // Adjacency graph. For flattened groupings, items[node_id] matches each node in the graph.
-    // Empty graph if no connection type is specified.
-    AdjacencyGraph<uint32_t> adjacency_graph;
+    // Adjacency graph over GroupingChipId nodes. For flattened groupings, items[node_id] matches
+    // each node in the graph. Empty graph if no connection type is specified.
+    AdjacencyGraph<GroupingChipId> adjacency_graph;
+
+    // Stable per-descriptor handle of this resolved grouping, assigned in population order.
+    PhysicalGroupingId id = 0;
 
     // Logical pinning for MESH groupings committed from a PGD<->MGD topology match in get_valid_groupings_for_mgd:
     // mesh-local chip id (row-major, 0..N-1) -> PGD slot (TrayID + ASICLocation). Populated at match time from

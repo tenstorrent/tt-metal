@@ -16,7 +16,8 @@ single op with:  pytest test_sfpu_plot.py -k <Op> -s
 
 import math
 import os
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, replace
 from typing import Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
@@ -45,7 +46,10 @@ from helpers.param_config import (
 from helpers.sfpu_domains import _SFPU_UNDEFINED_RANGES, Operand, _subtract_intervals
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import DistributionKind, StimuliSpec, generate_stimuli
-from helpers.stimuli_generator.strategies.structured import _enumerate_representable
+from helpers.stimuli_generator.strategies.structured import (
+    _enumerate_representable,
+    ulp_sweep_value_count,
+)
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
@@ -1289,6 +1293,9 @@ class Case:
     clamp_negative: bool = False
     input_dimensions: Optional[List[int]] = None
     extra_undefined_ranges: Optional[List[Tuple[float, float]]] = None
+    # ulp_sweep only: sweep a range too large for one run in batches of this
+    # many tiles (offset walks the range). None = single run.
+    batch_tiles: Optional[int] = None
 
     @property
     def test_id(self) -> str:
@@ -1326,6 +1333,15 @@ CASES = [
         approx_mode=ApproximationMode.Yes,
         name="Reciprocal-bf16-approx-exhaustive",
     ),
+    # host-batched fp32 sweep: every fp32 value in a full octave [1.0, 2.0]
+    # (2^23 values) in 64-tile batches. Exercises the batching loop + timing.
+    # Slow — ~128 device runs (minutes).
+    Case(
+        op=MathOperation.Reciprocal,
+        spec=StimuliSpec.ulp_sweep(low=1.0, high=2.0),
+        fmt=FP32,
+        name="Reciprocal-fp32-batched",
+    ),
     # Diagnostic-only example (uncomment to explore a known-inaccurate op without failing the run):
     # Case(op=MathOperation.Gelu, spec=StimuliSpec.ramp(low=-13.0, high=13.0), expect_pass=False),
 ]
@@ -1334,6 +1350,41 @@ CASES = [
 # One 32x32 tile = 1024 elements. A ulp_sweep is bounded by L1, not dest.
 _TILE_ELEMENTS = TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1]
 _MAX_SWEEP_TILES = 64
+
+# Above this many points, downsample the arrays sent to the plot (it gets slow).
+# Stats and passed_test still use the full result.
+_MAX_PLOT_POINTS = 100_000
+# When downsampling, always keep this many worst-error points so the plot still shows the extremes.
+_PLOT_KEEP_WORST = 2000
+
+# Max values a ulp_sweep may have — beyond this it takes too long, so run_case
+# errors and asks for a narrower range. Only fp32 can reach it (bf16/fp16 ~65k).
+_MAX_ULP_SWEEP_VALUES = 2**25
+
+
+def _downsample_for_plot(
+    x: np.ndarray,
+    y_golden: np.ndarray,
+    y_hw: np.ndarray,
+    budget: int = _MAX_PLOT_POINTS,
+    keep_worst: int = _PLOT_KEEP_WORST,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, bool]:
+    """Reduce point count for plotting without dropping the interesting points.
+
+    Evenly samples the bulk (so the curve shape and the error *distribution* are
+    preserved) and force-includes the worst-|error| points (so the offenders and
+    max always appear). NaN/inf sort last, so they count as worst and are kept.
+    Returns (x, y_golden, y_hw, was_downsampled). Stats/passed_test upstream still
+    use the full arrays.
+    """
+    n = x.size
+    if n <= budget:
+        return x, y_golden, y_hw, False
+    err = np.abs(y_hw - y_golden)
+    base = np.linspace(0, n - 1, max(1, budget - keep_worst)).astype(np.int64)
+    worst = np.argsort(err)[-keep_worst:]
+    keep = np.unique(np.concatenate([base, worst]))  # sorted -> stays x-ordered
+    return x[keep], y_golden[keep], y_hw[keep], True
 
 
 def _ulp_sweep_dims(
@@ -1394,77 +1445,151 @@ def run_case(case: Case) -> bool:
     if unpack_to_dest is None:
         unpack_to_dest = is_fp32
 
-    if case.input_dimensions is not None:
-        input_dimensions = case.input_dimensions
-    elif case.spec.distribution == DistributionKind.ULP_SWEEP:
-        input_dimensions = _ulp_sweep_dims(
-            formats.input_format, case.spec.low, case.spec.high, dest_acc
-        )
-    else:
-        input_dimensions = [32, 32]
     mathop = case.op
     spec = case.spec
     plot_path = f"_plot_output/sfpu_{case.test_id}.png"
-
-    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
-        stimuli_format_A=formats.input_format,
-        input_dimensions_A=input_dimensions,
-        spec_A=spec,
-        stimuli_format_B=formats.input_format,
-        input_dimensions_B=input_dimensions,
-    )
-
-    generate_golden = get_golden_generator(UnarySFPUGolden)
-    golden_tensor = generate_golden(
-        mathop,
-        src_A,
-        formats.output_format,
-        dest_acc,
-        formats.input_format,
-        input_dimensions,
-    )
-
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(case.approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(case.clamp_negative),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=unpack_to_dest,
-    )
-
-    res_from_L1 = configuration.run().result
     torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    generate_golden = get_golden_generator(UnarySFPUGolden)
+
+    def _run_chunk(chunk_spec, dims):
+        """Run one chunk on the device and return (input, golden, hardware result).
+
+        Builds the stimuli, computes the torch golden, runs the kernel, reads the
+        result back. Called once for a normal run, or once per batch when batching.
+        """
+        src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+            stimuli_format_A=formats.input_format,
+            input_dimensions_A=dims,
+            spec_A=chunk_spec,
+            stimuli_format_B=formats.input_format,
+            input_dimensions_B=dims,
+        )
+        golden = generate_golden(
+            mathop, src_A, formats.output_format, dest_acc, formats.input_format, dims
+        )
+        num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            dims,
+            TILE_DIMENSIONS,
+            BlocksCalculationAlgorithm.Standard,
+        )
+        configuration = TestConfig(
+            "sources/eltwise_unary_sfpu_test.cpp",
+            formats,
+            templates=[
+                generate_input_dim(dims, dims),
+                APPROX_MODE(case.approx_mode),
+                FAST_MODE(FastMode.No),
+                CLAMP_NEGATIVE(case.clamp_negative),
+                MATH_OP(mathop=mathop),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=unpack_to_dest,
+        )
+        res = torch.tensor(configuration.run().result, dtype=torch_format)
+        return src_A, golden, res
+
+    # Pick batching for a ulp_sweep. Use batch_tiles if set; otherwise auto-batch
+    # when the range is too big for one run, so it can't silently truncate.
+    # If input_dimensions is set, use that size as-is (no auto-batching).
+    is_ulp = spec.distribution == DistributionKind.ULP_SWEEP
+    batch_tiles = case.batch_tiles
+    if is_ulp:
+        total = ulp_sweep_value_count(formats.input_format, spec.low, spec.high)
+        # Reject a range with too many values to sweep in a reasonable time.
+        # (Skipped when input_dimensions is set — that's a single, quick run.)
+        if case.input_dimensions is None and total > _MAX_ULP_SWEEP_VALUES:
+            raise ValueError(
+                f"ulp_sweep [{spec.low}, {spec.high}] has {total:,} values, over "
+                f"the {_MAX_ULP_SWEEP_VALUES:,}-value limit — narrow the range."
+            )
+        if (
+            batch_tiles is None
+            and case.input_dimensions is None
+            and total > _MAX_SWEEP_TILES * _TILE_ELEMENTS
+        ):
+            batch_tiles = _MAX_SWEEP_TILES
+            logger.info(
+                "ulp_sweep [{}, {}] has {} values — too many for one run, "
+                "auto-batching at {} tiles",
+                spec.low,
+                spec.high,
+                total,
+                batch_tiles,
+            )
+
+    if is_ulp and batch_tiles is not None:
+        # Sweep a range too large for one run in fixed-size batches (offset walks
+        # the range) and join them. Every batch is the same size, so the kernel is
+        # compiled once and reused.
+        batch_values = batch_tiles * _TILE_ELEMENTS
+        batch_dims = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * batch_tiles]
+        num_batches = max(1, math.ceil(total / batch_values))
+        logger.info(
+            "ulp_sweep batched: {} values -> {} batch(es) of {} tiles ({} values each)",
+            total,
+            num_batches,
+            batch_tiles,
+            batch_values,
+        )
+        src_parts, golden_parts, res_parts = [], [], []
+        start = time.perf_counter()
+        for k in range(num_batches):
+            s, g, r = _run_chunk(replace(spec, offset=k * batch_values), batch_dims)
+            # Full batches are all real; the last is zero-padded at the tail, so
+            # keep only its real values — padding is not test data.
+            real = min(batch_values, total - k * batch_values)
+            src_parts.append(s[:real])
+            golden_parts.append(g[:real])
+            res_parts.append(r[:real])
+            logger.info(
+                "  batch {}/{} done ({:.1f}s elapsed)",
+                k + 1,
+                num_batches,
+                time.perf_counter() - start,
+            )
+        src_A = torch.cat(src_parts)
+        golden_tensor = torch.cat(golden_parts)
+        res_tensor = torch.cat(res_parts)
+        logger.info(
+            "ulp_sweep batched: {} values swept in {:.1f}s",
+            src_A.numel(),
+            time.perf_counter() - start,
+        )
+    else:
+        if case.input_dimensions is not None:
+            input_dimensions = case.input_dimensions
+        elif is_ulp:
+            input_dimensions = _ulp_sweep_dims(
+                formats.input_format, spec.low, spec.high, dest_acc
+            )
+        else:
+            input_dimensions = [32, 32]
+        src_A, golden_tensor, res_tensor = _run_chunk(spec, input_dimensions)
+        if is_ulp:
+            # Drop the trailing zero-padding a ulp_sweep adds when the range has
+            # fewer values than the tensor holds — it is not test data.
+            real = min(total, input_dimensions[0] * input_dimensions[1])
+            src_A = src_A[:real]
+            golden_tensor = golden_tensor[:real]
+            res_tensor = res_tensor[:real]
 
     sort_idx = torch.argsort(src_A.to(torch.float32))
     x = src_A.to(torch.float32)[sort_idx].numpy()
@@ -1482,6 +1607,16 @@ def run_case(case: Case) -> bool:
             _SFPU_UNDEFINED_RANGES.get(mathop, {}).get(Operand.A, [])
         )
 
+    # Downsample the arrays for the plot only (too many points to draw);
+    # passed_test and the max ULP below still use the full result.
+    x_plot, golden_plot, hw_plot, downsampled = _downsample_for_plot(x, y_golden, y_hw)
+    if downsampled:
+        logger.info(
+            "plot downsampled {} -> {} points (even sample + worst cases)",
+            x.size,
+            x_plot.size,
+        )
+
     # ULP/eps spacing in _plot_and_print is taken from this format, so it must
     # match the format the compared values live in: golden and hw are produced
     # in output_format, so pass output_format (not input_format). Identical for
@@ -1490,9 +1625,9 @@ def run_case(case: Case) -> bool:
     _plot_and_print(
         mathop,
         formats.output_format,
-        x,
-        y_golden,
-        y_hw,
+        x_plot,
+        golden_plot,
+        hw_plot,
         plot_path,
         allowed_intervals=allowed_intervals,
         undefined_ranges=undefined_ranges,

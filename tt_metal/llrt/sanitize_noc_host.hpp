@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "impl/context/metal_context.hpp"
+#include "llrt/hal.hpp"
 #include "llrt/tlb_config.hpp"  // kL2cpuLimBase / kL2cpuLimTlbEnd
 
 namespace tt {
@@ -87,6 +87,7 @@ static void print_stack_trace() {
 // NOLINTEND(cppcoreguidelines-no-malloc)
 
 static void watcher_sanitize_host_noc(
+    const tt::tt_metal::Hal& hal,
     const char* what,
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
@@ -98,7 +99,6 @@ static void watcher_sanitize_host_noc(
     const tt::tt_metal::CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const bool dram_l1_available = hal.has_programmable_core_type(tt::tt_metal::HalProgrammableCoreType::DRAM);
     const uint64_t dram_l1_noc_offset =
         dram_l1_available ? hal.get_l1_noc_offset(tt::tt_metal::HalProgrammableCoreType::DRAM) : 0;
@@ -162,6 +162,7 @@ static void watcher_sanitize_host_noc(
 }
 
 inline void watcher_sanitize_host_noc_read(
+    const tt::tt_metal::Hal& hal,
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
@@ -173,6 +174,7 @@ inline void watcher_sanitize_host_noc_read(
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
+        hal,
         "read",
         soc_d,
         virtual_worker_cores,
@@ -187,6 +189,7 @@ inline void watcher_sanitize_host_noc_read(
 }
 
 inline void watcher_sanitize_host_noc_write(
+    const tt::tt_metal::Hal& hal,
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_eth_cores,
@@ -198,6 +201,7 @@ inline void watcher_sanitize_host_noc_write(
     uint64_t addr,
     uint32_t lbytes) {
     watcher_sanitize_host_noc(
+        hal,
         "write",
         soc_d,
         virtual_worker_cores,
@@ -212,13 +216,13 @@ inline void watcher_sanitize_host_noc_write(
 }
 
 inline void watcher_sanitize_host_noc_multicast_write(
+    const tt::tt_metal::Hal& hal,
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<tt::tt_metal::CoreCoord>& virtual_worker_cores,
     const tt::tt_metal::CoreCoord& core_start,
     const tt::tt_metal::CoreCoord& core_end,
     uint64_t addr,
     uint32_t lbytes) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start,
     // but only for Tensix cores. DRAM/PCIe/Eth cores don't support wrap-around.
     bool has_noc_torus = (hal.get_noc_topology() == tt::tt_metal::NoCTopologyType::TORUS);

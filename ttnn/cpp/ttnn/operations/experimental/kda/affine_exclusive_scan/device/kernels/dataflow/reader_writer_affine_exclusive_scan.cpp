@@ -53,7 +53,8 @@ FORCE_INLINE void issue_affine_pair_send(
     }
 }
 
-FORCE_INLINE void complete_affine_pair_send(Noc& noc, Semaphore<>& ready, uint32_t destination_worker) {
+template <typename ReadySem>
+FORCE_INLINE void complete_affine_pair_send(Noc& noc, ReadySem& ready, uint32_t destination_worker) {
     noc.async_write_barrier();
     ready.up(noc, worker_x(destination_worker), worker_y(destination_worker), 1);
 }
@@ -85,14 +86,14 @@ FORCE_INLINE void issue_affine_pair_loopback(
         {.noc_x = local_x, .noc_y = local_y, .addr = local_b.get_write_ptr()});
 }
 
-template <uint32_t G>
+template <uint32_t G, typename ArrivalSem, typename ReleaseSem>
 FORCE_INLINE void synchronize_head_stage(
     uint32_t worker_index,
     uint32_t group,
     uint32_t& completed_stages,
     Noc& noc,
-    Semaphore<>& arrival,
-    Semaphore<>& release) {
+    ArrivalSem& arrival,
+    ReleaseSem& release) {
     completed_stages++;
     const uint32_t coordinator = worker_index - group;
     const uint32_t coordinator_x = worker_x(coordinator);
@@ -129,9 +130,9 @@ TT_KERNEL void dataflow(uint32_t worker_index, uint32_t group) {
     DataflowBuffer initial_state(dfb::initial_state);
     DataflowBuffer final(dfb::final);
     Noc noc;
-    Semaphore<> ready(sem::ready);
-    Semaphore<> arrival(sem::arrival);
-    Semaphore<> release(sem::release);
+    Semaphore ready(sem::ready);
+    Semaphore arrival(sem::arrival);
+    Semaphore release(sem::release);
 
     initial_a.reserve_back(affine_a_tiles);
     initial_b.reserve_back(affine_b_tiles);

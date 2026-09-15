@@ -521,7 +521,12 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
         // Re-key of the legacy unpack_to_dest_mode vector, which was indexed by CB id. The
         // writer-facing stat buffers are producer-only for this kernel, so they get no entry. An
         // omitted DFB keeps the UnpackToSrc default.
-        auto& unpack_modes = std::get<ComputeGen1Config>(compute_hw_config).unpack_modes;
+        // Reach unpack_modes through the generation-neutral accessor rather than
+        // std::get<ComputeGen1Config>: the helper above returns whichever alternative matches
+        // `arch`, so naming Gen1 here would throw std::bad_variant_access on Quasar. (The local is
+        // named dfb_unpack_modes so it does not shadow the accessor.)
+        // TODO(#52269): Quasar unpack_modes are copied from Gen1 and not yet optimized for Quasar.
+        auto& dfb_unpack_modes = unpack_modes(compute_hw_config);
         for (const auto& dfb_name :
              {BATCH_MEAN_DFB,
               BATCH_VAR_DFB,
@@ -535,7 +540,7 @@ ttnn::device_operation::ProgramArtifacts RunningStatistics::RunningStatisticsPro
               TMP1_DFB,
               TMP2_DFB,
               TMP3_DFB}) {
-            unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
+            dfb_unpack_modes[dfb_name] = UnpackMode::UnpackToDest;
         }
     }
 

@@ -9,14 +9,20 @@ selection.
 
 - row-major or tile-layout DRAM input;
 - preallocated, persistent, interleaved-DRAM output;
-- required `cluster_axis` (0 for N/S or 1 for E/W) selecting one mesh axis
-  with at least two devices and at least one Fabric link;
+- required `cluster_axis`: 0 selects N/S, 1 selects E/W, and explicit `None`
+  linearizes the complete 2D mesh into one snake ring;
 - tensor distribution axes aligned with the physical device-mesh axes;
 - optional `num_links`; by default the op uses the number of links discovered
-  usable across the complete selected axis. An override must be greater than
-  zero and no larger than that discovered count;
-- a one-dimensional all-gather only: devices on the orthogonal mesh axis run
-  independent collectives, and gathering across both axes is unsupported;
+  usable across the complete selected axis, or the minimum across both axes in
+  full-mesh mode. An override must be greater than zero and no larger than
+  every participating axis supports;
+- a one-dimensional all-gather schedule: an integer `cluster_axis` runs
+  independent collectives on the orthogonal axis, while `cluster_axis=None`
+  makes every mesh device participate in one logical ring;
+- full-mesh mode requires Fabric2D and a 2D mesh with at least one even
+  dimension, row-major tensor mesh coordinates, and the gather dimension
+  sharded across every device. Every edge in the selected row or column snake,
+  including its closing edge, must have the requested direct physical links;
 - Fabric1D line/ring, or Fabric2D on a direct physical line/ring;
 - Fabric2D Torus can wrap `cluster_axis` when the axis has a distinct wrap
   neighbor and every ring edge is a direct physical hop; a size-two torus axis
@@ -46,11 +52,35 @@ independent `R`-device gathers in each column; axis 1 produces independent
 `C`-device gathers in each row. The output extent at `dim` must be multiplied
 by the selected axis size, not by `R * C`.
 
+With `cluster_axis=None`, the host selects a direct Hamiltonian cycle over the
+complete `(R, C)` mesh. It prefers a row snake when `R` is even:
+`(0,0)..(0,C-1),(1,C-1)..(1,0),...`. If that route is not direct, it tries a
+column snake when `C` is even:
+`(0,0)..(R-1,0),(R-1,1)..(0,1),...`. A row snake closes along Y; a column
+snake closes along X. A lane count of two closes through ordinary adjacency,
+while a larger lane count requires the corresponding direct torus wrap. The
+host route proof selects the first orientation for which every edge and link
+is direct. Fabric uses the selected snake index for communication, while the
+kernels translate each stripe back to the tensor's normal row-major rank
+before reading or writing the persistent output. In this mode the output
+extent at `dim` is multiplied by `R * C` and every shard placement of `dim`
+becomes replicated.
+
 Link discovery chooses a uniform count supported by every participating
-device and direction. Set `num_links=2` when results should be comparable
-across QuietBox (four available links), LoudBox, and Galaxy (two available
-links). This is a cap on discovered hardware capacity: requesting more links
-than Fabric reports fails before program construction.
+device and direction. Full-mesh mode conservatively uses the minimum discovered
+across both complete mesh axes, including configured wrap directions. Set
+`num_links=2` when results should be comparable across QuietBox (four available
+links), LoudBox, and Galaxy (two available links). This is a cap on discovered
+hardware capacity: requesting more links than Fabric reports fails before
+program construction.
+
+The snake schedule uses one forward and one backward port per device. For an
+8x4 mesh its idealized link-volume bound matches a two-phase axis-1 then axis-0
+all-gather: the advantage is a single program, one synchronization sequence,
+and a directly produced 32-way row-major layout, not an inherent claim of
+higher fabric bandwidth. Worker-count thresholds were qualified on the
+existing axis rings; measure the full-mesh path before assigning performance
+targets or retuning those thresholds.
 
 ## Data flow
 
@@ -92,11 +122,13 @@ existing `pipeline_get_forwarding_direction` and `pipeline_get_chip_neighbors`
 control-plane queries. This is a host-side safety check with no firmware or
 performance effect and requires no Fabric change.
 
-The operation follows the configured topology rather than opportunistically
-upgrading a plain `FABRIC_2D` mesh to a ring. `FABRIC_2D_TORUS_X` wraps axis 1,
-`FABRIC_2D_TORUS_Y` wraps axis 0, and `FABRIC_2D_TORUS_XY` can wrap either axis.
-If the configured Fabric does not wrap `cluster_axis`, the operation uses its
-direct-line schedule.
+For an integer `cluster_axis`, the operation follows the configured topology
+rather than opportunistically upgrading a plain `FABRIC_2D` mesh to a ring.
+`FABRIC_2D_TORUS_X` wraps axis 1, `FABRIC_2D_TORUS_Y` wraps axis 0, and
+`FABRIC_2D_TORUS_XY` can wrap either axis. If the configured Fabric does not
+wrap the selected axis, the operation uses its direct-line schedule. Full-mesh
+mode always requests a ring and is admitted only when the complete host route
+proof shows that every snake edge is one physical hop.
 
 ### Worker-injection spare slots
 

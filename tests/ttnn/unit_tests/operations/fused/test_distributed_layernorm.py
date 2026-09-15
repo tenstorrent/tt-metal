@@ -11,7 +11,7 @@ import ttnn
 from models.common.utility_functions import tt2torch_tensor
 
 from loguru import logger
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, check_with_pcc
 from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -209,3 +209,41 @@ def test_distributed_layernorm_with_program_cache_4chip(
         iterations=iterations,
         has_weights=has_weights,
     )
+
+
+# Regression for #54697: the pre-all-gather x^2 buffer is sized per row, so a wide row with
+# fp32 dest accumulation is what pushes the program past L1. The parametrizations above cannot
+# catch it -- they shard 8192 across 4-8 devices, leaving only 1024 per chip. This runs the
+# widest per-chip row the models actually use (Llama-3.3-70B on a 2-device mesh: 8192/2) on a
+# SINGLE device, with fp32_dest_acc_en on, so it fails at allocation time if the buffer sizing
+# regresses again.
+@pytest.mark.parametrize("width", [4096], ids=["w4096"])
+@pytest.mark.parametrize("is_rmsnorm", rms_norm_parametrizations, ids=rms_norm_parametrization_ids)
+def test_pre_all_gather_wide_row_fp32_dest_acc_fits_l1(device, width, is_rmsnorm):
+    torch.manual_seed(1234)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    inp = torch.randn((1, 1, 32, width), dtype=torch.bfloat16)
+    tt_inp = ttnn.from_torch(
+        inp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    if is_rmsnorm:
+        tt_stats = ttnn.rms_norm_pre_all_gather(
+            tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+        )
+    else:
+        tt_stats = ttnn.layer_norm_pre_all_gather(
+            tt_inp, compute_kernel_config=compute_kernel_config, dtype=ttnn.bfloat16
+        )
+
+    # Column 0 of the stats tile is sum(x^2) for both variants.
+    got = ttnn.to_torch(tt_stats).to(torch.float32)[..., 0:1]
+    expected = (inp.to(torch.float32) ** 2).sum(dim=-1, keepdim=True)
+    passing, pcc = check_with_pcc(expected, got, 0.99)
+    assert passing, f"sum(x^2) mismatch at width {width}: {pcc}"
