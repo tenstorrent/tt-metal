@@ -10,6 +10,7 @@
 
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
