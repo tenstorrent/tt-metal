@@ -303,20 +303,57 @@ void pack_tiles_scaled(
     cb_pop_front(cb_source, num_tiles);
 }
 
-// dV carries the scale: seeded by a, handed over by 1/a (exact where a is
-// a power of two, one rounding each otherwise). dK is copied as it is.
-constexpr uint32_t seed_scale_bits = scaler_bits;       // dV's seed, times a
-constexpr uint32_t handover_scale_bits = inv_scaler_bits;  // dV's handover, divided by a
-void reload_column_gradients() {
-    // The scaled copy first: a matmul issued straight after an SFPU pass
-    // (with only a pack between) came out as zeros; the plain copies that
-    // follow are what keeps the two apart.
-    pack_tiles_scaled(cb_grad_value_seed, cb_grad_value_accum, Bt * vWt, seed_scale_bits);
-    pack_tiles_to_output(cb_grad_key_seed, cb_grad_key_accum, Bt * qWt);
+// The column gradients' handover. An interval's accumulator starts from
+// zero (its first update writes), and what DRAM holds for the column -- on
+// a revisit, or on every visit when accumulating into the outputs -- is
+// added at the end: the seed's buffer and the output's are two views of
+// one slot (see the host), the seed lies in it already, and the packer
+// sums the accumulator onto it in L1, as the dQ packet is updated. So no
+// seed is ever copied into the accumulator. dV carries the softmax scale
+// (P does), so its accumulator is multiplied by 1/a on the way -- exact
+// where a is a power of two.
+constexpr uint32_t handover_scale_bits = inv_scaler_bits;
+void hand_over(
+    const uint32_t cb_source, const uint32_t cb_output, const uint32_t num_tiles, const bool scaled, const bool seeded) {
+    cb_wait_front(cb_source, num_tiles);
+    cb_reserve_back(cb_output, num_tiles);
+    pack_reconfig_data_format(cb_output);
+    reconfig_data_format(cb_source, cb_source);
+    if (seeded) {
+        pack_reconfig_l1_acc(true);
+    }
+    copy_init(cb_source);
+    for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
+        tile_regs_acquire();
+        copy_tile(cb_source, tile_idx, /* register idx */ 0);
+        if (scaled) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(/* register idx */ 0, handover_scale_bits);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(/* register idx */ 0, cb_output);
+        tile_regs_release();
+    }
+    if (seeded) {
+        pack_reconfig_l1_acc(false);
+    }
+    cb_push_back(cb_output, num_tiles);
+    cb_pop_front(cb_source, num_tiles);
 }
-void handover_column_gradients() {
-    pack_tiles_scaled(cb_grad_value_accum, cb_grad_value_out, Bt * vWt, handover_scale_bits);
-    pack_tiles_to_output(cb_grad_key_accum, cb_grad_key_out, Bt * qWt);
+void handover_column_gradients(const bool seeded) {
+    if (seeded) {
+        cb_wait_front(cb_grad_value_seed, Bt * vWt);
+        cb_wait_front(cb_grad_key_seed, Bt * qWt);
+    }
+    hand_over(cb_grad_value_accum, cb_grad_value_out, Bt * vWt, /* scaled */ true, seeded);
+    hand_over(cb_grad_key_accum, cb_grad_key_out, Bt * qWt, /* scaled */ false, seeded);
+    if (seeded) {
+        // The slots are the outputs' now; the reader reloads them for the
+        // next interval once the writer has stored these.
+        cb_pop_front(cb_grad_value_seed, Bt * vWt);
+        cb_pop_front(cb_grad_key_seed, Bt * qWt);
+    }
 }
 
 // The packer for P^T and dS^T: Float32 in and out, but with the packer's
@@ -615,6 +652,7 @@ void kernel_main() {
     const auto owned = sched.owned_columns(my_core);
     bool visited[2] = {false, false};
     bool column_accumulating = false;
+    bool column_seeded = false;
 #endif
 
     // Folding the scale into K works without residency too: dK is then divided
@@ -688,18 +726,13 @@ void kernel_main() {
         if (column_changed) {
             DeviceZoneScopedN("COL-CHANGE");
             transpose_key_block();
-            if (visited[owned_slot] || SEED_COLUMN_GRADIENTS) {
-                // A revisit, or every visit when accumulating into the
-                // outputs: the interval starts from what is in DRAM.
-                visited[owned_slot] = true;
-                reload_column_gradients();
-                column_accumulating = true;
-            } else {
-                // A first visit: the first update writes rather than adds, so
-                // the gradients start at zero without reading zeros.
-                column_accumulating = false;
-                visited[owned_slot] = true;
-            }
+            // The interval's accumulator starts from zero: its first update
+            // writes rather than adds. What DRAM holds for the column -- on a
+            // revisit, or on every visit when accumulating into the outputs
+            // -- is added at the handover.
+            column_seeded = visited[owned_slot] || SEED_COLUMN_GRADIENTS;
+            column_accumulating = false;
+            visited[owned_slot] = true;
         }
 #else
         // Without residency the column arrives every timestep, scaled and
@@ -931,9 +964,9 @@ void kernel_main() {
 #if COLUMN_RESIDENT
             const bool dv_accumulate = column_accumulating;
 #else
-            // Both seeds come from DRAM every timestep here.
-            reload_column_gradients();
-            const bool dv_accumulate = true;
+            // Every timestep is an interval of one here: the accumulator
+            // starts from zero and the seed is added at the handover.
+            constexpr bool dv_accumulate = false;
 #endif
             // The previous pack was dQ into the relay's buffer.
             pack_reconfig_data_format(cb_grad_query_out, cb_grad_value_accum);
@@ -984,7 +1017,7 @@ void kernel_main() {
 #if COLUMN_RESIDENT
             const bool dk_accumulate = column_accumulating;
 #else
-            const bool dk_accumulate = true;
+            constexpr bool dk_accumulate = false;
 #endif
             // The previous operation is the dV update, so its accumulator is
             // what the packer was last set from and dO what SrcA was.
@@ -1029,10 +1062,10 @@ void kernel_main() {
             // Hand both column gradients over once, at the end of the interval.
             if (column_ends) {
                 DeviceZoneScopedN("HANDOVER");
-                handover_column_gradients();
+                handover_column_gradients(column_seeded);
             }
 #else
-            handover_column_gradients();
+            handover_column_gradients(/* seeded */ true);
 #endif
         }
 

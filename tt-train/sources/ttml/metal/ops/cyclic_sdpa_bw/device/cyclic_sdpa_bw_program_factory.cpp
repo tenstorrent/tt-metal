@@ -230,12 +230,24 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     make_cb(tt::CBIndex::c_13, 2U * Bt, tt::DataFormat::Float32);      // L_i, row layout
     make_cb(tt::CBIndex::c_14, 2U * Bt, tt::DataFormat::Float32);      // D_i, row layout
     make_cb(tt::CBIndex::c_16, rowT, tt::DataFormat::Float16_b);       // K_j^T (scaled where exact)
-    make_cb(tt::CBIndex::c_18, rowT, tt::DataFormat::Float32);         // dK seed
+    // dK and dV: the seed from DRAM and the output share one slot each (two
+    // views), the accumulator sits between them; see the compute kernel.
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            rowT * fp32_tile, {{tt::CBIndex::c_18, tt::DataFormat::Float32}, {tt::CBIndex::c_20, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_18, fp32_tile)
+            .set_page_size(tt::CBIndex::c_20, fp32_tile));
     make_cb(tt::CBIndex::c_19, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_20, rowT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_21, valT, tt::DataFormat::Float32);         // dV seed
+    CreateCircularBuffer(
+        program,
+        region,
+        CircularBufferConfig(
+            valT * fp32_tile, {{tt::CBIndex::c_21, tt::DataFormat::Float32}, {tt::CBIndex::c_23, tt::DataFormat::Float32}})
+            .set_page_size(tt::CBIndex::c_21, fp32_tile)
+            .set_page_size(tt::CBIndex::c_23, fp32_tile));
     make_cb(tt::CBIndex::c_22, valT, tt::DataFormat::Float32);
-    make_cb(tt::CBIndex::c_23, valT, tt::DataFormat::Float32);
     make_cb(tt::CBIndex::c_24, 1U, tt::DataFormat::Float32);           // readiness scratch
     make_cb(tt::CBIndex::c_25, 1U, tt::DataFormat::Float32);           // release word
     make_cb(tt::CBIndex::c_26, 1U, tt::DataFormat::Float32);           // column-gradient progress
@@ -334,9 +346,7 @@ CyclicSDPABackwardProgramFactory::cached_program_t CyclicSDPABackwardProgramFact
     // The column gradients' seeds and accumulators too: read only by the
     // reload and handover copies, so the running sums keep all 32 bits
     // across a handover and a reload rather than the register's 19.
-    unpack_mode[tt::CBIndex::c_18] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_19] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
-    unpack_mode[tt::CBIndex::c_21] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     unpack_mode[tt::CBIndex::c_22] = UnpackToDestMode::UnpackToDestFp32;  // EXACT-ACCUM
     const auto compute = CreateKernel(
         program, kComputePath, region,
