@@ -1660,6 +1660,7 @@
       tier: 3
   owner_id: D0B8130N4BW # Dalar Vartanians
   team: models
+  budget_type: unit
 
 - name: panoptic-deeplab unit tests
   cmd: TT_METAL_WATCHER=30 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="10,9" pytest models/experimental/panoptic_deeplab/tests/pcc/ --timeout=420
