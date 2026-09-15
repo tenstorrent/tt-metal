@@ -466,12 +466,20 @@ class WanPipeline(PipelineAPIMixin):
         # TODO: Reset buffers for change in resolution. Also reinitialize trace
         if run_warmup:
             logger.info("Pipeline allocation run...")
-            self(
-                prompts=["warmup"],
-                num_inference_steps=2,
-                guidance_scale=2 if config.cfg_enabled else 1,
-                guidance_scale_2=2 if config.cfg_enabled else 1,
-            )
+            self._warmup()
+
+    def _warmup(self) -> None:
+        """Allocation/compile run that sizes the persistent buffers and warms the caches.
+
+        Override when a variant needs extra inputs to reach every buffer -- an I2V variant
+        must pass an `image_prompt` here, or `condition_buffer` is never allocated.
+        """
+        self(
+            prompts=["warmup"],
+            num_inference_steps=2,
+            guidance_scale=2 if self._cfg_enabled else 1,
+            guidance_scale_2=2 if self._cfg_enabled else 1,
+        )
 
     def prepare_text_conditioning(self, tt_model, prompt_embeds, buffer, traced=False):
         prompt_1BLP = tt_model.prepare_text_conditioning(prompt_embeds)
@@ -518,10 +526,16 @@ class WanPipeline(PipelineAPIMixin):
 
         permuted_model_input = self.get_model_input(permuted_latent_tt, cond_latents)
 
-        assert timestep.ndim == 1, "Wan2.2-T2V/I2V requires a 1D timestep tensor"
-        timestep = float32_tensor(
-            timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
-        )
+        if timestep.ndim == 1:
+            # Scalar-per-batch timestep (T2V, and 14B I2V). Replicated across the mesh.
+            timestep = float32_tensor(
+                timestep.unsqueeze(1).unsqueeze(1).unsqueeze(1), device=(None if traced else self.mesh_device)
+            )
+        else:
+            # Per-token (expanded) timestep, used by TI2V-5B image conditioning. Only
+            # reachable when `expand_timesteps` is set, which no T2V variant does.
+            assert timestep.ndim == 2, "timestep must be 1-D (per batch) or 2-D (batch, seq_len)"
+            timestep = self.prepare_timestep_tensor(timestep, t=t, traced=traced)
 
         # guidance_scale is passed as a 1-element device tensor (broadcast via ttnn.lerp's
         # tensor-weight overload) so it can be updated in place between traced executions,
@@ -549,6 +563,42 @@ class WanPipeline(PipelineAPIMixin):
             latent=permuted_latent_tt,
             velocity_pred=permuted_velocity_pred_tt,
         )
+
+    def prepare_mask(self, latents: torch.Tensor, *, device: torch.device | None) -> torch.Tensor:
+        """Per-latent conditioning mask: 1 = denoise this token, 0 = pin it to the condition.
+
+        Only consulted when `expand_timesteps` is set. The all-ones default makes the
+        per-token timestep identical to the scalar one, so T2V is unaffected either way.
+        Override to pin conditioned frames (see `ti2v_5b_i2v_math.first_frame_mask`).
+        """
+        return torch.ones(latents.shape, dtype=torch.float32, device=device)
+
+    def prepare_timestep_tensor(self, timestep: torch.Tensor, *, t: float, traced: bool) -> ttnn.Tensor:
+        """Upload a 2-D `(batch, seq_len)` per-token timestep to the device.
+
+        Unreachable unless `prepare_mask` is overridden to return a non-uniform mask, which
+        requires `expand_timesteps=True`. The upload must be sharded on the sequence-parallel
+        mesh axis to match the spatial input; replicating it instead would run the timestep
+        MLP at the full (un-sharded) token count and blow out L1.
+
+        Args:
+            timestep: `(batch, seq_len)` host tensor, seq_len == the transformer's padded N.
+            t: the scalar timestep for this step, for padding the sequence-parallel tail.
+            traced: whether this step is being captured into a trace.
+        """
+        msg = (
+            f"{type(self).__name__} produced a {timestep.ndim}-D timestep but does not implement "
+            "prepare_timestep_tensor; a per-token timestep needs a sequence-parallel upload"
+        )
+        raise NotImplementedError(msg)
+
+    def finalize_latents(self, latents: torch.Tensor) -> torch.Tensor:
+        """Last chance to adjust the latents after denoising, before the VAE decode.
+
+        Identity for T2V. Image conditioning overrides this to re-pin the conditioned frames
+        one final time, mirroring the post-loop blend the reference pipeline applies.
+        """
+        return latents
 
     def get_model_input(self, latents: ttnn.Tensor, cond_latents: ttnn.Tensor | None) -> ttnn.Tensor:
         """Adapter function to enable I2V. For base T2V, just return the latents (cast to bf16)."""
@@ -705,7 +755,7 @@ class WanPipeline(PipelineAPIMixin):
         )
         on_event(SectionEnd("prepare_latents"))
 
-        mask = torch.ones(latents.shape, dtype=torch.float32, device=device)
+        mask = self.prepare_mask(latents, device=device)
 
         # 6. Denoising loop
         if effective_boundary_ratio is not None:
@@ -811,6 +861,7 @@ class WanPipeline(PipelineAPIMixin):
         latents = ts.model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=latents_sequence_length
         )
+        latents = self.finalize_latents(latents)
 
         on_event(SectionEnd("denoising"))
 

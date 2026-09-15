@@ -184,11 +184,30 @@ class WanTransformerBlock(Module):
         spatial_1BND: fractured N on SP, fractured D on TP
         """
 
-        assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
+        # Two timestep layouts are supported, discriminated by width rather than by an extra
+        # argument, so `combined_step`'s traced signature is untouched:
+        #   scalar   temb (1, B, 6, D/tp) -- one timestep per batch  (T2V, 14B I2V)
+        #   per-token temb (1, B, N, 6*D/tp) -- one timestep per token (TI2V-5B I2V)
+        # The per-token arm works because time_proj's per-device output is already laid out
+        # group-major [g0|g1|...|g5] (see WanTimeTextImageEmbedding._prepare_torch_state), which
+        # is exactly the row-major flattening of the (1,1,6,D/tp) table.
+        table_width = self.scale_shift_table.data.shape[-1]
+        per_token = temb_1BTD.shape[-1] != table_width
 
-        shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
+        if not per_token:
+            assert temb_1BTD.shape[2] == 6, "wan2.2 14b expects 6 chunks in timestep embedding"
+            shifted_temb_1BTD = self.scale_shift_table.data + temb_1BTD
+            chunk_dim = 2
+        else:
+            assert (
+                temb_1BTD.shape[-1] == 6 * table_width
+            ), f"per-token timestep embedding must be 6*{table_width} wide, got {temb_1BTD.shape[-1]}"
+            sst_flat = ttnn.reshape(self.scale_shift_table.data, (1, 1, 1, 6 * table_width))
+            shifted_temb_1BTD = sst_flat + temb_1BTD
+            chunk_dim = 3
+
         shift_msa_1B1D, scale_msa_1B1D, gate_msa_1B1D, c_shift_msa_1B1D, c_scale_msa_1B1D, c_gate_msa_1B1D = ttnn.chunk(
-            shifted_temb_1BTD, 6, dim=2
+            shifted_temb_1BTD, 6, dim=chunk_dim
         )
 
         # NOTE: workaround - addcmul (fused and unfused) is less accurate with fp32 gate input
@@ -360,6 +379,11 @@ class WanTransformer3DModel(Module):
             mesh_device=mesh_device,
         )
 
+        # Installed by set_per_token_timestep_masks() when a variant drives the transformer with
+        # a two-row timestep; None on every scalar-timestep path.
+        self._per_token_temb_mask = None
+        self._per_token_proj_mask = None
+
         self.scale_shift_table = Parameter(
             total_shape=[1, 2, dim],
             device=mesh_device,
@@ -452,8 +476,91 @@ class WanTransformer3DModel(Module):
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")
         return tt_prompt_1BLP
 
+    def _apply_norm_out_modulation(self, temb_11BD):
+        """Add the model-level scale/shift table to `temb` and split it into (shift, scale).
+
+        The table is (1, 2, D/tp) per device -- row-major [shift_row | scale_row]. `temb` is
+        D/tp wide in *both* layouts, so the two are told apart by the token axis, not width:
+
+          scalar    temb (1, 1, B, D/tp), token axis 1 -> broadcast-add, chunk on axis -2
+          per-token temb (1, B, N, D/tp), token axis N -> the (1,2,D/tp) table cannot
+                    broadcast against N tokens, so flatten it to (1, 1, 1, 2*D/tp) and
+                    duplicate temb along the feature axis, which reproduces the same
+                    [shift | scale] row-major pairing and chunks on the feature axis.
+        """
+        table_width = self.scale_shift_table.data.shape[-1]
+        if temb_11BD.shape[-2] == 1:
+            scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
+            return ttnn.chunk(scale_shift_1BSD, 2, -2)
+
+        assert (
+            temb_11BD.shape[-1] == table_width
+        ), f"per-token norm_out temb must be {table_width} wide, got {temb_11BD.shape[-1]}"
+        sst_flat = ttnn.reshape(self.scale_shift_table.data, (1, 1, 1, 2 * table_width))
+        duplicated = ttnn.concat([temb_11BD, temb_11BD], dim=-1)
+        return ttnn.chunk(sst_flat + duplicated, 2, dim=3)
+
+    def set_per_token_timestep_masks(self, temb_mask, proj_mask) -> None:
+        """Install the masks that expand a 2-row timestep embedding to one row per token.
+
+        Persistent device tensors, so a captured trace binds them by address the same way the
+        pipeline's latent and conditioning buffers are bound. Each is 0 where the token should
+        take the first timestep row and 1 where it should take the second, at the temb and
+        timestep-projection feature widths respectively.
+        """
+        self._per_token_temb_mask = temb_mask
+        self._per_token_proj_mask = proj_mask
+
+    @staticmethod
+    def _expand_two_row(rows, mask):
+        """Select per token between two embedding rows: `row0 + mask * (row1 - row0)`.
+
+        `rows` is (..., 2, W); `mask` is (..., N, W) and binary. Rows are repeated to the token
+        count rather than relied on to broadcast, so this does not depend on two-axis broadcast
+        semantics for the fused ternary.
+        """
+        n = mask.shape[-2]
+        row0 = ttnn.slice(rows, [0, 0, 0, 0], [rows.shape[0], rows.shape[1], 1, rows.shape[3]])
+        row1 = ttnn.slice(rows, [0, 0, 1, 0], [rows.shape[0], rows.shape[1], 2, rows.shape[3]])
+        row0 = ttnn.repeat(row0, ttnn.Shape([1, 1, n, 1]))
+        row1 = ttnn.repeat(row1, ttnn.Shape([1, 1, n, 1]))
+        return ttnn.lerp(row0, row1, mask)
+
     def prepare_timestep_conditioning(self, timestep):
+        """Embed the timestep, for either a scalar or a per-token schedule.
+
+        Three layouts reach this, told apart by the token axis so that `combined_step`'s traced
+        signature never changes:
+
+          (B, 1, 1, 1)  scalar, one timestep per batch -- T2V and 14B I2V, unchanged
+          (1, 1, 2, 1)  two distinct values, expanded per token via the installed masks
+          (1, B, N, 1)  fully per-token (kept working, but runs the MLP N/SP times over)
+
+        TI2V-5B image conditioning only ever needs two values -- 0 on the conditioned frame and
+        `t` everywhere else -- and the embedder is pointwise in the token axis, so the 2-row
+        form is mathematically identical to the per-token form while running the MLP at M=32
+        (tile-padded) instead of M=N/SP. That is the same shape the scalar path already uses, so
+        it needs no matmul blocking entries of its own and cannot overflow L1 at any resolution.
+        """
+        tokens = timestep.shape[-2]
+        two_row = tokens == 2 and self._per_token_temb_mask is not None
+        per_token = tokens != 1 and not two_row
+
         tt_temb_11BD, tt_timestep_proj_1BTD = self.condition_embedder.forward_timestep(timestep, timestep_seq_len=None)
+
+        if two_row:
+            assert tt_temb_11BD.shape[-2] == 2 and tt_timestep_proj_1BTD.shape[-2] == 2, (
+                f"expected 2 embedding rows, got temb {tt_temb_11BD.shape} / " f"proj {tt_timestep_proj_1BTD.shape}"
+            )
+            tt_temb_11BD = self._expand_two_row(tt_temb_11BD, self._per_token_temb_mask)
+            tt_timestep_proj_1BTD = self._expand_two_row(tt_timestep_proj_1BTD, self._per_token_proj_mask)
+            return tt_temb_11BD, tt_timestep_proj_1BTD
+
+        if per_token:
+            # Leave the projection as (1, B, N, 6*D/tp); WanTransformerBlock.forward detects the
+            # wider layout and chunks on the feature axis instead of a dedicated chunk axis.
+            logger.info(f"TT per-token timestep proj shape: {tt_timestep_proj_1BTD.shape}")
+            return tt_temb_11BD, tt_timestep_proj_1BTD
         tt_timestep_proj_1BTD = unflatten(ttnn.squeeze(tt_timestep_proj_1BTD, -2), -1, (6, -1))
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT timestep proj shape: {tt_timestep_proj_1BTD.shape}")
@@ -586,8 +693,7 @@ class WanTransformer3DModel(Module):
                 trans_mat=trans_mat,
             )
 
-        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
-        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+        shift_11BD, scale_11BD = self._apply_norm_out_modulation(temb_11BD)
 
         spatial_norm_1BND = self.norm_out(
             spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32
@@ -634,8 +740,7 @@ class WanTransformer3DModel(Module):
                 rope_sin=rope_sin_1HND,
                 trans_mat=trans_mat,
             )
-        scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
-        shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)
+        shift_11BD, scale_11BD = self._apply_norm_out_modulation(temb_11BD)
 
         spatial_norm_1BND = self.norm_out(
             spatial_1BND, dynamic_weight=(1 + scale_11BD), dynamic_bias=shift_11BD, dtype=ttnn.float32

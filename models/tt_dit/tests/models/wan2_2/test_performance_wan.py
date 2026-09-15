@@ -697,3 +697,181 @@ def test_pipeline_performance_ti2v_5b(
     assert pass_perf_check, "\n".join(assert_msgs)
 
     logger.info("TI2V-5B performance test completed successfully!")
+
+
+def ti2v_5b_i2v_metrics(mesh_shape, height):
+    """Perf targets for Wan2.2 TI2V-5B **image-to-video** on single BH Galaxy (4x8).
+
+    Warm-traced, 81 frames, 40 steps -- identical geometry to `ti2v_5b_metrics` so the two are
+    directly comparable. Kept separate on purpose: that function is the T2V gate and must not
+    move.
+
+    `image_encode` is the host-side torch VAE encode of the single conditioning frame. It is
+    reported separately because it is the one component a TT residual-encoder port would
+    remove, and because it must not be confused with `encoder` (the T5 text encoder).
+
+    PROVISIONAL: these are generous first-measurement bounds, not measured+30%. The per-token
+    timestep MLP currently runs at M = padded_N/SP on a make-it-fit blocking, and the shared
+    5B matmul tables are keyed on M values the model never asks for, so denoising here is not
+    yet a meaningful steady state. Tighten once both are fixed.
+    """
+    assert is_blackhole(), "TI2V-5B I2V perf currently targets Blackhole only"
+    assert tuple(mesh_shape) == (4, 8), "TI2V-5B I2V perf currently targets single BH Galaxy (4x8)"
+    if height == 480:
+        return {"encoder": 0.3, "image_encode": 4.0, "denoising": 18.0, "vae": 3.5, "total": 26.0}
+    if height == 704:
+        return {"encoder": 0.3, "image_encode": 7.0, "denoising": 32.0, "vae": 6.5, "total": 46.0}
+    assert False, f"No TI2V-5B I2V perf targets for height={height} (expected 480 or 704)"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, device_params, topology",
+    [
+        [(4, 8), (4, 8), 1, 0, 2, {**DEVICE_PARAMS, **ring_params_req_exact_devices}, ttnn.Topology.Ring],
+    ],
+    ids=["ring_bh_4x8_sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "width, height",
+    [(1280, 704)],
+    ids=["resolution_720p"],
+)
+def test_pipeline_performance_ti2v_5b_i2v(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple,
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    device_params: dict,
+    topology: ttnn.Topology,
+    width: int,
+    height: int,
+    is_ci_env: bool,
+    galaxy_type: str,
+) -> None:
+    """Apples-to-apples I2V perf against `test_pipeline_performance_ti2v_5b`.
+
+    Same geometry, same step count, same warm-traced methodology, same section names, so the
+    only differences in the numbers are the image conditioning itself.
+    """
+    if not ttnn.device.is_blackhole():
+        pytest.skip("TI2V-5B I2V performance currently targets Blackhole (single BH Galaxy)")
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
+
+    # Imported lazily, NOT at module scope: this module also holds the T2V gate, and importing
+    # the I2V pipeline registers matmul blockings into a process-global table whose keys
+    # overlap T2V projection shapes. A module-level import would silently change the T2V
+    # numbers measured in the same pytest process.
+    from models.tt_dit.pipelines.wan.pipeline_wan_ti2v_5b_i2v import WanTI2V5BI2VPipeline
+
+    # Submesh, exactly as the T2V gate does (:557) and every other 5B test. Running on the
+    # parent mesh handle instead made the pipeline pathologically slow -- 20+ minutes with no
+    # progress past the construction warmup, versus ~2 minutes on a submesh.
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    benchmark_profiler = BenchmarkProfiler()
+    traced = True
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    tp_factor = tuple(mesh_device.shape)[tp_axis]
+    expected_metrics = ti2v_5b_i2v_metrics(mesh_device.shape, height)
+
+    num_frames = 81
+    num_inference_steps = 40
+    prompt = "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
+    image_prompt = create_fractal_image(width, height)
+
+    print(f"Parameters: {height}x{width}, {num_frames} frames, {num_inference_steps} steps (I2V)")
+
+    pipeline = WanTI2V5BI2VPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        height=height,
+        width=width,
+        num_frames=num_frames,
+        run_warmup=True,
+    )
+
+    logger.info("Running warmup iteration...")
+    with benchmark_profiler("run", iteration=0):
+        with torch.no_grad():
+            pipeline(
+                prompts=[prompt],
+                image_prompt=image_prompt,
+                num_inference_steps=2,
+                guidance_scale_2=None,
+                traced=traced,
+            )
+    logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
+
+    ttnn.synchronize_device(mesh_device)
+
+    num_perf_runs = 1
+    for i in range(num_perf_runs):
+        with benchmark_profiler("run", iteration=i):
+            with torch.no_grad():
+                frames = pipeline(
+                    prompts=[prompt],
+                    image_prompt=image_prompt,
+                    num_inference_steps=num_inference_steps,
+                    on_event=profiler_event_callback(benchmark_profiler, i),
+                    seed=42,
+                    guidance_scale_2=None,
+                    traced=traced,
+                    output_type="uint8",
+                )
+                ttnn.synchronize_device(mesh_device)
+        logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+
+    pipeline.release_traces()
+
+    text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
+    denoising_times = [benchmark_profiler.get_duration("denoising", i) for i in range(num_perf_runs)]
+    vae_times = [benchmark_profiler.get_duration("vae", i) for i in range(num_perf_runs)]
+    total_times = [benchmark_profiler.get_duration("run", i) for i in range(num_perf_runs)]
+    image_encode_times = [pipeline.last_image_encode_seconds]
+
+    print("\n" + "=" * 80)
+    print("WAN2.2 TI2V-5B **I2V** PERFORMANCE RESULTS")
+    print("=" * 80)
+    print(f"Image Size: {width}x{height}")
+    print(f"Inference Steps: {num_inference_steps}")
+    print(f"Num Frames: {num_frames}")
+    print(f"DiT Configuration: sp={sp_factor}, tp={tp_factor}")
+    print(f"Mesh Shape: {mesh_device.shape}")
+    print(f"Topology: {topology}")
+    print("-" * 80)
+    for name, times in (
+        ("Text Encoding", text_encoder_times),
+        ("Image Encode (host)", image_encode_times),
+        ("Denoising", denoising_times),
+        ("VAE Decoding", vae_times),
+        ("Total Pipeline", total_times),
+    ):
+        mean_time = statistics.mean(times)
+        std_time = statistics.stdev(times) if len(times) > 1 else 0
+        print(
+            f"{name:25} | Mean: {mean_time:8.4f}s | Std: {std_time:8.4f}s | "
+            f"Min: {min(times):8.4f}s | Max: {max(times):8.4f}s"
+        )
+    print("-" * 80)
+
+    measurements = {
+        "encoder": statistics.mean(text_encoder_times),
+        "image_encode": statistics.mean(image_encode_times),
+        "denoising": statistics.mean(denoising_times),
+        "vae": statistics.mean(vae_times),
+        "total": statistics.mean(total_times),
+    }
+
+    assert_msgs = [
+        f"Warning: {k} is outside of the tolerance range. Expected: {expected_metrics[k]}, Actual: {measurements[k]}"
+        for k in expected_metrics
+        if measurements[k] > expected_metrics[k]
+    ]
+    assert not assert_msgs, "\n".join(assert_msgs)
+
+    logger.info("TI2V-5B I2V performance test completed successfully!")
