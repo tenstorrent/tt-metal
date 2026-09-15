@@ -194,7 +194,8 @@ MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
         core_group_2,
         num_blocks_per_core_group_1,
         num_blocks_per_core_group_2,
-        [&](const tt::tt_metal::CoreCoord& core, uint32_t num_blocks, uint32_t start_block) {
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_blocks, start_block] = work;
             const uint32_t b_start = start_block / Ts;
             const uint32_t sb_start = start_block % Ts;
             // Packed: tile id of (b, sb, h=0) = block_index * H * Th

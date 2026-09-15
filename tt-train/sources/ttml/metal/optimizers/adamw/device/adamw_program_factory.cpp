@@ -320,9 +320,8 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
         core_group_2,
         num_tiles_per_core_group_1,
         num_tiles_per_core_group_2,
-        [&](const tt::tt_metal::CoreCoord& core, uint32_t num_tiles, uint32_t start_tile) {
-            // seeds are indexed in for_each_core_with_work's walk order: core i -> {i / num_cores_y, i % num_cores_y}
-            const uint32_t core_index = core.x * num_cores_y + core.y;
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_tiles, start_tile] = work;
             SetRuntimeArgs(
                 program,
                 kernels.reader,
@@ -427,7 +426,7 @@ void AdamWProgramFactory::override_runtime_arguments(
 
     // Update:
     // theta_t = theta_{t-1} - step_size * (m_t / ((sqrt(v_t) * inv_sqrt_bc2) + epsilon))
-    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
+    for_each_core(num_cores, num_cores_y, [&](const tt::tt_metal::CoreCoord& core, uint32_t core_index) {
         // Update reader kernel args
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
@@ -449,7 +448,7 @@ void AdamWProgramFactory::override_runtime_arguments(
             runtime_args[kComputeOneMinusBeta1Idx] = std::bit_cast<uint32_t>(one_minus_beta1);
             runtime_args[kComputeOneMinusBeta2Idx] = std::bit_cast<uint32_t>(one_minus_beta2);
             runtime_args[kComputeDecayFactorIdx] = std::bit_cast<uint32_t>(decay_factor);
-            runtime_args[kComputeSeedIdx] = seeds[core.x * num_cores_y + core.y];
+            runtime_args[kComputeSeedIdx] = seeds[core_index];
         }
         // Update writer kernel args
         {
