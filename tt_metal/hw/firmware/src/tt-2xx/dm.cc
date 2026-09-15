@@ -79,11 +79,8 @@ tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(UNCACHED_MEM_M
 tt_l1_ptr subordinate_map_t* const subordinate_sync = (subordinate_map_t*)mailboxes->subordinate_sync.map;
 
 #ifdef FDS_SIGNALLING
-constexpr uint32_t fds_num_dispatch_lanes = 3;
-constexpr uint32_t fds_dispatch_lane_mask = (uint32_t{1} << fds_num_dispatch_lanes) - 1;
-constexpr uint32_t fds_filter_length = 8;
 constexpr uint32_t fds_num_go_groups = go_message_num_entries - 1;
-constexpr uint32_t fds_go_interrupt_mask = ((uint32_t{1} << fds_num_go_groups) - 1) << 1;
+constexpr uint32_t fds_go_interrupt_mask = overlay::fds_signalling::go_interrupt_mask(fds_num_go_groups);
 static_assert(fds_go_interrupt_mask == 0x1FE, "FDS interrupt mask must cover exactly groups 1..8");
 
 __attribute__((interrupt)) void fds_go_interrupt_handler() {
@@ -93,7 +90,7 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
     }
 
     const uint32_t group_id = claimed_source - overlay::quasar::plic_source_base;
-    if (group_id - 1 >= fds_num_go_groups) {
+    if (overlay::fds_signalling::sub_device_from_go_group(group_id) >= fds_num_go_groups) {
         overlay::quasar::plic_complete(claimed_source);
         return;
     }
@@ -109,8 +106,8 @@ __attribute__((interrupt)) void fds_go_interrupt_handler() {
     overlay::quasar::plic_complete(claimed_source);
 
     // The host rewrites go_message_index only after quiesce with no go in flight, so no locking is needed.
-    if (group_id == mailboxes->go_message_index + 1) {
-        mailboxes->go_messages[group_id - 1].signal = RUN_MSG_GO;
+    if (group_id == overlay::fds_signalling::go_group_for_sub_device(mailboxes->go_message_index)) {
+        mailboxes->go_messages[overlay::fds_signalling::sub_device_from_go_group(group_id)].signal = RUN_MSG_GO;
     }
 }
 #endif
@@ -386,17 +383,20 @@ extern "C" uint32_t _start1() {
         register_handler_for_interrupt(MACHINE_EXTERNAL_INTERRUPT_OFFSET, fds_go_interrupt_handler);
         invalidate_l1_icache();
         overlay::fds_signalling::worker_disable_auto_dispatch();
-        overlay::fds_signalling::worker_config_filter_length(fds_filter_length);
-        overlay::fds_signalling::worker_config_interrupt_enable(0);
+        overlay::fds_signalling::worker_config_filter_length(overlay::fds_signalling::filter_length);
+        overlay::fds_signalling::worker_config_interrupt_enable(overlay::fds_signalling::interrupts_disabled);
         overlay::fds_signalling::worker_clear_done();
-        for (uint32_t dispatch_lane = 0; dispatch_lane < fds_num_dispatch_lanes; ++dispatch_lane) {
+        for (uint32_t dispatch_lane = 0; dispatch_lane < overlay::fds_signalling::num_dispatch_lanes; ++dispatch_lane) {
             overlay::fds_signalling::worker_clear_dispatch_status(dispatch_lane);
         }
-        for (uint32_t go_group_id = 1; go_group_id <= fds_num_go_groups; ++go_group_id) {
-            overlay::fds_signalling::worker_config_group(go_group_id, fds_dispatch_lane_mask, 1);
+        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+             ++go_group_id) {
+            overlay::fds_signalling::worker_config_group(
+                go_group_id, overlay::fds_signalling::dispatch_lane_mask, overlay::fds_signalling::worker_go_threshold);
         }
         overlay::quasar::plic_set_threshold(0);
-        for (uint32_t go_group_id = 1; go_group_id <= fds_num_go_groups; ++go_group_id) {
+        for (uint32_t go_group_id = overlay::fds_signalling::idle_group_id + 1; go_group_id <= fds_num_go_groups;
+             ++go_group_id) {
             const uint32_t plic_source = overlay::quasar::plic_source_base + go_group_id;
             overlay::quasar::plic_set_priority(plic_source, 1);
             overlay::quasar::plic_enable_source(plic_source, true);

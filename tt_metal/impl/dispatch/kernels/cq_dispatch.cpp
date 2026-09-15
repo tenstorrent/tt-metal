@@ -1162,6 +1162,8 @@ static void process_delay_cmd() {
 FORCE_INLINE
 void process_go_signal_mcast_cmd() {
 #if defined(ARCH_QUASAR) && defined(FDS_SIGNALLING)
+    // FDS go is issued by dispatch_s. A SEND_GO_SIGNAL here means the command was mis-routed to dispatch_d; abort
+    // rather than NOC-multicast a second go.
     ASSERT(0);
 #endif
     volatile CQDispatchCmd tt_l1_ptr* cmd = reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(cmd_ptr);
