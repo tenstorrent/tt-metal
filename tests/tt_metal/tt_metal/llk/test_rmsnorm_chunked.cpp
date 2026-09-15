@@ -142,11 +142,13 @@ TEST_F(LLKBlackholeSingleCardFixture, RmsnormChunkedReductionPreservesAccumulato
                 std::vector<bfloat16> source(rows * num_tiles * tile_elements);
                 std::vector<double> golden(rows, 0.0);
                 for (std::uint32_t row = 0; row < rows; ++row) {
+                    const float magnitude = std::ldexp(1.0f, static_cast<int>(row) - 2);
                     for (std::uint32_t i = 0; i < num_tiles * tile_elements; ++i) {
-                        // Exactly representable BF16 values with different tile,
-                        // face and row contributions; golden is a plain dot product.
-                        const auto sample = static_cast<int>((i * 7 + (i / tile_elements) * 13 + row * 3) % 31) - 15;
-                        const bfloat16 value(static_cast<float>(sample) / 16.0f);
+                        // Signed powers of two keep products and the three-/seven-
+                        // tile chunk sums exact even in LoFi. This isolates DEST
+                        // reuse from partial-mantissa multiplication error.
+                        const bool negative = (i + i / tile_elements + row) % 2 != 0;
+                        const bfloat16 value(negative ? -magnitude : magnitude);
                         source[row * num_tiles * tile_elements + i] = value;
                         golden[row] += static_cast<double>(value) * static_cast<double>(value) / tile_elements;
                     }

@@ -50,8 +50,10 @@ void kernel_main() {
             for (std::uint32_t tile = 0; tile < capacity; ++tile) {
                 fill_tile(tile, static_cast<float>(row * 16 + tile + 1));
             }
+            // GAPOOL applies the scaler in both the column and row reductions.
+            // Use sqrt(1/1024), matching RMSNorm's 1/sqrt(width) convention.
             mul_reduce_scalar_chunked_tile<num_tiles, capacity>(
-                tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, 1.0f / 1024.0f);
+                tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16, 1.0f / 32.0f);
             mul_reduce_scalar_uninit();
             tile_regs_commit();
             tile_regs_wait();

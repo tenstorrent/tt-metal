@@ -99,7 +99,8 @@ ALWI void rmsnorm_mul_bcast_scalar_reuse_tiles(
  * mul_reduce_scalar and add_binary, then acquire DST before calling.
  *
  * ocb programs the packer's face_r_dim for the reduce mask. On return,
- * DST[dst_capacity - 1] contains the scaled sum of products.
+ * DST[dst_capacity - 1] contains scaler * scaler * sum(A * B): the column
+ * and row reductions both apply scaler, so a mean requires 1 / sqrt(width).
  * The reduce pack mask remains configured; call
  * mul_reduce_scalar_uninit() before normal packing.
  */

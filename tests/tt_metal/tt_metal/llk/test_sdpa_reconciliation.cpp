@@ -176,6 +176,7 @@ void run_sdpa_tail(
         std::vector<bfloat16>(rounds * tiles * sdpa_tail_elements),
         std::vector<bfloat16>(rounds * tiles * sdpa_tail_elements)};
     std::vector<float> golden(rounds * tiles * sdpa_tail_elements);
+    std::vector<float> rounding_bound(golden.size());
     std::vector<float> golden_stats(rounds * sdpa_tail_elements, 0.0f);
     for (std::uint32_t round = 0; round < rounds; ++round) {
         for (std::uint32_t row = 0; row < sdpa_tail_rows; ++row) {
@@ -208,12 +209,22 @@ void run_sdpa_tail(
                         16.0f);
                     source[2][source_index] = worker_value;
                     source[3][source_index] = previous_value;
-                    const float value = static_cast<float>(worker_value) * worker_weight +
-                                        static_cast<float>(previous_value) * previous_weight;
+                    const float worker_term = static_cast<float>(worker_value) * worker_weight;
+                    const float previous_term = static_cast<float>(previous_value) * previous_weight;
+                    const float value = worker_term + previous_term;
                     const auto output_index = untilize ? round * tiles * sdpa_tail_elements +
                                                              row * tiles * sdpa_tail_cols + tile * sdpa_tail_cols + col
                                                        : source_index;
                     golden[output_index] = normalize ? value / denominator : value;
+                    // The two BF16-weighted terms can nearly cancel. Bound
+                    // coefficient/product/accumulator rounding by the terms'
+                    // magnitudes, not by their potentially tiny final sum.
+                    // Four BF16 unit roundoffs cover these rounding stages;
+                    // a separate relative-L2 check below rejects broad drift.
+                    constexpr float bf16_unit_roundoff = 1.0f / 256.0f;
+                    rounding_bound[output_index] = 4.0f * bf16_unit_roundoff *
+                                                   (std::abs(worker_term) + std::abs(previous_term)) /
+                                                   (normalize ? denominator : 1.0f);
                 }
             }
         }
@@ -237,11 +248,16 @@ void run_sdpa_tail(
     detail::ReadFromBuffer(output, result);
     const auto actual = unpack_uint32_vec_into_bfloat16_vec(result);
     ASSERT_EQ(actual.size(), golden.size());
+    double squared_error = 0.0;
+    double squared_golden = 0.0;
     for (std::uint32_t index = 0; index < actual.size(); ++index) {
         const float value = static_cast<float>(actual[index]);
         ASSERT_TRUE(std::isfinite(value)) << "output index=" << index;
-        ASSERT_NEAR(value, golden[index], 0.003f + 0.025f * std::abs(golden[index])) << "output index=" << index;
+        ASSERT_NEAR(value, golden[index], rounding_bound[index]) << "output index=" << index;
+        squared_error += std::pow(static_cast<double>(value) - golden[index], 2);
+        squared_golden += std::pow(static_cast<double>(golden[index]), 2);
     }
+    ASSERT_LT(std::sqrt(squared_error / squared_golden), 0.01);
     if (!normalize) {
         detail::ReadFromBuffer(output_stats, result);
         const auto actual_stats = unpack_uint32_vec_into_bfloat16_vec(result);
@@ -283,9 +299,6 @@ TEST_F(LLKBlackholeSingleCardFixture, SdpaTailShortFaceProducerAndUntilize) {
                                                  << ", fp32_dest_acc=" << fp32_dest_acc << ", full_sync=" << full_sync
                                                  << ", blocks=" << num_blocks);
                         run_sdpa_tail(*devices_.at(0), normalize, untilize, fp32_dest_acc, full_sync, num_blocks);
-                        if (::testing::Test::HasFatalFailure()) {
-                            return;
-                        }
                     }
                 }
             }
