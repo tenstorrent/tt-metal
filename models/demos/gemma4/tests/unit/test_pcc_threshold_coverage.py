@@ -23,6 +23,8 @@ _MESHES = ["1x2", "1x4", "1x8"]
 # agree to every decimal on five of the six, and survived a board reset; 1x4
 # prefill produced 0.9805 once against 0.9803 on three other runs, so treat
 # ~2e-4 as its run-to-run spread when comparing against these.
+# Only the branch column gates (see test_gate_passes_a_healthy_tree); base is
+# kept to show what the fix moved.
 # The branch column covers HiFi3 + fp32 dest-accumulation on the m<=32
 # projections, plus the bf16 weight promotions in precision_overrides.json
 # ("_comment_wh_bf16"). 1x8 went all-bf16 and 1x2 took shared_mlp + lm_head;
@@ -60,10 +62,14 @@ def test_wormhole_gate_exists(test, mesh):
 @pytest.mark.parametrize("test", sorted(_WH_MEASURED))
 @pytest.mark.parametrize("mesh", _MESHES)
 def test_gate_passes_a_healthy_tree(test, mesh):
-    """A gate above the clean measurement is permanently red and therefore useless."""
-    gate = _gate(test, mesh)
-    for label, measured in zip(("base", "branch"), _WH_MEASURED[test][mesh]):
-        assert gate < measured, f"{test}/{mesh}: gate {gate} >= {label} measurement {measured}"
+    """A gate above the current measurement is permanently red and therefore useless.
+
+    Only the branch column is binding. The base column predates the m<=32 fp32
+    dest-accumulation fix, so it no longer describes a tree anyone runs, and the
+    gates are deliberately above it.
+    """
+    gate, measured = _gate(test, mesh), _WH_MEASURED[test][mesh][1]
+    assert gate < measured, f"{test}/{mesh}: gate {gate} >= measured {measured}"
 
 
 @pytest.mark.parametrize("test", sorted(_REGRESSED))
