@@ -151,6 +151,26 @@ inline void gather_statistic(uint32_t src_l1, uint32_t row_l1, uint32_t rem_row_
 // the compute kernel then adds it on the SFPU and takes no column). Done by
 // the writer RISC, which is otherwise idle while the reader relays packets,
 // as soon as the statistics are in L1.
+// The same tiles at explicit addresses (one packet slot's worth), for the
+// relay: they travel with the packet from the core that loaded the row from
+// DRAM, so the reader owns the buffers and this only fills them.
+template <bool kFold>
+inline void produce_statistic_tiles_at(
+    uint32_t l_l1, uint32_t d_l1, uint32_t Bt, uint32_t interm_bytes, uint32_t rem_bytes,
+    uint32_t lrow, uint32_t urow, uint32_t lrem_row, uint32_t lrem, uint32_t urem) {
+    for (uint32_t k = 0; k < Bt; ++k) {
+        if constexpr (kFold) {
+            gather_statistic</* negate */ true>(
+                l_l1 + k * interm_bytes, lrow + k * interm_bytes, 0u, lrem + k * rem_bytes);
+        } else {
+            gather_statistic</* negate */ true>(
+                l_l1 + k * interm_bytes, lrow + k * interm_bytes, lrem_row + k * interm_bytes, 0u);
+        }
+        gather_statistic</* negate */ true>(
+            d_l1 + k * interm_bytes, urow + k * interm_bytes, 0u, urem + k * rem_bytes);
+    }
+}
+
 template <bool kFold>
 inline void produce_statistic_tiles(
     uint32_t l_l1, uint32_t d_l1, uint32_t Bt, uint32_t interm_bytes,
@@ -167,17 +187,7 @@ inline void produce_statistic_tiles(
     const uint32_t lrem = get_write_ptr(cb_neg_lse_rem);
     const uint32_t urem = get_write_ptr(cb_neg_u_rem);
     const uint32_t rem_bytes = get_tile_size(cb_neg_u_rem);
-    for (uint32_t k = 0; k < Bt; ++k) {
-        if constexpr (kFold) {
-            gather_statistic</* negate */ true>(
-                l_l1 + k * interm_bytes, lrow + k * interm_bytes, 0u, lrem + k * rem_bytes);
-        } else {
-            gather_statistic</* negate */ true>(
-                l_l1 + k * interm_bytes, lrow + k * interm_bytes, lrem_row + k * interm_bytes, 0u);
-        }
-        gather_statistic</* negate */ true>(
-            d_l1 + k * interm_bytes, urow + k * interm_bytes, 0u, urem + k * rem_bytes);
-    }
+    produce_statistic_tiles_at<kFold>(l_l1, d_l1, Bt, interm_bytes, rem_bytes, lrow, urow, lrem_row, lrem, urem);
     cb_push_back(cb_neg_lse_row, Bt);
     cb_push_back(cb_neg_u_row, Bt);
     cb_push_back(cb_neg_lse_rem_row, Bt);
@@ -186,11 +196,15 @@ inline void produce_statistic_tiles(
 }
 
 // The reader pushes one page here once a timestep's L and D are in L1, and
-// the writer waits on it before producing the statistic tiles. A buffer
+// the writer waits on it before producing the statistic tiles. In the relay
+// the writer answers on kStatsDoneCb (the D scratch buffer's pages, free for
+// this since D itself is not a packet field there) once the tiles are in the
+// slot, and the reader pushes them to the compute kernel. A buffer
 // rather than an L1 word because the host resets buffer state every launch;
 // a word in scratch L1 could carry the previous launch's count and pass a
 // wait early.
 constexpr uint32_t kStatsReadyCb = tt::CBIndex::c_31;
+constexpr uint32_t kStatsDoneCb = tt::CBIndex::c_5;
 
 // A bfloat16 tile with 1.0 down column 0 and 0 elsewhere: the left factor of
 // the rank-one correction above.

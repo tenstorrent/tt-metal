@@ -247,9 +247,30 @@ void kernel_main() {
     // receiver's.
     const uint32_t base_query = get_write_ptr(cb_query);
     const uint32_t base_grad_output = get_write_ptr(cb_grad_output);
-    const uint32_t base_lse = get_write_ptr(cb_lse);
+    const uint32_t base_lse = get_write_ptr(cb_lse);  // load scratch, not a packet field
     const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
     const uint32_t base_grad_query = get_write_ptr(cb_grad_query_seed);
+    // The prepared statistic tiles (see cyclic_dataflow_utils.hpp): made once
+    // where a row's packet is loaded from DRAM, then carried by the packet.
+    constexpr uint32_t cb_lse_row = tt::CBIndex::c_13;
+    constexpr uint32_t cb_u_row = tt::CBIndex::c_14;
+    constexpr uint32_t cb_lse_rem_row = tt::CBIndex::c_30;
+    constexpr uint32_t cb_lse_rem = tt::CBIndex::c_9;
+    constexpr uint32_t cb_u_rem = tt::CBIndex::c_29;
+    const uint32_t base_lse_row = get_write_ptr(cb_lse_row);
+    const uint32_t base_u_row = get_write_ptr(cb_u_row);
+    const uint32_t base_lse_rem_row = get_write_ptr(cb_lse_rem_row);
+    const uint32_t base_lse_rem = get_write_ptr(cb_lse_rem);
+    const uint32_t base_u_rem = get_write_ptr(cb_u_rem);
+    const uint32_t rem_bytes = get_tile_size(cb_u_rem);
+    const uint32_t stride_rem = Bt * rem_bytes;
+    const auto reserve_stat_slots = [&]() {
+        cb_reserve_back(cb_lse_row, Bt);
+        cb_reserve_back(cb_u_row, Bt);
+        cb_reserve_back(cb_lse_rem_row, Bt);
+        cb_reserve_back(cb_lse_rem, Bt);
+        cb_reserve_back(cb_u_rem, Bt);
+    };
     const uint32_t stride_query = row_tiles * tile_bytes;
     const uint32_t stride_grad_output = val_tiles * tile_bytes;
     const uint32_t stride_interm = Bt * interm_bytes;
@@ -384,7 +405,12 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 
+    // Whether the next timestep's constant packet fields (Q, dO, L, D) were
+    // already read from DRAM during this one's dQ wait; see the prefetch below.
+    bool prefetched_next = false;
     for (uint32_t t = 0; t < kTimesteps; ++t) {
+        const bool prefetched = prefetched_next;
+        prefetched_next = false;
         DeviceZoneScopedN("RELAY-READER-STEP");
         const auto pair = sched.pair(my_core, t);
         const uint32_t i = pair.i;
@@ -445,10 +471,11 @@ void kernel_main() {
         // release of t - 2 becoming a credit for whoever fills it.
         {
             DeviceZoneScopedN("SLOT-RESERVE");
-            cb_reserve_back(cb_query, row_tiles);
-            cb_reserve_back(cb_grad_output, val_tiles);
-            cb_reserve_back(cb_lse, Bt);
-            cb_reserve_back(cb_u_scalar, Bt);
+            if (!prefetched) {
+                cb_reserve_back(cb_query, row_tiles);
+                cb_reserve_back(cb_grad_output, val_tiles);
+                reserve_stat_slots();
+            }
             cb_reserve_back(cb_grad_query_seed, row_tiles);
         }
 
@@ -503,26 +530,29 @@ void kernel_main() {
             }
 #endif
             DeviceZoneScopedN("LOAD-IMM-DRAM");
-            for (uint32_t k = 0; k < row_tiles; ++k) {
-                noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
-            }
-            for (uint32_t k = 0; k < val_tiles; ++k) {
-                noc_async_read_page(val_base + (i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
-            }
-            for (uint32_t k = 0; k < Bt; ++k) {
-                noc_async_read_page(stat_base + (i - 1u) * Bt + k, lse, ls + k * interm_bytes);
-                noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
+            if (!prefetched) {
+                for (uint32_t k = 0; k < row_tiles; ++k) {
+                    noc_async_read_page(row_base + (i - 1u) * row_tiles + k, query, qs + k * tile_bytes);
+                }
+                for (uint32_t k = 0; k < val_tiles; ++k) {
+                    noc_async_read_page(val_base + (i - 1u) * val_tiles + k, grad_output, os + k * tile_bytes);
+                }
+                for (uint32_t k = 0; k < Bt; ++k) {
+                    noc_async_read_page(stat_base + (i - 1u) * Bt + k, lse, ls + k * interm_bytes);
+                    noc_async_read_page(stat_base + (i - 1u) * Bt + k, u_scalar, ds + k * interm_bytes);
+                }
             }
             noc_async_read_barrier();
-        }
-
-        // The writer makes the row-layout statistic tiles the compute kernel
-        // takes, off this core's forwarding path. For a forwarded packet it
-        // watches the readiness semaphore itself, which lands a whole timestep
-        // before this loop gets here; a DRAM load it can only learn of from us.
-        if (!producer.internal) {
-            cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
-            cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
+            // The writer makes the statistic tiles from L and D, into this
+            // slot; they then travel with the packet, so this happens only
+            // here, where the row entered from DRAM. A prefetched packet was
+            // signalled when its reads completed, a timestep ago.
+            if (!prefetched) {
+                cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
+                cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
+            }
+            cb_wait_front(cyclic_dataflow::kStatsDoneCb, 1);
+            cb_pop_front(cyclic_dataflow::kStatsDoneCb, 1);
         }
 
         // The compute kernel can start on S, P, dP and dS now. It does not
@@ -530,8 +560,11 @@ void kernel_main() {
         // arrive.
         cb_push_back(cb_query, row_tiles);
         cb_push_back(cb_grad_output, val_tiles);
-        cb_push_back(cb_lse, Bt);
-        cb_push_back(cb_u_scalar, Bt);
+        cb_push_back(cb_lse_row, Bt);
+        cb_push_back(cb_u_row, Bt);
+        cb_push_back(cb_lse_rem_row, Bt);
+        cb_push_back(cb_lse_rem, Bt);
+        cb_push_back(cb_u_rem, Bt);
 
         // Forward the immutable fields straight away, before this core has
         // computed anything: the packet carries them unchanged, so they never
@@ -541,8 +574,16 @@ void kernel_main() {
         const uint32_t dst = u % 2u;
         const uint32_t dst_query = base_query + dst * stride_query;
         const uint32_t dst_grad_output = base_grad_output + dst * stride_grad_output;
-        const uint32_t dst_lse = base_lse + dst * stride_interm;
-        const uint32_t dst_u_scalar = base_u_scalar + dst * stride_interm;
+        const uint32_t dst_lse_row = base_lse_row + dst * stride_interm;
+        const uint32_t dst_u_row = base_u_row + dst * stride_interm;
+        const uint32_t dst_lse_rem_row = base_lse_rem_row + dst * stride_interm;
+        const uint32_t dst_lse_rem = base_lse_rem + dst * stride_rem;
+        const uint32_t dst_u_rem = base_u_rem + dst * stride_rem;
+        const uint32_t src_lse_row = base_lse_row + slot * stride_interm;
+        const uint32_t src_u_row = base_u_row + slot * stride_interm;
+        const uint32_t src_lse_rem_row = base_lse_rem_row + slot * stride_interm;
+        const uint32_t src_lse_rem = base_lse_rem + slot * stride_rem;
+        const uint32_t src_u_rem = base_u_rem + slot * stride_rem;
         const uint32_t dst_grad_query = base_grad_query + dst * stride_grad_query;
         uint32_t receiver_x = 0;
         uint32_t receiver_y = 0;
@@ -557,13 +598,15 @@ void kernel_main() {
             // credit, and the copies are local.
             cb_reserve_back(cb_query, row_tiles);
             cb_reserve_back(cb_grad_output, val_tiles);
-            cb_reserve_back(cb_lse, Bt);
-            cb_reserve_back(cb_u_scalar, Bt);
+            reserve_stat_slots();
             cb_reserve_back(cb_grad_query_seed, row_tiles);
             noc_async_write(qs, get_noc_addr(dst_query), stride_query);
             noc_async_write(os, get_noc_addr(dst_grad_output), stride_grad_output);
-            noc_async_write(ls, get_noc_addr(dst_lse), stride_interm);
-            noc_async_write(ds, get_noc_addr(dst_u_scalar), stride_interm);
+            noc_async_write(src_lse_row, get_noc_addr(dst_lse_row), stride_interm);
+            noc_async_write(src_u_row, get_noc_addr(dst_u_row), stride_interm);
+            noc_async_write(src_lse_rem_row, get_noc_addr(dst_lse_rem_row), stride_interm);
+            noc_async_write(src_lse_rem, get_noc_addr(dst_lse_rem), stride_rem);
+            noc_async_write(src_u_rem, get_noc_addr(dst_u_rem), stride_rem);
             noc_async_write_barrier();
             noc_semaphore_set(ready_imm_sem[dst], u + 1u);
         } else if (receiver != kNoCore) {
@@ -571,9 +614,12 @@ void kernel_main() {
             noc_async_write(qs, get_noc_addr(receiver_x, receiver_y, dst_query), stride_query);
             noc_async_write(
                 os, get_noc_addr(receiver_x, receiver_y, dst_grad_output), stride_grad_output);
-            noc_async_write(ls, get_noc_addr(receiver_x, receiver_y, dst_lse), stride_interm);
+            noc_async_write(src_lse_row, get_noc_addr(receiver_x, receiver_y, dst_lse_row), stride_interm);
+            noc_async_write(src_u_row, get_noc_addr(receiver_x, receiver_y, dst_u_row), stride_interm);
             noc_async_write(
-                ds, get_noc_addr(receiver_x, receiver_y, dst_u_scalar), stride_interm);
+                src_lse_rem_row, get_noc_addr(receiver_x, receiver_y, dst_lse_rem_row), stride_interm);
+            noc_async_write(src_lse_rem, get_noc_addr(receiver_x, receiver_y, dst_lse_rem), stride_rem);
+            noc_async_write(src_u_rem, get_noc_addr(receiver_x, receiver_y, dst_u_rem), stride_rem);
             // Payload complete before readiness, as the contract requires.
             noc_async_write_barrier();
             // An inline write carries the value in the command itself, so
@@ -584,6 +630,41 @@ void kernel_main() {
             noc_inline_dw_write(
                 get_noc_addr(receiver_x, receiver_y, get_semaphore(ready_imm_sem_id[dst])), u + 1u);
         }
+        }
+
+        // If the next timestep's packet comes from DRAM, read its constant
+        // fields now, into the slot the compute kernel released two timesteps
+        // ago, while this timestep's dQ is awaited. The snake's first core does
+        // this every timestep of a dense pass; without it that core, and so
+        // the whole ring, waited on the read.
+        if (t + 1u < kTimesteps && !sched.producer(my_core, t + 1u).internal) {
+            DeviceZoneScopedN("PREFETCH-IMM");
+            const auto next_pair = sched.pair(my_core, t + 1u);
+            const uint32_t ni = next_pair.i;
+            const uint32_t nslot = (g + 1u) % 2u;
+            cb_reserve_back(cb_query, row_tiles);
+            cb_reserve_back(cb_grad_output, val_tiles);
+            reserve_stat_slots();
+            const uint32_t nqs = base_query + nslot * stride_query;
+            const uint32_t nos = base_grad_output + nslot * stride_grad_output;
+            const uint32_t nls = base_lse + nslot * stride_interm;
+            const uint32_t nds = base_u_scalar + nslot * stride_interm;
+            for (uint32_t k = 0; k < row_tiles; ++k) {
+                noc_async_read_page(row_base + (ni - 1u) * row_tiles + k, query, nqs + k * tile_bytes);
+            }
+            for (uint32_t k = 0; k < val_tiles; ++k) {
+                noc_async_read_page(val_base + (ni - 1u) * val_tiles + k, grad_output, nos + k * tile_bytes);
+            }
+            for (uint32_t k = 0; k < Bt; ++k) {
+                noc_async_read_page(stat_base + (ni - 1u) * Bt + k, lse, nls + k * interm_bytes);
+                noc_async_read_page(stat_base + (ni - 1u) * Bt + k, u_scalar, nds + k * interm_bytes);
+            }
+            // Complete the reads now and hand L and D to the writer, which
+            // has the rest of this timestep to make the statistic tiles.
+            noc_async_read_barrier();
+            cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
+            cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);
+            prefetched_next = true;
         }
 
         // Now dQ, which is the one field that has to wait for arithmetic --

@@ -93,8 +93,13 @@ void kernel_main() {
         read_tiles_by_row(cb_key, key, (j - 1u) * row_tiles, row_tiles, tile_bytes, row_tiles);
         read_tiles_by_row(cb_value, value, (j - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
         read_tiles_by_row(cb_grad_output, grad_output, (i - 1u) * val_tiles, val_tiles, tile_bytes, val_tiles);
-        read_tiles_by_row(cb_lse, lse, (i - 1u) * Bt, Bt, interm_bytes, Bt);
-        read_tiles_by_row(cb_u_scalar, u_scalar, (i - 1u) * Bt, Bt, interm_bytes, Bt);
+        // L and D go into scratch (the compute kernel takes only the tiles the
+        // writer makes of them), so plain reads, no push.
+        for (uint32_t k = 0; k < Bt; ++k) {
+            noc_async_read_page((i - 1u) * Bt + k, lse, get_write_ptr(cb_lse) + k * interm_bytes);
+            noc_async_read_page((i - 1u) * Bt + k, u_scalar, get_write_ptr(cb_u_scalar) + k * interm_bytes);
+        }
+        noc_async_read_barrier();
         // L and D are in L1: the writer makes the row-layout statistic tiles.
         cb_reserve_back(cyclic_dataflow::kStatsReadyCb, 1);
         cb_push_back(cyclic_dataflow::kStatsReadyCb, 1);

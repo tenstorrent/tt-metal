@@ -131,16 +131,17 @@ void kernel_main() {
     const uint32_t base_lse = get_write_ptr(cb_lse);
     const uint32_t base_u_scalar = get_write_ptr(cb_u_scalar);
     const uint32_t stride_interm = Bt * interm_bytes;
-    volatile tt_l1_ptr uint32_t* ready_imm_sem[2] = {
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[0])),
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ready_imm_sem_id[1]))};
-    // The row-layout tiles are written in row 0 only, the remainder columns
-    // in column 0 only; zero them once so the rest holds zeros.
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem_row), 2u * Bt * interm_bytes);
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_lse_rem), 2u * Bt * get_tile_size(cb_lse_rem));
-    cyclic_dataflow::zero_tile(get_write_ptr(cb_u_rem), 2u * Bt * get_tile_size(cb_u_rem));
+    // Slot-0 addresses of the statistic tile buffers (never reserved here:
+    // the reader owns them) and the zero page the slots are cleared from.
+    const uint32_t base_lse_row = get_write_ptr(cb_lse_row);
+    const uint32_t base_u_row = get_write_ptr(cb_u_row);
+    const uint32_t base_lse_rem_row = get_write_ptr(cb_lse_rem_row);
+    const uint32_t base_lse_rem = get_write_ptr(cb_lse_rem);
+    const uint32_t base_u_rem = get_write_ptr(cb_u_rem);
+    const uint32_t rem_bytes = get_tile_size(cb_u_rem);
+    const uint32_t stride_rem = Bt * rem_bytes;
+    const uint32_t zero_l1 = get_write_ptr(tt::CBIndex::c_8);
+    const uint32_t zero_bytes = get_tile_size(tt::CBIndex::c_8);  // half a Float32 tile
 
     const uint32_t grad_bytes = get_tile_size(cb_grad_key);
     const auto grad_key = TensorAccessor(grad_key_args, grad_key_addr, grad_bytes);
@@ -174,33 +175,40 @@ void kernel_main() {
         // counter must keep rising across a slice boundary.
         const uint32_t g = s * kTimesteps + t;
 
-        // First the statistic tiles for this timestep, as soon as the reader
-        // has L and D in slot g mod 2: the compute kernel waits on nothing
-        // else to start its score pass. Before the column-gradient writes
-        // below, which wait on the compute kernel and so must not hold this up.
-        {
+        // The statistic tiles of a packet the reader loads from DRAM this
+        // timestep: made here, into the packet's slot, once the reader says L
+        // and D are in; the reader then pushes them, and they travel with the
+        // packet, so a forwarded packet needs nothing from this thread.
+        if (!sched.producer(my_core, t).internal) {
             DeviceZoneScopedN("STAT-ROWS");
+            cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
+            invalidate_l1_cache();
             const uint32_t slot = g % 2u;
-            const bool forwarded = sched.producer(my_core, t).internal;
-            if (forwarded) {
-                // The producer's readiness write, the same one the reader
-                // waits on -- but the reader gets to it only after the previous
-                // timestep's dQ relay, and this is a timestep earlier.
-                WAYPOINT("STRW");
-                do {
-                    invalidate_l1_cache();
-                } while ((*ready_imm_sem[slot]) < g + 1u);
-                WAYPOINT("STRD");
-            } else {
-                cb_wait_front(cyclic_dataflow::kStatsReadyCb, 1);
-                invalidate_l1_cache();
+            const uint32_t lrow = base_lse_row + slot * stride_interm;
+            const uint32_t urow = base_u_row + slot * stride_interm;
+            const uint32_t lrem_row = base_lse_rem_row + slot * stride_interm;
+            const uint32_t lrem = base_lse_rem + slot * stride_rem;
+            const uint32_t urem = base_u_rem + slot * stride_rem;
+            // The gather writes row 0 or column 0 only; the rest of each tile
+            // must be zero. Zero the slot's tiles first, by NoC from the zero
+            // page, which is faster than the RISC storing zeros.
+            for (uint32_t k = 0; k < Bt; ++k) {
+                for (uint32_t half = 0; half < 2u; ++half) {
+                    noc_async_write(zero_l1, get_noc_addr(lrow + k * interm_bytes + half * zero_bytes), zero_bytes);
+                    noc_async_write(zero_l1, get_noc_addr(urow + k * interm_bytes + half * zero_bytes), zero_bytes);
+                    noc_async_write(
+                        zero_l1, get_noc_addr(lrem_row + k * interm_bytes + half * zero_bytes), zero_bytes);
+                }
+                noc_async_write(zero_l1, get_noc_addr(lrem + k * rem_bytes), rem_bytes);
+                noc_async_write(zero_l1, get_noc_addr(urem + k * rem_bytes), rem_bytes);
             }
-            cyclic_dataflow::produce_statistic_tiles<FOLD_SCALE_INTO_KEY != 0>(
-                base_lse + slot * stride_interm, base_u_scalar + slot * stride_interm, Bt, interm_bytes,
-                cb_lse_row, cb_u_row, cb_lse_rem_row, cb_lse_rem, cb_u_rem);
-            if (!forwarded) {
-                cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
-            }
+            noc_async_write_barrier();
+            cyclic_dataflow::produce_statistic_tiles_at<FOLD_SCALE_INTO_KEY != 0>(
+                base_lse + slot * stride_interm, base_u_scalar + slot * stride_interm, Bt, interm_bytes, rem_bytes,
+                lrow, urow, lrem_row, lrem, urem);
+            cb_pop_front(cyclic_dataflow::kStatsReadyCb, 1);
+            cb_reserve_back(cyclic_dataflow::kStatsDoneCb, 1);
+            cb_push_back(cyclic_dataflow::kStatsDoneCb, 1);
         }
 
         // The column gradients are handed over once per residency interval,
