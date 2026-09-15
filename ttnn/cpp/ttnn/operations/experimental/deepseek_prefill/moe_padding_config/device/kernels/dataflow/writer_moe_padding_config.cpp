@@ -87,6 +87,16 @@ void kernel_main() {
     const uint32_t actual_end = CoreLocalMem<volatile uint32_t>(cb_meta.get_write_ptr())[0];
     cb_meta.push_back(onepage);
 
+#if defined(TT_INJECT_HANG_POS)
+    // DO NOT MERGE -- fault injection (armed host-side in create_descriptor). actual_start advances
+    // one chunk per trace replay, so this wedges mid-workload, not on the first invocation.
+    if (actual_start >= static_cast<uint32_t>(TT_INJECT_HANG_POS)) {
+        while (true) {
+            invalidate_l1_cache();
+        }
+    }
+#endif
+
     // ---- per-chip real-token count under the KV-pad-aware rotation ----
     // Chip c's chunk_local rows carry global positions that are a strictly increasing sequence, so its
     // real rows are a contiguous PREFIX and one count describes the split. The rotation mirrors

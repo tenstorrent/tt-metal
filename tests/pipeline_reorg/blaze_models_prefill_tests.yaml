@@ -1258,7 +1258,15 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
-    # DO NOT MERGE -- model-op hang injection goes here (pending).
+    # DO NOT MERGE -- fault injection. Wedges the moe_padding_config writer kernel on rank 2
+    # (chip 0 of its mesh) once a chunk's actual_start reaches 25600 tokens, i.e. the 6th chunk,
+    # after ~100 launches of this op. actual_start is NoC-read from a fixed DRAM address every
+    # chunk, so the gate survives trace replay -- an RTA-based gate would not, since replay never
+    # re-enters the host op. TT_-prefixed so tt-run's parent-env passthrough reaches every rank.
+    # Warmup and the measured request both restart actual_start at 0, so any value <= 46080 fires
+    # during warmup; 51200 is the only value that skips it, and that is the final chunk.
+    export TT_INJECT_MOE_HANG_POS=25600
+    export TT_INJECT_MOE_HANG_RANK=2
     # Periodic all-thread Python stack dumps, so a rank that wedges says where.
     export TT_INJECT_FAULTHANDLER_SECONDS=60
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27
